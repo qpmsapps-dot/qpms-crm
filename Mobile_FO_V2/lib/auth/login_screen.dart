@@ -1,0 +1,135 @@
+import 'package:flutter/material.dart';
+
+import '../models/fo_models.dart';
+import '../services/crash_log_service.dart';
+import '../services/supabase_service.dart';
+import '../theme/app_theme.dart';
+import 'register_screen.dart';
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({required this.onAuthenticated, super.key});
+
+  final ValueChanged<FoUser> onAuthenticated;
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _mobile = TextEditingController();
+  final _password = TextEditingController();
+  bool _busy = false;
+  String? _message;
+
+  @override
+  void dispose() {
+    _mobile.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
+  Future<void> _login() async {
+    setState(() {
+      _busy = true;
+      _message = null;
+    });
+    try {
+      final user = await SupabaseService.login(
+        mobile: _mobile.text,
+        password: _password.text,
+      );
+      widget.onAuthenticated(user);
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        screen: 'login',
+        action: 'LOGIN_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      if (mounted) {
+        setState(() => _message = 'Login failed. Please check details.');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(22),
+          children: [
+            const SizedBox(height: 24),
+            Center(
+              child: Image.asset('assets/qpms-logo.png', width: 74, height: 74),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'myQPMS',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: qpmsBlue,
+                fontSize: 30,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 28),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  children: [
+                    TextField(
+                      controller: _mobile,
+                      keyboardType: TextInputType.phone,
+                      decoration: const InputDecoration(
+                        labelText: 'Mobile Number',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _password,
+                      obscureText: true,
+                      decoration: const InputDecoration(labelText: 'Password'),
+                    ),
+                    if (_message != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        _message!,
+                        style: const TextStyle(color: Colors.red),
+                      ),
+                    ],
+                    const SizedBox(height: 18),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: _busy ? null : _login,
+                        child: Text(_busy ? 'Signing in...' : 'Login'),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _busy
+                          ? null
+                          : () async {
+                              final user = await Navigator.of(context)
+                                  .push<FoUser>(
+                                    MaterialPageRoute(
+                                      builder: (_) => const RegisterScreen(),
+                                    ),
+                                  );
+                              if (user != null) widget.onAuthenticated(user);
+                            },
+                      child: const Text('Register as Field Officer'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

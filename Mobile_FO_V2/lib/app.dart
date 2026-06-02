@@ -1,0 +1,171 @@
+import 'package:flutter/material.dart';
+
+import 'auth/login_screen.dart';
+import 'home/home_shell.dart';
+import 'models/fo_models.dart';
+import 'services/config_service.dart';
+import 'services/crash_log_service.dart';
+import 'services/local_store.dart';
+import 'services/supabase_service.dart';
+import 'theme/app_theme.dart';
+import 'tracking/tracking_service.dart';
+
+class MyQpmsFoApp extends StatefulWidget {
+  const MyQpmsFoApp({super.key});
+
+  @override
+  State<MyQpmsFoApp> createState() => _MyQpmsFoAppState();
+}
+
+class _MyQpmsFoAppState extends State<MyQpmsFoApp> {
+  bool _loading = true;
+  String? _error;
+  FoUser? _user;
+
+  @override
+  void initState() {
+    super.initState();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    try {
+      if (!AppConfig.hasSupabase) {
+        _error = AppConfig.configError;
+      } else {
+        await SupabaseService.initialize();
+        await CrashLogService.sync();
+        _user = await LocalStore.getUser();
+      }
+    } catch (error, stackTrace) {
+      _error = error.toString();
+      await CrashLogService.record(
+        screen: 'app',
+        action: 'BOOTSTRAP_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _setUser(FoUser user) async {
+    await LocalStore.saveUser(user);
+    if (mounted) setState(() => _user = user);
+  }
+
+  Future<void> _logout() async {
+    await TrackingService.stop(user: _user);
+    await LocalStore.clearAll();
+    if (SupabaseService.isReady) {
+      await SupabaseService.signOut();
+    }
+    if (mounted) setState(() => _user = null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'myQPMS',
+      debugShowCheckedModeBanner: false,
+      theme: buildAppTheme(),
+      home: _home(),
+    );
+  }
+
+  Widget _home() {
+    if (_loading) return const SplashScreen();
+    if (_error != null) return ConfigErrorScreen(message: _error!);
+    if (_user == null) return LoginScreen(onAuthenticated: _setUser);
+    return HomeShell(user: _user!, onLogout: _logout);
+  }
+}
+
+class SplashScreen extends StatelessWidget {
+  const SplashScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [qpmsBlue, qpmsBlue2],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: Center(child: _LogoTitle(light: true)),
+      ),
+    );
+  }
+}
+
+class ConfigErrorScreen extends StatelessWidget {
+  const ConfigErrorScreen({required this.message, super.key});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const _LogoTitle(),
+              const SizedBox(height: 20),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Text(
+                    message,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LogoTitle extends StatelessWidget {
+  const _LogoTitle({this.light = false});
+
+  final bool light;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 76,
+          height: 76,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(22),
+          ),
+          child: Image.asset('assets/qpms-logo.png'),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          'myQPMS',
+          style: TextStyle(
+            color: light ? Colors.white : qpmsBlue,
+            fontSize: 30,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ],
+    );
+  }
+}

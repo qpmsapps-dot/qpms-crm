@@ -6,7 +6,7 @@ import StatusBadge from '../components/StatusBadge.jsx';
 import Toast from '../components/Toast.jsx';
 import { useWorkflow } from '../context/workflow-context.js';
 import { useAuth } from '../context/auth-context.js';
-import { bdExecutives, canManageLeads, canViewBdTeam, isManagement } from '../data/mockUsers.js';
+import { bdExecutives, canManageLeads, canViewBdTeam, isFinanceLeadership, isManagement } from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { sendLeadMomEmail } from '../services/mailService.js';
 
@@ -413,6 +413,8 @@ function createLeadMomDraft(lead) {
 export default function CRM() {
   const { leads, siteVisits, addLead, updateLead, deleteLead, saveLeadMomDraft, sendLeadMom, workflowError } = useWorkflow();
   const { user } = useAuth();
+  const canEditLeads = canManageLeads(user);
+  const canMonitorLeads = canEditLeads || isFinanceLeadership(user);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [leadForm, setLeadForm] = useState(initialLeadForm);
   const [selectedLeadId, setSelectedLeadId] = useState(null);
@@ -463,14 +465,16 @@ export default function CRM() {
             <button type="button" onClick={(event) => { event.stopPropagation(); openLeadDrawer(row); }} className="focus-ring rounded-lg border border-slate-200 p-2 text-slate-500 transition hover:text-qpms-700 dark:border-slate-800 dark:text-slate-300" aria-label={`Open ${row.company}`}>
               <Eye className="h-4 w-4" />
             </button>
-            <button type="button" onClick={(event) => { event.stopPropagation(); setLeadPendingDelete(row); }} className="focus-ring rounded-lg border border-rose-200 p-2 text-rose-600 transition hover:bg-rose-50 dark:border-rose-500/30 dark:hover:bg-rose-500/10" aria-label={`Delete ${row.company}`}>
-              <Trash2 className="h-4 w-4" />
-            </button>
+            {canEditLeads ? (
+              <button type="button" onClick={(event) => { event.stopPropagation(); setLeadPendingDelete(row); }} className="focus-ring rounded-lg border border-rose-200 p-2 text-rose-600 transition hover:bg-rose-50 dark:border-rose-500/30 dark:hover:bg-rose-500/10" aria-label={`Delete ${row.company}`}>
+                <Trash2 className="h-4 w-4" />
+              </button>
+            ) : null}
           </div>
         ),
       },
     ],
-    [],
+    [canEditLeads],
   );
 
   const stats = useMemo(
@@ -679,7 +683,7 @@ export default function CRM() {
     }
   }
 
-  if (!canManageLeads(user)) {
+  if (!canMonitorLeads) {
     return (
       <div className="space-y-7">
         <PageHeader title="Lead Management" />
@@ -694,7 +698,7 @@ export default function CRM() {
     <div className="space-y-7">
       <PageHeader
         title="Lead Management"
-        actions={canManageLeads(user) ? (
+        actions={canEditLeads ? (
           <button
             type="button"
             onClick={() => setIsFormOpen(true)}
@@ -822,15 +826,17 @@ export default function CRM() {
               </div>
 
               <div className="mt-5 flex flex-wrap gap-3">
-                <button type="button" onClick={() => setIsEditingLead(true)} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:text-slate-950 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:text-white">
-                  <Pencil className="h-4 w-4" /> Edit Lead
-                </button>
+                {canEditLeads ? (
+                  <button type="button" onClick={() => setIsEditingLead(true)} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:text-slate-950 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:text-white">
+                    <Pencil className="h-4 w-4" /> Edit Lead
+                  </button>
+                ) : null}
                 {isEditingLead ? (
                   <button type="button" onClick={saveLeadChanges} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-qpms-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-qpms-600/20 transition hover:bg-qpms-700">
                     <Save className="h-4 w-4" /> Save Changes
                   </button>
                 ) : null}
-                {!isManagement(user) ? (
+                {canEditLeads && !isManagement(user) ? (
                   <button type="button" onClick={openMomEditor} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-950/20 transition hover:bg-slate-800 dark:bg-white dark:text-slate-950">
                     <FileText className="h-4 w-4" /> Create Lead MOM
                   </button>

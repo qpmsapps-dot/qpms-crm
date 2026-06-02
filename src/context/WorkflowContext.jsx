@@ -633,13 +633,17 @@ export function WorkflowProvider({ children }) {
     }
   }
 
-  async function submitCommercialReview(siteVisitId) {
+  async function submitCommercialReview(siteVisitId, options = {}) {
     const visit = siteVisits.find((item) => item.id === siteVisitId);
     if (!visit) throw new Error('Site visit not found.');
     if (visit.status === 'Pending Review' || ['Returned to BD', 'Proposal Generated', 'Proposal Sent'].includes(visit.status)) {
       throw new Error('This assessment is already submitted into the approval workflow.');
     }
-    const nextSubmitStage = nextSubmissionStageForVisit(visit);
+    const adminDemoStartStages = ['HR Validation', 'Commercial Review', 'Finance Review'];
+    const adminDemoSubmission = options.adminDemo === true
+      && options.actorRole === 'Admin'
+      && adminDemoStartStages.includes(options.targetStage);
+    const nextSubmitStage = adminDemoSubmission ? options.targetStage : nextSubmissionStageForVisit(visit);
     const nextPendingWith = pendingOwnerByStage[nextSubmitStage] || 'Operations Team';
     updateSiteVisit(siteVisitId, (visit) => ({
       status: 'Pending Review',
@@ -649,7 +653,11 @@ export function WorkflowProvider({ children }) {
       approvalRemarks: '',
       reviewStatus: reviewStages.reduce((statusMap, stage) => ({
         ...statusMap,
-        [stage]: stage === nextSubmitStage ? 'Pending' : statusMap[stage] === 'Approved' ? 'Approved' : 'Not Started',
+        [stage]: stage === nextSubmitStage
+          ? 'Pending'
+          : adminDemoSubmission && reviewStages.indexOf(stage) < reviewStages.indexOf(nextSubmitStage)
+            ? 'Approved'
+            : statusMap[stage] === 'Approved' ? 'Approved' : 'Not Started',
       }), { ...(visit.reviewStatus || {}) }),
       approvalTimeline: buildApprovalTimeline(visit, `Submitted to ${nextSubmitStage}`),
       activity: [`Submitted to ${nextSubmitStage}`, ...(visit.activity || [])].slice(0, 8),
@@ -659,7 +667,9 @@ export function WorkflowProvider({ children }) {
         await submitForReview({
           visit,
           targetStage: nextSubmitStage,
-          user: { name: visit.created_by_name, email: visit.assigned_bd_email, role: 'BD Team' },
+          user: adminDemoSubmission
+            ? { name: 'Admin', email: '', role: 'Admin' }
+            : { name: visit.created_by_name, email: visit.assigned_bd_email, role: 'BD Team' },
           idempotencyKey: rpcIdempotencyKey('submit-review', siteVisitId),
           remarks: 'Assessment submitted for approval matrix review',
         });

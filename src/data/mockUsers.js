@@ -1,5 +1,13 @@
 export const mockUsers = [
   {
+    id: 'md',
+    name: 'Bharath',
+    email: 'md@qpms.co.in',
+    password: '123456',
+    role: 'MD',
+    access: 'Enterprise operational visibility and final approval oversight',
+  },
+  {
     id: 'admin',
     name: 'Admin',
     email: 'admin@qpms.co.in',
@@ -160,14 +168,6 @@ export const mockUsers = [
     access: 'Active site and field operations monitoring',
   },
   {
-    id: 'fo-1',
-    name: 'Field Officer 1',
-    email: 'fo1@qpms.co.in',
-    password: '123456',
-    role: 'Field Officer',
-    access: 'Assigned field routes and site activity',
-  },
-  {
     id: 'client-1',
     name: 'Client User 1',
     email: 'client1@qpms.co.in',
@@ -205,11 +205,15 @@ export function isCoordinator(user) {
 }
 
 export function isManagement(user) {
-  return ['Admin', 'COO', 'Management', 'GM', 'Top Management', 'GM / Top Management'].includes(user?.role);
+  return ['MD', 'Admin', 'COO', 'Management', 'GM', 'Top Management', 'GM / Top Management'].includes(user?.role);
 }
 
 export function isFinanceLeadership(user) {
   return ['Finance GM', 'CFO'].includes(user?.role);
+}
+
+export function isAdmin(user) {
+  return user?.role === 'Admin';
 }
 
 export function isExistingBusinessOperations(user) {
@@ -229,12 +233,12 @@ export function canManageLeads(user) {
 }
 
 export function canViewBdTeam(user) {
-  return user?.role === 'BD Head' || isManagement(user);
+  return user?.role === 'BD Head' || isManagement(user) || isFinanceLeadership(user);
 }
 
 export function findMockUser(email, password) {
   const normalizedEmail = email.trim().toLowerCase();
-  return mockUsers.find((user) => user.email === normalizedEmail && user.password === password);
+  return mockUsers.find((user) => (user.email === normalizedEmail || user.username?.toLowerCase() === normalizedEmail) && user.password === password);
 }
 
 export function getExecutiveByName(name) {
