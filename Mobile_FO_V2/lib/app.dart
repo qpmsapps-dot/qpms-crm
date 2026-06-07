@@ -17,7 +17,7 @@ class MyQpmsFoApp extends StatefulWidget {
   State<MyQpmsFoApp> createState() => _MyQpmsFoAppState();
 }
 
-class _MyQpmsFoAppState extends State<MyQpmsFoApp> {
+class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
   bool _loading = true;
   String? _error;
   FoUser? _user;
@@ -25,7 +25,59 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _bootstrap();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _handleResume();
+    }
+  }
+
+  Future<void> _handleResume() async {
+    try {
+      await CrashLogService.record(
+        employeeCode: _user?.employeeCode,
+        screen: 'app',
+        action: 'APP_RESUME_SYNC_START',
+      );
+      if (SupabaseService.isReady) {
+        await TrackingService.syncQueuedLogs();
+        await CrashLogService.sync();
+      }
+      final user = _user ?? await LocalStore.getUser();
+      final attendance = await LocalStore.getAttendance();
+      if (user != null &&
+          attendance?.isActive == true &&
+          !TrackingService.isActive) {
+        await TrackingService.start(
+          user: user,
+          attendance: attendance!,
+          onLog: (log, liveKm) {},
+        );
+      }
+      await CrashLogService.record(
+        employeeCode: user?.employeeCode,
+        screen: 'app',
+        action: 'APP_RESUME_SYNC_SUCCESS',
+      );
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: _user?.employeeCode,
+        screen: 'app',
+        action: 'APP_RESUME_SYNC_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   Future<void> _bootstrap() async {
@@ -56,11 +108,35 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> {
   }
 
   Future<void> _logout() async {
-    await TrackingService.stop(user: _user);
-    await LocalStore.clearAll();
-    if (SupabaseService.isReady) {
-      await SupabaseService.signOut();
+    try {
+      final attendance = await LocalStore.getAttendance();
+      if (attendance?.isActive == true) {
+        await CrashLogService.record(
+          employeeCode: _user?.employeeCode,
+          screen: 'app',
+          action: 'LOGOUT_BLOCKED_ACTIVE_ATTENDANCE',
+        );
+        return;
+      }
+      await TrackingService.stop(user: _user);
+      await LocalStore.clearAll();
+      if (SupabaseService.isReady) {
+        await SupabaseService.signOut();
+      }
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: _user?.employeeCode,
+        screen: 'app',
+        action: 'LOGOUT_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
+    await CrashLogService.record(
+      employeeCode: _user?.employeeCode,
+      screen: 'app',
+      action: 'LOGOUT_SUCCESS',
+    );
     if (mounted) setState(() => _user = null);
   }
 

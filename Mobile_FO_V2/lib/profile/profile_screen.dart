@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../models/fo_models.dart';
-import '../tracking/tracking_service.dart';
+import '../services/crash_log_service.dart';
+import '../services/local_store.dart';
+import '../services/supabase_service.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({required this.user, required this.onLogout, super.key});
@@ -9,8 +11,56 @@ class ProfileScreen extends StatelessWidget {
   final FoUser user;
   final Future<void> Function() onLogout;
 
-  Future<void> _logout() async {
-    await TrackingService.stop(user: user);
+  Future<void> _logout(BuildContext context) async {
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'profile',
+      action: 'LOGOUT_ATTEMPT',
+    );
+
+    final localAttendance = await LocalStore.getAttendance();
+    final hasLocalActiveAttendance =
+        localAttendance?.isActive == true &&
+        localAttendance?.employeeCode == user.employeeCode;
+    var hasRemoteActiveAttendance = false;
+
+    if (SupabaseService.isReady) {
+      final remoteAttendance = await SupabaseService.findOpenActiveAttendance(
+        user,
+      );
+      hasRemoteActiveAttendance = remoteAttendance != null;
+    }
+
+    if (hasLocalActiveAttendance || hasRemoteActiveAttendance) {
+      await CrashLogService.record(
+        employeeCode: user.employeeCode,
+        screen: 'profile',
+        action: 'LOGOUT_BLOCKED_ACTIVE_ATTENDANCE',
+      );
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('End Day Required'),
+          content: const Text(
+            'Your day is still active. Please click End Day before logging out.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'profile',
+      action: 'LOGOUT_ALLOWED_NO_ACTIVE_ATTENDANCE',
+    );
     await onLogout();
   }
 
@@ -37,7 +87,10 @@ class ProfileScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          FilledButton(onPressed: _logout, child: const Text('Logout')),
+          FilledButton(
+            onPressed: () => _logout(context),
+            child: const Text('Logout'),
+          ),
         ],
       ),
     );

@@ -169,8 +169,6 @@ create unique index if not exists ux_fo_site_visits_local_id
 create unique index if not exists ux_fo_conveyance_attendance
   on public.fo_conveyance_reports(attendance_id)
   where attendance_id is not null;
-create unique index if not exists ux_fo_conveyance_attendance_upsert
-  on public.fo_conveyance_reports(attendance_id);
 
 create index if not exists idx_fo_attendance_user_date
   on public.fo_attendance(fo_user_id, attendance_date desc);

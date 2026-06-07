@@ -19,17 +19,26 @@ class CrashLogService {
   }) async {
     try {
       final user = await LocalStore.getUser();
+      final foUserId = employeeCode ?? user?.employeeCode;
+      final errorMessage = error?.toString() ?? '';
+      final stack = stackTrace?.toString() ?? '';
       final row = {
         'id': '${DateTime.now().microsecondsSinceEpoch}-$screen-$action',
-        'employee_code': employeeCode ?? user?.employeeCode,
+        'fo_user_id': foUserId,
+        'stage': action,
+        'employee_code': foUserId,
         'screen': screen,
         'action': action,
-        'error_message': error?.toString() ?? '',
-        'stack_trace': stackTrace?.toString() ?? '',
+        'error_message': errorMessage,
+        'stack_trace': stack,
         'created_at': DateTime.now().toUtc().toIso8601String(),
         'synced': false,
       };
-      debugPrint('[myQPMS FO V2] $screen/$action ${row['error_message']}');
+      debugPrint(
+        '[myQPMS FO V2] $screen/$action'
+        '${errorMessage.isEmpty ? '' : ' ERROR: $errorMessage'}',
+      );
+      if (stack.isNotEmpty) debugPrint(stack);
       final prefs = await SharedPreferences.getInstance();
       final logs = await _read();
       logs.add(row);
@@ -51,18 +60,12 @@ class CrashLogService {
       var changed = false;
       for (final log in logs.where((e) => e['synced'] != true)) {
         try {
-          await SupabaseService.client.from('mobile_crash_logs').insert({
-            'id': log['id'],
-            'employee_code': log['employee_code'],
-            'screen': log['screen'],
-            'action': log['action'],
-            'error_message': log['error_message'],
-            'stack_trace': log['stack_trace'],
-            'created_at': log['created_at'],
-          });
+          await _insertLog(log);
           log['synced'] = true;
           changed = true;
-        } catch (_) {
+        } catch (error, stackTrace) {
+          debugPrint('[myQPMS FO V2] Crash log Supabase sync failed: $error');
+          debugPrint(stackTrace.toString());
           break;
         }
       }
@@ -82,5 +85,32 @@ class CrashLogService {
     return (jsonDecode(value) as List<dynamic>)
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
+  }
+
+  static Future<void> _insertLog(Map<String, dynamic> log) async {
+    final payload = {
+      'fo_user_id': log['fo_user_id'] ?? log['employee_code'],
+      'stage': log['stage'] ?? log['action'],
+      'employee_code': log['employee_code'] ?? log['fo_user_id'],
+      'screen': log['screen'],
+      'action': log['action'] ?? log['stage'],
+      'error_message': log['error_message'],
+      'stack_trace': log['stack_trace'],
+      'created_at': log['created_at'],
+    };
+    try {
+      await SupabaseService.client.from('mobile_crash_logs').insert(payload);
+    } catch (_) {
+      await SupabaseService.client.from('mobile_crash_logs').insert({
+        'fo_user_id': log['fo_user_id'] ?? log['employee_code'],
+        'stage': log['stage'] ?? log['action'],
+        'employee_code': log['employee_code'] ?? log['fo_user_id'],
+        'screen': log['screen'],
+        'action': log['action'] ?? log['stage'],
+        'error_message': log['error_message'],
+        'stack_trace': log['stack_trace'],
+        'created_at': log['created_at'],
+      });
+    }
   }
 }

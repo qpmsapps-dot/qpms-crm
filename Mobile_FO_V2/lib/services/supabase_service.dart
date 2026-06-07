@@ -17,17 +17,41 @@ class DuplicateEmployeeIdException implements Exception {
 
 class SupabaseService {
   static bool _initialized = false;
+  static bool _runtimeConfigured = false;
 
-  static bool get isReady => _initialized && AppConfig.hasSupabase;
+  static bool get isReady =>
+      _initialized && (AppConfig.hasSupabase || _runtimeConfigured);
   static SupabaseClient get client => Supabase.instance.client;
 
   static Future<void> initialize() async {
     if (_initialized || !AppConfig.hasSupabase) return;
-    await Supabase.initialize(
+    await initializeWithCredentials(
       url: AppConfig.supabaseUrl.trim(),
       anonKey: AppConfig.supabaseAnonKey.trim(),
     );
-    _initialized = true;
+  }
+
+  static Future<void> initializeWithCredentials({
+    required String url,
+    required String anonKey,
+  }) async {
+    final cleanUrl = url.trim();
+    final cleanAnonKey = anonKey.trim();
+    if (_initialized) return;
+    if (cleanUrl.isEmpty || cleanAnonKey.isEmpty) return;
+    try {
+      await Supabase.initialize(url: cleanUrl, anonKey: cleanAnonKey);
+      _initialized = true;
+      _runtimeConfigured = true;
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        screen: 'supabase',
+        action: 'SUPABASE_INITIALIZE_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      rethrow;
+    }
   }
 
   static Future<FoUser> register({
@@ -160,6 +184,8 @@ class SupabaseService {
             'fo_user_id': user.employeeCode,
             'username': user.employeeCode,
             'display_name': user.fullName,
+            'attendance_date':
+                attendance.attendanceDate ?? indiaDateKey(attendance.startTime),
             'login_time': attendance.startTime.toUtc().toIso8601String(),
             'start_latitude': attendance.startLat,
             'start_longitude': attendance.startLng,
@@ -227,6 +253,20 @@ class SupabaseService {
     return latest;
   }
 
+  static Future<Attendance?> findOpenActiveAttendance(FoUser user) async {
+    final rows = await client
+        .from('fo_attendance')
+        .select('*')
+        .eq('fo_user_id', user.employeeCode)
+        .eq('status', 'Active')
+        .filter('logout_time', 'is', null)
+        .order('login_time', ascending: false)
+        .limit(1);
+    final records = List<Map<String, dynamic>>.from(rows);
+    if (records.isEmpty) return null;
+    return _attendanceFromRow(records.first, user);
+  }
+
   static Future<Attendance?> findCompletedAttendanceForToday(
     FoUser user,
   ) async {
@@ -242,6 +282,25 @@ class SupabaseService {
     final records = List<Map<String, dynamic>>.from(rows);
     if (records.isEmpty) return null;
     return _attendanceFromRow(records.first, user);
+  }
+
+  static Future<SiteVisit?> findActiveSiteVisitForAttendance({
+    required FoUser user,
+    required Attendance attendance,
+  }) async {
+    final attendanceId = attendance.remoteId?.trim();
+    if (!isValidUuid(attendanceId)) return null;
+    final rows = await client
+        .from('fo_site_visits')
+        .select('*')
+        .eq('fo_user_id', user.employeeCode)
+        .eq('attendance_id', attendanceId!)
+        .filter('checkout_time', 'is', null)
+        .order('check_in_time', ascending: false)
+        .limit(1);
+    final records = List<Map<String, dynamic>>.from(rows);
+    if (records.isEmpty) return null;
+    return SiteVisit.fromJson(records.first);
   }
 
   static Future<void> reopenAttendanceForToday(Attendance attendance) async {
@@ -262,6 +321,7 @@ class SupabaseService {
     final id = attendance.remoteId;
     if (id == null || id.isEmpty) return;
     try {
+      await _syncAttendanceRouteKmFromVisits(attendance);
       await client
           .from('fo_attendance')
           .update({
@@ -272,6 +332,7 @@ class SupabaseService {
             'actual_km': attendance.actualKm,
             'eligible_km': attendance.eligibleKm,
             'total_raw_km': attendance.actualKm,
+            'total_route_km': attendance.totalRouteKm,
             'total_approved_km': attendance.eligibleKm,
             'rate_per_km': 4,
             'petrol_amount': attendance.eligibleKm * 4,
@@ -282,6 +343,20 @@ class SupabaseService {
         employeeCode: attendance.employeeCode,
         screen: 'home',
         action: 'ATTENDANCE_END_UPDATE_SUCCESS',
+      );
+      await CrashLogService.record(
+        employeeCode: attendance.employeeCode,
+        screen: 'tracking',
+        action: 'ATTENDANCE_KM_UPDATE_SUCCESS',
+        error:
+            'attendance_id=$id actual_km=${attendance.actualKm} total_raw_km=${attendance.actualKm} total_route_km=${attendance.totalRouteKm}',
+      );
+      await CrashLogService.record(
+        employeeCode: attendance.employeeCode,
+        screen: 'tracking',
+        action: 'ROUTE_KM_ATTENDANCE_UPDATED',
+        error:
+            'attendance_uuid=$id total_route_km=${attendance.totalRouteKm} eligible_km=${attendance.eligibleKm} petrol_amount=${attendance.eligibleKm * 4}',
       );
     } catch (error, stackTrace) {
       await CrashLogService.record(
@@ -302,6 +377,117 @@ class SupabaseService {
     }
   }
 
+  static Future<void> updateAttendanceKm(Attendance attendance) async {
+    final id = attendance.remoteId?.trim();
+    if (id == null || id.isEmpty) {
+      await CrashLogService.record(
+        employeeCode: attendance.employeeCode,
+        screen: 'tracking',
+        action: 'ATTENDANCE_KM_UPDATE_SKIPPED_NO_REMOTE_ID',
+        error: 'local_id=${attendance.id} km=${attendance.actualKm}',
+      );
+      return;
+    }
+    if (!isValidUuid(id)) {
+      await CrashLogService.record(
+        employeeCode: attendance.employeeCode,
+        screen: 'tracking',
+        action: 'ATTENDANCE_KM_UPDATE_FAILED',
+        error:
+            'Invalid attendance UUID: remote_id=$id local_id=${attendance.id}',
+      );
+      return;
+    }
+    try {
+      await _syncAttendanceRouteKmFromVisits(attendance);
+      final payload = {
+        'actual_km': attendance.actualKm,
+        'eligible_km': attendance.eligibleKm,
+        'total_raw_km': attendance.actualKm,
+        'total_route_km': attendance.totalRouteKm,
+        'total_approved_km': attendance.eligibleKm,
+        'rate_per_km': 4,
+        'petrol_amount': attendance.eligibleKm * 4,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      };
+      await CrashLogService.record(
+        employeeCode: attendance.employeeCode,
+        screen: 'tracking',
+        action: 'ATTENDANCE_KM_UPDATE_QUERY_START',
+        error:
+            'attendance_uuid=$id local_id=${attendance.id} actual_km=${attendance.actualKm} total_raw_km=${attendance.actualKm} total_route_km=${attendance.totalRouteKm} total_approved_km=${attendance.eligibleKm}',
+      );
+      final response = await client
+          .from('fo_attendance')
+          .update(payload)
+          .eq('id', id)
+          .select(
+            'id, actual_km, total_raw_km, total_route_km, total_approved_km, updated_at',
+          );
+      final rows = List<Map<String, dynamic>>.from(response);
+      if (rows.isEmpty) {
+        throw StateError(
+          'fo_attendance KM update matched 0 rows for attendance_uuid=$id',
+        );
+      }
+      final row = rows.first;
+      await CrashLogService.record(
+        employeeCode: attendance.employeeCode,
+        screen: 'tracking',
+        action: 'ATTENDANCE_KM_UPDATE_SUCCESS',
+        error:
+            'attendance_uuid=${row['id']} actual_km=${row['actual_km']} total_raw_km=${row['total_raw_km']} total_route_km=${row['total_route_km']} total_approved_km=${row['total_approved_km']} updated_at=${row['updated_at']}',
+      );
+      await CrashLogService.record(
+        employeeCode: attendance.employeeCode,
+        screen: 'tracking',
+        action: 'ROUTE_KM_ATTENDANCE_UPDATED',
+        error:
+            'attendance_uuid=$id total_route_km=${attendance.totalRouteKm} eligible_km=${attendance.eligibleKm} petrol_amount=${attendance.eligibleKm * 4}',
+      );
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: attendance.employeeCode,
+        screen: 'tracking',
+        action: 'ATTENDANCE_KM_UPDATE_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<void> _syncAttendanceRouteKmFromVisits(
+    Attendance attendance,
+  ) async {
+    final id = attendance.remoteId?.trim();
+    if (!isValidUuid(id)) return;
+    final rows = await client
+        .from('fo_site_visits')
+        .select('id, route_km')
+        .eq('attendance_id', id!)
+        .not('route_km', 'is', null)
+        .order('check_in_time', ascending: true);
+    final visits = List<Map<String, dynamic>>.from(rows);
+    var totalRouteKm = 0.0;
+    for (final row in visits) {
+      final routeKm = _double(row['route_km']);
+      if (routeKm == null || routeKm <= 0 || !routeKm.isFinite) continue;
+      totalRouteKm += routeKm;
+      await CrashLogService.record(
+        employeeCode: attendance.employeeCode,
+        screen: 'tracking',
+        action: 'ROUTE_KM_SITE_VISIT_FOUND',
+        error:
+            'attendance_uuid=$id site_visit_id=${row['id']} route_km=$routeKm',
+      );
+    }
+    if (visits.isEmpty || totalRouteKm <= 0) return;
+    attendance
+      ..totalRouteKm = totalRouteKm
+      ..eligibleKm = totalRouteKm;
+  }
+
   static Attendance _attendanceFromRow(Map<String, dynamic> row, FoUser user) {
     return Attendance(
       id: row['local_id']?.toString() ?? row['id']?.toString() ?? '',
@@ -310,6 +496,7 @@ class SupabaseService {
           row['fo_user_id']?.toString() ??
           row['employee_code']?.toString() ??
           user.employeeCode,
+      attendanceDate: row['attendance_date']?.toString(),
       startTime:
           DateTime.tryParse(row['login_time']?.toString() ?? '')?.toLocal() ??
           DateTime.now(),
@@ -327,6 +514,11 @@ class SupabaseService {
       actualKm: _double(row['actual_km']) ?? _double(row['total_raw_km']) ?? 0,
       eligibleKm:
           _double(row['eligible_km']) ?? _double(row['total_approved_km']) ?? 0,
+      totalRouteKm:
+          _double(row['total_route_km']) ??
+          _double(row['eligible_km']) ??
+          _double(row['total_approved_km']) ??
+          0,
     );
   }
 
@@ -343,24 +535,20 @@ class SupabaseService {
   }
 
   static Future<String?> insertLocation(LocationLog log) async {
+    final attendanceId = _uuidOrNull(log.attendanceId);
+    if (attendanceId == null) {
+      await CrashLogService.record(
+        employeeCode: log.employeeCode,
+        screen: 'tracking',
+        action: 'LOCATION_LOG_SKIPPED_NO_ATTENDANCE_ID',
+        error: 'attendance_id=${log.attendanceId}',
+      );
+      return null;
+    }
     try {
       final row = await client
           .from('fo_location_logs')
-          .insert({
-            'fo_user_id': log.employeeCode,
-            'username': log.employeeCode,
-            'attendance_id': _uuidOrNull(log.attendanceId),
-            'latitude': log.latitude,
-            'longitude': log.longitude,
-            'accuracy': log.accuracy,
-            'speed': log.speed,
-            'battery_percentage': log.battery,
-            'logged_at': log.capturedAt.toUtc().toIso8601String(),
-            'captured_at': log.capturedAt.toUtc().toIso8601String(),
-            'local_id': log.id,
-            'source': 'mobile',
-            'sync_status': 'synced',
-          })
+          .insert(_locationPayload(log, attendanceId))
           .select('id')
           .maybeSingle();
       await CrashLogService.record(
@@ -370,6 +558,15 @@ class SupabaseService {
       );
       return row?['id']?.toString();
     } catch (error, stackTrace) {
+      if (error is PostgrestException && error.code == '23505') {
+        await CrashLogService.record(
+          employeeCode: log.employeeCode,
+          screen: 'tracking',
+          action: 'LOCATION_LOG_DUPLICATE_LOCAL_ID_SKIPPED',
+          error: 'local_id=${log.id}',
+        );
+        return null;
+      }
       await CrashLogService.record(
         employeeCode: log.employeeCode,
         screen: 'tracking',
@@ -379,6 +576,86 @@ class SupabaseService {
       );
       rethrow;
     }
+  }
+
+  static Future<Map<String, String?>> insertLocationBatch(
+    List<LocationLog> logs,
+  ) async {
+    final validLogs = <LocationLog>[];
+    final payload = <Map<String, dynamic>>[];
+    for (final log in logs) {
+      final attendanceId = _uuidOrNull(log.attendanceId);
+      if (attendanceId == null) {
+        await CrashLogService.record(
+          employeeCode: log.employeeCode,
+          screen: 'tracking',
+          action: 'LOCATION_LOG_SKIPPED_NO_ATTENDANCE_ID',
+          error: 'attendance_id=${log.attendanceId}',
+        );
+        continue;
+      }
+      validLogs.add(log);
+      payload.add(_locationPayload(log, attendanceId));
+    }
+    if (validLogs.isEmpty) return {};
+    try {
+      final rows = await client
+          .from('fo_location_logs')
+          .insert(payload)
+          .select('id, local_id');
+      final result = <String, String?>{};
+      for (final row in List<Map<String, dynamic>>.from(rows)) {
+        final localId = row['local_id']?.toString();
+        if (localId == null || localId.isEmpty) continue;
+        result[localId] = row['id']?.toString();
+      }
+      for (final log in validLogs) {
+        result.putIfAbsent(log.id, () => null);
+      }
+      await CrashLogService.record(
+        screen: 'tracking',
+        action: 'GPS_LOG_BATCH_SYNCED',
+        error: 'count=${result.length}',
+      );
+      return result;
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        screen: 'tracking',
+        action: 'GPS_LOG_SYNC_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      final result = <String, String?>{};
+      for (final log in validLogs) {
+        try {
+          result[log.id] = await insertLocation(log);
+        } catch (_) {
+          break;
+        }
+      }
+      return result;
+    }
+  }
+
+  static Map<String, dynamic> _locationPayload(
+    LocationLog log,
+    String attendanceId,
+  ) {
+    return {
+      'fo_user_id': log.employeeCode,
+      'username': log.employeeCode,
+      'attendance_id': attendanceId,
+      'latitude': log.latitude,
+      'longitude': log.longitude,
+      'accuracy': log.accuracy,
+      'speed': log.speed,
+      'battery_percentage': log.battery,
+      'logged_at': log.capturedAt.toUtc().toIso8601String(),
+      'captured_at': log.capturedAt.toUtc().toIso8601String(),
+      'local_id': log.id,
+      'source': 'mobile',
+      'sync_status': 'synced',
+    };
   }
 
   static Future<List<LocationLog>> fetchLocationLogsForAttendance({
@@ -416,37 +693,40 @@ class SupabaseService {
     ).map(_locationLogFromRow).toList();
   }
 
-  static LocationLog _locationLogFromRow(
-    Map<String, dynamic> row,
-  ) => LocationLog(
-    id: row['local_id']?.toString() ?? row['id']?.toString() ?? '',
-    remoteId: row['id']?.toString(),
-    employeeCode:
-        row['fo_user_id']?.toString() ?? row['employee_code']?.toString() ?? '',
-    attendanceId: row['attendance_id']?.toString() ?? '',
-    latitude: _double(row['latitude']) ?? 0,
-    longitude: _double(row['longitude']) ?? 0,
-    accuracy: _double(row['accuracy']),
-    speed: _double(row['speed']),
-    battery: _int(row['battery_percentage']),
-    capturedAt:
-        DateTime.tryParse(
-          row['captured_at']?.toString() ?? row['logged_at']?.toString() ?? '',
-        )?.toLocal() ??
-        DateTime.now(),
-    synced: true,
-  );
+  static LocationLog _locationLogFromRow(Map<String, dynamic> row) =>
+      LocationLog(
+        id: row['local_id']?.toString() ?? row['id']?.toString() ?? '',
+        remoteId: row['id']?.toString(),
+        employeeCode: row['fo_user_id']?.toString() ?? '',
+        attendanceId: row['attendance_id']?.toString() ?? '',
+        latitude: _double(row['latitude']) ?? 0,
+        longitude: _double(row['longitude']) ?? 0,
+        accuracy: _double(row['accuracy']),
+        speed: _double(row['speed']),
+        battery: _int(row['battery_percentage']),
+        capturedAt:
+            DateTime.tryParse(
+              row['captured_at']?.toString() ??
+                  row['logged_at']?.toString() ??
+                  '',
+            )?.toLocal() ??
+            DateTime.now(),
+        synced: true,
+      );
 
   static Future<void> updateLiveStatus({
     required FoUser user,
     required bool isTracking,
     required String status,
+    bool? isOnline,
     double? latitude,
     double? longitude,
     double? accuracy,
     double? speed,
     int? battery,
     double? routeKm,
+    String? attendanceId,
+    String? activeSiteVisitId,
   }) async {
     await CrashLogService.record(
       employeeCode: user.employeeCode,
@@ -460,17 +740,26 @@ class SupabaseService {
         'display_name': user.fullName,
         'battery_percentage': battery,
         'last_seen_at': DateTime.now().toUtc().toIso8601String(),
-        'is_online': isTracking,
+        'is_online': isOnline ?? isTracking,
         'is_tracking': isTracking,
         'current_status': status,
         'source': 'mobile',
         'sync_status': 'synced',
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       };
       if (latitude != null) payload['latitude'] = latitude;
       if (longitude != null) payload['longitude'] = longitude;
       if (accuracy != null) payload['accuracy'] = accuracy;
       if (speed != null) payload['speed'] = speed;
       if (routeKm != null) payload['route_km_today'] = routeKm;
+      final validAttendanceId = _uuidOrNull(attendanceId);
+      final validSiteVisitId = _uuidOrNull(activeSiteVisitId);
+      if (validAttendanceId != null) {
+        payload['attendance_id'] = validAttendanceId;
+      }
+      if (validSiteVisitId != null) {
+        payload['active_site_visit_id'] = validSiteVisitId;
+      }
       if (latitude == null || longitude == null) {
         await CrashLogService.record(
           employeeCode: user.employeeCode,
@@ -486,11 +775,73 @@ class SupabaseService {
         screen: 'tracking',
         action: 'LIVE_STATUS_UPSERT_SUCCESS',
       );
+      await CrashLogService.record(
+        employeeCode: user.employeeCode,
+        screen: 'tracking',
+        action: 'LIVE_STATUS_UPDATED',
+      );
+      if (routeKm != null) {
+        await CrashLogService.record(
+          employeeCode: user.employeeCode,
+          screen: 'tracking',
+          action: 'ROUTE_KM_LIVE_STATUS_UPDATED',
+          error: 'route_km_today=$routeKm',
+        );
+      }
     } catch (error, stackTrace) {
       await CrashLogService.record(
         employeeCode: user.employeeCode,
         screen: 'tracking',
         action: 'LIVE_STATUS_UPSERT_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<void> updateCheckInLiveStatus({
+    required FoUser user,
+    required SiteVisit visit,
+    double? latitude,
+    double? longitude,
+    double? accuracy,
+  }) async {
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'tasks',
+      action: 'CHECKIN_LIVE_STATUS_UPDATE_START',
+    );
+    try {
+      final payload = <String, dynamic>{
+        'fo_user_id': user.employeeCode,
+        'username': user.employeeCode,
+        'display_name': user.fullName,
+        'attendance_id': _uuidOrNull(visit.attendanceId),
+        'active_site_visit_id': _uuidOrNull(visit.remoteId),
+        'is_online': true,
+        'is_tracking': false,
+        'current_status': 'On Site Visit',
+        'last_seen_at': DateTime.now().toUtc().toIso8601String(),
+        'source': 'mobile',
+        'sync_status': 'synced',
+      };
+      if (latitude != null) payload['latitude'] = latitude;
+      if (longitude != null) payload['longitude'] = longitude;
+      if (accuracy != null) payload['accuracy'] = accuracy;
+      await client
+          .from('fo_live_status')
+          .upsert(payload, onConflict: 'fo_user_id');
+      await CrashLogService.record(
+        employeeCode: user.employeeCode,
+        screen: 'tasks',
+        action: 'CHECKIN_LIVE_STATUS_UPDATE_SUCCESS',
+      );
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: user.employeeCode,
+        screen: 'tasks',
+        action: 'CHECKIN_FAILED',
         error: error,
         stackTrace: stackTrace,
       );
@@ -525,19 +876,43 @@ class SupabaseService {
     required Attendance attendance,
     required String storeName,
     required String clientName,
-    required String storeCode,
     required String state,
+    String? storeCode,
+    String? locationName,
+    String? addressLandmark,
+    String? remarks,
     double? latitude,
     double? longitude,
     double? accuracy,
   }) async {
     try {
+      final code = storeCode?.trim().isNotEmpty == true
+          ? storeCode!.trim()
+          : 'FO-${user.employeeCode}-${DateTime.now().millisecondsSinceEpoch}';
+      final metadata = {
+        'approval_status': 'pending_approval',
+        'verification_status': 'Pending',
+        'source': 'created_by_fo',
+        'created_by': user.authUserId.isNotEmpty
+            ? user.authUserId
+            : user.employeeCode,
+        'created_by_employee_code': user.employeeCode,
+        'created_by_full_name': user.fullName,
+        'is_temporary': true,
+        'first_captured_by': user.employeeCode,
+        'first_captured_by_name': user.fullName,
+        if (locationName?.trim().isNotEmpty == true)
+          'mall_building_location_name': locationName!.trim(),
+        if (addressLandmark?.trim().isNotEmpty == true)
+          'address_landmark': addressLandmark!.trim(),
+        if (remarks?.trim().isNotEmpty == true) 'remarks': remarks!.trim(),
+      };
       final row = await client
           .from('store_master')
           .insert({
             'store_name': storeName,
             'client_name': clientName,
-            'store_code': storeCode,
+            'store_code': code,
             'state': state,
             'latitude': latitude,
             'longitude': longitude,
@@ -547,12 +922,7 @@ class SupabaseService {
             'attendance_id': _uuidOrNull(attendance.remoteId),
             'captured_at': DateTime.now().toUtc().toIso8601String(),
             'status': 'Active',
-            'metadata': {
-              'verification_status': 'Pending',
-              'source': 'fo_checkin',
-              'first_captured_by': user.employeeCode,
-              'first_captured_by_name': user.fullName,
-            },
+            'metadata': metadata,
           })
           .select('id')
           .maybeSingle();
@@ -600,6 +970,11 @@ class SupabaseService {
                 visit.currentGpsAccuracy ?? visit.checkInAccuracy,
             'checkin_accuracy': visit.checkInAccuracy,
             'checkout_accuracy': visit.checkOutAccuracy,
+            'origin_lat': visit.originLatitude,
+            'origin_lng': visit.originLongitude,
+            'destination_lat': visit.destinationLatitude,
+            'destination_lng': visit.destinationLongitude,
+            'route_km': visit.routeKm,
             'visit_duration_minutes': visit.durationMinutes,
             'status': visit.status,
           })

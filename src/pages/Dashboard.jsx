@@ -232,8 +232,10 @@ function FoGpsTestDashboard() {
             return dashboardFoKeys(log).some((key) => keys.includes(key));
           });
           const latestLog = attendanceLogs[0] || {};
-          const actualKm = Number(record.actual_km ?? record.total_raw_km ?? record.total_route_km ?? 0);
-          const eligibleKm = Number(record.eligible_km ?? record.total_approved_km ?? 0);
+          const eligibleKm = Number(record.eligible_km ?? record.total_approved_km ?? record.total_route_km ?? liveRow.route_km_today ?? 0);
+          const rawGpsKm = Number(record.raw_gps_km ?? record.total_raw_km ?? record.actual_km ?? 0);
+          const filteredGpsKm = Number(record.filtered_gps_km ?? record.actual_km ?? 0);
+          const actualKm = Number(record.actual_travel_km ?? record.actual_km ?? record.total_raw_km ?? 0);
           const rate = Number(record.rate_per_km ?? 4);
           return {
             username,
@@ -245,6 +247,8 @@ function FoGpsTestDashboard() {
             battery: liveRow.battery_percentage ?? latestLog.battery_percentage ?? record.end_battery_percentage ?? record.start_battery_percentage,
             points: attendanceLogs.length,
             actualKm,
+            rawGpsKm,
+            filteredGpsKm,
             eligibleKm,
             rate,
             petrol: Number(record.petrol_amount ?? eligibleKm * rate),
@@ -292,7 +296,7 @@ function FoGpsTestDashboard() {
       <div className="mt-4 overflow-x-auto">
         <table className="min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-800">
           <thead className="text-xs uppercase tracking-wide text-slate-500">
-            <tr>{['Username', 'Start Day', 'End Day', 'Status', 'Last seen', 'Battery', 'GPS points', 'Actual KM', 'Eligible KM', 'Rate/KM', 'Petrol'].map((heading) => <th key={heading} className="px-3 py-3 font-bold">{heading}</th>)}</tr>
+            <tr>{['Username', 'Start Day', 'End Day', 'Status', 'Last seen', 'Battery', 'GPS points', 'Today KM', 'Raw GPS KM', 'Filtered GPS KM', 'Actual Travel KM', 'Route vs Actual', 'Rate/KM', 'Petrol'].map((heading) => <th key={heading} className="px-3 py-3 font-bold">{heading}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {rows.map((row) => (
@@ -304,8 +308,11 @@ function FoGpsTestDashboard() {
                 <td className="px-3 py-3">{formatDateTimeCell(row.lastSeen)}</td>
                 <td className="px-3 py-3">{row.battery == null ? '-' : `${row.battery}%`}</td>
                 <td className="px-3 py-3">{row.points || 0}</td>
-                <td className="px-3 py-3">{formatKm(row.actualKm)}</td>
                 <td className="px-3 py-3">{formatKm(row.eligibleKm)}</td>
+                <td className="px-3 py-3">{formatKm(row.rawGpsKm)}</td>
+                <td className="px-3 py-3">{formatKm(row.filteredGpsKm)}</td>
+                <td className="px-3 py-3">{formatKm(row.actualKm)}</td>
+                <td className="px-3 py-3">{formatKm(Number(row.eligibleKm || 0) - Number(row.actualKm || 0))}</td>
                 <td className="px-3 py-3">₹{row.rate || 4}</td>
                 <td className="px-3 py-3 font-semibold">₹{Number(row.petrol || 0).toFixed(2)}</td>
               </tr>

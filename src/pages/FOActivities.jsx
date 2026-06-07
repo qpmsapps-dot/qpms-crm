@@ -41,8 +41,26 @@ import { isSupabaseConfigured, supabase } from "../lib/supabase.js";
 const SOUTH_INDIA_CENTER = [13.0827, 80.2707];
 const INDIA_TIME_ZONE = "Asia/Kolkata";
 const RATE_PER_KM = 4;
-const ROUTE_BREAK_MINUTES = 10;
-const ROUTE_BREAK_KM = 5;
+const MAX_GPS_ACCURACY_METERS = 50;
+const MIN_ROUTE_SEGMENT_METERS = 5;
+const MAX_ROUTE_SEGMENT_METERS = 1000;
+const MAX_ROUTE_SEGMENT_SECONDS = 600;
+const MAX_ROUTE_SPEED_MPS = 33.33;
+const LARGE_GPS_GAP_SECONDS = 600;
+const GAP_DISTANCE_SAFETY_MULTIPLIER = 1.2;
+const HIGH_CONFIDENCE_MULTIPLIER = 1.03;
+const MEDIUM_CONFIDENCE_MULTIPLIER = 1.08;
+const LOW_CONFIDENCE_MULTIPLIER = 1.12;
+const SITE_GEOFENCE_METERS = 100;
+const FO_SITE_VISIT_SELECT =
+  "fo_user_id,employee_code,fo_name,display_name,store_name,site_name,client_name,store_code,site_code,check_in_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,visit_duration_minutes,status";
+const FO_LIVE_STATUS_SELECT =
+  "fo_user_id,latitude,longitude,last_seen_at,route_km_today,is_online,is_tracking,current_status,display_name,username,accuracy,battery_percentage";
+const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:4000").replace(/\/+$/, "");
+const MARKER_ANIMATION_MIN_MS = 15000;
+const MARKER_ANIMATION_MAX_MS = 180000;
+const MARKER_ANIMATION_DEFAULT_MS = 45000;
+const MARKER_ANIMATION_RECENT_THRESHOLD_MS = 10 * 60 * 1000;
 
 function toDateInputValue(date) {
   return new Intl.DateTimeFormat("en-CA", {
@@ -184,19 +202,18 @@ function markerTone(state, officers) {
 function foMarkerColor(officer) {
   if (officer.status === "Offline") return "#ef4444";
   if (officer.status === "Recent") return "#f59e0b";
-  if (officer.battery !== null && officer.battery < 20) return "#ef4444";
-  if (officer.battery !== null && officer.battery < 60) return "#f59e0b";
   return "#10b981";
 }
 
 function foMarkerIcon(officer) {
   const color = foMarkerColor(officer);
   const isActive = officer.status === "Active";
+  const isSelected = officer.isSelected === true;
   const rotation = Number(officer.heading || 0);
   return L.divIcon({
     className: "",
     html: `
-      <div class="fo-bike-marker" style="--marker-color:${color};">
+      <div class="fo-bike-marker ${isSelected ? "fo-bike-marker-selected" : ""}" style="--marker-color:${color};">
         ${isActive ? '<span class="fo-bike-pulse"></span>' : ""}
         <span class="fo-bike-core" style="transform: rotate(${rotation}deg);">
           <span class="fo-bike-glyph">&#128757;</span>
@@ -244,6 +261,15 @@ function formatTime(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatDurationSeconds(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "--";
+  if (seconds < 60) return `${Math.round(seconds)} sec`;
+  const minutes = seconds / 60;
+  if (minutes < 60) return `${minutes.toFixed(1)} min`;
+  return `${(minutes / 60).toFixed(1)} hr`;
 }
 
 function formatDateTime(value) {
@@ -303,6 +329,23 @@ function isValidRoutePoint(log) {
   if (log?.is_mocked || log?.metadata?.mock === true) return false;
   const lat = Number(log?.latitude);
   const lng = Number(log?.longitude);
+  const accuracy = Number(log?.accuracy);
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180 &&
+    Number.isFinite(accuracy) &&
+    accuracy <= MAX_GPS_ACCURACY_METERS
+  );
+}
+
+function isValidGpsLog(log) {
+  if (log?.is_mocked || log?.metadata?.mock === true) return false;
+  const lat = Number(log?.latitude);
+  const lng = Number(log?.longitude);
   return (
     Number.isFinite(lat) &&
     Number.isFinite(lng) &&
@@ -311,6 +354,14 @@ function isValidRoutePoint(log) {
     lng >= -180 &&
     lng <= 180
   );
+}
+
+function locationTimestampMs(log) {
+  return new Date(log?.captured_at || log?.logged_at || log?.last_seen_at || 0).getTime();
+}
+
+function routePointTime(log) {
+  return new Date(log?.captured_at || log?.logged_at || 0);
 }
 
 function distanceKmBetween(a, b) {
@@ -330,40 +381,71 @@ function distanceKmBetween(a, b) {
   );
 }
 
-function routeSegmentsFromLogs(logs = []) {
+function isSameSiteDrift(previous, current, visits = []) {
+  const previousTime = routePointTime(previous);
+  const currentTime = routePointTime(current);
+  return visits.some((visit) => {
+    const lat = numberOrNull(
+      visit.current_latitude ?? visit.check_in_latitude ?? visit.latitude,
+    );
+    const lng = numberOrNull(
+      visit.current_longitude ?? visit.check_in_longitude ?? visit.longitude,
+    );
+    if (lat === null || lng === null) return false;
+    const checkIn = new Date(visit.check_in_time || visit.checkin_time || 0);
+    const checkOutValue = visit.checkout_time || visit.check_out_time;
+    const checkOut = checkOutValue ? new Date(checkOutValue) : null;
+    if (previousTime < checkIn || (checkOut && currentTime > checkOut)) {
+      return false;
+    }
+    const site = { latitude: lat, longitude: lng };
+    return (
+      distanceKmBetween(previous, site) * 1000 <= SITE_GEOFENCE_METERS &&
+      distanceKmBetween(current, site) * 1000 <= SITE_GEOFENCE_METERS
+    );
+  });
+}
+
+function routeSegmentsFromLogs(logs = [], visits = []) {
   const ordered = logs
     .filter(isValidRoutePoint)
     .slice()
-    .sort(
-      (a, b) =>
-        new Date(a.captured_at || a.logged_at || 0) -
-        new Date(b.captured_at || b.logged_at || 0),
-    );
+    .sort((a, b) => routePointTime(a) - routePointTime(b));
   const segments = [];
   let current = [];
   let previous = null;
 
   ordered.forEach((log) => {
     if (previous) {
-      const gapMinutes =
-        (new Date(log.captured_at || log.logged_at || 0) -
-          new Date(previous.captured_at || previous.logged_at || 0)) /
-        60000;
-      const jumpKm = distanceKmBetween(previous, log);
-      if (gapMinutes > ROUTE_BREAK_MINUTES || jumpKm > ROUTE_BREAK_KM) {
+      const secondsDiff = (routePointTime(log) - routePointTime(previous)) / 1000;
+      const segmentMeters = distanceKmBetween(previous, log) * 1000;
+      const accepted =
+        segmentMeters >= MIN_ROUTE_SEGMENT_METERS &&
+        segmentMeters <= MAX_ROUTE_SEGMENT_METERS &&
+        secondsDiff > 0 &&
+        secondsDiff <= MAX_ROUTE_SEGMENT_SECONDS &&
+        segmentMeters / secondsDiff <= MAX_ROUTE_SPEED_MPS &&
+        !isSameSiteDrift(previous, log, visits);
+      if (!accepted) {
         if (current.length > 1) segments.push(current);
-        current = [];
+        current = [[Number(log.latitude), Number(log.longitude)]];
+      } else {
+        if (!current.length) {
+          current.push([Number(previous.latitude), Number(previous.longitude)]);
+        }
+        current.push([Number(log.latitude), Number(log.longitude)]);
       }
+    } else {
+      current.push([Number(log.latitude), Number(log.longitude)]);
     }
-    current.push([Number(log.latitude), Number(log.longitude)]);
     previous = log;
   });
   if (current.length > 1) segments.push(current);
   return segments;
 }
 
-function routeKmFromLogs(logs = []) {
-  return routeSegmentsFromLogs(logs).reduce((sum, segment) => {
+function routeKmFromLogs(logs = [], visits = []) {
+  return routeSegmentsFromLogs(logs, visits).reduce((sum, segment) => {
     let distance = 0;
     for (let index = 1; index < segment.length; index += 1) {
       distance += distanceKmBetween(
@@ -373,6 +455,165 @@ function routeKmFromLogs(logs = []) {
     }
     return sum + distance;
   }, 0);
+}
+
+function isBasicGpsLog(log) {
+  if (log?.is_mocked || log?.metadata?.mock === true) return false;
+  const lat = Number(log?.latitude);
+  const lng = Number(log?.longitude);
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180 &&
+    routePointTime(log).toString() !== "Invalid Date"
+  );
+}
+
+function rawGpsKmFromLogs(logs = []) {
+  const ordered = logs.filter(isBasicGpsLog).sort((a, b) => routePointTime(a) - routePointTime(b));
+  let distance = 0;
+  for (let index = 1; index < ordered.length; index += 1) {
+    const previous = ordered[index - 1];
+    const current = ordered[index];
+    const gapSeconds = (routePointTime(current) - routePointTime(previous)) / 1000;
+    const segmentKm = distanceKmBetween(previous, current);
+    if (gapSeconds > 0 && segmentKm * 1000 >= MIN_ROUTE_SEGMENT_METERS) {
+      distance += segmentKm;
+    }
+  }
+  return distance;
+}
+
+function foSafeKmFromLogs(logs = [], visits = []) {
+  const ordered = logs
+    .slice()
+    .sort((a, b) => routePointTime(a) - routePointTime(b));
+  const validLogs = ordered.filter(isValidRoutePoint);
+  const rejectedPointsCount = ordered.length - validLogs.length;
+  const rawGpsKm = rawGpsKmFromLogs(logs);
+  let filteredGpsKm = 0;
+  let gapSafetyKm = 0;
+  const gaps = [];
+
+  for (let index = 1; index < validLogs.length; index += 1) {
+    const previous = validLogs[index - 1];
+    const current = validLogs[index];
+    const gapSeconds = (routePointTime(current) - routePointTime(previous)) / 1000;
+    if (!Number.isFinite(gapSeconds) || gapSeconds <= 0) continue;
+    gaps.push(gapSeconds);
+    const segmentMeters = distanceKmBetween(previous, current) * 1000;
+    if (!Number.isFinite(segmentMeters) || segmentMeters < MIN_ROUTE_SEGMENT_METERS) {
+      continue;
+    }
+    if (gapSeconds > LARGE_GPS_GAP_SECONDS) {
+      gapSafetyKm += (segmentMeters / 1000) * GAP_DISTANCE_SAFETY_MULTIPLIER;
+      continue;
+    }
+    const accepted =
+      segmentMeters <= MAX_ROUTE_SEGMENT_METERS &&
+      segmentMeters / gapSeconds <= MAX_ROUTE_SPEED_MPS &&
+      !isSameSiteDrift(previous, current, visits);
+    if (accepted) {
+      filteredGpsKm += segmentMeters / 1000;
+    }
+  }
+
+  const averageGapSeconds = gaps.length
+    ? gaps.reduce((sum, value) => sum + value, 0) / gaps.length
+    : 0;
+  const maxGapSeconds = gaps.length ? Math.max(...gaps) : 0;
+  const gapAdjustedKm = filteredGpsKm + gapSafetyKm;
+  const logsPerKm = filteredGpsKm > 0 ? validLogs.length / filteredGpsKm : validLogs.length;
+  const rejectedRatio = ordered.length ? rejectedPointsCount / ordered.length : 0;
+  let kmConfidence = "REVIEW";
+
+  if (validLogs.length >= 2 && filteredGpsKm > 0 && rejectedRatio <= 0.35) {
+    if (logsPerKm >= 8 && maxGapSeconds <= 180 && averageGapSeconds <= 90) {
+      kmConfidence = "HIGH";
+    } else if (
+      logsPerKm >= 4 &&
+      maxGapSeconds <= 600 &&
+      averageGapSeconds <= 180
+    ) {
+      kmConfidence = "MEDIUM";
+    } else if (logsPerKm >= 2 && maxGapSeconds <= 1800) {
+      kmConfidence = "LOW";
+    }
+  }
+
+  const confidenceAdjustedKm =
+    kmConfidence === "HIGH"
+      ? filteredGpsKm * HIGH_CONFIDENCE_MULTIPLIER
+      : kmConfidence === "MEDIUM"
+        ? filteredGpsKm * MEDIUM_CONFIDENCE_MULTIPLIER
+        : kmConfidence === "LOW"
+          ? filteredGpsKm * LOW_CONFIDENCE_MULTIPLIER
+          : filteredGpsKm;
+  const actualTravelKm = Math.max(filteredGpsKm, gapAdjustedKm, confidenceAdjustedKm);
+  const adjustmentParts = [];
+  if (gapAdjustedKm > filteredGpsKm) {
+    adjustmentParts.push("Gap safety multiplier 1.20");
+  }
+  if (kmConfidence === "HIGH") {
+    adjustmentParts.push("Confidence multiplier 1.03");
+  } else if (kmConfidence === "MEDIUM") {
+    adjustmentParts.push("Confidence multiplier 1.08");
+  } else if (kmConfidence === "LOW") {
+    adjustmentParts.push("Confidence multiplier 1.12");
+  } else {
+    adjustmentParts.push("Supervisor review required");
+  }
+
+  return {
+    rawGpsKm,
+    filteredGpsKm,
+    gapAdjustedKm,
+    gpsLogsCount: ordered.length,
+    validPointsCount: validLogs.length,
+    logsPerKm,
+    averageGapSeconds,
+    maxGapSeconds,
+    rejectedPointsCount,
+    kmConfidence,
+    reviewRequired: kmConfidence === "LOW" || kmConfidence === "REVIEW",
+    actualTravelKm,
+    claimKm: actualTravelKm,
+    petrolAmount: actualTravelKm * RATE_PER_KM,
+    adjustmentApplied: adjustmentParts.join(", "),
+  };
+}
+
+function actualTravelKmFromAttendanceOrLogs(attendance, logs = [], visits = []) {
+  const storedRawGpsKm = Number(attendance?.raw_gps_km);
+  const storedFilteredGpsKm = Number(attendance?.filtered_gps_km);
+  const storedActualTravelKm = Number(attendance?.actual_travel_km);
+  if (
+    Number.isFinite(storedRawGpsKm) &&
+    Number.isFinite(storedFilteredGpsKm) &&
+    Number.isFinite(storedActualTravelKm) &&
+    (storedRawGpsKm > 0 || storedFilteredGpsKm > 0 || storedActualTravelKm > 0)
+  ) {
+    return {
+      ...emptyFoSafeKmMetrics(storedActualTravelKm),
+      rawGpsKm: storedRawGpsKm,
+      filteredGpsKm: storedFilteredGpsKm,
+      gapAdjustedKm: storedActualTravelKm,
+      actualTravelKm: storedActualTravelKm,
+      claimKm: storedActualTravelKm,
+      adjustmentApplied: "Stored in fo_attendance",
+    };
+  }
+  if (logs.length) return foSafeKmFromLogs(logs, visits);
+  const fallbackKm = Number(attendance?.actual_km ?? attendance?.total_raw_km ?? 0);
+  return {
+    ...emptyFoSafeKmMetrics(fallbackKm),
+    filteredGpsKm: fallbackKm,
+    actualTravelKm: fallbackKm,
+    claimKm: fallbackKm,
+  };
 }
 
 function numberOrNull(value) {
@@ -391,38 +632,133 @@ function liveStatusTimestamp(row) {
 }
 
 function liveStatusFromRow(row, fallbackActive = false) {
-  const statusText = String(row?.current_status || "").toLowerCase();
-  if (
-    row &&
-    (row.is_online === true ||
-      row.is_tracking === true ||
-      statusText === "live" ||
-      statusText === "active")
-  )
-    return "Active";
   const timestamp = liveStatusTimestamp(row);
+  if (!timestamp) return fallbackActive ? "Recent" : "Offline";
   const ageMs = timestamp
     ? Date.now() - new Date(timestamp).getTime()
     : Number.POSITIVE_INFINITY;
   const ageMinutes = ageMs / 60000;
-  if (row && ageMinutes <= 10) return "Recent";
-  if (row) return "Offline";
-  return fallbackActive ? "Recent" : "Offline";
+  if (ageMinutes <= 2) return "Active";
+  if (ageMinutes <= 10) return "Recent";
+  return "Offline";
 }
 
 function hasFiniteCoordinates(coordinates) {
   return (
     Array.isArray(coordinates) &&
     Number.isFinite(Number(coordinates[0])) &&
-    Number.isFinite(Number(coordinates[1]))
+    Number.isFinite(Number(coordinates[1])) &&
+    Number(coordinates[0]) >= -90 &&
+    Number(coordinates[0]) <= 90 &&
+    Number(coordinates[1]) >= -180 &&
+    Number(coordinates[1]) <= 180
   );
 }
 
+function normalizeCoordinates(coordinates) {
+  if (!hasFiniteCoordinates(coordinates)) return null;
+  return [Number(coordinates[0]), Number(coordinates[1])];
+}
+
 function canShowOfficerMarker(officer) {
-  return (
-    ["Active", "Recent"].includes(officer.status) &&
-    hasFiniteCoordinates(officer.coordinates)
+  return ["Active", "Recent", "Offline"].includes(officer.status) &&
+    hasFiniteCoordinates(officer.coordinates);
+}
+
+function latestValidLocationLog(logs = []) {
+  return [...logs]
+    .filter(isValidGpsLog)
+    .sort((a, b) => locationTimestampMs(b) - locationTimestampMs(a))[0] || null;
+}
+
+function gpsPointFromLiveOrLogs(live, logs = []) {
+  const candidates = [];
+  const liveLat = Number(live?.latitude ?? live?.lat);
+  const liveLng = Number(live?.longitude ?? live?.lng ?? live?.long);
+  const liveTimestamp = liveStatusTimestamp(live);
+  if (
+    Number.isFinite(liveLat) &&
+    Number.isFinite(liveLng) &&
+    liveLat >= -90 &&
+    liveLat <= 90 &&
+    liveLng >= -180 &&
+    liveLng <= 180 &&
+    liveTimestamp
+  ) {
+    candidates.push({
+      coordinates: [liveLat, liveLng],
+      timestamp: liveTimestamp,
+      accuracy: numberOrNull(live?.accuracy),
+      speed: numberOrNull(live?.speed),
+      heading: live?.heading ?? live?.bearing ?? null,
+      source: "fo_live_status",
+    });
+  }
+  const latestLog = latestValidLocationLog(logs);
+  if (latestLog) {
+    candidates.push({
+      coordinates: [Number(latestLog.latitude), Number(latestLog.longitude)],
+      timestamp: latestLog.captured_at || latestLog.logged_at,
+      accuracy: numberOrNull(latestLog.accuracy),
+      speed: numberOrNull(latestLog.speed),
+      heading: latestLog.heading ?? latestLog.bearing ?? null,
+      source: "fo_location_logs",
+    });
+  }
+  return candidates.sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+  )[0] || null;
+}
+
+function movementBearing(start, end) {
+  const from = normalizeCoordinates(start);
+  const to = normalizeCoordinates(end);
+  if (!from || !to) return null;
+  const lat1 = (from[0] * Math.PI) / 180;
+  const lat2 = (to[0] * Math.PI) / 180;
+  const deltaLng = ((to[1] - from[1]) * Math.PI) / 180;
+  const y = Math.sin(deltaLng) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLng);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+function markerAnimationDurationMs(distanceMeters) {
+  if (!Number.isFinite(distanceMeters) || distanceMeters <= 0) {
+    return MARKER_ANIMATION_DEFAULT_MS;
+  }
+  const scaled = distanceMeters * 120;
+  return Math.min(
+    MARKER_ANIMATION_MAX_MS,
+    Math.max(MARKER_ANIMATION_MIN_MS, scaled),
   );
+}
+
+function markerAnimationLabel(timestamp) {
+  if (!timestamp) return "Moving";
+  const ageMinutes = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(timestamp).getTime()) / 60000),
+  );
+  if (ageMinutes < 1) return "Moving • last update just now";
+  return `Moving • last update ${ageMinutes} min ago`;
+}
+
+function canAnimateOfficerMarker(officer) {
+  if (officer.status === "Offline") return false;
+  if (
+    String(
+      officer.attendance?.status || officer.action || officer.current_status || "",
+    )
+      .toLowerCase()
+      .includes("completed")
+  ) {
+    return false;
+  }
+  const timestamp = officer.locationSourceTime;
+  if (!timestamp) return false;
+  return Date.now() - new Date(timestamp).getTime() <= MARKER_ANIMATION_RECENT_THRESHOLD_MS;
 }
 
 function batteryFromRow(...rows) {
@@ -492,44 +828,249 @@ async function fetchPagedLiveStatusRows(baseQuery, pageSize = 1000) {
 }
 
 async function fetchFoLiveStatusRows() {
-  const activeBaseQuery = supabase
+  let baseQuery = supabase
     .from("fo_live_status")
-    .select("*")
-    .or(
-      "is_online.eq.true,is_tracking.eq.true,current_status.eq.live,current_status.eq.Active,current_status.eq.active",
-    )
+    .select(FO_LIVE_STATUS_SELECT)
     .order("last_seen_at", { ascending: false })
-    .order("updated_at", { ascending: false });
-  const activeRows = await fetchPagedLiveStatusRows(activeBaseQuery);
+    .limit(5000);
+  let { data, error } = await baseQuery;
 
-  const { data: recentRows, error: recentError } = await supabase
-    .from("fo_live_status")
-    .select("*")
-    .order("updated_at", { ascending: false })
-    .order("last_seen_at", { ascending: false })
-    .limit(500);
-  if (recentError) throw recentError;
+  if (error) {
+    const message = String(error.message || "").toLowerCase();
+    const missingColumn =
+      error.code === "42703" ||
+      error.code === "PGRST204" ||
+      message.includes("column") ||
+      message.includes("could not find");
+    if (!missingColumn) throw error;
+    const fallback = await supabase
+      .from("fo_live_status")
+      .select("*")
+      .order("last_seen_at", { ascending: false })
+      .limit(5000);
+    if (fallback.error) throw fallback.error;
+    data = fallback.data || [];
+  }
 
-  console.debug("FO_ACTIVE_LIVE_ROWS_LOADED", activeRows.length);
-  console.debug("FO_RECENT_LIVE_ROWS_LOADED", recentRows?.length || 0);
-  return mergeLiveStatusRows(activeRows, recentRows || []);
+  const rows = mergeLiveStatusRows(data || []);
+  console.debug("FO_LIVE_STATUS_ROWS_FETCHED", rows.length);
+  return rows;
 }
 
-function officerFromRows({ foId, profile, live, attendance, visits }) {
+async function fetchFoSiteVisitRows(fromIso, toIso) {
+  let query = supabase
+    .from("fo_site_visits")
+    .select(FO_SITE_VISIT_SELECT)
+    .gte("check_in_time", fromIso)
+    .lte("check_in_time", toIso)
+    .order("check_in_time", { ascending: false })
+    .limit(5000);
+  let response = await query;
+  if (response.error) {
+    const message = String(response.error.message || "").toLowerCase();
+    const missingColumn =
+      response.error.code === "42703" ||
+      response.error.code === "PGRST204" ||
+      message.includes("column") ||
+      message.includes("could not find");
+    if (!missingColumn) throw response.error;
+    response = await supabase
+      .from("fo_site_visits")
+      .select("*")
+      .gte("check_in_time", fromIso)
+      .lte("check_in_time", toIso)
+      .order("check_in_time", { ascending: false })
+      .limit(5000);
+    if (response.error) throw response.error;
+  }
+  return response.data || [];
+}
+
+function siteVisitFoId(visit) {
+  return normalizeFoKey(visit?.fo_user_id || visit?.employee_code);
+}
+
+function siteVisitCoordinates(visit) {
+  const checkInLat = numberOrNull(visit?.check_in_latitude);
+  const checkInLng = numberOrNull(visit?.check_in_longitude);
+  if (checkInLat !== null && checkInLng !== null) {
+    return [checkInLat, checkInLng];
+  }
+  const checkOutLat = numberOrNull(visit?.check_out_latitude);
+  const checkOutLng = numberOrNull(visit?.check_out_longitude);
+  if (checkOutLat !== null && checkOutLng !== null) {
+    return [checkOutLat, checkOutLng];
+  }
+  return null;
+}
+
+function siteVisitName(visit) {
+  return (
+    visit?.store_name ||
+    visit?.site_name ||
+    visit?.store_code ||
+    visit?.site_code ||
+    "Visited site"
+  );
+}
+
+function siteVisitStatus(visit) {
+  const raw = String(visit?.status || "").trim();
+  if (raw) return raw;
+  return visit?.check_out_time ? "Checked Out" : "Checked In";
+}
+
+function siteVisitDuration(visit) {
+  const explicit = Number(visit?.visit_duration_minutes);
+  if (Number.isFinite(explicit)) return `${Math.round(explicit)} min`;
+  if (!visit?.check_in_time || !visit?.check_out_time) return "--";
+  const minutes = Math.max(
+    0,
+    Math.round(
+      (new Date(visit.check_out_time) - new Date(visit.check_in_time)) / 60000,
+    ),
+  );
+  return `${minutes} min`;
+}
+
+function buildSiteVisitPin(visit, officersByFoId, index) {
+  const coordinates = siteVisitCoordinates(visit);
+  if (!coordinates) return null;
+  const foId = siteVisitFoId(visit);
+  const officer = officersByFoId.get(foId);
+  const siteName = siteVisitName(visit);
+  console.debug("FO_SITE_VISIT_POPUP_READY", siteName, foId || "--");
+  return {
+    id:
+      visit.id ||
+      `visit-${foId || "unknown"}-${visit.check_in_time || visit.check_out_time || index}-${coordinates[0]}-${coordinates[1]}`,
+    coordinates,
+    siteName,
+    clientName: visit.client_name || "--",
+    storeCode: visit.store_code || visit.site_code || "--",
+    foName:
+      visit.fo_name ||
+      visit.display_name ||
+      officer?.name ||
+      visit.full_name ||
+      "--",
+    foId: foId || "--",
+    checkIn: formatDateTime(visit.check_in_time),
+    checkOut: formatDateTime(visit.check_out_time),
+    duration: siteVisitDuration(visit),
+    status: siteVisitStatus(visit),
+  };
+}
+
+function emptyFoSafeKmMetrics(fallbackKm = 0) {
+  const rawGpsKm = Number(fallbackKm) || 0;
+  return {
+    rawGpsKm,
+    filteredGpsKm: rawGpsKm,
+    gapAdjustedKm: rawGpsKm,
+    actualTravelKm: rawGpsKm,
+    gpsLogsCount: 0,
+    validPointsCount: 0,
+    logsPerKm: 0,
+    averageGapSeconds: 0,
+    maxGapSeconds: 0,
+    rejectedPointsCount: 0,
+    kmConfidence: rawGpsKm > 0 ? "REVIEW" : "REVIEW",
+    reviewRequired: true,
+    claimKm: rawGpsKm,
+    petrolAmount: rawGpsKm * RATE_PER_KM,
+    adjustmentApplied: "Supervisor review required",
+  };
+}
+
+function sumSiteVisitRouteKm(visits = []) {
+  return visits.reduce((sum, visit) => {
+    const routeKm = Number(visit?.route_km);
+    return Number.isFinite(routeKm) && routeKm > 0 ? sum + routeKm : sum;
+  }, 0);
+}
+
+function logPayableKmSource(foId, source, km) {
+  console.debug("FO_PAYABLE_KM_SOURCE_SELECTED", foId, source, km);
+  console.debug("FO_ROUTE_KM_TODAY_VALUE", foId, km);
+}
+
+function payableRouteKmForOfficer({ foId, live, attendance, visits = [] }) {
+  const liveKm = Number(live?.route_km_today);
+  if (Number.isFinite(liveKm) && liveKm >= 0.1) {
+    logPayableKmSource(foId, "fo_live_status.route_km_today", liveKm);
+    return {
+      km: liveKm,
+      source: "fo_live_status.route_km_today",
+    };
+  }
+
+  const eligibleKm = Number(attendance?.eligible_km);
+  if (Number.isFinite(eligibleKm) && eligibleKm > 0) {
+    logPayableKmSource(foId, "fo_attendance.eligible_km", eligibleKm);
+    return {
+      km: eligibleKm,
+      source: "fo_attendance.eligible_km",
+    };
+  }
+
+  const totalRouteKm = Number(attendance?.total_route_km);
+  if (Number.isFinite(totalRouteKm) && totalRouteKm > 0) {
+    logPayableKmSource(foId, "fo_attendance.total_route_km", totalRouteKm);
+    return {
+      km: totalRouteKm,
+      source: "fo_attendance.total_route_km",
+    };
+  }
+
+  const siteVisitRouteKm = sumSiteVisitRouteKm(visits);
+  if (siteVisitRouteKm > 0) {
+    logPayableKmSource(foId, "fo_site_visits.route_km_sum", siteVisitRouteKm);
+    return {
+      km: siteVisitRouteKm,
+      source: "fo_site_visits.route_km_sum",
+    };
+  }
+
+  logPayableKmSource(foId, "zero", 0);
+  return {
+    km: 0,
+    source: "zero",
+  };
+}
+
+function officerFromRows({ foId, profile, live, attendance, visits, logs }) {
   const record = attendance || {};
   const foVisits = visits || [];
-  const lat = numberOrNull(live?.latitude ?? live?.lat);
-  const lng = numberOrNull(live?.longitude ?? live?.lng ?? live?.long);
-  const coordinates = lat !== null && lng !== null ? [lat, lng] : null;
-  const sourceTimestamp = liveStatusTimestamp(live) || record.login_time;
-  const status = liveStatusFromRow(
+  const foLogs = logs || [];
+  const gpsPoint = gpsPointFromLiveOrLogs(live, foLogs);
+  const coordinates = gpsPoint?.coordinates ?? null;
+  const sourceTimestamp =
+    gpsPoint?.timestamp || liveStatusTimestamp(live) || record.login_time;
+  const status = gpsPoint
+    ? liveStatusFromRow({ last_seen_at: gpsPoint.timestamp })
+    : liveStatusFromRow(
+        null,
+        !record.logout_time &&
+          String(record.status || "").toLowerCase() !== "completed",
+      );
+  const payableRouteKm = payableRouteKmForOfficer({
+    foId,
     live,
-    !record.logout_time &&
-      String(record.status || "").toLowerCase() !== "completed",
-  );
-  const actualKm = Number(live?.route_km_today ?? record.actual_km ?? 0);
-  const eligibleKm = Number(record.eligible_km ?? actualKm ?? 0);
-  const petrolAmount = Number(record.petrol_amount ?? eligibleKm * RATE_PER_KM);
+    attendance: record,
+    visits: foVisits,
+  });
+  const payableKm = payableRouteKm.km;
+  const foSafeKm = actualTravelKmFromAttendanceOrLogs(record, foLogs, foVisits);
+  const actualKm = Number(foSafeKm.actualTravelKm ?? record.actual_km ?? record.total_raw_km ?? 0);
+  const eligibleKm = payableKm;
+  const storedPetrolAmount = Number(record.petrol_amount);
+  const petrolAmount =
+    payableRouteKm.source !== "fo_live_status.route_km_today" &&
+    Number.isFinite(storedPetrolAmount) &&
+    storedPetrolAmount > 0
+      ? storedPetrolAmount
+      : eligibleKm * RATE_PER_KM;
   const name =
     profile?.full_name ||
     profile?.display_name ||
@@ -556,28 +1097,35 @@ function officerFromRows({ foId, profile, live, attendance, visits }) {
     action: live?.current_status || record.status || "Attendance captured",
     phone: "--",
     coordinates,
-    heading: live?.heading ?? live?.bearing ?? null,
-    speed: live?.speed ?? null,
-    accuracy: live?.accuracy ?? null,
+    heading: gpsPoint?.heading ?? null,
+    speed: gpsPoint?.speed ?? null,
+    accuracy: gpsPoint?.accuracy ?? null,
     actualKm,
+    rawGpsKm: Number(foSafeKm.rawGpsKm || 0),
+    filteredGpsKm: Number(foSafeKm.filteredGpsKm || 0),
+    actualTravelKm: Number(foSafeKm.actualTravelKm || actualKm || 0),
     eligibleKm,
     ratePerKm: RATE_PER_KM,
     petrolAmount,
-    routeKmToday: actualKm,
+    routeKmToday: eligibleKm,
+    routeKmSource: payableRouteKm.source,
+    foSafeKm,
     siteCoordinates: null,
     siteMarkerName: "Assigned site",
     foLatitude: coordinates?.[0] ?? null,
     foLongitude: coordinates?.[1] ?? null,
     locationSourceTime: sourceTimestamp,
+    locationSource: gpsPoint?.source ?? null,
+    hasLiveStatus: Boolean(live),
     attendance: record,
     tasks: [],
     visits: foVisits,
-    logs: [],
+    logs: foLogs,
     conveyance: null,
   };
 }
 
-function buildLiveFoData({ attendance, visits, liveStatus, profiles }) {
+function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs }) {
   const latestAttendance = latestBy(attendance, "login_time");
   const latestLiveStatus = latestLiveStatusByFo(liveStatus);
   const profilesByCode = profileByFoKey(profiles);
@@ -588,9 +1136,16 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles }) {
     map.set(id, list);
     return map;
   }, new Map());
+  const logsByFo = (logs || []).reduce((map, log) => {
+    const id = normalizeFoKey(foIdFromRow(log));
+    if (!id) return map;
+    const list = map.get(id) || [];
+    list.push(log);
+    map.set(id, list);
+    return map;
+  }, new Map());
 
   const officerIds = new Set([
-    ...profilesByCode.keys(),
     ...latestLiveStatus.keys(),
   ]);
   return Array.from(officerIds).map((foId) =>
@@ -600,6 +1155,7 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles }) {
       live: latestLiveStatus.get(foId),
       attendance: latestAttendance.get(foId),
       visits: visitsByFo.get(foId) || [],
+      logs: logsByFo.get(foId) || [],
     }),
   );
 }
@@ -610,22 +1166,38 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
   );
   if (!foId) return null;
   const profile = profilesByCode.get(foId);
-  const lat = numberOrNull(row?.latitude ?? row?.lat);
-  const lng = numberOrNull(row?.longitude ?? row?.lng ?? row?.long);
-  const coordinates = lat !== null && lng !== null ? [lat, lng] : null;
+  const gpsPoint = gpsPointFromLiveOrLogs(row, []);
+  const coordinates =
+    gpsPoint?.coordinates ??
+    (hasFiniteCoordinates(existing.coordinates) ? existing.coordinates : null);
   if (!coordinates && hasFiniteCoordinates(existing.coordinates)) {
     console.debug("FO_COORDINATES_CLEARED", foId);
   }
-  const timestamp = liveStatusTimestamp(row) || existing.locationSourceTime;
-  const status = liveStatusFromRow(row, existing.status === "Active");
+  const timestamp =
+    gpsPoint?.timestamp ||
+    (coordinates ? existing.locationSourceTime : liveStatusTimestamp(row));
+  const status = coordinates
+    ? liveStatusFromRow({ last_seen_at: timestamp })
+    : liveStatusFromRow(row, existing.status === "Active");
   const battery = batteryFromRow(row);
-  const actualKm = Number(
-    row?.route_km_today ?? existing.actualKm ?? existing.routeKmToday ?? 0,
-  );
-  const eligibleKm = Number(existing.eligibleKm ?? actualKm ?? 0);
-  const petrolAmount = Number(
-    existing.petrolAmount ?? eligibleKm * RATE_PER_KM,
-  );
+  const actualKm = Number(existing.foSafeKm?.actualTravelKm ?? existing.actualKm ?? 0);
+  const payableRouteKm = payableRouteKmForOfficer({
+    foId,
+    live: row,
+    attendance: existing.attendance,
+    visits: existing.visits || [],
+  });
+  const eligibleKm = payableRouteKm.km;
+  const attendancePetrolAmount = Number(existing.attendance?.petrol_amount);
+  const existingPetrolAmount = Number(existing.petrolAmount);
+  const petrolAmount =
+    payableRouteKm.source === "fo_live_status.route_km_today"
+      ? eligibleKm * RATE_PER_KM
+      : Number.isFinite(attendancePetrolAmount) && attendancePetrolAmount > 0
+        ? attendancePetrolAmount
+        : Number.isFinite(existingPetrolAmount) && existingPetrolAmount > 0
+          ? existingPetrolAmount
+          : eligibleKm * RATE_PER_KM;
   return {
     ...existing,
     id: existing.id || `live-${foId}`,
@@ -651,16 +1223,23 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     battery: battery ?? existing.battery ?? null,
     action: row?.current_status || existing.action || "Attendance captured",
     coordinates,
-    heading: row?.heading ?? row?.bearing ?? existing.heading ?? null,
-    speed: row?.speed ?? existing.speed ?? null,
-    accuracy: row?.accuracy ?? existing.accuracy ?? null,
+    heading: gpsPoint?.heading ?? existing.heading ?? null,
+    speed: gpsPoint?.speed ?? existing.speed ?? null,
+    accuracy: gpsPoint?.accuracy ?? existing.accuracy ?? null,
     actualKm,
+    rawGpsKm: existing.rawGpsKm ?? Number(existing.foSafeKm?.rawGpsKm || 0),
+    filteredGpsKm: existing.filteredGpsKm ?? Number(existing.foSafeKm?.filteredGpsKm || 0),
+    actualTravelKm: existing.actualTravelKm ?? Number(existing.foSafeKm?.actualTravelKm || actualKm || 0),
     eligibleKm,
-    routeKmToday: actualKm,
+    routeKmToday: eligibleKm,
+    routeKmSource: payableRouteKm.source,
     petrolAmount,
+    foSafeKm: existing.foSafeKm || emptyFoSafeKmMetrics(actualKm),
     foLatitude: coordinates?.[0] ?? null,
     foLongitude: coordinates?.[1] ?? null,
     locationSourceTime: timestamp,
+    locationSource: gpsPoint?.source ?? existing.locationSource ?? null,
+    hasLiveStatus: true,
     tasks: existing.tasks || [],
     visits: existing.visits || [],
     logs: existing.logs || [],
@@ -820,12 +1399,19 @@ function LegendItem({ color, label, helper, dashed = false, site = false }) {
 function OfficerDirectoryRow({ officer, selected, onSelect }) {
   const status = officerStatus(officer);
   const battery = batteryState(officer);
-  const routeKm = Number(officer.routeKmToday ?? 0);
+  const distanceToday = Number(
+    officer.eligibleKm ?? officer.routeKmToday ?? 0,
+  );
+  const actualTravelKm = Number(officer.actualTravelKm ?? officer.actualKm ?? 0);
   const isLive = status.label === "Online";
   const isRecent =
     status.label === "Recently Active" || status.label === "Low Battery";
-  const statusText = isLive ? "Live" : isRecent ? "Recent" : "Offline";
-  const statusClass = isLive
+  const statusText =
+    officer.movementStatusLabel ||
+    (isLive ? "Live" : isRecent ? "Recent" : "Offline");
+  const statusClass = officer.movementStatusLabel
+    ? "bg-emerald-50 text-emerald-700"
+    : isLive
     ? "bg-emerald-50 text-emerald-700"
     : isRecent
       ? "bg-amber-50 text-amber-700"
@@ -866,23 +1452,17 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
               {battery.label}
             </span>
             <span className="inline-flex items-center gap-1">
-              <CircleGauge className="h-3.5 w-3.5" />
-              {officer.speed
-                ? `${Math.round(Number(officer.speed))} km/h`
-                : "0 km/h"}
-            </span>
-            <span className="inline-flex items-center gap-1">
               <Route className="h-3.5 w-3.5" />
-              {routeKm.toFixed(1)} km
+              {distanceToday.toFixed(1)} km
             </span>
-            <span>
-              Eligible {Number(officer.eligibleKm || 0).toFixed(1)} km
-            </span>
-            <span>₹{Number(officer.petrolAmount || 0).toFixed(0)}</span>
+            <span>Actual {actualTravelKm.toFixed(1)} km</span>
+            <span>₹{Number(officer.petrolAmount ?? distanceToday * RATE_PER_KM).toFixed(0)}</span>
           </div>
           <p className="mt-1 truncate text-xs font-medium text-slate-500">
             <MapPin className="mr-1 inline h-3.5 w-3.5 text-slate-400" />
-            {officer.branch || officer.state}
+            {hasFiniteCoordinates(officer.coordinates)
+              ? `${Number(officer.coordinates[0]).toFixed(5)}, ${Number(officer.coordinates[1]).toFixed(5)}`
+              : "No Location Available"}
           </p>
           <p className="mt-0.5 text-xs font-semibold text-slate-400">
             {officer.lastSeen}
@@ -893,11 +1473,35 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
   );
 }
 
-function SelectedOfficerSummary({ officer, onClose }) {
+function SelectedOfficerSummary({
+  officer,
+  onClose,
+  onRecalculateKm,
+  recalculatingKm = false,
+  recalculationResult = null,
+  roadKmEstimate,
+  foSafeKm,
+  siteVisitCount,
+}) {
   if (!officer) return null;
   const status = officerStatus(officer);
   const battery = batteryState(officer);
-  const routeKm = Number(officer.actualKm ?? officer.routeKmToday ?? 0);
+  const kmMetrics = foSafeKm || officer.foSafeKm || emptyFoSafeKmMetrics(0);
+  const routeKm = Number(officer.eligibleKm ?? officer.routeKmToday ?? 0);
+  const actualTravelKm = Number(
+    officer.actualTravelKm ?? kmMetrics.actualTravelKm ?? officer.actualKm ?? 0,
+  );
+  const filteredGpsKm = Number(officer.filteredGpsKm ?? kmMetrics.filteredGpsKm ?? 0);
+  const routeVsActualDelta = routeKm - actualTravelKm;
+  const claimKm = routeKm;
+  const hasClaimKm = Number.isFinite(claimKm);
+  const roadKmLabel = roadKmEstimate
+    ? `${Number(roadKmEstimate.roadKm || 0).toFixed(1)} km reference only${
+        roadKmEstimate.usedFallback ? " fallback" : ""
+      }`
+    : "--";
+  const claimKmLabel = hasClaimKm ? `${claimKm.toFixed(1)} km` : "--";
+  const claimPetrol = Number(officer.petrolAmount ?? claimKm * RATE_PER_KM);
   const isLive = status.label === "Online";
   const isRecent =
     status.label === "Recently Active" || status.label === "Low Battery";
@@ -947,6 +1551,18 @@ function SelectedOfficerSummary({ officer, onClose }) {
         <strong className={`text-right ${battery.tone}`}>
           {battery.label}
         </strong>
+        <span>Accuracy</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {officer.accuracy === null || officer.accuracy === undefined
+            ? "--"
+            : `${Number(officer.accuracy).toFixed(1)} m`}
+        </strong>
+        <span>Latest Lat/Lng</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {hasFiniteCoordinates(officer.coordinates)
+            ? `${Number(officer.coordinates[0]).toFixed(5)}, ${Number(officer.coordinates[1]).toFixed(5)}`
+            : "No Location Available"}
+        </strong>
       </div>
       <div className="mt-3 border-y border-slate-100 py-3 dark:border-slate-800">
         <p className="text-[11px] font-bold uppercase text-slate-400">
@@ -963,7 +1579,7 @@ function SelectedOfficerSummary({ officer, onClose }) {
       <div className="mt-3 flex items-center justify-between">
         <div>
           <p className="text-[11px] font-bold uppercase text-slate-400">
-            Actual KM
+            Today KM
           </p>
           <p className="mt-1 text-sm font-black text-slate-950 dark:text-white">
             {routeKm.toFixed(1)} km
@@ -973,14 +1589,79 @@ function SelectedOfficerSummary({ officer, onClose }) {
           <Route className="h-4 w-4" />
         </span>
       </div>
+      <button
+        type="button"
+        onClick={onRecalculateKm}
+        disabled={recalculatingKm}
+        className="focus-ring mt-3 w-full rounded-lg border border-qpms-200 bg-white px-3 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-blue-300"
+      >
+        {recalculatingKm ? "Recalculating KM..." : "Recalculate KM"}
+      </button>
+      {recalculationResult ? (
+        <p className="mt-2 text-[11px] font-semibold text-slate-500">
+          Actual {Number(recalculationResult.actual_travel_km || 0).toFixed(1)} km,
+          points {recalculationResult.gps_points_used || 0}/{recalculationResult.gps_points_total || 0},
+          confidence {recalculationResult.confidence || "--"}
+        </p>
+      ) : null}
       <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] font-semibold text-slate-500">
-        <span>Eligible KM</span>
+        <span>Raw GPS KM</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
-          {Number(officer.eligibleKm || 0).toFixed(1)} km
+          {Number(kmMetrics.rawGpsKm || 0).toFixed(1)} km
         </strong>
-        <span>Sites Visited Today</span>
+        <span>Filtered GPS KM</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
-          {officer.visits?.length || 0}
+          {filteredGpsKm.toFixed(1)} km
+        </strong>
+        <span>Actual Travel KM</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {actualTravelKm.toFixed(1)} km
+        </strong>
+        <span>Route vs Actual</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {routeVsActualDelta.toFixed(1)} km
+        </strong>
+        <span>Claim KM</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {claimKmLabel}
+        </strong>
+        <span>Petrol Amount</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {claimPetrol === null ? "--" : `₹${claimPetrol.toFixed(0)}`}
+        </strong>
+        <span>KM Confidence</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {kmMetrics.kmConfidence || "REVIEW"}
+        </strong>
+        <span>Review Required</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {kmMetrics.reviewRequired ? "Yes" : "No"}
+        </strong>
+        <span>GPS Logs Count</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {Number(kmMetrics.gpsLogsCount || 0)}
+        </strong>
+        <span>Max GPS Gap</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {formatDurationSeconds(kmMetrics.maxGapSeconds)}
+        </strong>
+        <span>Adjustment Applied</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {kmMetrics.adjustmentApplied || "--"}
+        </strong>
+        <span>Road Estimate</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {roadKmLabel}
+        </strong>
+        <span>Road KM Source</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {roadKmEstimate
+            ? `${roadKmEstimate.status === "google" ? "Google" : roadKmEstimate.status} / ${roadKmEstimate.anchorCount || 0} anchors`
+            : "--"}
+        </strong>
+        <span>Sites Visited Today / Selected Date</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {siteVisitCount ?? officer.visits?.length ?? 0}
         </strong>
         <span>Petrol</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
@@ -1039,6 +1720,7 @@ function OperationsMap({
   onSelectOfficer,
   onCloseSelection,
 }) {
+  // TODO: optional Google Maps provider switch using Google Maps JS API key
   const tileUrl =
     mapTheme === "dark"
       ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
@@ -1084,14 +1766,18 @@ function OperationsMap({
               icon={siteMarkerIcon()}
             >
               <Popup>
-                <div className="min-w-[180px] text-slate-700">
+                <div className="min-w-[240px] space-y-1 text-xs text-slate-700">
                   <p className="text-sm font-bold text-slate-950">
-                    {site.name}
+                    Site: {site.siteName}
                   </p>
-                  <p className="text-xs text-slate-600">{site.state}</p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Destination/site marker
-                  </p>
+                  <p>Client: {site.clientName}</p>
+                  <p>Store Code: {site.storeCode}</p>
+                  <p>FO: {site.foName}</p>
+                  <p>Employee ID: {site.foId}</p>
+                  <p>Check-In: {site.checkIn}</p>
+                  <p>Check-Out: {site.checkOut}</p>
+                  <p>Duration: {site.duration}</p>
+                  <p>Status: {site.status}</p>
                 </div>
               </Popup>
             </Marker>
@@ -1135,14 +1821,39 @@ function OperationsMap({
                       : "--"}
                   </p>
                   <p className="text-slate-600">
+                    Status:{" "}
+                    {officer.movementStatusLabel ||
+                      (officer.status === "Active"
+                        ? "Live"
+                        : officer.status === "Recent"
+                          ? "Recent"
+                          : "Offline")}
+                  </p>
+                  <p className="text-slate-600">
                     Last seen: {officer.lastSeen}
+                  </p>
+                  <p className="text-slate-600">
+                    Accuracy:{" "}
+                    {officer.accuracy === null || officer.accuracy === undefined
+                      ? "--"
+                      : `${Number(officer.accuracy).toFixed(1)} m`}
+                  </p>
+                  <p className="text-slate-600">
+                    Lat/Lng:{" "}
+                    {hasFiniteCoordinates(officer.coordinates)
+                      ? `${Number(officer.coordinates[0]).toFixed(5)}, ${Number(officer.coordinates[1]).toFixed(5)}`
+                      : "No Location Available"}
                   </p>
                   <p className="text-slate-600">
                     Route KM:{" "}
                     {Number(
-                      officer.actualKm ?? officer.routeKmToday ?? 0,
+                      officer.eligibleKm ?? officer.routeKmToday ?? 0,
                     ).toFixed(1)}{" "}
                     km
+                  </p>
+                  <p className="text-slate-600">
+                    Actual Travel KM:{" "}
+                    {Number(officer.actualTravelKm ?? officer.actualKm ?? 0).toFixed(1)} km
                   </p>
                 </div>
               ))}
@@ -1167,8 +1878,7 @@ function OperationsMap({
 }
 
 function validReportPoint(log) {
-  if (!isValidRoutePoint(log)) return false;
-  return log.accuracy == null || Number(log.accuracy) <= 50;
+  return isValidRoutePoint(log);
 }
 
 function pointFromVisit(visit, phase, store) {
@@ -1211,15 +1921,8 @@ function routeDistanceKmForWindow(logs, from, to) {
     const capturedAt = new Date(log.captured_at || log.logged_at || 0);
     return capturedAt >= new Date(from) && capturedAt <= new Date(to);
   });
-  const goodLogs = windowLogs.filter(validReportPoint);
-  const points =
-    goodLogs.length >= 2 ? goodLogs : windowLogs.filter(isValidRoutePoint);
-  if (points.length < 2) return null;
-  let distance = 0;
-  for (let index = 1; index < points.length; index += 1) {
-    distance += distanceKmBetween(points[index - 1], points[index]);
-  }
-  return distance;
+  const distance = routeKmFromLogs(windowLogs);
+  return distance > 0 ? distance : null;
 }
 
 function appendSheet(workbook, name, rows, headers) {
@@ -1338,16 +2041,26 @@ async function exportFoOperationsExcel({
           new Date(a.captured_at || a.logged_at || 0) -
           new Date(b.captured_at || b.logged_at || 0),
       );
-    const goodLogs = rawLogs.filter(validReportPoint);
-    const logsForDistance =
-      goodLogs.length >= 2 ? goodLogs : rawLogs.filter(isValidRoutePoint);
+    const logsForDistance = rawLogs.filter(validReportPoint);
 
     let runningKm = 0;
     logsForDistance.forEach((log, index) => {
       let segmentKm = 0;
       if (index > 0) {
-        segmentKm = distanceKmBetween(logsForDistance[index - 1], log);
-        runningKm += segmentKm;
+        const previous = logsForDistance[index - 1];
+        const segmentMeters = distanceKmBetween(previous, log) * 1000;
+        const secondsDiff = (routePointTime(log) - routePointTime(previous)) / 1000;
+        const accepted =
+          segmentMeters >= MIN_ROUTE_SEGMENT_METERS &&
+          segmentMeters <= MAX_ROUTE_SEGMENT_METERS &&
+          secondsDiff > 0 &&
+          secondsDiff <= MAX_ROUTE_SEGMENT_SECONDS &&
+          segmentMeters / secondsDiff <= MAX_ROUTE_SPEED_MPS &&
+          !isSameSiteDrift(previous, log, visits);
+        if (accepted) {
+          segmentKm = segmentMeters / 1000;
+          runningKm += segmentKm;
+        }
       }
       routePointRows.push({
         "Employee ID": foId,
@@ -1505,28 +2218,26 @@ async function exportFoOperationsExcel({
         });
       });
 
-    const calculatedKm = runningKm;
-    const attendanceCompleted =
-      attendance.logout_time ||
-      String(attendance.status || "").toLowerCase() === "completed";
-    const totalRouteKm =
-      Number(
-        attendanceCompleted
-          ? (attendance.actual_km ?? attendance.total_raw_km)
-          : (live.route_km_today ?? calculatedKm),
-      ) || 0;
-    const eligibleKm =
-      Number(
-        attendance.eligible_km ?? attendance.total_approved_km ?? totalRouteKm,
-      ) || 0;
+    const safeKm = actualTravelKmFromAttendanceOrLogs(attendance, rawLogs, visits);
+    const calculatedKm = safeKm.actualTravelKm || runningKm;
+    const payableRouteKm = payableRouteKmForOfficer({
+      foId,
+      live,
+      attendance,
+      visits,
+    }).km;
+    const eligibleKm = payableRouteKm;
+    const storedPetrolAmount = Number(attendance.petrol_amount);
     const petrolAmount =
-      Number(attendance.petrol_amount ?? eligibleKm * RATE_PER_KM) || 0;
-    if (Math.abs(totalRouteKm - calculatedKm) > 2 && calculatedKm > 0) {
+      Number.isFinite(storedPetrolAmount) && storedPetrolAmount > 0
+        ? storedPetrolAmount
+        : eligibleKm * RATE_PER_KM;
+    if (Math.abs(payableRouteKm - calculatedKm) > 2 && calculatedKm > 0) {
       exceptionRows.push({
         "Employee ID": foId,
         "FO Name": foName,
-        Type: "Distance mismatch",
-        Detail: `Reported ${totalRouteKm.toFixed(2)} km vs logs ${calculatedKm.toFixed(2)} km`,
+        Type: "Route vs actual travel mismatch",
+        Detail: `Route ${payableRouteKm.toFixed(2)} km vs actual travel ${calculatedKm.toFixed(2)} km`,
         Time: "",
       });
     }
@@ -1538,10 +2249,22 @@ async function exportFoOperationsExcel({
       "Start Time": formatDateTime(attendance.login_time),
       "End Time": formatDateTime(attendance.logout_time),
       "Attendance Status": attendance.status || officer.status || "",
-      "Total Route KM": totalRouteKm.toFixed(2),
-      "Eligible KM": eligibleKm.toFixed(2),
+      "Raw GPS KM": safeKm.rawGpsKm.toFixed(2),
+      "Filtered GPS KM": safeKm.filteredGpsKm.toFixed(2),
+      "Actual Travel KM": safeKm.actualTravelKm.toFixed(2),
+      "Route KM": eligibleKm.toFixed(2),
+      "Route vs Actual KM": (eligibleKm - safeKm.actualTravelKm).toFixed(2),
+      "Claim KM": eligibleKm.toFixed(2),
       "Rate Per KM": RATE_PER_KM,
       "Petrol Amount": petrolAmount.toFixed(2),
+      "KM Confidence": safeKm.kmConfidence,
+      "Review Required": safeKm.reviewRequired ? "Yes" : "No",
+      "GPS Logs Count": safeKm.gpsLogsCount,
+      "Logs Per KM": safeKm.logsPerKm.toFixed(2),
+      "Average GPS Gap Seconds": safeKm.averageGapSeconds.toFixed(2),
+      "Max GPS Gap Seconds": safeKm.maxGapSeconds.toFixed(2),
+      "Rejected Points Count": safeKm.rejectedPointsCount,
+      "Adjustment Applied": safeKm.adjustmentApplied,
       "Total Sites Visited": visits.length,
       "Total Time on Site": visits.reduce(
         (sum, visit) =>
@@ -1572,10 +2295,22 @@ async function exportFoOperationsExcel({
     "Start Time",
     "End Time",
     "Attendance Status",
-    "Total Route KM",
-    "Eligible KM",
+    "Raw GPS KM",
+    "Filtered GPS KM",
+    "Actual Travel KM",
+    "Route KM",
+    "Route vs Actual KM",
+    "Claim KM",
     "Rate Per KM",
     "Petrol Amount",
+    "KM Confidence",
+    "Review Required",
+    "GPS Logs Count",
+    "Logs Per KM",
+    "Average GPS Gap Seconds",
+    "Max GPS Gap Seconds",
+    "Rejected Points Count",
+    "Adjustment Applied",
     "Total Sites Visited",
     "Total Time on Site",
     "First Location",
@@ -1636,6 +2371,199 @@ async function exportFoOperationsExcel({
   );
 }
 
+function latestRouteSegmentFromLogs(logs = []) {
+  const orderedLogs = logs
+    .filter(isValidRoutePoint)
+    .slice()
+    .sort((a, b) => routePointTime(a) - routePointTime(b));
+  if (orderedLogs.length < 2) return null;
+  const start = orderedLogs[orderedLogs.length - 2];
+  const end = orderedLogs[orderedLogs.length - 1];
+  return {
+    start: [Number(start.latitude), Number(start.longitude)],
+    end: [Number(end.latitude), Number(end.longitude)],
+  };
+}
+
+function useAnimatedOfficerMarkers(officers, selectedOfficerId, selectedRouteLogs) {
+  const [animatedMarkers, setAnimatedMarkers] = useState({});
+  const targetCoordinatesRef = useRef(new Map());
+  const selectedSegmentKeyRef = useRef(null);
+  const animationsRef = useRef(new Map());
+  const frameRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (frameRef.current) {
+        window.cancelAnimationFrame(frameRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const latestSelectedSegment = latestRouteSegmentFromLogs(selectedRouteLogs);
+    const latestSelectedSegmentKey = latestSelectedSegment
+      ? `${latestSelectedSegment.start.join(",")}-${latestSelectedSegment.end.join(",")}`
+      : null;
+    const currentOfficerIds = new Set(officers.map((officer) => officer.id));
+    const now = performance.now();
+
+    setAnimatedMarkers((currentMarkers) => {
+      const nextMarkers = { ...currentMarkers };
+
+      Object.keys(nextMarkers).forEach((id) => {
+        if (!currentOfficerIds.has(id)) {
+          delete nextMarkers[id];
+          targetCoordinatesRef.current.delete(id);
+          animationsRef.current.delete(id);
+        }
+      });
+
+      officers.forEach((officer) => {
+        const target = normalizeCoordinates(officer.coordinates);
+        if (!target || !canShowOfficerMarker(officer)) {
+          delete nextMarkers[officer.id];
+          targetCoordinatesRef.current.delete(officer.id);
+          animationsRef.current.delete(officer.id);
+          return;
+        }
+
+        const previousTarget = targetCoordinatesRef.current.get(officer.id);
+        const targetKey = target.join(",");
+        const shouldAnimateSelectedSegment =
+          officer.id === selectedOfficerId &&
+          latestSelectedSegment &&
+          selectedSegmentKeyRef.current !== latestSelectedSegmentKey;
+        if (previousTarget?.key === targetKey && !shouldAnimateSelectedSegment) {
+          return;
+        }
+
+        if (!canAnimateOfficerMarker(officer)) {
+          nextMarkers[officer.id] = {
+            coordinates: target,
+            heading: officer.heading,
+            isAnimating: false,
+            movementStatusLabel: null,
+          };
+          targetCoordinatesRef.current.set(officer.id, {
+            key: targetKey,
+            coordinates: target,
+          });
+          animationsRef.current.delete(officer.id);
+          return;
+        }
+
+        let start =
+          normalizeCoordinates(nextMarkers[officer.id]?.coordinates) ||
+          normalizeCoordinates(previousTarget?.coordinates);
+        if (
+          (!start || shouldAnimateSelectedSegment) &&
+          officer.id === selectedOfficerId &&
+          latestSelectedSegment
+        ) {
+          start = latestSelectedSegment.start;
+        }
+        if (!start) {
+          nextMarkers[officer.id] = {
+            coordinates: target,
+            heading: officer.heading,
+            isAnimating: false,
+            movementStatusLabel: null,
+          };
+          targetCoordinatesRef.current.set(officer.id, {
+            key: targetKey,
+            coordinates: target,
+          });
+          return;
+        }
+
+        const distanceMeters = distanceKmBetween(
+          { latitude: start[0], longitude: start[1] },
+          { latitude: target[0], longitude: target[1] },
+        ) * 1000;
+        const heading = movementBearing(start, target) ?? officer.heading;
+
+        if (distanceMeters > MAX_ROUTE_SEGMENT_METERS) {
+          nextMarkers[officer.id] = {
+            coordinates: target,
+            heading,
+            isAnimating: false,
+            movementStatusLabel: null,
+          };
+          animationsRef.current.delete(officer.id);
+        } else {
+          const duration = markerAnimationDurationMs(distanceMeters);
+          const label = markerAnimationLabel(officer.locationSourceTime);
+          animationsRef.current.set(officer.id, {
+            start,
+            end: target,
+            startTime: now,
+            duration,
+            heading,
+            label,
+          });
+          nextMarkers[officer.id] = {
+            coordinates: start,
+            heading,
+            isAnimating: true,
+            movementStatusLabel: label,
+          };
+        }
+
+        targetCoordinatesRef.current.set(officer.id, {
+          key: targetKey,
+          coordinates: target,
+        });
+      });
+
+      selectedSegmentKeyRef.current = latestSelectedSegmentKey;
+
+      return nextMarkers;
+    });
+
+    if (animationsRef.current.size && !frameRef.current) {
+      const animate = (frameTime) => {
+        let hasActiveAnimations = false;
+        setAnimatedMarkers((currentMarkers) => {
+          const nextMarkers = { ...currentMarkers };
+          animationsRef.current.forEach((animation, officerId) => {
+            const progress = Math.min(
+              1,
+              (frameTime - animation.startTime) / animation.duration,
+            );
+            const coordinates = [
+              animation.start[0] +
+                (animation.end[0] - animation.start[0]) * progress,
+              animation.start[1] +
+                (animation.end[1] - animation.start[1]) * progress,
+            ];
+            nextMarkers[officerId] = {
+              coordinates,
+              heading: animation.heading,
+              isAnimating: progress < 1,
+              movementStatusLabel: progress < 1 ? animation.label : null,
+            };
+            if (progress >= 1) {
+              animationsRef.current.delete(officerId);
+            } else {
+              hasActiveAnimations = true;
+            }
+          });
+          return nextMarkers;
+        });
+        if (hasActiveAnimations) {
+          frameRef.current = window.requestAnimationFrame(animate);
+        } else {
+          frameRef.current = null;
+        }
+      };
+      frameRef.current = window.requestAnimationFrame(animate);
+    }
+  }, [officers, selectedOfficerId, selectedRouteLogs]);
+
+  return animatedMarkers;
+}
+
 export default function FOActivities() {
   usePageTitle("FO Activities");
   const [stateFilter, setStateFilter] = useState("All States");
@@ -1644,12 +2572,16 @@ export default function FOActivities() {
   const [expandedMap, setExpandedMap] = useState(false);
   const [selectedOfficerId, setSelectedOfficerId] = useState(null);
   const [liveOfficers, setLiveOfficers] = useState([]);
+  const [siteVisitRows, setSiteVisitRows] = useState([]);
   const [selectedRouteLogs, setSelectedRouteLogs] = useState([]);
   const [showSiteMarkers, setShowSiteMarkers] = useState(true);
   const [showRouteTrail, setShowRouteTrail] = useState(true);
   const [mapTheme, setMapTheme] = useState("light");
+  const [mapControlsCollapsed, setMapControlsCollapsed] = useState(false);
   const [mapCommand, setMapCommand] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [kmRecalcBusy, setKmRecalcBusy] = useState(false);
+  const [kmRecalcResult, setKmRecalcResult] = useState(null);
   const [datePreset, setDatePreset] = useState("today");
   const [customFromDate, setCustomFromDate] = useState(
     toDateInputValue(new Date()),
@@ -1673,7 +2605,7 @@ export default function FOActivities() {
       try {
         const fromIso = formatDateForDb(selectedRange.from);
         const toIso = formatDateForDb(selectedRange.to);
-        const [attendanceRes, visitsRes, liveStatusRows, profilesRes] =
+        const [attendanceRes, siteVisits, liveStatusRows, profilesRes, logsRes] =
           await Promise.all([
             supabase
               .from("fo_attendance")
@@ -1682,13 +2614,7 @@ export default function FOActivities() {
               .lte("login_time", toIso)
               .order("login_time", { ascending: false })
               .limit(500),
-            supabase
-              .from("fo_site_visits")
-              .select("*")
-              .gte("check_in_time", fromIso)
-              .lte("check_in_time", toIso)
-              .order("check_in_time", { ascending: false })
-              .limit(500),
+            fetchFoSiteVisitRows(fromIso, toIso),
             fetchFoLiveStatusRows(),
             supabase
               .from("profiles")
@@ -1697,8 +2623,15 @@ export default function FOActivities() {
               )
               .or("role.ilike.FO,role.ilike.Field Officer")
               .limit(1000),
+            supabase
+              .from("fo_location_logs")
+              .select("*")
+              .gte("captured_at", fromIso)
+              .lte("captured_at", toIso)
+              .order("captured_at", { ascending: true })
+              .limit(20000),
           ]);
-        const errors = [attendanceRes, visitsRes, profilesRes]
+        const errors = [attendanceRes, profilesRes, logsRes]
           .map((res) => res?.error)
           .filter(Boolean);
         if (errors.length) {
@@ -1715,18 +2648,22 @@ export default function FOActivities() {
         });
         const officersFromSupabase = buildLiveFoData({
           attendance: attendanceRes.data || [],
-          visits: visitsRes.data || [],
+          visits: siteVisits,
           liveStatus: liveStatusRows,
           profiles: profileRows,
+          logs: logsRes.data || [],
         });
+        console.debug("FO_SITE_VISITS_LOADED", siteVisits.length);
         console.debug("FO_OFFICERS_BUILT", officersFromSupabase.length);
         if (!cancelled) {
           profileRowsRef.current = profileRows;
+          setSiteVisitRows(siteVisits);
           setLiveOfficers(officersFromSupabase);
         }
       } catch (error) {
         console.warn("[myQPMS FO] Supabase FO fetch failed.", error);
         if (!cancelled) {
+          setSiteVisitRows([]);
           setLiveOfficers([]);
         }
       }
@@ -1740,7 +2677,7 @@ export default function FOActivities() {
   useEffect(() => {
     const interval = window.setInterval(() => {
       setRefreshToken((value) => value + 1);
-    }, 20000);
+    }, 12000);
     return () => window.clearInterval(interval);
   }, []);
 
@@ -1776,6 +2713,24 @@ export default function FOActivities() {
           setRefreshToken((value) => value + 1);
         }
       });
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return undefined;
+    const channel = supabase
+      .channel("fo-operations-site-visits")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "fo_site_visits" },
+        (payload) => {
+          console.debug("FO_SITE_VISIT_REALTIME_UPDATE", payload.new?.fo_user_id);
+          setRefreshToken((value) => value + 1);
+        },
+      )
+      .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
@@ -1843,6 +2798,26 @@ export default function FOActivities() {
   const selectedOfficer =
     filteredOfficers.find((officer) => officer.id === selectedOfficerId) ||
     null;
+  const animatedMarkers = useAnimatedOfficerMarkers(
+    filteredOfficers,
+    selectedOfficerId,
+    selectedRouteLogs,
+  );
+  const visualFilteredOfficers = useMemo(
+    () =>
+      filteredOfficers.map((officer) => {
+        const animatedMarker = animatedMarkers[officer.id];
+        if (!animatedMarker) return officer;
+        return {
+          ...officer,
+          coordinates: animatedMarker.coordinates,
+          heading: animatedMarker.heading ?? officer.heading,
+          movementStatusLabel: animatedMarker.movementStatusLabel,
+          isMarkerAnimating: animatedMarker.isAnimating,
+        };
+      }),
+    [animatedMarkers, filteredOfficers],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -1918,12 +2893,40 @@ export default function FOActivities() {
 
   function focusOfficer(officerId) {
     setSelectedOfficerId(officerId);
+    setKmRecalcResult(null);
     setMapCommand({ type: "recenter", at: Date.now() });
   }
 
+  async function recalculateSelectedOfficerKm() {
+    if (!selectedOfficer) return;
+    setKmRecalcBusy(true);
+    setKmRecalcResult(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/fo/km/recalculate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fo_user_id: selectedOfficer.foId || selectedOfficer.employeeCode,
+          attendance_id: selectedOfficer.attendance?.id,
+          date: selectedRange.fromDate,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.message || "KM recalculation failed.");
+      }
+      setKmRecalcResult(payload);
+      setRefreshToken((value) => value + 1);
+    } catch (error) {
+      setKmRecalcResult({ message: error.message, confidence: "ERROR" });
+      console.warn("[myQPMS FO] KM recalculation failed.", error);
+    } finally {
+      setKmRecalcBusy(false);
+    }
+  }
+
   const pins = useMemo(() => {
-    const groups = new Map();
-    const markerOfficers = filteredOfficers.filter((officer) => {
+    const markerOfficers = visualFilteredOfficers.filter((officer) => {
       const canShow = canShowOfficerMarker(officer);
       if (!canShow && !hasFiniteCoordinates(officer.coordinates)) {
         console.debug(
@@ -1933,49 +2936,34 @@ export default function FOActivities() {
       }
       return canShow;
     });
-    markerOfficers.forEach((officer) => {
-      const lat = Number(officer.coordinates[0]);
-      const lng = Number(officer.coordinates[1]);
-      const isSelected = selectedOfficer?.id === officer.id;
-      const key = isSelected
-        ? `selected-${officer.id}`
-        : `${Math.round(lat * 12) / 12}-${Math.round(lng * 12) / 12}`;
-      const state = filteredStates.find(
-        (item) => item.state === officer.state,
-      ) || {
-        id: officer.state,
-        state: officer.state,
-        tickets: 0,
-        visits: officer.visits?.length || 0,
-        status:
-          officer.status === "Offline"
-            ? "Critical"
-            : officer.battery !== null && officer.battery < 20
-              ? "Warning"
-              : "Stable",
-      };
-      const group = groups.get(key) || {
-        id: key,
-        state,
-        officers: [],
-        coordinates: [0, 0],
-      };
-      group.officers.push(officer);
-      group.coordinates[0] += lat;
-      group.coordinates[1] += lng;
-      groups.set(key, group);
-    });
-
-    const builtPins = Array.from(groups.values())
-      .map((group) => {
-        const stateOfficers = group.officers;
-        const coordinates = [
-          group.coordinates[0] / stateOfficers.length,
-          group.coordinates[1] / stateOfficers.length,
-        ];
+    const builtPins = markerOfficers
+      .map((officer) => {
+        const lat = Number(officer.coordinates[0]);
+        const lng = Number(officer.coordinates[1]);
+        const markerOfficer =
+          selectedOfficer?.id === officer.id
+            ? { ...officer, isSelected: true }
+            : officer;
+        const state = filteredStates.find(
+          (item) => item.state === officer.state,
+        ) || {
+          id: officer.state,
+          state: officer.state,
+          tickets: 0,
+          visits: officer.visits?.length || 0,
+          status:
+            officer.status === "Offline"
+              ? "Critical"
+              : officer.battery !== null && officer.battery < 20
+                ? "Warning"
+                : "Stable",
+        };
+        const stateOfficers = [markerOfficer];
         return {
-          ...group,
-          coordinates,
+          id: `fo-${officer.id}`,
+          state,
+          officers: stateOfficers,
+          coordinates: [lat, lng],
           activeOfficers: stateOfficers.filter(
             (officer) => officer.status === "Active",
           ).length,
@@ -1985,7 +2973,7 @@ export default function FOActivities() {
           lowBattery: stateOfficers.filter(
             (officer) => officer.battery !== null && officer.battery < 20,
           ).length,
-          color: markerTone(group.state, stateOfficers),
+          color: markerTone(state, stateOfficers),
         };
       })
       .sort((a, b) => {
@@ -1995,30 +2983,49 @@ export default function FOActivities() {
           return 1;
         return b.activeOfficers - a.activeOfficers;
       });
+    console.debug("FO_MARKERS_WITH_VALID_COORDS", builtPins.length);
     console.debug("FO_MARKERS_BUILT", builtPins.length);
     return builtPins;
-  }, [filteredOfficers, filteredStates, selectedOfficer]);
+  }, [filteredStates, selectedOfficer, visualFilteredOfficers]);
 
-  const sitePins = useMemo(
-    () =>
-      filteredOfficers
-        .filter((officer) => Array.isArray(officer.siteCoordinates))
-        .map((officer) => ({
-          id: `site-${officer.id}`,
-          name: officer.siteMarkerName,
-          state: officer.state,
-          coordinates: officer.siteCoordinates,
-        })),
-    [filteredOfficers],
-  );
+  const sitePins = useMemo(() => {
+    const officersByFoId = new Map();
+    filteredOfficers.forEach((officer) => {
+      [officer.foId, officer.employeeCode].forEach((id) => {
+        const key = normalizeFoKey(id);
+        if (key) officersByFoId.set(key, officer);
+      });
+    });
+    const selectedFoId = selectedOfficer
+      ? normalizeFoKey(selectedOfficer.foId || selectedOfficer.employeeCode)
+      : null;
+    const pinsForVisits = siteVisitRows
+      .filter((visit) => {
+        if (!selectedFoId) return true;
+        return siteVisitFoId(visit) === selectedFoId;
+      })
+      .map((visit, index) => buildSiteVisitPin(visit, officersByFoId, index))
+      .filter(Boolean);
+    console.debug("FO_SITE_MARKERS_BUILT", pinsForVisits.length);
+    return pinsForVisits;
+  }, [filteredOfficers, selectedOfficer, siteVisitRows]);
 
   const routeLines = useMemo(() => {
     if (!selectedOfficer) return [];
-    return routeSegmentsFromLogs(selectedRouteLogs).map((positions, index) => ({
+    return routeSegmentsFromLogs(selectedRouteLogs, selectedOfficer.visits).map((positions, index) => ({
       id: `route-${selectedOfficer.id}-${index}`,
       positions,
       color: foMarkerColor(selectedOfficer),
     }));
+  }, [selectedOfficer, selectedRouteLogs]);
+
+  const selectedActualTravelMetrics = useMemo(() => {
+    if (!selectedOfficer) return null;
+    return actualTravelKmFromAttendanceOrLogs(
+      selectedOfficer.attendance,
+      selectedRouteLogs,
+      selectedOfficer.visits || [],
+    );
   }, [selectedOfficer, selectedRouteLogs]);
 
   const totalStates =
@@ -2054,18 +3061,25 @@ export default function FOActivities() {
       `${officer.action} ${officer.tasks?.[0]?.task_status || ""} ${officer.visits?.[0]?.visit_status || ""}`,
     ),
   ).length;
-  const liveRawKm = filteredOfficers.reduce(
+  const liveRouteKm = filteredOfficers.reduce(
     (sum, officer) =>
-      sum + Number(officer.actualKm ?? officer.routeKmToday ?? 0),
+      sum + Number(officer.eligibleKm ?? officer.routeKmToday ?? 0),
+    0,
+  );
+  const liveActualTravelKm = filteredOfficers.reduce(
+    (sum, officer) =>
+      sum + Number(officer.actualTravelKm ?? officer.actualKm ?? 0),
     0,
   );
   const totalPetrolAmount = filteredOfficers.reduce(
     (sum, officer) => sum + Number(officer.petrolAmount || 0),
     0,
   );
-  const distanceTravelled = `${liveRawKm.toFixed(1)} km`;
+  const distanceTravelled = `${liveRouteKm.toFixed(1)} km`;
+  const actualTravelled = `${liveActualTravelKm.toFixed(1)} km`;
+  const routeVsActual = `${(liveRouteKm - liveActualTravelKm).toFixed(1)} km`;
   const avgRouteKm = filteredOfficers.length
-    ? `${(liveRawKm / filteredOfficers.length).toFixed(1)} km`
+    ? `${(liveRouteKm / filteredOfficers.length).toFixed(1)} km`
     : "0.0 km";
 
   return (
@@ -2075,7 +3089,7 @@ export default function FOActivities() {
         actions={
           <span className="command-pill">
             <RadioTower className="h-3.5 w-3.5 text-emerald-500" /> Live
-            Tracking
+            updating every 12s
           </span>
         }
       />
@@ -2298,51 +3312,66 @@ export default function FOActivities() {
               </div>
             </div>
 
-            <div className="absolute right-5 top-5 z-[540] w-[255px] rounded-xl border border-slate-200 bg-white/96 p-4 shadow-[0_20px_50px_rgba(15,23,42,0.18)] backdrop-blur dark:border-slate-700 dark:bg-slate-950/90">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-base font-black text-slate-950 dark:text-white">
+            <div
+              className={`absolute right-5 top-5 z-[540] w-[255px] rounded-xl border border-slate-200 bg-white/96 shadow-[0_20px_50px_rgba(15,23,42,0.18)] backdrop-blur dark:border-slate-700 dark:bg-slate-950/90 ${mapControlsCollapsed ? "p-3" : "p-4"}`}
+            >
+              <button
+                type="button"
+                onClick={() => setMapControlsCollapsed((value) => !value)}
+                aria-expanded={!mapControlsCollapsed}
+                className={`focus-ring flex w-full items-center justify-between text-left ${mapControlsCollapsed ? "" : "mb-3"}`}
+              >
+                <span className="text-base font-black text-slate-950 dark:text-white">
                   Map Controls
-                </h2>
-                <ChevronRight className="-rotate-90 h-4 w-4 text-slate-400" />
-              </div>
-              <div className="space-y-2">
-                <ControlButton
-                  icon={LocateFixed}
-                  label="Recenter on Selected FO"
-                  onClick={() =>
-                    setMapCommand({ type: "recenter", at: Date.now() })
-                  }
+                </span>
+                <ChevronRight
+                  className={`h-4 w-4 text-slate-400 transition-transform ${mapControlsCollapsed ? "rotate-90" : "-rotate-90"}`}
                 />
-                <ControlButton
-                  icon={Maximize2}
-                  label="Fit All Active Officers"
-                  onClick={() => setMapCommand({ type: "fit", at: Date.now() })}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowSiteMarkers((value) => !value)}
-                  className="focus-ring flex w-full items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
-                >
-                  Show Site Markers <ToggleSwitch checked={showSiteMarkers} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowRouteTrail((value) => !value)}
-                  className="focus-ring flex w-full items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
-                >
-                  Show Route Trails <ToggleSwitch checked={showRouteTrail} />
-                </button>
-                <ControlButton
-                  icon={RefreshCw}
-                  label="Refresh Live Location"
-                  onClick={() => setRefreshToken((value) => value + 1)}
-                />
-              </div>
-              <p className="mt-4 text-[11px] font-black text-slate-500">
-                Map Style
-              </p>
-              <div className="mt-2 grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
-                {["light", "dark", "satellite"].map((theme) => (
+              </button>
+              {!mapControlsCollapsed ? (
+                <>
+                  <div className="space-y-2">
+                    <ControlButton
+                      icon={LocateFixed}
+                      label="Recenter on Selected FO"
+                      onClick={() =>
+                        setMapCommand({ type: "recenter", at: Date.now() })
+                      }
+                    />
+                    <ControlButton
+                      icon={Maximize2}
+                      label="Fit All Active Officers"
+                      onClick={() =>
+                        setMapCommand({ type: "fit", at: Date.now() })
+                      }
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSiteMarkers((value) => !value)}
+                      className="focus-ring flex w-full items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
+                    >
+                      Show Site Markers{" "}
+                      <ToggleSwitch checked={showSiteMarkers} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowRouteTrail((value) => !value)}
+                      className="focus-ring flex w-full items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
+                    >
+                      Show Route Trails{" "}
+                      <ToggleSwitch checked={showRouteTrail} />
+                    </button>
+                    <ControlButton
+                      icon={RefreshCw}
+                      label="Refresh Live Location"
+                      onClick={() => setRefreshToken((value) => value + 1)}
+                    />
+                  </div>
+                  <p className="mt-4 text-[11px] font-black text-slate-500">
+                    Map Style
+                  </p>
+                  <div className="mt-2 grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
+                    {["light", "dark", "satellite"].map((theme) => (
                   <button
                     key={theme}
                     type="button"
@@ -2351,8 +3380,10 @@ export default function FOActivities() {
                   >
                     {theme}
                   </button>
-                ))}
-              </div>
+                    ))}
+                  </div>
+                </>
+              ) : null}
             </div>
 
             <div className="absolute right-5 bottom-[88px] z-[540] w-[255px] rounded-xl border border-slate-200 bg-white/96 p-4 shadow-[0_20px_50px_rgba(15,23,42,0.18)] backdrop-blur dark:border-slate-700 dark:bg-slate-950/90">
@@ -2421,9 +3452,14 @@ export default function FOActivities() {
             <SelectedOfficerSummary
               officer={selectedOfficer}
               onClose={() => setSelectedOfficerId(null)}
+              onRecalculateKm={recalculateSelectedOfficerKm}
+              recalculatingKm={kmRecalcBusy}
+              recalculationResult={kmRecalcResult}
+              foSafeKm={selectedActualTravelMetrics}
+              siteVisitCount={selectedOfficer?.visits?.length || 0}
             />
             <div className="max-h-[584px] overflow-y-auto">
-              {filteredOfficers.map((officer) => (
+              {visualFilteredOfficers.map((officer) => (
                 <OfficerDirectoryRow
                   key={officer.id}
                   officer={officer}
@@ -2447,12 +3483,24 @@ export default function FOActivities() {
         </div>
       </section>
 
-      <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.05)] sm:grid-cols-2 lg:grid-cols-6 dark:border-slate-800 dark:bg-slate-900">
+      <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.05)] sm:grid-cols-2 lg:grid-cols-6 xl:grid-cols-9 dark:border-slate-800 dark:bg-slate-900">
         <MetricTile
           label="Total Route KM Today"
           value={distanceTravelled}
           icon={Route}
           tone="green"
+        />
+        <MetricTile
+          label="Actual Travel KM"
+          value={actualTravelled}
+          icon={Navigation2}
+          tone="blue"
+        />
+        <MetricTile
+          label="Route vs Actual"
+          value={routeVsActual}
+          icon={CircleGauge}
+          tone={Math.abs(liveRouteKm - liveActualTravelKm) > 2 ? "amber" : "green"}
         />
         <MetricTile
           label="Avg. Route KM / FO"

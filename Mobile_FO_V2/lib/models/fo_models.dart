@@ -43,6 +43,7 @@ class Attendance {
     required this.id,
     required this.employeeCode,
     required this.startTime,
+    this.attendanceDate,
     this.remoteId,
     this.endTime,
     this.startLat,
@@ -53,12 +54,15 @@ class Attendance {
     this.batteryEnd,
     this.actualKm = 0,
     this.eligibleKm = 0,
+    this.totalRouteKm = 0,
+    this.endRouteKm = 0,
   });
 
   final String id;
   String? remoteId;
   final String employeeCode;
   final DateTime startTime;
+  final String? attendanceDate;
   DateTime? endTime;
   double? startLat;
   double? startLng;
@@ -68,6 +72,8 @@ class Attendance {
   int? batteryEnd;
   double actualKm;
   double eligibleKm;
+  double totalRouteKm;
+  double endRouteKm;
 
   bool get isActive => endTime == null;
 
@@ -75,6 +81,7 @@ class Attendance {
     'id': id,
     'remote_id': remoteId,
     'employee_code': employeeCode,
+    'attendance_date': attendanceDate,
     'start_time': startTime.toIso8601String(),
     'end_time': endTime?.toIso8601String(),
     'start_lat': startLat,
@@ -85,12 +92,15 @@ class Attendance {
     'battery_end': batteryEnd,
     'actual_km': actualKm,
     'eligible_km': eligibleKm,
+    'total_route_km': totalRouteKm,
+    'end_route_km': endRouteKm,
   };
 
   factory Attendance.fromJson(Map<String, dynamic> json) => Attendance(
     id: _text(json['id']),
     remoteId: _nullableText(json['remote_id']),
     employeeCode: _text(json['employee_code']),
+    attendanceDate: _nullableText(json['attendance_date']),
     startTime: _date(json['start_time']) ?? DateTime.now(),
     endTime: _date(json['end_time']),
     startLat: _double(json['start_lat']),
@@ -101,6 +111,9 @@ class Attendance {
     batteryEnd: _int(json['battery_end']),
     actualKm: _double(json['actual_km']) ?? 0,
     eligibleKm: _double(json['eligible_km']) ?? 0,
+    totalRouteKm:
+        _double(json['total_route_km']) ?? _double(json['eligible_km']) ?? 0,
+    endRouteKm: _double(json['end_route_km']) ?? 0,
   );
 }
 
@@ -133,8 +146,9 @@ class LocationLog {
 
   Map<String, dynamic> toJson() => {
     'id': id,
+    'local_id': id,
     'remote_id': remoteId,
-    'employee_code': employeeCode,
+    'fo_user_id': employeeCode,
     'attendance_id': attendanceId,
     'latitude': latitude,
     'longitude': longitude,
@@ -146,9 +160,9 @@ class LocationLog {
   };
 
   factory LocationLog.fromJson(Map<String, dynamic> json) => LocationLog(
-    id: _text(json['id']),
+    id: _text(json['local_id'] ?? json['id']),
     remoteId: _nullableText(json['remote_id']),
-    employeeCode: _text(json['employee_code']),
+    employeeCode: _text(json['fo_user_id'] ?? json['employee_code']),
     attendanceId: _text(json['attendance_id']),
     latitude: _double(json['latitude']) ?? 0,
     longitude: _double(json['longitude']) ?? 0,
@@ -214,6 +228,11 @@ class SiteVisit {
     this.checkOutLongitude,
     this.checkInAccuracy,
     this.checkOutAccuracy,
+    this.originLatitude,
+    this.originLongitude,
+    this.destinationLatitude,
+    this.destinationLongitude,
+    this.routeKm,
     this.durationMinutes,
     this.status = 'Checked In',
     this.synced = false,
@@ -238,6 +257,11 @@ class SiteVisit {
   double? checkOutLongitude;
   double? checkInAccuracy;
   double? checkOutAccuracy;
+  double? originLatitude;
+  double? originLongitude;
+  double? destinationLatitude;
+  double? destinationLongitude;
+  double? routeKm;
   int? durationMinutes;
   String status;
   bool synced;
@@ -264,6 +288,11 @@ class SiteVisit {
     'check_out_longitude': checkOutLongitude,
     'checkin_accuracy': checkInAccuracy,
     'checkout_accuracy': checkOutAccuracy,
+    'origin_lat': originLatitude,
+    'origin_lng': originLongitude,
+    'destination_lat': destinationLatitude,
+    'destination_lng': destinationLongitude,
+    'route_km': routeKm,
     'visit_duration_minutes': durationMinutes,
     'status': status,
     'synced': synced,
@@ -289,6 +318,11 @@ class SiteVisit {
     checkOutLongitude: _double(json['check_out_longitude']),
     checkInAccuracy: _double(json['checkin_accuracy']),
     checkOutAccuracy: _double(json['checkout_accuracy']),
+    originLatitude: _double(json['origin_lat']),
+    originLongitude: _double(json['origin_lng']),
+    destinationLatitude: _double(json['destination_lat']),
+    destinationLongitude: _double(json['destination_lng']),
+    routeKm: _double(json['route_km']),
     durationMinutes: _int(json['visit_duration_minutes']),
     status: _text(json['status']).isEmpty
         ? 'Checked In'

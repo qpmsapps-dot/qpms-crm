@@ -24,6 +24,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   DateTime? _birthDate;
   String? _gender;
   bool _busy = false;
+  bool _showPassword = false;
+  bool _showConfirmPassword = false;
   String? _message;
   static const _genderOptions = [
     'Male',
@@ -126,8 +128,26 @@ class _RegisterScreenState extends State<RegisterScreen> {
             _birthDateField(),
             _genderField(),
             _field(_state, 'State'),
-            _field(_password, 'Password', obscure: true),
-            _field(_confirm, 'Confirm Password', obscure: true),
+            _field(
+              _password,
+              'Password',
+              obscure: !_showPassword,
+              suffixIcon: _passwordVisibilityButton(
+                visible: _showPassword,
+                onPressed: () => setState(() => _showPassword = !_showPassword),
+              ),
+            ),
+            _field(
+              _confirm,
+              'Confirm Password',
+              obscure: !_showConfirmPassword,
+              suffixIcon: _passwordVisibilityButton(
+                visible: _showConfirmPassword,
+                onPressed: () => setState(
+                  () => _showConfirmPassword = !_showConfirmPassword,
+                ),
+              ),
+            ),
             if (_message != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -152,6 +172,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     bool obscure = false,
     TextInputType? keyboard,
     String? hint,
+    Widget? suffixIcon,
     TextCapitalization textCapitalization = TextCapitalization.none,
   }) {
     return Padding(
@@ -163,8 +184,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
         textCapitalization: textCapitalization,
         validator: (value) =>
             value == null || value.trim().isEmpty ? 'Required' : null,
-        decoration: InputDecoration(labelText: label, hintText: hint),
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: hint,
+          suffixIcon: suffixIcon,
+        ),
       ),
+    );
+  }
+
+  Widget _passwordVisibilityButton({
+    required bool visible,
+    required VoidCallback onPressed,
+  }) {
+    return IconButton(
+      tooltip: visible ? 'Hide password' : 'Show password',
+      icon: Icon(
+        visible ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+      ),
+      onPressed: onPressed,
     );
   }
 

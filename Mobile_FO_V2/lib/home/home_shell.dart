@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../models/fo_models.dart';
 import '../profile/profile_screen.dart';
 import '../tasks/tasks_screen.dart';
+import '../theme/app_theme.dart';
+import '../ui/fo_ui.dart';
 import '../visits/visits_screen.dart';
 import 'home_screen.dart';
 
@@ -60,31 +62,88 @@ class _HomeShellState extends State<HomeShell> {
         onPageChanged: (value) => setState(() => _index = value),
         children: _pages,
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: _selectTab,
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: 'Home',
+      bottomNavigationBar: SafeArea(
+        minimum: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: foBorder),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x180A43D1),
+                blurRadius: 24,
+                offset: Offset(0, 10),
+              ),
+            ],
           ),
-          NavigationDestination(
-            icon: Icon(Icons.task_alt_outlined),
-            selectedIcon: Icon(Icons.task_alt),
-            label: 'My Tasks',
+          child: Row(
+            children: [
+              _navItem(0, Icons.home_outlined, Icons.home_rounded, 'Home'),
+              _navItem(
+                1,
+                Icons.assignment_outlined,
+                Icons.assignment_rounded,
+                'My Tasks',
+              ),
+              _navItem(
+                2,
+                Icons.location_on_outlined,
+                Icons.location_on_rounded,
+                'Site Visit',
+              ),
+              _navItem(3, Icons.person_outline, Icons.person, 'Profile'),
+            ],
           ),
-          NavigationDestination(
-            icon: Icon(Icons.history_outlined),
-            selectedIcon: Icon(Icons.history),
-            label: 'Site Visit',
+        ),
+      ),
+    );
+  }
+
+  Widget _navItem(
+    int index,
+    IconData icon,
+    IconData selectedIcon,
+    String label,
+  ) {
+    final selected = _index == index;
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => _selectTab(index),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                width: 54,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: selected ? qpmsBlue.withValues(alpha: 0.12) : null,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  selected ? selectedIcon : icon,
+                  color: selected ? qpmsBlue : const Color(0xFF66708D),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? qpmsBlue : const Color(0xFF66708D),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
           ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: 'Profile',
-          ),
-        ],
+        ),
       ),
     );
   }

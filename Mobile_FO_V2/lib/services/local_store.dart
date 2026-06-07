@@ -3,10 +3,12 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/fo_models.dart';
+import 'local_db_service.dart';
 
 class LocalStore {
   static const _userKey = 'fo_user';
   static const _attendanceKey = 'active_attendance';
+  static const _backgroundSessionKey = 'background_tracking_session';
   static const _logsKey = 'location_logs';
   static const _visitsKey = 'site_visits';
 
@@ -43,20 +45,98 @@ class LocalStore {
     return Attendance.fromJson(jsonDecode(value) as Map<String, dynamic>);
   }
 
-  static Future<void> addLocationLog(LocationLog log) async {
-    final logs = await getLocationLogs();
-    logs.add(log);
-    await _saveList(_logsKey, logs.map((e) => e.toJson()).toList());
+  static Future<void> saveBackgroundTrackingSession({
+    required FoUser user,
+    required Attendance attendance,
+    required String supabaseUrl,
+    required String supabaseAnonKey,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _backgroundSessionKey,
+      jsonEncode({
+        'employee_code': user.employeeCode,
+        'full_name': user.fullName,
+        'attendance_id': attendance.remoteId ?? attendance.id,
+        'remote_id': attendance.remoteId,
+        'local_attendance_id': attendance.id,
+        'supabase_url': supabaseUrl,
+        'supabase_anon_key': supabaseAnonKey,
+        'saved_at': DateTime.now().toUtc().toIso8601String(),
+      }),
+    );
+  }
+
+  static Future<Map<String, dynamic>?> getBackgroundTrackingSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getString(_backgroundSessionKey);
+    if (value == null || value.isEmpty) return null;
+    return Map<String, dynamic>.from(jsonDecode(value) as Map);
+  }
+
+  static Future<void> clearBackgroundTrackingSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_backgroundSessionKey);
+  }
+
+  static Future<void> addLocationLog(
+    LocationLog log, {
+    String eventType = 'gps',
+  }) async {
+    await LocalDbService.upsertGpsLog(log, eventType: eventType);
   }
 
   static Future<List<LocationLog>> getLocationLogs() async {
-    return (await _readList(
+    final dbLogs = await LocalDbService.getGpsLogs();
+    final legacyLogs = (await _readList(
       _logsKey,
     )).map((e) => LocationLog.fromJson(e)).toList();
+    final byId = <String, LocationLog>{};
+    for (final log in legacyLogs) {
+      if (log.id.isNotEmpty) byId[log.id] = log;
+    }
+    for (final log in dbLogs) {
+      if (log.id.isNotEmpty) byId[log.id] = log;
+    }
+    final logs = byId.values.toList()
+      ..sort((a, b) => a.capturedAt.compareTo(b.capturedAt));
+    return logs;
   }
 
-  static Future<void> saveLocationLogs(List<LocationLog> logs) =>
-      _saveList(_logsKey, logs.map((e) => e.toJson()).toList());
+  static Future<void> saveLocationLogs(List<LocationLog> logs) async {
+    for (final log in logs) {
+      await LocalDbService.upsertGpsLog(
+        log,
+        localSynced: log.synced,
+        syncStatus: log.synced ? 'synced' : 'pending',
+      );
+    }
+    final compact = logs.length <= 250 ? logs : logs.sublist(logs.length - 250);
+    await _saveList(_logsKey, compact.map((e) => e.toJson()).toList());
+  }
+
+  static Future<List<LocationLog>> getUnsyncedLocationLogs({int limit = 50}) {
+    return LocalDbService.getUnsyncedGpsLogs(limit: limit);
+  }
+
+  static Future<int> countUnsyncedLocationLogs() {
+    return LocalDbService.countUnsyncedGpsLogs();
+  }
+
+  static Future<void> markLocationLogsSynced(Map<String, String?> remoteIds) {
+    return LocalDbService.markGpsLogsSynced(remoteIds);
+  }
+
+  static Future<void> markLocationLogsSyncFailed(
+    List<String> ids,
+    Object error,
+  ) {
+    return LocalDbService.markGpsLogsSyncFailed(ids, error);
+  }
+
+  static Future<void> cleanupOldSyncedLocationLogs({int keepDays = 10}) {
+    return LocalDbService.cleanupOldSyncedGpsLogs(keepDays: keepDays);
+  }
 
   static Future<void> saveVisit(SiteVisit visit) async {
     final visits = await getVisits();
@@ -66,6 +146,12 @@ class LocalStore {
     } else {
       visits.add(visit);
     }
+    await _saveList(_visitsKey, visits.map((e) => e.toJson()).toList());
+  }
+
+  static Future<void> removeVisit(String id) async {
+    final visits = await getVisits();
+    visits.removeWhere((item) => item.id == id || item.remoteId == id);
     await _saveList(_visitsKey, visits.map((e) => e.toJson()).toList());
   }
 

@@ -263,6 +263,16 @@
   place-items: center;
 }
 
+.fo-bike-marker-selected::before {
+  position: absolute;
+  inset: -6px;
+  border: 3px solid #2563eb;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.14);
+  box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.12);
+  content: "";
+}
+
 .fo-cluster-marker {
   display: grid;
   width: 42px;
