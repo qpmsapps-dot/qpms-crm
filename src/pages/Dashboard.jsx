@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowRight,
@@ -10,6 +11,7 @@ import {
   Download,
   FileText,
   Layers3,
+  MapPin,
   MessageSquareWarning,
   Search,
   TimerReset,
@@ -18,6 +20,8 @@ import {
   UserPlus,
   Users,
 } from 'lucide-react';
+import { CircleMarker, MapContainer, Popup, TileLayer } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
 import {
   Area,
   AreaChart,
@@ -55,9 +59,21 @@ import {
 } from '../data/qpmsWorkflowData.js';
 import { useAuth } from '../context/auth-context.js';
 import { useWorkflow } from '../context/workflow-context.js';
-import { bdExecutives, canViewBdTeam, isCommercialTeam, isCoordinator, isExistingBusinessOperations, isFinanceTeam, isHrReviewer, isOperationsTeam } from '../data/mockUsers.js';
+import {
+  bdExecutives,
+  canViewBdTeam,
+  isCommercialTeam,
+  isCoordinator,
+  isExistingBusinessOperations,
+  isFinanceLeadership,
+  isFinanceTeam,
+  isHrReviewer,
+  isManagement,
+  isOperationsTeam,
+} from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { isDemoMode } from '../config/demoMode.js';
+import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 
 const taskColors = ['#10b981', '#f59e0b', '#ef4444'];
 const chartGrid = '#e2e8f0';
@@ -132,6 +148,181 @@ const businessSnapshotColumns = [
   { key: 'slaHealth', label: 'SLA Health' },
   { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
 ];
+
+function formatDateInput(date = new Date()) {
+  return date.toISOString().slice(0, 10);
+}
+
+function formatDateTimeCell(value) {
+  if (!value) return '-';
+  return new Date(value).toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatKm(value) {
+  const number = Number(value || 0);
+  return `${number.toFixed(2)} km`;
+}
+
+function normalizeFoKey(value = '') {
+  return String(value).trim().toUpperCase();
+}
+
+function dashboardFoKeys(row) {
+  return [row?.employee_code, row?.username, row?.fo_user_id]
+    .map(normalizeFoKey)
+    .filter(Boolean);
+}
+
+function isMockFoUser(value = '') {
+  const id = String(value).toLowerCase();
+  return /^fo0{2,3}[1-5]$/.test(id) || id.includes('test') || id.includes('demo') || id === 'fo-demo-001';
+}
+
+function isRealFoProfile(profile) {
+  const role = String(profile?.role || '').trim().toLowerCase();
+  const status = String(profile?.status || '').trim().toLowerCase();
+  const keys = dashboardFoKeys(profile);
+  return ['fo', 'field officer'].includes(role)
+    && !['deleted', 'disabled', 'inactive', 'blocked'].includes(status)
+    && keys.length > 0
+    && keys.every((key) => !isMockFoUser(key));
+}
+
+function FoGpsTestDashboard() {
+  const [date, setDate] = useState(formatDateInput());
+  const [foUser, setFoUser] = useState('All');
+  const [rows, setRows] = useState([]);
+  const [source, setSource] = useState('loading');
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadFoGpsRows() {
+      if (!isSupabaseConfigured || !supabase) {
+        setRows([]);
+        setSource('Supabase not configured');
+        return;
+      }
+      try {
+        const start = `${date}T00:00:00`;
+        const end = `${date}T23:59:59`;
+        const [profilesRes, attendanceRes, liveRes, logsRes] = await Promise.all([
+          supabase.from('profiles').select('username, employee_code, display_name, full_name, role, status').in('role', ['FO', 'Field Officer']),
+          supabase.from('fo_attendance').select('*').gte('login_time', start).lte('login_time', end).order('login_time', { ascending: false }),
+          supabase.from('fo_live_status').select('*'),
+          supabase.from('fo_location_logs').select('fo_user_id, attendance_id, logged_at, captured_at, battery_percentage').gte('logged_at', start).lte('logged_at', end).order('logged_at', { ascending: false }).limit(1000),
+        ]);
+        const errors = [profilesRes, attendanceRes, liveRes, logsRes].map((res) => res.error).filter(Boolean);
+        if (errors.length) throw errors[0];
+        const profiles = (profilesRes.data || []).filter(isRealFoProfile);
+        const attendance = attendanceRes.data || [];
+        const live = liveRes.data || [];
+        const logs = logsRes.data || [];
+        const tableRows = profiles.map((profile) => {
+          const keys = dashboardFoKeys(profile);
+          const username = profile.employee_code || profile.username || keys[0];
+          const record = attendance.find((item) => dashboardFoKeys(item).some((key) => keys.includes(key))) || {};
+          const liveRow = live.find((item) => dashboardFoKeys(item).some((key) => keys.includes(key))) || {};
+          const attendanceLogs = logs.filter((log) => {
+            if (record.id) return log.attendance_id === record.id;
+            return dashboardFoKeys(log).some((key) => keys.includes(key));
+          });
+          const latestLog = attendanceLogs[0] || {};
+          const eligibleKm = Number(record.eligible_km ?? record.total_approved_km ?? record.total_route_km ?? liveRow.route_km_today ?? 0);
+          const rawGpsKm = Number(record.raw_gps_km ?? record.total_raw_km ?? record.actual_km ?? 0);
+          const filteredGpsKm = Number(record.filtered_gps_km ?? record.actual_km ?? 0);
+          const actualKm = Number(record.actual_travel_km ?? record.actual_km ?? record.total_raw_km ?? 0);
+          const rate = Number(record.rate_per_km ?? 4);
+          return {
+            username,
+            display_name: profile.display_name || profile.full_name || record.display_name || liveRow.display_name || username,
+            start: record.login_time,
+            end: record.logout_time,
+            status: liveRow.is_tracking ? 'Tracking' : record.status || liveRow.current_status || 'Not started',
+            lastSeen: liveRow.last_seen_at || latestLog.captured_at || latestLog.logged_at,
+            battery: liveRow.battery_percentage ?? latestLog.battery_percentage ?? record.end_battery_percentage ?? record.start_battery_percentage,
+            points: attendanceLogs.length,
+            actualKm,
+            rawGpsKm,
+            filteredGpsKm,
+            eligibleKm,
+            rate,
+            petrol: Number(record.petrol_amount ?? eligibleKm * rate),
+          };
+        }).filter((row) => foUser === 'All' || normalizeFoKey(row.username) === normalizeFoKey(foUser));
+        if (!cancelled) {
+          setRows(tableRows);
+          setSource('Supabase profiles + FO tables');
+        }
+      } catch (error) {
+        console.warn('[myQPMS FO GPS] Dashboard load failed.', error);
+        if (!cancelled) {
+          setRows([]);
+          setSource('Supabase error');
+        }
+      }
+    }
+    loadFoGpsRows();
+    return () => {
+      cancelled = true;
+    };
+  }, [date, foUser]);
+
+  return (
+    <section className="enterprise-card p-5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-950 dark:text-white">FO GPS Tracking</h2>
+          <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Source: {source}</p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Date</span>
+            <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className="focus-ring h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold dark:border-slate-800 dark:bg-slate-950" />
+          </label>
+          <label className="space-y-1">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">FO/User</span>
+              <select value={foUser} onChange={(event) => setFoUser(event.target.value)} className="focus-ring h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold dark:border-slate-800 dark:bg-slate-950">
+                <option>All</option>
+              {rows.map((row) => <option key={row.username}>{row.username}</option>)}
+              </select>
+          </label>
+        </div>
+      </div>
+      <div className="mt-4 overflow-x-auto">
+        <table className="min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-800">
+          <thead className="text-xs uppercase tracking-wide text-slate-500">
+            <tr>{['Username', 'Start Day', 'End Day', 'Status', 'Last seen', 'Battery', 'GPS points', 'Today KM', 'Raw GPS KM', 'Filtered GPS KM', 'Actual Travel KM', 'Route vs Actual', 'Rate/KM', 'Petrol'].map((heading) => <th key={heading} className="px-3 py-3 font-bold">{heading}</th>)}</tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            {rows.map((row) => (
+              <tr key={row.username}>
+                <td className="px-3 py-3 font-semibold text-slate-900 dark:text-white">{row.username}<div className="text-xs font-medium text-slate-500">{row.display_name}</div></td>
+                <td className="px-3 py-3">{formatDateTimeCell(row.start)}</td>
+                <td className="px-3 py-3">{formatDateTimeCell(row.end)}</td>
+                <td className="px-3 py-3"><StatusBadge status={row.status || 'Not started'} /></td>
+                <td className="px-3 py-3">{formatDateTimeCell(row.lastSeen)}</td>
+                <td className="px-3 py-3">{row.battery == null ? '-' : `${row.battery}%`}</td>
+                <td className="px-3 py-3">{row.points || 0}</td>
+                <td className="px-3 py-3">{formatKm(row.eligibleKm)}</td>
+                <td className="px-3 py-3">{formatKm(row.rawGpsKm)}</td>
+                <td className="px-3 py-3">{formatKm(row.filteredGpsKm)}</td>
+                <td className="px-3 py-3">{formatKm(row.actualKm)}</td>
+                <td className="px-3 py-3">{formatKm(Number(row.eligibleKm || 0) - Number(row.actualKm || 0))}</td>
+                <td className="px-3 py-3">₹{row.rate || 4}</td>
+                <td className="px-3 py-3 font-semibold">₹{Number(row.petrol || 0).toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
 
 const workflowStageOwners = {
   'Operations Review': 'Operations Team',
@@ -1290,7 +1481,288 @@ function NewBusinessPipeline({ visibleLeads, visibleSiteVisits, user }) {
   );
 }
 
-function ExistingBusinessOperations({ activeOperationsSection, onSectionChange }) {
+function ExecutiveOperationsCommandCenter({ leads, siteVisits }) {
+  const [region, setRegion] = useState('All States');
+  const operationsRows = useMemo(() => filterOperationSummary('All Businesses', region), [region]);
+  const operationsKpis = useMemo(() => buildOperationsKpis(operationsRows), [operationsRows]);
+  const pipeline = useMemo(() => buildPipelineCommandData(leads, siteVisits, []), [leads, siteVisits]);
+  const kpiValue = (id) => operationsKpis.find((item) => item.id === id)?.value || '0';
+  const pendingApprovalTotal = pipeline.approvalBottlenecks.reduce((sum, item) => sum + item.Pending + item.Rework + item.Delayed, 0);
+  const sla = averageOperationRows(operationsRows, 'sla');
+  const attendance = averageOperationRows(operationsRows, 'attendance');
+  const approvalRing = pipeline.approvalBottlenecks.map((item) => ({
+    name: item.stage,
+    value: item.Pending + item.Rework + item.Delayed,
+  }));
+  const activity = [
+    ...pipeline.activity,
+    ...fieldOfficerActivity.slice(0, 3).map((officer) => ({
+      event: officer.lastActivity,
+      client: officer.assignedSite,
+      time: officer.checkIn,
+      status: officer.status,
+    })),
+  ].slice(0, 7);
+  const approvalRows = pipeline.approvalBottlenecks.map((item) => ({
+    ...item,
+    owner: `${item.stage} Team`,
+    total: item.Pending + item.Rework + item.Delayed,
+    status: item.Delayed ? 'Critical' : item.Pending ? 'Pending' : 'Healthy',
+  }));
+  const managementKpis = [
+    { title: 'Total Pipeline Value', value: formatInr(pipeline.proposalValue), change: 'Current workflow value', icon: TrendingUp, tone: 'blue' },
+    { title: 'Conversion %', value: `${pipeline.flow.at(-1)?.conversion || 0}%`, change: 'Lead to converted', icon: CheckCircle2, tone: 'violet' },
+    { title: 'Open Proposals', value: pipeline.flow.find((item) => item.stage === 'Proposal')?.count || 0, change: 'Ready or sent', icon: FileText, tone: 'violet' },
+    { title: 'Pending Approvals', value: pendingApprovalTotal, change: 'Across departments', icon: Clock3, tone: 'amber' },
+    { title: 'Sites Operational', value: kpiValue('activeSites'), change: `${operationsRows.length} regions monitored`, icon: BriefcaseBusiness, tone: 'green' },
+    { title: 'Active FO Today', value: kpiValue('fieldOfficersActive'), change: `${attendance}% present`, icon: UserCheck, tone: 'green' },
+    { title: 'SLA Compliance', value: `${sla}%`, change: 'Operations health', icon: CheckCircle2, tone: sla >= 92 ? 'green' : 'amber' },
+  ];
+  const mapCoordinates = {
+    'Tamil Nadu': [13.0827, 80.2707],
+    Kerala: [9.9312, 76.2673],
+    Karnataka: [12.9716, 77.5946],
+    Telangana: [17.385, 78.4867],
+    'Andhra Pradesh - 1': [17.6868, 83.2185],
+    'Andhra Pradesh - 2': [16.5062, 80.648],
+  };
+
+  return (
+    <div className="space-y-3">
+      <section className="flex flex-col gap-3 md:flex-row md:items-center md:justify-end">
+        <label className="command-pill min-w-44">
+          <CalendarCheck2 className="h-3.5 w-3.5" />
+          13 May - 19 May 2026
+        </label>
+        <label className="command-pill min-w-44">
+          <MapPin className="h-3.5 w-3.5" />
+          <select
+            value={region}
+            onChange={(event) => setRegion(event.target.value)}
+            className="min-w-32 bg-transparent text-[11px] font-semibold outline-none dark:text-slate-200"
+          >
+            {stateFilterOptions.map((option) => <option key={option}>{option}</option>)}
+          </select>
+        </label>
+      </section>
+
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-4 xl:grid-cols-7">
+        {managementKpis.map((kpi) => (
+          <article key={kpi.title} className="command-kpi">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="command-label">{kpi.title}</p>
+                <p className="mt-1.5 text-[22px] font-bold leading-none text-slate-950 dark:text-white">{kpi.value}</p>
+              </div>
+              <span className={`rounded-lg p-2 ${
+                kpi.tone === 'green' ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300'
+                  : kpi.tone === 'amber' ? 'bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300'
+                    : kpi.tone === 'violet' ? 'bg-violet-50 text-violet-600 dark:bg-violet-500/15 dark:text-violet-300'
+                      : 'bg-qpms-50 text-qpms-600 dark:bg-qpms-500/15 dark:text-qpms-300'
+              }`}><kpi.icon className="h-4 w-4" /></span>
+            </div>
+            <p className="mt-2 text-[10px] font-semibold text-emerald-600">{kpi.change}</p>
+          </article>
+        ))}
+      </section>
+
+      <section className="grid gap-3 xl:grid-cols-[0.82fr_0.86fr_0.94fr_1.08fr]">
+        <section className="command-panel">
+          <div className="command-panel-head"><h2 className="command-title">Pipeline Conversion Funnel</h2></div>
+          <div className="space-y-1.5 p-3.5">
+            {pipeline.flow.map((step, index) => (
+              <div key={step.stage} className="grid grid-cols-[64px_1fr_30px] items-center gap-2 text-[10px]">
+                <span className="font-semibold text-slate-600 dark:text-slate-300">{step.stage}</span>
+                <div
+                  className="mx-auto flex h-6 items-center justify-center rounded-sm text-white"
+                  style={{
+                    width: `${Math.max(22, 100 - index * 9)}%`,
+                    background: ['#315efb', '#3686f4', '#16b3ca', '#12a968', '#f5be2e', '#f59e0b', '#fb7230', '#ef3b58'][index % 8],
+                  }}
+                >
+                  {step.conversion}%
+                </div>
+                <span className="text-right font-bold">{step.count}</span>
+              </div>
+            ))}
+            <p className="pt-2 text-[11px] font-bold text-emerald-600">Conversion rate {pipeline.flow.at(-1)?.conversion || 0}%</p>
+          </div>
+        </section>
+
+        <section className="command-panel">
+          <div className="command-panel-head"><h2 className="command-title">Pipeline Value Breakup</h2></div>
+          <div className="h-[248px] p-2">
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 260, height: 220 }}>
+              <PieChart>
+                <Pie data={pipeline.flow.slice(0, 6).map((item) => ({ name: item.stage, value: Math.max(item.count, 1) }))} dataKey="value" innerRadius={55} outerRadius={82} paddingAngle={1}>
+                  {pipeline.flow.slice(0, 6).map((item, index) => <Cell key={item.stage} fill={['#315efb', '#8055ff', '#14b8a6', '#f97316', '#13a863', '#0ea5e9'][index]} />)}
+                </Pie>
+                <Tooltip contentStyle={tooltipStyle} />
+                <Legend iconType="circle" wrapperStyle={{ fontSize: 10 }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+
+        <section className="command-panel">
+          <div className="command-panel-head"><h2 className="command-title">Proposal Value Trend</h2></div>
+          <div className="h-[218px] p-3">
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 290, height: 194 }}>
+              <AreaChart data={pipeline.proposalTrend}>
+                <CartesianGrid stroke={chartGrid} vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 10, fill: chartText }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: chartText }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={tooltipStyle} />
+                <Area type="monotone" dataKey="pipelineValue" stroke="#315efb" fill="#dce8ff" strokeWidth={2.4} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="px-4 pb-3 text-[11px] font-semibold text-emerald-600">{formatInr(pipeline.proposalValue)} current pipeline</p>
+        </section>
+
+        <section className="command-panel">
+          <div className="command-panel-head"><h2 className="command-title">Live FO Tracking Map</h2><Link className="text-[11px] font-bold text-qpms-600" to="/fo-activities">View</Link></div>
+          <div className="h-[208px] isolate overflow-hidden">
+            <MapContainer center={[13.1, 78.2]} zoom={5.2} scrollWheelZoom={false} className="h-full w-full">
+              <TileLayer attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+              {operationsRows.map((row) => (
+                <CircleMarker key={row.state} center={mapCoordinates[row.state]} radius={8} pathOptions={{ color: '#fff', weight: 2, fillOpacity: 0.95, fillColor: row.status === 'Critical' ? '#ef4444' : row.status === 'Warning' ? '#f59e0b' : '#13a863' }}>
+                  <Popup>{row.state}: {row.officers} field officers</Popup>
+                </CircleMarker>
+              ))}
+            </MapContainer>
+          </div>
+          <div className="grid grid-cols-3 gap-2 p-3 text-center">
+            {[['Active FO', kpiValue('fieldOfficersActive')], ['Visits', kpiValue('siteVisitsCompleted')], ['Tickets', kpiValue('openTickets')]].map(([title, value]) => <div key={title}><p className="command-label">{title}</p><p className="mt-1 text-sm font-bold">{value}</p></div>)}
+          </div>
+        </section>
+      </section>
+
+      <section className="grid gap-3 xl:grid-cols-[0.78fr_0.86fr_0.86fr_1fr]">
+        <section className="command-panel">
+          <div className="command-panel-head"><h2 className="command-title">Approval Bottleneck</h2></div>
+          {pendingApprovalTotal ? (
+            <div className="h-[190px] p-2">
+              <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 250, height: 174 }}>
+                <PieChart>
+                  <Pie data={approvalRing} dataKey="value" nameKey="name" innerRadius={45} outerRadius={67} paddingAngle={3}>
+                    {approvalRing.map((item, index) => (
+                      <Cell key={item.name} fill={['#f97316', '#2e5fe7', '#06b6d4'][index]} />
+                    ))}
+                  </Pie>
+                  <Tooltip contentStyle={tooltipStyle} />
+                  <Legend iconType="circle" wrapperStyle={{ fontSize: 11 }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <div className="grid h-52 place-items-center rounded-xl bg-slate-50 text-center dark:bg-slate-950/55">
+              <div>
+                <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-500" />
+                <p className="mt-2 text-sm font-bold text-slate-950 dark:text-white">No active bottlenecks</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">No pending approval records in the current workflow.</p>
+              </div>
+            </div>
+          )}
+        </section>
+        <section className="command-panel">
+          <div className="command-panel-head"><h2 className="command-title">Ticket Overview</h2></div>
+          <div className="p-4">
+            <p className="text-3xl font-bold">{kpiValue('openTickets')}</p>
+            <p className="command-label">Total Tickets</p>
+            <div className="mt-5 grid grid-cols-3 gap-2">
+              {[['Open', kpiValue('openTickets'), 'text-qpms-600'], ['In Progress', kpiValue('pendingTasks'), 'text-amber-600'], ['Resolved', kpiValue('siteVisitsCompleted'), 'text-emerald-600']].map(([label, value, tone]) => (
+                <div className="command-muted-surface p-2" key={label}><p className={`text-[10px] font-bold ${tone}`}>{label}</p><p className="mt-1 text-lg font-bold">{value}</p></div>
+              ))}
+            </div>
+          </div>
+        </section>
+        <section className="command-panel">
+          <div className="command-panel-head"><h2 className="command-title">FO Attendance Overview</h2></div>
+          <div className="flex items-center justify-around gap-3 p-5">
+            <div className="relative grid h-24 w-24 place-items-center rounded-full" style={{ background: `conic-gradient(#13a863 ${attendance}%, #e2e8f0 ${attendance}% 100%)` }}>
+              <div className="grid h-[72%] w-[72%] place-items-center rounded-full bg-white dark:bg-[#081522]"><p className="text-lg font-bold">{attendance}%</p></div>
+            </div>
+            <div className="space-y-3 text-xs font-semibold">
+              <p><span className="mr-2 inline-block h-2 w-2 rounded-full bg-emerald-500" />Present</p>
+              <p><span className="mr-2 inline-block h-2 w-2 rounded-full bg-rose-500" />Absent</p>
+              <p><span className="mr-2 inline-block h-2 w-2 rounded-full bg-amber-500" />On Leave</p>
+            </div>
+          </div>
+        </section>
+        <section className="command-panel">
+          <div className="command-panel-head"><h2 className="command-title">Today's FO Activity</h2><Link className="text-[11px] font-bold text-qpms-600" to="/fo-activities">View All</Link></div>
+          <div className="space-y-3 p-3">
+            {fieldOfficerActivity.slice(0, 5).map((officer) => (
+              <div key={officer.id} className="grid grid-cols-[12px_1fr_auto] items-center gap-2 text-[11px] font-semibold">
+                <span className={`h-2 w-2 rounded-full ${officer.status === 'Offline' ? 'bg-rose-500' : officer.status === 'Active' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                <span className="truncate"><strong>{officer.name}</strong> <span className="text-slate-500">{officer.assignedSite}</span></span>
+                <span className="text-slate-400">{officer.checkIn}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </section>
+
+      <section className="grid gap-3 xl:grid-cols-[1.05fr_0.72fr_0.9fr_0.9fr]">
+        <section className="command-panel">
+          <div className="command-panel-head"><h2 className="command-title">Visits By Region (This Week)</h2></div>
+          <div className="h-[200px] p-3">
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 400, height: 174 }}>
+              <BarChart data={operationsRows}>
+                <CartesianGrid stroke={chartGrid} vertical={false} />
+                <XAxis dataKey="state" tickLine={false} axisLine={false} tick={{ fill: chartText, fontSize: 10 }} interval={0} height={42} />
+                <YAxis tickLine={false} axisLine={false} tick={{ fill: chartText, fontSize: 11 }} />
+                <Tooltip contentStyle={tooltipStyle} />
+                <Bar dataKey="visits" fill="#2e5fe7" radius={[6, 6, 0, 0]} name="Visits" />
+                <Bar dataKey="tickets" fill="#f59e0b" radius={[6, 6, 0, 0]} name="Tickets" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+        <section className="command-panel">
+          <div className="command-panel-head"><h2 className="command-title">Business Health Score</h2></div>
+          <div className="grid place-items-center p-5">
+            <div className="relative grid h-28 w-28 place-items-center rounded-full" style={{ background: 'conic-gradient(#13a863 72%, #f59e0b 72% 89%, #ef4444 89% 100%)' }}>
+              <div className="grid h-[72%] w-[72%] place-items-center rounded-full bg-white dark:bg-[#081522]"><div className="text-center"><p className="text-2xl font-bold">{sla}%</p><p className="text-[10px]">Healthy</p></div></div>
+            </div>
+          </div>
+        </section>
+        <section className="command-panel">
+          <div className="command-panel-head"><h2 className="command-title">Top Pending Approvals</h2></div>
+          <div className="space-y-2">
+            {approvalRows.map((row) => (
+              <div key={row.stage} className="flex items-center justify-between border-b border-slate-100 px-3 py-2.5 last:border-0 dark:border-slate-800">
+                <div>
+                  <p className="text-xs font-bold text-slate-950 dark:text-white">{row.owner}</p>
+                  <p className="text-[10px] font-semibold text-slate-500">{row.Pending} pending / {row.Delayed} delayed</p>
+                </div>
+                <StatusBadge status={row.status} />
+              </div>
+            ))}
+          </div>
+        </section>
+        <section className="command-panel">
+          <div className="command-panel-head"><h2 className="command-title">Recent Activity</h2></div>
+          <div className="max-h-52 space-y-3 overflow-y-auto p-3">
+            {activity.length ? activity.map((item, index) => (
+              <div key={`${item.client}-${item.event}-${index}`} className="flex gap-3 border-b border-slate-100 pb-2 last:border-0 dark:border-slate-800">
+                <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-qpms-500" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold text-slate-950 dark:text-white">{item.event}</p>
+                  <p className="truncate text-xs font-semibold text-slate-500">{item.client}</p>
+                </div>
+                <p className="whitespace-nowrap text-[10px] font-bold uppercase text-slate-400">{item.time}</p>
+              </div>
+            )) : <p className="text-sm font-semibold text-slate-500">No workflow activity recorded.</p>}
+          </div>
+        </section>
+      </section>
+    </div>
+  );
+}
+
+export function ExistingBusinessOperations({ activeOperationsSection, onSectionChange }) {
   const [businessFilter, setBusinessFilter] = useState('All Businesses');
   const [stateFilter, setStateFilter] = useState('All States');
   const filteredSummary = useMemo(() => filterOperationSummary(businessFilter, stateFilter), [businessFilter, stateFilter]);
@@ -1367,6 +1839,8 @@ function ExistingBusinessOperations({ activeOperationsSection, onSectionChange }
         />
       ) : (
         <div className="space-y-6 animate-[login-fade-up_220ms_ease-out]">
+          <FoGpsTestDashboard />
+
           <ChartCard title="Business Performance Snapshot">
             <DataTable columns={businessSnapshotColumns} rows={snapshotRows} embedded />
           </ChartCard>
@@ -1637,6 +2111,7 @@ function ApprovalDashboard({ title, description, stage, siteVisits, leads, user 
 export default function Dashboard() {
   const { user } = useAuth();
   const { leads, siteVisits } = useWorkflow();
+  const location = useLocation();
   const [activeOperationsSection, setActiveOperationsSection] = useState(null);
   usePageTitle('Dashboard');
   const restrictedToPipeline = ['BD Head', 'BD Executive'].includes(user?.role);
@@ -1681,8 +2156,12 @@ export default function Dashboard() {
                 stage: 'Finance Review',
               }
             : null;
-  const canSeeOperations = isExistingBusinessOperations(user);
-  const effectiveTab = canSeeOperations ? 'operations' : 'new-business';
+  const requestedWorkspace = new URLSearchParams(location.search).get('workspace');
+  const executiveViewer = isManagement(user) || isFinanceLeadership(user);
+  const canSeeOperations = isExistingBusinessOperations(user) || executiveViewer;
+  const effectiveTab = canSeeOperations && (isExistingBusinessOperations(user) || requestedWorkspace === 'operations')
+    ? 'operations'
+    : 'new-business';
 
   const visibleLeads = useMemo(() => {
     if (canViewBdTeam(user) || user?.role === 'COO') return leads;
@@ -1697,7 +2176,7 @@ export default function Dashboard() {
   return (
     <div className="space-y-7">
       <PageHeader
-        title={reviewerDashboard?.title || 'Dashboard'}
+        title={reviewerDashboard?.title || (executiveViewer ? `Welcome back, ${user?.name || 'Admin'}` : 'Dashboard')}
         description={reviewerDashboard?.description}
         actions={null}
       />
@@ -1711,6 +2190,8 @@ export default function Dashboard() {
           leads={leads}
           user={user}
         />
+      ) : executiveViewer && effectiveTab === 'new-business' ? (
+        <ExecutiveOperationsCommandCenter leads={leads} siteVisits={siteVisits} />
       ) : effectiveTab === 'new-business' || restrictedToPipeline ? (
         <NewBusinessPipeline
           visibleLeads={visibleLeads}

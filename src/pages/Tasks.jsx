@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
   BadgeCheck,
@@ -17,7 +18,7 @@ import StatusBadge from '../components/StatusBadge.jsx';
 import Toast from '../components/Toast.jsx';
 import { useAuth } from '../context/auth-context.js';
 import { useWorkflow } from '../context/workflow-context.js';
-import { isCoordinator, isFinanceTeam, isHrReviewer, isOperationsTeam } from '../data/mockUsers.js';
+import { isAdmin, isCoordinator, isFinanceTeam, isHrReviewer, isOperationsTeam } from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 
 function serviceScope(visit) {
@@ -192,6 +193,7 @@ function AssessmentSnapshot({ visit, stage }) {
 export default function Tasks() {
   const { user } = useAuth();
   const { siteVisits, decideApproval } = useWorkflow();
+  const [searchParams] = useSearchParams();
   const [remarks, setRemarks] = useState({});
   const [pendingDecision, setPendingDecision] = useState('');
   const [selectedVisitId, setSelectedVisitId] = useState('');
@@ -200,15 +202,26 @@ export default function Tasks() {
   const hrMode = isHrReviewer(user);
   const operationsMode = isOperationsTeam(user);
   const coordinatorMode = isCoordinator(user);
-  const stage = operationsMode ? 'Operations Review' : coordinatorMode ? 'Coordinator Costing Review' : hrMode ? 'HR Validation' : financeMode ? 'Finance Review' : 'Commercial Review';
+  const adminReviewStage = ['HR Validation', 'Commercial Review', 'Finance Review'].includes(searchParams.get('stage'))
+    ? searchParams.get('stage')
+    : 'HR Validation';
+  const stage = isAdmin(user)
+    ? adminReviewStage
+    : operationsMode
+      ? 'Operations Review'
+      : coordinatorMode
+        ? 'Coordinator Costing Review'
+        : hrMode
+          ? 'HR Validation'
+          : financeMode
+            ? 'Finance Review'
+            : 'Commercial Review';
+  const isFinanceStage = stage === 'Finance Review';
   const meta = reviewMeta(stage);
   const pageTitle = meta.title;
   usePageTitle(pageTitle);
 
-  const queue = useMemo(
-    () => siteVisits.filter((visit) => (visit.reviewStatus?.[stage] || ((visit.currentStage || visit.status) === stage ? 'Pending' : '')) === 'Pending'),
-    [siteVisits, stage],
-  );
+  const queue = siteVisits.filter((visit) => (visit.reviewStatus?.[stage] || ((visit.currentStage || visit.status) === stage ? 'Pending' : '')) === 'Pending');
 
   const pendingCount = queue.filter((visit) => !['Approved', 'Rejected', 'Rework Requested'].includes(visit.approvalStatus)).length;
   const selectedVisit = queue.find((visit) => String(visit.id) === String(selectedVisitId)) || queue[0];
@@ -253,6 +266,7 @@ export default function Tasks() {
           <div className="flex flex-wrap gap-2">
             <span className="rounded-full bg-white/12 px-3 py-1.5 text-xs font-bold ring-1 ring-white/20">Stage: {stage}</span>
             <span className="rounded-full bg-white/12 px-3 py-1.5 text-xs font-bold ring-1 ring-white/20">Role: {user?.role || 'Reviewer'}</span>
+            {isAdmin(user) ? <span className="rounded-full bg-amber-400/20 px-3 py-1.5 text-xs font-bold text-amber-100 ring-1 ring-amber-300/35">Admin Demo Access</span> : null}
           </div>
         </div>
       </section>
@@ -321,7 +335,7 @@ export default function Tasks() {
                   <p className="mt-1 text-xs">Primary scope: {serviceScope(selectedVisit)}</p>
                 </div>
                 <div className="rounded-2xl border border-slate-100 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
-                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{financeMode ? 'Billing Summary' : 'Review Summary'}</p>
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{isFinanceStage ? 'Billing Summary' : 'Review Summary'}</p>
                   <p className="mt-2 font-semibold text-slate-950 dark:text-white">{selectedVisit.survey?.commercialStatement || selectedVisit.survey?.commercial?.notes || 'Available in assessment record'}</p>
                   <p className="mt-1 text-xs">{selectedVisit.survey?.marginAgreed || selectedVisit.survey?.paymentTerms || 'Pending reviewer validation'}</p>
                 </div>
@@ -346,7 +360,7 @@ export default function Tasks() {
               placeholder={meta.remark}
               className="focus-ring min-h-28 w-full rounded-2xl border border-slate-200 bg-white px-3.5 py-3 text-sm text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white"
             />
-            <div className={financeMode ? 'grid gap-2' : 'grid grid-cols-2 gap-2'}>
+            <div className={isFinanceStage ? 'grid gap-2' : 'grid grid-cols-2 gap-2'}>
               <button type="button" disabled={Boolean(pendingDecision)} onClick={() => handleDecision(selectedVisit, 'approve')} className="focus-ring inline-flex items-center justify-center gap-1 rounded-xl bg-emerald-600 px-3 py-2.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
                 <CheckCircle2 className="h-4 w-4" /> Approve
               </button>
@@ -356,7 +370,7 @@ export default function Tasks() {
               <button type="button" disabled={Boolean(pendingDecision)} onClick={() => handleDecision(selectedVisit, 'reject')} className="focus-ring inline-flex items-center justify-center gap-1 rounded-xl border border-rose-200 bg-white px-3 py-2.5 text-xs font-bold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-500/30 dark:bg-slate-950 dark:text-rose-300 dark:hover:bg-rose-500/10">
                 <AlertTriangle className="h-4 w-4" /> Reject
               </button>
-              {financeMode ? (
+              {isFinanceStage ? (
                 <button type="button" disabled={Boolean(pendingDecision)} onClick={() => handleDecision(selectedVisit, 'return')} className="focus-ring inline-flex items-center justify-center gap-1 rounded-xl bg-qpms-600 px-3 py-2.5 text-xs font-bold text-white hover:bg-qpms-700 disabled:cursor-not-allowed disabled:opacity-60">
                   <CheckCircle2 className="h-4 w-4" /> Return to BD
                 </button>

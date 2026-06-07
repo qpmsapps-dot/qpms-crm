@@ -1,51 +1,132 @@
 import {
   BarChart3,
-  CheckSquare,
   ClipboardCheck,
   FileText,
   Home,
   ListChecks,
   MapPinned,
   Settings,
-  Users,
+  ShieldCheck,
+  Wrench,
   Workflow,
 } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { isDemoMode } from '../config/demoMode.js';
 import { useAuth } from '../context/auth-context.js';
-import { isCoordinator, isExistingBusinessOperations, isFinanceTeam, isHrReviewer, isOperationsTeam } from '../data/mockUsers.js';
+import {
+  isApprovalReviewer,
+  isAdmin,
+  isCoordinator,
+  isExistingBusinessOperations,
+  isFinanceLeadership,
+  isFinanceTeam,
+  isHrReviewer,
+  isManagement,
+  isOperationsTeam,
+} from '../data/mockUsers.js';
 import { canAccessNavRoute } from '../utils/authRoles.js';
 import Logo from './Logo.jsx';
 
-const navGroups = [
+const executiveNavGroups = [
   {
-    title: 'Workspace',
+    title: 'Command Center',
     items: [
       { label: 'Dashboard', to: '/dashboard', icon: Home },
       { label: 'Lead Management', to: '/crm', icon: Workflow },
-      { label: 'Site Visit & Estimation', to: '/sites', icon: ClipboardCheck },
-    ],
-  },
-  {
-    title: 'Reviews',
-    items: [
-      { label: 'Review Workbench', to: '/tasks', icon: CheckSquare },
-      { label: 'Approval Workflow', to: '/reports', icon: BarChart3, demoHidden: true },
+      { label: 'Site Visit + Estimation', to: '/site-monitoring', icon: ClipboardCheck },
+      { label: 'Proposals', to: '/proposals', icon: FileText },
+      { label: 'Approvals', to: '/approvals', icon: ShieldCheck },
     ],
   },
   {
     title: 'Operations',
     items: [
-      { label: 'Existing Business Operations', to: '/dashboard?workspace=operations', icon: ListChecks, existingOperationsOnly: true },
-      { label: 'FO Activities', to: '/fo-activities', icon: MapPinned },
-      { label: 'Tickets', to: '/tickets', icon: FileText, demoHidden: true },
+      { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
+      { label: 'FO Operations', to: '/fo-activities', icon: MapPinned },
+      { label: 'Tickets', to: '/tickets', icon: FileText },
+      { label: 'Asset Management', to: '/assets', icon: Wrench },
+      { label: 'Reports', to: '/reports', icon: BarChart3 },
     ],
   },
   {
-    title: 'Admin',
+    title: 'Administration',
     items: [
       { label: 'Settings', to: '/settings', icon: Settings },
-      { label: 'IAM', to: '/employees', icon: Users, demoHidden: true },
+    ],
+  },
+];
+
+const adminDemoNavGroups = [
+  {
+    title: 'Workspace',
+    items: [
+      { label: 'Dashboard', to: '/dashboard', icon: Home },
+      { label: 'Lead Management', to: '/crm', icon: Workflow },
+      { label: 'Site Visit + Estimation', to: '/sites', icon: ClipboardCheck },
+    ],
+  },
+  {
+    title: 'Demo Reviews',
+    items: [
+      { label: 'HR Review', to: '/tasks?stage=HR%20Validation', icon: ShieldCheck },
+      { label: 'Commercial Review', to: '/tasks?stage=Commercial%20Review', icon: ShieldCheck },
+      { label: 'Finance Review', to: '/tasks?stage=Finance%20Review', icon: ShieldCheck },
+      { label: 'Proposals', to: '/proposals', icon: FileText },
+      { label: 'Approvals', to: '/approvals', icon: ShieldCheck },
+    ],
+  },
+  {
+    title: 'Operations',
+    items: [
+      { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
+      { label: 'FO Operations', to: '/fo-activities', icon: MapPinned },
+      { label: 'Tickets', to: '/tickets', icon: FileText },
+      { label: 'Asset Management', to: '/assets', icon: Wrench },
+      { label: 'Reports', to: '/reports', icon: BarChart3 },
+    ],
+  },
+  {
+    title: 'Administration',
+    items: [
+      { label: 'Settings', to: '/settings', icon: Settings },
+    ],
+  },
+];
+
+const businessNavGroups = [
+  {
+    title: 'Workspace',
+    items: [
+      { label: 'Dashboard', to: '/dashboard', icon: Home },
+      { label: 'Lead Management', to: '/crm', icon: Workflow },
+      { label: 'Site Visit + Estimation', to: '/sites', icon: ClipboardCheck },
+      { label: 'Proposals', to: '/proposals', icon: FileText },
+      { label: 'Settings', to: '/settings', icon: Settings },
+    ],
+  },
+];
+
+const reviewNavGroups = [
+  {
+    title: 'Review Workbench',
+    items: [
+      { label: 'Dashboard', to: '/dashboard', icon: Home },
+      { label: 'Assigned Approvals', to: '/tasks', icon: ShieldCheck },
+      { label: 'Settings', to: '/settings', icon: Settings },
+    ],
+  },
+];
+
+const operationsNavGroups = [
+  {
+    title: 'Operations',
+    items: [
+      { label: 'Dashboard', to: '/dashboard', icon: Home },
+      { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
+      { label: 'FO Operations', to: '/fo-activities', icon: MapPinned },
+      { label: 'Tickets', to: '/tickets', icon: FileText },
+      { label: 'Asset Management', to: '/assets', icon: Wrench },
+      { label: 'Reports', to: '/reports', icon: BarChart3 },
+      { label: 'Settings', to: '/settings', icon: Settings },
     ],
   },
 ];
@@ -63,12 +144,20 @@ export default function Sidebar({ isOpen, onClose }) {
   const { user } = useAuth();
   const location = useLocation();
   const currentTarget = `${location.pathname}${location.search}`;
+  const executiveViewer = isManagement(user) || isFinanceLeadership(user);
+  const navGroups = isAdmin(user)
+    ? adminDemoNavGroups
+    : executiveViewer
+    ? executiveNavGroups
+    : isApprovalReviewer(user)
+      ? reviewNavGroups
+      : isExistingBusinessOperations(user)
+        ? operationsNavGroups
+        : businessNavGroups;
   const visibleNavGroups = navGroups.map((group) => ({
     ...group,
     items: group.items.filter((item) => {
       const routePath = item.to.split('?')[0];
-      if (item.existingOperationsOnly && !isExistingBusinessOperations(user)) return false;
-      if (isDemoMode && item.demoHidden) return false;
       return canAccessNavRoute(user, routePath);
     }),
   })).filter((group) => group.items.length);

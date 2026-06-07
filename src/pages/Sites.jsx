@@ -31,7 +31,7 @@ import StatusBadge from '../components/StatusBadge.jsx';
 import Toast from '../components/Toast.jsx';
 import { useAuth } from '../context/auth-context.js';
 import { useWorkflow } from '../context/workflow-context.js';
-import { canViewBdTeam, isApprovalReviewer, isCommercialTeam, isCoordinator, isFinanceTeam, isHrReviewer, isOperationsTeam } from '../data/mockUsers.js';
+import { canViewBdTeam, isAdmin, isApprovalReviewer, isCommercialTeam, isCoordinator, isFinanceTeam, isHrReviewer, isOperationsTeam } from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { sendProposalEmail, sendSiteVisitMomEmail } from '../services/mailService.js';
 import { logAssessmentAuditRemote } from '../services/workflowRepository.js';
@@ -812,6 +812,7 @@ export default function Sites() {
   const [showWorkflowTimeline, setShowWorkflowTimeline] = useState(false);
   const [sectionsCollapsed, setSectionsCollapsed] = useState(false);
   const [validationErrors, setValidationErrors] = useState([]);
+  const adminDemoAccess = isAdmin(user);
   usePageTitle('Site Visit & Estimation');
 
   const visibleSiteVisits = useMemo(() => {
@@ -933,6 +934,10 @@ export default function Sites() {
   }
 
   function validateSection(section = activeSection) {
+    if (adminDemoAccess) {
+      setValidationErrors([]);
+      return true;
+    }
     const errors = [];
     if (section === 'Basic Site Information') {
       if (!surveyDraft?.siteAddress?.trim()) errors.push('Site Address is required.');
@@ -1138,7 +1143,9 @@ function duplicateRow(section, index) {
     showToast('Saving...', 'info');
     try {
       await Promise.resolve(saveSiteSurvey(selectedVisit.id, surveyDraft, 'Submitted', user));
-      await Promise.resolve(submitCommercialReview(selectedVisit.id));
+      await Promise.resolve(submitCommercialReview(selectedVisit.id, adminDemoAccess
+        ? { adminDemo: true, actorRole: user.role, targetStage: 'HR Validation' }
+        : undefined));
       await logAssessmentAuditRemote({
         visit: selectedVisit,
         sectionName: activeSection,
@@ -1151,7 +1158,7 @@ function duplicateRow(section, index) {
       rememberSectionAudit('Submitted for Review Workflow');
       setEditingSection('');
       setAutoSaveLabel('Submitted for Review');
-      showToast('Submitted for Review. Approval matrix updated.', 'success');
+      showToast(adminDemoAccess ? 'Submitted for Admin Demo Review. Pending HR Review.' : 'Submitted for Review. Approval matrix updated.', 'success');
     } catch (error) {
       setAutoSaveLabel('Failed to save');
       showToast(`Failed to submit: ${error.message}`, 'error');

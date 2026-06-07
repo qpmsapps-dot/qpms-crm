@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import express from 'express';
 import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
+import { recalculateFoKm, recalculateFoKmForToday } from './foKmRecalculationService.js';
 
 dotenv.config({ path: './.env' });
 dotenv.config({ path: './backend/.env' });
@@ -1298,6 +1299,26 @@ app.get('/api/workflows/:siteVisitId/status', requireApiAuth, async (request, re
       workflow,
       events: events || [],
     });
+  } catch (error) {
+    response.status(error.statusCode || 500).json({ ok: false, message: error.message });
+  }
+});
+
+app.post('/api/fo/km/recalculate', async (request, response) => {
+  try {
+    const client = requireSupabase();
+    const result = await recalculateFoKm(client, request.body || {});
+    response.json({ ok: true, ...result });
+  } catch (error) {
+    response.status(error.statusCode || 500).json({ ok: false, message: error.message });
+  }
+});
+
+app.post('/api/fo/km/recalculate-all', async (request, response) => {
+  try {
+    const client = requireSupabase();
+    const result = await recalculateFoKmForToday(client, request.body || {});
+    response.json({ ok: true, ...result });
   } catch (error) {
     response.status(error.statusCode || 500).json({ ok: false, message: error.message });
   }

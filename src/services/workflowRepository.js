@@ -513,9 +513,13 @@ export async function fetchWorkflowData() {
 
   const leadIds = (leadsResponse.data || []).map((lead) => lead.id);
   let contactsByLeadId = {};
+  let momByLeadId = {};
 
   if (leadIds.length) {
-    const contactsResponse = await supabase.from('lead_contacts').select('*').in('lead_id', leadIds);
+    const [contactsResponse, momResponse] = await Promise.all([
+      supabase.from('lead_contacts').select('*').in('lead_id', leadIds),
+      supabase.from('lead_mom').select('*').in('lead_id', leadIds),
+    ]);
     if (contactsResponse.error) {
       console.warn('[myQPMS Supabase] lead_contacts fetch skipped/failed', contactsResponse.error);
     } else {
@@ -525,6 +529,15 @@ export async function fetchWorkflowData() {
       }, {});
       console.info('[myQPMS Supabase] lead_contacts fetch success', {
         contacts: contactsResponse.data?.length || 0,
+      });
+    }
+
+    if (momResponse.error) {
+      console.warn('[myQPMS Supabase] lead_mom fetch skipped/failed', momResponse.error);
+    } else {
+      momByLeadId = groupBy(momResponse.data || [], 'lead_id');
+      console.info('[myQPMS Supabase] lead_mom fetch success', {
+        moms: momResponse.data?.length || 0,
       });
     }
   }
@@ -544,6 +557,7 @@ export async function fetchWorkflowData() {
     mapped[lead.id] = {
       ...lead,
       lead_contacts: contactsByLeadId[lead.id] || [],
+      lead_mom: momByLeadId[lead.id] || [],
     };
     return mapped;
   }, {});
@@ -632,6 +646,7 @@ export async function fetchWorkflowData() {
   const leadsWithContacts = (leadsResponse.data || []).map((lead) => ({
     ...lead,
     lead_contacts: contactsByLeadId[lead.id] || [],
+    lead_mom: momByLeadId[lead.id] || [],
   }));
 
   const visitsWithWorkflow = siteVisitRows.map((visit) => ({

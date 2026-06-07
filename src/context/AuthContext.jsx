@@ -6,7 +6,7 @@ import { AuthContext } from './auth-context.js';
 const authStorageKey = 'qpms-crm-auth-user';
 
 function readStoredUser() {
-  if (typeof window === 'undefined' || isProductionAuthMode) return null;
+  if (typeof window === 'undefined') return null;
 
   try {
     const savedUser = window.localStorage.getItem(authStorageKey);
@@ -29,8 +29,8 @@ function profileToUser(profile, sessionUser) {
     role,
     rawRole: profile?.role || role,
     access: `${role} access`,
-    isActive: Boolean(profile?.is_active),
-    status: profile?.status || 'Pending Approval',
+    isActive: profile ? Boolean(profile.is_active) : true,
+    status: profile?.status || 'Active',
     authProvider: 'supabase',
   };
 }
@@ -46,7 +46,7 @@ async function fetchProfileForSession(session) {
 
   if (error) {
     console.warn('[myQPMS Auth] Profile fetch failed', error);
-    throw error;
+    return profileToUser(null, session.user);
   }
 
   if (data) {
@@ -64,19 +64,23 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (isProductionAuthMode && !isSupabaseConfigured) {
-      setAuthStatus('error');
-      setAuthError('Supabase Auth is required in production mode.');
-      setUserState(null);
+      queueMicrotask(() => {
+        setAuthStatus('error');
+        setAuthError('Supabase Auth is required in production mode.');
+        setUserState(null);
+      });
       return undefined;
     }
 
     if (!isSupabaseConfigured || !supabase) {
-      setAuthStatus('ready');
+      queueMicrotask(() => setAuthStatus('ready'));
       return undefined;
     }
 
     let active = true;
-    setAuthStatus('loading');
+    queueMicrotask(() => {
+      if (active) setAuthStatus('loading');
+    });
 
     supabase.auth.getSession()
       .then(async ({ data, error }) => {
@@ -86,6 +90,7 @@ export function AuthProvider({ children }) {
         if (!active) return;
         setUserState(nextUser);
         setAuthStatus('ready');
+        setAuthError('');
       })
       .catch((error) => {
         if (!active) return;
@@ -95,7 +100,17 @@ export function AuthProvider({ children }) {
         setAuthError(error.message || 'Session restore failed');
       });
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        if (!active) return;
+        setUserState(null);
+        setAuthStatus('ready');
+        setAuthError('');
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem(authStorageKey);
+        }
+        return;
+      }
       fetchProfileForSession(session)
         .then((nextUser) => {
           if (!active) return;
@@ -119,7 +134,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    if (isProductionAuthMode || typeof window === 'undefined') return;
+    if (typeof window === 'undefined') return;
     if (!user) {
       window.localStorage.removeItem(authStorageKey);
       return;
