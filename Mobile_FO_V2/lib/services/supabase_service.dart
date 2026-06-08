@@ -1112,21 +1112,51 @@ class SupabaseService {
     if (!isValidUuid(id)) {
       throw StateError('Site visit sync missing. Please reload and try again.');
     }
-    final rows = await client
-        .from('fo_site_visits')
-        .update({
-          'checkout_time': visit.checkOutTime?.toUtc().toIso8601String(),
-          'check_out_latitude': visit.checkOutLatitude,
-          'check_out_longitude': visit.checkOutLongitude,
-          'checkout_accuracy': visit.checkOutAccuracy,
-          'visit_duration_minutes': visit.durationMinutes,
-          'status': visit.status,
-        })
-        .eq('id', id!)
-        .select('id');
+    final payload = {
+      'checkout_time': visit.checkOutTime?.toUtc().toIso8601String(),
+      'check_out_latitude': visit.checkOutLatitude,
+      'check_out_longitude': visit.checkOutLongitude,
+      'checkout_accuracy': visit.checkOutAccuracy,
+      'checkout_distance_meters': visit.checkOutDistanceMeters,
+      'checkout_location_status': visit.checkOutLocationStatus ?? 'valid',
+      'checkout_note': visit.checkOutNote,
+      'petrol_eligible_after_checkout': visit.petrolEligibleAfterCheckout,
+      'petrol_penalty_distance_meters': visit.petrolPenaltyDistanceMeters,
+      'visit_duration_minutes': visit.durationMinutes,
+      'status': visit.status,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    };
+    dynamic rows;
+    try {
+      rows = await client
+          .from('fo_site_visits')
+          .update(payload)
+          .eq('id', id!)
+          .select('id');
+    } on PostgrestException catch (error) {
+      if (!_isMissingColumnError(error)) rethrow;
+      payload.remove('checkout_distance_meters');
+      payload.remove('checkout_location_status');
+      payload.remove('checkout_note');
+      payload.remove('petrol_eligible_after_checkout');
+      payload.remove('petrol_penalty_distance_meters');
+      rows = await client
+          .from('fo_site_visits')
+          .update(payload)
+          .eq('id', id!)
+          .select('id');
+    }
     if (List<Map<String, dynamic>>.from(rows).isEmpty) {
       throw StateError('Check Out update matched 0 site visit rows.');
     }
+  }
+
+  static bool _isMissingColumnError(PostgrestException error) {
+    final code = error.code?.trim();
+    final message = error.message.toLowerCase();
+    return code == '42703' ||
+        code == 'PGRST204' ||
+        message.contains('column') && message.contains('schema cache');
   }
 
   static Future<List<SiteVisit>> fetchVisitsForRange({
