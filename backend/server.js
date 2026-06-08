@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import dotenv from 'dotenv';
 import express from 'express';
 import nodemailer from 'nodemailer';
+import ws from 'ws';
 import { createClient } from '@supabase/supabase-js';
 import { recalculateFoKm, recalculateFoKmForToday } from './foKmRecalculationService.js';
 
@@ -47,6 +48,9 @@ const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabase
   auth: {
     persistSession: false,
     autoRefreshToken: false,
+  },
+  realtime: {
+    transport: ws,
   },
 }) : null;
 const supabaseConfigStatus = {
