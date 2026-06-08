@@ -53,7 +53,7 @@ const MEDIUM_CONFIDENCE_MULTIPLIER = 1.08;
 const LOW_CONFIDENCE_MULTIPLIER = 1.12;
 const SITE_GEOFENCE_METERS = 100;
 const FO_SITE_VISIT_SELECT =
-  "fo_user_id,employee_code,fo_name,display_name,store_name,site_name,client_name,store_code,site_code,check_in_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,visit_duration_minutes,status";
+  "fo_user_id,employee_code,fo_name,display_name,store_name,site_name,client_name,store_code,site_code,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,visit_duration_minutes,status";
 const FO_LIVE_STATUS_SELECT =
   "fo_user_id,latitude,longitude,last_seen_at,route_km_today,is_online,is_tracking,current_status,display_name,username,accuracy,battery_percentage";
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:4000").replace(/\/+$/, "");
@@ -925,21 +925,28 @@ function siteVisitName(visit) {
   );
 }
 
+function siteVisitCheckoutValue(visit) {
+  return visit?.check_out_time || visit?.checkout_time || null;
+}
+
+function isSiteVisitOpen(visit) {
+  return !visit?.checkout_time && !visit?.check_out_time;
+}
+
 function siteVisitStatus(visit) {
   const raw = String(visit?.status || "").trim();
   if (raw) return raw;
-  return visit?.check_out_time ? "Checked Out" : "Checked In";
+  return isSiteVisitOpen(visit) ? "Checked In" : "Checked Out";
 }
 
 function siteVisitDuration(visit) {
   const explicit = Number(visit?.visit_duration_minutes);
   if (Number.isFinite(explicit)) return `${Math.round(explicit)} min`;
-  if (!visit?.check_in_time || !visit?.check_out_time) return "--";
+  const checkOut = siteVisitCheckoutValue(visit);
+  if (!visit?.check_in_time || !checkOut) return "--";
   const minutes = Math.max(
     0,
-    Math.round(
-      (new Date(visit.check_out_time) - new Date(visit.check_in_time)) / 60000,
-    ),
+    Math.round((new Date(checkOut) - new Date(visit.check_in_time)) / 60000),
   );
   return `${minutes} min`;
 }
@@ -954,7 +961,7 @@ function buildSiteVisitPin(visit, officersByFoId, index) {
   return {
     id:
       visit.id ||
-      `visit-${foId || "unknown"}-${visit.check_in_time || visit.check_out_time || index}-${coordinates[0]}-${coordinates[1]}`,
+      `visit-${foId || "unknown"}-${visit.check_in_time || siteVisitCheckoutValue(visit) || index}-${coordinates[0]}-${coordinates[1]}`,
     coordinates,
     siteName,
     clientName: visit.client_name || "--",
@@ -967,7 +974,7 @@ function buildSiteVisitPin(visit, officersByFoId, index) {
       "--",
     foId: foId || "--",
     checkIn: formatDateTime(visit.check_in_time),
-    checkOut: formatDateTime(visit.check_out_time),
+    checkOut: formatDateTime(visit.check_out_time || visit.checkout_time),
     duration: siteVisitDuration(visit),
     status: siteVisitStatus(visit),
   };
@@ -1099,7 +1106,7 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs }) {
     employeeCode: profile?.employee_code || live?.fo_user_id || foId,
     status,
     assignedSite:
-      foVisits.find((visit) => !visit.checkout_time)?.store_name ||
+      foVisits.find((visit) => isSiteVisitOpen(visit))?.store_name ||
       "No active store visit",
     branch: state,
     state,
@@ -2163,10 +2170,10 @@ async function exportFoOperationsExcel({
         "Store Code": visit.store_code || store?.store_code || "",
         State: visit.state || store?.state || "",
         "Check-In Time": formatDateTime(visit.check_in_time),
-        "Check-Out Time": formatDateTime(visit.checkout_time),
+        "Check-Out Time": formatDateTime(siteVisitCheckoutValue(visit)),
         "Visit Duration Minutes":
           visit.visit_duration_minutes ??
-          minutesBetween(visit.check_in_time, visit.checkout_time),
+          minutesBetween(visit.check_in_time, siteVisitCheckoutValue(visit)),
         "Check-In Latitude": checkInPoint?.latitude ?? "",
         "Check-In Longitude": checkInPoint?.longitude ?? "",
         "Check-Out Latitude": checkoutPoint?.latitude ?? "",
@@ -2180,8 +2187,8 @@ async function exportFoOperationsExcel({
       });
       previousPoint = checkoutPoint || checkInPoint || previousPoint;
       previousVisitTime =
-        visit.checkout_time || visit.check_in_time || previousVisitTime;
-      if (!visit.checkout_time) {
+        siteVisitCheckoutValue(visit) || visit.check_in_time || previousVisitTime;
+      if (isSiteVisitOpen(visit)) {
         exceptionRows.push({
           "Employee ID": foId,
           "FO Name": foName,
@@ -2288,7 +2295,7 @@ async function exportFoOperationsExcel({
           sum +
           Number(
             visit.visit_duration_minutes ||
-              minutesBetween(visit.check_in_time, visit.checkout_time) ||
+              minutesBetween(visit.check_in_time, siteVisitCheckoutValue(visit)) ||
               0,
           ),
         0,

@@ -836,6 +836,7 @@ class SupabaseService {
     double? routeKm,
     String? attendanceId,
     String? activeSiteVisitId,
+    bool clearActiveSiteVisit = false,
   }) async {
     await CrashLogService.record(
       employeeCode: user.employeeCode,
@@ -866,7 +867,9 @@ class SupabaseService {
       if (validAttendanceId != null) {
         payload['attendance_id'] = validAttendanceId;
       }
-      if (validSiteVisitId != null) {
+      if (clearActiveSiteVisit) {
+        payload['active_site_visit_id'] = null;
+      } else if (validSiteVisitId != null) {
         payload['active_site_visit_id'] = validSiteVisitId;
       }
       if (latitude == null || longitude == null) {
@@ -1071,6 +1074,8 @@ class SupabaseService {
             'local_id': visit.id,
             'check_in_time': visit.checkInTime.toUtc().toIso8601String(),
             'checkout_time': visit.checkOutTime?.toUtc().toIso8601String(),
+            'check_in_latitude': visit.currentLatitude,
+            'check_in_longitude': visit.currentLongitude,
             'check_out_latitude': visit.checkOutLatitude,
             'check_out_longitude': visit.checkOutLongitude,
             'current_latitude': visit.currentLatitude,
@@ -1112,8 +1117,10 @@ class SupabaseService {
     if (!isValidUuid(id)) {
       throw StateError('Site visit sync missing. Please reload and try again.');
     }
+    final checkoutTimestamp = visit.checkOutTime?.toUtc().toIso8601String();
     final payload = {
-      'checkout_time': visit.checkOutTime?.toUtc().toIso8601String(),
+      'checkout_time': checkoutTimestamp,
+      'check_out_time': checkoutTimestamp,
       'check_out_latitude': visit.checkOutLatitude,
       'check_out_longitude': visit.checkOutLongitude,
       'checkout_accuracy': visit.checkOutAccuracy,

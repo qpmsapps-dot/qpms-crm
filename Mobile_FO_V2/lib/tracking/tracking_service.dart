@@ -442,6 +442,7 @@ class TrackingService {
             speed: checkoutLog?.speed,
             routeKm: attendance.eligibleKm,
             attendanceId: attendance.remoteId,
+            clearActiveSiteVisit: true,
           );
         } catch (error, stackTrace) {
           await CrashLogService.record(
