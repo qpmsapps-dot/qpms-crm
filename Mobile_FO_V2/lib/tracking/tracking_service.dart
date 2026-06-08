@@ -250,6 +250,7 @@ class TrackingService {
     double? accuracy,
     double? speed,
     double? routeKm,
+    bool updateRemoteLiveStatus = true,
   }) async {
     try {
       await CrashLogService.record(
@@ -283,7 +284,7 @@ class TrackingService {
         stackTrace: stackTrace,
       );
     }
-    if (user != null && SupabaseService.isReady) {
+    if (updateRemoteLiveStatus && user != null && SupabaseService.isReady) {
       try {
         final hasLocation = latitude != null && longitude != null;
         await CrashLogService.record(

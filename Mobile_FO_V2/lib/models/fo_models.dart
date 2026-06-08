@@ -97,8 +97,8 @@ class Attendance {
   };
 
   factory Attendance.fromJson(Map<String, dynamic> json) => Attendance(
-    id: _text(json['id']),
-    remoteId: _nullableText(json['remote_id']),
+    id: _text(json['local_id'] ?? json['id']),
+    remoteId: _nullableText(json['remote_id'] ?? json['id']),
     employeeCode: _text(json['employee_code']),
     attendanceDate: _nullableText(json['attendance_date']),
     startTime: _date(json['start_time']) ?? DateTime.now(),
@@ -233,6 +233,11 @@ class SiteVisit {
     this.destinationLatitude,
     this.destinationLongitude,
     this.routeKm,
+    this.checkOutDistanceMeters,
+    this.checkOutLocationStatus,
+    this.checkOutNote,
+    this.petrolEligibleAfterCheckout = true,
+    this.petrolPenaltyDistanceMeters = 0,
     this.durationMinutes,
     this.status = 'Checked In',
     this.synced = false,
@@ -262,6 +267,11 @@ class SiteVisit {
   double? destinationLatitude;
   double? destinationLongitude;
   double? routeKm;
+  double? checkOutDistanceMeters;
+  String? checkOutLocationStatus;
+  String? checkOutNote;
+  bool petrolEligibleAfterCheckout;
+  double petrolPenaltyDistanceMeters;
   int? durationMinutes;
   String status;
   bool synced;
@@ -293,6 +303,11 @@ class SiteVisit {
     'destination_lat': destinationLatitude,
     'destination_lng': destinationLongitude,
     'route_km': routeKm,
+    'checkout_distance_meters': checkOutDistanceMeters,
+    'checkout_location_status': checkOutLocationStatus,
+    'checkout_note': checkOutNote,
+    'petrol_eligible_after_checkout': petrolEligibleAfterCheckout,
+    'petrol_penalty_distance_meters': petrolPenaltyDistanceMeters,
     'visit_duration_minutes': durationMinutes,
     'status': status,
     'synced': synced,
@@ -323,6 +338,13 @@ class SiteVisit {
     destinationLatitude: _double(json['destination_lat']),
     destinationLongitude: _double(json['destination_lng']),
     routeKm: _double(json['route_km']),
+    checkOutDistanceMeters: _double(json['checkout_distance_meters']),
+    checkOutLocationStatus: _nullableText(json['checkout_location_status']),
+    checkOutNote: _nullableText(json['checkout_note']),
+    petrolEligibleAfterCheckout:
+        json['petrol_eligible_after_checkout'] != false,
+    petrolPenaltyDistanceMeters:
+        _double(json['petrol_penalty_distance_meters']) ?? 0,
     durationMinutes: _int(json['visit_duration_minutes']),
     status: _text(json['status']).isEmpty
         ? 'Checked In'
