@@ -237,12 +237,18 @@ function FoGpsTestDashboard() {
           const filteredGpsKm = Number(record.filtered_gps_km ?? record.actual_km ?? 0);
           const actualKm = Number(record.actual_travel_km ?? record.actual_km ?? record.total_raw_km ?? 0);
           const rate = Number(record.rate_per_km ?? 4);
+          const attendanceEnded = Boolean(record.logout_time);
+          const liveActive = liveRow.is_online === true && liveRow.is_tracking === true && !attendanceEnded;
           return {
             username,
             display_name: profile.display_name || profile.full_name || record.display_name || liveRow.display_name || username,
             start: record.login_time,
             end: record.logout_time,
-            status: liveRow.is_tracking ? 'Tracking' : record.status || liveRow.current_status || 'Not started',
+            status: attendanceEnded
+              ? 'Completed'
+              : liveActive
+                ? 'Tracking'
+                : liveRow.current_status || record.status || 'Not started',
             lastSeen: liveRow.last_seen_at || latestLog.captured_at || latestLog.logged_at,
             battery: liveRow.battery_percentage ?? latestLog.battery_percentage ?? record.end_battery_percentage ?? record.start_battery_percentage,
             points: attendanceLogs.length,

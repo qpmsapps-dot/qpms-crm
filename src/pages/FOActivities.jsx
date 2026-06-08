@@ -632,6 +632,17 @@ function liveStatusTimestamp(row) {
 }
 
 function liveStatusFromRow(row, fallbackActive = false) {
+  if (row) {
+    const currentStatus = String(row.current_status || "").toLowerCase();
+    if (
+      row.is_online === false ||
+      row.is_tracking === false ||
+      currentStatus === "offline" ||
+      currentStatus === "completed"
+    ) {
+      return "Offline";
+    }
+  }
   const timestamp = liveStatusTimestamp(row);
   if (!timestamp) return fallbackActive ? "Recent" : "Offline";
   const ageMs = timestamp
@@ -1047,13 +1058,14 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs }) {
   const coordinates = gpsPoint?.coordinates ?? null;
   const sourceTimestamp =
     gpsPoint?.timestamp || liveStatusTimestamp(live) || record.login_time;
-  const status = gpsPoint
-    ? liveStatusFromRow({ last_seen_at: gpsPoint.timestamp })
-    : liveStatusFromRow(
-        null,
-        !record.logout_time &&
-          String(record.status || "").toLowerCase() !== "completed",
-      );
+  const attendanceEnded =
+    Boolean(record.logout_time) ||
+    String(record.status || "").toLowerCase() === "completed";
+  const status = attendanceEnded
+    ? "Offline"
+    : gpsPoint
+      ? liveStatusFromRow({ ...live, last_seen_at: gpsPoint.timestamp })
+      : liveStatusFromRow(null, true);
   const payableRouteKm = payableRouteKmForOfficer({
     foId,
     live,
@@ -1176,9 +1188,14 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
   const timestamp =
     gpsPoint?.timestamp ||
     (coordinates ? existing.locationSourceTime : liveStatusTimestamp(row));
-  const status = coordinates
-    ? liveStatusFromRow({ last_seen_at: timestamp })
-    : liveStatusFromRow(row, existing.status === "Active");
+  const attendanceEnded =
+    Boolean(existing.attendance?.logout_time) ||
+    String(existing.attendance?.status || "").toLowerCase() === "completed";
+  const status = attendanceEnded
+    ? "Offline"
+    : coordinates
+      ? liveStatusFromRow({ ...row, last_seen_at: timestamp })
+      : liveStatusFromRow(row, existing.status === "Active");
   const battery = batteryFromRow(row);
   const actualKm = Number(existing.foSafeKm?.actualTravelKm ?? existing.actualKm ?? 0);
   const payableRouteKm = payableRouteKmForOfficer({

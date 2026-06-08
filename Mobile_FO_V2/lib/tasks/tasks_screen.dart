@@ -51,6 +51,12 @@ class _TasksScreenState extends State<TasksScreen>
           action: 'REMOTE_ACTIVE_ATTENDANCE_FOUND',
           error: 'attendance_id=${remoteAttendance.remoteId}',
         );
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'tasks',
+          action: 'ATTENDANCE_ACTIVE_LOADED',
+          error: 'attendance_id=${remoteAttendance.remoteId}',
+        );
         attendance = remoteAttendance;
         await LocalStore.saveAttendance(remoteAttendance);
         final remoteVisit =
@@ -65,6 +71,12 @@ class _TasksScreenState extends State<TasksScreen>
             action: 'REMOTE_ACTIVE_SITE_VISIT_FOUND',
             error: 'site_visit_id=${remoteVisit.remoteId ?? remoteVisit.id}',
           );
+          await CrashLogService.record(
+            employeeCode: widget.user.employeeCode,
+            screen: 'tasks',
+            action: 'ACTIVE_SITE_VISIT_LOADED',
+            error: 'site_visit_id=${remoteVisit.remoteId ?? remoteVisit.id}',
+          );
           remoteVisit.synced = true;
           await LocalStore.saveVisit(remoteVisit);
           activeVisit = remoteVisit;
@@ -72,6 +84,9 @@ class _TasksScreenState extends State<TasksScreen>
             user: widget.user,
             visit: remoteVisit,
           );
+        } else {
+          await _clearLocalActiveVisitCache(remoteAttendance);
+          activeVisit = null;
         }
       }
     }
@@ -88,11 +103,21 @@ class _TasksScreenState extends State<TasksScreen>
       user: widget.user,
       attendance: attendance,
     );
-    if (remoteVisit == null) return null;
+    if (remoteVisit == null) {
+      await _clearLocalActiveVisitCache(attendance);
+      if (mounted) setState(() => _activeVisit = null);
+      return null;
+    }
     await CrashLogService.record(
       employeeCode: widget.user.employeeCode,
       screen: 'tasks',
       action: 'REMOTE_ACTIVE_SITE_VISIT_FOUND',
+      error: 'site_visit_id=${remoteVisit.remoteId ?? remoteVisit.id}',
+    );
+    await CrashLogService.record(
+      employeeCode: widget.user.employeeCode,
+      screen: 'tasks',
+      action: 'ACTIVE_SITE_VISIT_LOADED',
       error: 'site_visit_id=${remoteVisit.remoteId ?? remoteVisit.id}',
     );
     remoteVisit.synced = true;
@@ -103,6 +128,23 @@ class _TasksScreenState extends State<TasksScreen>
     );
     if (mounted) setState(() => _activeVisit = remoteVisit);
     return remoteVisit;
+  }
+
+  Future<void> _clearLocalActiveVisitCache(Attendance attendance) async {
+    final attendanceIds = {
+      if (attendance.remoteId?.trim().isNotEmpty == true)
+        attendance.remoteId!.trim(),
+      if (attendance.id.trim().isNotEmpty) attendance.id.trim(),
+    };
+    for (final attendanceId in attendanceIds) {
+      await LocalStore.clearActiveVisitsForAttendance(attendanceId);
+    }
+    await CrashLogService.record(
+      employeeCode: widget.user.employeeCode,
+      screen: 'tasks',
+      action: 'CHECKOUT_CACHE_CLEARED',
+      error: 'attendance_id=${attendance.remoteId ?? attendance.id}',
+    );
   }
 
   Future<void> _checkIn() async {
@@ -128,17 +170,6 @@ class _TasksScreenState extends State<TasksScreen>
       }
       final activeAttendance = attendance!;
       _attendance = activeAttendance;
-      if (await LocalStore.activeVisit() != null) {
-        await CrashLogService.record(
-          employeeCode: widget.user.employeeCode,
-          screen: 'tasks',
-          action: 'DUPLICATE_CHECKIN_BLOCKED',
-          error: 'local_active_visit_found',
-        );
-        throw StateError(
-          'Please Check Out from current store before checking in again.',
-        );
-      }
       final remoteActiveVisit = await _restoreRemoteActiveVisit(
         activeAttendance,
       );
@@ -146,12 +177,23 @@ class _TasksScreenState extends State<TasksScreen>
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'tasks',
-          action: 'DUPLICATE_CHECKIN_BLOCKED',
+          action: 'CHECKIN_EXISTING_ACTIVE_VISIT_FOUND',
           error:
               'site_visit_id=${remoteActiveVisit.remoteId ?? remoteActiveVisit.id}',
         );
-        throw StateError(
-          'You are already checked in. Please check out before checking in again.',
+        _toast(
+          'Already checked in at ${remoteActiveVisit.storeName}. Please check out before checking in again.',
+        );
+        return;
+      }
+      final localActiveVisit = await LocalStore.activeVisit();
+      if (localActiveVisit != null) {
+        await _clearLocalActiveVisitCache(activeAttendance);
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'tasks',
+          action: 'CHECKOUT_CACHE_CLEARED',
+          error: 'stale_local_active_visit_id=${localActiveVisit.id}',
         );
       }
 
@@ -358,17 +400,6 @@ class _TasksScreenState extends State<TasksScreen>
         throw StateError('Attendance sync missing. Please restart Start Day.');
       }
       final activeAttendance = attendance!;
-      if (await LocalStore.activeVisit() != null) {
-        await CrashLogService.record(
-          employeeCode: widget.user.employeeCode,
-          screen: 'tasks',
-          action: 'DUPLICATE_CHECKIN_BLOCKED',
-          error: 'local_active_visit_found',
-        );
-        throw StateError(
-          'Please Check Out from current store before adding another site.',
-        );
-      }
       final remoteActiveVisit = await _restoreRemoteActiveVisit(
         activeAttendance,
       );
@@ -376,12 +407,23 @@ class _TasksScreenState extends State<TasksScreen>
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'tasks',
-          action: 'DUPLICATE_CHECKIN_BLOCKED',
+          action: 'CHECKIN_EXISTING_ACTIVE_VISIT_FOUND',
           error:
               'site_visit_id=${remoteActiveVisit.remoteId ?? remoteActiveVisit.id}',
         );
-        throw StateError(
-          'You are already checked in. Please check out before checking in again.',
+        _toast(
+          'Already checked in at ${remoteActiveVisit.storeName}. Please check out before adding another site.',
+        );
+        return;
+      }
+      final localActiveVisit = await LocalStore.activeVisit();
+      if (localActiveVisit != null) {
+        await _clearLocalActiveVisitCache(activeAttendance);
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'tasks',
+          action: 'CHECKOUT_CACHE_CLEARED',
+          error: 'stale_local_active_visit_id=${localActiveVisit.id}',
         );
       }
       final position = await Geolocator.getCurrentPosition(
@@ -519,6 +561,12 @@ class _TasksScreenState extends State<TasksScreen>
         action: 'CHECKIN_SITE_VISIT_CREATE_SUCCESS',
         error: 'site_visit_id=${visit.remoteId ?? '--'}',
       );
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tasks',
+        action: 'CHECKIN_NEW_VISIT_CREATED',
+        error: 'site_visit_id=${visit.remoteId ?? '--'}',
+      );
     } catch (error, stackTrace) {
       await LocalStore.removeVisit(visit.id);
       await CrashLogService.record(
@@ -650,10 +698,35 @@ class _TasksScreenState extends State<TasksScreen>
   }
 
   Future<void> _checkOut() async {
-    final visit = _activeVisit;
-    if (visit == null) return;
+    var visit = _activeVisit;
+    final attendance = await LocalStore.getAttendance();
+    if (attendance?.isActive != true) return;
     setState(() => _busy = true);
     try {
+      if (SupabaseService.isReady) {
+        final remoteVisit =
+            await SupabaseService.findActiveSiteVisitForAttendance(
+              user: widget.user,
+              attendance: attendance!,
+            );
+        if (remoteVisit != null) {
+          await CrashLogService.record(
+            employeeCode: widget.user.employeeCode,
+            screen: 'tasks',
+            action: 'CHECKOUT_ACTIVE_VISIT_FOUND',
+            error: 'site_visit_id=${remoteVisit.remoteId ?? remoteVisit.id}',
+          );
+          remoteVisit.synced = true;
+          await LocalStore.saveVisit(remoteVisit);
+          visit = remoteVisit;
+        } else {
+          await _clearLocalActiveVisitCache(attendance);
+          if (mounted) setState(() => _activeVisit = null);
+          _toast('No active site visit found. Please refresh and try again.');
+          return;
+        }
+      }
+      if (visit == null) return;
       Position? position;
       try {
         position = await Geolocator.getCurrentPosition(
@@ -719,6 +792,12 @@ class _TasksScreenState extends State<TasksScreen>
         ..status = 'Checked Out';
       try {
         await SupabaseService.updateVisitCheckout(visit);
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'tasks',
+          action: 'CHECKOUT_UPDATE_SUCCESS',
+          error: 'site_visit_id=${visit.remoteId ?? visit.id}',
+        );
       } catch (error, stackTrace) {
         visit
           ..checkOutTime = previousCheckOutTime
@@ -739,6 +818,7 @@ class _TasksScreenState extends State<TasksScreen>
         return;
       }
       await LocalStore.saveVisit(visit);
+      await _clearLocalActiveVisitCache(attendance!);
       if (_isValidLatLng(visit.checkOutLatitude, visit.checkOutLongitude)) {
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
@@ -748,9 +828,8 @@ class _TasksScreenState extends State<TasksScreen>
               'site_visit_id=${visit.remoteId ?? visit.id} origin=${visit.checkOutLatitude},${visit.checkOutLongitude}',
         );
       }
-      final attendance = await LocalStore.getAttendance();
-      if (attendance?.isActive == true) {
-        final activeAttendance = attendance!;
+      if (attendance.isActive) {
+        final activeAttendance = attendance;
         await TrackingService.resumeAfterSiteCheckout(
           user: widget.user,
           attendance: activeAttendance,

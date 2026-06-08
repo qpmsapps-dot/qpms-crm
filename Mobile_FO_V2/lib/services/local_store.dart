@@ -168,6 +168,21 @@ class LocalStore {
     return null;
   }
 
+  static Future<void> clearActiveVisitsForAttendance(
+    String attendanceId,
+  ) async {
+    final cleanAttendanceId = attendanceId.trim();
+    if (cleanAttendanceId.isEmpty) return;
+    final visits = await getVisits();
+    visits.removeWhere(
+      (visit) =>
+          visit.isActive &&
+          ((visit.attendanceId?.trim() ?? '').isEmpty ||
+              visit.attendanceId?.trim() == cleanAttendanceId),
+    );
+    await _saveList(_visitsKey, visits.map((e) => e.toJson()).toList());
+  }
+
   static Future<void> clearAll() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_userKey);

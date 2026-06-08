@@ -303,6 +303,22 @@ class SupabaseService {
     return SiteVisit.fromJson(records.first);
   }
 
+  static Future<int> countOpenSiteVisitsForAttendance({
+    required FoUser user,
+    required Attendance attendance,
+  }) async {
+    final attendanceId = attendance.remoteId?.trim();
+    if (!isValidUuid(attendanceId)) return 0;
+    final rows = await client
+        .from('fo_site_visits')
+        .select('id')
+        .eq('fo_user_id', user.employeeCode)
+        .eq('attendance_id', attendanceId!)
+        .filter('checkout_time', 'is', null)
+        .limit(100);
+    return List<Map<String, dynamic>>.from(rows).length;
+  }
+
   static Future<void> reopenAttendanceForToday(Attendance attendance) async {
     final id = attendance.remoteId;
     if (id == null || id.isEmpty) return;
@@ -374,6 +390,99 @@ class SupabaseService {
         stackTrace: stackTrace,
       );
       rethrow;
+    }
+  }
+
+  static Future<Attendance> endCurrentActiveAttendance({
+    required FoUser user,
+    required Attendance attendance,
+  }) async {
+    final remoteActive = await findOpenActiveAttendance(user);
+    if (remoteActive == null || !isValidUuid(remoteActive.remoteId)) {
+      throw StateError('No active attendance found in Supabase.');
+    }
+    attendance.remoteId = remoteActive.remoteId;
+    await _syncAttendanceRouteKmFromVisits(attendance);
+    final id = remoteActive.remoteId!;
+    final logoutTime = attendance.endTime ?? DateTime.now();
+    final rows = await client
+        .from('fo_attendance')
+        .update({
+          'logout_time': logoutTime.toUtc().toIso8601String(),
+          'end_latitude': attendance.endLat,
+          'end_longitude': attendance.endLng,
+          'end_battery_percentage': attendance.batteryEnd,
+          'actual_km': attendance.actualKm,
+          'eligible_km': attendance.eligibleKm,
+          'total_raw_km': attendance.actualKm,
+          'total_route_km': attendance.totalRouteKm,
+          'total_approved_km': attendance.eligibleKm,
+          'rate_per_km': 4,
+          'petrol_amount': attendance.eligibleKm * 4,
+          'status': 'Completed',
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', id)
+        .eq('fo_user_id', user.employeeCode)
+        .eq('status', 'Active')
+        .filter('logout_time', 'is', null)
+        .select('*');
+    final records = List<Map<String, dynamic>>.from(rows);
+    if (records.length != 1) {
+      throw StateError(
+        'End Day attendance update affected ${records.length} rows.',
+      );
+    }
+    return _attendanceFromRow(records.first, user);
+  }
+
+  static Future<void> updateEndDayLiveStatus({
+    required FoUser user,
+    double? latitude,
+    double? longitude,
+    double? accuracy,
+    double? speed,
+    double? routeKm,
+    String? attendanceId,
+  }) async {
+    final payload = <String, dynamic>{
+      'fo_user_id': user.employeeCode,
+      'username': user.employeeCode,
+      'display_name': user.fullName,
+      'attendance_id': _uuidOrNull(attendanceId),
+      'active_site_visit_id': null,
+      'active_task_id': null,
+      'is_online': false,
+      'is_tracking': false,
+      'current_status': 'Offline',
+      'last_seen_at': DateTime.now().toUtc().toIso8601String(),
+      'source': 'mobile',
+      'sync_status': 'synced',
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    };
+    if (latitude != null) payload['latitude'] = latitude;
+    if (longitude != null) payload['longitude'] = longitude;
+    if (accuracy != null) payload['accuracy'] = accuracy;
+    if (speed != null) payload['speed'] = speed;
+    if (routeKm != null) payload['route_km_today'] = routeKm;
+    dynamic rows;
+    try {
+      rows = await client
+          .from('fo_live_status')
+          .upsert(payload, onConflict: 'fo_user_id')
+          .select('fo_user_id');
+    } on PostgrestException catch (error) {
+      if (error.code != '42703' || !payload.containsKey('active_task_id')) {
+        rethrow;
+      }
+      payload.remove('active_task_id');
+      rows = await client
+          .from('fo_live_status')
+          .upsert(payload, onConflict: 'fo_user_id')
+          .select('fo_user_id');
+    }
+    if (List<Map<String, dynamic>>.from(rows).isEmpty) {
+      throw StateError('End Day live status update returned 0 rows.');
     }
   }
 
@@ -1000,8 +1109,10 @@ class SupabaseService {
 
   static Future<void> updateVisitCheckout(SiteVisit visit) async {
     final id = visit.remoteId;
-    if (id == null || id.isEmpty) return;
-    await client
+    if (!isValidUuid(id)) {
+      throw StateError('Site visit sync missing. Please reload and try again.');
+    }
+    final rows = await client
         .from('fo_site_visits')
         .update({
           'checkout_time': visit.checkOutTime?.toUtc().toIso8601String(),
@@ -1011,7 +1122,11 @@ class SupabaseService {
           'visit_duration_minutes': visit.durationMinutes,
           'status': visit.status,
         })
-        .eq('id', id);
+        .eq('id', id!)
+        .select('id');
+    if (List<Map<String, dynamic>>.from(rows).isEmpty) {
+      throw StateError('Check Out update matched 0 site visit rows.');
+    }
   }
 
   static Future<List<SiteVisit>> fetchVisitsForRange({
