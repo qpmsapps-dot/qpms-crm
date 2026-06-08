@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "node backend/server.js",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint ."
@@ -14,13 +13,9 @@
     "@supabase/supabase-js": "^2.105.4",
     "@tailwindcss/vite": "^4.1.17",
     "axios": "^1.13.2",
-    "cors": "^2.8.6",
-    "dotenv": "^17.4.2",
-    "express": "^5.2.1",
     "framer-motion": "^12.38.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.555.0",
-    "nodemailer": "^8.0.7",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-leaflet": "^5.0.0",
