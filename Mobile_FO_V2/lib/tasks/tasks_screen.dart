@@ -18,9 +18,10 @@ import '../utils/date_utils.dart';
 import '../utils/local_id.dart';
 
 class TasksScreen extends StatefulWidget {
-  const TasksScreen({required this.user, super.key});
+  const TasksScreen({required this.user, this.isSelected = true, super.key});
 
   final FoUser user;
+  final bool isSelected;
 
   @override
   State<TasksScreen> createState() => _TasksScreenState();
@@ -38,9 +39,24 @@ class _TasksScreenState extends State<TasksScreen>
     _load();
   }
 
+  @override
+  void didUpdateWidget(covariant TasksScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isSelected && !oldWidget.isSelected) {
+      _load();
+    }
+  }
+
   Future<void> _load() async {
     var attendance = await LocalStore.getAttendance();
     var activeVisit = await LocalStore.activeVisit();
+    await CrashLogService.record(
+      employeeCode: widget.user.employeeCode,
+      screen: 'tasks',
+      action: 'ATTENDANCE_LOADED_MYTASKS',
+      error:
+          'source=local attendance_id=${attendance?.remoteId ?? attendance?.id ?? '--'} active=${attendance?.isActive == true} remote_id=${attendance?.remoteId ?? '--'} end_time=${attendance?.endTime?.toIso8601String() ?? '--'}',
+    );
     if (SupabaseService.isReady) {
       final remoteAttendance =
           await SupabaseService.findActiveAttendanceForToday(widget.user);
@@ -59,6 +75,13 @@ class _TasksScreenState extends State<TasksScreen>
         );
         attendance = remoteAttendance;
         await LocalStore.saveAttendance(remoteAttendance);
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'tasks',
+          action: 'ATTENDANCE_SAVED_LOCAL',
+          error:
+              'source=remote_active attendance_id=${remoteAttendance.remoteId ?? remoteAttendance.id} active=${remoteAttendance.isActive} remote_id=${remoteAttendance.remoteId ?? '--'}',
+        );
         final remoteVisit =
             await SupabaseService.findActiveSiteVisitForAttendance(
               user: widget.user,
@@ -91,6 +114,13 @@ class _TasksScreenState extends State<TasksScreen>
       }
     }
     if (!mounted) return;
+    await CrashLogService.record(
+      employeeCode: widget.user.employeeCode,
+      screen: 'tasks',
+      action: 'ATTENDANCE_ACTIVE_CHECK',
+      error:
+          'source=load attendance_id=${attendance?.remoteId ?? attendance?.id ?? '--'} active=${attendance?.isActive == true} remote_id=${attendance?.remoteId ?? '--'} button_enabled=${attendance?.isActive == true}',
+    );
     setState(() {
       _attendance = attendance;
       _activeVisit = activeVisit;
@@ -161,6 +191,13 @@ class _TasksScreenState extends State<TasksScreen>
         screen: 'tasks',
         action: 'CHECKIN_ATTENDANCE_LOADED',
         error: 'remote_id=${attendance?.remoteId ?? '--'}',
+      );
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tasks',
+        action: 'ATTENDANCE_ACTIVE_CHECK',
+        error:
+            'source=checkin attendance_id=${attendance?.remoteId ?? attendance?.id ?? '--'} active=${attendance?.isActive == true} remote_id=${attendance?.remoteId ?? '--'} end_time=${attendance?.endTime?.toIso8601String() ?? '--'}',
       );
       if (attendance?.isActive != true) {
         throw StateError('Please Start Day before checking into a store.');
@@ -394,6 +431,13 @@ class _TasksScreenState extends State<TasksScreen>
     setState(() => _busy = true);
     try {
       final attendance = await LocalStore.getAttendance();
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tasks',
+        action: 'ATTENDANCE_ACTIVE_CHECK',
+        error:
+            'source=add_site attendance_id=${attendance?.remoteId ?? attendance?.id ?? '--'} active=${attendance?.isActive == true} remote_id=${attendance?.remoteId ?? '--'} end_time=${attendance?.endTime?.toIso8601String() ?? '--'}',
+      );
       if (attendance?.isActive != true) {
         throw StateError('Please Start Day before adding a site.');
       }
@@ -636,8 +680,7 @@ class _TasksScreenState extends State<TasksScreen>
     Attendance attendance,
     SiteVisit visit,
   ) async {
-    final routeKm =
-        await _routeKmFromVisits(attendance) + attendance.endRouteKm;
+    final routeKm = await _routeKmFromVisits(attendance);
     attendance
       ..totalRouteKm = routeKm
       ..eligibleKm = routeKm;

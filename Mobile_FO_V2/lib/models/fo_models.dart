@@ -314,8 +314,8 @@ class SiteVisit {
   };
 
   factory SiteVisit.fromJson(Map<String, dynamic> json) => SiteVisit(
-    id: _text(json['id']),
-    remoteId: _nullableText(json['remote_id']),
+    id: _text(json['local_id'] ?? json['id']),
+    remoteId: _nullableText(json['remote_id'] ?? json['id']),
     employeeCode: _text(json['employee_code']),
     attendanceId: _nullableText(json['attendance_id']),
     storeId: _nullableText(json['store_id']),

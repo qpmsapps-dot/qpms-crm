@@ -6,10 +6,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../build_info.dart';
 import '../models/fo_models.dart';
 import '../services/crash_log_service.dart';
-import '../services/local_db_service.dart';
 import '../services/local_store.dart';
 import '../services/permission_service.dart';
-import '../services/route_distance_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../tracking/route_km_calculator.dart';
@@ -240,8 +238,7 @@ class _HomeScreenState extends State<HomeScreen>
     }
     if (hasActiveAttendanceToday && attendance != null) {
       liveKm = await _calculateContinuedKm(attendance);
-      final routeKm =
-          await _routeKmFromVisits(attendance) + attendance.endRouteKm;
+      final routeKm = await _routeKmFromVisits(attendance);
       attendance
         ..actualKm = liveKm
         ..totalRouteKm = routeKm
@@ -251,7 +248,9 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     setState(() {
       _attendance = attendance;
-      _km = attendance?.eligibleKm ?? 0;
+      final eligibleKm = attendance?.eligibleKm ?? 0;
+      final totalRouteKm = attendance?.totalRouteKm ?? 0;
+      _km = eligibleKm > 0 ? eligibleKm : totalRouteKm;
       _sitesToday = visits
           .where((visit) => visit.checkInTime.isAfter(today))
           .length;
@@ -401,6 +400,8 @@ class _HomeScreenState extends State<HomeScreen>
         employeeCode: widget.user.employeeCode,
         screen: 'home',
         action: 'ATTENDANCE_CREATED',
+        error:
+            'local_id=${attendance.id} attendance_date=${attendance.attendanceDate} active=${attendance.isActive} remote_id=${attendance.remoteId ?? '--'}',
       );
       try {
         attendance.remoteId = await SupabaseService.createAttendance(
@@ -440,8 +441,17 @@ class _HomeScreenState extends State<HomeScreen>
         employeeCode: widget.user.employeeCode,
         screen: 'home',
         action: 'SAME_DAY_NEW_ATTENDANCE_CREATED',
+        error:
+            'attendance_id=${attendance.remoteId} local_id=${attendance.id} active=${attendance.isActive}',
       );
       await LocalStore.saveAttendance(attendance);
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'home',
+        action: 'ATTENDANCE_SAVED_LOCAL',
+        error:
+            'attendance_id=${attendance.remoteId ?? attendance.id} remote_id=${attendance.remoteId ?? '--'} active=${attendance.isActive}',
+      );
       await TrackingService.saveRouteAnchor(
         user: widget.user,
         attendance: attendance,
@@ -490,8 +500,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _resumeAttendance(Attendance attendance) async {
     final existingKm = await _calculateContinuedKm(attendance);
-    final routeKm =
-        await _routeKmFromVisits(attendance) + attendance.endRouteKm;
+    final routeKm = await _routeKmFromVisits(attendance);
     attendance
       ..actualKm = existingKm
       ..totalRouteKm = routeKm
@@ -706,11 +715,6 @@ class _HomeScreenState extends State<HomeScreen>
       }
       await TrackingService.syncQueuedLogs(force: true);
       final actualKm = await _calculateContinuedKm(attendance);
-      final returnRouteKm = await _calculateEndRouteKm(
-        attendance: attendance,
-        endLatitude: endLatitude,
-        endLongitude: endLongitude,
-      );
       final previousEndTime = attendance.endTime;
       final previousEndLat = attendance.endLat;
       final previousEndLng = attendance.endLng;
@@ -719,7 +723,7 @@ class _HomeScreenState extends State<HomeScreen>
       final previousEligibleKm = attendance.eligibleKm;
       final previousTotalRouteKm = attendance.totalRouteKm;
       final previousEndRouteKm = attendance.endRouteKm;
-      final routeKm = await _routeKmFromVisits(attendance) + returnRouteKm;
+      final routeKm = await _routeKmFromVisits(attendance);
       final endTime = DateTime.now();
       attendance
         ..endTime = endTime
@@ -727,7 +731,7 @@ class _HomeScreenState extends State<HomeScreen>
         ..endLng = endLongitude
         ..batteryEnd = battery
         ..actualKm = actualKm
-        ..endRouteKm = returnRouteKm
+        ..endRouteKm = 0
         ..totalRouteKm = routeKm
         ..eligibleKm = routeKm;
       try {
@@ -929,83 +933,6 @@ class _HomeScreenState extends State<HomeScreen>
       }
     }
     return total;
-  }
-
-  Future<double> _calculateEndRouteKm({
-    required Attendance attendance,
-    required double? endLatitude,
-    required double? endLongitude,
-  }) async {
-    if (attendance.endRouteKm > 0) return attendance.endRouteKm;
-    if (endLatitude == null || endLongitude == null) return 0;
-    final origin = await _lastRouteOrigin(attendance);
-    if (origin == null) return 0;
-    final km = await RouteDistanceService.roadDistanceKm(
-      employeeCode: widget.user.employeeCode,
-      originLat: origin.lat,
-      originLng: origin.lng,
-      destinationLat: endLatitude,
-      destinationLng: endLongitude,
-    );
-    if (km == null || km <= 0) return 0;
-    await CrashLogService.record(
-      employeeCode: widget.user.employeeCode,
-      screen: 'tracking',
-      action: 'CONVEYANCE_KM_UPDATED',
-      error: 'end_route_km=$km',
-    );
-    await CrashLogService.record(
-      employeeCode: widget.user.employeeCode,
-      screen: 'tracking',
-      action: 'ROUTE_LEG_CALCULATED_TO_END_DAY',
-      error:
-          'attendance_id=${attendance.remoteId} origin=${origin.lat},${origin.lng} destination=$endLatitude,$endLongitude route_km=$km',
-    );
-    await LocalDbService.saveRouteLeg(
-      id: newLocalId('route-leg'),
-      attendanceId: attendance.remoteId ?? attendance.id,
-      originLat: origin.lat,
-      originLng: origin.lng,
-      destinationLat: endLatitude,
-      destinationLng: endLongitude,
-      routeKm: km,
-      source: 'end_day',
-      syncStatus: 'synced',
-    );
-    return km;
-  }
-
-  Future<({double lat, double lng})?> _lastRouteOrigin(
-    Attendance attendance,
-  ) async {
-    final attendanceId = attendance.remoteId?.trim().isNotEmpty == true
-        ? attendance.remoteId!.trim()
-        : attendance.id;
-    final visits =
-        (await LocalStore.getVisits())
-            .where((visit) => visit.attendanceId?.trim() == attendanceId)
-            .toList()
-          ..sort((a, b) => a.checkInTime.compareTo(b.checkInTime));
-    for (final visit in visits.reversed) {
-      final lat = visit.checkOutLatitude ?? visit.currentLatitude;
-      final lng = visit.checkOutLongitude ?? visit.currentLongitude;
-      if (_isValidLatLng(lat, lng)) return (lat: lat!, lng: lng!);
-    }
-    if (_isValidLatLng(attendance.startLat, attendance.startLng)) {
-      return (lat: attendance.startLat!, lng: attendance.startLng!);
-    }
-    return null;
-  }
-
-  bool _isValidLatLng(double? latitude, double? longitude) {
-    return latitude != null &&
-        longitude != null &&
-        latitude.isFinite &&
-        longitude.isFinite &&
-        latitude >= -90 &&
-        latitude <= 90 &&
-        longitude >= -180 &&
-        longitude <= 180;
   }
 
   void _toast(String message) {

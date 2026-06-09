@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/fo_models.dart';
@@ -33,16 +34,37 @@ class LocalStore {
     final prefs = await SharedPreferences.getInstance();
     if (attendance == null) {
       await prefs.remove(_attendanceKey);
+      debugPrint('[myQPMS FO V2] local_store/ATTENDANCE_SAVED_LOCAL cleared');
       return;
     }
     await prefs.setString(_attendanceKey, jsonEncode(attendance.toJson()));
+    debugPrint(
+      '[myQPMS FO V2] local_store/ATTENDANCE_SAVED_LOCAL '
+      'attendance_id=${attendance.remoteId ?? attendance.id} '
+      'remote_id=${attendance.remoteId ?? '--'} '
+      'active=${attendance.isActive} '
+      'end_time=${attendance.endTime?.toIso8601String() ?? '--'}',
+    );
   }
 
   static Future<Attendance?> getAttendance() async {
     final prefs = await SharedPreferences.getInstance();
     final value = prefs.getString(_attendanceKey);
-    if (value == null || value.isEmpty) return null;
-    return Attendance.fromJson(jsonDecode(value) as Map<String, dynamic>);
+    if (value == null || value.isEmpty) {
+      debugPrint('[myQPMS FO V2] local_store/ATTENDANCE_LOADED_MYTASKS null');
+      return null;
+    }
+    final attendance = Attendance.fromJson(
+      jsonDecode(value) as Map<String, dynamic>,
+    );
+    debugPrint(
+      '[myQPMS FO V2] local_store/ATTENDANCE_LOADED_MYTASKS '
+      'attendance_id=${attendance.remoteId ?? attendance.id} '
+      'remote_id=${attendance.remoteId ?? '--'} '
+      'active=${attendance.isActive} '
+      'end_time=${attendance.endTime?.toIso8601String() ?? '--'}',
+    );
+    return attendance;
   }
 
   static Future<void> saveBackgroundTrackingSession({
