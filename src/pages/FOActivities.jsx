@@ -2690,6 +2690,20 @@ export default function FOActivities() {
               .order("captured_at", { ascending: true })
               .limit(20000),
           ]);
+        console.debug("FO_SUPABASE_QUERY_RESULTS", {
+          attendanceCount: attendanceRes.data?.length || 0,
+          attendanceError: attendanceRes.error || null,
+          liveStatusCount: liveStatusRows.length,
+          profilesCount: profilesRes.data?.length || 0,
+          profilesError: profilesRes.error || null,
+          locationLogsCount: logsRes.data?.length || 0,
+          locationLogsError: logsRes.error || null,
+        });
+        console.warn("FO_SUPABASE_ERRORS", {
+          attendance: attendanceRes.error || null,
+          profiles: profilesRes.error || null,
+          locationLogs: logsRes.error || null,
+        });
         const errors = [attendanceRes, profilesRes, logsRes]
           .map((res) => res?.error)
           .filter(Boolean);
@@ -2712,7 +2726,9 @@ export default function FOActivities() {
           profiles: profileRows,
           logs: logsRes.data || [],
         });
+        console.debug("FO_ATTENDANCE_LOADED", attendanceRes.data?.length || 0);
         console.debug("FO_SITE_VISITS_LOADED", siteVisits.length);
+        console.debug("FO_LIVE_STATUS_LOADED", liveStatusRows.length);
         console.debug("FO_OFFICERS_BUILT", officersFromSupabase.length);
         if (!cancelled) {
           profileRowsRef.current = profileRows;
