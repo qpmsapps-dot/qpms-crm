@@ -345,7 +345,7 @@ class SupabaseService {
             'end_latitude': attendance.endLat,
             'end_longitude': attendance.endLng,
             'end_battery_percentage': attendance.batteryEnd,
-            'actual_km': attendance.actualKm,
+            'actual_km': attendance.totalRouteKm,
             'eligible_km': attendance.eligibleKm,
             'total_raw_km': attendance.actualKm,
             'total_route_km': attendance.totalRouteKm,
@@ -412,7 +412,7 @@ class SupabaseService {
           'end_latitude': attendance.endLat,
           'end_longitude': attendance.endLng,
           'end_battery_percentage': attendance.batteryEnd,
-          'actual_km': attendance.actualKm,
+          'actual_km': attendance.totalRouteKm,
           'eligible_km': attendance.eligibleKm,
           'total_raw_km': attendance.actualKm,
           'total_route_km': attendance.totalRouteKm,
@@ -510,7 +510,7 @@ class SupabaseService {
     try {
       await _syncAttendanceRouteKmFromVisits(attendance);
       final payload = {
-        'actual_km': attendance.actualKm,
+        'actual_km': attendance.totalRouteKm,
         'eligible_km': attendance.eligibleKm,
         'total_raw_km': attendance.actualKm,
         'total_route_km': attendance.totalRouteKm,
@@ -591,10 +591,17 @@ class SupabaseService {
             'attendance_uuid=$id site_visit_id=${row['id']} route_km=$routeKm',
       );
     }
-    if (visits.isEmpty || totalRouteKm <= 0) return;
+    totalRouteKm = double.parse(totalRouteKm.toStringAsFixed(2));
     attendance
       ..totalRouteKm = totalRouteKm
       ..eligibleKm = totalRouteKm;
+    await CrashLogService.record(
+      employeeCode: attendance.employeeCode,
+      screen: 'tracking',
+      action: 'ROUTE_KM_ATTENDANCE_CANONICAL_SUM',
+      error:
+          'attendance_uuid=$id visits=${visits.length} total_route_km=$totalRouteKm eligible_km=$totalRouteKm',
+    );
   }
 
   static Attendance _attendanceFromRow(Map<String, dynamic> row, FoUser user) {
@@ -836,6 +843,7 @@ class SupabaseService {
     double? routeKm,
     String? attendanceId,
     String? activeSiteVisitId,
+    bool clearActiveSiteVisit = false,
   }) async {
     await CrashLogService.record(
       employeeCode: user.employeeCode,
@@ -866,7 +874,9 @@ class SupabaseService {
       if (validAttendanceId != null) {
         payload['attendance_id'] = validAttendanceId;
       }
-      if (validSiteVisitId != null) {
+      if (clearActiveSiteVisit) {
+        payload['active_site_visit_id'] = null;
+      } else if (validSiteVisitId != null) {
         payload['active_site_visit_id'] = validSiteVisitId;
       }
       if (latitude == null || longitude == null) {
@@ -1071,6 +1081,8 @@ class SupabaseService {
             'local_id': visit.id,
             'check_in_time': visit.checkInTime.toUtc().toIso8601String(),
             'checkout_time': visit.checkOutTime?.toUtc().toIso8601String(),
+            'check_in_latitude': visit.currentLatitude,
+            'check_in_longitude': visit.currentLongitude,
             'check_out_latitude': visit.checkOutLatitude,
             'check_out_longitude': visit.checkOutLongitude,
             'current_latitude': visit.currentLatitude,
@@ -1112,8 +1124,10 @@ class SupabaseService {
     if (!isValidUuid(id)) {
       throw StateError('Site visit sync missing. Please reload and try again.');
     }
+    final checkoutTimestamp = visit.checkOutTime?.toUtc().toIso8601String();
     final payload = {
-      'checkout_time': visit.checkOutTime?.toUtc().toIso8601String(),
+      'checkout_time': checkoutTimestamp,
+      'check_out_time': checkoutTimestamp,
       'check_out_latitude': visit.checkOutLatitude,
       'check_out_longitude': visit.checkOutLongitude,
       'checkout_accuracy': visit.checkOutAccuracy,
