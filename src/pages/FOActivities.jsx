@@ -55,7 +55,7 @@ const SITE_GEOFENCE_METERS = 100;
 const FO_SITE_VISIT_SELECT =
   "fo_user_id,employee_code,fo_name,display_name,store_name,site_name,client_name,store_code,site_code,check_in_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,visit_duration_minutes,status";
 const FO_LIVE_STATUS_SELECT =
-  "fo_user_id,latitude,longitude,last_seen_at,route_km_today,is_online,is_tracking,current_status,display_name,username,accuracy,battery_percentage";
+  "fo_user_id,latitude,longitude,last_seen_at,updated_at,route_km_today,is_online,is_tracking,current_status,display_name,username,accuracy,battery_percentage";
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:4000").replace(/\/+$/, "");
 const MARKER_ANIMATION_MIN_MS = 15000;
 const MARKER_ANIMATION_MAX_MS = 180000;
@@ -623,31 +623,21 @@ function numberOrNull(value) {
 
 function liveStatusTimestamp(row) {
   return (
+    row?.updated_at ||
     row?.last_seen_at ||
     row?.last_seen ||
-    row?.updated_at ||
     row?.logged_at ||
     row?.created_at
   );
 }
 
-function liveStatusFromRow(row, fallbackActive = false) {
-  if (row) {
-    const currentStatus = String(row.current_status || "").toLowerCase();
-    if (
-      row.is_online === false ||
-      row.is_tracking === false ||
-      currentStatus === "offline" ||
-      currentStatus === "completed"
-    ) {
-      return "Offline";
-    }
-  }
+function liveStatusFromRow(row) {
   const timestamp = liveStatusTimestamp(row);
-  if (!timestamp) return fallbackActive ? "Recent" : "Offline";
+  if (!timestamp) return "Offline";
   const ageMs = timestamp
     ? Date.now() - new Date(timestamp).getTime()
     : Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(ageMs)) return "Offline";
   const ageMinutes = ageMs / 60000;
   if (ageMinutes <= 2) return "Active";
   if (ageMinutes <= 10) return "Recent";
@@ -1058,14 +1048,7 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs }) {
   const coordinates = gpsPoint?.coordinates ?? null;
   const sourceTimestamp =
     gpsPoint?.timestamp || liveStatusTimestamp(live) || record.login_time;
-  const attendanceEnded =
-    Boolean(record.logout_time) ||
-    String(record.status || "").toLowerCase() === "completed";
-  const status = attendanceEnded
-    ? "Offline"
-    : gpsPoint
-      ? liveStatusFromRow({ ...live, last_seen_at: gpsPoint.timestamp })
-      : liveStatusFromRow(null, true);
+  const status = live ? liveStatusFromRow(live) : "Offline";
   const payableRouteKm = payableRouteKmForOfficer({
     foId,
     live,
@@ -1157,9 +1140,19 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs }) {
     return map;
   }, new Map());
 
-  const officerIds = new Set([
-    ...latestLiveStatus.keys(),
-  ]);
+  const officerIds = new Set();
+  profiles.filter(isRealFoProfile).forEach((profile) => {
+    const code = normalizeFoKey(profile?.employee_code);
+    if (code) {
+      officerIds.add(code);
+      return;
+    }
+    profileKeys(profile).forEach((key) => officerIds.add(key));
+  });
+  latestLiveStatus.forEach((_, foId) => officerIds.add(foId));
+  latestAttendance.forEach((_, foId) => officerIds.add(foId));
+  visitsByFo.forEach((_, foId) => officerIds.add(foId));
+  logsByFo.forEach((_, foId) => officerIds.add(foId));
   return Array.from(officerIds).map((foId) =>
     officerFromRows({
       foId,
@@ -1188,14 +1181,7 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
   const timestamp =
     gpsPoint?.timestamp ||
     (coordinates ? existing.locationSourceTime : liveStatusTimestamp(row));
-  const attendanceEnded =
-    Boolean(existing.attendance?.logout_time) ||
-    String(existing.attendance?.status || "").toLowerCase() === "completed";
-  const status = attendanceEnded
-    ? "Offline"
-    : coordinates
-      ? liveStatusFromRow({ ...row, last_seen_at: timestamp })
-      : liveStatusFromRow(row, existing.status === "Active");
+  const status = liveStatusFromRow(row);
   const battery = batteryFromRow(row);
   const actualKm = Number(existing.foSafeKm?.actualTravelKm ?? existing.actualKm ?? 0);
   const payableRouteKm = payableRouteKmForOfficer({
