@@ -55,7 +55,7 @@ const SITE_GEOFENCE_METERS = 100;
 const FO_SITE_VISIT_SELECT =
   "fo_user_id,employee_code,fo_name,display_name,store_name,site_name,client_name,store_code,site_code,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,visit_duration_minutes,status";
 const FO_LIVE_STATUS_SELECT =
-  "fo_user_id,latitude,longitude,last_seen_at,route_km_today,is_online,is_tracking,current_status,display_name,username,accuracy,battery_percentage";
+  "fo_user_id,latitude,longitude,last_seen_at,updated_at,route_km_today,is_online,is_tracking,current_status,display_name,username,accuracy,battery_percentage";
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:4000").replace(/\/+$/, "");
 const MARKER_ANIMATION_MIN_MS = 15000;
 const MARKER_ANIMATION_MAX_MS = 180000;
@@ -623,31 +623,21 @@ function numberOrNull(value) {
 
 function liveStatusTimestamp(row) {
   return (
+    row?.updated_at ||
     row?.last_seen_at ||
     row?.last_seen ||
-    row?.updated_at ||
     row?.logged_at ||
     row?.created_at
   );
 }
 
-function liveStatusFromRow(row, fallbackActive = false) {
-  if (row) {
-    const currentStatus = String(row.current_status || "").toLowerCase();
-    if (
-      row.is_online === false ||
-      row.is_tracking === false ||
-      currentStatus === "offline" ||
-      currentStatus === "completed"
-    ) {
-      return "Offline";
-    }
-  }
+function liveStatusFromRow(row) {
   const timestamp = liveStatusTimestamp(row);
-  if (!timestamp) return fallbackActive ? "Recent" : "Offline";
+  if (!timestamp) return "Offline";
   const ageMs = timestamp
     ? Date.now() - new Date(timestamp).getTime()
     : Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(ageMs)) return "Offline";
   const ageMinutes = ageMs / 60000;
   if (ageMinutes <= 2) return "Active";
   if (ageMinutes <= 10) return "Recent";
@@ -1014,6 +1004,15 @@ function logPayableKmSource(foId, source, km) {
 }
 
 function payableRouteKmForOfficer({ foId, live, attendance, visits = [] }) {
+  const siteVisitRouteKm = sumSiteVisitRouteKm(visits);
+  if (siteVisitRouteKm > 0) {
+    logPayableKmSource(foId, "fo_site_visits.route_km_sum", siteVisitRouteKm);
+    return {
+      km: siteVisitRouteKm,
+      source: "fo_site_visits.route_km_sum",
+    };
+  }
+
   const liveKm = Number(live?.route_km_today);
   if (Number.isFinite(liveKm) && liveKm >= 0.1) {
     logPayableKmSource(foId, "fo_live_status.route_km_today", liveKm);
@@ -1041,20 +1040,60 @@ function payableRouteKmForOfficer({ foId, live, attendance, visits = [] }) {
     };
   }
 
-  const siteVisitRouteKm = sumSiteVisitRouteKm(visits);
-  if (siteVisitRouteKm > 0) {
-    logPayableKmSource(foId, "fo_site_visits.route_km_sum", siteVisitRouteKm);
-    return {
-      km: siteVisitRouteKm,
-      source: "fo_site_visits.route_km_sum",
-    };
-  }
-
   logPayableKmSource(foId, "zero", 0);
   return {
     km: 0,
     source: "zero",
   };
+}
+
+function reviewFlagsForOfficer({ systemKm = 0, attendance, visits = [], logs = [] }) {
+  const flags = new Set();
+  const storedFlags = String(attendance?.eligibility_status || "")
+    .split(",")
+    .map((flag) => flag.trim())
+    .filter(Boolean);
+  storedFlags.forEach((flag) => {
+    if (
+      [
+        "ROUTE_KM_ZERO_WITH_VISITS",
+        "GOOGLE_ROUTE_FAILED",
+        "MISSING_ANCHOR_COORDINATES",
+        "OPEN_SITE_VISIT",
+        "LOW_GPS_LOG_COUNT",
+      ].includes(flag)
+    ) {
+      flags.add(flag);
+    }
+  });
+  if (Number(systemKm) <= 0 && visits.length > 0) {
+    flags.add("ROUTE_KM_ZERO_WITH_VISITS");
+  }
+  if (visits.some(isSiteVisitOpen)) {
+    flags.add("OPEN_SITE_VISIT");
+  }
+  if (logs.length < 5) {
+    flags.add("LOW_GPS_LOG_COUNT");
+  }
+  if (
+    visits.some(
+      (visit) =>
+        !siteVisitCoordinates(visit) &&
+        !(
+          Number.isFinite(Number(visit?.destination_lat)) &&
+          Number.isFinite(Number(visit?.destination_lng))
+        ),
+    )
+  ) {
+    flags.add("MISSING_ANCHOR_COORDINATES");
+  }
+  if (
+    visits.length > 0 &&
+    String(attendance?.route_sync_status || "").toLowerCase() === "review_required"
+  ) {
+    flags.add("GOOGLE_ROUTE_FAILED");
+  }
+  return [...flags];
 }
 
 function officerFromRows({ foId, profile, live, attendance, visits, logs }) {
@@ -1065,14 +1104,7 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs }) {
   const coordinates = gpsPoint?.coordinates ?? null;
   const sourceTimestamp =
     gpsPoint?.timestamp || liveStatusTimestamp(live) || record.login_time;
-  const attendanceEnded =
-    Boolean(record.logout_time) ||
-    String(record.status || "").toLowerCase() === "completed";
-  const status = attendanceEnded
-    ? "Offline"
-    : gpsPoint
-      ? liveStatusFromRow({ ...live, last_seen_at: gpsPoint.timestamp })
-      : liveStatusFromRow(null, true);
+  const status = live ? liveStatusFromRow(live) : "Offline";
   const payableRouteKm = payableRouteKmForOfficer({
     foId,
     live,
@@ -1083,13 +1115,13 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs }) {
   const foSafeKm = actualTravelKmFromAttendanceOrLogs(record, foLogs, foVisits);
   const actualKm = Number(foSafeKm.actualTravelKm ?? record.actual_km ?? record.total_raw_km ?? 0);
   const eligibleKm = payableKm;
-  const storedPetrolAmount = Number(record.petrol_amount);
-  const petrolAmount =
-    payableRouteKm.source !== "fo_live_status.route_km_today" &&
-    Number.isFinite(storedPetrolAmount) &&
-    storedPetrolAmount > 0
-      ? storedPetrolAmount
-      : eligibleKm * RATE_PER_KM;
+  const petrolAmount = eligibleKm * RATE_PER_KM;
+  const reviewFlags = reviewFlagsForOfficer({
+    systemKm: eligibleKm,
+    attendance: record,
+    visits: foVisits,
+    logs: foLogs,
+  });
   const name =
     profile?.full_name ||
     profile?.display_name ||
@@ -1128,6 +1160,7 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs }) {
     petrolAmount,
     routeKmToday: eligibleKm,
     routeKmSource: payableRouteKm.source,
+    reviewFlags,
     foSafeKm,
     siteCoordinates: null,
     siteMarkerName: "Assigned site",
@@ -1164,9 +1197,19 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs }) {
     return map;
   }, new Map());
 
-  const officerIds = new Set([
-    ...latestLiveStatus.keys(),
-  ]);
+  const officerIds = new Set();
+  profiles.filter(isRealFoProfile).forEach((profile) => {
+    const code = normalizeFoKey(profile?.employee_code);
+    if (code) {
+      officerIds.add(code);
+      return;
+    }
+    profileKeys(profile).forEach((key) => officerIds.add(key));
+  });
+  latestLiveStatus.forEach((_, foId) => officerIds.add(foId));
+  latestAttendance.forEach((_, foId) => officerIds.add(foId));
+  visitsByFo.forEach((_, foId) => officerIds.add(foId));
+  logsByFo.forEach((_, foId) => officerIds.add(foId));
   return Array.from(officerIds).map((foId) =>
     officerFromRows({
       foId,
@@ -1195,14 +1238,7 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
   const timestamp =
     gpsPoint?.timestamp ||
     (coordinates ? existing.locationSourceTime : liveStatusTimestamp(row));
-  const attendanceEnded =
-    Boolean(existing.attendance?.logout_time) ||
-    String(existing.attendance?.status || "").toLowerCase() === "completed";
-  const status = attendanceEnded
-    ? "Offline"
-    : coordinates
-      ? liveStatusFromRow({ ...row, last_seen_at: timestamp })
-      : liveStatusFromRow(row, existing.status === "Active");
+  const status = liveStatusFromRow(row);
   const battery = batteryFromRow(row);
   const actualKm = Number(existing.foSafeKm?.actualTravelKm ?? existing.actualKm ?? 0);
   const payableRouteKm = payableRouteKmForOfficer({
@@ -1212,16 +1248,13 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     visits: existing.visits || [],
   });
   const eligibleKm = payableRouteKm.km;
-  const attendancePetrolAmount = Number(existing.attendance?.petrol_amount);
-  const existingPetrolAmount = Number(existing.petrolAmount);
-  const petrolAmount =
-    payableRouteKm.source === "fo_live_status.route_km_today"
-      ? eligibleKm * RATE_PER_KM
-      : Number.isFinite(attendancePetrolAmount) && attendancePetrolAmount > 0
-        ? attendancePetrolAmount
-        : Number.isFinite(existingPetrolAmount) && existingPetrolAmount > 0
-          ? existingPetrolAmount
-          : eligibleKm * RATE_PER_KM;
+  const petrolAmount = eligibleKm * RATE_PER_KM;
+  const reviewFlags = reviewFlagsForOfficer({
+    systemKm: eligibleKm,
+    attendance: existing.attendance,
+    visits: existing.visits || [],
+    logs: existing.logs || [],
+  });
   return {
     ...existing,
     id: existing.id || `live-${foId}`,
@@ -1258,6 +1291,7 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     routeKmToday: eligibleKm,
     routeKmSource: payableRouteKm.source,
     petrolAmount,
+    reviewFlags,
     foSafeKm: existing.foSafeKm || emptyFoSafeKmMetrics(actualKm),
     foLatitude: coordinates?.[0] ?? null,
     foLongitude: coordinates?.[1] ?? null,
@@ -1519,6 +1553,7 @@ function SelectedOfficerSummary({
   const routeVsActualDelta = routeKm - actualTravelKm;
   const claimKm = routeKm;
   const hasClaimKm = Number.isFinite(claimKm);
+  const reviewFlags = officer.reviewFlags || [];
   const roadKmLabel = roadKmEstimate
     ? `${Number(roadKmEstimate.roadKm || 0).toFixed(1)} km reference only${
         roadKmEstimate.usedFallback ? " fallback" : ""
@@ -1603,7 +1638,7 @@ function SelectedOfficerSummary({
       <div className="mt-3 flex items-center justify-between">
         <div>
           <p className="text-[11px] font-bold uppercase text-slate-400">
-            Today KM
+            System KM
           </p>
           <p className="mt-1 text-sm font-black text-slate-950 dark:text-white">
             {routeKm.toFixed(1)} km
@@ -1623,7 +1658,7 @@ function SelectedOfficerSummary({
       </button>
       {recalculationResult ? (
         <p className="mt-2 text-[11px] font-semibold text-slate-500">
-          Actual {Number(recalculationResult.actual_travel_km || 0).toFixed(1)} km,
+          Approved {Number(recalculationResult.approved_km ?? recalculationResult.total_route_km ?? 0).toFixed(1)} km,
           points {recalculationResult.gps_points_used || 0}/{recalculationResult.gps_points_total || 0},
           confidence {recalculationResult.confidence || "--"}
         </p>
@@ -1659,7 +1694,11 @@ function SelectedOfficerSummary({
         </strong>
         <span>Review Required</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
-          {kmMetrics.reviewRequired ? "Yes" : "No"}
+          {reviewFlags.length || kmMetrics.reviewRequired ? "Yes" : "No"}
+        </strong>
+        <span>Review Flags</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {reviewFlags.length ? reviewFlags.join(", ") : "--"}
         </strong>
         <span>GPS Logs Count</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
@@ -2251,11 +2290,7 @@ async function exportFoOperationsExcel({
       visits,
     }).km;
     const eligibleKm = payableRouteKm;
-    const storedPetrolAmount = Number(attendance.petrol_amount);
-    const petrolAmount =
-      Number.isFinite(storedPetrolAmount) && storedPetrolAmount > 0
-        ? storedPetrolAmount
-        : eligibleKm * RATE_PER_KM;
+    const petrolAmount = eligibleKm * RATE_PER_KM;
     if (Math.abs(payableRouteKm - calculatedKm) > 2 && calculatedKm > 0) {
       exceptionRows.push({
         "Employee ID": foId,
