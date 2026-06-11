@@ -6,6 +6,7 @@ const MAX_NORMAL_GAP_SECONDS = 600;
 const MAX_NORMAL_SEGMENT_METERS = 2500;
 const MAX_SPEED_KMPH = 120;
 const DUPLICATE_WINDOW_SECONDS = 10;
+const MIN_MEANINGFUL_FINAL_RETURN_LEG_KM = 0.05;
 
 function log(event, detail = {}) {
   console.log(`[${event}]`, detail);
@@ -278,6 +279,88 @@ function isOpenVisit(visit) {
   return !visit?.checkout_time && !visit?.check_out_time;
 }
 
+function visitTime(value) {
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
+function latestCheckedOutVisit(visits = []) {
+  return visits
+    .filter((visit) => coordinateFrom(visit, ['check_out_latitude'], ['check_out_longitude']))
+    .sort((a, b) => {
+      const aTime = visitTime(a.checkout_time || a.check_out_time || a.updated_at || a.check_in_time);
+      const bTime = visitTime(b.checkout_time || b.check_out_time || b.updated_at || b.check_in_time);
+      return (bTime?.getTime() || 0) - (aTime?.getTime() || 0);
+    })[0] || null;
+}
+
+function attendanceEndCoordinate(attendance) {
+  return coordinateFrom(
+    attendance,
+    ['end_latitude', 'logout_latitude', 'end_lat', 'logout_lat'],
+    ['end_longitude', 'logout_longitude', 'end_lng', 'logout_lng'],
+  );
+}
+
+async function calculateFinalReturnLegKm(attendance, visits = [], options = {}) {
+  const checkedOutVisit = latestCheckedOutVisit(visits);
+  const origin = checkedOutVisit
+    ? coordinateFrom(checkedOutVisit, ['check_out_latitude'], ['check_out_longitude'])
+    : null;
+  const destination = attendanceEndCoordinate(attendance);
+
+  log('FINAL_RETURN_LEG_CHECK', {
+    attendance_id: attendance.id,
+    site_visit_id: checkedOutVisit?.id,
+    has_origin: Boolean(origin),
+    has_destination: Boolean(destination),
+  });
+
+  if (!checkedOutVisit || !origin) {
+    const reason = 'missing_checkout_gps';
+    log('FINAL_RETURN_LEG_SKIPPED', { attendance_id: attendance.id, reason });
+    return { km: 0, calculated: false, reason };
+  }
+  if (!destination) {
+    const reason = 'missing_end_day_gps';
+    log('FINAL_RETURN_LEG_SKIPPED', { attendance_id: attendance.id, site_visit_id: checkedOutVisit.id, reason });
+    return { km: 0, calculated: false, reason };
+  }
+
+  const straightLineKm = haversineKm(origin, destination);
+  if (!Number.isFinite(straightLineKm) || straightLineKm < MIN_MEANINGFUL_FINAL_RETURN_LEG_KM) {
+    const reason = 'distance_not_meaningful';
+    log('FINAL_RETURN_LEG_SKIPPED', {
+      attendance_id: attendance.id,
+      site_visit_id: checkedOutVisit.id,
+      reason,
+      straight_line_km: Number((straightLineKm || 0).toFixed(3)),
+    });
+    return { km: 0, calculated: false, reason };
+  }
+
+  const googleKm = await googleDirectionsKm(origin, destination, options);
+  if (googleKm === null) {
+    const reason = 'google_route_failed';
+    log('FINAL_RETURN_LEG_GOOGLE_FAILED', {
+      attendance_id: attendance.id,
+      site_visit_id: checkedOutVisit.id,
+      reason,
+      straight_line_km: Number(straightLineKm.toFixed(3)),
+    });
+    return { km: 0, calculated: false, reason };
+  }
+
+  const km = Number(googleKm.toFixed(2));
+  log('FINAL_RETURN_LEG_GOOGLE_SUCCESS', {
+    attendance_id: attendance.id,
+    site_visit_id: checkedOutVisit.id,
+    route_km: km,
+    straight_line_km: Number(straightLineKm.toFixed(3)),
+  });
+  return { km, calculated: true, reason: null, site_visit_id: checkedOutVisit.id };
+}
+
 async function calculateRouteKmFromVisitAnchors(client, attendance, visits = [], options = {}) {
   const reviewFlags = [];
   let origin = coordinateFrom(
@@ -372,17 +455,28 @@ export async function recalculateFoKm(client, payload = {}, options = {}) {
   const calculation = await calculateActualTravelKm(points, options);
   const actualTravelKm = Number(calculation.actualTravelKm.toFixed(2));
   const storedRouteKm = Number(sumStoredRouteKm(visits).toFixed(2));
+  const finalReturnLeg = await calculateFinalReturnLegKm(attendance, visits, options);
+  const finalReturnLegKm = finalReturnLeg.km;
   const reviewFlags = [];
   const visitsMissingRouteKm = visits.filter((visit) => {
     const routeKm = normalizeNumber(visit.route_km);
     return !Number.isFinite(routeKm) || routeKm <= 0;
   }).length;
   if (visitsMissingRouteKm > 0) reviewFlags.push('SITE_VISIT_ROUTE_KM_MISSING');
-  if (storedRouteKm <= 0 && visits.length > 0) reviewFlags.push('ROUTE_KM_ZERO_WITH_VISITS');
+  if (storedRouteKm <= 0 && visits.length > 0 && finalReturnLegKm <= 0) reviewFlags.push('ROUTE_KM_ZERO_WITH_VISITS');
+  if (finalReturnLeg.reason) reviewFlags.push(`FINAL_RETURN_LEG_${finalReturnLeg.reason.toUpperCase()}`);
   if (rows.length < 5) reviewFlags.push('LOW_GPS_LOG_COUNT');
-  const approvedKm = storedRouteKm > 0 ? storedRouteKm : 0;
+  const approvedKm = Number((storedRouteKm + finalReturnLegKm).toFixed(2));
   const petrolAmount = Number((approvedKm * RATE_PER_KM).toFixed(2));
-  const routeSyncStatus = approvedKm > 0 ? 'site_visit_route_km_sum' : 'review_required';
+  const routeSyncStatus = approvedKm > 0
+    ? (finalReturnLegKm > 0 ? 'site_visit_route_km_sum_plus_final_return_leg' : 'site_visit_route_km_sum')
+    : 'review_required';
+  log('FINAL_APPROVED_KM', {
+    attendance_id: attendance.id,
+    site_visit_route_km: storedRouteKm,
+    final_return_leg_km: finalReturnLegKm,
+    approved_km: approvedKm,
+  });
 
   const attendanceUpdate = {
     actual_km: approvedKm,
@@ -437,7 +531,11 @@ export async function recalculateFoKm(client, payload = {}, options = {}) {
     gps_points_used: points.length,
     site_visits_count: visits.length,
     stored_site_visit_route_km: storedRouteKm,
-    backend_route_legs_calculated: 0,
+    final_return_leg_km: finalReturnLegKm,
+    final_return_leg_calculated: finalReturnLeg.calculated,
+    final_return_leg_skip_reason: finalReturnLeg.reason,
+    final_return_leg_site_visit_id: finalReturnLeg.site_visit_id,
+    backend_route_legs_calculated: finalReturnLeg.calculated ? 1 : 0,
     site_visits_missing_route_km: visitsMissingRouteKm,
     review_flags: [...new Set(reviewFlags)],
     route_sync_status: routeSyncStatus,

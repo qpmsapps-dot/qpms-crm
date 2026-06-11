@@ -62,6 +62,9 @@ class SupabaseService {
     required String birthDate,
     required String gender,
     required String state,
+    required String department,
+    required String designation,
+    String? business,
     required String password,
   }) async {
     final cleanFullName = fullName.trim();
@@ -71,6 +74,9 @@ class SupabaseService {
     final cleanBirthDate = birthDate.trim();
     final cleanGender = gender.trim();
     final cleanState = state.trim();
+    final cleanDepartment = department.trim();
+    final cleanDesignation = designation.trim();
+    final cleanBusiness = business?.trim();
 
     if (cleanEmployeeId.isEmpty) {
       throw ArgumentError('Employee ID is required.');
@@ -97,6 +103,9 @@ class SupabaseService {
         'birth_date': cleanBirthDate,
         'gender': cleanGender,
         'state': cleanState,
+        'department': cleanDepartment,
+        'designation': cleanDesignation,
+        'business': cleanBusiness?.isEmpty == true ? null : cleanBusiness,
         'role': 'FO',
         'status': 'Active',
         'is_active': true,
@@ -117,6 +126,9 @@ class SupabaseService {
       'birth_date': cleanBirthDate,
       'gender': cleanGender,
       'state': cleanState,
+      'department': cleanDepartment,
+      'designation': cleanDesignation,
+      'business': cleanBusiness?.isEmpty == true ? null : cleanBusiness,
       'role': 'FO',
       'status': 'Active',
       'is_active': true,
@@ -161,7 +173,7 @@ class SupabaseService {
     final row = await client
         .from('profiles')
         .select(
-          'id, auth_user_id, employee_code, username, full_name, display_name, mobile, email, state, role',
+          'id, auth_user_id, employee_code, username, full_name, display_name, mobile, email, state, role, department, designation, business',
         )
         .eq('auth_user_id', authUser.id)
         .maybeSingle();
@@ -974,7 +986,9 @@ class SupabaseService {
     final rows = await client
         .from('store_master')
         .select()
-        .or('store_name.ilike.%$q%,store_code.ilike.%$q%')
+        .or(
+          'store_name.ilike.%$q%,store_code.ilike.%$q%,client_name.ilike.%$q%',
+        )
         .limit(20);
     return List<Map<String, dynamic>>.from(rows).map(Store.fromJson).toList();
   }
@@ -996,6 +1010,7 @@ class SupabaseService {
     required String storeName,
     required String clientName,
     required String state,
+    String? business,
     String? storeCode,
     String? locationName,
     String? addressLandmark,
@@ -1008,6 +1023,7 @@ class SupabaseService {
       final code = storeCode?.trim().isNotEmpty == true
           ? storeCode!.trim()
           : 'FO-${user.employeeCode}-${DateTime.now().millisecondsSinceEpoch}';
+      final cleanBusiness = business?.trim();
       final metadata = {
         'approval_status': 'pending_approval',
         'verification_status': 'Pending',
@@ -1033,6 +1049,7 @@ class SupabaseService {
             'client_name': clientName,
             'store_code': code,
             'state': state,
+            'business': cleanBusiness?.isEmpty == true ? null : cleanBusiness,
             'latitude': latitude,
             'longitude': longitude,
             'gps_accuracy': accuracy,
@@ -1065,42 +1082,55 @@ class SupabaseService {
 
   static Future<String?> insertVisit(SiteVisit visit) async {
     try {
-      final row = await client
-          .from('fo_site_visits')
-          .insert({
-            'fo_user_id': visit.employeeCode,
-            'employee_code': visit.employeeCode,
-            'full_name': visit.fullName,
-            'attendance_id': _uuidOrNull(visit.attendanceId),
-            'store_id': _uuidOrNull(visit.storeId),
-            'site_name': visit.storeName,
-            'store_name': visit.storeName,
-            'store_code': visit.storeCode,
-            'client_name': visit.clientName,
-            'state': visit.state,
-            'local_id': visit.id,
-            'check_in_time': visit.checkInTime.toUtc().toIso8601String(),
-            'checkout_time': visit.checkOutTime?.toUtc().toIso8601String(),
-            'check_in_latitude': visit.currentLatitude,
-            'check_in_longitude': visit.currentLongitude,
-            'check_out_latitude': visit.checkOutLatitude,
-            'check_out_longitude': visit.checkOutLongitude,
-            'current_latitude': visit.currentLatitude,
-            'current_longitude': visit.currentLongitude,
-            'current_gps_accuracy':
-                visit.currentGpsAccuracy ?? visit.checkInAccuracy,
-            'checkin_accuracy': visit.checkInAccuracy,
-            'checkout_accuracy': visit.checkOutAccuracy,
-            'origin_lat': visit.originLatitude,
-            'origin_lng': visit.originLongitude,
-            'destination_lat': visit.destinationLatitude,
-            'destination_lng': visit.destinationLongitude,
-            'route_km': visit.routeKm,
-            'visit_duration_minutes': visit.durationMinutes,
-            'status': visit.status,
-          })
-          .select('id')
-          .maybeSingle();
+      final payload = {
+        'fo_user_id': visit.employeeCode,
+        'employee_code': visit.employeeCode,
+        'full_name': visit.fullName,
+        'attendance_id': _uuidOrNull(visit.attendanceId),
+        'store_id': _uuidOrNull(visit.storeId),
+        'site_name': visit.storeName,
+        'store_name': visit.storeName,
+        'store_code': visit.storeCode,
+        'client_name': visit.clientName,
+        'state': visit.state,
+        'business': visit.business,
+        'local_id': visit.id,
+        'check_in_time': visit.checkInTime.toUtc().toIso8601String(),
+        'checkout_time': visit.checkOutTime?.toUtc().toIso8601String(),
+        'check_in_latitude': visit.currentLatitude,
+        'check_in_longitude': visit.currentLongitude,
+        'check_out_latitude': visit.checkOutLatitude,
+        'check_out_longitude': visit.checkOutLongitude,
+        'current_latitude': visit.currentLatitude,
+        'current_longitude': visit.currentLongitude,
+        'current_gps_accuracy':
+            visit.currentGpsAccuracy ?? visit.checkInAccuracy,
+        'checkin_accuracy': visit.checkInAccuracy,
+        'checkout_accuracy': visit.checkOutAccuracy,
+        'origin_lat': visit.originLatitude,
+        'origin_lng': visit.originLongitude,
+        'destination_lat': visit.destinationLatitude,
+        'destination_lng': visit.destinationLongitude,
+        'route_km': visit.routeKm,
+        'visit_duration_minutes': visit.durationMinutes,
+        'status': visit.status,
+      };
+      dynamic row;
+      try {
+        row = await client
+            .from('fo_site_visits')
+            .insert(payload)
+            .select('id')
+            .maybeSingle();
+      } on PostgrestException catch (error) {
+        if (!_isMissingColumnError(error)) rethrow;
+        payload.remove('business');
+        row = await client
+            .from('fo_site_visits')
+            .insert(payload)
+            .select('id')
+            .maybeSingle();
+      }
       await CrashLogService.record(
         employeeCode: visit.employeeCode,
         screen: 'tasks',
