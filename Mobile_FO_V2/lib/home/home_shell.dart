@@ -21,22 +21,11 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
   late final PageController _pageController;
-  late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController();
-    _pages = [
-      HomeScreen(user: widget.user, key: const PageStorageKey('home')),
-      TasksScreen(user: widget.user, key: const PageStorageKey('tasks')),
-      VisitsScreen(user: widget.user, key: const PageStorageKey('visits')),
-      ProfileScreen(
-        user: widget.user,
-        onLogout: widget.onLogout,
-        key: const PageStorageKey('profile'),
-      ),
-    ];
   }
 
   @override
@@ -60,7 +49,20 @@ class _HomeShellState extends State<HomeShell> {
       body: PageView(
         controller: _pageController,
         onPageChanged: (value) => setState(() => _index = value),
-        children: _pages,
+        children: [
+          HomeScreen(user: widget.user, key: const PageStorageKey('home')),
+          TasksScreen(
+            user: widget.user,
+            isSelected: _index == 1,
+            key: const PageStorageKey('tasks'),
+          ),
+          VisitsScreen(user: widget.user, key: const PageStorageKey('visits')),
+          ProfileScreen(
+            user: widget.user,
+            onLogout: widget.onLogout,
+            key: const PageStorageKey('profile'),
+          ),
+        ],
       ),
       bottomNavigationBar: SafeArea(
         minimum: const EdgeInsets.fromLTRB(16, 0, 16, 12),

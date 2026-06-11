@@ -7,6 +7,9 @@ class FoUser {
     required this.email,
     required this.state,
     this.role = 'FO',
+    this.department,
+    this.designation,
+    this.business,
   });
 
   final String authUserId;
@@ -16,6 +19,9 @@ class FoUser {
   final String email;
   final String state;
   final String role;
+  final String? department;
+  final String? designation;
+  final String? business;
 
   Map<String, dynamic> toJson() => {
     'auth_user_id': authUserId,
@@ -25,6 +31,9 @@ class FoUser {
     'email': email,
     'state': state,
     'role': role,
+    'department': department,
+    'designation': designation,
+    'business': business,
   };
 
   factory FoUser.fromJson(Map<String, dynamic> json) => FoUser(
@@ -35,6 +44,9 @@ class FoUser {
     email: _text(json['email']),
     state: _text(json['state']),
     role: _text(json['role']).isEmpty ? 'FO' : _text(json['role']),
+    department: _nullableText(json['department']),
+    designation: _nullableText(json['designation']),
+    business: _nullableText(json['business']),
   );
 }
 
@@ -181,6 +193,7 @@ class Store {
     required this.clientName,
     required this.storeCode,
     required this.state,
+    this.business,
     this.latitude,
     this.longitude,
     this.gpsAccuracy,
@@ -191,6 +204,7 @@ class Store {
   final String clientName;
   final String storeCode;
   final String state;
+  final String? business;
   final double? latitude;
   final double? longitude;
   final double? gpsAccuracy;
@@ -201,6 +215,7 @@ class Store {
     clientName: _text(json['client_name']),
     storeCode: _text(json['store_code']),
     state: _text(json['state']),
+    business: _nullableText(json['business']),
     latitude: _double(json['latitude']),
     longitude: _double(json['longitude']),
     gpsAccuracy: _double(json['gps_accuracy']),
@@ -216,6 +231,7 @@ class SiteVisit {
     required this.storeCode,
     required this.state,
     required this.checkInTime,
+    this.business,
     this.remoteId,
     this.attendanceId,
     this.storeId,
@@ -256,6 +272,7 @@ class SiteVisit {
   final String clientName;
   final String storeCode;
   final String state;
+  final String? business;
   final DateTime checkInTime;
   DateTime? checkOutTime;
   double? checkOutLatitude;
@@ -289,6 +306,7 @@ class SiteVisit {
     'client_name': clientName,
     'store_code': storeCode,
     'state': state,
+    'business': business,
     'check_in_time': checkInTime.toIso8601String(),
     'current_latitude': currentLatitude,
     'current_longitude': currentLongitude,
@@ -314,8 +332,8 @@ class SiteVisit {
   };
 
   factory SiteVisit.fromJson(Map<String, dynamic> json) => SiteVisit(
-    id: _text(json['id']),
-    remoteId: _nullableText(json['remote_id']),
+    id: _text(json['local_id'] ?? json['id']),
+    remoteId: _nullableText(json['remote_id'] ?? json['id']),
     employeeCode: _text(json['employee_code']),
     attendanceId: _nullableText(json['attendance_id']),
     storeId: _nullableText(json['store_id']),
@@ -324,6 +342,7 @@ class SiteVisit {
     clientName: _text(json['client_name']),
     storeCode: _text(json['store_code']),
     state: _text(json['state']),
+    business: _nullableText(json['business']),
     checkInTime: _date(json['check_in_time']) ?? DateTime.now(),
     currentLatitude: _double(json['current_latitude']),
     currentLongitude: _double(json['current_longitude']),

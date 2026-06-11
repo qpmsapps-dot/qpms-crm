@@ -18,9 +18,10 @@ import '../utils/date_utils.dart';
 import '../utils/local_id.dart';
 
 class TasksScreen extends StatefulWidget {
-  const TasksScreen({required this.user, super.key});
+  const TasksScreen({required this.user, this.isSelected = true, super.key});
 
   final FoUser user;
+  final bool isSelected;
 
   @override
   State<TasksScreen> createState() => _TasksScreenState();
@@ -38,9 +39,24 @@ class _TasksScreenState extends State<TasksScreen>
     _load();
   }
 
+  @override
+  void didUpdateWidget(covariant TasksScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isSelected && !oldWidget.isSelected) {
+      _load();
+    }
+  }
+
   Future<void> _load() async {
     var attendance = await LocalStore.getAttendance();
     var activeVisit = await LocalStore.activeVisit();
+    await CrashLogService.record(
+      employeeCode: widget.user.employeeCode,
+      screen: 'tasks',
+      action: 'ATTENDANCE_LOADED_MYTASKS',
+      error:
+          'source=local attendance_id=${attendance?.remoteId ?? attendance?.id ?? '--'} active=${attendance?.isActive == true} remote_id=${attendance?.remoteId ?? '--'} end_time=${attendance?.endTime?.toIso8601String() ?? '--'}',
+    );
     if (SupabaseService.isReady) {
       final remoteAttendance =
           await SupabaseService.findActiveAttendanceForToday(widget.user);
@@ -59,6 +75,13 @@ class _TasksScreenState extends State<TasksScreen>
         );
         attendance = remoteAttendance;
         await LocalStore.saveAttendance(remoteAttendance);
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'tasks',
+          action: 'ATTENDANCE_SAVED_LOCAL',
+          error:
+              'source=remote_active attendance_id=${remoteAttendance.remoteId ?? remoteAttendance.id} active=${remoteAttendance.isActive} remote_id=${remoteAttendance.remoteId ?? '--'}',
+        );
         final remoteVisit =
             await SupabaseService.findActiveSiteVisitForAttendance(
               user: widget.user,
@@ -91,6 +114,13 @@ class _TasksScreenState extends State<TasksScreen>
       }
     }
     if (!mounted) return;
+    await CrashLogService.record(
+      employeeCode: widget.user.employeeCode,
+      screen: 'tasks',
+      action: 'ATTENDANCE_ACTIVE_CHECK',
+      error:
+          'source=load attendance_id=${attendance?.remoteId ?? attendance?.id ?? '--'} active=${attendance?.isActive == true} remote_id=${attendance?.remoteId ?? '--'} button_enabled=${attendance?.isActive == true}',
+    );
     setState(() {
       _attendance = attendance;
       _activeVisit = activeVisit;
@@ -161,6 +191,13 @@ class _TasksScreenState extends State<TasksScreen>
         screen: 'tasks',
         action: 'CHECKIN_ATTENDANCE_LOADED',
         error: 'remote_id=${attendance?.remoteId ?? '--'}',
+      );
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tasks',
+        action: 'ATTENDANCE_ACTIVE_CHECK',
+        error:
+            'source=checkin attendance_id=${attendance?.remoteId ?? attendance?.id ?? '--'} active=${attendance?.isActive == true} remote_id=${attendance?.remoteId ?? '--'} end_time=${attendance?.endTime?.toIso8601String() ?? '--'}',
       );
       if (attendance?.isActive != true) {
         throw StateError('Please Start Day before checking into a store.');
@@ -394,6 +431,13 @@ class _TasksScreenState extends State<TasksScreen>
     setState(() => _busy = true);
     try {
       final attendance = await LocalStore.getAttendance();
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tasks',
+        action: 'ATTENDANCE_ACTIVE_CHECK',
+        error:
+            'source=add_site attendance_id=${attendance?.remoteId ?? attendance?.id ?? '--'} active=${attendance?.isActive == true} remote_id=${attendance?.remoteId ?? '--'} end_time=${attendance?.endTime?.toIso8601String() ?? '--'}',
+      );
       if (attendance?.isActive != true) {
         throw StateError('Please Start Day before adding a site.');
       }
@@ -518,6 +562,7 @@ class _TasksScreenState extends State<TasksScreen>
       clientName: store.clientName,
       storeCode: store.storeCode,
       state: store.state,
+      business: store.business,
       checkInTime: DateTime.now(),
       currentLatitude: position.latitude,
       currentLongitude: position.longitude,
@@ -636,8 +681,7 @@ class _TasksScreenState extends State<TasksScreen>
     Attendance attendance,
     SiteVisit visit,
   ) async {
-    final routeKm =
-        await _routeKmFromVisits(attendance) + attendance.endRouteKm;
+    final routeKm = await _routeKmFromVisits(attendance);
     attendance
       ..totalRouteKm = routeKm
       ..eligibleKm = routeKm;
@@ -2213,7 +2257,9 @@ class _StoreSearchDialogState extends State<_StoreSearchDialog> {
           children: [
             TextField(
               controller: _query,
-              decoration: const InputDecoration(labelText: 'Store Name / Code'),
+              decoration: const InputDecoration(
+                labelText: 'Store Name / Code / Client',
+              ),
               onSubmitted: (_) => _search(),
             ),
             const SizedBox(height: 10),
@@ -2385,19 +2431,21 @@ class _AddStoreDialog extends StatefulWidget {
 }
 
 class _AddStoreDialogState extends State<_AddStoreDialog> {
-  static const _stateOptions = [
-    ('Tamil Nadu (TN)', 'TN'),
-    ('Kerala (KL)', 'KL'),
-    ('Karnataka (KA)', 'KA'),
-    ('Andhra Pradesh 1 (AP-1)', 'AP-1'),
-    ('Andhra Pradesh 2 (AP-2)', 'AP-2'),
-    ('Telangana (TG)', 'TG'),
+  static const _businessOptions = [
+    'Standalone',
+    'Retail',
+    'TN Government',
+    'DME',
+    'Airport',
+    'Osmania Hospital',
+    'Private Hospital',
+    'AP DSH',
   ];
 
   final _name = TextEditingController();
   final _siteId = TextEditingController();
   final _client = TextEditingController();
-  String _stateCode = 'TN';
+  String? _business;
   double? _latitude;
   double? _longitude;
   double? _accuracy;
@@ -2406,7 +2454,10 @@ class _AddStoreDialogState extends State<_AddStoreDialog> {
   @override
   void initState() {
     super.initState();
-    _stateCode = _normalizeStateCode(widget.user.state);
+    final profileBusiness = widget.user.business?.trim();
+    if (profileBusiness != null && _businessOptions.contains(profileBusiness)) {
+      _business = profileBusiness;
+    }
     _setCoordinates(widget.latitude, widget.longitude, widget.accuracy);
     if (widget.latitude != null && widget.longitude != null) {
       Future.microtask(
@@ -2427,11 +2478,6 @@ class _AddStoreDialogState extends State<_AddStoreDialog> {
     _siteId.dispose();
     _client.dispose();
     super.dispose();
-  }
-
-  String _normalizeStateCode(String state) {
-    final value = state.trim().toUpperCase();
-    return _stateOptions.any((option) => option.$2 == value) ? value : 'TN';
   }
 
   void _setCoordinates(double? latitude, double? longitude, double? accuracy) {
@@ -2479,6 +2525,18 @@ class _AddStoreDialogState extends State<_AddStoreDialog> {
           _client.text.trim().isEmpty) {
         throw StateError('Site name, Site ID and Client Name are required.');
       }
+      if (_business == null || _business!.trim().isEmpty) {
+        throw StateError('Business is required.');
+      }
+      final profile = SupabaseService.isReady
+          ? await SupabaseService.fetchCurrentProfile()
+          : widget.user;
+      final profileState = profile.state.trim();
+      if (profileState.isEmpty) {
+        throw StateError(
+          'State is missing in your profile. Please contact admin.',
+        );
+      }
       if (latitude == null || longitude == null) {
         await _captureGps();
         latitude = _latitude;
@@ -2517,7 +2575,8 @@ class _AddStoreDialogState extends State<_AddStoreDialog> {
         storeName: _name.text.trim(),
         clientName: _client.text.trim(),
         storeCode: _siteId.text.trim(),
-        state: _stateCode,
+        state: profileState,
+        business: _business,
         latitude: latitude,
         longitude: longitude,
         accuracy: accuracy,
@@ -2535,7 +2594,8 @@ class _AddStoreDialogState extends State<_AddStoreDialog> {
           storeName: _name.text.trim(),
           clientName: _client.text.trim(),
           storeCode: _siteId.text.trim(),
-          state: _stateCode,
+          state: profileState,
+          business: _business,
           latitude: latitude,
           longitude: longitude,
           gpsAccuracy: accuracy,
@@ -2597,21 +2657,19 @@ class _AddStoreDialogState extends State<_AddStoreDialog> {
               ),
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
-                initialValue: _stateCode,
-                decoration: const InputDecoration(labelText: 'State *'),
-                items: _stateOptions
+                initialValue: _business,
+                decoration: const InputDecoration(labelText: 'Business *'),
+                items: _businessOptions
                     .map(
-                      (option) => DropdownMenuItem(
-                        value: option.$2,
-                        child: Text(option.$1),
-                      ),
+                      (value) =>
+                          DropdownMenuItem(value: value, child: Text(value)),
                     )
                     .toList(),
                 onChanged: _busy
                     ? null
                     : (value) {
                         if (value == null) return;
-                        setState(() => _stateCode = value);
+                        setState(() => _business = value);
                       },
               ),
               const SizedBox(height: 10),

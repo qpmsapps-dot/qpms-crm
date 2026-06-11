@@ -76,12 +76,15 @@ class ProfileScreen extends StatelessWidget {
               padding: const EdgeInsets.all(18),
               child: Column(
                 children: [
-                  _row('Full Name', user.fullName),
                   _row('Employee Code', user.employeeCode),
-                  _row('Mobile Number', user.mobile),
+                  _row('Full Name', user.fullName),
+                  _row('Mobile', user.mobile),
                   _row('Email', user.email),
                   _row('State', user.state),
-                  _row('Role', user.role),
+                  _row('Department', user.department ?? ''),
+                  _row('Designation', user.designation ?? ''),
+                  if (user.business?.trim().isNotEmpty == true)
+                    _row('Business', user.business ?? ''),
                 ],
               ),
             ),
