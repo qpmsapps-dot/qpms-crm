@@ -3,23 +3,34 @@ import {
   Battery,
   Bike,
   Building2,
+  CalendarDays,
   CircleGauge,
+  ChevronLeft,
   ChevronRight,
   ClipboardList,
   Clock,
+  Download,
+  Eye,
   Filter,
   FileSpreadsheet,
+  Fuel,
+  Image,
   LocateFixed,
   MapPin,
   MapPinned,
   Maximize2,
   Minimize2,
   Navigation2,
+  Phone,
+  PlayCircle,
   RadioTower,
   RefreshCw,
   Route,
   Search,
   ShieldAlert,
+  ShieldCheck,
+  Square,
+  User,
   UserRoundCheck,
 } from "lucide-react";
 import L from "leaflet";
@@ -37,6 +48,7 @@ import "leaflet/dist/leaflet.css";
 import PageHeader from "../components/PageHeader.jsx";
 import { usePageTitle } from "../hooks/usePageTitle.js";
 import { isSupabaseConfigured, supabase } from "../lib/supabase.js";
+import { api } from "../services/api.js";
 
 const SOUTH_INDIA_CENTER = [13.0827, 80.2707];
 const INDIA_TIME_ZONE = "Asia/Kolkata";
@@ -53,14 +65,40 @@ const MEDIUM_CONFIDENCE_MULTIPLIER = 1.08;
 const LOW_CONFIDENCE_MULTIPLIER = 1.12;
 const SITE_GEOFENCE_METERS = 100;
 const FO_SITE_VISIT_SELECT =
-  "fo_user_id,employee_code,fo_name,display_name,store_name,site_name,client_name,store_code,site_code,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,visit_duration_minutes,status";
+  "id,fo_user_id,employee_code,fo_name,display_name,attendance_id,store_id,store_name,site_name,client_name,store_code,site_code,business,state,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,current_latitude,current_longitude,origin_lat,origin_lng,destination_lat,destination_lng,route_km,google_route_polyline,visit_duration_minutes,status,visit_status,checkout_note,metadata";
 const FO_LIVE_STATUS_SELECT =
   "fo_user_id,latitude,longitude,last_seen_at,updated_at,route_km_today,is_online,is_tracking,current_status,display_name,username,accuracy,battery_percentage";
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:4000").replace(/\/+$/, "");
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
 const MARKER_ANIMATION_MIN_MS = 15000;
 const MARKER_ANIMATION_MAX_MS = 180000;
 const MARKER_ANIMATION_DEFAULT_MS = 45000;
 const MARKER_ANIMATION_RECENT_THRESHOLD_MS = 10 * 60 * 1000;
+const ACTIVITY_PHOTO_TABS = ["All", "Inspection", "Training", "Deep Cleaning", "Documents", "Others"];
+const SNAP_TO_ROADS_MAX_POINTS_PER_REQUEST = 100;
+const SNAP_TO_ROADS_MAX_INPUT_POINTS = 500;
+const ROUTE_MAP_SEGMENT_MAX_GAP_SECONDS = 10 * 60;
+const ROUTE_MAP_SEGMENT_MAX_DISTANCE_KM = 2;
+const ROUTE_MAP_SEGMENT_MAX_SPEED_KMPH = 120;
+const MAIN_ROUTE_GAP_DISTANCE_METERS = 500;
+const MAIN_ROUTE_GAP_SECONDS = 120;
+const ROUTE_MAP_SOUTH_INDIA_BOUNDS = {
+  minLat: 6,
+  maxLat: 20,
+  minLng: 68,
+  maxLng: 90,
+};
+const INR_CURRENCY = new Intl.NumberFormat("en-IN", {
+  style: "currency",
+  currency: "INR",
+  maximumFractionDigits: 0,
+});
+
+function formatInr(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return INR_CURRENCY.format(number);
+}
 
 function toDateInputValue(date) {
   return new Intl.DateTimeFormat("en-CA", {
@@ -357,11 +395,11 @@ function isValidGpsLog(log) {
 }
 
 function locationTimestampMs(log) {
-  return new Date(log?.captured_at || log?.logged_at || log?.last_seen_at || 0).getTime();
+  return new Date(log?.captured_at || log?.recorded_at || log?.logged_at || log?.created_at || log?.last_seen_at || 0).getTime();
 }
 
 function routePointTime(log) {
-  return new Date(log?.captured_at || log?.logged_at || 0);
+  return new Date(log?.captured_at || log?.recorded_at || log?.logged_at || log?.created_at || 0);
 }
 
 function distanceKmBetween(a, b) {
@@ -442,6 +480,133 @@ function routeSegmentsFromLogs(logs = [], visits = []) {
   });
   if (current.length > 1) segments.push(current);
   return segments;
+}
+
+function routePointCoordinates(log) {
+  if (!isValidRoutePoint(log)) return null;
+  return [Number(log.latitude), Number(log.longitude)];
+}
+
+function mainRouteGap(previous, current) {
+  const secondsDiff = (routePointTime(current) - routePointTime(previous)) / 1000;
+  const distanceMeters = distanceKmBetween(previous, current) * 1000;
+  return {
+    hasGap:
+      distanceMeters > MAIN_ROUTE_GAP_DISTANCE_METERS ||
+      secondsDiff > MAIN_ROUTE_GAP_SECONDS,
+    secondsDiff,
+    distanceMeters,
+  };
+}
+
+async function googleDirectionsPathForMainMap(previous, current) {
+  const start = routePointCoordinates(previous);
+  const end = routePointCoordinates(current);
+  if (!GOOGLE_MAPS_API_KEY || !start || !end) return null;
+
+  try {
+    const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
+    url.searchParams.set("origin", `${start[0]},${start[1]}`);
+    url.searchParams.set("destination", `${end[0]},${end[1]}`);
+    url.searchParams.set("mode", "driving");
+    url.searchParams.set("key", GOOGLE_MAPS_API_KEY);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Google Directions HTTP ${response.status}`);
+    const payload = await response.json();
+    if (payload.status !== "OK") {
+      throw new Error(payload.error_message || `Google Directions status ${payload.status}`);
+    }
+    const encoded =
+      payload.routes?.[0]?.overview_polyline?.points ||
+      payload.routes?.[0]?.overview_polyline;
+    const decoded = decodeGooglePolyline(encoded);
+    return decoded.length > 1 ? decoded : null;
+  } catch (fetchError) {
+    try {
+      const maps = await loadGoogleMapsScript();
+      const directionsService = new maps.DirectionsService();
+      const result = await new Promise((resolve, reject) => {
+        directionsService.route(
+          {
+            origin: { lat: start[0], lng: start[1] },
+            destination: { lat: end[0], lng: end[1] },
+            travelMode: maps.TravelMode.DRIVING,
+          },
+          (response, status) => {
+            if (status === "OK" && response) resolve(response);
+            else reject(new Error(`Google Directions JS status ${status}`));
+          },
+        );
+      });
+      const path = (result.routes?.[0]?.overview_path || [])
+        .map((point) => [point.lat(), point.lng()])
+        .filter(hasFiniteCoordinates);
+      return path.length > 1 ? path : null;
+    } catch (jsError) {
+      console.warn("[myQPMS FO] Main map route gap fill failed.", {
+        fetchMessage: fetchError?.message || String(fetchError),
+        jsMessage: jsError?.message || String(jsError),
+      });
+      return null;
+    }
+  }
+}
+
+async function buildMainMapRouteLines({ logs = [], visits = [], color = "#2563eb", idPrefix = "route" }) {
+  const ordered = logs
+    .filter(isValidRoutePoint)
+    .slice()
+    .sort((a, b) => routePointTime(a) - routePointTime(b));
+  if (ordered.length < 2) return [];
+
+  const lines = [];
+  let currentGpsSegment = [routePointCoordinates(ordered[0])].filter(Boolean);
+
+  for (let index = 1; index < ordered.length; index += 1) {
+    const previous = ordered[index - 1];
+    const current = ordered[index];
+    const currentPoint = routePointCoordinates(current);
+    if (!currentPoint) continue;
+    const gap = mainRouteGap(previous, current);
+    const sameSiteDrift = isSameSiteDrift(previous, current, visits);
+
+    if (gap.hasGap || sameSiteDrift) {
+      if (currentGpsSegment.length > 1) {
+        lines.push({
+          id: `${idPrefix}-gps-${lines.length}`,
+          positions: currentGpsSegment,
+          color,
+          source: "gps",
+        });
+      }
+
+      const filledPath = sameSiteDrift
+        ? null
+        : await googleDirectionsPathForMainMap(previous, current);
+      lines.push({
+        id: `${idPrefix}-gap-${index}`,
+        positions:
+          filledPath && filledPath.length > 1
+            ? filledPath
+            : [routePointCoordinates(previous), currentPoint].filter(Boolean),
+        color,
+        source: filledPath ? "reconstructed/google_filled" : "fallback/straight_line",
+      });
+      currentGpsSegment = [currentPoint];
+    } else {
+      currentGpsSegment.push(currentPoint);
+    }
+  }
+
+  if (currentGpsSegment.length > 1) {
+    lines.push({
+      id: `${idPrefix}-gps-${lines.length}`,
+      positions: currentGpsSegment,
+      color,
+      source: "gps",
+    });
+  }
+  return lines;
 }
 
 function routeKmFromLogs(logs = [], visits = []) {
@@ -923,6 +1088,22 @@ function isSiteVisitOpen(visit) {
   return !visit?.checkout_time && !visit?.check_out_time;
 }
 
+function isAttendanceEnded(attendance) {
+  return (
+    Boolean(attendance?.logout_time) ||
+    /completed|ended|closed|logout/i.test(String(attendance?.status || ""))
+  );
+}
+
+function isAttendanceActive(attendance) {
+  return (
+    Boolean(attendance) &&
+    !attendance?.logout_time &&
+    !isAttendanceEnded(attendance) &&
+    String(attendance?.status || "Active").toLowerCase() === "active"
+  );
+}
+
 function siteVisitStatus(visit) {
   const raw = String(visit?.status || "").trim();
   if (raw) return raw;
@@ -1005,38 +1186,38 @@ function logPayableKmSource(foId, source, km) {
 
 function payableRouteKmForOfficer({ foId, live, attendance, visits = [] }) {
   const siteVisitRouteKm = sumSiteVisitRouteKm(visits);
-  if (siteVisitRouteKm > 0) {
-    logPayableKmSource(foId, "fo_site_visits.route_km_sum", siteVisitRouteKm);
-    return {
-      km: siteVisitRouteKm,
-      source: "fo_site_visits.route_km_sum",
-    };
-  }
-
   const liveKm = Number(live?.route_km_today);
-  if (Number.isFinite(liveKm) && liveKm >= 0.1) {
-    logPayableKmSource(foId, "fo_live_status.route_km_today", liveKm);
+  const attendanceCandidates = [
+    ["fo_attendance.eligible_km", attendance?.eligible_km],
+    ["fo_attendance.total_route_km", attendance?.total_route_km],
+    ["fo_attendance.total_approved_km", attendance?.total_approved_km],
+  ]
+    .map(([source, value]) => ({ source, km: Number(value) }))
+    .filter((item) => Number.isFinite(item.km) && item.km > 0);
+  const attendancePayable = attendanceCandidates.sort((a, b) => b.km - a.km)[0] || null;
+  const attendanceCompleted =
+    Boolean(attendance?.logout_time) ||
+    /completed|closed|ended|logout/i.test(String(attendance?.status || ""));
+
+  if (attendanceCompleted && attendancePayable) {
+    logPayableKmSource(foId, attendancePayable.source, attendancePayable.km);
     return {
-      km: liveKm,
-      source: "fo_live_status.route_km_today",
+      km: attendancePayable.km,
+      source: attendancePayable.source,
     };
   }
 
-  const eligibleKm = Number(attendance?.eligible_km);
-  if (Number.isFinite(eligibleKm) && eligibleKm > 0) {
-    logPayableKmSource(foId, "fo_attendance.eligible_km", eligibleKm);
+  const candidates = [
+    { source: "fo_site_visits.route_km_sum", km: siteVisitRouteKm },
+    { source: "fo_live_status.route_km_today", km: liveKm },
+    attendancePayable,
+  ].filter((item) => item && Number.isFinite(item.km) && item.km > 0);
+  const selected = candidates.sort((a, b) => b.km - a.km)[0];
+  if (selected) {
+    logPayableKmSource(foId, selected.source, selected.km);
     return {
-      km: eligibleKm,
-      source: "fo_attendance.eligible_km",
-    };
-  }
-
-  const totalRouteKm = Number(attendance?.total_route_km);
-  if (Number.isFinite(totalRouteKm) && totalRouteKm > 0) {
-    logPayableKmSource(foId, "fo_attendance.total_route_km", totalRouteKm);
-    return {
-      km: totalRouteKm,
-      source: "fo_attendance.total_route_km",
+      km: selected.km,
+      source: selected.source,
     };
   }
 
@@ -1129,7 +1310,7 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs }) {
     live?.username ||
     live?.fo_user_id ||
     foId;
-  const state = profile?.state || live?.state || record.state || "Tamil Nadu";
+  const state = profile?.state || live?.state || record.state || "--";
 
   return {
     id: `live-${foId}`,
@@ -1146,7 +1327,7 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs }) {
     lastSeen: formatDateTime(sourceTimestamp),
     battery: batteryFromRow(live),
     action: live?.current_status || record.status || "Attendance captured",
-    phone: "--",
+    phone: profile?.mobile || profile?.phone || record.mobile || live?.mobile || "--",
     coordinates,
     heading: gpsPoint?.heading ?? null,
     speed: gpsPoint?.speed ?? null,
@@ -1274,8 +1455,8 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
       foId,
     status,
     assignedSite: existing.assignedSite || "No active store visit",
-    branch: profile?.state || row?.state || existing.state || "Tamil Nadu",
-    state: profile?.state || row?.state || existing.state || "Tamil Nadu",
+    branch: profile?.state || row?.state || existing.state || "--",
+    state: profile?.state || row?.state || existing.state || "--",
     lastSeen: formatDateTime(timestamp),
     battery: battery ?? existing.battery ?? null,
     action: row?.current_status || existing.action || "Attendance captured",
@@ -1513,8 +1694,8 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
               <Route className="h-3.5 w-3.5" />
               {distanceToday.toFixed(1)} km
             </span>
-            <span>Actual {actualTravelKm.toFixed(1)} km</span>
-            <span>₹{Number(officer.petrolAmount ?? distanceToday * RATE_PER_KM).toFixed(0)}</span>
+            <span>GPS audit {actualTravelKm.toFixed(1)} km</span>
+            <span>{formatInr(officer.petrolAmount ?? distanceToday * RATE_PER_KM)}</span>
           </div>
           <p className="mt-1 truncate text-xs font-medium text-slate-500">
             <MapPin className="mr-1 inline h-3.5 w-3.5 text-slate-400" />
@@ -1554,6 +1735,7 @@ function SelectedOfficerSummary({
   const claimKm = routeKm;
   const hasClaimKm = Number.isFinite(claimKm);
   const reviewFlags = officer.reviewFlags || [];
+  const workingMinutes = attendanceWorkingMinutes(officer.attendance || {});
   const roadKmLabel = roadKmEstimate
     ? `${Number(roadKmEstimate.roadKm || 0).toFixed(1)} km reference only${
         roadKmEstimate.usedFallback ? " fallback" : ""
@@ -1638,7 +1820,7 @@ function SelectedOfficerSummary({
       <div className="mt-3 flex items-center justify-between">
         <div>
           <p className="text-[11px] font-bold uppercase text-slate-400">
-            System KM
+            Payable KM
           </p>
           <p className="mt-1 text-sm font-black text-slate-950 dark:text-white">
             {routeKm.toFixed(1)} km
@@ -1656,14 +1838,34 @@ function SelectedOfficerSummary({
       >
         {recalculatingKm ? "Recalculating KM..." : "Recalculate KM"}
       </button>
-      {recalculationResult ? (
+      {recalculationResult?.ok === true ? (
         <p className="mt-2 text-[11px] font-semibold text-slate-500">
-          Approved {Number(recalculationResult.approved_km ?? recalculationResult.total_route_km ?? 0).toFixed(1)} km,
-          points {recalculationResult.gps_points_used || 0}/{recalculationResult.gps_points_total || 0},
-          confidence {recalculationResult.confidence || "--"}
+          KM recalculation completed. Refreshing payable values.
         </p>
       ) : null}
-      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] font-semibold text-slate-500">
+      <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl border border-slate-100 bg-white/70 p-3 text-[11px] font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-900/60">
+        <span>Petrol Amount</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {formatInr(claimPetrol)}
+        </strong>
+        <span>Sites Visited</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {siteVisitCount ?? officer.visits?.length ?? 0}
+        </strong>
+        <span>Working Hours</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {durationMinutesLabel(workingMinutes)}
+        </strong>
+        <span>Attendance Status</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {officer.attendance?.status || status.label || "--"}
+        </strong>
+      </div>
+      <details className="mt-3 rounded-xl border border-slate-100 bg-white/60 p-3 text-[11px] font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-900/50">
+        <summary className="cursor-pointer select-none text-xs font-black text-slate-700 dark:text-slate-200">
+          GPS Audit Details
+        </summary>
+        <div className="mt-3 grid grid-cols-2 gap-2">
         <span>Raw GPS KM</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
           {Number(kmMetrics.rawGpsKm || 0).toFixed(1)} km
@@ -1672,25 +1874,27 @@ function SelectedOfficerSummary({
         <strong className="text-right text-slate-800 dark:text-slate-100">
           {filteredGpsKm.toFixed(1)} km
         </strong>
-        <span>Actual Travel KM</span>
+        <span>GPS Audit KM</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
           {actualTravelKm.toFixed(1)} km
         </strong>
-        <span>Route vs Actual</span>
+        <span>Payable vs GPS Delta</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
           {routeVsActualDelta.toFixed(1)} km
         </strong>
-        <span>Claim KM</span>
+        <span>Payable KM</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
           {claimKmLabel}
         </strong>
         <span>Petrol Amount</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
-          {claimPetrol === null ? "--" : `₹${claimPetrol.toFixed(0)}`}
+          {formatInr(claimPetrol)}
         </strong>
-        <span>KM Confidence</span>
+        <span>GPS Audit Confidence</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
-          {kmMetrics.kmConfidence || "REVIEW"}
+          {["HIGH", "MEDIUM", "LOW"].includes(String(kmMetrics.kmConfidence || "").toUpperCase())
+            ? kmMetrics.kmConfidence
+            : "Needs Review"}
         </strong>
         <span>Review Required</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
@@ -1722,44 +1926,74 @@ function SelectedOfficerSummary({
             ? `${roadKmEstimate.status === "google" ? "Google" : roadKmEstimate.status} / ${roadKmEstimate.anchorCount || 0} anchors`
             : "--"}
         </strong>
-        <span>Sites Visited Today / Selected Date</span>
-        <strong className="text-right text-slate-800 dark:text-slate-100">
-          {siteVisitCount ?? officer.visits?.length ?? 0}
-        </strong>
         <span>Petrol</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
-          ₹{Number(officer.petrolAmount || 0).toFixed(0)}
+          {formatInr(officer.petrolAmount || 0)}
         </strong>
-      </div>
+        </div>
+      </details>
     </div>
   );
 }
 
-function MapViewport({ pins, expanded, command }) {
+function flattenRouteLinePoints(routeLines = []) {
+  return routeLines.flatMap((route) => route.positions || []).filter(hasFiniteCoordinates);
+}
+
+function MapViewport({ pins, sitePins, routeLines, expanded, command }) {
   const map = useMap();
+  const didInitialFitRef = useRef(false);
 
   useEffect(() => {
     window.setTimeout(() => map.invalidateSize(), 80);
   }, [expanded, map]);
 
   useEffect(() => {
-    if (!pins.length) {
+    if (!pins.length && !didInitialFitRef.current) {
       map.setView(SOUTH_INDIA_CENTER, 6);
+      didInitialFitRef.current = true;
       return;
     }
-    if (command?.type === "recenter") {
-      map.flyTo(pins[0].coordinates, 15, { duration: 0.55 });
+
+    if (!command && !didInitialFitRef.current && pins.length) {
+      map.fitBounds(
+        pins.map((pin) => pin.coordinates),
+        { padding: [44, 44], maxZoom: 13 },
+      );
+      didInitialFitRef.current = true;
       return;
     }
-    if (pins.length === 1) {
-      map.flyTo(pins[0].coordinates, 13, { duration: 0.45 });
+
+    if (!command) return;
+
+    if (command.type === "current-location" && hasFiniteCoordinates(command.coordinates)) {
+      map.flyTo(command.coordinates, 15, { duration: 0.55 });
       return;
     }
-    map.fitBounds(
-      pins.map((pin) => pin.coordinates),
-      { padding: [44, 44], maxZoom: 13 },
-    );
-  }, [command, map, pins]);
+
+    if (command.type === "fit-route") {
+      const routePoints = flattenRouteLinePoints(routeLines);
+      const sitePoints = sitePins.map((site) => site.coordinates).filter(hasFiniteCoordinates);
+      const points = [...routePoints, ...sitePoints];
+      if (points.length === 1) {
+        map.flyTo(points[0], 14, { duration: 0.45 });
+      } else if (points.length > 1) {
+        map.fitBounds(points, { padding: [56, 56], maxZoom: 15 });
+      }
+      return;
+    }
+
+    if (command.type === "fit-all") {
+      if (pins.length === 1) {
+        map.flyTo(pins[0].coordinates, 13, { duration: 0.45 });
+      } else if (pins.length > 1) {
+        map.fitBounds(
+          pins.map((pin) => pin.coordinates),
+          { padding: [44, 44], maxZoom: 13 },
+        );
+      }
+    }
+  }, [command, map, pins, routeLines, sitePins]);
 
   return null;
 }
@@ -1804,7 +2038,13 @@ function OperationsMap({
       attributionControl
     >
       <TileLayer attribution={attribution} url={tileUrl} />
-      <MapViewport pins={pins} expanded={expanded} command={command} />
+      <MapViewport
+        pins={pins}
+        sitePins={sitePins}
+        routeLines={routeLines}
+        expanded={expanded}
+        command={command}
+      />
       <MapBackgroundClose onClose={onCloseSelection} />
       {showRoutes
         ? routeLines.map((route) => (
@@ -1908,14 +2148,14 @@ function OperationsMap({
                       : "No Location Available"}
                   </p>
                   <p className="text-slate-600">
-                    Route KM:{" "}
+                    Payable KM:{" "}
                     {Number(
                       officer.eligibleKm ?? officer.routeKmToday ?? 0,
                     ).toFixed(1)}{" "}
                     km
                   </p>
                   <p className="text-slate-600">
-                    Actual Travel KM:{" "}
+                    GPS Audit KM:{" "}
                     {Number(officer.actualTravelKm ?? officer.actualKm ?? 0).toFixed(1)} km
                   </p>
                 </div>
@@ -2444,6 +2684,1752 @@ function latestRouteSegmentFromLogs(logs = []) {
   };
 }
 
+function displayValue(value, suffix = "") {
+  if (value === null || value === undefined || value === "") return "--";
+  return `${value}${suffix}`;
+}
+
+function numberLabel(value, suffix = "") {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return `${number.toFixed(1)}${suffix}`;
+}
+
+function moneyLabel(value) {
+  return formatInr(value);
+}
+
+function durationMinutesLabel(minutes) {
+  const value = Number(minutes);
+  if (!Number.isFinite(value) || value <= 0) return "--";
+  if (value < 60) return `${Math.round(value)} min`;
+  const hours = Math.floor(value / 60);
+  const remainder = Math.round(value % 60);
+  return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`;
+}
+
+function attendanceWorkingMinutes(attendance) {
+  if (!attendance?.login_time || !attendance?.logout_time) return null;
+  const minutes = Math.max(
+    0,
+    Math.round((new Date(attendance.logout_time) - new Date(attendance.login_time)) / 60000),
+  );
+  return Number.isFinite(minutes) ? minutes : null;
+}
+
+function visitMinutes(visit) {
+  const explicit = Number(visit?.visit_duration_minutes);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const checkOut = siteVisitCheckoutValue(visit);
+  if (!visit?.check_in_time || !checkOut) return null;
+  const minutes = Math.max(
+    0,
+    Math.round((new Date(checkOut) - new Date(visit.check_in_time)) / 60000),
+  );
+  return Number.isFinite(minutes) ? minutes : null;
+}
+
+function sortedOfficerVisits(officer) {
+  return (officer?.visits || [])
+    .slice()
+    .sort((a, b) => new Date(a.check_in_time || 0) - new Date(b.check_in_time || 0));
+}
+
+function visitTitle(visit) {
+  return visit?.store_name || visit?.site_name || visit?.store_code || visit?.site_code || "--";
+}
+
+function visitClient(visit) {
+  return visit?.client_name || "--";
+}
+
+function visitLocation(visit) {
+  const lat = numberOrNull(visit?.check_in_latitude ?? visit?.current_latitude ?? visit?.destination_lat);
+  const lng = numberOrNull(visit?.check_in_longitude ?? visit?.current_longitude ?? visit?.destination_lng);
+  if (lat !== null && lng !== null) return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  return visit?.state || "--";
+}
+
+function visitRemarks(visit) {
+  return visit?.checkout_note || visit?.visit_status || visit?.status || "--";
+}
+
+function normalizeActivityGroup(value, uploadRole = "") {
+  const text = `${value || ""} ${uploadRole || ""}`.toLowerCase();
+  if (text.includes("inspect")) return "Inspection";
+  if (text.includes("deep") || text.includes("clean")) return "Deep Cleaning";
+  if (text.includes("train")) return "Training";
+  if (text.includes("doc") || text.includes("pdf") || text.includes("report")) return "Documents";
+  return "Others";
+}
+
+function activityUploadIsImage(upload) {
+  const type = String(upload?.file_type || "").toLowerCase();
+  const name = String(upload?.file_name || upload?.file_url || "").toLowerCase();
+  return type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(name);
+}
+
+function activityUploadName(upload) {
+  return upload?.file_name || upload?.file_url?.split("/").pop() || "Uploaded file";
+}
+
+function activityUploadTime(upload) {
+  return upload?.uploaded_at || upload?.created_at || upload?.submitted_at;
+}
+
+function filteredActivityUploads(uploads = [], filter = "All") {
+  if (filter === "All") return uploads;
+  return uploads.filter((upload) => upload.activityGroup === filter);
+}
+
+async function signedActivityUploadUrl(upload) {
+  const fileUrl = upload?.file_url;
+  if (!fileUrl) return null;
+  if (/^https?:\/\//i.test(fileUrl)) return fileUrl;
+  if (!supabase?.storage) return null;
+  const bucket = upload.storage_bucket || "fo-activity-uploads";
+  const path = fileUrl.replace(new RegExp(`^${bucket}/`), "").replace(/^\/+/, "");
+  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 60);
+  if (error) {
+    console.warn("[myQPMS FO] Activity upload signed URL failed.", {
+      uploadId: upload.id,
+      bucket,
+      message: error.message,
+    });
+    return null;
+  }
+  return data?.signedUrl || null;
+}
+
+function uploadMatchesSelectedContext(upload, { attendanceId, siteVisitIds }) {
+  if (attendanceId && upload.attendance_id && String(upload.attendance_id) === String(attendanceId)) {
+    return true;
+  }
+  if (upload.site_visit_id && siteVisitIds.has(String(upload.site_visit_id))) {
+    return true;
+  }
+  return !upload.attendance_id && !upload.site_visit_id;
+}
+
+function isMissingColumnError(error, columnName) {
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    error?.code === "42703" ||
+    error?.code === "PGRST204" ||
+    message.includes("column") ||
+    message.includes(String(columnName || "").toLowerCase())
+  );
+}
+
+async function fetchLocationLogsByColumn({ idColumn, idValue, timeColumn, fromIso, toIso }) {
+  const { data, error } = await supabase
+    .from("fo_location_logs")
+    .select("*")
+    .eq(idColumn, idValue)
+    .gte(timeColumn, fromIso)
+    .lte(timeColumn, toIso)
+    .order(timeColumn, { ascending: true })
+    .limit(10000);
+  if (error) {
+    if (isMissingColumnError(error, idColumn) || isMissingColumnError(error, timeColumn)) {
+      return [];
+    }
+    throw error;
+  }
+  return data || [];
+}
+
+function routePointFromVisit(visit, phase = "checkin") {
+  const latKeys =
+    phase === "checkout"
+      ? ["check_out_latitude", "current_latitude", "destination_lat"]
+      : ["check_in_latitude", "current_latitude", "destination_lat"];
+  const lngKeys =
+    phase === "checkout"
+      ? ["check_out_longitude", "current_longitude", "destination_lng"]
+      : ["check_in_longitude", "current_longitude", "destination_lng"];
+  for (const latKey of latKeys) {
+    for (const lngKey of lngKeys) {
+      const lat = numberOrNull(visit?.[latKey]);
+      const lng = numberOrNull(visit?.[lngKey]);
+      if (lat !== null && lng !== null) return [lat, lng];
+    }
+  }
+  return null;
+}
+
+function detailRouteAnchor(id, type, label, coordinates, title) {
+  if (!hasFiniteCoordinates(coordinates)) return null;
+  return {
+    id,
+    type,
+    label,
+    coordinates,
+    title,
+  };
+}
+
+function routePointFromAttendanceEnd(attendance) {
+  const lat = numberOrNull(attendance?.end_latitude ?? attendance?.logout_latitude ?? attendance?.end_lat);
+  const lng = numberOrNull(attendance?.end_longitude ?? attendance?.logout_longitude ?? attendance?.end_lng);
+  return lat !== null && lng !== null ? [lat, lng] : null;
+}
+
+let googleMapsScriptPromise = null;
+const snapToRoadsCache = new Map();
+
+function loadGoogleMapsScript() {
+  if (typeof window === "undefined") return Promise.reject(new Error("Google Maps requires a browser."));
+  if (window.google?.maps) return Promise.resolve(window.google.maps);
+  if (!GOOGLE_MAPS_API_KEY) return Promise.reject(new Error("Google Maps key is not configured."));
+  if (googleMapsScriptPromise) return googleMapsScriptPromise;
+
+  googleMapsScriptPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector("script[data-myqpms-google-maps='true']");
+    if (existing) {
+      existing.addEventListener("load", () => resolve(window.google.maps), { once: true });
+      existing.addEventListener("error", () => reject(new Error("Google Maps failed to load.")), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}`;
+    script.async = true;
+    script.defer = true;
+    script.dataset.myqpmsGoogleMaps = "true";
+    script.onload = () => resolve(window.google.maps);
+    script.onerror = () => reject(new Error("Google Maps failed to load."));
+    document.head.appendChild(script);
+  });
+  return googleMapsScriptPromise;
+}
+
+function decodeGooglePolyline(encoded) {
+  if (!encoded || typeof encoded !== "string") return [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+  const path = [];
+
+  while (index < encoded.length) {
+    let result = 0;
+    let shift = 0;
+    let byte = null;
+    do {
+      byte = encoded.charCodeAt(index) - 63;
+      index += 1;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+
+    result = 0;
+    shift = 0;
+    do {
+      byte = encoded.charCodeAt(index) - 63;
+      index += 1;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+
+    path.push([lat / 1e5, lng / 1e5]);
+  }
+  return path.filter(hasFiniteCoordinates);
+}
+
+function createRouteMapCoordinateStats() {
+  return {
+    routeMapOriginalPointCount: 0,
+    routeMapAcceptedOriginalCount: 0,
+    routeMapSwappedCorrectionCount: 0,
+    routeMapRejectedInvalidCount: 0,
+    routeMapRejectedExamples: [],
+  };
+}
+
+function isSouthIndiaRouteCoordinate(lat, lng) {
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat >= ROUTE_MAP_SOUTH_INDIA_BOUNDS.minLat &&
+    lat <= ROUTE_MAP_SOUTH_INDIA_BOUNDS.maxLat &&
+    lng >= ROUTE_MAP_SOUTH_INDIA_BOUNDS.minLng &&
+    lng <= ROUTE_MAP_SOUTH_INDIA_BOUNDS.maxLng
+  );
+}
+
+function routeMapPointArray(point) {
+  if (Array.isArray(point)) return [Number(point[0]), Number(point[1])];
+  if (point && typeof point === "object") {
+    return [Number(point.latitude ?? point.lat), Number(point.longitude ?? point.lng)];
+  }
+  return [Number.NaN, Number.NaN];
+}
+
+function normalizeRouteMapCoordinate(point, stats, source = "unknown") {
+  if (point === null || point === undefined) return null;
+  const [lat, lng] = routeMapPointArray(point);
+  stats.routeMapOriginalPointCount += 1;
+  if (isSouthIndiaRouteCoordinate(lat, lng)) {
+    stats.routeMapAcceptedOriginalCount += 1;
+    return [lat, lng];
+  }
+  if (isSouthIndiaRouteCoordinate(lng, lat)) {
+    stats.routeMapSwappedCorrectionCount += 1;
+    return [lng, lat];
+  }
+  stats.routeMapRejectedInvalidCount += 1;
+  if (stats.routeMapRejectedExamples.length < 5) {
+    stats.routeMapRejectedExamples.push({ source, lat, lng });
+  }
+  return null;
+}
+
+function storedRoutePolylinesFromVisits(visits = [], stats = createRouteMapCoordinateStats()) {
+  return visits
+    .map((visit) => visit?.google_route_polyline || visit?.metadata?.google_route_polyline)
+    .map(decodeGooglePolyline)
+    .map((path, pathIndex) =>
+      path
+        .map((point, pointIndex) =>
+          normalizeRouteMapCoordinate(point, stats, `polyline_${pathIndex}_${pointIndex}`),
+        )
+        .filter(Boolean),
+    )
+    .filter((path) => path.length > 1);
+}
+
+function isValidGpsTrailLog(log) {
+  if (!isValidGpsLog(log)) return false;
+  const accuracy = Number(log?.accuracy);
+  return !Number.isFinite(accuracy) || accuracy <= MAX_GPS_ACCURACY_METERS;
+}
+
+function gpsTrailGapReason(previous, current) {
+  const secondsGap = (current.timestampMs - previous.timestampMs) / 1000;
+  const distanceKm = distanceKmBetween(
+    { latitude: previous.point[0], longitude: previous.point[1] },
+    { latitude: current.point[0], longitude: current.point[1] },
+  );
+  const speedKmph = secondsGap > 0 ? distanceKm / (secondsGap / 3600) : Number.POSITIVE_INFINITY;
+  if (secondsGap > ROUTE_MAP_SEGMENT_MAX_GAP_SECONDS) {
+    return { reason: "time_gap", secondsGap, distanceKm, speedKmph };
+  }
+  if (distanceKm > ROUTE_MAP_SEGMENT_MAX_DISTANCE_KM) {
+    return { reason: "distance_gap", secondsGap, distanceKm, speedKmph };
+  }
+  if (speedKmph > ROUTE_MAP_SEGMENT_MAX_SPEED_KMPH) {
+    return { reason: "speed_gap", secondsGap, distanceKm, speedKmph };
+  }
+  return null;
+}
+
+function gpsTrailFromLogs(logs = [], stats = createRouteMapCoordinateStats()) {
+  const ordered = logs
+    .filter(isValidGpsTrailLog)
+    .slice()
+    .sort((a, b) => routePointTime(a) - routePointTime(b));
+  const normalizedPoints = [];
+  let duplicatesRemoved = 0;
+  ordered.forEach((log) => {
+    const point = normalizeRouteMapCoordinate(
+      [Number(log.latitude), Number(log.longitude)],
+      stats,
+      `gps_log_${log.id || log.captured_at || log.recorded_at || log.created_at || normalizedPoints.length}`,
+    );
+    if (!point) return;
+    const previous = normalizedPoints.at(-1);
+    if (previous && previous.point[0] === point[0] && previous.point[1] === point[1]) {
+      duplicatesRemoved += 1;
+      return;
+    }
+    normalizedPoints.push({
+      point,
+      timestampMs: routePointTime(log).getTime(),
+      source: log.id || log.captured_at || log.recorded_at || log.created_at || normalizedPoints.length,
+    });
+  });
+  const segments = [];
+  const gapBreakExamples = [];
+  let currentSegment = [];
+  let previousPoint = null;
+  normalizedPoints.forEach((currentPoint) => {
+    const gap = previousPoint ? gpsTrailGapReason(previousPoint, currentPoint) : null;
+    if (gap) {
+      if (currentSegment.length > 1) segments.push(currentSegment);
+      if (gapBreakExamples.length < 10) {
+        gapBreakExamples.push({
+          reason: gap.reason,
+          from: previousPoint.source,
+          to: currentPoint.source,
+          secondsGap: Number(gap.secondsGap.toFixed(0)),
+          distanceKm: Number(gap.distanceKm.toFixed(3)),
+          speedKmph: Number(gap.speedKmph.toFixed(1)),
+        });
+      }
+      currentSegment = [];
+    }
+    currentSegment.push(currentPoint.point);
+    previousPoint = currentPoint;
+  });
+  if (currentSegment.length > 1) segments.push(currentSegment);
+  return {
+    trail: segments[0] || [],
+    segments,
+    validPointsCount: ordered.length,
+    duplicatesRemoved,
+    gapBreakExamples,
+    segmentsSkippedCount: normalizedPoints.length - segments.reduce((sum, segment) => sum + segment.length, 0),
+  };
+}
+
+function perpendicularPointDistance(point, start, end) {
+  const [lat, lng] = point;
+  const [startLat, startLng] = start;
+  const [endLat, endLng] = end;
+  const dLat = endLat - startLat;
+  const dLng = endLng - startLng;
+  if (dLat === 0 && dLng === 0) {
+    return Math.hypot(lat - startLat, lng - startLng);
+  }
+  const t = Math.max(0, Math.min(1, ((lat - startLat) * dLat + (lng - startLng) * dLng) / (dLat * dLat + dLng * dLng)));
+  return Math.hypot(lat - (startLat + t * dLat), lng - (startLng + t * dLng));
+}
+
+function simplifyRoutePoints(points, epsilon = 0.00012) {
+  if (points.length <= 2) return points;
+  let maxDistance = 0;
+  let maxIndex = 0;
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const distance = perpendicularPointDistance(points[index], points[0], points.at(-1));
+    if (distance > maxDistance) {
+      maxDistance = distance;
+      maxIndex = index;
+    }
+  }
+  if (maxDistance <= epsilon) return [points[0], points.at(-1)];
+  const left = simplifyRoutePoints(points.slice(0, maxIndex + 1), epsilon);
+  const right = simplifyRoutePoints(points.slice(maxIndex), epsilon);
+  return [...left.slice(0, -1), ...right];
+}
+
+function capRoutePoints(points, maxPoints = SNAP_TO_ROADS_MAX_INPUT_POINTS) {
+  if (points.length <= maxPoints) return points;
+  const capped = [points[0]];
+  const step = (points.length - 1) / (maxPoints - 1);
+  for (let index = 1; index < maxPoints - 1; index += 1) {
+    capped.push(points[Math.round(index * step)]);
+  }
+  capped.push(points.at(-1));
+  return capped;
+}
+
+function downsampleGpsTrailForSnap(points = []) {
+  if (points.length <= SNAP_TO_ROADS_MAX_INPUT_POINTS) return points;
+  let epsilon = 0.00008;
+  let simplified = points;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    simplified = simplifyRoutePoints(points, epsilon);
+    if (simplified.length <= SNAP_TO_ROADS_MAX_INPUT_POINTS) break;
+    epsilon *= 1.7;
+  }
+  return capRoutePoints(simplified, SNAP_TO_ROADS_MAX_INPUT_POINTS);
+}
+
+function simplifiedGpsTrailForDisplay(points = []) {
+  if (points.length <= 120) return points;
+  let epsilon = 0.00018;
+  let simplified = points;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    simplified = simplifyRoutePoints(points, epsilon);
+    if (simplified.length <= 160) break;
+    epsilon *= 1.6;
+  }
+  return capRoutePoints(simplified, 160);
+}
+
+function chunkRoutePoints(points = [], size = SNAP_TO_ROADS_MAX_POINTS_PER_REQUEST) {
+  const chunks = [];
+  if (points.length <= size) return points.length ? [points] : [];
+  let index = 0;
+  while (index < points.length) {
+    chunks.push(points.slice(index, Math.min(points.length, index + size)));
+    if (index + size >= points.length) break;
+    index += size - 1;
+  }
+  return chunks;
+}
+
+async function snapGpsSegmentToRoads(points = []) {
+  const downsampled = downsampleGpsTrailForSnap(points);
+  const chunks = chunkRoutePoints(downsampled);
+  const snappedPath = [];
+
+  for (const chunk of chunks) {
+    if (chunk.length < 2) continue;
+    const url = new URL("https://roads.googleapis.com/v1/snapToRoads");
+    url.searchParams.set("interpolate", "true");
+    url.searchParams.set("path", chunk.map((point) => `${point[0]},${point[1]}`).join("|"));
+    url.searchParams.set("key", GOOGLE_MAPS_API_KEY);
+    const response = await fetch(url);
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      payload = { parse_error: error?.message || String(error) };
+    }
+    if (!response.ok) {
+      const error = new Error(`Snap to Roads HTTP ${response.status}`);
+      error.roadsApiResponse = payload;
+      throw error;
+    }
+    if (payload.error) {
+      const error = new Error(payload.error.message || payload.error.status || "Snap to Roads failed");
+      error.roadsApiResponse = payload.error;
+      throw error;
+    }
+    (payload.snappedPoints || []).forEach((point) => {
+      const location = point.location;
+      if (!location) return;
+      const next = [Number(location.latitude), Number(location.longitude)];
+      if (!hasFiniteCoordinates(next)) return;
+      const previous = snappedPath.at(-1);
+      if (previous && previous[0] === next[0] && previous[1] === next[1]) return;
+      snappedPath.push(next);
+    });
+  }
+
+  if (snappedPath.length < 2) {
+    throw new Error("Snap to Roads returned insufficient points");
+  }
+
+  return {
+    path: snappedPath,
+    downsampledGpsPoints: downsampled.length,
+    snapApiChunkCount: chunks.length,
+    snappedPointsReturned: snappedPath.length,
+  };
+}
+
+async function snapGpsSegmentsToRoads(segments = []) {
+  const renderedSegments = [];
+  const errors = [];
+  let downsampledGpsPoints = 0;
+  let snapApiChunkCount = 0;
+  let snappedPointsReturned = 0;
+  let snappedSegmentsCount = 0;
+  let failedSegmentsCount = 0;
+
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (segment.length < 2) continue;
+    const downsampled = downsampleGpsTrailForSnap(segment);
+    downsampledGpsPoints += downsampled.length;
+    snapApiChunkCount += chunkRoutePoints(downsampled).length;
+    try {
+      const snapped = await snapGpsSegmentToRoads(segment);
+      renderedSegments.push(snapped.path);
+      snappedPointsReturned += snapped.snappedPointsReturned;
+      snappedSegmentsCount += 1;
+    } catch (error) {
+      failedSegmentsCount += 1;
+      const simplified = simplifiedGpsTrailForDisplay(segment);
+      if (simplified.length > 1) renderedSegments.push(simplified);
+      errors.push({
+        segmentIndex: index,
+        message: error?.message || String(error),
+        roadsApiResponse: error?.roadsApiResponse || null,
+      });
+    }
+  }
+
+  if (!renderedSegments.length) {
+    const error = new Error("Snap to Roads returned no renderable segments");
+    error.roadsApiResponse = errors;
+    throw error;
+  }
+
+  return {
+    paths: renderedSegments,
+    status: failedSegmentsCount
+      ? snappedSegmentsCount
+        ? "partial"
+        : "failed"
+      : "success",
+    downsampledGpsPoints,
+    snapApiChunkCount,
+    snappedPointsReturned,
+    snappedSegmentsCount,
+    failedSegmentsCount,
+    errors,
+  };
+}
+
+function buildDetailMapPoints(officer, routeLogs) {
+  const visits = sortedOfficerVisits(officer);
+  const coordinateStats = createRouteMapCoordinateStats();
+  const start = normalizeRouteMapCoordinate(
+    pointFromAttendanceStart(officer?.attendance),
+    coordinateStats,
+    "attendance_start",
+  );
+  const end = normalizeRouteMapCoordinate(
+    routePointFromAttendanceEnd(officer?.attendance),
+    coordinateStats,
+    "attendance_end",
+  );
+  const gpsTrail = gpsTrailFromLogs(routeLogs, coordinateStats);
+  const storedPolylines = storedRoutePolylinesFromVisits(visits, coordinateStats);
+  const anchors = [
+    detailRouteAnchor(
+      "start",
+      "start",
+      "S",
+      start,
+      "Start Day",
+    ),
+    ...visits.flatMap((visit, index) => {
+      const checkIn = normalizeRouteMapCoordinate(
+        routePointFromVisit(visit, "checkin"),
+        coordinateStats,
+        `site_${index + 1}_checkin`,
+      );
+      const checkOut = normalizeRouteMapCoordinate(
+        routePointFromVisit(visit, "checkout"),
+        coordinateStats,
+        `site_${index + 1}_checkout`,
+      );
+      const siteCoordinates = checkIn || checkOut;
+      const siteAnchor = detailRouteAnchor(
+        visit.id || `site-${index + 1}`,
+        "site",
+        index + 1,
+        siteCoordinates,
+        visitTitle(visit),
+      );
+      const checkoutAnchor =
+        checkOut && checkIn && (checkOut[0] !== checkIn[0] || checkOut[1] !== checkIn[1])
+          ? detailRouteAnchor(
+              `${visit.id || `site-${index + 1}`}-checkout`,
+              "checkout",
+              null,
+              checkOut,
+              `${visitTitle(visit)} checkout`,
+            )
+          : null;
+      return [siteAnchor, checkoutAnchor].filter(Boolean);
+    }),
+    detailRouteAnchor("end", "end", "E", end, "End Day"),
+  ].filter(Boolean);
+  const fallbackTrail = anchors.map((anchor) => anchor.coordinates).filter(hasFiniteCoordinates);
+  const hasGpsTrail = gpsTrail.segments.length > 0;
+  const routeTrail = hasGpsTrail
+    ? gpsTrail.trail
+    : storedPolylines.length
+      ? storedPolylines[0]
+      : fallbackTrail;
+  const markers = spreadDetailMarkers(
+    anchors.filter((anchor) => ["start", "site", "end"].includes(anchor.type)),
+  );
+  return {
+    anchors,
+    markers,
+    storedPolylines,
+    routeTrail,
+    gpsSegments: gpsTrail.segments,
+    gpsFetchedCount: routeLogs.length,
+    gpsValidPointsCount: gpsTrail.validPointsCount,
+    gpsDuplicatesRemoved: gpsTrail.duplicatesRemoved,
+    gpsSegmentCount: gpsTrail.segments.length,
+    gpsSegmentPointCounts: gpsTrail.segments.map((segment) => segment.length),
+    gpsSegmentsSkippedCount: gpsTrail.segmentsSkippedCount,
+    gpsGapBreakExamples: gpsTrail.gapBreakExamples,
+    coordinateStats,
+    routeSource: hasGpsTrail
+      ? "gps-trail"
+      : storedPolylines.length
+        ? "stored-polyline"
+        : "fallback-anchors",
+  };
+}
+
+function spreadDetailMarkers(markers = []) {
+  const grouped = markers.reduce((map, marker) => {
+    const key = marker.coordinates.map((value) => Number(value).toFixed(4)).join(",");
+    const list = map.get(key) || [];
+    list.push(marker);
+    map.set(key, list);
+    return map;
+  }, new Map());
+
+  return markers.map((marker) => {
+    const key = marker.coordinates.map((value) => Number(value).toFixed(4)).join(",");
+    const siblings = grouped.get(key) || [];
+    if (siblings.length <= 1) return marker;
+    const index = siblings.findIndex((item) => item.id === marker.id);
+    const angle = (index / siblings.length) * Math.PI * 2;
+    const radius = 5.2;
+    return {
+      ...marker,
+      displayOffset: {
+        x: Math.cos(angle) * radius,
+        y: Math.sin(angle) * radius,
+      },
+    };
+  });
+}
+
+function googleLatLng(point, displayOffset) {
+  if (!hasFiniteCoordinates(point)) return null;
+  const latOffset = (displayOffset?.y || 0) * -0.00004;
+  const lngOffset = (displayOffset?.x || 0) * 0.00004;
+  return {
+    lat: Number(point[0]) + latOffset,
+    lng: Number(point[1]) + lngOffset,
+  };
+}
+
+function firstValidPointFromPaths(paths = []) {
+  for (const path of paths) {
+    const point = path.find(hasFiniteCoordinates);
+    if (point) return point;
+  }
+  return null;
+}
+
+function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
+  const points = useMemo(() => buildDetailMapPoints(officer, routeLogs), [officer, routeLogs]);
+  const mapElementRef = useRef(null);
+  const mapRef = useRef(null);
+  const overlaysRef = useRef([]);
+  const [mapStatus, setMapStatus] = useState(GOOGLE_MAPS_API_KEY ? "loading" : "missing-key");
+  const [routeViewMode, setRouteViewMode] = useState("road");
+  const [snapResult, setSnapResult] = useState({
+    status: "skipped",
+    paths: [],
+    downsampledGpsPoints: 0,
+    snapApiChunkCount: 0,
+    snappedPointsReturned: 0,
+    snappedSegmentsCount: 0,
+    failedSegmentsCount: 0,
+    errors: [],
+  });
+  const snapCacheKey = [
+    officer?.foId || officer?.employeeCode || "unknown",
+    formatDateOnly(fromDate),
+    formatDateOnly(toDate),
+    points.gpsValidPointsCount,
+    points.gpsDuplicatesRemoved,
+    points.gpsSegmentCount,
+  ].join("|");
+  const simplifiedGpsTrail = useMemo(
+    () => points.gpsSegments.map((segment) => simplifiedGpsTrailForDisplay(segment)).filter((segment) => segment.length > 1),
+    [points.gpsSegments],
+  );
+  const selectedRoute = useMemo(() => {
+    if (routeViewMode === "markers") {
+      return { paths: [], source: "markers_only", label: "Markers Only" };
+    }
+    if (routeViewMode === "raw") {
+      return { paths: points.gpsSegments.length ? points.gpsSegments : [points.routeTrail], source: "raw_gps", label: "Raw GPS" };
+    }
+    if (["success", "partial"].includes(snapResult.status) && snapResult.paths?.length) {
+      return {
+        paths: snapResult.paths,
+        source: snapResult.status === "partial" ? "mixed_snapped_simplified" : "snapped_gps",
+        label: snapResult.status === "partial" ? "Road-snapped GPS Trail" : "Road-snapped GPS Trail",
+      };
+    }
+    if (points.routeSource === "gps-trail") {
+      return { paths: simplifiedGpsTrail, source: "simplified_gps", label: "Simplified GPS Trail" };
+    }
+    if (points.routeSource === "stored-polyline") {
+      return { paths: points.storedPolylines, source: "polyline", label: "Stored Polyline" };
+    }
+    return { paths: [points.routeTrail], source: "anchors", label: "Anchors" };
+  }, [points.routeSource, points.routeTrail, points.storedPolylines, routeViewMode, simplifiedGpsTrail, snapResult]);
+  const renderedPolylinePointCount = selectedRoute.paths.reduce((sum, path) => sum + path.length, 0);
+  const hasMapGeometry = renderedPolylinePointCount > 1 || points.markers.length > 0;
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSnappedTrail() {
+      if (points.routeSource !== "gps-trail" || !points.gpsSegments.length || !GOOGLE_MAPS_API_KEY) {
+        setSnapResult({
+          status: "skipped",
+          paths: [],
+          downsampledGpsPoints: 0,
+          snapApiChunkCount: 0,
+          snappedPointsReturned: 0,
+          snappedSegmentsCount: 0,
+          failedSegmentsCount: 0,
+          errors: [],
+        });
+        return;
+      }
+      const cached = snapToRoadsCache.get(snapCacheKey);
+      if (cached) {
+        setSnapResult(cached);
+        return;
+      }
+      try {
+        const snapped = await snapGpsSegmentsToRoads(points.gpsSegments);
+        const result = { ...snapped };
+        if (result.errors?.length) {
+          console.warn("[myQPMS FO] Snap to Roads partially failed; using simplified GPS for failed segments.", {
+            officer_id: officer?.foId || officer?.employeeCode,
+            date_range: `${formatDateOnly(fromDate)} to ${formatDateOnly(toDate)}`,
+            roadsApiErrors: result.errors,
+          });
+        }
+        snapToRoadsCache.set(snapCacheKey, result);
+        if (!cancelled) setSnapResult(result);
+      } catch (error) {
+        const downsampledSegments = points.gpsSegments.map((segment) => downsampleGpsTrailForSnap(segment));
+        console.warn("[myQPMS FO] Snap to Roads failed; using raw GPS trail.", {
+          officer_id: officer?.foId || officer?.employeeCode,
+          date_range: `${formatDateOnly(fromDate)} to ${formatDateOnly(toDate)}`,
+          message: error?.message || String(error),
+          roadsApiResponse: error?.roadsApiResponse || null,
+        });
+        const result = {
+          status: "failed",
+          paths: [],
+          downsampledGpsPoints: downsampledSegments.reduce((sum, segment) => sum + segment.length, 0),
+          snapApiChunkCount: downsampledSegments.reduce((sum, segment) => sum + chunkRoutePoints(segment).length, 0),
+          snappedPointsReturned: 0,
+          snappedSegmentsCount: 0,
+          failedSegmentsCount: points.gpsSegments.length,
+          errors: [
+            {
+              message: error?.message || String(error),
+              roadsApiResponse: error?.roadsApiResponse || null,
+            },
+          ],
+        };
+        snapToRoadsCache.set(snapCacheKey, result);
+        if (!cancelled) setSnapResult(result);
+      }
+    }
+    loadSnappedTrail();
+    return () => {
+      cancelled = true;
+    };
+  }, [fromDate, officer?.employeeCode, officer?.foId, points.gpsSegments, points.routeSource, snapCacheKey, toDate]);
+
+  useEffect(() => {
+    const coordinateStats = points.coordinateStats || createRouteMapCoordinateStats();
+    const swappedRatio = coordinateStats.routeMapOriginalPointCount
+      ? coordinateStats.routeMapSwappedCorrectionCount / coordinateStats.routeMapOriginalPointCount
+      : 0;
+    console.debug("FO_DRILLDOWN_ROUTE_MAP_DIAGNOSTICS", {
+      officer_name: officer?.name,
+      officer_id: officer?.foId || officer?.employeeCode,
+      date_range: `${formatDateOnly(fromDate)} to ${formatDateOnly(toDate)}`,
+      attendance_rows_count: officer?.attendance?.id ? 1 : 0,
+      site_visits_count: officer?.visits?.length || 0,
+      gps_logs_fetched_count: points.gpsFetchedCount,
+      valid_gps_points_count: points.gpsValidPointsCount,
+      duplicate_points_removed_count: points.gpsDuplicatesRemoved,
+      rawGpsPoints: points.gpsValidPointsCount,
+      downsampledGpsPoints: snapResult.downsampledGpsPoints,
+      snapApiChunkCount: snapResult.snapApiChunkCount,
+      snappedPointsReturned: snapResult.snappedPointsReturned,
+      snapToRoadStatus: snapResult.status,
+      finalPathSource: selectedRoute.source,
+      selectedRouteViewMode: routeViewMode,
+      renderedPolylinePointCount,
+      renderedPolylineSegmentCount: selectedRoute.paths.filter((path) => path.length > 1).length,
+      renderedPolylineSource: selectedRoute.source,
+      gpsSegmentCount: points.gpsSegmentCount,
+      gpsSegmentPointCounts: points.gpsSegmentPointCounts,
+      gpsSegmentsSkippedCount: points.gpsSegmentsSkippedCount,
+      gpsGapBreakExamples: points.gpsGapBreakExamples,
+      roadsApiErrors: snapResult.errors,
+      final_marker_count: points.markers.length,
+      routeMapOriginalPointCount: coordinateStats.routeMapOriginalPointCount,
+      routeMapAcceptedOriginalCount: coordinateStats.routeMapAcceptedOriginalCount,
+      routeMapSwappedCorrectionCount: coordinateStats.routeMapSwappedCorrectionCount,
+      routeMapRejectedInvalidCount: coordinateStats.routeMapRejectedInvalidCount,
+      routeMapRejectedExamples: coordinateStats.routeMapRejectedExamples,
+    });
+    if (swappedRatio > 0.1) {
+      console.warn("FO route map detected swapped latitude/longitude values.", {
+        officer_name: officer?.name,
+        officer_id: officer?.foId || officer?.employeeCode,
+        swapped_ratio: Number(swappedRatio.toFixed(3)),
+        swapped_count: coordinateStats.routeMapSwappedCorrectionCount,
+        total_points: coordinateStats.routeMapOriginalPointCount,
+      });
+    }
+  }, [fromDate, officer, points, renderedPolylinePointCount, routeViewMode, selectedRoute.source, snapResult, toDate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function renderMap() {
+      try {
+        const maps = await loadGoogleMapsScript();
+        if (cancelled || !mapElementRef.current) return;
+        const firstPoint =
+          points.markers[0]?.coordinates ||
+          firstValidPointFromPaths(selectedRoute.paths) ||
+          points.routeTrail.find(hasFiniteCoordinates) ||
+          SOUTH_INDIA_CENTER;
+        const center = googleLatLng(firstPoint) || { lat: SOUTH_INDIA_CENTER[0], lng: SOUTH_INDIA_CENTER[1] };
+        if (!mapRef.current) {
+          mapRef.current = new maps.Map(mapElementRef.current, {
+            center,
+            zoom: 12,
+            mapTypeControl: false,
+            streetViewControl: false,
+            fullscreenControl: true,
+            clickableIcons: false,
+          });
+        }
+
+        overlaysRef.current.forEach((overlay) => overlay.setMap(null));
+        overlaysRef.current = [];
+        const bounds = new maps.LatLngBounds();
+        let hasBounds = false;
+
+        selectedRoute.paths
+          .filter((path) => path.length > 1)
+          .forEach((path) => {
+            const googlePath = path.map((point) => googleLatLng(point)).filter(Boolean);
+            if (googlePath.length < 2) return;
+            googlePath.forEach((latLng) => {
+              bounds.extend(latLng);
+              hasBounds = true;
+            });
+            const polyline = new maps.Polyline({
+              path: googlePath,
+              geodesic: true,
+              strokeColor: "#1557ff",
+              strokeOpacity: selectedRoute.source === "raw_gps" ? 0.42 : 0.68,
+              strokeWeight: selectedRoute.source === "raw_gps" ? 2 : 3,
+              map: mapRef.current,
+            });
+            overlaysRef.current.push(polyline);
+          });
+
+        points.markers.forEach((marker) => {
+          const position = googleLatLng(marker.coordinates, marker.displayOffset);
+          if (!position) return;
+          bounds.extend(position);
+          hasBounds = true;
+          const isStart = marker.type === "start";
+          const isEnd = marker.type === "end";
+          const mapMarker = new maps.Marker({
+            map: mapRef.current,
+            position,
+            title: marker.title,
+            label: {
+              text: String(marker.label || ""),
+              color: "#ffffff",
+              fontSize: "12px",
+              fontWeight: "800",
+            },
+            icon: {
+              path: maps.SymbolPath.CIRCLE,
+              scale: isStart || isEnd ? 12 : 11,
+              fillColor: isStart ? "#10b981" : isEnd ? "#ef4444" : "#1557ff",
+              fillOpacity: 1,
+              strokeColor: "#ffffff",
+              strokeWeight: 3,
+            },
+          });
+          overlaysRef.current.push(mapMarker);
+        });
+
+        if (hasBounds) {
+          mapRef.current.fitBounds(bounds, 48);
+        } else {
+          mapRef.current.setCenter(center);
+          mapRef.current.setZoom(11);
+        }
+        setMapStatus("ready");
+      } catch (error) {
+        console.warn("[myQPMS FO] Google map unavailable.", error);
+        if (!cancelled) setMapStatus("unavailable");
+      }
+    }
+    renderMap();
+    return () => {
+      cancelled = true;
+    };
+  }, [points, selectedRoute]);
+
+  return (
+    <div className="relative h-[340px] overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-inner">
+      <div ref={mapElementRef} className="absolute inset-0" />
+      {mapStatus !== "ready" ? (
+        <div className="absolute inset-0 z-10 grid place-items-center bg-slate-50 text-sm font-semibold text-slate-500">
+          {mapStatus === "missing-key" ? "Google Maps key is not configured." : "Loading route map..."}
+        </div>
+      ) : null}
+      {mapStatus === "ready" && !hasMapGeometry ? (
+        <div className="absolute inset-0 z-10 grid place-items-center bg-white/80 text-sm font-semibold text-slate-500">
+          No GPS trail or route anchors available for selected filters.
+        </div>
+      ) : null}
+      {routeViewMode === "road" && ["failed", "partial"].includes(snapResult.status) ? (
+        <div className="absolute bottom-4 left-4 z-10 rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-xs font-bold text-amber-800 shadow-sm">
+          Road snapping unavailable — showing simplified GPS trail
+        </div>
+      ) : null}
+      <div className="absolute left-4 top-4 z-10 flex flex-wrap gap-1 rounded-lg border border-slate-200 bg-white/95 p-1 text-xs font-black text-slate-600 shadow-sm">
+        {[
+          ["road", "Road Trail"],
+          ["raw", "Raw GPS"],
+          ["markers", "Markers Only"],
+        ].map(([mode, label]) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => setRouteViewMode(mode)}
+            className={`rounded-md px-3 py-1.5 transition ${
+              routeViewMode === mode
+                ? "bg-qpms-700 text-white"
+                : "text-slate-600 hover:bg-slate-100"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="absolute right-4 top-4 z-10 w-28 rounded-lg border border-slate-200 bg-white/95 p-3 text-xs font-semibold text-slate-600 shadow-sm">
+        <p className="mb-2 font-black text-slate-900">Legend</p>
+        <LegendDot color="bg-emerald-500" label="Start Day" />
+        <LegendDot color="bg-blue-600" label="Site Visit" />
+        <LegendDot color="bg-red-500" label="End Day" />
+        <div className="mt-2 flex items-center gap-2">
+          <span className="h-0.5 w-5 rounded-full bg-blue-600" />
+          <span>Route</span>
+        </div>
+        <p className="mt-2 text-[10px] font-bold uppercase text-slate-400">
+          {selectedRoute.label}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function LegendDot({ color, label }) {
+  return (
+    <div className="mt-2 flex items-center gap-2">
+      <span className={`h-3 w-3 rounded-full ${color}`} />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function DetailSummaryCard({ icon, label, value, hint, tone = "blue" }) {
+  const Icon = icon;
+  const tones = {
+    blue: "bg-blue-50 text-blue-700",
+    green: "bg-emerald-50 text-emerald-700",
+    amber: "bg-amber-50 text-amber-700",
+    red: "bg-red-50 text-red-700",
+    purple: "bg-violet-50 text-violet-700",
+  };
+  return (
+    <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.06)]">
+      <div className="flex items-center gap-3">
+        <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-full ${tones[tone] || tones.blue}`}>
+          <Icon className="h-5 w-5" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-slate-600">{label}</p>
+          <p className="mt-1 truncate text-base font-black text-slate-950">{value || "--"}</p>
+          <p className="mt-1 truncate text-xs font-semibold text-slate-500">{hint || "--"}</p>
+        </div>
+        </div>
+    </div>
+  );
+}
+
+function FieldOfficerDetailsView({
+  officer,
+  routeLogs,
+  activitySubmissions = [],
+  activityUploads = [],
+  fromDate,
+  toDate,
+  draftFromDate,
+  draftToDate,
+  onDraftFromDate,
+  onDraftToDate,
+  onApplyDate,
+  onBack,
+  onExport,
+}) {
+  const [selectedVisitIndex, setSelectedVisitIndex] = useState(0);
+  const [photoFilter, setPhotoFilter] = useState("All");
+  const [routeMapOpen, setRouteMapOpen] = useState(false);
+  const visits = useMemo(() => sortedOfficerVisits(officer), [officer]);
+  const attendance = useMemo(() => officer?.attendance || {}, [officer?.attendance]);
+  const activeVisitIndex = visits.length
+    ? Math.min(selectedVisitIndex, visits.length - 1)
+    : 0;
+  const selectedVisit = visits[activeVisitIndex] || null;
+  const visibleActivityUploads = useMemo(() => {
+    const selectedVisitId = selectedVisit?.id ? String(selectedVisit.id) : null;
+    const siteScopedUploads = selectedVisitId
+      ? activityUploads.filter((upload) => {
+          const uploadVisitId = upload.site_visit_id || upload.submission?.site_visit_id;
+          return !uploadVisitId || String(uploadVisitId) === selectedVisitId;
+        })
+      : activityUploads;
+    return filteredActivityUploads(siteScopedUploads, photoFilter);
+  }, [activityUploads, photoFilter, selectedVisit]);
+  const status = officerStatus(officer);
+  const isLive = status.label === "Online";
+  const workingMinutes = attendanceWorkingMinutes(attendance);
+  const totalVisitMinutes = visits.reduce((sum, visit) => sum + (visitMinutes(visit) || 0), 0);
+  const totalKm = Number(officer?.eligibleKm ?? officer?.routeKmToday);
+  const petrolAmount = Number(attendance?.petrol_amount ?? officer?.petrolAmount);
+  const ratePerKm = Number(attendance?.rate_per_km);
+  const timelineRows = useMemo(() => {
+    const rows = [];
+    if (attendance.login_time) {
+      rows.push({
+        key: "start",
+        index: <PlayCircle className="h-4 w-4" />,
+        site: "Start Day",
+        location: pointFromAttendanceStart(attendance)
+          ? `${pointFromAttendanceStart(attendance).latitude.toFixed(5)}, ${pointFromAttendanceStart(attendance).longitude.toFixed(5)}`
+          : "--",
+        checkIn: formatDateTime(attendance.login_time),
+        checkOut: "--",
+        duration: "--",
+        travelFromPrevious: "--",
+        distance: "--",
+        activity: "Start Day",
+      });
+    }
+    visits.forEach((visit, index) => {
+      rows.push({
+        key: visit.id || `${visit.check_in_time}-${index}`,
+        index: index + 1,
+        site: `${visitTitle(visit)} / ${visitClient(visit)}`,
+        location: visitLocation(visit),
+        checkIn: formatDateTime(visit.check_in_time),
+        checkOut: formatDateTime(siteVisitCheckoutValue(visit)),
+        duration: durationMinutesLabel(visitMinutes(visit)),
+        travelFromPrevious: index === 0 ? "Start Day" : visitTitle(visits[index - 1]),
+        distance: numberLabel(visit.route_km, ""),
+        activity: siteVisitStatus(visit),
+        visitIndex: index,
+      });
+    });
+    if (attendance.logout_time) {
+      rows.push({
+        key: "end",
+        index: <Square className="h-3.5 w-3.5" />,
+        site: "End Day",
+        location: routePointFromAttendanceEnd(attendance)
+          ? `${routePointFromAttendanceEnd(attendance)[0].toFixed(5)}, ${routePointFromAttendanceEnd(attendance)[1].toFixed(5)}`
+          : "--",
+        checkIn: "--",
+        checkOut: formatDateTime(attendance.logout_time),
+        duration: durationMinutesLabel(workingMinutes),
+        travelFromPrevious: visits.length ? visitTitle(visits.at(-1)) : "--",
+        distance: "--",
+        activity: "End Day",
+      });
+    }
+    return rows;
+  }, [attendance, visits, workingMinutes]);
+
+  return (
+    <div className="max-w-full overflow-x-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-500">
+            <span>FO Operations</span>
+            <ChevronRight className="h-4 w-4" />
+            <span className="font-black text-slate-950">Field Officer Details</span>
+          </div>
+          <div className="mt-5 flex min-w-0 items-center gap-5">
+            <span className="grid h-16 w-16 place-items-center rounded-full bg-slate-100 text-qpms-800">
+              <User className="h-8 w-8" />
+            </span>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="min-w-0 break-words text-3xl font-black tracking-normal text-slate-950">{officer?.name || "--"}</h1>
+                <span className={`rounded-full px-3 py-1 text-xs font-black ${isLive ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                  {isLive ? "Live / Active" : displayValue(status.label)}
+                </span>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-6 text-sm font-semibold text-slate-600">
+                <span>Employee ID: {displayValue(officer?.employeeCode || officer?.foId)}</span>
+                <span className="inline-flex items-center gap-2"><Phone className="h-4 w-4 text-qpms-700" /> {displayValue(officer?.phone)}</span>
+                <span className="inline-flex items-center gap-2"><MapPin className="h-4 w-4 text-qpms-700" /> {displayValue(officer?.state)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="min-w-0 max-w-full grid gap-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <label>
+              <span className="text-xs font-bold text-slate-600">From Date</span>
+              <input type="date" value={draftFromDate} onChange={(event) => onDraftFromDate(event.target.value)} className="mt-1 rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-800 outline-none focus:border-qpms-500" />
+            </label>
+            <span className="pb-2 text-slate-400">to</span>
+            <label>
+              <span className="text-xs font-bold text-slate-600">To Date</span>
+              <input type="date" value={draftToDate} onChange={(event) => onDraftToDate(event.target.value)} className="mt-1 rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-800 outline-none focus:border-qpms-500" />
+            </label>
+            <button type="button" onClick={onApplyDate} className="focus-ring rounded-lg border border-qpms-600 px-5 py-2 text-sm font-black text-qpms-700 hover:bg-qpms-50">Apply</button>
+            <button type="button" onClick={onExport} className="focus-ring inline-flex items-center gap-2 rounded-lg bg-qpms-700 px-5 py-2 text-sm font-black text-white hover:bg-qpms-800">
+              <Download className="h-4 w-4" /> Export Report
+            </button>
+          </div>
+          <button type="button" onClick={onBack} className="focus-ring ml-auto inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-sm font-black text-qpms-700 hover:bg-slate-50">
+            <ChevronLeft className="h-4 w-4" /> Back to List
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
+        <DetailSummaryCard icon={PlayCircle} label="Start Day" value={formatTime(attendance.login_time)} hint={formatDateOnly(attendance.login_time)} tone="green" />
+        <DetailSummaryCard icon={Square} label="End Day" value={formatTime(attendance.logout_time)} hint={formatDateOnly(attendance.logout_time)} tone="red" />
+        <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length ? visits.length : "--"} hint="--" tone="purple" />
+        <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint="--" tone="blue" />
+        <DetailSummaryCard icon={Clock} label="Working Hours" value={durationMinutesLabel(workingMinutes)} hint="--" tone="amber" />
+        <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`@ ${formatInr(ratePerKm)} / km`} tone="green" />
+        <DetailSummaryCard icon={ShieldCheck} label="Status" value={displayValue(attendance.status || status.label)} hint="--" tone="green" />
+      </div>
+
+      <section className="mt-3 min-w-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-black text-slate-950">Route Map</h2>
+            <p className="text-xs font-semibold text-slate-500">Visual route proof from GPS logs, stored map data, or route anchors.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setRouteMapOpen((value) => !value)}
+            className="focus-ring inline-flex items-center gap-2 rounded-lg border border-qpms-200 px-4 py-2 text-sm font-black text-qpms-700 hover:bg-qpms-50"
+          >
+            <MapPinned className="h-4 w-4" />
+            {routeMapOpen ? "Hide Route Map" : "Show Route Map"}
+          </button>
+        </div>
+        {routeMapOpen ? (
+          <div className="mt-3">
+            <GoogleRouteMap officer={officer} routeLogs={routeLogs} fromDate={fromDate} toDate={toDate} />
+          </div>
+        ) : null}
+      </section>
+
+      <div className="mt-3 grid min-w-0 gap-3 overflow-hidden 2xl:grid-cols-[minmax(0,1fr)_minmax(390px,460px)]">
+        <div className="grid min-w-0 content-start gap-3">
+          <section className="min-h-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="mb-3 flex items-center gap-2">
+              <h2 className="text-base font-black text-slate-950">Visit Timeline</h2>
+              <span className="text-sm font-semibold text-slate-500">({formatDateOnly(fromDate)} - {formatDateOnly(toDate)})</span>
+            </div>
+            <div className="max-h-[390px] overflow-auto rounded-lg border border-slate-100">
+              <table className="min-w-[900px] text-left text-xs">
+                <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-black text-slate-600">
+                  <tr>
+                    {["#", "Site / Client", "Location", "Check-in", "Check-out", "Duration", "Travel From Previous", "Distance (km)", "Activity", "View"].map((heading) => (
+                      <th key={heading} className="whitespace-nowrap border-b border-slate-100 px-3 py-2">{heading}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-semibold text-slate-600">
+                  {timelineRows.map((row) => (
+                    <tr key={row.key} className="hover:bg-slate-50">
+                      <td className="px-3 py-2">
+                        <span className={`grid h-6 w-6 place-items-center rounded-full text-[11px] font-black text-white ${row.key === "start" ? "bg-emerald-500" : row.key === "end" ? "bg-red-500" : "bg-blue-600"}`}>{row.index}</span>
+                      </td>
+                      <td className="min-w-40 px-3 py-2 text-slate-900">{row.site}</td>
+                      <td className="min-w-28 px-3 py-2">{row.location}</td>
+                      <td className="whitespace-nowrap px-3 py-2">{row.checkIn}</td>
+                      <td className="whitespace-nowrap px-3 py-2">{row.checkOut}</td>
+                      <td className="whitespace-nowrap px-3 py-2">{row.duration}</td>
+                      <td className="min-w-36 px-3 py-2">{row.travelFromPrevious}</td>
+                      <td className="whitespace-nowrap px-3 py-2">{row.distance}</td>
+                      <td className="whitespace-nowrap px-3 py-2">{row.activity}</td>
+                      <td className="px-3 py-2">
+                        {row.visitIndex !== undefined ? (
+                          <button type="button" onClick={() => setSelectedVisitIndex(row.visitIndex)} className="focus-ring grid h-8 w-8 place-items-center rounded-full text-qpms-700 hover:bg-qpms-50" aria-label="View site details">
+                            <Eye className="h-4 w-4" />
+                          </button>
+                        ) : "--"}
+                      </td>
+                    </tr>
+                  ))}
+                  {!timelineRows.length ? (
+                    <tr>
+                      <td colSpan={10} className="px-3 py-8 text-center text-sm text-slate-500">No visit timeline available for selected filters.</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div className="grid min-w-0 content-start gap-3">
+          <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-base font-black text-slate-950">Site Selector <span className="text-sm text-slate-500">({visits.length} Sites Visited)</span></h2>
+              <div className="flex shrink-0 gap-2">
+                <button type="button" disabled={visits.length <= 1} onClick={() => setSelectedVisitIndex((value) => Math.max(0, value - 1))} className="focus-ring grid h-8 w-8 place-items-center rounded-lg border border-slate-200 text-qpms-700 disabled:cursor-not-allowed disabled:opacity-40"><ChevronLeft className="h-4 w-4" /></button>
+                <button type="button" disabled={visits.length <= 1} onClick={() => setSelectedVisitIndex((value) => Math.min(visits.length - 1, value + 1))} className="focus-ring grid h-8 w-8 place-items-center rounded-lg border border-slate-200 text-qpms-700 disabled:cursor-not-allowed disabled:opacity-40"><ChevronRight className="h-4 w-4" /></button>
+              </div>
+            </div>
+            <div className="mt-3 flex max-w-full gap-2 overflow-x-auto pb-1">
+              {visits.map((visit, index) => (
+                <button key={visit.id || `${visit.check_in_time}-${index}`} type="button" onClick={() => setSelectedVisitIndex(index)} className={`focus-ring inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-black ${index === activeVisitIndex ? "border-qpms-600 bg-qpms-50 text-qpms-700" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+                  <span className="grid h-5 w-5 place-items-center rounded-full bg-slate-100 text-[11px]">{index + 1}</span>
+                  {visitTitle(visit)}
+                </button>
+              ))}
+              {!visits.length ? <span className="text-sm font-semibold text-slate-500">No sites visited.</span> : null}
+            </div>
+            <div className="mt-5 grid min-w-0 grid-cols-1 gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(140px,0.65fr)]">
+              <div className="min-w-0">
+                <h3 className="mb-3 text-base font-black text-slate-950">Site Details</h3>
+                {[
+                  ["Site / Client", `${visitTitle(selectedVisit)} / ${visitClient(selectedVisit)}`],
+                  ["Client Name", visitClient(selectedVisit)],
+                  ["Business Type", selectedVisit?.business],
+                  ["Address", selectedVisit?.address || selectedVisit?.location_name],
+                  ["Check-in", formatDateTime(selectedVisit?.check_in_time)],
+                  ["Check-out", formatDateTime(siteVisitCheckoutValue(selectedVisit))],
+                  ["Duration", durationMinutesLabel(visitMinutes(selectedVisit))],
+                  ["Remarks", visitRemarks(selectedVisit)],
+                ].map(([label, value]) => (
+                  <div key={label} className="grid grid-cols-[120px_1fr] gap-2 py-1 text-xs font-semibold">
+                    <span className="text-qpms-800">{label}</span>
+                    <span className="truncate text-slate-700">{displayValue(value)}</span>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <div className="grid h-44 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-300">
+                  <Image className="h-14 w-14" />
+                </div>
+                <p className="mt-2 text-center text-sm font-black text-qpms-800">{visits.length ? `${activeVisitIndex + 1} / ${visits.length}` : "--"}</p>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <section className="mt-3 min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 className="text-base font-black text-slate-950">Activity Photos <span className="text-sm text-slate-500">({visibleActivityUploads.length})</span></h2>
+        <div className="mt-3 flex max-w-full flex-wrap gap-2 overflow-x-auto pb-1">
+          {ACTIVITY_PHOTO_TABS.map((tab) => (
+            <button key={tab} type="button" onClick={() => setPhotoFilter(tab)} className={`focus-ring shrink-0 rounded-lg border px-3 py-2 text-xs font-black ${photoFilter === tab ? "border-qpms-700 bg-qpms-700 text-white" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{tab}</button>
+          ))}
+        </div>
+        <div className="mt-4 min-h-[165px] max-h-[260px] overflow-y-auto rounded-lg border border-dashed border-slate-200 bg-white p-3">
+          {visibleActivityUploads.length ? (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {visibleActivityUploads.map((upload) => (
+                <a
+                  key={upload.id || upload.local_id || upload.file_url}
+                  href={upload.displayUrl || upload.file_url || undefined}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="group grid grid-cols-[56px_1fr] gap-3 rounded-lg border border-slate-100 bg-slate-50 p-2 text-left hover:border-qpms-200 hover:bg-qpms-50"
+                >
+                  <span className="grid h-14 w-14 place-items-center overflow-hidden rounded-md bg-white text-slate-300">
+                    {activityUploadIsImage(upload) && upload.displayUrl ? (
+                      <img src={upload.displayUrl} alt={activityUploadName(upload)} className="h-full w-full object-cover" />
+                    ) : (
+                      <Image className="h-7 w-7" />
+                    )}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-xs font-black text-slate-800">{activityUploadName(upload)}</span>
+                    <span className="mt-1 block truncate text-[11px] font-semibold text-qpms-700">{upload.activityGroup}</span>
+                    <span className="mt-1 block truncate text-[11px] font-semibold text-slate-500">{formatDateTime(activityUploadTime(upload))}</span>
+                  </span>
+                </a>
+              ))}
+            </div>
+          ) : (
+            <div className="grid min-h-[150px] place-items-center text-center">
+              <div>
+                <Image className="mx-auto h-12 w-12 text-slate-300" />
+                <p className="mt-3 text-sm font-semibold text-slate-500">No activity photos uploaded for selected filters.</p>
+                {activitySubmissions.length && !activityUploads.length ? (
+                  <p className="mt-1 text-xs font-semibold text-slate-400">Activity submissions found, but no upload files are linked.</p>
+                ) : null}
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <div className="mt-3 grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
+        <DetailStripItem icon={UserRoundCheck} label="Total Sites Visited" value={visits.length ? visits.length : "--"} />
+        <DetailStripItem icon={Route} label="Total Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} />
+        <DetailStripItem icon={Clock} label="Total Working Hours" value={durationMinutesLabel(workingMinutes)} />
+        <DetailStripItem icon={CalendarDays} label="Total Duration" value={durationMinutesLabel(totalVisitMinutes)} />
+        <DetailStripItem icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`@ ${formatInr(ratePerKm)} / km`} />
+      </div>
+    </div>
+  );
+}
+
+function DetailStripItem({ icon, label, value, hint }) {
+  const Icon = icon;
+  return (
+    <div className="flex items-center gap-3 px-3">
+      <span className="grid h-9 w-9 place-items-center rounded-full bg-qpms-50 text-qpms-700">
+        <Icon className="h-4 w-4" />
+      </span>
+      <div className="min-w-0">
+        <p className="truncate text-xs font-semibold text-slate-600">{label}</p>
+        <p className="mt-1 truncate text-base font-black text-slate-950">{value || "--"}</p>
+        {hint ? <p className="truncate text-xs font-semibold text-slate-500">{hint}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function todayAttendanceFromRows(rows = []) {
+  const sorted = rows
+    .slice()
+    .sort((a, b) => new Date(b.login_time || b.created_at || 0) - new Date(a.login_time || a.created_at || 0));
+  return sorted[0] || null;
+}
+
+function activeSiteVisitFromRows(rows = []) {
+  return rows
+    .slice()
+    .sort((a, b) => new Date(b.check_in_time || b.created_at || 0) - new Date(a.check_in_time || a.created_at || 0))
+    .find(isSiteVisitOpen) || null;
+}
+
+function supportActionAvailability({ attendanceRows = [], visitRows = [] }) {
+  const attendance = todayAttendanceFromRows(attendanceRows);
+  const activeVisit = activeSiteVisitFromRows(visitRows);
+  const hasAttendance = Boolean(attendance);
+  const attendanceActive = isAttendanceActive(attendance);
+  const attendanceEnded = isAttendanceEnded(attendance);
+
+  return {
+    attendance,
+    activeVisit,
+    canCheckOut: Boolean(activeVisit),
+    canEndDay: attendanceActive && !activeVisit,
+    canStartDay: !hasAttendance,
+    canReopenAttendance: hasAttendance && attendanceEnded,
+  };
+}
+
+function FoSupportActionPanel({
+  officer,
+  context,
+  loading,
+  busy,
+  pendingAction,
+  remarks,
+  message,
+  onRemarksChange,
+  onBeginAction,
+  onCancelAction,
+  onConfirmAction,
+  onDetailedView,
+  onClose,
+  onRecalculateKm,
+  recalculatingKm = false,
+  recalculationResult = null,
+  roadKmEstimate,
+  foSafeKm,
+  siteVisitCount,
+}) {
+  if (!officer) return null;
+  const availability = supportActionAvailability(context || {});
+  const status = officerStatus(officer);
+  const battery = batteryState(officer);
+  const kmMetrics = foSafeKm || officer.foSafeKm || emptyFoSafeKmMetrics(0);
+  const routeKm = Number(officer.eligibleKm ?? officer.routeKmToday ?? 0);
+  const actualTravelKm = Number(
+    officer.actualTravelKm ?? kmMetrics.actualTravelKm ?? officer.actualKm ?? 0,
+  );
+  const filteredGpsKm = Number(officer.filteredGpsKm ?? kmMetrics.filteredGpsKm ?? 0);
+  const routeVsActualDelta = routeKm - actualTravelKm;
+  const claimKm = routeKm;
+  const hasClaimKm = Number.isFinite(claimKm);
+  const reviewFlags = officer.reviewFlags || [];
+  const roadKmLabel = roadKmEstimate
+    ? `${Number(roadKmEstimate.roadKm || 0).toFixed(1)} km reference only${
+        roadKmEstimate.usedFallback ? " fallback" : ""
+      }`
+    : "--";
+  const claimKmLabel = hasClaimKm ? `${claimKm.toFixed(1)} km` : "--";
+  const claimPetrol = Number(officer.petrolAmount ?? claimKm * RATE_PER_KM);
+  const isLive = status.label === "Online";
+  const isRecent = status.label === "Recently Active" || status.label === "Low Battery";
+  const statusText = isLive ? "Live" : isRecent ? "Recent" : "Offline";
+  const statusClass = isLive
+    ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
+    : isRecent
+      ? "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200"
+      : "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-200";
+  const accuracyLabel =
+    officer.accuracy === null || officer.accuracy === undefined
+      ? "--"
+      : `${Number(officer.accuracy).toFixed(1)}m`;
+  const coordinateLabel = hasFiniteCoordinates(officer.coordinates)
+    ? `${Number(officer.coordinates[0]).toFixed(5)}, ${Number(officer.coordinates[1]).toFixed(5)}`
+    : "No Location";
+  const activeSiteLabel = availability.activeVisit ? visitTitle(availability.activeVisit) : "None";
+  const actions = [
+    {
+      id: "start_day",
+      label: "Start Day",
+      enabled: availability.canStartDay,
+      hint: "Create today's attendance",
+    },
+    {
+      id: "check_out",
+      label: "Check Out",
+      enabled: availability.canCheckOut,
+      hint: availability.activeVisit ? visitTitle(availability.activeVisit) : "No active site visit",
+    },
+    {
+      id: "end_day",
+      label: "End Day",
+      enabled: availability.canEndDay,
+      hint: availability.attendance ? formatTime(availability.attendance.login_time) : "No active attendance",
+    },
+    {
+      id: "recalculate",
+      label: "Recalculate",
+      enabled: Boolean(onRecalculateKm),
+      hint: "Refresh payable KM",
+    },
+    {
+      id: "detailed_view",
+      label: "Detailed View",
+      enabled: Boolean(onDetailedView),
+      hint: "Open FO drill-down",
+    },
+  ];
+
+  const pendingLabel = actions.find((action) => action.id === pendingAction)?.label;
+
+  return (
+    <div className="border-b border-slate-100 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-3 py-2.5 dark:border-slate-800">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="truncate text-sm font-black text-slate-950 dark:text-white">{officer.name}</h2>
+              <span className={`shrink-0 rounded-md px-2 py-0.5 text-[10px] font-black ${statusClass}`}>
+                {statusText}
+              </span>
+            </div>
+            <p className="mt-0.5 truncate text-[11px] font-bold text-slate-500">
+              {officer.employeeCode || officer.foId || "--"}
+            </p>
+          </div>
+          {onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-slate-200 text-xs font-black text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900"
+              aria-label="Close selected officer"
+            >
+              x
+            </button>
+          ) : null}
+        </div>
+
+        <div className="space-y-2.5 px-3 py-3">
+          {loading ? (
+            <div className="rounded-lg border border-dashed border-slate-200 p-4 text-center text-xs font-semibold text-slate-500 dark:border-slate-800">
+              Loading today's FO status...
+            </div>
+          ) : (
+            <>
+              <div className="grid gap-1 text-[11px] font-semibold text-slate-500">
+                <div className="flex items-center justify-between gap-2">
+                  <span>Battery <strong className={battery.tone}>{battery.label}</strong> | Accuracy <strong className="text-slate-800 dark:text-slate-100">{accuracyLabel}</strong></span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span>Last Seen</span>
+                  <strong className="text-slate-800 dark:text-slate-100">{officer.lastSeen || "--"}</strong>
+                </div>
+                <div className="truncate text-slate-600 dark:text-slate-300">
+                  Lat/Lng: <strong className="text-slate-800 dark:text-slate-100">{coordinateLabel}</strong>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-1.5 text-center text-[11px] font-semibold text-slate-500">
+                <div className="rounded-lg bg-slate-50 px-2 py-1.5 dark:bg-slate-900">
+                  KM <strong className="text-slate-950 dark:text-white">{routeKm.toFixed(1)}</strong>
+                </div>
+                <div className="rounded-lg bg-slate-50 px-2 py-1.5 dark:bg-slate-900">
+                  Petrol <strong className="text-slate-950 dark:text-white">{formatInr(claimPetrol)}</strong>
+                </div>
+                <div className="rounded-lg bg-slate-50 px-2 py-1.5 dark:bg-slate-900">
+                  Sites <strong className="text-slate-950 dark:text-white">{siteVisitCount ?? officer.visits?.length ?? 0}</strong>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-1.5 text-[11px] font-semibold text-slate-500">
+                <div className="truncate rounded-lg bg-slate-50 px-2 py-1.5 dark:bg-slate-900">
+                  Status <strong className="text-slate-950 dark:text-white">{status.label || "--"}</strong>
+                </div>
+                <div className="truncate rounded-lg bg-slate-50 px-2 py-1.5 dark:bg-slate-900" title={activeSiteLabel}>
+                  Active Site <strong className="text-slate-950 dark:text-white">{activeSiteLabel}</strong>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-1.5">
+                {actions.map((action) => (
+                  <button
+                    key={action.id}
+                    type="button"
+                    onClick={() => {
+                      if (action.id === "recalculate") {
+                        onRecalculateKm?.();
+                        return;
+                      }
+                      if (action.id === "detailed_view") {
+                        onDetailedView?.();
+                        return;
+                      }
+                      onBeginAction(action.id);
+                    }}
+                    disabled={busy || recalculatingKm || !action.enabled}
+                    className="focus-ring rounded-lg border border-slate-200 px-2 py-1.5 text-center text-[11px] font-black text-slate-700 hover:border-qpms-300 hover:bg-qpms-50 disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-800 dark:text-slate-200 dark:hover:bg-slate-900"
+                    title={action.hint}
+                  >
+                    {action.id === "recalculate" && recalculatingKm ? "Recalc..." : action.label}
+                  </button>
+                ))}
+              </div>
+
+              {pendingAction ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-xs font-black text-amber-900">Confirm {pendingLabel}</p>
+                  <textarea
+                    value={remarks}
+                    onChange={(event) => onRemarksChange(event.target.value)}
+                    rows={2}
+                    className="mt-2 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500"
+                    placeholder="Reason / remarks"
+                  />
+                  <div className="mt-2 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={onCancelAction}
+                      disabled={busy}
+                      className="focus-ring rounded-lg border border-amber-200 px-3 py-2 text-xs font-black text-amber-800 hover:bg-white disabled:opacity-60"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onConfirmAction}
+                      disabled={busy || !remarks.trim()}
+                      className="focus-ring rounded-lg bg-amber-600 px-3 py-2 text-xs font-black text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {busy ? "Updating..." : "Confirm Update"}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {message ? (
+                <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-semibold text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+                  {message}
+                </p>
+              ) : null}
+
+              {recalculationResult?.ok === true ? (
+                <p className="text-[11px] font-semibold text-slate-500">
+                  KM recalculation completed. Refreshing payable values.
+                </p>
+              ) : null}
+
+              <details className="rounded-lg border border-slate-100 bg-white/60 p-2 text-[11px] font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-900/50">
+                <summary className="cursor-pointer select-none text-xs font-black text-slate-700 dark:text-slate-200">
+                  GPS Audit
+                </summary>
+                <div className="mt-2 grid grid-cols-2 gap-1.5">
+                  <span>Raw GPS KM</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {Number(kmMetrics.rawGpsKm || 0).toFixed(1)} km
+                  </strong>
+                  <span>Filtered GPS KM</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {filteredGpsKm.toFixed(1)} km
+                  </strong>
+                  <span>GPS Audit KM</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {actualTravelKm.toFixed(1)} km
+                  </strong>
+                  <span>Payable vs GPS Delta</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {routeVsActualDelta.toFixed(1)} km
+                  </strong>
+                  <span>Payable KM</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {claimKmLabel}
+                  </strong>
+                  <span>Petrol Amount</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {formatInr(claimPetrol)}
+                  </strong>
+                  <span>GPS Audit Confidence</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {["HIGH", "MEDIUM", "LOW"].includes(String(kmMetrics.kmConfidence || "").toUpperCase())
+                      ? kmMetrics.kmConfidence
+                      : "Needs Review"}
+                  </strong>
+                  <span>Review Required</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {reviewFlags.length || kmMetrics.reviewRequired ? "Yes" : "No"}
+                  </strong>
+                  <span>Review Flags</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {reviewFlags.length ? reviewFlags.join(", ") : "--"}
+                  </strong>
+                  <span>GPS Logs Count</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {Number(kmMetrics.gpsLogsCount || 0)}
+                  </strong>
+                  <span>Max GPS Gap</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {formatDurationSeconds(kmMetrics.maxGapSeconds)}
+                  </strong>
+                  <span>Adjustment Applied</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {kmMetrics.adjustmentApplied || "--"}
+                  </strong>
+                  <span>Road Estimate</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {roadKmLabel}
+                  </strong>
+                  <span>Road KM Source</span>
+                  <strong className="text-right text-slate-800 dark:text-slate-100">
+                    {roadKmEstimate
+                      ? `${roadKmEstimate.status === "google" ? "Google" : roadKmEstimate.status} / ${roadKmEstimate.anchorCount || 0} anchors`
+                      : "--"}
+                  </strong>
+                </div>
+              </details>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function useAnimatedOfficerMarkers(officers, selectedOfficerId, selectedRouteLogs) {
   const [animatedMarkers, setAnimatedMarkers] = useState({});
   const targetCoordinatesRef = useRef(new Map());
@@ -2630,9 +4616,20 @@ export default function FOActivities() {
   const [search, setSearch] = useState("");
   const [expandedMap, setExpandedMap] = useState(false);
   const [selectedOfficerId, setSelectedOfficerId] = useState(null);
+  const [mapRouteOfficerId, setMapRouteOfficerId] = useState(null);
+  const [supportOfficerId, setSupportOfficerId] = useState(null);
+  const [supportContext, setSupportContext] = useState({ attendanceRows: [], visitRows: [] });
+  const [supportLoading, setSupportLoading] = useState(false);
+  const [supportBusy, setSupportBusy] = useState(false);
+  const [supportPendingAction, setSupportPendingAction] = useState(null);
+  const [supportRemarks, setSupportRemarks] = useState("");
+  const [supportMessage, setSupportMessage] = useState("");
   const [liveOfficers, setLiveOfficers] = useState([]);
   const [siteVisitRows, setSiteVisitRows] = useState([]);
   const [selectedRouteLogs, setSelectedRouteLogs] = useState([]);
+  const [mainMapRouteLines, setMainMapRouteLines] = useState([]);
+  const [selectedActivitySubmissions, setSelectedActivitySubmissions] = useState([]);
+  const [selectedActivityUploads, setSelectedActivityUploads] = useState([]);
   const [showSiteMarkers, setShowSiteMarkers] = useState(true);
   const [showRouteTrail, setShowRouteTrail] = useState(true);
   const [mapTheme, setMapTheme] = useState("light");
@@ -2648,7 +4645,10 @@ export default function FOActivities() {
   const [customToDate, setCustomToDate] = useState(
     toDateInputValue(new Date()),
   );
+  const [detailDraftFromDate, setDetailDraftFromDate] = useState(customFromDate);
+  const [detailDraftToDate, setDetailDraftToDate] = useState(customToDate);
   const profileRowsRef = useRef([]);
+  const mainRouteFitKeyRef = useRef(null);
 
   const selectedRange = useMemo(
     () => dateRangeForPreset(datePreset, customFromDate, customToDate),
@@ -2678,7 +4678,7 @@ export default function FOActivities() {
             supabase
               .from("profiles")
               .select(
-                "full_name, display_name, employee_code, username, role, state, status",
+                "full_name, display_name, employee_code, username, mobile, role, state, status",
               )
               .or("role.ilike.FO,role.ilike.Field Officer")
               .limit(1000),
@@ -2873,6 +4873,15 @@ export default function FOActivities() {
   const selectedOfficer =
     filteredOfficers.find((officer) => officer.id === selectedOfficerId) ||
     null;
+  const mapRouteOfficer =
+    filteredOfficers.find((officer) => officer.id === mapRouteOfficerId) ||
+    liveOfficers.find((officer) => officer.id === mapRouteOfficerId) ||
+    null;
+  const routeOfficer = selectedOfficer || mapRouteOfficer;
+  const supportOfficer =
+    filteredOfficers.find((officer) => officer.id === supportOfficerId) ||
+    liveOfficers.find((officer) => officer.id === supportOfficerId) ||
+    null;
   const animatedMarkers = useAnimatedOfficerMarkers(
     filteredOfficers,
     selectedOfficerId,
@@ -2897,79 +4906,367 @@ export default function FOActivities() {
   useEffect(() => {
     let cancelled = false;
     async function loadSelectedRouteLogs() {
-      if (!selectedOfficer || !isSupabaseConfigured || !supabase) {
+      if (!routeOfficer || !isSupabaseConfigured || !supabase) {
         setSelectedRouteLogs([]);
         return;
       }
       const fromIso = formatDateForDb(selectedRange.from);
       const toIso = formatDateForDb(selectedRange.to);
-      const selectedFoId = normalizeFoKey(selectedOfficer.foId);
-      const { data, error } = await supabase
-        .from("fo_location_logs")
-        .select("*")
-        .eq("fo_user_id", selectedFoId)
-        .gte("captured_at", fromIso)
-        .lte("captured_at", toIso)
-        .order("captured_at", { ascending: true })
-        .limit(5000);
-      if (cancelled) return;
-      if (error) {
-        console.warn("[myQPMS FO] Selected FO route logs fetch failed.", error);
-        setSelectedRouteLogs([]);
+      const selectedFoKeys = Array.from(
+        new Set(
+          [
+            routeOfficer.foId,
+            routeOfficer.employeeCode,
+            routeOfficer.attendance?.fo_user_id,
+            routeOfficer.attendance?.employee_code,
+          ]
+            .map(normalizeFoKey)
+            .filter(Boolean),
+        ),
+      );
+      const fetchedRows = [];
+      const idColumns = ["fo_user_id", "employee_code", "profile_id"];
+      const timeColumns = ["captured_at", "recorded_at", "created_at", "logged_at"];
+
+      try {
+        for (const idValue of selectedFoKeys) {
+          for (const idColumn of idColumns) {
+            for (const timeColumn of timeColumns) {
+              const rows = await fetchLocationLogsByColumn({
+                idColumn,
+                idValue,
+                timeColumn,
+                fromIso,
+                toIso,
+              });
+              fetchedRows.push(...rows);
+            }
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("[myQPMS FO] Selected FO route logs fetch failed.", error);
+          setSelectedRouteLogs([]);
+        }
         return;
       }
-      let fallbackRows = [];
-      const { data: employeeCodeData, error: employeeCodeError } =
-        await supabase
-          .from("fo_location_logs")
-          .select("*")
-          .eq("employee_code", selectedFoId)
-          .gte("captured_at", fromIso)
-          .lte("captured_at", toIso)
-          .order("captured_at", { ascending: true })
-          .limit(5000);
       if (cancelled) return;
-      if (employeeCodeError) {
-        const message = String(employeeCodeError.message || "").toLowerCase();
-        const missingEmployeeCodeColumn =
-          employeeCodeError.code === "42703" ||
-          employeeCodeError.code === "PGRST204" ||
-          message.includes("employee_code");
-        if (!missingEmployeeCodeColumn) {
-          console.warn(
-            "[myQPMS FO] Selected FO employee_code route log fallback failed.",
-            employeeCodeError,
-          );
-        }
-      } else {
-        fallbackRows = employeeCodeData || [];
-      }
       const routeRowsById = new Map();
-      [...(data || []), ...fallbackRows].forEach((row, index) => {
+      fetchedRows.forEach((row, index) => {
         routeRowsById.set(
           row.id ||
-            `${row.captured_at || row.logged_at || index}-${row.latitude}-${row.longitude}`,
+            `${row.captured_at || row.recorded_at || row.logged_at || row.created_at || index}-${row.latitude}-${row.longitude}`,
           row,
         );
       });
-      setSelectedRouteLogs(
-        Array.from(routeRowsById.values()).sort(
-          (a, b) =>
-            new Date(a.captured_at || a.logged_at || 0) -
-            new Date(b.captured_at || b.logged_at || 0),
-        ),
+      const selectedLogs = Array.from(routeRowsById.values()).sort(
+        (a, b) => routePointTime(a) - routePointTime(b),
       );
+      console.debug("FO_DRILLDOWN_GPS_LOGS_FETCHED", {
+        officer_name: routeOfficer.name,
+        officer_id: routeOfficer.foId || routeOfficer.employeeCode,
+        date_range: `${selectedRange.fromDate} to ${selectedRange.toDate}`,
+        gps_logs_fetched_count: selectedLogs.length,
+      });
+      setSelectedRouteLogs(selectedLogs);
     }
     loadSelectedRouteLogs();
     return () => {
       cancelled = true;
     };
-  }, [selectedOfficer, selectedRange.from, selectedRange.to]);
+  }, [routeOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSelectedActivityUploads() {
+      if (!selectedOfficer || !isSupabaseConfigured || !supabase) {
+        setSelectedActivitySubmissions([]);
+        setSelectedActivityUploads([]);
+        return;
+      }
+      const selectedFoId = normalizeFoKey(selectedOfficer.foId || selectedOfficer.employeeCode);
+      if (!selectedFoId) {
+        setSelectedActivitySubmissions([]);
+        setSelectedActivityUploads([]);
+        return;
+      }
+      const fromIso = formatDateForDb(selectedRange.from);
+      const toIso = formatDateForDb(selectedRange.to);
+      const attendanceId =
+        selectedRange.fromDate === selectedRange.toDate && selectedOfficer.attendance?.id
+          ? String(selectedOfficer.attendance.id)
+          : null;
+      const siteVisitIds = new Set(
+        (selectedOfficer.visits || []).map((visit) => String(visit.id || "")).filter(Boolean),
+      );
+
+      try {
+        const [submissionsRes, uploadsRes] = await Promise.all([
+          supabase
+            .from("fo_activity_submissions")
+            .select("*")
+            .or(`fo_user_id.eq.${selectedFoId},employee_code.eq.${selectedFoId}`)
+            .gte("submitted_at", fromIso)
+            .lte("submitted_at", toIso)
+            .order("submitted_at", { ascending: false })
+            .limit(1000),
+          supabase
+            .from("fo_activity_uploads")
+            .select("*")
+            .or(`fo_user_id.eq.${selectedFoId},employee_code.eq.${selectedFoId}`)
+            .gte("uploaded_at", fromIso)
+            .lte("uploaded_at", toIso)
+            .order("uploaded_at", { ascending: false })
+            .limit(1000),
+        ]);
+        if (submissionsRes.error) throw submissionsRes.error;
+        if (uploadsRes.error) throw uploadsRes.error;
+        if (cancelled) return;
+
+        const submissions = (submissionsRes.data || []).filter((submission) =>
+          uploadMatchesSelectedContext(submission, { attendanceId, siteVisitIds }),
+        );
+        const submissionsById = new Map(submissions.map((submission) => [String(submission.id), submission]));
+        const uploads = (uploadsRes.data || []).filter((upload) => {
+          if (upload.submission_id && submissionsById.has(String(upload.submission_id))) return true;
+          return uploadMatchesSelectedContext(upload, { attendanceId, siteVisitIds });
+        });
+        const hydratedUploads = await Promise.all(
+          uploads.map(async (upload) => {
+            const submission = upload.submission_id ? submissionsById.get(String(upload.submission_id)) : null;
+            const activityType = upload.activity_type || submission?.activity_type || upload.upload_role;
+            return {
+              ...upload,
+              submission,
+              activityGroup: normalizeActivityGroup(activityType, upload.upload_role),
+              displayUrl: await signedActivityUploadUrl(upload),
+            };
+          }),
+        );
+        if (cancelled) return;
+        setSelectedActivitySubmissions(submissions);
+        setSelectedActivityUploads(hydratedUploads);
+      } catch (error) {
+        console.warn("[myQPMS FO] Activity uploads fetch failed.", error);
+        if (!cancelled) {
+          setSelectedActivitySubmissions([]);
+          setSelectedActivityUploads([]);
+        }
+      }
+    }
+    loadSelectedActivityUploads();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate]);
+
+  async function loadSupportContext(officer) {
+    if (!officer || !isSupabaseConfigured || !supabase) {
+      setSupportContext({ attendanceRows: [], visitRows: [] });
+      return;
+    }
+    const foId = normalizeFoKey(officer.foId || officer.employeeCode);
+    if (!foId) {
+      setSupportContext({ attendanceRows: [], visitRows: [] });
+      return;
+    }
+    setSupportLoading(true);
+    setSupportMessage("");
+    try {
+      const today = toDateInputValue(new Date());
+      const [attendanceRes, visitsRes] = await Promise.all([
+        supabase
+          .from("fo_attendance")
+          .select("*")
+          .eq("fo_user_id", foId)
+          .eq("attendance_date", today)
+          .order("login_time", { ascending: false })
+          .limit(20),
+        supabase
+          .from("fo_site_visits")
+          .select("*")
+          .or(`fo_user_id.eq.${foId},employee_code.eq.${foId}`)
+          .order("check_in_time", { ascending: false })
+          .limit(100),
+      ]);
+      if (attendanceRes.error) throw attendanceRes.error;
+      if (visitsRes.error) throw visitsRes.error;
+      const attendanceRows = attendanceRes.data || [];
+      const attendanceIds = new Set(attendanceRows.map((row) => String(row.id || "")).filter(Boolean));
+      const todayStart = startOfIndiaDayFromInput(today).getTime();
+      const todayEnd = endOfIndiaDayFromInput(today).getTime();
+      const visitRows = (visitsRes.data || []).filter((visit) => {
+        if (isSiteVisitOpen(visit)) return true;
+        if (visit.attendance_id && attendanceIds.has(String(visit.attendance_id))) return true;
+        const checkInMs = new Date(visit.check_in_time || 0).getTime();
+        return checkInMs >= todayStart && checkInMs <= todayEnd;
+      });
+      setSupportContext({ attendanceRows, visitRows });
+    } catch (error) {
+      console.warn("[myQPMS FO] Support action context failed.", error);
+      setSupportContext({ attendanceRows: [], visitRows: [] });
+      setSupportMessage(error?.message || "Unable to load today's support state.");
+    } finally {
+      setSupportLoading(false);
+    }
+  }
+
+  function openSupportActions(officerId) {
+    const officer =
+      filteredOfficers.find((item) => item.id === officerId) ||
+      liveOfficers.find((item) => item.id === officerId);
+    if (!officer) return;
+    setMapRouteOfficerId(officerId);
+    if (hasFiniteCoordinates(officer.coordinates)) {
+      setMapCommand({
+        type: "current-location",
+        coordinates: officer.coordinates,
+        at: Date.now(),
+      });
+    }
+    setSupportOfficerId(officerId);
+    setSupportPendingAction(null);
+    setSupportRemarks("");
+    setSupportMessage("");
+    setSupportContext({
+      attendanceRows: officer.attendance ? [officer.attendance] : [],
+      visitRows: officer.visits || [],
+    });
+    loadSupportContext(officer);
+  }
+
+  function closeSupportActions() {
+    if (supportBusy) return;
+    setSupportOfficerId(null);
+    setSupportPendingAction(null);
+    setSupportRemarks("");
+    setSupportMessage("");
+  }
+
+  function supportMetadata(row, action, remarks) {
+    const metadata =
+      row?.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+        ? row.metadata
+        : {};
+    return {
+      ...metadata,
+      admin_support_last_action: action,
+      admin_support_last_remarks: remarks.trim(),
+      admin_support_last_at: new Date().toISOString(),
+      admin_support_source: "fo_operations_dashboard",
+    };
+  }
+
+  async function confirmSupportAction() {
+    if (!supportOfficer || !supportPendingAction || !supportRemarks.trim()) return;
+    if (!isSupabaseConfigured || !supabase) {
+      setSupportMessage("Supabase is not configured.");
+      return;
+    }
+    const availability = supportActionAvailability(supportContext);
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const today = toDateInputValue(now);
+    const foId = normalizeFoKey(supportOfficer.foId || supportOfficer.employeeCode);
+    const coordinates = normalizeCoordinates(supportOfficer.coordinates);
+    setSupportBusy(true);
+    setSupportMessage("");
+    try {
+      if (!foId) throw new Error("FO employee ID is missing.");
+      if (supportPendingAction === "check_out") {
+        const visit = availability.activeVisit;
+        if (!visit?.id) throw new Error("No active site visit found for Check Out.");
+        await api.post(`/api/fo/site-visits/${visit.id}/force-checkout`, {
+          remarks: supportRemarks.trim(),
+          checkout_latitude: coordinates?.[0] ?? null,
+          checkout_longitude: coordinates?.[1] ?? null,
+        });
+        setSupportMessage("Active site visit checked out.");
+      }
+
+      if (supportPendingAction === "end_day") {
+        const attendance = availability.attendance;
+        if (!attendance?.id || !isAttendanceActive(attendance)) {
+          throw new Error("No active attendance found for End Day.");
+        }
+        const payload = {
+          logout_time: nowIso,
+          end_latitude: coordinates?.[0] ?? numberOrNull(attendance.end_latitude ?? attendance.start_latitude),
+          end_longitude: coordinates?.[1] ?? numberOrNull(attendance.end_longitude ?? attendance.start_longitude),
+          status: "Completed",
+          metadata: supportMetadata(attendance, "end_day", supportRemarks),
+          updated_at: nowIso,
+        };
+        const { error } = await supabase.from("fo_attendance").update(payload).eq("id", attendance.id);
+        if (error) throw error;
+        setSupportMessage("Attendance day ended.");
+      }
+
+      if (supportPendingAction === "start_day") {
+        if (availability.attendance) throw new Error("Today's attendance already exists.");
+        const payload = {
+          fo_user_id: foId,
+          username: supportOfficer.employeeCode || foId,
+          display_name: supportOfficer.name,
+          attendance_date: today,
+          login_time: nowIso,
+          start_latitude: coordinates?.[0] ?? null,
+          start_longitude: coordinates?.[1] ?? null,
+          status: "Active",
+          metadata: supportMetadata(null, "start_day", supportRemarks),
+        };
+        const { error } = await supabase.from("fo_attendance").insert(payload);
+        if (error) throw error;
+        setSupportMessage("Attendance day started.");
+      }
+
+      if (supportPendingAction === "reopen_attendance") {
+        const attendance = availability.attendance;
+        if (!attendance?.id || !isAttendanceEnded(attendance)) {
+          throw new Error("No ended attendance found to reopen.");
+        }
+        const payload = {
+          logout_time: null,
+          status: "Active",
+          metadata: supportMetadata(attendance, "reopen_attendance", supportRemarks),
+          updated_at: nowIso,
+        };
+        const { error } = await supabase.from("fo_attendance").update(payload).eq("id", attendance.id);
+        if (error) throw error;
+        setSupportMessage("Attendance reopened.");
+      }
+
+      setSupportPendingAction(null);
+      setSupportRemarks("");
+      setRefreshToken((value) => value + 1);
+      await loadSupportContext(supportOfficer);
+    } catch (error) {
+      console.warn("[myQPMS FO] Support action failed.", error);
+      setSupportMessage(error?.message || "Support action failed.");
+    } finally {
+      setSupportBusy(false);
+    }
+  }
 
   function focusOfficer(officerId) {
+    setDetailDraftFromDate(selectedRange.fromDate);
+    setDetailDraftToDate(selectedRange.toDate);
     setSelectedOfficerId(officerId);
     setKmRecalcResult(null);
     setMapCommand({ type: "recenter", at: Date.now() });
+  }
+
+  function openSupportDetailedView() {
+    if (!supportOfficer) return;
+    const officerId = supportOfficer.id;
+    closeSupportActions();
+    focusOfficer(officerId);
+  }
+
+  function applyDetailDateRange() {
+    setCustomFromDate(detailDraftFromDate);
+    setCustomToDate(detailDraftToDate);
+    setDatePreset("custom");
   }
 
   async function recalculateSelectedOfficerKm() {
@@ -3016,7 +5313,7 @@ export default function FOActivities() {
         const lat = Number(officer.coordinates[0]);
         const lng = Number(officer.coordinates[1]);
         const markerOfficer =
-          selectedOfficer?.id === officer.id
+          routeOfficer?.id === officer.id
             ? { ...officer, isSelected: true }
             : officer;
         const state = filteredStates.find(
@@ -3052,16 +5349,16 @@ export default function FOActivities() {
         };
       })
       .sort((a, b) => {
-        if (a.officers.some((officer) => officer.id === selectedOfficer?.id))
+        if (a.officers.some((officer) => officer.id === routeOfficer?.id))
           return -1;
-        if (b.officers.some((officer) => officer.id === selectedOfficer?.id))
+        if (b.officers.some((officer) => officer.id === routeOfficer?.id))
           return 1;
         return b.activeOfficers - a.activeOfficers;
       });
     console.debug("FO_MARKERS_WITH_VALID_COORDS", builtPins.length);
     console.debug("FO_MARKERS_BUILT", builtPins.length);
     return builtPins;
-  }, [filteredStates, selectedOfficer, visualFilteredOfficers]);
+  }, [filteredStates, routeOfficer, visualFilteredOfficers]);
 
   const sitePins = useMemo(() => {
     const officersByFoId = new Map();
@@ -3071,8 +5368,8 @@ export default function FOActivities() {
         if (key) officersByFoId.set(key, officer);
       });
     });
-    const selectedFoId = selectedOfficer
-      ? normalizeFoKey(selectedOfficer.foId || selectedOfficer.employeeCode)
+    const selectedFoId = routeOfficer
+      ? normalizeFoKey(routeOfficer.foId || routeOfficer.employeeCode)
       : null;
     const pinsForVisits = siteVisitRows
       .filter((visit) => {
@@ -3083,25 +5380,52 @@ export default function FOActivities() {
       .filter(Boolean);
     console.debug("FO_SITE_MARKERS_BUILT", pinsForVisits.length);
     return pinsForVisits;
-  }, [filteredOfficers, selectedOfficer, siteVisitRows]);
+  }, [filteredOfficers, routeOfficer, siteVisitRows]);
 
-  const routeLines = useMemo(() => {
-    if (!selectedOfficer) return [];
-    return routeSegmentsFromLogs(selectedRouteLogs, selectedOfficer.visits).map((positions, index) => ({
-      id: `route-${selectedOfficer.id}-${index}`,
-      positions,
-      color: foMarkerColor(selectedOfficer),
-    }));
-  }, [selectedOfficer, selectedRouteLogs]);
+  useEffect(() => {
+    let cancelled = false;
+    async function rebuildMainRouteLines() {
+      if (!routeOfficer) {
+        setMainMapRouteLines([]);
+        return;
+      }
+      const lines = await buildMainMapRouteLines({
+        logs: selectedRouteLogs,
+        visits: routeOfficer.visits || [],
+        color: foMarkerColor(routeOfficer),
+        idPrefix: `route-${routeOfficer.id}`,
+      });
+      if (!cancelled) setMainMapRouteLines(lines);
+    }
+    rebuildMainRouteLines();
+    return () => {
+      cancelled = true;
+    };
+  }, [routeOfficer, selectedRouteLogs]);
+
+  const routeLines = mainMapRouteLines;
+
+  useEffect(() => {
+    if (!mapRouteOfficer || !routeLines.length) return;
+    const routeKey = [
+      mapRouteOfficer.id,
+      selectedRange.fromDate,
+      selectedRange.toDate,
+      selectedRouteLogs.length,
+    ].join("|");
+    if (mainRouteFitKeyRef.current === routeKey) return;
+    mainRouteFitKeyRef.current = routeKey;
+    setMapCommand({ type: "fit-route", at: Date.now() });
+  }, [mapRouteOfficer, routeLines.length, selectedRange.fromDate, selectedRange.toDate, selectedRouteLogs.length]);
 
   const selectedActualTravelMetrics = useMemo(() => {
-    if (!selectedOfficer) return null;
+    if (!routeOfficer) return null;
     return actualTravelKmFromAttendanceOrLogs(
-      selectedOfficer.attendance,
+      routeOfficer.attendance,
       selectedRouteLogs,
-      selectedOfficer.visits || [],
+      routeOfficer.visits || [],
     );
-  }, [selectedOfficer, selectedRouteLogs]);
+  }, [routeOfficer, selectedRouteLogs]);
 
   const totalStates =
     stateFilter === "All States"
@@ -3157,10 +5481,38 @@ export default function FOActivities() {
     ? `${(liveRouteKm / filteredOfficers.length).toFixed(1)} km`
     : "0.0 km";
 
+  if (selectedOfficer) {
+    return (
+      <FieldOfficerDetailsView
+        key={`${selectedOfficer.id}-${selectedRange.fromDate}-${selectedRange.toDate}`}
+        officer={selectedOfficer}
+        routeLogs={selectedRouteLogs}
+        activitySubmissions={selectedActivitySubmissions}
+        activityUploads={selectedActivityUploads}
+        fromDate={selectedRange.from}
+        toDate={selectedRange.to}
+        draftFromDate={detailDraftFromDate}
+        draftToDate={detailDraftToDate}
+        onDraftFromDate={setDetailDraftFromDate}
+        onDraftToDate={setDetailDraftToDate}
+        onApplyDate={applyDetailDateRange}
+        onBack={() => setSelectedOfficerId(null)}
+        onExport={() =>
+          exportFoOperationsExcel({
+            officers: filteredOfficers,
+            selectedOfficer,
+            from: selectedRange.from,
+            to: selectedRange.to,
+          })
+        }
+      />
+    );
+  }
+
   return (
     <div className="space-y-3">
       <PageHeader
-        title="FO Operations Command Center"
+        title="Operations Command Center"
         actions={
           <span className="command-pill">
             <RadioTower className="h-3.5 w-3.5 text-emerald-500" /> Live
@@ -3271,14 +5623,14 @@ export default function FOActivities() {
           tone={offlineOfficers ? "red" : "slate"}
         />
         <FleetKpi
-          label="Total Route KM Today"
+          label="Payable KM Today"
           value={distanceTravelled}
           icon={Route}
           tone="green"
         />
         <FleetKpi
           label="Total Petrol Amount Today"
-          value={`₹${totalPetrolAmount.toFixed(0)}`}
+          value={formatInr(totalPetrolAmount)}
           icon={CircleGauge}
           tone="amber"
         />
@@ -3296,10 +5648,10 @@ export default function FOActivities() {
               showRoutes={showRouteTrail}
               mapTheme={mapTheme}
               command={mapCommand}
-              onSelectOfficer={focusOfficer}
+              onSelectOfficer={openSupportActions}
               onCloseSelection={() => setSelectedOfficerId(null)}
             />
-            {selectedOfficer && !routeLines.length ? (
+            {routeOfficer && !routeLines.length ? (
               <div className="absolute left-5 top-5 z-[540] rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-semibold text-slate-600 shadow-xl backdrop-blur">
                 No route data available for selected date.
               </div>
@@ -3307,7 +5659,7 @@ export default function FOActivities() {
 
             <button
               type="button"
-              onClick={() => setMapCommand({ type: "fit", at: Date.now() })}
+              onClick={() => setMapCommand({ type: "fit-all", at: Date.now() })}
               className="focus-ring absolute left-5 top-[45%] z-[520] inline-flex items-center gap-2 rounded-lg border border-white/70 bg-white/95 px-4 py-3 text-xs font-black text-slate-700 shadow-xl backdrop-blur hover:text-qpms-700"
             >
               <Maximize2 className="h-4 w-4" /> Fit All
@@ -3329,7 +5681,11 @@ export default function FOActivities() {
               <button
                 type="button"
                 onClick={() =>
-                  setMapCommand({ type: "recenter", at: Date.now() })
+                  setMapCommand({
+                    type: "current-location",
+                    coordinates: routeOfficer?.coordinates,
+                    at: Date.now(),
+                  })
                 }
                 className="grid h-12 w-12 place-items-center text-slate-700"
               >
@@ -3407,17 +5763,28 @@ export default function FOActivities() {
                 <>
                   <div className="space-y-2">
                     <ControlButton
-                      icon={LocateFixed}
-                      label="Recenter on Selected FO"
+                      icon={Route}
+                      label="Fit Route"
                       onClick={() =>
-                        setMapCommand({ type: "recenter", at: Date.now() })
+                        setMapCommand({ type: "fit-route", at: Date.now() })
+                      }
+                    />
+                    <ControlButton
+                      icon={LocateFixed}
+                      label="Current Location"
+                      onClick={() =>
+                        setMapCommand({
+                          type: "current-location",
+                          coordinates: routeOfficer?.coordinates,
+                          at: Date.now(),
+                        })
                       }
                     />
                     <ControlButton
                       icon={Maximize2}
-                      label="Fit All Active Officers"
+                      label="Fit All"
                       onClick={() =>
-                        setMapCommand({ type: "fit", at: Date.now() })
+                        setMapCommand({ type: "fit-all", at: Date.now() })
                       }
                     />
                     <button
@@ -3502,7 +5869,7 @@ export default function FOActivities() {
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4 dark:border-slate-800">
               <div>
                 <h2 className="text-lg font-black text-slate-950 dark:text-white">
-                  Field Officers ({filteredOfficers.length})
+                  Operations ({filteredOfficers.length})
                 </h2>
                 <p className="mt-1 text-xs font-semibold text-slate-500">
                   Operational directory
@@ -3524,22 +5891,43 @@ export default function FOActivities() {
                 className="w-full rounded-lg border border-slate-200 bg-white py-3 pl-10 pr-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400 focus:border-qpms-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
               />
             </label>
-            <SelectedOfficerSummary
-              officer={selectedOfficer}
-              onClose={() => setSelectedOfficerId(null)}
+            <FoSupportActionPanel
+              officer={supportOfficer || routeOfficer}
+              context={supportContext}
+              loading={supportLoading}
+              busy={supportBusy}
+              pendingAction={supportPendingAction}
+              remarks={supportRemarks}
+              message={supportMessage}
+              onRemarksChange={setSupportRemarks}
+              onBeginAction={(action) => {
+                setSupportPendingAction(action);
+                setSupportRemarks("");
+                setSupportMessage("");
+              }}
+              onCancelAction={() => {
+                setSupportPendingAction(null);
+                setSupportRemarks("");
+              }}
+              onConfirmAction={confirmSupportAction}
+              onDetailedView={openSupportDetailedView}
+              onClose={() => {
+                setMapRouteOfficerId(null);
+                closeSupportActions();
+              }}
               onRecalculateKm={recalculateSelectedOfficerKm}
               recalculatingKm={kmRecalcBusy}
               recalculationResult={kmRecalcResult}
               foSafeKm={selectedActualTravelMetrics}
-              siteVisitCount={selectedOfficer?.visits?.length || 0}
+              siteVisitCount={(supportOfficer || routeOfficer)?.visits?.length || 0}
             />
             <div className="max-h-[584px] overflow-y-auto">
               {visualFilteredOfficers.map((officer) => (
                 <OfficerDirectoryRow
                   key={officer.id}
                   officer={officer}
-                  selected={selectedOfficer?.id === officer.id}
-                  onSelect={() => focusOfficer(officer.id)}
+                  selected={routeOfficer?.id === officer.id}
+                  onSelect={() => openSupportActions(officer.id)}
                 />
               ))}
               {!filteredOfficers.length ? (
@@ -3560,19 +5948,19 @@ export default function FOActivities() {
 
       <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.05)] sm:grid-cols-2 lg:grid-cols-6 xl:grid-cols-9 dark:border-slate-800 dark:bg-slate-900">
         <MetricTile
-          label="Total Route KM Today"
+          label="Payable KM Today"
           value={distanceTravelled}
           icon={Route}
           tone="green"
         />
         <MetricTile
-          label="Actual Travel KM"
+          label="GPS Audit KM"
           value={actualTravelled}
           icon={Navigation2}
           tone="blue"
         />
         <MetricTile
-          label="Route vs Actual"
+          label="Payable vs GPS Delta"
           value={routeVsActual}
           icon={CircleGauge}
           tone={Math.abs(liveRouteKm - liveActualTravelKm) > 2 ? "amber" : "green"}
@@ -3584,7 +5972,7 @@ export default function FOActivities() {
         />
         <MetricTile
           label="Petrol Amount"
-          value={`₹${totalPetrolAmount.toFixed(0)}`}
+          value={formatInr(totalPetrolAmount)}
           icon={CircleGauge}
           tone="amber"
         />
@@ -3640,7 +6028,7 @@ export default function FOActivities() {
                 showRoutes={showRouteTrail}
                 mapTheme={mapTheme}
                 command={mapCommand}
-                onSelectOfficer={focusOfficer}
+                onSelectOfficer={openSupportActions}
                 onCloseSelection={() => setSelectedOfficerId(null)}
               />
             </div>

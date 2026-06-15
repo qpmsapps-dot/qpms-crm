@@ -29,10 +29,16 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 
 const apiDemoUsers = [
+  { id: 'md', name: 'Bharath', email: 'md@qpms.co.in', password: '123456', role: 'MD' },
   { id: 'bd-1', name: 'Ananya Rao', email: 'bd1@qpms.co.in', password: '123456', role: 'BD Executive' },
   { id: 'commercial-1', name: 'Commercial Team 1', email: 'commercial1@qpms.co.in', password: '123456', role: 'Commercial Reviewer' },
   { id: 'finance-1', name: 'Finance Team 1', email: 'finance1@qpms.co.in', password: '123456', role: 'Finance Reviewer' },
+  { id: 'finance-gm', name: 'Finance GM', email: 'financegm@qpms.co.in', password: '123456', role: 'Finance GM' },
+  { id: 'cfo', name: 'CFO', email: 'cfo@qpms.co.in', password: '123456', role: 'CFO' },
   { id: 'hr-1', name: 'HR Reviewer 1', email: 'hr1@qpms.co.in', password: '123456', role: 'HR Reviewer' },
+  { id: 'coo', name: 'COO', email: 'coo@qpms.co.in', password: '123456', role: 'COO' },
+  { id: 'gm', name: 'General Manager', email: 'gm@qpms.co.in', password: '123456', role: 'GM / Top Management' },
+  { id: 'existing-operations', name: 'Existing Business Operations', email: 'existingoperations@qpms.co.in', password: '123456', role: 'Existing Business Operations Team' },
   { id: 'admin', name: 'Admin', email: 'admin@qpms.co.in', password: '123456', role: 'Admin' },
 ];
 
@@ -43,7 +49,17 @@ function normalizeSupabaseUrl(url) {
 
 const supabaseUrl = normalizeSupabaseUrl(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey, {
+  realtime: {
+    enabled: false,
+  },
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+  },
+}) : null;
+const serviceRoleSupabase = supabaseUrl && supabaseServiceRoleKey ? createClient(supabaseUrl, supabaseServiceRoleKey, {
   realtime: {
     enabled: false,
   },
@@ -123,6 +139,15 @@ function requireSupabase() {
     throw error;
   }
   return supabase;
+}
+
+function requireServiceRoleSupabase() {
+  if (!serviceRoleSupabase) {
+    const error = new Error('SUPABASE_SERVICE_ROLE_KEY is required for backend-only admin FO actions.');
+    error.statusCode = 503;
+    throw error;
+  }
+  return serviceRoleSupabase;
 }
 
 function stageToDepartment(stage) {
@@ -1306,6 +1331,143 @@ app.get('/api/workflows/:siteVisitId/status', requireApiAuth, async (request, re
     response.status(error.statusCode || 500).json({ ok: false, message: error.message });
   }
 });
+
+app.post(
+  '/api/fo/site-visits/:visitId/force-checkout',
+  requireApiAuth,
+  requireRoles(['Admin', 'MD', 'COO', 'GM / Top Management', 'Finance GM', 'CFO', 'Existing Business Operations Team']),
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      const visitId = String(request.params.visitId || '').trim();
+      const remarks = String(request.body?.remarks || '').trim();
+      if (!visitId) {
+        response.status(400).json({ ok: false, message: 'visitId is required.' });
+        return;
+      }
+      if (!remarks) {
+        response.status(400).json({ ok: false, message: 'Admin remarks are required for Force Check Out.' });
+        return;
+      }
+
+      const { data: visit, error: visitError } = await client
+        .from('fo_site_visits')
+        .select('*')
+        .eq('id', visitId)
+        .single();
+      if (visitError) throw visitError;
+      if (!visit) {
+        response.status(404).json({ ok: false, message: 'Site visit not found.' });
+        return;
+      }
+      if (visit.checkout_time || visit.check_out_time) {
+        response.status(409).json({ ok: false, message: 'Site visit is already checked out.' });
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      const checkIn = visit.check_in_time ? new Date(visit.check_in_time) : null;
+      const duration = checkIn && !Number.isNaN(checkIn.getTime())
+        ? Math.max(0, Math.round((Date.now() - checkIn.getTime()) / 60000))
+        : null;
+      const checkoutLatitudeRaw = request.body?.checkout_latitude;
+      const checkoutLongitudeRaw = request.body?.checkout_longitude;
+      const checkoutLatitude = Number(checkoutLatitudeRaw);
+      const checkoutLongitude = Number(checkoutLongitudeRaw);
+      const hasCheckoutCoordinates =
+        checkoutLatitudeRaw !== null &&
+        checkoutLatitudeRaw !== undefined &&
+        checkoutLatitudeRaw !== '' &&
+        checkoutLongitudeRaw !== null &&
+        checkoutLongitudeRaw !== undefined &&
+        checkoutLongitudeRaw !== '' &&
+        Number.isFinite(checkoutLatitude) &&
+        Number.isFinite(checkoutLongitude) &&
+        checkoutLatitude >= -90 &&
+        checkoutLatitude <= 90 &&
+        checkoutLongitude >= -180 &&
+        checkoutLongitude <= 180;
+      const metadata = visit.metadata && typeof visit.metadata === 'object' && !Array.isArray(visit.metadata)
+        ? visit.metadata
+        : {};
+      const updatePayload = {
+        checkout_time: nowIso,
+        check_out_time: nowIso,
+        visit_duration_minutes: duration,
+        status: 'Checked Out',
+        visit_status: 'Admin Force Check Out',
+        checkout_note: remarks,
+        metadata: {
+          ...metadata,
+          admin_support_last_action: 'force_check_out',
+          admin_support_last_remarks: remarks,
+          admin_support_last_at: nowIso,
+          admin_support_source: 'backend_force_checkout',
+          admin_support_actor_id: request.apiUser.id,
+          admin_support_actor_email: request.apiUser.email,
+          admin_support_actor_role: request.apiUser.role,
+          force_checkout: true,
+          force_checkout_coordinate_source: hasCheckoutCoordinates ? 'web_live_status' : 'not_provided',
+        },
+        updated_at: nowIso,
+      };
+      if (hasCheckoutCoordinates) {
+        updatePayload.check_out_latitude = checkoutLatitude;
+        updatePayload.check_out_longitude = checkoutLongitude;
+      }
+
+      const { data: updatedVisit, error: updateError } = await client
+        .from('fo_site_visits')
+        .update(updatePayload)
+        .eq('id', visit.id)
+        .select('*')
+        .single();
+      if (updateError) throw updateError;
+
+      const { data: liveStatus, error: liveStatusFetchError } = await client
+        .from('fo_live_status')
+        .select('metadata')
+        .eq('fo_user_id', visit.fo_user_id)
+        .eq('active_site_visit_id', visit.id)
+        .maybeSingle();
+      if (liveStatusFetchError) throw liveStatusFetchError;
+      const liveMetadata = liveStatus?.metadata && typeof liveStatus.metadata === 'object' && !Array.isArray(liveStatus.metadata)
+        ? liveStatus.metadata
+        : {};
+      const { error: liveStatusError } = await client
+        .from('fo_live_status')
+        .update({
+          active_site_visit_id: null,
+          current_status: 'Active',
+          metadata: {
+            ...liveMetadata,
+            force_checkout_cleared_active_site_visit_id: visit.id,
+            force_checkout_cleared_at: nowIso,
+            force_checkout_cleared_by: request.apiUser.email,
+          },
+          updated_at: nowIso,
+        })
+        .eq('fo_user_id', visit.fo_user_id)
+        .eq('active_site_visit_id', visit.id);
+      if (liveStatusError) throw liveStatusError;
+
+      const recalculationPayload = {
+        attendance_id: visit.attendance_id,
+        fo_user_id: visit.fo_user_id || visit.employee_code,
+        date: visit.check_in_time ? new Date(visit.check_in_time).toISOString().slice(0, 10) : undefined,
+      };
+      const recalculation = await recalculateFoKm(client, recalculationPayload);
+      response.json({
+        ok: true,
+        message: 'Site visit force checked out.',
+        visit: updatedVisit,
+        recalculation,
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ ok: false, message: error.message });
+    }
+  },
+);
 
 app.post('/api/fo/km/recalculate', async (request, response) => {
   try {

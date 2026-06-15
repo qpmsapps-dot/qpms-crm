@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
+import { api, clearBackendToken, readBackendToken, setBackendToken } from '../services/api.js';
 import { isProductionAuthMode, normalizeAppRole } from '../utils/authRoles.js';
 import { AuthContext } from './auth-context.js';
 
@@ -59,6 +60,7 @@ async function fetchProfileForSession(session) {
 
 export function AuthProvider({ children }) {
   const [user, setUserState] = useState(readStoredUser);
+  const [backendToken, setBackendTokenState] = useState(readBackendToken);
   const [authStatus, setAuthStatus] = useState(isProductionAuthMode ? 'loading' : 'ready');
   const [authError, setAuthError] = useState('');
 
@@ -108,6 +110,8 @@ export function AuthProvider({ children }) {
         setAuthError('');
         if (typeof window !== 'undefined') {
           window.localStorage.removeItem(authStorageKey);
+          clearBackendToken();
+          setBackendTokenState('');
         }
         return;
       }
@@ -143,15 +147,33 @@ export function AuthProvider({ children }) {
     window.localStorage.setItem(authStorageKey, JSON.stringify(user));
   }, [user]);
 
-  function setUser(nextUser) {
+  const setUser = useCallback((nextUser) => {
     if (isProductionAuthMode) {
       console.warn('[myQPMS Auth] Mock setUser ignored in production mode');
       return;
     }
     setUserState(nextUser);
-  }
+  }, []);
 
-  async function loginWithPassword(email, password) {
+  const loginBackend = useCallback(async (email, password) => {
+    const response = await api.post('/api/auth/login', {
+      email: email.trim().toLowerCase(),
+      password,
+    });
+    const token = response.data?.token || '';
+    if (!token) throw new Error('Backend login did not return an API token.');
+    setBackendToken(token);
+    setBackendTokenState(token);
+    return response.data;
+  }, []);
+
+  const loginWithAppPassword = useCallback(async (email, password, nextUser) => {
+    await loginBackend(email, password);
+    setUser(nextUser);
+    return nextUser;
+  }, [loginBackend, setUser]);
+
+  const loginWithPassword = useCallback(async (email, password) => {
     if (!isSupabaseConfigured || !supabase) {
       throw new Error('Supabase Auth is not configured.');
     }
@@ -176,32 +198,38 @@ export function AuthProvider({ children }) {
       throw new Error(`User access is ${nextUser?.status || 'not active'}. Please contact Admin.`);
     }
 
+    await loginBackend(email, password);
     setUserState(nextUser);
     setAuthStatus('ready');
     return nextUser;
-  }
+  }, [loginBackend]);
 
-  async function logout() {
+  const logout = useCallback(async () => {
     if (isSupabaseConfigured && supabase) {
       await supabase.auth.signOut();
     }
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(authStorageKey);
     }
+    clearBackendToken();
+    setBackendTokenState('');
     setUserState(null);
-  }
+  }, []);
 
   const value = useMemo(
     () => ({
       user,
       setUser,
+      loginBackend,
+      loginWithAppPassword,
       loginWithPassword,
       logout,
       authStatus,
       authError,
       isProductionAuthMode,
+      backendToken,
     }),
-    [user, authStatus, authError],
+    [user, setUser, loginBackend, loginWithAppPassword, loginWithPassword, logout, authStatus, authError, backendToken],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

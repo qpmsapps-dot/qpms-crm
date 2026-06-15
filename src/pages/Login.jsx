@@ -39,7 +39,7 @@ export default function Login() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isWelcoming, setIsWelcoming] = useState(false);
   const navigate = useNavigate();
-  const { setUser, loginWithPassword, isProductionAuthMode } = useAuth();
+  const { loginWithAppPassword, loginWithPassword, isProductionAuthMode } = useAuth();
   usePageTitle('Sign in');
 
   async function handleSubmit(event) {
@@ -83,13 +83,19 @@ export default function Login() {
     };
 
     window.setTimeout(() => {
-      setUser(nextUser);
-      setIsSubmitting(false);
-      setIsWelcoming(true);
+      loginWithAppPassword(normalizedUsername, password, nextUser)
+        .then(() => {
+          setIsSubmitting(false);
+          setIsWelcoming(true);
 
-      window.setTimeout(() => {
-        navigate('/dashboard', { replace: true });
-      }, 1700);
+          window.setTimeout(() => {
+            navigate('/dashboard', { replace: true });
+          }, 1700);
+        })
+        .catch((backendError) => {
+          setError(backendError.message || 'Unable to start backend admin session.');
+          setIsSubmitting(false);
+        });
     }, 650);
   }
 
