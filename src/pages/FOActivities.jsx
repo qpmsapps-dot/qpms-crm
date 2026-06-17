@@ -82,6 +82,8 @@ const ROUTE_MAP_SEGMENT_MAX_DISTANCE_KM = 2;
 const ROUTE_MAP_SEGMENT_MAX_SPEED_KMPH = 120;
 const MAIN_ROUTE_GAP_DISTANCE_METERS = 500;
 const MAIN_ROUTE_GAP_SECONDS = 120;
+const KM_RECALC_COOLDOWN_MS = 60 * 1000;
+const KM_RECALC_RUNNING_MESSAGE = "Recalculation already running. Please wait.";
 const ROUTE_MAP_SOUTH_INDIA_BOUNDS = {
   minLat: 6,
   maxLat: 20,
@@ -1787,6 +1789,11 @@ function SelectedOfficerSummary({
       {recalculationResult?.ok === true ? (
         <p className="mt-2 text-[11px] font-semibold text-slate-500">
           KM recalculation completed. Refreshing payable values.
+        </p>
+      ) : null}
+      {recalculationResult?.ok === false && recalculationResult?.message ? (
+        <p className="mt-2 text-[11px] font-semibold text-amber-700">
+          {recalculationResult.message}
         </p>
       ) : null}
       <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl border border-slate-100 bg-white/70 p-3 text-[11px] font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-900/60">
@@ -4315,6 +4322,11 @@ function FoSupportActionPanel({
                   KM recalculation completed. Refreshing payable values.
                 </p>
               ) : null}
+              {recalculationResult?.ok === false && recalculationResult?.message ? (
+                <p className="text-[11px] font-semibold text-amber-700">
+                  {recalculationResult.message}
+                </p>
+              ) : null}
 
               <details className="rounded-lg border border-slate-100 bg-white/60 p-2 text-[11px] font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-900/50">
                 <summary className="cursor-pointer select-none text-xs font-black text-slate-700 dark:text-slate-200">
@@ -4610,6 +4622,8 @@ export default function FOActivities() {
   const [detailDraftToDate, setDetailDraftToDate] = useState(customToDate);
   const profileRowsRef = useRef([]);
   const mainRouteFitKeyRef = useRef(null);
+  const kmRecalcCooldownRef = useRef(new Map());
+  const kmRecalcInFlightRef = useRef(new Set());
 
   const selectedRange = useMemo(
     () => dateRangeForPreset(datePreset, customFromDate, customToDate),
@@ -5230,8 +5244,41 @@ export default function FOActivities() {
     setDatePreset("custom");
   }
 
+  function selectedOfficerKmRecalcKey() {
+    if (!selectedOfficer) return null;
+    const foId = normalizeFoKey(
+      selectedOfficer.foId ||
+        selectedOfficer.employeeCode ||
+        selectedOfficer.attendance?.fo_user_id ||
+        selectedOfficer.attendance?.employee_code ||
+        selectedOfficer.id,
+    );
+    return foId ? `${foId}|${selectedRange.fromDate}` : null;
+  }
+
   async function recalculateSelectedOfficerKm() {
     if (!selectedOfficer) return;
+    const recalcKey = selectedOfficerKmRecalcKey();
+    const now = Date.now();
+    const lastStartedAt = recalcKey ? kmRecalcCooldownRef.current.get(recalcKey) : null;
+    if (
+      kmRecalcBusy ||
+      (recalcKey && kmRecalcInFlightRef.current.has(recalcKey)) ||
+      (lastStartedAt && now - lastStartedAt < KM_RECALC_COOLDOWN_MS)
+    ) {
+      setKmRecalcResult({
+        ok: false,
+        message: KM_RECALC_RUNNING_MESSAGE,
+        confidence: "BLOCKED",
+      });
+      return;
+    }
+
+    if (recalcKey) {
+      kmRecalcInFlightRef.current.add(recalcKey);
+      kmRecalcCooldownRef.current.set(recalcKey, now);
+    }
+
     setKmRecalcBusy(true);
     setKmRecalcResult(null);
     try {
@@ -5251,9 +5298,12 @@ export default function FOActivities() {
       setKmRecalcResult(payload);
       setRefreshToken((value) => value + 1);
     } catch (error) {
-      setKmRecalcResult({ message: error.message, confidence: "ERROR" });
+      setKmRecalcResult({ ok: false, message: error.message, confidence: "ERROR" });
       console.warn("[myQPMS FO] KM recalculation failed.", error);
     } finally {
+      if (recalcKey) {
+        kmRecalcInFlightRef.current.delete(recalcKey);
+      }
       setKmRecalcBusy(false);
     }
   }

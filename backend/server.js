@@ -43,6 +43,48 @@ const apiDemoUsers = [
 ];
 
 const apiSessions = new Map();
+const foKmRecalculationLocks = new Set();
+const foKmRecalculateAllLocks = new Set();
+const FO_KM_RECALCULATION_RUNNING_MESSAGE = 'Recalculation already running. Please wait.';
+
+function currentIndiaDateInput() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+function normalizeFoKmRecalculationDate(value) {
+  if (!value) return currentIndiaDateInput();
+  return String(value).slice(0, 10);
+}
+
+function normalizeFoKmRecalculationId(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function foKmRecalculationLockKey(payload = {}) {
+  const foId = normalizeFoKmRecalculationId(
+    payload.fo_user_id ||
+      payload.employee_code ||
+      payload.username ||
+      payload.attendance_id ||
+      payload.id ||
+      'unknown',
+  );
+  return `${foId}|${normalizeFoKmRecalculationDate(payload.date)}`;
+}
+
+function hasFoKmRecalculationForDate(date) {
+  const suffix = `|${date}`;
+  for (const key of foKmRecalculationLocks) {
+    if (key.endsWith(suffix)) return true;
+  }
+  return false;
+}
+
 function normalizeSupabaseUrl(url) {
   return String(url || '').replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
 }
@@ -1470,26 +1512,45 @@ app.post(
 );
 
 app.post('/api/fo/km/recalculate', async (request, response) => {
+  const payload = request.body || {};
+  const lockKey = foKmRecalculationLockKey(payload);
+  const lockDate = normalizeFoKmRecalculationDate(payload.date);
+  if (foKmRecalculateAllLocks.has(lockDate) || foKmRecalculationLocks.has(lockKey)) {
+    response.status(409).json({ ok: false, message: FO_KM_RECALCULATION_RUNNING_MESSAGE });
+    return;
+  }
+  foKmRecalculationLocks.add(lockKey);
   try {
     const client = requireSupabase();
-    const result = await recalculateFoKm(client, request.body || {}, {
-      maxGoogleDirectionsCalls: request.body?.max_google_directions_calls,
+    const result = await recalculateFoKm(client, payload, {
+      maxGoogleDirectionsCalls: payload.max_google_directions_calls,
     });
     response.json({ ok: true, ...result });
   } catch (error) {
     response.status(error.statusCode || 500).json({ ok: false, message: error.message });
+  } finally {
+    foKmRecalculationLocks.delete(lockKey);
   }
 });
 
 app.post('/api/fo/km/recalculate-all', async (request, response) => {
+  const payload = request.body || {};
+  const lockDate = normalizeFoKmRecalculationDate(payload.date);
+  if (foKmRecalculateAllLocks.has(lockDate) || hasFoKmRecalculationForDate(lockDate)) {
+    response.status(409).json({ ok: false, message: FO_KM_RECALCULATION_RUNNING_MESSAGE });
+    return;
+  }
+  foKmRecalculateAllLocks.add(lockDate);
   try {
     const client = requireSupabase();
-    const result = await recalculateFoKmForToday(client, request.body || {}, {
-      maxGoogleDirectionsCalls: request.body?.max_google_directions_calls,
+    const result = await recalculateFoKmForToday(client, payload, {
+      maxGoogleDirectionsCalls: payload.max_google_directions_calls,
     });
     response.json({ ok: true, ...result });
   } catch (error) {
     response.status(error.statusCode || 500).json({ ok: false, message: error.message });
+  } finally {
+    foKmRecalculateAllLocks.delete(lockDate);
   }
 });
 
