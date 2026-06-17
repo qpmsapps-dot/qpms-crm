@@ -62,6 +62,7 @@ import { useWorkflow } from '../context/workflow-context.js';
 import {
   bdExecutives,
   canViewBdTeam,
+  isAdmin,
   isCommercialTeam,
   isCoordinator,
   isExistingBusinessOperations,
@@ -408,7 +409,7 @@ const healthTone = {
 };
 
 function roleScope(user) {
-  if (['Admin', 'COO'].includes(user?.role)) return 'admin';
+  if (isAdmin(user) || user?.role === 'COO') return 'admin';
   if (['BD Head', 'BD Executive'].includes(user?.role)) return 'bd';
   if (isCommercialTeam(user)) return 'commercial';
   if (isFinanceTeam(user)) return 'finance';
@@ -1480,7 +1481,7 @@ function NewBusinessPipeline({ visibleLeads, visibleSiteVisits, user }) {
       </section>
       <PipelineActionActivity actions={pipelineData.actions} activity={pipelineData.activity} />
 
-      {['Admin', 'BD Head'].includes(user?.role) ? (
+      {isAdmin(user) || user?.role === 'BD Head' ? (
         <BdPerformanceLeaderboard rows={pipelineData.performance} />
       ) : null}
     </div>

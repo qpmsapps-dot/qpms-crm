@@ -499,59 +499,6 @@ function mainRouteGap(previous, current) {
   };
 }
 
-async function googleDirectionsPathForMainMap(previous, current) {
-  const start = routePointCoordinates(previous);
-  const end = routePointCoordinates(current);
-  if (!GOOGLE_MAPS_API_KEY || !start || !end) return null;
-
-  try {
-    const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
-    url.searchParams.set("origin", `${start[0]},${start[1]}`);
-    url.searchParams.set("destination", `${end[0]},${end[1]}`);
-    url.searchParams.set("mode", "driving");
-    url.searchParams.set("key", GOOGLE_MAPS_API_KEY);
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Google Directions HTTP ${response.status}`);
-    const payload = await response.json();
-    if (payload.status !== "OK") {
-      throw new Error(payload.error_message || `Google Directions status ${payload.status}`);
-    }
-    const encoded =
-      payload.routes?.[0]?.overview_polyline?.points ||
-      payload.routes?.[0]?.overview_polyline;
-    const decoded = decodeGooglePolyline(encoded);
-    return decoded.length > 1 ? decoded : null;
-  } catch (fetchError) {
-    try {
-      const maps = await loadGoogleMapsScript();
-      const directionsService = new maps.DirectionsService();
-      const result = await new Promise((resolve, reject) => {
-        directionsService.route(
-          {
-            origin: { lat: start[0], lng: start[1] },
-            destination: { lat: end[0], lng: end[1] },
-            travelMode: maps.TravelMode.DRIVING,
-          },
-          (response, status) => {
-            if (status === "OK" && response) resolve(response);
-            else reject(new Error(`Google Directions JS status ${status}`));
-          },
-        );
-      });
-      const path = (result.routes?.[0]?.overview_path || [])
-        .map((point) => [point.lat(), point.lng()])
-        .filter(hasFiniteCoordinates);
-      return path.length > 1 ? path : null;
-    } catch (jsError) {
-      console.warn("[myQPMS FO] Main map route gap fill failed.", {
-        fetchMessage: fetchError?.message || String(fetchError),
-        jsMessage: jsError?.message || String(jsError),
-      });
-      return null;
-    }
-  }
-}
-
 async function buildMainMapRouteLines({ logs = [], visits = [], color = "#2563eb", idPrefix = "route" }) {
   const ordered = logs
     .filter(isValidRoutePoint)
@@ -580,9 +527,8 @@ async function buildMainMapRouteLines({ logs = [], visits = [], color = "#2563eb
         });
       }
 
-      const filledPath = sameSiteDrift
-        ? null
-        : await googleDirectionsPathForMainMap(previous, current);
+      // Frontend Directions disabled for billing protection.
+      const filledPath = null;
       lines.push({
         id: `${idPrefix}-gap-${index}`,
         positions:
@@ -3402,6 +3348,7 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
   const mapElementRef = useRef(null);
   const mapRef = useRef(null);
   const overlaysRef = useRef([]);
+  const roadSnapRequestAvailableRef = useRef(true);
   const [mapStatus, setMapStatus] = useState(GOOGLE_MAPS_API_KEY ? "loading" : "missing-key");
   const [routeViewMode, setRouteViewMode] = useState("road");
   const [snapResult, setSnapResult] = useState({
@@ -3472,6 +3419,20 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
         setSnapResult(cached);
         return;
       }
+      if (!roadSnapRequestAvailableRef.current) {
+        setSnapResult({
+          status: "skipped",
+          paths: [],
+          downsampledGpsPoints: 0,
+          snapApiChunkCount: 0,
+          snappedPointsReturned: 0,
+          snappedSegmentsCount: 0,
+          failedSegmentsCount: 0,
+          errors: [],
+        });
+        return;
+      }
+      roadSnapRequestAvailableRef.current = false;
       try {
         const snapped = await snapGpsSegmentsToRoads(points.gpsSegments);
         const result = { ...snapped };

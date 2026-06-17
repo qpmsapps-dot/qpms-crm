@@ -1,5 +1,7 @@
 import {
   BarChart3,
+  ChevronsLeft,
+  ChevronsRight,
   ClipboardCheck,
   FileText,
   Home,
@@ -41,7 +43,7 @@ const executiveNavGroups = [
     title: 'Operations',
     items: [
       { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
-      { label: 'FO Operations', to: '/fo-activities', icon: MapPinned },
+      { label: 'Operations', to: '/fo-activities', icon: MapPinned },
       { label: 'Tickets', to: '/tickets', icon: FileText },
       { label: 'Asset Management', to: '/assets', icon: Wrench },
       { label: 'Reports', to: '/reports', icon: BarChart3 },
@@ -78,7 +80,7 @@ const adminDemoNavGroups = [
     title: 'Operations',
     items: [
       { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
-      { label: 'FO Operations', to: '/fo-activities', icon: MapPinned },
+      { label: 'Operations', to: '/fo-activities', icon: MapPinned },
       { label: 'Tickets', to: '/tickets', icon: FileText },
       { label: 'Asset Management', to: '/assets', icon: Wrench },
       { label: 'Reports', to: '/reports', icon: BarChart3 },
@@ -122,7 +124,7 @@ const operationsNavGroups = [
     items: [
       { label: 'Dashboard', to: '/dashboard', icon: Home },
       { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
-      { label: 'FO Operations', to: '/fo-activities', icon: MapPinned },
+      { label: 'Operations', to: '/fo-activities', icon: MapPinned },
       { label: 'Tickets', to: '/tickets', icon: FileText },
       { label: 'Asset Management', to: '/assets', icon: Wrench },
       { label: 'Reports', to: '/reports', icon: BarChart3 },
@@ -140,7 +142,7 @@ function navLabelForRole(item, user) {
   return 'Commercial Review';
 }
 
-export default function Sidebar({ isOpen, onClose }) {
+export default function Sidebar({ isOpen, isCollapsed = false, onClose, onToggleCollapse }) {
   const { user } = useAuth();
   const location = useLocation();
   const currentTarget = `${location.pathname}${location.search}`;
@@ -181,20 +183,29 @@ export default function Sidebar({ isOpen, onClose }) {
         aria-hidden="true"
       />
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-slate-200 bg-white transition-transform duration-300 dark:border-slate-800 dark:bg-slate-950 lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-slate-200 bg-white transition-[width,transform] duration-300 dark:border-slate-800 dark:bg-slate-950 lg:static lg:translate-x-0 ${isCollapsed ? 'lg:w-20' : 'lg:w-72'} ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="border-b border-slate-100 px-5 py-4 dark:border-slate-800">
-          <div className="rounded-2xl border border-slate-100 bg-gradient-to-br from-white to-qpms-50/70 p-3 shadow-sm ring-1 ring-white/70 dark:border-slate-800 dark:from-slate-950 dark:to-qpms-900/10 dark:ring-white/5">
-            <Logo className="h-10 w-10" />
+        <div className={`border-b border-slate-100 px-5 py-4 dark:border-slate-800 ${isCollapsed ? 'lg:px-3' : ''}`}>
+          <div className={`relative flex items-center gap-2 rounded-2xl border border-slate-100 bg-gradient-to-br from-white to-qpms-50/70 p-3 shadow-sm ring-1 ring-white/70 dark:border-slate-800 dark:from-slate-950 dark:to-qpms-900/10 dark:ring-white/5 ${isCollapsed ? 'lg:justify-center' : 'justify-between'}`}>
+            <Logo className="h-10 w-10" showText={!isCollapsed} />
+            <button
+              type="button"
+              onClick={onToggleCollapse}
+              className={`focus-ring hidden h-8 w-8 shrink-0 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:text-qpms-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 lg:grid ${isCollapsed ? 'lg:absolute lg:left-14 lg:top-6' : ''}`}
+              aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {isCollapsed ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
+            </button>
           </div>
         </div>
 
-        <nav className="flex-1 space-y-5 overflow-y-auto px-4 py-5">
+        <nav className={`flex-1 space-y-5 overflow-y-auto py-5 ${isCollapsed ? 'lg:px-3 px-4' : 'px-4'}`}>
           {visibleNavGroups.map((group) => (
             <div key={group.title} className="space-y-1">
-              <p className="px-3 pb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400 dark:text-slate-500">{group.title}</p>
+              <p className={`px-3 pb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400 dark:text-slate-500 ${isCollapsed ? 'lg:sr-only' : ''}`}>{group.title}</p>
               {group.items.map((item) => {
                 const active = item.to.includes('?')
                   ? currentTarget === item.to
@@ -204,15 +215,16 @@ export default function Sidebar({ isOpen, onClose }) {
                     key={item.to}
                     to={item.to}
                     onClick={onClose}
+                    title={navLabelForRole(item, user)}
                     className={[
-                      'group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition',
+                      `group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${isCollapsed ? 'lg:justify-center' : ''}`,
                       active
                         ? 'bg-gradient-to-r from-qpms-700 to-qpms-500 text-white shadow-lg shadow-qpms-600/20'
                         : 'text-slate-600 hover:bg-qpms-50 hover:text-qpms-700 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white',
                     ].join(' ')}
                   >
                     <item.icon className="h-5 w-5 shrink-0" strokeWidth={2.2} />
-                    <span>{navLabelForRole(item, user)}</span>
+                    <span className={isCollapsed ? 'lg:sr-only' : ''}>{navLabelForRole(item, user)}</span>
                   </NavLink>
                 );
               })}

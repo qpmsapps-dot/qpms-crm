@@ -29,9 +29,13 @@ class TasksScreen extends StatefulWidget {
 
 class _TasksScreenState extends State<TasksScreen>
     with AutomaticKeepAliveClientMixin<TasksScreen> {
+  static const _checkoutSyncBlockedMessage =
+      'Check-Out could not sync. Please retry Check-Out before travelling to the next site. GPS travel tracking is paused until this checkout is completed.';
+
   Attendance? _attendance;
   SiteVisit? _activeVisit;
   bool _busy = false;
+  bool _checkoutSyncBlocked = false;
 
   @override
   void initState() {
@@ -124,6 +128,7 @@ class _TasksScreenState extends State<TasksScreen>
     setState(() {
       _attendance = attendance;
       _activeVisit = activeVisit;
+      _checkoutSyncBlocked = false;
     });
   }
 
@@ -135,7 +140,12 @@ class _TasksScreenState extends State<TasksScreen>
     );
     if (remoteVisit == null) {
       await _clearLocalActiveVisitCache(attendance);
-      if (mounted) setState(() => _activeVisit = null);
+      if (mounted) {
+        setState(() {
+          _activeVisit = null;
+          _checkoutSyncBlocked = false;
+        });
+      }
       return null;
     }
     await CrashLogService.record(
@@ -156,7 +166,12 @@ class _TasksScreenState extends State<TasksScreen>
       user: widget.user,
       visit: remoteVisit,
     );
-    if (mounted) setState(() => _activeVisit = remoteVisit);
+    if (mounted) {
+      setState(() {
+        _activeVisit = remoteVisit;
+        _checkoutSyncBlocked = false;
+      });
+    }
     return remoteVisit;
   }
 
@@ -207,6 +222,20 @@ class _TasksScreenState extends State<TasksScreen>
       }
       final activeAttendance = attendance!;
       _attendance = activeAttendance;
+      final localActiveVisitBeforeRemote = await LocalStore.activeVisit();
+      if (localActiveVisitBeforeRemote != null) {
+        if (_checkoutSyncBlocked) {
+          await _blockUntilCheckoutRetry(localActiveVisitBeforeRemote);
+        } else {
+          if (mounted) {
+            setState(() => _activeVisit = localActiveVisitBeforeRemote);
+          }
+          _toast(
+            'Already checked in at ${localActiveVisitBeforeRemote.storeName}. Please check out before checking in again.',
+          );
+        }
+        return;
+      }
       final remoteActiveVisit = await _restoreRemoteActiveVisit(
         activeAttendance,
       );
@@ -407,7 +436,10 @@ class _TasksScreenState extends State<TasksScreen>
         visit: visit,
         finalPosition: position,
       );
-      setState(() => _activeVisit = visit);
+      setState(() {
+        _activeVisit = visit;
+        _checkoutSyncBlocked = false;
+      });
       _toast(
         nearby.isEmpty
             ? 'New site added and checked in: ${store.storeName}'
@@ -445,6 +477,20 @@ class _TasksScreenState extends State<TasksScreen>
         throw StateError('Attendance sync missing. Please restart Start Day.');
       }
       final activeAttendance = attendance!;
+      final localActiveVisitBeforeRemote = await LocalStore.activeVisit();
+      if (localActiveVisitBeforeRemote != null) {
+        if (_checkoutSyncBlocked) {
+          await _blockUntilCheckoutRetry(localActiveVisitBeforeRemote);
+        } else {
+          if (mounted) {
+            setState(() => _activeVisit = localActiveVisitBeforeRemote);
+          }
+          _toast(
+            'Already checked in at ${localActiveVisitBeforeRemote.storeName}. Please check out before adding another site.',
+          );
+        }
+        return;
+      }
       final remoteActiveVisit = await _restoreRemoteActiveVisit(
         activeAttendance,
       );
@@ -508,7 +554,10 @@ class _TasksScreenState extends State<TasksScreen>
         finalPosition: position,
       );
       if (!mounted) return;
-      setState(() => _activeVisit = visit);
+      setState(() {
+        _activeVisit = visit;
+        _checkoutSyncBlocked = false;
+      });
       _toast('Added and checked in at ${store.storeName}');
     } catch (error, stackTrace) {
       await CrashLogService.record(
@@ -965,7 +1014,13 @@ class _TasksScreenState extends State<TasksScreen>
           error: error,
           stackTrace: stackTrace,
         );
-        _toast('Check Out sync failed. Tracking remains paused.');
+        if (mounted) {
+          setState(() {
+            _activeVisit = visit;
+            _checkoutSyncBlocked = true;
+          });
+        }
+        await _showCheckoutSyncBlockedDialog();
         return;
       }
       await LocalStore.saveVisit(visit);
@@ -997,7 +1052,10 @@ class _TasksScreenState extends State<TasksScreen>
           onLog: (_, _) {},
         );
       }
-      setState(() => _activeVisit = null);
+      setState(() {
+        _activeVisit = null;
+        _checkoutSyncBlocked = false;
+      });
       _toast('Checked out successfully');
     } catch (error, stackTrace) {
       await CrashLogService.record(
@@ -1084,6 +1142,39 @@ class _TasksScreenState extends State<TasksScreen>
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _blockUntilCheckoutRetry(SiteVisit visit) async {
+    await CrashLogService.record(
+      employeeCode: widget.user.employeeCode,
+      screen: 'tasks',
+      action: 'NEXT_ACTION_BLOCKED_CHECKOUT_PENDING',
+      error: 'site_visit_id=${visit.remoteId ?? visit.id}',
+    );
+    if (mounted) {
+      setState(() {
+        _activeVisit = visit;
+        _checkoutSyncBlocked = true;
+      });
+    }
+    await _showCheckoutSyncBlockedDialog();
+  }
+
+  Future<void> _showCheckoutSyncBlockedDialog() async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Check-Out Pending'),
+        content: const Text(_checkoutSyncBlockedMessage),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _showErrorDialog(String title, Object error) async {
@@ -1264,10 +1355,47 @@ class _TasksScreenState extends State<TasksScreen>
               ],
             ),
           ] else
-            FoOutlinedButton(
-              label: 'Check-Out',
-              icon: Icons.logout_rounded,
-              onPressed: _busy ? null : _checkOut,
+            Column(
+              children: [
+                if (_checkoutSyncBlocked) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF4E5),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFFFB74D)),
+                    ),
+                    child: const Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          color: Color(0xFFB45309),
+                          size: 20,
+                        ),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _checkoutSyncBlockedMessage,
+                            style: TextStyle(
+                              color: Color(0xFF7C2D12),
+                              fontWeight: FontWeight.w800,
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                FoOutlinedButton(
+                  label: _checkoutSyncBlocked ? 'Retry Check-Out' : 'Check-Out',
+                  icon: Icons.logout_rounded,
+                  onPressed: _busy ? null : _checkOut,
+                ),
+              ],
             ),
         ],
       ),

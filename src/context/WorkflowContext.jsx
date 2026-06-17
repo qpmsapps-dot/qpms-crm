@@ -25,6 +25,7 @@ import {
   updateLeadRemote,
   uploadSiteImageRemote,
 } from '../services/workflowRepository.js';
+import { isSuperUser } from '../utils/authRoles.js';
 import { WorkflowContext } from './workflow-context.js';
 
 const leadsStorageKey = 'qpms-crm-workflow-leads';
@@ -713,7 +714,7 @@ export function WorkflowProvider({ children }) {
 
     const stage = reviewStage || visit.currentStage || 'Commercial Review';
     const expectedOwner = pendingOwnerByStage[stage];
-    if (expectedOwner && user?.role && ![expectedOwner, 'Admin'].includes(user.role)) {
+    if (expectedOwner && user?.role && ![expectedOwner, 'Admin'].includes(user.role) && !isSuperUser(user)) {
       throw new Error(`${user.role} cannot act on ${stage}.`);
     }
     if ((visit.reviewStatus || {})[stage] && (visit.reviewStatus || {})[stage] !== 'Pending' && visit.currentStage !== stage) {

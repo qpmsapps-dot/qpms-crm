@@ -7,9 +7,18 @@ const MAX_NORMAL_SEGMENT_METERS = 2500;
 const MAX_SPEED_KMPH = 120;
 const DUPLICATE_WINDOW_SECONDS = 10;
 const MIN_MEANINGFUL_FINAL_RETURN_LEG_KM = 0.05;
+const DEFAULT_MAX_GOOGLE_DIRECTIONS_CALLS = 25;
 
 function log(event, detail = {}) {
   console.log(`[${event}]`, detail);
+}
+
+function redactForLog(value, secrets = []) {
+  let text = value == null ? '' : String(value);
+  for (const secret of secrets) {
+    if (secret) text = text.split(secret).join('[redacted]');
+  }
+  return text.replace(/([?&]key=)[^&\s]+/gi, '$1[redacted]');
 }
 
 function indiaDateKey(date = new Date()) {
@@ -24,6 +33,25 @@ function indiaDateKey(date = new Date()) {
 function normalizeNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function createGoogleDirectionsContext(options = {}) {
+  const maxCalls = Number(options.maxGoogleDirectionsCalls ?? process.env.MAX_GOOGLE_DIRECTIONS_CALLS);
+  return {
+    enabled: process.env.ENABLE_GOOGLE_DIRECTIONS === 'true',
+    disabledLogged: false,
+    callsAttempted: 0,
+    maxCalls: Number.isFinite(maxCalls) && maxCalls >= 0
+      ? maxCalls
+      : DEFAULT_MAX_GOOGLE_DIRECTIONS_CALLS,
+  };
+}
+
+function googleDirectionsContext(options = {}) {
+  if (options.googleDirectionsContext) return options.googleDirectionsContext;
+  const context = createGoogleDirectionsContext(options);
+  options.googleDirectionsContext = context;
+  return context;
 }
 
 function pointTime(row) {
@@ -111,26 +139,99 @@ function cleanGpsLogs(rows = []) {
 }
 
 async function googleDirectionsKm(start, end, options = {}) {
+  const context = googleDirectionsContext(options);
+  if (!context.enabled) {
+    if (!context.disabledLogged) {
+      context.disabledLogged = true;
+      log('GOOGLE_DIRECTIONS_DISABLED', {
+        enable_google_directions: process.env.ENABLE_GOOGLE_DIRECTIONS || 'false',
+      });
+    }
+    return null;
+  }
+  if (context.callsAttempted >= context.maxCalls) {
+    log('GOOGLE_DIRECTIONS_LIMIT_REACHED', {
+      calls_attempted: context.callsAttempted,
+      max_calls: context.maxCalls,
+    });
+    return null;
+  }
+  const keySource = options.googleMapsApiKey
+    ? 'options.googleMapsApiKey'
+    : process.env.GOOGLE_MAPS_API_KEY
+      ? 'GOOGLE_MAPS_API_KEY'
+      : process.env.VITE_GOOGLE_MAPS_API_KEY
+        ? 'VITE_GOOGLE_MAPS_API_KEY'
+        : null;
   const apiKey =
     options.googleMapsApiKey ||
     process.env.GOOGLE_MAPS_API_KEY ||
     process.env.VITE_GOOGLE_MAPS_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey) {
+    log('GOOGLE_MAPS_API_KEY_MISSING', {
+      checked_env: ['GOOGLE_MAPS_API_KEY', 'VITE_GOOGLE_MAPS_API_KEY'],
+      has_options_key: Boolean(options.googleMapsApiKey),
+    });
+    return null;
+  }
   const url = new URL('https://maps.googleapis.com/maps/api/directions/json');
   url.searchParams.set('origin', `${start.latitude},${start.longitude}`);
   url.searchParams.set('destination', `${end.latitude},${end.longitude}`);
   url.searchParams.set('mode', 'driving');
   url.searchParams.set('key', apiKey);
 
-  const response = await fetch(url);
-  if (!response.ok) return null;
-  const payload = await response.json();
-  if (payload.status !== 'OK') return null;
-  const meters = payload.routes?.[0]?.legs?.reduce(
-    (sum, leg) => sum + Number(leg.distance?.value || 0),
-    0,
-  );
-  return Number.isFinite(meters) && meters > 0 ? meters / 1000 : null;
+  log('GOOGLE_DIRECTIONS_REQUEST_ATTEMPTED', {
+    endpoint: 'https://maps.googleapis.com/maps/api/directions/json',
+    mode: 'driving',
+    key_source: keySource,
+    calls_attempted: context.callsAttempted + 1,
+    max_calls: context.maxCalls,
+    has_origin: isValidCoordinate(start.latitude, start.longitude),
+    has_destination: isValidCoordinate(end.latitude, end.longitude),
+  });
+  context.callsAttempted += 1;
+
+  try {
+    const response = await fetch(url);
+    log('GOOGLE_DIRECTIONS_HTTP_STATUS', {
+      status: response.status,
+      ok: response.ok,
+      status_text: response.statusText,
+    });
+    if (!response.ok) {
+      log('GOOGLE_DIRECTIONS_HTTP_FAILED', {
+        status: response.status,
+        status_text: response.statusText,
+      });
+      return null;
+    }
+
+    const payload = await response.json();
+    log('GOOGLE_DIRECTIONS_PAYLOAD_STATUS', {
+      status: payload.status,
+      error_message: payload.error_message ? redactForLog(payload.error_message, [apiKey]) : null,
+    });
+    if (payload.status !== 'OK') return null;
+
+    const meters = payload.routes?.[0]?.legs?.reduce(
+      (sum, leg) => sum + Number(leg.distance?.value || 0),
+      0,
+    );
+    const km = Number.isFinite(meters) && meters > 0 ? meters / 1000 : null;
+    if (km === null) {
+      log('GOOGLE_DIRECTIONS_NO_DISTANCE', {
+        status: payload.status,
+        route_count: Array.isArray(payload.routes) ? payload.routes.length : 0,
+      });
+    }
+    return km;
+  } catch (error) {
+    log('GOOGLE_DIRECTIONS_FETCH_ERROR', {
+      message: redactForLog(error?.message || String(error), [apiKey]),
+      name: error?.name,
+    });
+    return null;
+  }
 }
 
 async function calculateActualTravelKm(points, options = {}) {
@@ -178,6 +279,13 @@ async function calculateActualTravelKm(points, options = {}) {
       if (secondsGap > 0 && speedKmph <= MAX_SPEED_KMPH) {
         reconstructedKm += distanceKm;
         segmentsReconstructed += 1;
+        log('FO_KM_GAP_RECONSTRUCTED_HAVERSINE', {
+          index,
+          distanceKm: Number(distanceKm.toFixed(3)),
+          secondsGap,
+          speedKmph: Number(speedKmph.toFixed(1)),
+          reason: 'google_directions_unavailable',
+        });
         segmentSummary.push({ index, status: 'reconstructed_haversine', distance_km: distanceKm, seconds_gap: secondsGap, speed_kmph: speedKmph });
         continue;
       }

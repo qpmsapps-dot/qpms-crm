@@ -10,6 +10,10 @@ import '../tracking/tracking_flags.dart';
 class PermissionService {
   static const message =
       'For reliable field tracking, set Location permission to Allow all the time and Battery usage to Unrestricted.';
+  static const backgroundLocationRequiredMessage =
+      'Background location is required. Please set Location Permission to \'Allow all the time\' so myQPMS can track duty travel after Start Day.';
+  static const batteryUnrestrictedRequiredMessage =
+      'Battery unrestricted mode is required. Please set myQPMS battery usage to Unrestricted so background GPS tracking continues during duty.';
   static String locationStatus = 'unknown';
   static String batteryOptimizationStatus = 'unknown';
   static String notificationStatus = 'not required';
@@ -64,13 +68,13 @@ class PermissionService {
               ? 'granted'
               : 'permission pending';
           if (!alwaysAfterRequest.isGranted && !alwaysAfterRequest.isLimited) {
-            warning =
-                'Background location permission pending. Tracking will continue while the foreground service is allowed, but may be limited after restrictions.';
+            warning = backgroundLocationRequiredMessage;
             await CrashLogService.record(
               screen: 'permissions',
               action: 'BACKGROUND_PERMISSION_MISSING',
               error: 'Background location is not allowed.',
             );
+            return false;
           }
         } else {
           backgroundLocationStatus = 'not required';
@@ -113,8 +117,16 @@ class PermissionService {
               stackTrace: stackTrace,
             );
           }
-          if (!await ph.Permission.ignoreBatteryOptimizations.isGranted) {
-            warning = 'Battery restriction may affect live tracking accuracy.';
+          if (await ph.Permission.ignoreBatteryOptimizations.isGranted) {
+            batteryOptimizationStatus = 'unrestricted';
+          } else {
+            warning = batteryUnrestrictedRequiredMessage;
+            await CrashLogService.record(
+              screen: 'permissions',
+              action: 'BATTERY_OPTIMIZATION_REQUIRED',
+              error: 'Battery optimization is still enabled.',
+            );
+            return false;
           }
         } else {
           batteryOptimizationStatus = 'unrestricted';
@@ -129,6 +141,75 @@ class PermissionService {
         stackTrace: stackTrace,
       );
       return false;
+    }
+  }
+
+  static Future<bool> openPermissionSettings() {
+    return ph.openAppSettings();
+  }
+
+  static Future<void> refreshStatus() async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        locationStatus = 'service disabled';
+      } else {
+        final permission = await Geolocator.checkPermission();
+        locationStatus = permission.name;
+        if (Platform.isAndroid &&
+            permission != LocationPermission.denied &&
+            permission != LocationPermission.deniedForever) {
+          final accuracy = await Geolocator.getLocationAccuracy();
+          if (accuracy == LocationAccuracyStatus.reduced) {
+            locationStatus = 'reduced accuracy';
+          }
+        }
+      }
+      if (Platform.isAndroid) {
+        final sdkInt = await _androidSdkInt();
+        if (TrackingFlags.enableAndroidForegroundLocationService) {
+          final always = await ph.Permission.locationAlways.status;
+          backgroundLocationStatus = always.isGranted
+              ? 'granted'
+              : 'permission pending';
+        } else {
+          backgroundLocationStatus = 'not required';
+        }
+        if (sdkInt >= 33) {
+          final notification = await ph.Permission.notification.status;
+          notificationStatus = notification.isGranted
+              ? 'granted'
+              : 'permission pending';
+        } else {
+          notificationStatus = 'not required';
+        }
+        final battery = await ph.Permission.ignoreBatteryOptimizations.status;
+        batteryOptimizationStatus = battery.isGranted
+            ? 'unrestricted'
+            : 'restricted';
+      }
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        screen: 'permissions',
+        action: 'PERMISSION_STATUS_REFRESH_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+  }
+
+  static Future<void> openBatteryOptimizationSettings() async {
+    try {
+      await ph.Permission.ignoreBatteryOptimizations.request();
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        screen: 'permissions',
+        action: 'BATTERY_OPTIMIZATION_REQUEST_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+    if (!await ph.Permission.ignoreBatteryOptimizations.isGranted) {
+      await ph.openAppSettings();
     }
   }
 

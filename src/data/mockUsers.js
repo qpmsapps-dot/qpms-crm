@@ -1,3 +1,5 @@
+import { isSuperUser } from '../utils/authRoles.js';
+
 export const mockUsers = [
   {
     id: 'md',
@@ -205,7 +207,7 @@ export function isCoordinator(user) {
 }
 
 export function isManagement(user) {
-  return ['MD', 'Admin', 'COO', 'Management', 'GM', 'Top Management', 'GM / Top Management'].includes(user?.role);
+  return isSuperUser(user) || ['MD', 'Admin', 'COO', 'Management', 'GM', 'Top Management', 'GM / Top Management'].includes(user?.role);
 }
 
 export function isFinanceLeadership(user) {
@@ -213,7 +215,7 @@ export function isFinanceLeadership(user) {
 }
 
 export function isAdmin(user) {
-  return user?.role === 'Admin';
+  return isSuperUser(user) || user?.role === 'Admin';
 }
 
 export function isExistingBusinessOperations(user) {
@@ -229,11 +231,11 @@ export function isApprovalReviewer(user) {
 }
 
 export function canManageLeads(user) {
-  return ['BD Head', 'BD Executive'].includes(user?.role) || isManagement(user);
+  return isSuperUser(user) || ['BD Head', 'BD Executive'].includes(user?.role) || isManagement(user);
 }
 
 export function canViewBdTeam(user) {
-  return user?.role === 'BD Head' || isManagement(user) || isFinanceLeadership(user);
+  return isSuperUser(user) || user?.role === 'BD Head' || isManagement(user) || isFinanceLeadership(user);
 }
 
 export function findMockUser(email, password) {

@@ -1,5 +1,6 @@
 export const appMode = String(import.meta.env.VITE_APP_MODE || 'demo').toLowerCase();
 export const isProductionAuthMode = appMode === 'production';
+export const SUPER_ROLES = ['Developer', 'Super Admin'];
 
 export const roleGroups = {
   BD: ['BD', 'BD Team', 'BD Executive', 'BD Head'],
@@ -23,9 +24,15 @@ export function normalizeAppRole(role = '') {
   return match?.[0] || role || 'BD';
 }
 
+export function isSuperUser(userOrRole) {
+  const role = typeof userOrRole === 'string' ? userOrRole : userOrRole?.role;
+  return SUPER_ROLES.includes(String(role || '').trim());
+}
+
 export function hasAnyRole(user, allowedRoles = []) {
   if (!allowedRoles.length) return true;
   if (!user) return false;
+  if (isSuperUser(user)) return true;
   const normalized = normalizeAppRole(user.role);
   return allowedRoles.some((role) => normalizeAppRole(role) === normalized || role === user.role);
 }

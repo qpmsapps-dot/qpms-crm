@@ -4,7 +4,7 @@ create table if not exists public.profiles (
   id uuid primary key default gen_random_uuid(),
   email text unique not null,
   full_name text not null,
-  role text not null check (role in ('Admin', 'BD Head', 'BD Executive', 'Operations Team', 'Coordinator', 'Commercial', 'Commercial Team', 'Commercial Reviewer', 'Finance', 'Finance Team', 'Finance Reviewer', 'HR Reviewer', 'COO')),
+  role text not null check (role in ('Admin', 'Developer', 'Super Admin', 'BD Head', 'BD Executive', 'Operations Team', 'Coordinator', 'Commercial', 'Commercial Team', 'Commercial Reviewer', 'Finance', 'Finance Team', 'Finance Reviewer', 'HR Reviewer', 'COO')),
   status text not null default 'Pending Approval',
   is_active boolean not null default false,
   approved_by text,

@@ -61,6 +61,8 @@ begin
       and coalesce(p.is_active, true) = true
       and p.role in (
         'Admin',
+        'Developer',
+        'Super Admin',
         'BD Head',
         'Operations Team',
         'Coordinator',

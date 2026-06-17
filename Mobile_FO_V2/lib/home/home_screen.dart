@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -26,7 +28,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen>
-    with AutomaticKeepAliveClientMixin<HomeScreen> {
+    with AutomaticKeepAliveClientMixin<HomeScreen>, WidgetsBindingObserver {
   Attendance? _attendance;
   bool _busy = false;
   int? _battery;
@@ -35,6 +37,10 @@ class _HomeScreenState extends State<HomeScreen>
   String? _currentSite;
   bool _firstGpsPingLogged = false;
   String _buildNumber = '--';
+  bool _pendingStartDayPermissionRecheck = false;
+  DateTime? _healthLastGpsCapturedAt;
+  DateTime? _healthLastSuccessfulSyncAt;
+  int _healthPendingQueueCount = 0;
 
   bool get _showTrackingDebug {
     final role = widget.user.role.trim().toLowerCase();
@@ -44,8 +50,26 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
     _loadBuildInfo();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (_pendingStartDayPermissionRecheck) {
+        _pendingStartDayPermissionRecheck = false;
+        unawaited(_recheckStartDayPermissionAfterSettings());
+      }
+      unawaited(_refreshTrackingHealth());
+    }
   }
 
   Future<void> _loadBuildInfo() async {
@@ -277,6 +301,7 @@ class _HomeScreenState extends State<HomeScreen>
         );
       }
     }
+    await _refreshTrackingHealth();
     await CrashLogService.record(
       employeeCode: widget.user.employeeCode,
       screen: 'home',
@@ -372,7 +397,7 @@ class _HomeScreenState extends State<HomeScreen>
       }
       final ok = await PermissionService.ensureLocation();
       if (!ok) {
-        _toast(PermissionService.message);
+        await _showStartDayPermissionDialog();
         return;
       }
       final position = await Geolocator.getCurrentPosition(
@@ -483,6 +508,7 @@ class _HomeScreenState extends State<HomeScreen>
         screen: 'home',
         action: 'BACKGROUND_TRACKING_STARTED',
       );
+      await _refreshTrackingHealth();
       _toast('Attendance marked present. Tracking active.');
     } catch (error, stackTrace) {
       await CrashLogService.record(
@@ -580,6 +606,13 @@ class _HomeScreenState extends State<HomeScreen>
   Future<void> _endDay() async {
     final attendance = _attendance;
     if (attendance == null) return;
+    final localActiveVisit = await LocalStore.activeVisit();
+    if (localActiveVisit != null) {
+      _toast(
+        'Check-Out could not sync. Please retry Check-Out before travelling to the next site. GPS travel tracking is paused until this checkout is completed.',
+      );
+      return;
+    }
     await CrashLogService.record(
       employeeCode: widget.user.employeeCode,
       screen: 'home',
@@ -838,6 +871,7 @@ class _HomeScreenState extends State<HomeScreen>
         action: 'END_DAY_CACHE_CLEARED',
         error: 'attendance_id=${attendance.remoteId ?? attendance.id}',
       );
+      await _refreshTrackingHealth();
       _toast('Day ended successfully.');
     } catch (error, stackTrace) {
       await CrashLogService.record(
@@ -909,6 +943,7 @@ class _HomeScreenState extends State<HomeScreen>
       _km = _attendance?.eligibleKm ?? 0;
       _battery = log.battery;
     });
+    unawaited(_refreshTrackingHealth());
   }
 
   Future<double> _routeKmFromVisits(Attendance attendance) async {
@@ -935,11 +970,110 @@ class _HomeScreenState extends State<HomeScreen>
     return total;
   }
 
+  Future<void> _refreshTrackingHealth() async {
+    try {
+      await PermissionService.refreshStatus();
+      final logs = await LocalStore.getLocationLogs();
+      final attendance = _attendance;
+      final attendanceIds = <String>{
+        if (attendance?.remoteId?.trim().isNotEmpty == true)
+          attendance!.remoteId!.trim(),
+        if (attendance?.id.trim().isNotEmpty == true) attendance!.id.trim(),
+      };
+      final relevantLogs = attendanceIds.isEmpty
+          ? logs
+          : logs
+                .where((log) => attendanceIds.contains(log.attendanceId))
+                .toList();
+      final lastGps = relevantLogs.isEmpty
+          ? TrackingService.lastGpsSync
+          : relevantLogs.last.capturedAt;
+      final syncedLogs = relevantLogs.where((log) => log.synced).toList();
+      final nearestSuccessfulSync =
+          TrackingService.lastSuccessfulSync ??
+          (syncedLogs.isEmpty ? null : syncedLogs.last.capturedAt);
+      final queueCount = await LocalStore.countUnsyncedLocationLogs();
+      if (!mounted) return;
+      setState(() {
+        _healthLastGpsCapturedAt = lastGps;
+        _healthLastSuccessfulSyncAt = nearestSuccessfulSync;
+        _healthPendingQueueCount = queueCount;
+      });
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'home',
+        action: 'TRACKING_HEALTH_REFRESH_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+  }
+
   void _toast(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _showStartDayPermissionDialog() async {
+    if (!mounted) return;
+    final needsBackgroundLocation =
+        PermissionService.backgroundLocationStatus == 'permission pending';
+    final needsBatteryUnrestricted =
+        PermissionService.batteryOptimizationStatus == 'restricted';
+    final message = needsBackgroundLocation
+        ? PermissionService.backgroundLocationRequiredMessage
+        : needsBatteryUnrestricted
+        ? PermissionService.batteryUnrestrictedRequiredMessage
+        : PermissionService.message;
+    final title = needsBatteryUnrestricted && !needsBackgroundLocation
+        ? 'Battery Setting Required'
+        : 'Location Permission Required';
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _pendingStartDayPermissionRecheck = true;
+              if (needsBatteryUnrestricted && !needsBackgroundLocation) {
+                unawaited(PermissionService.openBatteryOptimizationSettings());
+              } else {
+                unawaited(PermissionService.openPermissionSettings());
+              }
+            },
+            child: Text(
+              needsBatteryUnrestricted && !needsBackgroundLocation
+                  ? 'Open Battery Settings'
+                  : 'Open Settings',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _recheckStartDayPermissionAfterSettings() async {
+    final ok = await PermissionService.ensureLocation();
+    if (!mounted) return;
+    if (ok) {
+      _toast('Location permission verified. Please tap Start Day again.');
+      return;
+    }
+    if (PermissionService.backgroundLocationStatus == 'permission pending') {
+      _toast(PermissionService.backgroundLocationRequiredMessage);
+    } else if (PermissionService.batteryOptimizationStatus == 'restricted') {
+      _toast(PermissionService.batteryUnrestrictedRequiredMessage);
+    }
   }
 
   Future<void> _showErrorDialog(String title, Object error) async {
@@ -977,6 +1111,8 @@ class _HomeScreenState extends State<HomeScreen>
           _dutyCard(active),
           const SizedBox(height: 16),
           _recentActivityCard(active),
+          const SizedBox(height: 16),
+          _trackingHealthCard(),
         ],
       ),
     );
@@ -1405,6 +1541,129 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  Widget _trackingHealthCard() {
+    return FoCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: _trackingStatusColor().withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.gps_fixed_rounded,
+                  color: _trackingStatusColor(),
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Tracking Health',
+                      style: TextStyle(
+                        color: foNavy,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Pilot support check',
+                      style: TextStyle(
+                        color: Color(0xFF53607D),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              FoStatusBadge(
+                label: _trackingStatusLabel(),
+                color: _trackingStatusColor(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _healthTile(
+                'Last GPS',
+                _formatHealthTime(_healthLastGpsCapturedAt),
+              ),
+              _healthTile('GPS Queue', _healthPendingQueueCount.toString()),
+              _healthTile(
+                'Last Sync',
+                _formatHealthTime(_healthLastSuccessfulSyncAt),
+              ),
+              _healthTile(
+                'Background GPS',
+                _simplePermissionStatus(
+                  PermissionService.backgroundLocationStatus,
+                ),
+              ),
+              _healthTile(
+                'Battery',
+                _simpleBatteryStatus(
+                  PermissionService.batteryOptimizationStatus,
+                ),
+              ),
+              _healthTile('Service', _backgroundServiceStatusLabel()),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _healthTile(String label, String value) {
+    return Container(
+      width: 145,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFF),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: foBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFF64708F),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: foNavy,
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _dutyHoursLabel() {
     final attendance = _attendance;
     if (attendance == null) return '00h 00m';
@@ -1416,6 +1675,59 @@ class _HomeScreenState extends State<HomeScreen>
     if (TrackingService.queueLength > 0) return 'Pending';
     if (TrackingService.lastTrackingError != null) return 'Offline';
     return 'Synced';
+  }
+
+  String _trackingStatusLabel() {
+    if (TrackingService.isPausedForSiteVisit) return 'Paused';
+    if (TrackingService.isActive) return 'Running';
+    return 'Stopped';
+  }
+
+  Color _trackingStatusColor() {
+    if (TrackingService.isPausedForSiteVisit) return foOrange;
+    if (TrackingService.isActive) return foGreen;
+    return qpmsMuted;
+  }
+
+  String _backgroundServiceStatusLabel() {
+    final mode = TrackingService.trackingMode;
+    if (mode == 'Android service') return 'Running';
+    if (mode == 'Timer fallback') return 'Running';
+    if (mode == 'Paused for site visit') return 'Paused';
+    return 'Stopped';
+  }
+
+  String _formatHealthTime(DateTime? value) {
+    if (value == null) return 'Not available';
+    return formatTime(value);
+  }
+
+  String _simplePermissionStatus(String status) {
+    switch (status) {
+      case 'granted':
+        return 'Ready';
+      case 'not required':
+        return 'Not required';
+      case 'permission pending':
+        return 'Needs setup';
+      case 'unknown':
+        return 'Not checked';
+      default:
+        return status.isEmpty ? 'Not checked' : status;
+    }
+  }
+
+  String _simpleBatteryStatus(String status) {
+    switch (status) {
+      case 'unrestricted':
+        return 'Unrestricted';
+      case 'restricted':
+        return 'Restricted';
+      case 'unknown':
+        return 'Not checked';
+      default:
+        return status.isEmpty ? 'Not checked' : status;
+    }
   }
 
   String _month(int month) {
