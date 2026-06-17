@@ -42,8 +42,6 @@ alter table public.profiles drop constraint if exists profiles_role_check;
 alter table public.profiles add constraint profiles_role_check check (
   role in (
     'Admin',
-    'Developer',
-    'Super Admin',
     'BD',
     'BD Team',
     'BD Head',
@@ -106,7 +104,7 @@ language sql
 stable
 as $$
   select case
-    when p_role in ('Admin', 'Developer', 'Super Admin') then 'Admin'
+    when p_role in ('Admin') then 'Admin'
     when p_role in ('COO', 'Management', 'BD Head') then 'Management'
     when p_role in ('BD', 'BD Team', 'BD Executive') then 'BD'
     when p_role in ('Operations', 'Operations Team') then 'Operations'

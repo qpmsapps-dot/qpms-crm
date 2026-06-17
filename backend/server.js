@@ -43,18 +43,6 @@ const apiDemoUsers = [
 ];
 
 const apiSessions = new Map();
-const SUPER_ROLES = ['Developer', 'Super Admin'];
-
-function isSuperRole(role) {
-  return SUPER_ROLES.includes(String(role || '').trim());
-}
-
-function hasBackendRole(user, allowedRoles = []) {
-  if (!user) return false;
-  if (isSuperRole(user.role)) return true;
-  return allowedRoles.includes(user.role);
-}
-
 function normalizeSupabaseUrl(url) {
   return String(url || '').replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
 }
@@ -136,7 +124,7 @@ function requireApiAuth(request, response, next) {
 
 function requireRoles(roles) {
   return (request, response, next) => {
-    if (!hasBackendRole(request.apiUser, roles)) {
+    if (!roles.includes(request.apiUser?.role)) {
       response.status(403).json({ ok: false, message: `Role ${request.apiUser?.role || 'Unknown'} cannot perform this action.` });
       return;
     }
@@ -1200,7 +1188,7 @@ app.get('/api/approvals/queue', requireApiAuth, async (request, response) => {
       return;
     }
 
-    if (!hasBackendRole(request.apiUser, ['Admin']) && reviewerRoleToDepartment[request.apiUser.role] !== requestedDepartment) {
+    if (request.apiUser.role !== 'Admin' && reviewerRoleToDepartment[request.apiUser.role] !== requestedDepartment) {
       response.status(403).json({ ok: false, message: `${request.apiUser.role} cannot view ${requestedDepartment} queue.` });
       return;
     }
@@ -1237,7 +1225,7 @@ app.post('/api/approvals/:approvalId/decision', requireApiAuth, async (request, 
     if (fetchError) throw fetchError;
 
     const assignedRole = reviewerRoleForStage(approval.approval_stage);
-    if (!hasBackendRole(request.apiUser, ['Admin']) && request.apiUser.role !== assignedRole) {
+    if (request.apiUser.role !== 'Admin' && request.apiUser.role !== assignedRole) {
       response.status(403).json({ ok: false, message: `${request.apiUser.role} cannot decide ${stageToDepartment(approval.approval_stage)} approval.` });
       return;
     }

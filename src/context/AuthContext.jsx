@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import { api, clearBackendToken, readBackendToken, setBackendToken } from '../services/api.js';
-import { isProductionAuthMode, isSuperUser, normalizeAppRole } from '../utils/authRoles.js';
+import { isProductionAuthMode, normalizeAppRole } from '../utils/authRoles.js';
 import { AuthContext } from './auth-context.js';
 
 const authStorageKey = 'qpms-crm-auth-user';
@@ -191,7 +191,7 @@ export function AuthProvider({ children }) {
     }
 
     const nextUser = await fetchProfileForSession(data.session);
-    if (!nextUser?.isActive && nextUser?.role !== 'Admin' && !isSuperUser(nextUser)) {
+    if (!nextUser?.isActive && nextUser?.role !== 'Admin') {
       await supabase.auth.signOut();
       setUserState(null);
       setAuthStatus('ready');
