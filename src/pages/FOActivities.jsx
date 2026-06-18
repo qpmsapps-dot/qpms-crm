@@ -65,7 +65,7 @@ const MEDIUM_CONFIDENCE_MULTIPLIER = 1.08;
 const LOW_CONFIDENCE_MULTIPLIER = 1.12;
 const SITE_GEOFENCE_METERS = 100;
 const FO_SITE_VISIT_SELECT =
-  "id,fo_user_id,employee_code,fo_name,display_name,attendance_id,store_id,store_name,site_name,client_name,store_code,site_code,business,state,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,current_latitude,current_longitude,origin_lat,origin_lng,destination_lat,destination_lng,route_km,google_route_polyline,visit_duration_minutes,status,visit_status,checkout_note,metadata";
+  "id,fo_user_id,employee_code,attendance_id,store_id,store_name,site_name,client_name,store_code,state,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,current_latitude,current_longitude,origin_lat,origin_lng,destination_lat,destination_lng,route_km,google_route_polyline,visit_duration_minutes,status,visit_status,checkout_note,metadata";
 const FO_LIVE_STATUS_SELECT =
   "fo_user_id,latitude,longitude,last_seen_at,updated_at,route_km_today,is_online,is_tracking,current_status,display_name,username,accuracy,battery_percentage";
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:4000").replace(/\/+$/, "");
@@ -84,6 +84,31 @@ const MAIN_ROUTE_GAP_DISTANCE_METERS = 500;
 const MAIN_ROUTE_GAP_SECONDS = 120;
 const KM_RECALC_COOLDOWN_MS = 60 * 1000;
 const KM_RECALC_RUNNING_MESSAGE = "Recalculation already running. Please wait.";
+const MOVEMENT_FRESHNESS_MS = 5 * 60 * 1000;
+const MOVEMENT_SPEED_THRESHOLD_MPS = 1;
+const ACTIVE_OPERATIONAL_STATUSES = new Set([
+  "ON_SITE",
+  "ON_TRAVEL",
+  "ACTIVE_STATIONARY",
+]);
+const FIELD_APP_ROLE_KEYS = new Set([
+  "FO",
+  "FIELD_OFFICER",
+  "KEY_ACCOUNT_MANAGER",
+  "KEY_ACCOUNTS_MANAGER",
+  "KAM",
+  "OPERATIONS_MANAGER",
+  "MANAGER",
+  "BRANCH_HEAD",
+  "PROJECT_COORDINATOR",
+]);
+const OPERATIONAL_STATUS_LABELS = {
+  ON_SITE: "On Site",
+  ON_TRAVEL: "On Travel",
+  ACTIVE_STATIONARY: "Active / Stationary",
+  NOT_STARTED: "Not Started",
+  ENDED: "Ended Day",
+};
 const ROUTE_MAP_SOUTH_INDIA_BOUNDS = {
   minLat: 6,
   maxLat: 20,
@@ -109,6 +134,15 @@ function toDateInputValue(date) {
     month: "2-digit",
     day: "2-digit",
   }).format(date);
+}
+
+function logSupabaseError(context, error) {
+  console.error(context, {
+    code: error?.code || null,
+    message: error?.message || String(error || "Unknown Supabase error"),
+    details: error?.details || null,
+    hint: error?.hint || null,
+  });
 }
 
 function indiaDateFromInput(value) {
@@ -195,26 +229,25 @@ function formatDateOnly(value) {
   }).format(new Date(value));
 }
 
+function isOperationallyActive(officer) {
+  return ACTIVE_OPERATIONAL_STATUSES.has(officer?.operationalStatus);
+}
+
+function operationalStatusLabel(status) {
+  return OPERATIONAL_STATUS_LABELS[status] || "Not Started";
+}
+
 function officerStatus(officer) {
-  if (officer.status === "Offline")
-    return { label: "Offline", tone: "text-rose-600", dot: "bg-rose-500" };
-  if (officer.status === "Recent")
-    return {
-      label: "Recently Active",
-      tone: "text-amber-600",
-      dot: "bg-amber-500",
-    };
-  if (officer.battery < 20)
-    return {
-      label: "Low Battery",
-      tone: "text-amber-600",
-      dot: "bg-amber-500",
-    };
-  return { label: "Online", tone: "text-emerald-600", dot: "bg-emerald-500" };
+  const active = isOperationallyActive(officer);
+  return {
+    label: operationalStatusLabel(officer?.operationalStatus),
+    tone: active ? "text-emerald-600" : "text-rose-600",
+    dot: active ? "bg-emerald-500" : "bg-rose-500",
+  };
 }
 
 function batteryState(officer) {
-  if (officer.battery === null || officer.status === "Offline")
+  if (officer.battery === null || !isOperationallyActive(officer))
     return { tone: "text-slate-400", label: "--" };
   if (officer.battery < 20)
     return { tone: "text-rose-600", label: `${officer.battery}%` };
@@ -226,28 +259,18 @@ function batteryState(officer) {
 function markerTone(state, officers) {
   const isCritical =
     state.status === "Critical" ||
-    officers.some((officer) => officer.status === "Offline");
-  const needsAttention =
-    state.status === "Warning" ||
-    officers.some(
-      (officer) =>
-        officer.status !== "Active" ||
-        (officer.battery !== null && officer.battery < 30),
-    );
+    officers.some((officer) => !isOperationallyActive(officer));
   if (isCritical) return "#ef4444";
-  if (needsAttention) return "#f59e0b";
   return "#10b981";
 }
 
 function foMarkerColor(officer) {
-  if (officer.status === "Offline") return "#ef4444";
-  if (officer.status === "Recent") return "#f59e0b";
-  return "#10b981";
+  return isOperationallyActive(officer) ? "#10b981" : "#ef4444";
 }
 
 function foMarkerIcon(officer) {
   const color = foMarkerColor(officer);
-  const isActive = officer.status === "Active";
+  const isActive = isOperationallyActive(officer);
   const isSelected = officer.isSelected === true;
   const rotation = Number(officer.heading || 0);
   return L.divIcon({
@@ -344,22 +367,28 @@ function normalizeFoKey(value = "") {
   return String(value).trim().toUpperCase();
 }
 
+function normalizeFieldRole(value = "") {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+}
+
 function profileKeys(row) {
-  return [row?.employee_code, row?.username, row?.fo_user_id]
+  return [row?.fo_user_id, row?.id, row?.employee_code, row?.username]
     .map(normalizeFoKey)
     .filter(Boolean);
 }
 
 function isRealFoProfile(profile) {
-  const role = String(profile?.role || "")
-    .trim()
-    .toLowerCase();
+  const role = normalizeFieldRole(profile?.role);
+  const designation = normalizeFieldRole(profile?.designation);
   const status = String(profile?.status || "")
     .trim()
     .toLowerCase();
   const keys = profileKeys(profile);
   return (
-    ["fo", "field officer"].includes(role) &&
+    (FIELD_APP_ROLE_KEYS.has(role) || FIELD_APP_ROLE_KEYS.has(designation)) &&
     !["deleted", "disabled", "inactive", "blocked"].includes(status) &&
     keys.length > 0
   );
@@ -753,7 +782,6 @@ function liveStatusFromRow(row) {
   if (!Number.isFinite(ageMs)) return "Offline";
   const ageMinutes = ageMs / 60000;
   if (ageMinutes <= 2) return "Active";
-  if (ageMinutes <= 10) return "Recent";
   return "Offline";
 }
 
@@ -775,8 +803,7 @@ function normalizeCoordinates(coordinates) {
 }
 
 function canShowOfficerMarker(officer) {
-  return ["Active", "Recent", "Offline"].includes(officer.status) &&
-    hasFiniteCoordinates(officer.coordinates);
+  return hasFiniteCoordinates(officer.coordinates);
 }
 
 function latestValidLocationLog(logs = []) {
@@ -860,7 +887,7 @@ function markerAnimationLabel(timestamp) {
 }
 
 function canAnimateOfficerMarker(officer) {
-  if (officer.status === "Offline") return false;
+  if (!isOperationallyActive(officer)) return false;
   if (
     String(
       officer.attendance?.status || officer.action || officer.current_status || "",
@@ -981,6 +1008,7 @@ async function fetchFoSiteVisitRows(fromIso, toIso) {
     .limit(5000);
   let response = await query;
   if (response.error) {
+    logSupabaseError("[myQPMS FO] fo_site_visits select failed.", response.error);
     const message = String(response.error.message || "").toLowerCase();
     const missingColumn =
       response.error.code === "42703" ||
@@ -995,7 +1023,10 @@ async function fetchFoSiteVisitRows(fromIso, toIso) {
       .lte("check_in_time", toIso)
       .order("check_in_time", { ascending: false })
       .limit(5000);
-    if (response.error) throw response.error;
+    if (response.error) {
+      logSupabaseError("[myQPMS FO] fo_site_visits fallback select failed.", response.error);
+      throw response.error;
+    }
   }
   return response.data || [];
 }
@@ -1033,13 +1064,36 @@ function siteVisitCheckoutValue(visit) {
 }
 
 function isSiteVisitOpen(visit) {
-  return !visit?.checkout_time && !visit?.check_out_time;
+  const status = String(visit?.status || visit?.visit_status || "");
+  return (
+    Boolean(visit?.check_in_time) &&
+    !visit?.checkout_time &&
+    !visit?.check_out_time &&
+    !/completed|closed|checked\s*out|checkout|ended/i.test(status)
+  );
+}
+
+function isSameIndiaDate(value, dateInput) {
+  if (!value || !dateInput) return false;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return false;
+  return toDateInputValue(parsed) === dateInput;
+}
+
+function isCurrentAttendanceVisit(visit, attendance, dateInput) {
+  if (!visit) return false;
+  const visitAttendanceId = String(visit.attendance_id || "");
+  const attendanceId = String(attendance?.id || "");
+  if (visitAttendanceId && attendanceId) {
+    return visitAttendanceId === attendanceId;
+  }
+  return isSameIndiaDate(visit.check_in_time, dateInput);
 }
 
 function isAttendanceEnded(attendance) {
   return (
     Boolean(attendance?.logout_time) ||
-    /completed|ended|closed|logout/i.test(String(attendance?.status || ""))
+    /completed|ended|closed|logout|stale\s*auto\s*ended|stale_auto_ended/i.test(String(attendance?.status || ""))
   );
 }
 
@@ -1225,15 +1279,35 @@ function reviewFlagsForOfficer({ systemKm = 0, attendance, visits = [], logs = [
   return [...flags];
 }
 
-function officerFromRows({ foId, profile, live, attendance, visits, logs }) {
+function officerFromRows({ foId, profile, live, attendance, visits, logs, statusDate }) {
   const record = attendance || {};
   const foVisits = visits || [];
   const foLogs = logs || [];
   const gpsPoint = gpsPointFromLiveOrLogs(live, foLogs);
+  const employeeKey = normalizeFoKey(
+    live?.fo_user_id ||
+      record.fo_user_id ||
+      foVisits[0]?.fo_user_id ||
+      foLogs[0]?.fo_user_id ||
+      profile?.id ||
+      record.employee_code ||
+      foVisits[0]?.employee_code ||
+      foLogs[0]?.employee_code ||
+      profile?.employee_code ||
+      foId,
+  );
+  const operational = deriveOperationalStatus({
+    employeeKey,
+    attendance: record,
+    visits: foVisits,
+    live,
+    logs: foLogs,
+    gpsPoint,
+    dateInput: statusDate,
+  });
   const coordinates = gpsPoint?.coordinates ?? null;
   const sourceTimestamp =
     gpsPoint?.timestamp || liveStatusTimestamp(live) || record.login_time;
-  const status = live ? liveStatusFromRow(live) : "Offline";
   const payableRouteKm = payableRouteKmForOfficer({
     foId,
     live,
@@ -1262,12 +1336,15 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs }) {
 
   return {
     id: `live-${foId}`,
+    employeeKey,
     foId,
     name,
     employeeCode: profile?.employee_code || live?.fo_user_id || foId,
-    status,
+    status: operational.operationalStatus,
+    ...operational,
     assignedSite:
-      foVisits.find((visit) => isSiteVisitOpen(visit))?.store_name ||
+      operational.openVisit?.store_name ||
+      operational.openVisit?.site_name ||
       "No active store visit",
     branch: state,
     state,
@@ -1306,7 +1383,7 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs }) {
   };
 }
 
-function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs }) {
+function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statusDate }) {
   const latestAttendance = latestBy(attendance, "login_time");
   const latestLiveStatus = latestLiveStatusByFo(liveStatus);
   const profilesByCode = profileByFoKey(profiles);
@@ -1347,6 +1424,7 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs }) {
       attendance: latestAttendance.get(foId),
       visits: visitsByFo.get(foId) || [],
       logs: logsByFo.get(foId) || [],
+      statusDate,
     }),
   );
 }
@@ -1367,7 +1445,15 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
   const timestamp =
     gpsPoint?.timestamp ||
     (coordinates ? existing.locationSourceTime : liveStatusTimestamp(row));
-  const status = liveStatusFromRow(row);
+  const employeeKey = normalizeFoKey(row?.fo_user_id || existing.employeeKey || existing.foId || existing.employeeCode);
+  const operational = deriveOperationalStatus({
+    employeeKey,
+    attendance: existing.attendance,
+    visits: existing.visits || [],
+    live: row,
+    logs: existing.logs || [],
+    gpsPoint,
+  });
   const battery = batteryFromRow(row);
   const actualKm = Number(existing.foSafeKm?.actualTravelKm ?? existing.actualKm ?? 0);
   const payableRouteKm = payableRouteKmForOfficer({
@@ -1387,6 +1473,7 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
   return {
     ...existing,
     id: existing.id || `live-${foId}`,
+    employeeKey,
     foId,
     name:
       profile?.full_name ||
@@ -1401,7 +1488,8 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
       row?.fo_user_id ||
       existing.employeeCode ||
       foId,
-    status,
+    status: operational.operationalStatus,
+    ...operational,
     assignedSite: existing.assignedSite || "No active store visit",
     branch: profile?.state || row?.state || existing.state || "--",
     state: profile?.state || row?.state || existing.state || "--",
@@ -1590,19 +1678,10 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
     officer.eligibleKm ?? officer.routeKmToday ?? 0,
   );
   const actualTravelKm = Number(officer.actualTravelKm ?? officer.actualKm ?? 0);
-  const isLive = status.label === "Online";
-  const isRecent =
-    status.label === "Recently Active" || status.label === "Low Battery";
-  const statusText =
-    officer.movementStatusLabel ||
-    (isLive ? "Live" : isRecent ? "Recent" : "Offline");
-  const statusClass = officer.movementStatusLabel
+  const statusText = status.label;
+  const statusClass = isOperationallyActive(officer)
     ? "bg-emerald-50 text-emerald-700"
-    : isLive
-    ? "bg-emerald-50 text-emerald-700"
-    : isRecent
-      ? "bg-amber-50 text-amber-700"
-      : "bg-rose-50 text-rose-700";
+    : "bg-rose-50 text-rose-700";
 
   return (
     <button
@@ -1691,15 +1770,10 @@ function SelectedOfficerSummary({
     : "--";
   const claimKmLabel = hasClaimKm ? `${claimKm.toFixed(1)} km` : "--";
   const claimPetrol = Number(officer.petrolAmount ?? claimKm * RATE_PER_KM);
-  const isLive = status.label === "Online";
-  const isRecent =
-    status.label === "Recently Active" || status.label === "Low Battery";
-  const statusText = isLive ? "Live" : isRecent ? "Recent" : "Offline";
-  const statusClass = isLive
+  const statusText = status.label;
+  const statusClass = isOperationallyActive(officer)
     ? "bg-emerald-50 text-emerald-700"
-    : isRecent
-      ? "bg-amber-50 text-amber-700"
-      : "bg-rose-50 text-rose-700";
+    : "bg-rose-50 text-rose-700";
 
   return (
     <div className="border-b border-slate-100 bg-qpms-50/70 p-4 dark:border-slate-800 dark:bg-qpms-500/10">
@@ -2078,12 +2152,7 @@ function OperationsMap({
                   </p>
                   <p className="text-slate-600">
                     Status:{" "}
-                    {officer.movementStatusLabel ||
-                      (officer.status === "Active"
-                        ? "Live"
-                        : officer.status === "Recent"
-                          ? "Recent"
-                          : "Offline")}
+                    {officer.operationalStatusLabel || operationalStatusLabel(officer.operationalStatus)}
                   </p>
                   <p className="text-slate-600">
                     Last seen: {officer.lastSeen}
@@ -2114,9 +2183,9 @@ function OperationsMap({
                 </div>
               ))}
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                <span>Active FO</span>
+                <span>Active Users</span>
                 <strong>{pin.activeOfficers}</strong>
-                <span>Offline FO</span>
+                <span>Inactive Users</span>
                 <strong>{pin.offlineOfficers}</strong>
                 <span>Low battery</span>
                 <strong>{pin.lowBattery}</strong>
@@ -2500,7 +2569,7 @@ async function exportFoOperationsExcel({
       Date: `${toDateInputValue(from)} to ${toDateInputValue(to)}`,
       "Start Time": formatDateTime(attendance.login_time),
       "End Time": formatDateTime(attendance.logout_time),
-      "Attendance Status": attendance.status || officer.status || "",
+      "Attendance Status": attendance.status || officer.operationalStatusLabel || "",
       "Raw GPS KM": safeKm.rawGpsKm.toFixed(2),
       "Filtered GPS KM": safeKm.filteredGpsKm.toFixed(2),
       "Actual Travel KM": safeKm.actualTravelKm.toFixed(2),
@@ -2694,6 +2763,117 @@ function visitTitle(visit) {
 
 function visitClient(visit) {
   return visit?.client_name || "--";
+}
+
+function visitBusinessType(visit) {
+  const metadata = visit?.metadata && typeof visit.metadata === "object" && !Array.isArray(visit.metadata)
+    ? visit.metadata
+    : {};
+  return (
+    metadata.business ||
+    metadata.business_type ||
+    metadata.store_business ||
+    metadata.client_business ||
+    visit?.client_name ||
+    "--"
+  );
+}
+
+function isAttendanceForDate(attendance, dateInput) {
+  if (!attendance || !dateInput) return false;
+  if (String(attendance.attendance_date || "").slice(0, 10) === dateInput) return true;
+  return isSameIndiaDate(attendance.login_time, dateInput);
+}
+
+function isAttendanceActiveForDate(attendance, dateInput) {
+  return (
+    isAttendanceForDate(attendance, dateInput) &&
+    Boolean(attendance?.login_time) &&
+    isAttendanceActive(attendance)
+  );
+}
+
+function latestOpenSiteVisitForDate(visits = [], attendance = null, dateInput = toDateInputValue(new Date())) {
+  return visits
+    .filter((visit) => isSiteVisitOpen(visit) && isCurrentAttendanceVisit(visit, attendance, dateInput))
+    .sort((a, b) => new Date(b.check_in_time || b.created_at || 0) - new Date(a.check_in_time || a.created_at || 0))[0] || null;
+}
+
+function isFreshTimestamp(value, freshnessMs = MOVEMENT_FRESHNESS_MS) {
+  if (!value) return false;
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return false;
+  return Date.now() - time <= freshnessMs;
+}
+
+function textIndicatesMovement(value = "") {
+  return /moving|travel|transit|navigation|en\s*route|on\s*route|driv/i.test(String(value || ""));
+}
+
+function freshSpeedIndicatesMovement(speed, timestamp) {
+  const parsed = Number(speed);
+  return Number.isFinite(parsed) && parsed > MOVEMENT_SPEED_THRESHOLD_MPS && isFreshTimestamp(timestamp);
+}
+
+function latestLogWithFreshSpeed(logs = []) {
+  return [...logs]
+    .filter((log) => freshSpeedIndicatesMovement(log?.speed, log?.captured_at || log?.logged_at || log?.recorded_at || log?.created_at))
+    .sort((a, b) => routePointTime(b) - routePointTime(a))[0] || null;
+}
+
+function hasFreshMovement({ live, logs = [], gpsPoint }) {
+  const liveTimestamp = liveStatusTimestamp(live);
+  if (textIndicatesMovement(live?.current_status) && isFreshTimestamp(liveTimestamp)) return true;
+  if (freshSpeedIndicatesMovement(gpsPoint?.speed, gpsPoint?.timestamp)) return true;
+  return Boolean(latestLogWithFreshSpeed(logs));
+}
+
+function deriveOperationalStatus({
+  employeeKey,
+  attendance,
+  visits = [],
+  live,
+  logs = [],
+  gpsPoint,
+  dateInput = toDateInputValue(new Date()),
+}) {
+  const todayAttendanceExists = isAttendanceForDate(attendance, dateInput);
+  const hasActiveAttendanceToday = isAttendanceActiveForDate(attendance, dateInput);
+  const openVisit = hasActiveAttendanceToday
+    ? latestOpenSiteVisitForDate(visits, attendance, dateInput)
+    : null;
+  const hasOpenSiteVisit = Boolean(openVisit);
+  const isCurrentlyMoving = hasActiveAttendanceToday && !hasOpenSiteVisit
+    ? hasFreshMovement({ live, logs, gpsPoint })
+    : false;
+  let operationalStatus = "NOT_STARTED";
+
+  if (hasActiveAttendanceToday && hasOpenSiteVisit) {
+    operationalStatus = "ON_SITE";
+  } else if (hasActiveAttendanceToday && isCurrentlyMoving) {
+    operationalStatus = "ON_TRAVEL";
+  } else if (hasActiveAttendanceToday) {
+    operationalStatus = "ACTIVE_STATIONARY";
+  } else if (todayAttendanceExists && isAttendanceEnded(attendance)) {
+    operationalStatus = "ENDED";
+  }
+
+  return {
+    employeeKey,
+    hasActiveAttendanceToday,
+    hasOpenSiteVisit,
+    isCurrentlyMoving,
+    openVisit,
+    operationalStatus,
+    operationalStatusLabel: operationalStatusLabel(operationalStatus),
+  };
+}
+
+function statusFilterMatches(officer, filter) {
+  if (filter === "All Status") return true;
+  if (filter === "Active") return isOperationallyActive(officer);
+  if (filter === "Offline") return ["NOT_STARTED", "ENDED"].includes(officer?.operationalStatus);
+  return officer?.operationalStatus === filter;
 }
 
 function visitLocation(visit) {
@@ -3751,7 +3931,7 @@ function FieldOfficerDetailsView({
     return filteredActivityUploads(siteScopedUploads, photoFilter);
   }, [activityUploads, photoFilter, selectedVisit]);
   const status = officerStatus(officer);
-  const isLive = status.label === "Online";
+  const isLive = isOperationallyActive(officer);
   const workingMinutes = attendanceWorkingMinutes(attendance);
   const totalVisitMinutes = visits.reduce((sum, visit) => sum + (visitMinutes(visit) || 0), 0);
   const totalKm = Number(officer?.eligibleKm ?? officer?.routeKmToday);
@@ -3826,7 +4006,7 @@ function FieldOfficerDetailsView({
               <div className="flex flex-wrap items-center gap-3">
                 <h1 className="min-w-0 break-words text-3xl font-black tracking-normal text-slate-950">{officer?.name || "--"}</h1>
                 <span className={`rounded-full px-3 py-1 text-xs font-black ${isLive ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                  {isLive ? "Live / Active" : displayValue(status.label)}
+                  {displayValue(status.label)}
                 </span>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-6 text-sm font-semibold text-slate-600">
@@ -3965,7 +4145,7 @@ function FieldOfficerDetailsView({
                 {[
                   ["Site / Client", `${visitTitle(selectedVisit)} / ${visitClient(selectedVisit)}`],
                   ["Client Name", visitClient(selectedVisit)],
-                  ["Business Type", selectedVisit?.business],
+                  ["Business Type", visitBusinessType(selectedVisit)],
                   ["Address", selectedVisit?.address || selectedVisit?.location_name],
                   ["Check-in", formatDateTime(selectedVisit?.check_in_time)],
                   ["Check-out", formatDateTime(siteVisitCheckoutValue(selectedVisit))],
@@ -4070,16 +4250,16 @@ function todayAttendanceFromRows(rows = []) {
   return sorted[0] || null;
 }
 
-function activeSiteVisitFromRows(rows = []) {
+function activeSiteVisitFromRows(rows = [], attendance = null, dateInput = toDateInputValue(new Date())) {
   return rows
     .slice()
     .sort((a, b) => new Date(b.check_in_time || b.created_at || 0) - new Date(a.check_in_time || a.created_at || 0))
-    .find(isSiteVisitOpen) || null;
+    .find((visit) => isSiteVisitOpen(visit) && isCurrentAttendanceVisit(visit, attendance, dateInput)) || null;
 }
 
-function supportActionAvailability({ attendanceRows = [], visitRows = [] }) {
+function supportActionAvailability({ attendanceRows = [], visitRows = [], date = toDateInputValue(new Date()) }) {
   const attendance = todayAttendanceFromRows(attendanceRows);
-  const activeVisit = activeSiteVisitFromRows(visitRows);
+  const activeVisit = activeSiteVisitFromRows(visitRows, attendance, date);
   const hasAttendance = Boolean(attendance);
   const attendanceActive = isAttendanceActive(attendance);
   const attendanceEnded = isAttendanceEnded(attendance);
@@ -4136,14 +4316,10 @@ function FoSupportActionPanel({
     : "--";
   const claimKmLabel = hasClaimKm ? `${claimKm.toFixed(1)} km` : "--";
   const claimPetrol = Number(officer.petrolAmount ?? claimKm * RATE_PER_KM);
-  const isLive = status.label === "Online";
-  const isRecent = status.label === "Recently Active" || status.label === "Low Battery";
-  const statusText = isLive ? "Live" : isRecent ? "Recent" : "Offline";
-  const statusClass = isLive
+  const statusText = status.label;
+  const statusClass = isOperationallyActive(officer)
     ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
-    : isRecent
-      ? "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200"
-      : "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-200";
+    : "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-200";
   const accuracyLabel =
     officer.accuracy === null || officer.accuracy === undefined
       ? "--"
@@ -4700,6 +4876,7 @@ export default function FOActivities() {
           liveStatus: liveStatusRows,
           profiles: profileRows,
           logs: logsRes.data || [],
+          statusDate: toDateInputValue(new Date()),
         });
         console.debug("FO_ATTENDANCE_LOADED", attendanceRes.data?.length || 0);
         console.debug("FO_SITE_VISITS_LOADED", siteVisits.length);
@@ -4788,21 +4965,27 @@ export default function FOActivities() {
 
   const officers = liveOfficers;
 
-  const filteredOfficers = useMemo(
+  const structurallyFilteredOfficers = useMemo(
     () =>
       officers.filter((officer) => {
         const stateMatches =
           stateFilter === "All States" || officer.state === stateFilter;
-        const statusMatches =
-          statusFilter === "All Status" || officer.status === statusFilter;
         const searchMatches =
           !search ||
           `${officer.name} ${officer.employeeCode || officer.foId} ${officer.assignedSite} ${officer.branch}`
             .toLowerCase()
             .includes(search.toLowerCase());
-        return stateMatches && statusMatches && searchMatches;
+        return stateMatches && searchMatches;
       }),
-    [officers, search, stateFilter, statusFilter],
+    [officers, search, stateFilter],
+  );
+
+  const filteredOfficers = useMemo(
+    () =>
+      structurallyFilteredOfficers.filter((officer) =>
+        statusFilterMatches(officer, statusFilter),
+      ),
+    [statusFilter, structurallyFilteredOfficers],
   );
 
   const stateSummaryRows = useMemo(() => {
@@ -4825,9 +5008,7 @@ export default function FOActivities() {
         officer.tasks?.filter((task) => task.task_status !== "completed")
           .length || 0;
       current.visits += officer.visits?.length || 0;
-      if (officer.status === "Offline") current.status = "Critical";
-      else if (officer.battery !== null && officer.battery < 20)
-        current.status = "Warning";
+      if (!isOperationallyActive(officer)) current.status = "Critical";
       byState.set(officer.state, current);
     });
     return Array.from(byState.values());
@@ -5037,18 +5218,22 @@ export default function FOActivities() {
 
   async function loadSupportContext(officer) {
     if (!officer || !isSupabaseConfigured || !supabase) {
-      setSupportContext({ attendanceRows: [], visitRows: [] });
+      setSupportContext({ attendanceRows: [], visitRows: [], date: toDateInputValue(new Date()) });
       return;
     }
     const foId = normalizeFoKey(officer.foId || officer.employeeCode);
     if (!foId) {
-      setSupportContext({ attendanceRows: [], visitRows: [] });
+      setSupportContext({ attendanceRows: [], visitRows: [], date: toDateInputValue(new Date()) });
       return;
     }
     setSupportLoading(true);
     setSupportMessage("");
     try {
       const today = toDateInputValue(new Date());
+      const todayStart = startOfIndiaDayFromInput(today).getTime();
+      const todayEnd = endOfIndiaDayFromInput(today).getTime();
+      const todayStartIso = startOfIndiaDayFromInput(today).toISOString();
+      const todayEndIso = endOfIndiaDayFromInput(today).toISOString();
       const [attendanceRes, visitsRes] = await Promise.all([
         supabase
           .from("fo_attendance")
@@ -5061,25 +5246,31 @@ export default function FOActivities() {
           .from("fo_site_visits")
           .select("*")
           .or(`fo_user_id.eq.${foId},employee_code.eq.${foId}`)
+          .gte("check_in_time", todayStartIso)
+          .lte("check_in_time", todayEndIso)
           .order("check_in_time", { ascending: false })
           .limit(100),
       ]);
-      if (attendanceRes.error) throw attendanceRes.error;
-      if (visitsRes.error) throw visitsRes.error;
+      if (attendanceRes.error) {
+        logSupabaseError("[myQPMS FO] Support attendance query failed.", attendanceRes.error);
+        throw attendanceRes.error;
+      }
+      if (visitsRes.error) {
+        logSupabaseError("[myQPMS FO] Support fo_site_visits query failed.", visitsRes.error);
+        throw visitsRes.error;
+      }
       const attendanceRows = attendanceRes.data || [];
       const attendanceIds = new Set(attendanceRows.map((row) => String(row.id || "")).filter(Boolean));
-      const todayStart = startOfIndiaDayFromInput(today).getTime();
-      const todayEnd = endOfIndiaDayFromInput(today).getTime();
       const visitRows = (visitsRes.data || []).filter((visit) => {
-        if (isSiteVisitOpen(visit)) return true;
         if (visit.attendance_id && attendanceIds.has(String(visit.attendance_id))) return true;
         const checkInMs = new Date(visit.check_in_time || 0).getTime();
         return checkInMs >= todayStart && checkInMs <= todayEnd;
       });
-      setSupportContext({ attendanceRows, visitRows });
+      setSupportContext({ attendanceRows, visitRows, date: today });
     } catch (error) {
+      logSupabaseError("[myQPMS FO] Support action context failed.", error);
       console.warn("[myQPMS FO] Support action context failed.", error);
-      setSupportContext({ attendanceRows: [], visitRows: [] });
+      setSupportContext({ attendanceRows: [], visitRows: [], date: toDateInputValue(new Date()) });
       setSupportMessage(error?.message || "Unable to load today's support state.");
     } finally {
       setSupportLoading(false);
@@ -5106,6 +5297,7 @@ export default function FOActivities() {
     setSupportContext({
       attendanceRows: officer.attendance ? [officer.attendance] : [],
       visitRows: officer.visits || [],
+      date: toDateInputValue(new Date()),
     });
     loadSupportContext(officer);
   }
@@ -5334,12 +5526,7 @@ export default function FOActivities() {
           state: officer.state,
           tickets: 0,
           visits: officer.visits?.length || 0,
-          status:
-            officer.status === "Offline"
-              ? "Critical"
-              : officer.battery !== null && officer.battery < 20
-                ? "Warning"
-                : "Stable",
+          status: isOperationallyActive(officer) ? "Stable" : "Critical",
         };
         const stateOfficers = [markerOfficer];
         return {
@@ -5348,10 +5535,10 @@ export default function FOActivities() {
           officers: stateOfficers,
           coordinates: [lat, lng],
           activeOfficers: stateOfficers.filter(
-            (officer) => officer.status === "Active",
+            (officer) => isOperationallyActive(officer),
           ).length,
           offlineOfficers: stateOfficers.filter(
-            (officer) => officer.status === "Offline",
+            (officer) => !isOperationallyActive(officer),
           ).length,
           lowBattery: stateOfficers.filter(
             (officer) => officer.battery !== null && officer.battery < 20,
@@ -5455,21 +5642,17 @@ export default function FOActivities() {
   const averageSla = totalStates.length
     ? Math.round(totals.sla / totalStates.length)
     : 0;
-  const activeOfficers = filteredOfficers.filter(
-    (officer) => officer.status === "Active",
+  const kpiOfficers = structurallyFilteredOfficers;
+  const totalFieldUsers = kpiOfficers.length;
+  const activeOfficers = kpiOfficers.filter(isOperationallyActive).length;
+  const offlineOfficers = kpiOfficers.filter(
+    (officer) => ["NOT_STARTED", "ENDED"].includes(officer.operationalStatus),
   ).length;
-  const offlineOfficers = filteredOfficers.filter(
-    (officer) => officer.status === "Offline",
+  const onTravelOfficers = kpiOfficers.filter(
+    (officer) => officer.operationalStatus === "ON_TRAVEL",
   ).length;
-  const onTravelOfficers = filteredOfficers.filter((officer) =>
-    /travel|transit|navigation/i.test(
-      `${officer.action} ${officer.tasks?.[0]?.task_status || ""}`,
-    ),
-  ).length;
-  const onSiteOfficers = filteredOfficers.filter((officer) =>
-    /check|site|visit|progress/i.test(
-      `${officer.action} ${officer.tasks?.[0]?.task_status || ""} ${officer.visits?.[0]?.visit_status || ""}`,
-    ),
+  const onSiteOfficers = kpiOfficers.filter(
+    (officer) => officer.operationalStatus === "ON_SITE",
   ).length;
   const liveRouteKm = filteredOfficers.reduce(
     (sum, officer) =>
@@ -5488,8 +5671,8 @@ export default function FOActivities() {
   const distanceTravelled = `${liveRouteKm.toFixed(1)} km`;
   const actualTravelled = `${liveActualTravelKm.toFixed(1)} km`;
   const routeVsActual = `${(liveRouteKm - liveActualTravelKm).toFixed(1)} km`;
-  const avgRouteKm = filteredOfficers.length
-    ? `${(liveRouteKm / filteredOfficers.length).toFixed(1)} km`
+  const avgRouteKm = totalFieldUsers
+    ? `${(liveRouteKm / totalFieldUsers).toFixed(1)} km`
     : "0.0 km";
 
   if (selectedOfficer) {
@@ -5599,8 +5782,8 @@ export default function FOActivities() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
         <FleetKpi
-          label="Total Field Officers"
-          value={filteredOfficers.length}
+          label="Total Field Users"
+          value={totalFieldUsers}
           icon={UserRoundCheck}
           tone="blue"
         />
@@ -5608,8 +5791,8 @@ export default function FOActivities() {
           label="Live / Active Now"
           value={activeOfficers}
           hint={
-            filteredOfficers.length
-              ? `${Math.round((activeOfficers / filteredOfficers.length) * 100)}%`
+            totalFieldUsers
+              ? `${Math.round((activeOfficers / totalFieldUsers) * 100)}%`
               : "0%"
           }
           icon={RadioTower}
@@ -5705,9 +5888,8 @@ export default function FOActivities() {
             </div>
 
             <div className="absolute bottom-[118px] left-5 z-[520] flex flex-wrap items-center gap-4 rounded-xl border border-white/80 bg-white/95 px-4 py-3 shadow-xl backdrop-blur">
-              <LegendItem color="#10b981" label="Live" helper="(0-2 min)" />
-              <LegendItem color="#f59e0b" label="Recent" helper="(2-10 min)" />
-              <LegendItem color="#ef4444" label="Offline" helper="(>10 min)" />
+              <LegendItem color="#10b981" label="Started Day / Active" />
+              <LegendItem color="#ef4444" label="Not Started or Ended Day" />
               <LegendItem color="#2563eb" label="Site / Office" site />
             </div>
 
@@ -5737,8 +5919,12 @@ export default function FOActivities() {
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 outline-none focus:border-qpms-400"
                   >
                     <option>All Status</option>
-                    <option value="Active">Live</option>
-                    <option value="Recent">Recently Active</option>
+                    <option value="Active">Active</option>
+                    <option value="ON_TRAVEL">On Travel</option>
+                    <option value="ON_SITE">On Site Visit</option>
+                    <option value="ACTIVE_STATIONARY">Active / Stationary</option>
+                    <option value="NOT_STARTED">Not Started</option>
+                    <option value="ENDED">Ended Day</option>
                     <option>Offline</option>
                   </select>
                 </label>
@@ -5846,30 +6032,17 @@ export default function FOActivities() {
               <div className="space-y-3">
                 <LegendItem
                   color="#10b981"
-                  label="Live / Active"
-                  helper="(Last 0-2 min)"
-                />
-                <LegendItem
-                  color="#f59e0b"
-                  label="Recently Active"
-                  helper="(2-10 min)"
+                  label="Started Day / Active"
                 />
                 <LegendItem
                   color="#ef4444"
-                  label="Offline"
-                  helper="(>10 min)"
+                  label="Not Started or Ended Day"
                 />
                 <LegendItem color="#2563eb" label="Site / Office" site />
                 <LegendItem
                   color="#16a34a"
                   label="Route Trail"
                   helper="(Active)"
-                  dashed
-                />
-                <LegendItem
-                  color="#f59e0b"
-                  label="Route Trail"
-                  helper="(Recent)"
                   dashed
                 />
               </div>

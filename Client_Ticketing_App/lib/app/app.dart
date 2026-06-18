@@ -1,0 +1,57 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../features/auth/login_screen.dart';
+import '../features/dashboard/dashboard_screen.dart';
+import '../features/locations/locations_screen.dart';
+import '../features/notifications/notifications_screen.dart';
+import '../features/raise_ticket/raise_ticket_screen.dart';
+import '../features/splash/splash_screen.dart';
+import '../features/tickets/my_tickets_screen.dart';
+import '../features/tickets/ticket_details_screen.dart';
+import '../state/auth_controller.dart';
+import '../state/notification_controller.dart';
+import '../state/ticket_controller.dart';
+import 'routes.dart';
+import 'theme.dart';
+
+class QpmsClientTicketingApp extends StatelessWidget {
+  const QpmsClientTicketingApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AuthController()..load()),
+        ChangeNotifierProvider(create: (_) => TicketController()),
+        ChangeNotifierProvider(create: (_) => NotificationController()),
+      ],
+      child: MaterialApp(
+        title: 'QPMS Client Ticketing App',
+        debugShowCheckedModeBanner: false,
+        theme: buildQpmsTheme(),
+        initialRoute: AppRoutes.splash,
+        routes: {
+          AppRoutes.splash: (_) => const SplashScreen(),
+          AppRoutes.login: (_) => const LoginScreen(),
+          AppRoutes.dashboard: (_) => const DashboardScreen(),
+          AppRoutes.raiseTicket: (_) => const RaiseTicketScreen(),
+          AppRoutes.tickets: (_) => const MyTicketsScreen(),
+          AppRoutes.notifications: (_) => const NotificationsScreen(),
+          AppRoutes.locations: (_) => const LocationsScreen(),
+          AppRoutes.about: (_) => const AboutScreen(),
+        },
+        onGenerateRoute: (settings) {
+          if (settings.name == AppRoutes.ticketDetails) {
+            return MaterialPageRoute(
+              builder: (_) => TicketDetailsScreen(
+                ticketNumber: settings.arguments as String,
+              ),
+            );
+          }
+          return null;
+        },
+      ),
+    );
+  }
+}

@@ -47,13 +47,42 @@ const foKmRecalculationLocks = new Set();
 const foKmRecalculateAllLocks = new Set();
 const FO_KM_RECALCULATION_RUNNING_MESSAGE = 'Recalculation already running. Please wait.';
 
-function currentIndiaDateInput() {
+function currentIndiaDateInput(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Kolkata',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(new Date());
+  }).format(date);
+}
+
+function isActiveAttendance(row) {
+  return Boolean(row) &&
+    !row.logout_time &&
+    String(row.status || 'Active').toLowerCase() === 'active';
+}
+
+async function loadCurrentActiveAttendance(client, foIds, attendanceDate) {
+  const uniqueFoIds = Array.from(new Set((foIds || []).map((value) => String(value || '').trim()).filter(Boolean)));
+  const rowsById = new Map();
+  for (const foId of uniqueFoIds) {
+    for (const column of ['fo_user_id', 'username']) {
+      const { data, error } = await client
+        .from('fo_attendance')
+        .select('*')
+        .eq(column, foId)
+        .eq('attendance_date', attendanceDate)
+        .order('login_time', { ascending: false })
+        .limit(5);
+      if (error) throw error;
+      for (const row of data || []) {
+        rowsById.set(String(row.id || `${column}-${foId}-${row.login_time}`), row);
+      }
+    }
+  }
+  return Array.from(rowsById.values())
+    .sort((a, b) => new Date(b.login_time || b.created_at || 0) - new Date(a.login_time || a.created_at || 0))
+    .find(isActiveAttendance) || null;
 }
 
 function normalizeFoKmRecalculationDate(value) {
@@ -1404,6 +1433,25 @@ app.post(
       }
       if (visit.checkout_time || visit.check_out_time) {
         response.status(409).json({ ok: false, message: 'Site visit is already checked out.' });
+        return;
+      }
+      const today = currentIndiaDateInput();
+      const currentAttendance = await loadCurrentActiveAttendance(
+        client,
+        [visit.fo_user_id, visit.employee_code],
+        today,
+      );
+      if (!currentAttendance) {
+        response.status(409).json({ ok: false, message: 'No current active attendance found for this FO.' });
+        return;
+      }
+      const visitAttendanceId = String(visit.attendance_id || '');
+      if (visitAttendanceId && visitAttendanceId !== String(currentAttendance.id || '')) {
+        response.status(409).json({ ok: false, message: 'Site visit does not belong to the current active attendance.' });
+        return;
+      }
+      if (!visitAttendanceId && currentIndiaDateInput(new Date(visit.check_in_time || 0)) !== today) {
+        response.status(409).json({ ok: false, message: 'Site visit is not from the current attendance date.' });
         return;
       }
 

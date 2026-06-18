@@ -1,0 +1,115 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../../app/routes.dart';
+import '../../core/constants/app_colors.dart';
+import '../../core/widgets/app_card.dart';
+import '../../models/notification_item.dart';
+import '../../state/notification_controller.dart';
+
+class NotificationsScreen extends StatelessWidget {
+  const NotificationsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.watch<NotificationController>();
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Notifications'),
+        actions: [
+          TextButton(
+            onPressed: controller.items.isEmpty
+                ? null
+                : () => context.read<NotificationController>().markAllRead(),
+            child: const Text('Mark all as read'),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+          children: [
+            for (final item in controller.items)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: AppCard(
+                  onTap: item.ticketNumber == null
+                      ? null
+                      : () => Navigator.pushNamed(
+                          context,
+                          AppRoutes.ticketDetails,
+                          arguments: item.ticketNumber,
+                        ),
+                  child: Row(
+                    children: [
+                      _NotificationIcon(item),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.title,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w900,
+                                color: AppColors.deepBlue,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              item.body,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              item.time,
+                              style: const TextStyle(
+                                color: AppColors.muted,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (!item.isRead)
+                        Container(
+                          width: 9,
+                          height: 9,
+                          decoration: const BoxDecoration(
+                            color: AppColors.royalBlue,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NotificationIcon extends StatelessWidget {
+  const _NotificationIcon(this.item);
+  final NotificationItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final data = switch (item.iconKey) {
+      'person' => (Icons.engineering_rounded, AppColors.royalBlue),
+      'work' => (Icons.build_circle_rounded, AppColors.orange),
+      'comment' => (Icons.chat_bubble_rounded, AppColors.purple),
+      'done' => (Icons.verified_rounded, AppColors.green),
+      'closed' => (Icons.check_circle_rounded, AppColors.green),
+      _ => (Icons.confirmation_number_rounded, AppColors.orange),
+    };
+    return CircleAvatar(
+      backgroundColor: data.$2.withValues(alpha: 0.12),
+      child: Icon(data.$1, color: data.$2),
+    );
+  }
+}
