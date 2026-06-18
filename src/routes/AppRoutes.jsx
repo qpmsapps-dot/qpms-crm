@@ -9,6 +9,7 @@ import Sites from '../pages/Sites.jsx';
 import Tasks from '../pages/Tasks.jsx';
 import Employees from '../pages/Employees.jsx';
 import Settings from '../pages/Settings.jsx';
+import UserManagement from '../pages/settings/UserManagement.jsx';
 import { isDemoMode } from '../config/demoMode.js';
 import {
   AssetCenterPage,
@@ -54,6 +55,7 @@ export const router = createBrowserRouter([
           { path: 'reports', element: <ReportingCenterPage /> },
           { path: 'employees', element: isDemoMode ? <Navigate to="/dashboard" replace /> : <Employees /> },
           { path: 'settings', element: <Settings /> },
+          { path: 'settings/user-management', element: <UserManagement /> },
         ],
       },
       { path: '*', element: <Navigate to="/login" replace /> },
