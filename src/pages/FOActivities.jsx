@@ -362,7 +362,13 @@ function foIdFromRow(row) {
 }
 
 function normalizeFoKey(value = "") {
-  return String(value).trim().toUpperCase();
+  return String(value || "").replace(/\s+/g, "").trim().toUpperCase();
+}
+
+function formatDisplayKm(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return `${number > 0 && number < 0.1 ? number.toFixed(2) : number.toFixed(1)} km`;
 }
 
 function normalizeFieldRole(value = "") {
@@ -887,8 +893,10 @@ function latestLiveStatusByFo(rows = []) {
 function profileByEmployeeCode(rows = []) {
   const profilesByCode = new Map();
   rows.forEach((profile) => {
-    const key = normalizeFoKey(profile?.employee_code);
-    if (key) profilesByCode.set(key, profile);
+    [profile?.employee_code, profile?.username].forEach((value) => {
+      const key = normalizeFoKey(value);
+      if (key) profilesByCode.set(key, profile);
+    });
   });
   return profilesByCode;
 }
@@ -899,16 +907,152 @@ function firstNonEmptyText(...values) {
     .find(Boolean) || "";
 }
 
-function officerDisplayName({ profile, visits = [], attendance, employeeCode }) {
-  const visitName = visits
-    .map((visit) => firstNonEmptyText(visit?.full_name))
-    .find(Boolean);
-  return firstNonEmptyText(
-    profile?.full_name,
-    visitName,
-    attendance?.full_name,
-    employeeCode,
+function firstPositiveNumber(...values) {
+  return values
+    .map(Number)
+    .find((value) => Number.isFinite(value) && value > 0) ?? null;
+}
+
+function optionalFiniteNumber(value) {
+  if (value === null || value === undefined || String(value).trim() === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function coordinatesFromFields(row, latitudeField, longitudeField) {
+  const latitude = optionalFiniteNumber(row?.[latitudeField]);
+  const longitude = optionalFiniteNumber(row?.[longitudeField]);
+  return hasFiniteCoordinates([latitude, longitude])
+    ? [latitude, longitude]
+    : null;
+}
+
+function matchOfficerProfile({ officer = {}, attendance, visits = [], profilesByCode }) {
+  const identifiers = [
+    officer.employee_code,
+    officer.employeeCode,
+    officer.fo_user_id,
+    officer.foId,
+    attendance?.employee_code,
+    attendance?.fo_user_id,
+    ...visits.flatMap((visit) => [visit?.employee_code, visit?.fo_user_id]),
+  ];
+  for (const identifier of identifiers) {
+    const profile = profilesByCode.get(normalizeFoKey(identifier));
+    if (profile) return profile;
+  }
+  return null;
+}
+
+function enrichOfficer({ officer, attendance, visits = [], live, profilesByCode }) {
+  const activeVisit = visits.find(isSiteVisitOpen) || null;
+  const profile = matchOfficerProfile({ officer, attendance, visits, profilesByCode });
+  const employeeCode = firstNonEmptyText(
+    officer.employee_code,
+    officer.employeeCode,
+    officer.fo_user_id,
+    officer.foId,
+    attendance?.employee_code,
+    attendance?.fo_user_id,
+    activeVisit?.employee_code,
+    activeVisit?.fo_user_id,
+    profile?.employee_code,
+    profile?.username,
   );
+
+  const displayNameCandidates = [
+    [profile?.full_name, "profile.full_name"],
+    [activeVisit?.full_name, "site_visit.full_name"],
+    [attendance?.full_name, "attendance.full_name"],
+    [officer.full_name, "officer.full_name"],
+    [employeeCode, "employee_code"],
+  ];
+  const displayNameMatch = displayNameCandidates.find(([value]) =>
+    Boolean(firstNonEmptyText(value)),
+  );
+  const name = firstNonEmptyText(displayNameMatch?.[0], employeeCode);
+  const displayNameSource = displayNameMatch?.[1] || "employee_code";
+
+  const locationCandidates = [
+    [coordinatesFromFields(live, "latitude", "longitude"), "live_status"],
+    [coordinatesFromFields(activeVisit, "current_latitude", "current_longitude"), "site_visit.current"],
+    [coordinatesFromFields(activeVisit, "check_in_latitude", "check_in_longitude"), "site_visit.check_in"],
+    [coordinatesFromFields(activeVisit, "destination_lat", "destination_lng"), "site_visit.destination"],
+    [coordinatesFromFields(attendance, "start_latitude", "start_longitude"), "attendance.start"],
+  ];
+  const locationMatch = locationCandidates.find(([coordinates]) => coordinates);
+  const coordinates = locationMatch?.[0] || null;
+  const locationSource = locationMatch?.[1] || "none";
+
+  const attendanceKm = firstPositiveNumber(
+    attendance?.total_route_km,
+    attendance?.eligible_km,
+    attendance?.total_approved_km,
+  );
+  const liveKm = firstPositiveNumber(live?.route_km_today);
+  const siteVisitKm = visits.reduce((sum, visit) => {
+    const routeKm = Number(visit?.route_km);
+    return Number.isFinite(routeKm) && routeKm > 0 ? sum + routeKm : sum;
+  }, 0);
+  const activeVisitKm = firstPositiveNumber(activeVisit?.route_km);
+  const kmCandidates = [
+    [attendanceKm, "attendance"],
+    [liveKm, "live_status.route_km_today"],
+    [siteVisitKm > 0 ? siteVisitKm : null, "site_visits.route_km_sum"],
+    [activeVisitKm, "active_site_visit.route_km"],
+    [0, "zero"],
+  ];
+  const kmMatch = kmCandidates.find(([value]) => value !== null && value !== undefined);
+  const eligibleKm = Number(kmMatch?.[0] || 0);
+  const kmSource = kmMatch?.[1] || "zero";
+  const sourceTimestamp =
+    locationSource === "live_status"
+      ? liveStatusTimestamp(live)
+      : locationSource.startsWith("site_visit")
+        ? activeVisit?.check_in_time
+        : attendance?.login_time;
+  const dataSources = [
+    live ? "live_status" : null,
+    attendance ? "attendance" : null,
+    visits.length ? "site_visit" : null,
+    profile ? "profile" : null,
+  ].filter(Boolean);
+
+  return {
+    ...officer,
+    profile,
+    employeeCode,
+    employeeKey: normalizeFoKey(employeeCode),
+    name,
+    state: profile?.state || officer.state || "--",
+    branch: profile?.state || officer.branch || officer.state || "--",
+    phone: profile?.mobile || profile?.phone || officer.phone || "--",
+    displayNameSource,
+    coordinates,
+    locationSource,
+    locationSourceTime: sourceTimestamp || officer.locationSourceTime || null,
+    accuracy:
+      locationSource === "live_status"
+        ? optionalFiniteNumber(live?.accuracy)
+        : optionalFiniteNumber(activeVisit?.current_gps_accuracy ?? activeVisit?.checkin_accuracy),
+    heading: locationSource === "live_status" ? live?.heading ?? live?.bearing ?? null : null,
+    speed: locationSource === "live_status" ? optionalFiniteNumber(live?.speed) : null,
+    foLatitude: coordinates?.[0] ?? null,
+    foLongitude: coordinates?.[1] ?? null,
+    siteCoordinates: activeVisit
+      ? coordinatesFromFields(activeVisit, "current_latitude", "current_longitude") ||
+        coordinatesFromFields(activeVisit, "check_in_latitude", "check_in_longitude") ||
+        coordinatesFromFields(activeVisit, "destination_lat", "destination_lng")
+      : null,
+    eligibleKm,
+    routeKmToday: eligibleKm,
+    routeKmSource: kmSource,
+    kmSource,
+    dataSources,
+    sourceUsed: dataSources.join(" / ") || "unknown",
+  };
 }
 
 function mergeLiveStatusRows(...groups) {
@@ -1265,7 +1409,7 @@ function reviewFlagsForOfficer({ systemKm = 0, attendance, visits = [], logs = [
   return [...flags];
 }
 
-function officerFromRows({ foId, profile, live, attendance, visits, logs, statusDate }) {
+function officerFromRows({ foId, live, attendance, visits, logs, statusDate, profilesByCode }) {
   const record = attendance || {};
   const foVisits = visits || [];
   const foLogs = logs || [];
@@ -1275,11 +1419,9 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs, status
       record.fo_user_id ||
       foVisits[0]?.fo_user_id ||
       foLogs[0]?.fo_user_id ||
-      profile?.id ||
       record.employee_code ||
       foVisits[0]?.employee_code ||
       foLogs[0]?.employee_code ||
-      profile?.employee_code ||
       foId,
   );
   const operational = deriveOperationalStatus({
@@ -1319,19 +1461,13 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs, status
     live?.fo_user_id,
     foId,
   );
-  const name = officerDisplayName({
-    profile,
-    visits: foVisits,
-    attendance: record,
-    employeeCode,
-  });
-  const state = profile?.state || live?.state || record.state || "--";
+  const state = live?.state || record.state || "--";
 
-  return {
+  const baseOfficer = {
     id: `live-${foId}`,
     employeeKey,
     foId,
-    name,
+    name: employeeCode,
     employeeCode,
     status: operational.operationalStatus,
     ...operational,
@@ -1345,7 +1481,7 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs, status
     lastSeen: formatDateTime(sourceTimestamp),
     battery: batteryFromRow(live),
     action: live?.current_status || record.status || "Attendance captured",
-    phone: profile?.mobile || profile?.phone || record.mobile || live?.mobile || "--",
+    phone: record.mobile || live?.mobile || "--",
     coordinates,
     heading: gpsPoint?.heading ?? null,
     speed: gpsPoint?.speed ?? null,
@@ -1374,6 +1510,13 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs, status
     logs: foLogs,
     conveyance: null,
   };
+  return enrichOfficer({
+    officer: baseOfficer,
+    attendance: record,
+    visits: foVisits,
+    live,
+    profilesByCode,
+  });
 }
 
 function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statusDate }) {
@@ -1409,17 +1552,34 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
   latestAttendance.forEach((_, foId) => officerIds.add(foId));
   visitsByFo.forEach((_, foId) => officerIds.add(foId));
   logsByFo.forEach((_, foId) => officerIds.add(foId));
-  return Array.from(officerIds).map((foId) =>
+  const officers = Array.from(officerIds).map((foId) =>
     officerFromRows({
       foId,
-      profile: profilesByCode.get(foId),
       live: latestLiveStatus.get(foId),
       attendance: latestAttendance.get(foId),
       visits: visitsByFo.get(foId) || [],
       logs: logsByFo.get(foId) || [],
       statusDate,
+      profilesByCode,
     }),
   );
+  if (import.meta.env.DEV) {
+    officers.forEach((officer) => {
+      console.debug("FO_OFFICER_ENRICHED", {
+        employeeCode: officer.employeeCode || officer.foId,
+        sourceUsed: officer.sourceUsed,
+        displayNameSource: officer.displayNameSource,
+        locationSource: officer.locationSource,
+        kmSource: officer.kmSource,
+      });
+    });
+    console.debug("FO_OFFICER_ENRICHMENT_SUMMARY", {
+      officersMissingProfileName: officers.filter(
+        (officer) => officer.displayNameSource !== "profile.full_name",
+      ).length,
+    });
+  }
+  return officers;
 }
 
 function officerFromLiveStatus(row, profilesByCode, existing = {}) {
@@ -1427,7 +1587,6 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     row?.fo_user_id || existing.foId || existing.employeeCode,
   );
   if (!foId) return null;
-  const profile = profilesByCode.get(foId);
   const gpsPoint = gpsPointFromLiveOrLogs(row, []);
   const coordinates =
     gpsPoint?.coordinates ??
@@ -1470,23 +1629,18 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     row?.fo_user_id,
     foId,
   );
-  return {
+  const baseOfficer = {
     ...existing,
     id: existing.id || `live-${foId}`,
     employeeKey,
     foId,
-    name: officerDisplayName({
-      profile,
-      visits: existing.visits || [],
-      attendance: existing.attendance,
-      employeeCode,
-    }),
+    name: existing.name || employeeCode,
     employeeCode,
     status: operational.operationalStatus,
     ...operational,
     assignedSite: existing.assignedSite || "No active store visit",
-    branch: profile?.state || row?.state || existing.state || "--",
-    state: profile?.state || row?.state || existing.state || "--",
+    branch: row?.state || existing.state || "--",
+    state: row?.state || existing.state || "--",
     lastSeen: formatDateTime(timestamp),
     battery: battery ?? existing.battery ?? null,
     action: row?.current_status || existing.action || "Attendance captured",
@@ -1514,6 +1668,23 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     logs: existing.logs || [],
     conveyance: null,
   };
+  const enrichedOfficer = enrichOfficer({
+    officer: baseOfficer,
+    attendance: existing.attendance,
+    visits: existing.visits || [],
+    live: row,
+    profilesByCode,
+  });
+  if (import.meta.env.DEV) {
+    console.debug("FO_REALTIME_OFFICER_ENRICHED", {
+      employeeCode: enrichedOfficer.employeeCode || enrichedOfficer.foId,
+      sourceUsed: enrichedOfficer.sourceUsed,
+      displayNameSource: enrichedOfficer.displayNameSource,
+      locationSource: enrichedOfficer.locationSource,
+      kmSource: enrichedOfficer.kmSource,
+    });
+  }
+  return enrichedOfficer;
 }
 
 function mergeRealtimeOfficer(officers, liveRow, profileRows) {
@@ -1713,7 +1884,7 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
             </span>
             <span className="inline-flex items-center gap-1">
               <Route className="h-3.5 w-3.5" />
-              {distanceToday.toFixed(1)} km
+              {formatDisplayKm(distanceToday)}
             </span>
             <span>GPS audit {actualTravelKm.toFixed(1)} km</span>
             <span>{formatInr(officer.petrolAmount ?? distanceToday * RATE_PER_KM)}</span>
@@ -1762,7 +1933,7 @@ function SelectedOfficerSummary({
         roadKmEstimate.usedFallback ? " fallback" : ""
       }`
     : "--";
-  const claimKmLabel = hasClaimKm ? `${claimKm.toFixed(1)} km` : "--";
+  const claimKmLabel = hasClaimKm ? formatDisplayKm(claimKm) : "--";
   const claimPetrol = Number(officer.petrolAmount ?? claimKm * RATE_PER_KM);
   const statusText = status.label;
   const statusClass = isOperationallyActive(officer)
@@ -4350,7 +4521,7 @@ function FoSupportActionPanel({
         roadKmEstimate.usedFallback ? " fallback" : ""
       }`
     : "--";
-  const claimKmLabel = hasClaimKm ? `${claimKm.toFixed(1)} km` : "--";
+  const claimKmLabel = hasClaimKm ? formatDisplayKm(claimKm) : "--";
   const claimPetrol = Number(officer.petrolAmount ?? claimKm * RATE_PER_KM);
   const statusText = status.label;
   const statusClass = isOperationallyActive(officer)
