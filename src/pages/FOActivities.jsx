@@ -1181,6 +1181,24 @@ function sumSiteVisitRouteKm(visits = []) {
   }, 0);
 }
 
+function payableKmFromAttendance(row) {
+  const candidates = [
+    row?.total_approved_km,
+    row?.eligible_km,
+    row?.total_route_km,
+    0,
+  ];
+  const value = candidates
+    .map((item) => Number(item))
+    .find((item) => Number.isFinite(item));
+  return value || 0;
+}
+
+function petrolAmountFromAttendance(row) {
+  const value = Number(row?.petrol_amount);
+  return Number.isFinite(value) ? value : 0;
+}
+
 function logPayableKmSource(foId, source, km) {
   console.debug("FO_PAYABLE_KM_SOURCE_SELECTED", foId, source, km);
   console.debug("FO_ROUTE_KM_TODAY_VALUE", foId, km);
@@ -4774,6 +4792,7 @@ export default function FOActivities() {
   const [supportRemarks, setSupportRemarks] = useState("");
   const [supportMessage, setSupportMessage] = useState("");
   const [liveOfficers, setLiveOfficers] = useState([]);
+  const [attendanceKpiRows, setAttendanceKpiRows] = useState([]);
   const [siteVisitRows, setSiteVisitRows] = useState([]);
   const [selectedRouteLogs, setSelectedRouteLogs] = useState([]);
   const [mainMapRouteLines, setMainMapRouteLines] = useState([]);
@@ -4820,8 +4839,8 @@ export default function FOActivities() {
             supabase
               .from("fo_attendance")
               .select("*")
-              .gte("login_time", fromIso)
-              .lte("login_time", toIso)
+              .gte("attendance_date", selectedRange.fromDate)
+              .lte("attendance_date", selectedRange.toDate)
               .order("login_time", { ascending: false })
               .limit(500),
             fetchFoSiteVisitRows(fromIso, toIso),
@@ -4884,12 +4903,14 @@ export default function FOActivities() {
         console.debug("FO_OFFICERS_BUILT", officersFromSupabase.length);
         if (!cancelled) {
           profileRowsRef.current = profileRows;
+          setAttendanceKpiRows(attendanceRes.data || []);
           setSiteVisitRows(siteVisits);
           setLiveOfficers(officersFromSupabase);
         }
       } catch (error) {
         console.warn("[myQPMS FO] Supabase FO fetch failed.", error);
         if (!cancelled) {
+          setAttendanceKpiRows([]);
           setSiteVisitRows([]);
           setLiveOfficers([]);
         }
@@ -4899,7 +4920,7 @@ export default function FOActivities() {
     return () => {
       cancelled = true;
     };
-  }, [refreshToken, selectedRange.from, selectedRange.to]);
+  }, [refreshToken, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -5654,20 +5675,20 @@ export default function FOActivities() {
   const onSiteOfficers = kpiOfficers.filter(
     (officer) => officer.operationalStatus === "ON_SITE",
   ).length;
-  const liveRouteKm = filteredOfficers.reduce(
-    (sum, officer) =>
-      sum + Number(officer.eligibleKm ?? officer.routeKmToday ?? 0),
-    0,
+  const payableKpi = attendanceKpiRows.reduce(
+    (summary, row) => ({
+      payableKm: summary.payableKm + payableKmFromAttendance(row),
+      totalPetrol: summary.totalPetrol + petrolAmountFromAttendance(row),
+    }),
+    { payableKm: 0, totalPetrol: 0 },
   );
+  const liveRouteKm = payableKpi.payableKm;
   const liveActualTravelKm = filteredOfficers.reduce(
     (sum, officer) =>
       sum + Number(officer.actualTravelKm ?? officer.actualKm ?? 0),
     0,
   );
-  const totalPetrolAmount = filteredOfficers.reduce(
-    (sum, officer) => sum + Number(officer.petrolAmount || 0),
-    0,
-  );
+  const totalPetrolAmount = payableKpi.totalPetrol;
   const distanceTravelled = `${liveRouteKm.toFixed(1)} km`;
   const actualTravelled = `${liveActualTravelKm.toFixed(1)} km`;
   const routeVsActual = `${(liveRouteKm - liveActualTravelKm).toFixed(1)} km`;
@@ -5817,13 +5838,13 @@ export default function FOActivities() {
           tone={offlineOfficers ? "red" : "slate"}
         />
         <FleetKpi
-          label="Payable KM Today"
+          label="Payable KM"
           value={distanceTravelled}
           icon={Route}
           tone="green"
         />
         <FleetKpi
-          label="Total Petrol Amount Today"
+          label="Total Petrol Amount"
           value={formatInr(totalPetrolAmount)}
           icon={CircleGauge}
           tone="amber"
@@ -6132,7 +6153,7 @@ export default function FOActivities() {
 
       <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.05)] sm:grid-cols-2 lg:grid-cols-6 xl:grid-cols-9 dark:border-slate-800 dark:bg-slate-900">
         <MetricTile
-          label="Payable KM Today"
+          label="Payable KM"
           value={distanceTravelled}
           icon={Route}
           tone="green"

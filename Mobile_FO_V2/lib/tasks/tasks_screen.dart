@@ -28,7 +28,7 @@ class TasksScreen extends StatefulWidget {
 }
 
 class _TasksScreenState extends State<TasksScreen>
-    with AutomaticKeepAliveClientMixin<TasksScreen> {
+    with AutomaticKeepAliveClientMixin<TasksScreen>, WidgetsBindingObserver {
   Attendance? _attendance;
   SiteVisit? _activeVisit;
   bool _busy = false;
@@ -36,7 +36,15 @@ class _TasksScreenState extends State<TasksScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _load();
+    }
   }
 
   @override
@@ -50,6 +58,7 @@ class _TasksScreenState extends State<TasksScreen>
   Future<void> _load() async {
     var attendance = await LocalStore.getAttendance();
     var activeVisit = await LocalStore.activeVisit();
+    final todayKey = indiaDateKey(DateTime.now());
     await CrashLogService.record(
       employeeCode: widget.user.employeeCode,
       screen: 'tasks',
@@ -57,6 +66,18 @@ class _TasksScreenState extends State<TasksScreen>
       error:
           'source=local attendance_id=${attendance?.remoteId ?? attendance?.id ?? '--'} active=${attendance?.isActive == true} remote_id=${attendance?.remoteId ?? '--'} end_time=${attendance?.endTime?.toIso8601String() ?? '--'}',
     );
+    if (attendance != null) {
+      final attendanceDate = _attendanceDateKey(attendance);
+      if (attendanceDate != todayKey) {
+        await _clearPreviousDayLocalSession(
+          attendance: attendance,
+          attendanceDate: attendanceDate,
+          todayKey: todayKey,
+        );
+        attendance = null;
+        activeVisit = null;
+      }
+    }
     if (SupabaseService.isReady) {
       final remoteAttendance =
           await SupabaseService.findActiveAttendanceForToday(widget.user);
@@ -174,6 +195,59 @@ class _TasksScreenState extends State<TasksScreen>
       screen: 'tasks',
       action: 'CHECKOUT_CACHE_CLEARED',
       error: 'attendance_id=${attendance.remoteId ?? attendance.id}',
+    );
+  }
+
+  String _attendanceDateKey(Attendance attendance) {
+    final value = attendance.attendanceDate?.trim();
+    if (value != null && value.isNotEmpty) return value;
+    return indiaDateKey(attendance.startTime);
+  }
+
+  Future<void> _clearPreviousDayLocalSession({
+    required Attendance attendance,
+    required String attendanceDate,
+    required String todayKey,
+  }) async {
+    await CrashLogService.record(
+      employeeCode: widget.user.employeeCode,
+      screen: 'tasks',
+      action: 'PREVIOUS_DAY_LOCAL_SESSION_CLEANUP_STARTED',
+      error:
+          'attendance_id=${attendance.remoteId ?? attendance.id} attendance_date=$attendanceDate today=$todayKey active=${attendance.isActive}',
+    );
+    try {
+      await TrackingService.stop(
+        user: widget.user,
+        updateRemoteLiveStatus: false,
+      );
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tasks',
+        action: 'PREVIOUS_DAY_TRACKING_STOPPED',
+      );
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tasks',
+        action: 'PREVIOUS_DAY_TRACKING_STOP_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+    await _clearLocalActiveVisitCache(attendance);
+    await LocalStore.clearBackgroundTrackingSession();
+    await LocalStore.saveAttendance(null);
+    if (mounted) {
+      setState(() {
+        _attendance = null;
+        _activeVisit = null;
+      });
+    }
+    await CrashLogService.record(
+      employeeCode: widget.user.employeeCode,
+      screen: 'tasks',
+      action: 'PREVIOUS_DAY_LOCAL_SESSION_CLEANUP_COMPLETE',
     );
   }
 
@@ -1583,6 +1657,12 @@ class _TasksScreenState extends State<TasksScreen>
 
   void _showComingSoon() {
     _toast('Coming Soon');
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   @override
