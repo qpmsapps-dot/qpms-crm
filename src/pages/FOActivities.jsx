@@ -4012,7 +4012,7 @@ function FieldOfficerDetailsView({
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-500">
-            <span>FO Operations</span>
+            <span>Operations</span>
             <ChevronRight className="h-4 w-4" />
             <span className="font-black text-slate-950">Field Officer Details</span>
           </div>

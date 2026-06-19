@@ -53,7 +53,11 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
         await TrackingService.syncQueuedLogs();
         await CrashLogService.sync();
       }
-      final user = _user ?? await LocalStore.getUser();
+      var user = _user ?? await LocalStore.getUser();
+      user = await _refreshCachedProfile(user, source: 'app_resume');
+      if (mounted && user != null && user != _user) {
+        setState(() => _user = user);
+      }
       final attendance = await LocalStore.getAttendance();
       if (user != null &&
           attendance?.isActive == true &&
@@ -88,6 +92,7 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
         await SupabaseService.initialize();
         await CrashLogService.sync();
         _user = await LocalStore.getUser();
+        _user = await _refreshCachedProfile(_user, source: 'app_startup');
       }
     } catch (error, stackTrace) {
       _error = error.toString();
@@ -99,6 +104,70 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
       );
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<FoUser?> _refreshCachedProfile(
+    FoUser? cachedUser, {
+    required String source,
+  }) async {
+    if (!SupabaseService.isReady ||
+        SupabaseService.client.auth.currentUser == null) {
+      return cachedUser;
+    }
+    try {
+      final serverUser = await SupabaseService.fetchCurrentProfile();
+      final attendance = await LocalStore.getAttendance();
+      final hasActiveAttendance = attendance?.isActive == true;
+      final cachedCode = cachedUser?.employeeCode.trim() ?? '';
+      final serverCode = serverUser.employeeCode.trim();
+      final employeeCodeChanged =
+          cachedCode.isNotEmpty && cachedCode != serverCode;
+
+      if (employeeCodeChanged && hasActiveAttendance) {
+        await CrashLogService.record(
+          employeeCode: cachedCode,
+          screen: 'app',
+          action: 'EMPLOYEE_CODE_REFRESH_DEFERRED_ACTIVE_ATTENDANCE',
+          error:
+              'source=$source cached_code=$cachedCode server_code=$serverCode attendance_id=${attendance?.remoteId ?? attendance?.id}',
+        );
+        return cachedUser;
+      }
+
+      await LocalStore.saveUser(serverUser);
+      if (!hasActiveAttendance) {
+        await LocalStore.updateBackgroundTrackingEmployeeCode(
+          employeeCode: serverCode,
+          fullName: serverUser.fullName,
+        );
+      }
+      if (employeeCodeChanged) {
+        await CrashLogService.record(
+          employeeCode: serverCode,
+          screen: 'app',
+          action: 'EMPLOYEE_CODE_CACHE_REFRESHED',
+          error:
+              'source=$source previous_code=$cachedCode current_code=$serverCode queued_gps_rows_unchanged=true',
+        );
+      } else {
+        await CrashLogService.record(
+          employeeCode: serverCode,
+          screen: 'app',
+          action: 'PROFILE_CACHE_REFRESHED',
+          error: 'source=$source',
+        );
+      }
+      return serverUser;
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: cachedUser?.employeeCode,
+        screen: 'app',
+        action: 'PROFILE_CACHE_REFRESH_SKIPPED',
+        error: '$source: $error',
+        stackTrace: stackTrace,
+      );
+      return cachedUser;
     }
   }
 

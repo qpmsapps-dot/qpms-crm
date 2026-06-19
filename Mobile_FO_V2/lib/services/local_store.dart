@@ -96,6 +96,22 @@ class LocalStore {
     return Map<String, dynamic>.from(jsonDecode(value) as Map);
   }
 
+  static Future<void> updateBackgroundTrackingEmployeeCode({
+    required String employeeCode,
+    String? fullName,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getString(_backgroundSessionKey);
+    if (value == null || value.isEmpty) return;
+    final session = Map<String, dynamic>.from(jsonDecode(value) as Map);
+    session['employee_code'] = employeeCode;
+    if (fullName != null && fullName.trim().isNotEmpty) {
+      session['full_name'] = fullName.trim();
+    }
+    session['identity_refreshed_at'] = DateTime.now().toUtc().toIso8601String();
+    await prefs.setString(_backgroundSessionKey, jsonEncode(session));
+  }
+
   static Future<void> clearBackgroundTrackingSession() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_backgroundSessionKey);
