@@ -65,7 +65,7 @@ const MEDIUM_CONFIDENCE_MULTIPLIER = 1.08;
 const LOW_CONFIDENCE_MULTIPLIER = 1.12;
 const SITE_GEOFENCE_METERS = 100;
 const FO_SITE_VISIT_SELECT =
-  "id,fo_user_id,employee_code,attendance_id,store_id,store_name,site_name,client_name,store_code,state,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,current_latitude,current_longitude,origin_lat,origin_lng,destination_lat,destination_lng,route_km,google_route_polyline,visit_duration_minutes,status,visit_status,checkout_note,metadata";
+  "id,fo_user_id,employee_code,full_name,attendance_id,store_id,store_name,site_name,client_name,store_code,state,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,current_latitude,current_longitude,origin_lat,origin_lng,destination_lat,destination_lng,route_km,google_route_polyline,visit_duration_minutes,status,visit_status,checkout_note,metadata";
 const FO_LIVE_STATUS_SELECT =
   "fo_user_id,latitude,longitude,last_seen_at,updated_at,route_km_today,is_online,is_tracking,current_status,display_name,username,accuracy,battery_percentage";
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:4000").replace(/\/+$/, "");
@@ -80,8 +80,6 @@ const SNAP_TO_ROADS_MAX_INPUT_POINTS = 500;
 const ROUTE_MAP_SEGMENT_MAX_GAP_SECONDS = 10 * 60;
 const ROUTE_MAP_SEGMENT_MAX_DISTANCE_KM = 2;
 const ROUTE_MAP_SEGMENT_MAX_SPEED_KMPH = 120;
-const MAIN_ROUTE_GAP_DISTANCE_METERS = 500;
-const MAIN_ROUTE_GAP_SECONDS = 120;
 const KM_RECALC_COOLDOWN_MS = 60 * 1000;
 const KM_RECALC_RUNNING_MESSAGE = "Recalculation already running. Please wait.";
 const MOVEMENT_FRESHNESS_MS = 5 * 60 * 1000;
@@ -513,77 +511,30 @@ function routeSegmentsFromLogs(logs = [], visits = []) {
   return segments;
 }
 
-function routePointCoordinates(log) {
-  if (!isValidRoutePoint(log)) return null;
-  return [Number(log.latitude), Number(log.longitude)];
-}
-
-function mainRouteGap(previous, current) {
-  const secondsDiff = (routePointTime(current) - routePointTime(previous)) / 1000;
-  const distanceMeters = distanceKmBetween(previous, current) * 1000;
-  return {
-    hasGap:
-      distanceMeters > MAIN_ROUTE_GAP_DISTANCE_METERS ||
-      secondsDiff > MAIN_ROUTE_GAP_SECONDS,
-    secondsDiff,
-    distanceMeters,
+async function buildMainMapRouteLines({ logs = [], color = "#2563eb", idPrefix = "route" }) {
+  const gpsTrail = gpsTrailFromLogs(logs);
+  const lines = gpsTrail.segments.map((positions, index) => ({
+    id: `${idPrefix}-gps-${index}`,
+    positions,
+    color,
+    source: "segmented_raw_gps",
+  }));
+  const routeUnavailable = gpsTrail.acceptedGpsPoints >= 2 && lines.length === 0;
+  const diagnostics = {
+    rawGpsPoints: gpsTrail.rawGpsPoints,
+    acceptedGpsPoints: gpsTrail.acceptedGpsPoints,
+    segmentsCreated: lines.length,
+    skippedGapPoints: gpsTrail.skippedGapPoints,
+    googleRouteApiFailed: false,
   };
-}
-
-async function buildMainMapRouteLines({ logs = [], visits = [], color = "#2563eb", idPrefix = "route" }) {
-  const ordered = logs
-    .filter(isValidRoutePoint)
-    .slice()
-    .sort((a, b) => routePointTime(a) - routePointTime(b));
-  if (ordered.length < 2) return [];
-
-  const lines = [];
-  let currentGpsSegment = [routePointCoordinates(ordered[0])].filter(Boolean);
-
-  for (let index = 1; index < ordered.length; index += 1) {
-    const previous = ordered[index - 1];
-    const current = ordered[index];
-    const currentPoint = routePointCoordinates(current);
-    if (!currentPoint) continue;
-    const gap = mainRouteGap(previous, current);
-    const sameSiteDrift = isSameSiteDrift(previous, current, visits);
-
-    if (gap.hasGap || sameSiteDrift) {
-      if (currentGpsSegment.length > 1) {
-        lines.push({
-          id: `${idPrefix}-gps-${lines.length}`,
-          positions: currentGpsSegment,
-          color,
-          source: "gps",
-        });
-      }
-
-      // Frontend Directions disabled for billing protection.
-      const filledPath = null;
-      lines.push({
-        id: `${idPrefix}-gap-${index}`,
-        positions:
-          filledPath && filledPath.length > 1
-            ? filledPath
-            : [routePointCoordinates(previous), currentPoint].filter(Boolean),
-        color,
-        source: filledPath ? "reconstructed/google_filled" : "fallback/straight_line",
-      });
-      currentGpsSegment = [currentPoint];
-    } else {
-      currentGpsSegment.push(currentPoint);
-    }
-  }
-
-  if (currentGpsSegment.length > 1) {
-    lines.push({
-      id: `${idPrefix}-gps-${lines.length}`,
-      positions: currentGpsSegment,
-      color,
-      source: "gps",
-    });
-  }
-  return lines;
+  console.debug("FO_MAIN_MAP_ROUTE_FALLBACK_DIAGNOSTICS", diagnostics);
+  return {
+    lines,
+    diagnostics,
+    message: routeUnavailable
+      ? "Route trail unavailable. Showing available points."
+      : null,
+  };
 }
 
 function routeKmFromLogs(logs = [], visits = []) {
@@ -933,14 +884,31 @@ function latestLiveStatusByFo(rows = []) {
   return grouped;
 }
 
-function profileByFoKey(rows = []) {
+function profileByEmployeeCode(rows = []) {
   const profilesByCode = new Map();
-  rows.filter(isRealFoProfile).forEach((profile) => {
-    profileKeys(profile).forEach((key) => {
-      if (key) profilesByCode.set(key, profile);
-    });
+  rows.forEach((profile) => {
+    const key = normalizeFoKey(profile?.employee_code);
+    if (key) profilesByCode.set(key, profile);
   });
   return profilesByCode;
+}
+
+function firstNonEmptyText(...values) {
+  return values
+    .map((value) => String(value || "").trim())
+    .find(Boolean) || "";
+}
+
+function officerDisplayName({ profile, visits = [], attendance, employeeCode }) {
+  const visitName = visits
+    .map((visit) => firstNonEmptyText(visit?.full_name))
+    .find(Boolean);
+  return firstNonEmptyText(
+    profile?.full_name,
+    visitName,
+    attendance?.full_name,
+    employeeCode,
+  );
 }
 
 function mergeLiveStatusRows(...groups) {
@@ -1343,13 +1311,20 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs, status
     visits: foVisits,
     logs: foLogs,
   });
-  const name =
-    profile?.full_name ||
-    profile?.display_name ||
-    live?.display_name ||
-    live?.username ||
-    live?.fo_user_id ||
-    foId;
+  const employeeCode = firstNonEmptyText(
+    record.employee_code,
+    record.fo_user_id,
+    foVisits[0]?.employee_code,
+    foVisits[0]?.fo_user_id,
+    live?.fo_user_id,
+    foId,
+  );
+  const name = officerDisplayName({
+    profile,
+    visits: foVisits,
+    attendance: record,
+    employeeCode,
+  });
   const state = profile?.state || live?.state || record.state || "--";
 
   return {
@@ -1357,7 +1332,7 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs, status
     employeeKey,
     foId,
     name,
-    employeeCode: profile?.employee_code || live?.fo_user_id || foId,
+    employeeCode,
     status: operational.operationalStatus,
     ...operational,
     assignedSite:
@@ -1404,7 +1379,7 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs, status
 function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statusDate }) {
   const latestAttendance = latestBy(attendance, "login_time");
   const latestLiveStatus = latestLiveStatusByFo(liveStatus);
-  const profilesByCode = profileByFoKey(profiles);
+  const profilesByCode = profileByEmployeeCode(profiles);
   const visitsByFo = visits.reduce((map, visit) => {
     const id = normalizeFoKey(foIdFromRow(visit));
     const list = map.get(id) || [];
@@ -1488,24 +1463,25 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     visits: existing.visits || [],
     logs: existing.logs || [],
   });
+  const employeeCode = firstNonEmptyText(
+    existing.employeeCode,
+    existing.attendance?.employee_code,
+    existing.attendance?.fo_user_id,
+    row?.fo_user_id,
+    foId,
+  );
   return {
     ...existing,
     id: existing.id || `live-${foId}`,
     employeeKey,
     foId,
-    name:
-      profile?.full_name ||
-      profile?.display_name ||
-      row?.display_name ||
-      row?.username ||
-      row?.fo_user_id ||
-      existing.name ||
-      foId,
-    employeeCode:
-      profile?.employee_code ||
-      row?.fo_user_id ||
-      existing.employeeCode ||
-      foId,
+    name: officerDisplayName({
+      profile,
+      visits: existing.visits || [],
+      attendance: existing.attendance,
+      employeeCode,
+    }),
+    employeeCode,
     status: operational.operationalStatus,
     ...operational,
     assignedSite: existing.assignedSite || "No active store visit",
@@ -1541,7 +1517,7 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
 }
 
 function mergeRealtimeOfficer(officers, liveRow, profileRows) {
-  const profilesByCode = profileByFoKey(profileRows);
+  const profilesByCode = profileByEmployeeCode(profileRows);
   const foId = normalizeFoKey(liveRow?.fo_user_id);
   const existingIndex = officers.findIndex(
     (officer) =>
@@ -2054,6 +2030,7 @@ function OperationsMap({
   pins,
   sitePins,
   routeLines,
+  routeTrailMessage,
   expanded,
   showSites,
   showRoutes,
@@ -2106,6 +2083,11 @@ function OperationsMap({
             />
           ))
         : null}
+      {showRoutes && routeTrailMessage ? (
+        <div className="pointer-events-none absolute bottom-4 left-1/2 z-[500] -translate-x-1/2 rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-xs font-bold text-amber-800 shadow-sm">
+          {routeTrailMessage}
+        </div>
+      ) : null}
       {showSites
         ? sitePins.map((site) => (
             <Marker
@@ -3153,7 +3135,12 @@ function storedRoutePolylinesFromVisits(visits = [], stats = createRouteMapCoord
 function isValidGpsTrailLog(log) {
   if (!isValidGpsLog(log)) return false;
   const accuracy = Number(log?.accuracy);
-  return !Number.isFinite(accuracy) || accuracy <= MAX_GPS_ACCURACY_METERS;
+  const timestampMs = routePointTime(log).getTime();
+  return (
+    Number.isFinite(accuracy) &&
+    accuracy <= MAX_GPS_ACCURACY_METERS &&
+    Number.isFinite(timestampMs)
+  );
 }
 
 function gpsTrailGapReason(previous, current) {
@@ -3163,6 +3150,14 @@ function gpsTrailGapReason(previous, current) {
     { latitude: current.point[0], longitude: current.point[1] },
   );
   const speedKmph = secondsGap > 0 ? distanceKm / (secondsGap / 3600) : Number.POSITIVE_INFINITY;
+  const previousDate = toDateInputValue(new Date(previous.timestampMs));
+  const currentDate = toDateInputValue(new Date(current.timestampMs));
+  if (previousDate !== currentDate) {
+    return { reason: "date_mismatch", secondsGap, distanceKm, speedKmph };
+  }
+  if (secondsGap <= 0) {
+    return { reason: "invalid_time", secondsGap, distanceKm, speedKmph };
+  }
   if (secondsGap > ROUTE_MAP_SEGMENT_MAX_GAP_SECONDS) {
     return { reason: "time_gap", secondsGap, distanceKm, speedKmph };
   }
@@ -3227,10 +3222,15 @@ function gpsTrailFromLogs(logs = [], stats = createRouteMapCoordinateStats()) {
   return {
     trail: segments[0] || [],
     segments,
+    rawGpsPoints: logs.length,
+    acceptedGpsPoints: normalizedPoints.length,
     validPointsCount: ordered.length,
     duplicatesRemoved,
     gapBreakExamples,
     segmentsSkippedCount: normalizedPoints.length - segments.reduce((sum, segment) => sum + segment.length, 0),
+    skippedGapPoints:
+      logs.length - normalizedPoints.length +
+      normalizedPoints.length - segments.reduce((sum, segment) => sum + segment.length, 0),
   };
 }
 
@@ -3472,13 +3472,12 @@ function buildDetailMapPoints(officer, routeLogs) {
     }),
     detailRouteAnchor("end", "end", "E", end, "End Day"),
   ].filter(Boolean);
-  const fallbackTrail = anchors.map((anchor) => anchor.coordinates).filter(hasFiniteCoordinates);
   const hasGpsTrail = gpsTrail.segments.length > 0;
   const routeTrail = hasGpsTrail
     ? gpsTrail.trail
     : storedPolylines.length
       ? storedPolylines[0]
-      : fallbackTrail;
+      : [];
   const markers = spreadDetailMarkers(
     anchors.filter((anchor) => ["start", "site", "end"].includes(anchor.type)),
   );
@@ -3489,11 +3488,14 @@ function buildDetailMapPoints(officer, routeLogs) {
     routeTrail,
     gpsSegments: gpsTrail.segments,
     gpsFetchedCount: routeLogs.length,
+    rawGpsPoints: gpsTrail.rawGpsPoints,
+    acceptedGpsPoints: gpsTrail.acceptedGpsPoints,
     gpsValidPointsCount: gpsTrail.validPointsCount,
     gpsDuplicatesRemoved: gpsTrail.duplicatesRemoved,
     gpsSegmentCount: gpsTrail.segments.length,
     gpsSegmentPointCounts: gpsTrail.segments.map((segment) => segment.length),
     gpsSegmentsSkippedCount: gpsTrail.segmentsSkippedCount,
+    skippedGapPoints: gpsTrail.skippedGapPoints,
     gpsGapBreakExamples: gpsTrail.gapBreakExamples,
     coordinateStats,
     routeSource: hasGpsTrail
@@ -3583,7 +3585,7 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
       return { paths: [], source: "markers_only", label: "Markers Only" };
     }
     if (routeViewMode === "raw") {
-      return { paths: points.gpsSegments.length ? points.gpsSegments : [points.routeTrail], source: "raw_gps", label: "Raw GPS" };
+      return { paths: points.gpsSegments, source: "raw_gps", label: "Segmented Raw GPS" };
     }
     if (["success", "partial"].includes(snapResult.status) && snapResult.paths?.length) {
       return {
@@ -3598,9 +3600,14 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
     if (points.routeSource === "stored-polyline") {
       return { paths: points.storedPolylines, source: "polyline", label: "Stored Polyline" };
     }
-    return { paths: [points.routeTrail], source: "anchors", label: "Anchors" };
-  }, [points.routeSource, points.routeTrail, points.storedPolylines, routeViewMode, simplifiedGpsTrail, snapResult]);
+    return { paths: [], source: "markers_only", label: "Markers Only" };
+  }, [points.gpsSegments, points.routeSource, points.storedPolylines, routeViewMode, simplifiedGpsTrail, snapResult]);
   const renderedPolylinePointCount = selectedRoute.paths.reduce((sum, path) => sum + path.length, 0);
+  const renderedSegmentsCreated = selectedRoute.paths.filter((path) => path.length > 1).length;
+  const routeTrailUnavailable =
+    points.acceptedGpsPoints >= 2 &&
+    points.gpsSegmentCount === 0 &&
+    !points.storedPolylines.length;
   const hasMapGeometry = renderedPolylinePointCount > 1 || points.markers.length > 0;
 
   useEffect(() => {
@@ -3697,7 +3704,11 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
       gps_logs_fetched_count: points.gpsFetchedCount,
       valid_gps_points_count: points.gpsValidPointsCount,
       duplicate_points_removed_count: points.gpsDuplicatesRemoved,
-      rawGpsPoints: points.gpsValidPointsCount,
+      rawGpsPoints: points.rawGpsPoints,
+      acceptedGpsPoints: points.acceptedGpsPoints,
+      segmentsCreated: points.gpsSegmentCount,
+      skippedGapPoints: points.skippedGapPoints,
+      googleRouteApiFailed: ["failed", "partial"].includes(snapResult.status),
       downsampledGpsPoints: snapResult.downsampledGpsPoints,
       snapApiChunkCount: snapResult.snapApiChunkCount,
       snappedPointsReturned: snapResult.snappedPointsReturned,
@@ -3705,7 +3716,7 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
       finalPathSource: selectedRoute.source,
       selectedRouteViewMode: routeViewMode,
       renderedPolylinePointCount,
-      renderedPolylineSegmentCount: selectedRoute.paths.filter((path) => path.length > 1).length,
+      renderedPolylineSegmentCount: renderedSegmentsCreated,
       renderedPolylineSource: selectedRoute.source,
       gpsSegmentCount: points.gpsSegmentCount,
       gpsSegmentPointCounts: points.gpsSegmentPointCounts,
@@ -3728,7 +3739,7 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
         total_points: coordinateStats.routeMapOriginalPointCount,
       });
     }
-  }, [fromDate, officer, points, renderedPolylinePointCount, routeViewMode, selectedRoute.source, snapResult, toDate]);
+  }, [fromDate, officer, points, renderedPolylinePointCount, renderedSegmentsCreated, routeViewMode, selectedRoute.source, snapResult, toDate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3838,9 +3849,16 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
           No GPS trail or route anchors available for selected filters.
         </div>
       ) : null}
-      {routeViewMode === "road" && ["failed", "partial"].includes(snapResult.status) ? (
+      {routeViewMode === "road" &&
+      !routeTrailUnavailable &&
+      ["failed", "partial"].includes(snapResult.status) ? (
         <div className="absolute bottom-4 left-4 z-10 rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-xs font-bold text-amber-800 shadow-sm">
-          Road snapping unavailable — showing simplified GPS trail
+          Road snapping unavailable — showing segmented raw GPS trail
+        </div>
+      ) : null}
+      {routeTrailUnavailable ? (
+        <div className="absolute bottom-4 left-4 z-10 rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-xs font-bold text-amber-800 shadow-sm">
+          Route trail unavailable. Showing available points.
         </div>
       ) : null}
       <div className="absolute left-4 top-4 z-10 flex flex-wrap gap-1 rounded-lg border border-slate-200 bg-white/95 p-1 text-xs font-black text-slate-600 shadow-sm">
@@ -4796,6 +4814,7 @@ export default function FOActivities() {
   const [siteVisitRows, setSiteVisitRows] = useState([]);
   const [selectedRouteLogs, setSelectedRouteLogs] = useState([]);
   const [mainMapRouteLines, setMainMapRouteLines] = useState([]);
+  const [mainMapRouteMessage, setMainMapRouteMessage] = useState(null);
   const [selectedActivitySubmissions, setSelectedActivitySubmissions] = useState([]);
   const [selectedActivityUploads, setSelectedActivityUploads] = useState([]);
   const [showSiteMarkers, setShowSiteMarkers] = useState(true);
@@ -4850,8 +4869,7 @@ export default function FOActivities() {
               .select(
                 "full_name, display_name, employee_code, username, mobile, role, state, status",
               )
-              .or("role.ilike.FO,role.ilike.Field Officer")
-              .limit(1000),
+              .limit(5000),
             supabase
               .from("fo_location_logs")
               .select("*")
@@ -4880,8 +4898,8 @@ export default function FOActivities() {
         if (errors.length) {
           throw errors[0];
         }
-        const profileRows = (profilesRes.data || []).filter(isRealFoProfile);
-        const profilesByCode = profileByFoKey(profileRows);
+        const profileRows = profilesRes.data || [];
+        const profilesByCode = profileByEmployeeCode(profileRows);
         console.debug("FO_PROFILES_LOADED", profileRows.length);
         liveStatusRows.forEach((row) => {
           const foId = normalizeFoKey(row?.fo_user_id);
@@ -5606,15 +5624,18 @@ export default function FOActivities() {
     async function rebuildMainRouteLines() {
       if (!routeOfficer) {
         setMainMapRouteLines([]);
+        setMainMapRouteMessage(null);
         return;
       }
-      const lines = await buildMainMapRouteLines({
+      const result = await buildMainMapRouteLines({
         logs: selectedRouteLogs,
-        visits: routeOfficer.visits || [],
         color: foMarkerColor(routeOfficer),
         idPrefix: `route-${routeOfficer.id}`,
       });
-      if (!cancelled) setMainMapRouteLines(lines);
+      if (!cancelled) {
+        setMainMapRouteLines(result.lines);
+        setMainMapRouteMessage(result.message);
+      }
     }
     rebuildMainRouteLines();
     return () => {
@@ -5858,6 +5879,7 @@ export default function FOActivities() {
               pins={pins}
               sitePins={sitePins}
               routeLines={routeLines}
+              routeTrailMessage={mainMapRouteMessage}
               expanded={false}
               showSites={showSiteMarkers}
               showRoutes={showRouteTrail}
@@ -6228,6 +6250,7 @@ export default function FOActivities() {
                 pins={pins}
                 sitePins={sitePins}
                 routeLines={routeLines}
+                routeTrailMessage={mainMapRouteMessage}
                 expanded
                 showSites={showSiteMarkers}
                 showRoutes={showRouteTrail}
