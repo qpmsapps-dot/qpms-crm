@@ -41,7 +41,7 @@ const executiveNavGroups = [
     title: 'Operations',
     items: [
       { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
-      { label: 'FO Operations', to: '/fo-activities', icon: MapPinned },
+      { label: 'Operations', to: '/fo-activities', icon: MapPinned },
       { label: 'Tickets', to: '/tickets', icon: FileText },
       { label: 'Asset Management', to: '/assets', icon: Wrench },
       { label: 'Reports', to: '/reports', icon: BarChart3 },
@@ -78,7 +78,7 @@ const adminDemoNavGroups = [
     title: 'Operations',
     items: [
       { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
-      { label: 'FO Operations', to: '/fo-activities', icon: MapPinned },
+      { label: 'Operations', to: '/fo-activities', icon: MapPinned },
       { label: 'Tickets', to: '/tickets', icon: FileText },
       { label: 'Asset Management', to: '/assets', icon: Wrench },
       { label: 'Reports', to: '/reports', icon: BarChart3 },
@@ -122,7 +122,7 @@ const operationsNavGroups = [
     items: [
       { label: 'Dashboard', to: '/dashboard', icon: Home },
       { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
-      { label: 'FO Operations', to: '/fo-activities', icon: MapPinned },
+      { label: 'Operations', to: '/fo-activities', icon: MapPinned },
       { label: 'Tickets', to: '/tickets', icon: FileText },
       { label: 'Asset Management', to: '/assets', icon: Wrench },
       { label: 'Reports', to: '/reports', icon: BarChart3 },
