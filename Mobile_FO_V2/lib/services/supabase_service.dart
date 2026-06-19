@@ -15,6 +15,18 @@ class DuplicateEmployeeIdException implements Exception {
   String toString() => message;
 }
 
+class EndDayAttendanceResolution {
+  const EndDayAttendanceResolution({
+    required this.attendance,
+    required this.alreadyCompleted,
+    required this.usedFallback,
+  });
+
+  final Attendance attendance;
+  final bool alreadyCompleted;
+  final bool usedFallback;
+}
+
 class SupabaseService {
   static bool _initialized = false;
   static bool _runtimeConfigured = false;
@@ -279,6 +291,83 @@ class SupabaseService {
     return _attendanceFromRow(records.first, user);
   }
 
+  static Future<EndDayAttendanceResolution?> resolveEndDayAttendance({
+    required FoUser user,
+    required Attendance attendance,
+  }) async {
+    final exactId = attendance.remoteId?.trim();
+    if (isValidUuid(exactId)) {
+      await CrashLogService.record(
+        employeeCode: user.employeeCode,
+        screen: 'home',
+        action: 'END_DAY_EXACT_ATTENDANCE_LOOKUP_STARTED',
+        error: 'attendance_id=$exactId',
+      );
+      final rows = await client
+          .from('fo_attendance')
+          .select('*')
+          .eq('id', exactId!)
+          .eq('fo_user_id', user.employeeCode)
+          .limit(1);
+      final records = List<Map<String, dynamic>>.from(rows);
+      if (records.isNotEmpty) {
+        final row = records.first;
+        final resolved = _attendanceFromRow(row, user);
+        final completed = _isCompletedAttendanceRow(row);
+        await CrashLogService.record(
+          employeeCode: user.employeeCode,
+          screen: 'home',
+          action: completed
+              ? 'END_DAY_EXACT_ATTENDANCE_ALREADY_COMPLETED'
+              : 'END_DAY_EXACT_ATTENDANCE_FOUND',
+          error: 'attendance_id=${resolved.remoteId}',
+        );
+        return EndDayAttendanceResolution(
+          attendance: resolved,
+          alreadyCompleted: completed,
+          usedFallback: false,
+        );
+      }
+      await CrashLogService.record(
+        employeeCode: user.employeeCode,
+        screen: 'home',
+        action: 'END_DAY_EXACT_ATTENDANCE_NOT_FOUND',
+        error: 'attendance_id=$exactId',
+      );
+    }
+
+    final today = indiaDateKey(DateTime.now());
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'home',
+      action: 'END_DAY_TODAY_FALLBACK_LOOKUP_STARTED',
+      error: 'attendance_date=$today',
+    );
+    final rows = await client
+        .from('fo_attendance')
+        .select('*')
+        .eq('fo_user_id', user.employeeCode)
+        .eq('attendance_date', today)
+        .eq('status', 'Active')
+        .filter('logout_time', 'is', null)
+        .order('login_time', ascending: false)
+        .limit(1);
+    final records = List<Map<String, dynamic>>.from(rows);
+    if (records.isEmpty) return null;
+    final resolved = _attendanceFromRow(records.first, user);
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'home',
+      action: 'END_DAY_TODAY_FALLBACK_ATTENDANCE_FOUND',
+      error: 'attendance_id=${resolved.remoteId}',
+    );
+    return EndDayAttendanceResolution(
+      attendance: resolved,
+      alreadyCompleted: false,
+      usedFallback: true,
+    );
+  }
+
   static Future<Attendance?> findCompletedAttendanceForToday(
     FoUser user,
   ) async {
@@ -405,14 +494,19 @@ class SupabaseService {
     }
   }
 
-  static Future<Attendance> endCurrentActiveAttendance({
+  static Future<EndDayAttendanceResolution> endCurrentActiveAttendance({
     required FoUser user,
     required Attendance attendance,
   }) async {
-    final remoteActive = await findOpenActiveAttendance(user);
-    if (remoteActive == null || !isValidUuid(remoteActive.remoteId)) {
+    final resolution = await resolveEndDayAttendance(
+      user: user,
+      attendance: attendance,
+    );
+    if (resolution == null || !isValidUuid(resolution.attendance.remoteId)) {
       throw StateError('No active attendance found in Supabase.');
     }
+    if (resolution.alreadyCompleted) return resolution;
+    final remoteActive = resolution.attendance;
     attendance.remoteId = remoteActive.remoteId;
     await _syncAttendanceRouteKmFromVisits(attendance);
     final id = remoteActive.remoteId!;
@@ -441,11 +535,36 @@ class SupabaseService {
         .select('*');
     final records = List<Map<String, dynamic>>.from(rows);
     if (records.length != 1) {
+      final latestRows = await client
+          .from('fo_attendance')
+          .select('*')
+          .eq('id', id)
+          .eq('fo_user_id', user.employeeCode)
+          .limit(1);
+      final latestRecords = List<Map<String, dynamic>>.from(latestRows);
+      if (latestRecords.isNotEmpty &&
+          _isCompletedAttendanceRow(latestRecords.first)) {
+        return EndDayAttendanceResolution(
+          attendance: _attendanceFromRow(latestRecords.first, user),
+          alreadyCompleted: true,
+          usedFallback: resolution.usedFallback,
+        );
+      }
       throw StateError(
         'End Day attendance update affected ${records.length} rows.',
       );
     }
-    return _attendanceFromRow(records.first, user);
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'home',
+      action: 'END_DAY_ATTENDANCE_COMPLETION_SUCCEEDED',
+      error: 'attendance_id=$id fallback=${resolution.usedFallback}',
+    );
+    return EndDayAttendanceResolution(
+      attendance: _attendanceFromRow(records.first, user),
+      alreadyCompleted: false,
+      usedFallback: resolution.usedFallback,
+    );
   }
 
   static Future<void> updateEndDayLiveStatus({
@@ -648,6 +767,15 @@ class SupabaseService {
           _double(row['total_approved_km']) ??
           0,
     );
+  }
+
+  static bool _isCompletedAttendanceRow(Map<String, dynamic> row) {
+    final status = row['status']?.toString().trim().toLowerCase() ?? '';
+    return row['logout_time'] != null ||
+        status == 'completed' ||
+        status == 'ended' ||
+        status == 'stale auto ended' ||
+        status == 'stale_auto_ended';
   }
 
   static double? _double(Object? value) {

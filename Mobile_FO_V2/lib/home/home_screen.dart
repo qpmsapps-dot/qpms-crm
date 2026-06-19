@@ -26,7 +26,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen>
-    with AutomaticKeepAliveClientMixin<HomeScreen> {
+    with AutomaticKeepAliveClientMixin<HomeScreen>, WidgetsBindingObserver {
   Attendance? _attendance;
   bool _busy = false;
   int? _battery;
@@ -44,8 +44,22 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
     _loadBuildInfo();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _load();
+    }
   }
 
   Future<void> _loadBuildInfo() async {
@@ -88,18 +102,14 @@ class _HomeScreenState extends State<HomeScreen>
             'source=local attendance_id=${attendance.remoteId ?? attendance.id} attendance_date=$attendanceDate today=$todayKey active=${attendance.isActive}',
       );
       if (attendanceDate != todayKey) {
-        if (!attendance.isActive) {
-          await CrashLogService.record(
-            employeeCode: widget.user.employeeCode,
-            screen: 'home',
-            action: 'RECOVERY_PREVIOUS_DAY_COMPLETED_IGNORED',
-            error:
-                'attendance_id=${attendance.remoteId ?? attendance.id} attendance_date=$attendanceDate today=$todayKey',
-          );
-        }
+        await _clearPreviousDayLocalSession(
+          attendance: attendance,
+          attendanceDate: attendanceDate,
+          todayKey: todayKey,
+        );
         attendance = null;
         activeVisit = null;
-        await LocalStore.saveAttendance(null);
+        visits = await LocalStore.getVisits();
       }
     }
     var hasActiveAttendanceToday =
@@ -300,6 +310,57 @@ class _HomeScreenState extends State<HomeScreen>
       screen: 'home',
       action: 'CHECKOUT_CACHE_CLEARED',
       error: 'attendance_id=${attendance.remoteId ?? attendance.id}',
+    );
+  }
+
+  Future<void> _clearPreviousDayLocalSession({
+    required Attendance attendance,
+    required String attendanceDate,
+    required String todayKey,
+  }) async {
+    await CrashLogService.record(
+      employeeCode: widget.user.employeeCode,
+      screen: 'home',
+      action: 'PREVIOUS_DAY_LOCAL_SESSION_CLEANUP_STARTED',
+      error:
+          'attendance_id=${attendance.remoteId ?? attendance.id} attendance_date=$attendanceDate today=$todayKey active=${attendance.isActive}',
+    );
+    try {
+      await TrackingService.stop(
+        user: widget.user,
+        updateRemoteLiveStatus: false,
+      );
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'home',
+        action: 'PREVIOUS_DAY_TRACKING_STOPPED',
+      );
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'home',
+        action: 'PREVIOUS_DAY_TRACKING_STOP_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+    await _clearLocalActiveVisitCache(attendance);
+    await LocalStore.clearBackgroundTrackingSession();
+    await LocalStore.saveAttendance(null);
+    _firstGpsPingLogged = false;
+    if (mounted) {
+      setState(() {
+        _attendance = null;
+        _battery = null;
+        _km = 0;
+        _sitesToday = 0;
+        _currentSite = null;
+      });
+    }
+    await CrashLogService.record(
+      employeeCode: widget.user.employeeCode,
+      screen: 'home',
+      action: 'PREVIOUS_DAY_LOCAL_SESSION_CLEANUP_COMPLETE',
     );
   }
 
@@ -578,57 +639,107 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _endDay() async {
+    if (_busy) return;
     final attendance = _attendance;
     if (attendance == null) return;
-    await CrashLogService.record(
-      employeeCode: widget.user.employeeCode,
-      screen: 'home',
-      action: 'END_DAY_STARTED',
-      error: 'attendance_id=${attendance.remoteId ?? attendance.id}',
-    );
-    await CrashLogService.record(
-      employeeCode: widget.user.employeeCode,
-      screen: 'home',
-      action: 'END_DAY_VALIDATION_STARTED',
-      error: 'attendance_id=${attendance.remoteId ?? attendance.id}',
-    );
-    if (!SupabaseService.isReady) {
-      _toast('End Day sync failed. Please check internet and try again.');
-      return;
-    }
-    final activeAttendance = await SupabaseService.findOpenActiveAttendance(
-      widget.user,
-    );
-    if (activeAttendance == null ||
-        !SupabaseService.isValidUuid(activeAttendance.remoteId)) {
+    setState(() => _busy = true);
+    try {
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
         screen: 'home',
-        action: 'END_DAY_ATTENDANCE_UPDATE_FAILED',
-        error: 'No active Supabase attendance found.',
+        action: 'END_DAY_STARTED',
+        error: 'attendance_id=${attendance.remoteId ?? attendance.id}',
       );
-      _toast('End Day failed. Active attendance not found in database.');
-      return;
-    }
-    attendance.remoteId = activeAttendance.remoteId;
-    await CrashLogService.record(
-      employeeCode: widget.user.employeeCode,
-      screen: 'home',
-      action: 'END_DAY_ACTIVE_ATTENDANCE_FOUND',
-      error: 'attendance_id=${activeAttendance.remoteId}',
-    );
-    if (SupabaseService.isValidUuid(activeAttendance.remoteId)) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'home',
+        action: 'END_DAY_VALIDATION_STARTED',
+        error: 'attendance_id=${attendance.remoteId ?? attendance.id}',
+      );
+      if (!SupabaseService.isReady) {
+        _toast('End Day sync failed. Please check internet and try again.');
+        return;
+      }
+      final resolvedAttendance = await SupabaseService.resolveEndDayAttendance(
+        user: widget.user,
+        attendance: attendance,
+      );
+      if (resolvedAttendance == null ||
+          !SupabaseService.isValidUuid(
+            resolvedAttendance.attendance.remoteId,
+          )) {
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'home',
+          action: 'END_DAY_ATTENDANCE_UPDATE_FAILED',
+          error: 'No active attendance found for today.',
+        );
+        _toast('End Day failed. Today\'s active attendance was not found.');
+        return;
+      }
+      attendance.remoteId = resolvedAttendance.attendance.remoteId;
+      if (resolvedAttendance.alreadyCompleted) {
+        attendance
+          ..endTime = resolvedAttendance.attendance.endTime ?? DateTime.now()
+          ..endLat = resolvedAttendance.attendance.endLat
+          ..endLng = resolvedAttendance.attendance.endLng
+          ..batteryEnd = resolvedAttendance.attendance.batteryEnd
+          ..actualKm = resolvedAttendance.attendance.actualKm
+          ..eligibleKm = resolvedAttendance.attendance.eligibleKm
+          ..totalRouteKm = resolvedAttendance.attendance.totalRouteKm
+          ..endRouteKm = resolvedAttendance.attendance.endRouteKm;
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'home',
+          action: 'END_DAY_ALREADY_COMPLETED_CLEANUP_STARTED',
+          error: 'attendance_id=${attendance.remoteId}',
+        );
+        try {
+          await TrackingService.stop(
+            user: widget.user,
+            routeKm: attendance.eligibleKm,
+            updateRemoteLiveStatus: false,
+          );
+          await CrashLogService.record(
+            employeeCode: widget.user.employeeCode,
+            screen: 'home',
+            action: 'END_DAY_TRACKING_STOPPED',
+          );
+        } catch (error, stackTrace) {
+          await CrashLogService.record(
+            employeeCode: widget.user.employeeCode,
+            screen: 'home',
+            action: 'END_DAY_TRACKING_STOP_FAILED',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
+        await _clearLocalActiveVisitCache(attendance);
+        await LocalStore.saveAttendance(attendance);
+        if (mounted) {
+          setState(() {
+            _attendance = attendance;
+            _km = attendance.eligibleKm;
+            _battery = attendance.batteryEnd;
+            _currentSite = null;
+          });
+        }
+        _toast(
+          'End Day was already completed. App status has been synchronized.',
+        );
+        return;
+      }
       final openVisitsCount =
           await SupabaseService.countOpenSiteVisitsForAttendance(
             user: widget.user,
-            attendance: activeAttendance,
+            attendance: resolvedAttendance.attendance,
           );
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
         screen: 'home',
         action: 'END_DAY_OPEN_VISITS_COUNT',
         error:
-            'count=$openVisitsCount attendance_id=${activeAttendance.remoteId}',
+            'count=$openVisitsCount attendance_id=${resolvedAttendance.attendance.remoteId}',
       );
       if (openVisitsCount > 0) {
         await CrashLogService.record(
@@ -636,7 +747,7 @@ class _HomeScreenState extends State<HomeScreen>
           screen: 'home',
           action: 'END_DAY_BLOCKED_OPEN_VISITS_FOUND',
           error:
-              'count=$openVisitsCount attendance_id=${activeAttendance.remoteId}',
+              'count=$openVisitsCount attendance_id=${resolvedAttendance.attendance.remoteId}',
         );
         _toast('Please Check Out from current store before ending the day.');
         return;
@@ -645,11 +756,8 @@ class _HomeScreenState extends State<HomeScreen>
         employeeCode: widget.user.employeeCode,
         screen: 'home',
         action: 'END_DAY_ALLOWED_NO_OPEN_VISITS',
-        error: 'attendance_id=${activeAttendance.remoteId}',
+        error: 'attendance_id=${resolvedAttendance.attendance.remoteId}',
       );
-    }
-    setState(() => _busy = true);
-    try {
       Position? position;
       try {
         await CrashLogService.record(
@@ -715,14 +823,6 @@ class _HomeScreenState extends State<HomeScreen>
       }
       await TrackingService.syncQueuedLogs(force: true);
       final actualKm = await _calculateContinuedKm(attendance);
-      final previousEndTime = attendance.endTime;
-      final previousEndLat = attendance.endLat;
-      final previousEndLng = attendance.endLng;
-      final previousBatteryEnd = attendance.batteryEnd;
-      final previousActualKm = attendance.actualKm;
-      final previousEligibleKm = attendance.eligibleKm;
-      final previousTotalRouteKm = attendance.totalRouteKm;
-      final previousEndRouteKm = attendance.endRouteKm;
       final routeKm = await _routeKmFromVisits(attendance);
       final endTime = DateTime.now();
       attendance
@@ -746,13 +846,28 @@ class _HomeScreenState extends State<HomeScreen>
               attendance: attendance,
             );
         attendance
-          ..remoteId = completedAttendance.remoteId
-          ..endTime = completedAttendance.endTime ?? endTime;
+          ..remoteId = completedAttendance.attendance.remoteId
+          ..endTime = completedAttendance.attendance.endTime ?? endTime;
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'home',
-          action: 'END_DAY_ATTENDANCE_UPDATE_SUCCESS',
+          action: completedAttendance.alreadyCompleted
+              ? 'END_DAY_ATTENDANCE_ALREADY_COMPLETED'
+              : 'END_DAY_ATTENDANCE_UPDATE_SUCCESS',
         );
+      } catch (error, stackTrace) {
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'home',
+          action: 'END_DAY_ATTENDANCE_UPDATE_FAILED',
+          error: error,
+          stackTrace: stackTrace,
+        );
+        _toast('End Day failed. Please try again.');
+        return;
+      }
+      var secondarySyncPending = false;
+      try {
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'home',
@@ -775,53 +890,40 @@ class _HomeScreenState extends State<HomeScreen>
           error: 'attendance_id=${attendance.remoteId}',
         );
       } catch (error, stackTrace) {
-        attendance
-          ..endTime = previousEndTime
-          ..endLat = previousEndLat
-          ..endLng = previousEndLng
-          ..batteryEnd = previousBatteryEnd
-          ..actualKm = previousActualKm
-          ..eligibleKm = previousEligibleKm
-          ..totalRouteKm = previousTotalRouteKm
-          ..endRouteKm = previousEndRouteKm;
-        await LocalStore.saveAttendance(attendance);
+        secondarySyncPending = true;
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'home',
-          action: 'END_DAY_ATTENDANCE_UPDATE_FAILED',
+          action: 'END_DAY_SECONDARY_SYNC_PENDING',
           error: error,
           stackTrace: stackTrace,
         );
+      }
+      try {
+        await TrackingService.stop(
+          user: widget.user,
+          latitude: endLatitude,
+          longitude: endLongitude,
+          accuracy: endAccuracy,
+          speed: endSpeed,
+          routeKm: attendance.eligibleKm,
+          updateRemoteLiveStatus: false,
+        );
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'home',
-          action: 'END_DAY_REMOTE_FAILED_LOCAL_STATE_KEPT',
-          error: 'Attendance remains active for retry.',
+          action: 'END_DAY_TRACKING_STOPPED',
         );
-        if (mounted) {
-          setState(() {
-            _attendance = attendance;
-            _km = attendance.eligibleKm;
-            _battery = battery;
-          });
-        }
-        _toast('End Day sync failed. Local attendance kept for retry.');
-        return;
+      } catch (error, stackTrace) {
+        secondarySyncPending = true;
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'home',
+          action: 'END_DAY_TRACKING_STOP_FAILED',
+          error: error,
+          stackTrace: stackTrace,
+        );
       }
-      await TrackingService.stop(
-        user: widget.user,
-        latitude: endLatitude,
-        longitude: endLongitude,
-        accuracy: endAccuracy,
-        speed: endSpeed,
-        routeKm: attendance.eligibleKm,
-        updateRemoteLiveStatus: false,
-      );
-      await CrashLogService.record(
-        employeeCode: widget.user.employeeCode,
-        screen: 'home',
-        action: 'END_DAY_TRACKING_STOPPED',
-      );
       await _clearLocalActiveVisitCache(attendance);
       await LocalStore.saveAttendance(attendance);
       if (mounted) {
@@ -838,7 +940,11 @@ class _HomeScreenState extends State<HomeScreen>
         action: 'END_DAY_CACHE_CLEARED',
         error: 'attendance_id=${attendance.remoteId ?? attendance.id}',
       );
-      _toast('Day ended successfully.');
+      _toast(
+        secondarySyncPending
+            ? 'End Day completed; status synchronization pending.'
+            : 'Day ended successfully.',
+      );
     } catch (error, stackTrace) {
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,

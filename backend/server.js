@@ -5,6 +5,7 @@ import express from 'express';
 import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
 import { recalculateFoKm, recalculateFoKmForToday } from './foKmRecalculationService.js';
+import { cleanupStaleFoSessions } from './foStaleSessionCleanupService.js';
 
 dotenv.config({ path: './.env' });
 dotenv.config({ path: './backend/.env' });
@@ -46,6 +47,7 @@ const apiSessions = new Map();
 const foKmRecalculationLocks = new Set();
 const foKmRecalculateAllLocks = new Set();
 const FO_KM_RECALCULATION_RUNNING_MESSAGE = 'Recalculation already running. Please wait.';
+const FO_STALE_CLEANUP_INTERVAL_MS = Number(process.env.FO_STALE_CLEANUP_INTERVAL_MS || 30 * 60 * 1000);
 
 function currentIndiaDateInput(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -1602,6 +1604,42 @@ app.post('/api/fo/km/recalculate-all', async (request, response) => {
   }
 });
 
+async function runFoStaleSessionCleanup(reason = 'scheduled') {
+  try {
+    const client = requireServiceRoleSupabase();
+    const result = await cleanupStaleFoSessions(client);
+    console.log('[myQPMS FO stale cleanup] run complete', {
+      reason,
+      indiaDate: result.indiaDate,
+      attendanceRowsFound: result.attendanceRowsFound,
+      visitsClosed: result.visitsClosed,
+      attendanceClosed: result.attendanceClosed,
+      liveStatusesReset: result.liveStatusesReset,
+      skippedBecauseTodayAttendanceExists: result.skippedBecauseTodayAttendanceExists,
+      errors: result.errors?.length || 0,
+      skipped: result.skipped,
+    });
+    return result;
+  } catch (error) {
+    console.warn('[myQPMS FO stale cleanup] run failed', {
+      reason,
+      message: error.message,
+      code: error.code,
+    });
+    return { ok: false, message: error.message, code: error.code };
+  }
+}
+
+app.post(
+  '/api/fo/stale-sessions/cleanup',
+  requireApiAuth,
+  requireRoles(['Admin', 'MD', 'COO', 'GM / Top Management', 'Existing Business Operations Team']),
+  async (request, response) => {
+    const result = await runFoStaleSessionCleanup('manual_endpoint');
+    response.status(result.ok === false && !result.skipped ? 500 : 200).json(result);
+  },
+);
+
 app.post('/send-lead-mom', routeSendMom('lead'));
 app.post('/send-sitevisit-mom', routeSendMom('sitevisit'));
 
@@ -1616,4 +1654,10 @@ app.listen(port, () => {
     supabaseKeyPresent: supabaseConfigStatus.keyPresent,
   });
   verifyMailTransporter();
+  runFoStaleSessionCleanup('startup');
+  if (Number.isFinite(FO_STALE_CLEANUP_INTERVAL_MS) && FO_STALE_CLEANUP_INTERVAL_MS > 0) {
+    setInterval(() => {
+      runFoStaleSessionCleanup('interval');
+    }, FO_STALE_CLEANUP_INTERVAL_MS).unref?.();
+  }
 });

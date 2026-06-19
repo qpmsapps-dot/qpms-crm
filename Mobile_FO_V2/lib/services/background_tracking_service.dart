@@ -12,6 +12,7 @@ import '../utils/local_id.dart';
 import 'config_service.dart';
 import 'crash_log_service.dart';
 import 'local_store.dart';
+import 'site_away_notification_service.dart';
 import 'supabase_service.dart';
 
 class BackgroundTrackingService {
@@ -24,6 +25,9 @@ class BackgroundTrackingService {
   static const stationaryInterval = Duration(seconds: 75);
   static const lowBatteryInterval = Duration(seconds: 45);
   static const fallbackInterval = Duration(seconds: 10);
+  static const siteAwayCheckInterval = Duration(minutes: 4);
+  static const siteAwayThresholdMeters = 100.0;
+  static const siteAwayNotificationCooldown = Duration(minutes: 15);
   static bool _configured = false;
 
   static Future<void> saveActiveSession({
@@ -122,6 +126,11 @@ class BackgroundTrackingService {
       );
     }
   }
+
+  /// Re-evaluates local state now when check-in or checkout changes it.
+  static void refreshAfterSiteVisitChange() {
+    FlutterBackgroundService().invoke('refreshTracking');
+  }
 }
 
 @pragma('vm:entry-point')
@@ -186,6 +195,9 @@ void _onStart(ServiceInstance service) async {
   Position? lastPosition;
   var nextTickInterval = BackgroundTrackingService.fallbackInterval;
   DateTime? lastSuccessfulSync;
+  String? monitoredVisitId;
+  var consecutiveAwayChecks = 0;
+  DateTime? lastSiteAwayNotificationAt;
 
   Future<void> stopSelf() async {
     timer?.cancel();
@@ -302,6 +314,12 @@ void _onStart(ServiceInstance service) async {
       }
       final activeVisit = await LocalStore.activeVisit();
       if (activeVisit != null) {
+        final visitId = activeVisit.remoteId ?? activeVisit.id;
+        if (monitoredVisitId != visitId) {
+          monitoredVisitId = visitId;
+          consecutiveAwayChecks = 0;
+          lastSiteAwayNotificationAt = null;
+        }
         if (SupabaseService.isReady) {
           try {
             await SupabaseService.updateLiveStatus(
@@ -325,11 +343,92 @@ void _onStart(ServiceInstance service) async {
             );
           }
         }
+
+        final siteLatitude =
+            _isValidLatLng(
+              activeVisit.destinationLatitude,
+              activeVisit.destinationLongitude,
+            )
+            ? activeVisit.destinationLatitude
+            : activeVisit.currentLatitude;
+        final siteLongitude =
+            _isValidLatLng(
+              activeVisit.destinationLatitude,
+              activeVisit.destinationLongitude,
+            )
+            ? activeVisit.destinationLongitude
+            : activeVisit.currentLongitude;
+
+        if (_isValidLatLng(siteLatitude, siteLongitude)) {
+          try {
+            final monitorPosition = await Geolocator.getCurrentPosition(
+              locationSettings: const LocationSettings(
+                accuracy: LocationAccuracy.medium,
+                timeLimit: Duration(seconds: 15),
+              ),
+            );
+            final distanceMeters = Geolocator.distanceBetween(
+              siteLatitude!,
+              siteLongitude!,
+              monitorPosition.latitude,
+              monitorPosition.longitude,
+            );
+            consecutiveAwayChecks =
+                distanceMeters >
+                    BackgroundTrackingService.siteAwayThresholdMeters
+                ? consecutiveAwayChecks + 1
+                : 0;
+            await CrashLogService.record(
+              employeeCode: user.employeeCode,
+              screen: 'tracking',
+              action: 'SITE_AWAY_CHECK_COMPLETED',
+              error:
+                  'site_visit_id=$visitId distance_m=${distanceMeters.toStringAsFixed(1)} consecutive_away=$consecutiveAwayChecks payable_km_unchanged=true',
+            );
+
+            final now = DateTime.now();
+            final cooldownElapsed =
+                lastSiteAwayNotificationAt == null ||
+                now.difference(lastSiteAwayNotificationAt!) >=
+                    BackgroundTrackingService.siteAwayNotificationCooldown;
+            if (consecutiveAwayChecks >= 2 && cooldownElapsed) {
+              // Checkout may have completed while GPS was being acquired.
+              final stillActiveVisit = await LocalStore.activeVisit();
+              if ((stillActiveVisit?.remoteId ?? stillActiveVisit?.id) ==
+                  visitId) {
+                await SiteAwayNotificationService.show();
+                lastSiteAwayNotificationAt = now;
+                await CrashLogService.record(
+                  employeeCode: user.employeeCode,
+                  screen: 'tracking',
+                  action: 'SITE_AWAY_NOTIFICATION_SHOWN',
+                  error:
+                      'site_visit_id=$visitId distance_m=${distanceMeters.toStringAsFixed(1)}',
+                );
+              }
+            }
+          } catch (error, stackTrace) {
+            consecutiveAwayChecks = 0;
+            await _checkpointError(
+              employeeCode: user.employeeCode,
+              action: 'SITE_AWAY_CHECK_FAILED',
+              error: error,
+              stackTrace: stackTrace,
+            );
+          }
+        } else {
+          consecutiveAwayChecks = 0;
+          await _checkpoint(
+            employeeCode: user.employeeCode,
+            action: 'SITE_AWAY_CHECK_SKIPPED_NO_COORDINATES',
+            detail: 'site_visit_id=$visitId',
+          );
+        }
         service.invoke('trackingInterval', {
-          'seconds': BackgroundTrackingService.stationaryInterval.inSeconds,
+          'seconds': BackgroundTrackingService.siteAwayCheckInterval.inSeconds,
           'paused_for_site_visit': true,
         });
-        nextTickInterval = BackgroundTrackingService.stationaryInterval;
+        nextTickInterval = BackgroundTrackingService.siteAwayCheckInterval;
         await _checkpoint(
           employeeCode: user.employeeCode,
           action: 'BACKGROUND_TICK_SKIPPED_ON_SITE_VISIT',
@@ -337,6 +436,9 @@ void _onStart(ServiceInstance service) async {
         );
         return;
       }
+      monitoredVisitId = null;
+      consecutiveAwayChecks = 0;
+      lastSiteAwayNotificationAt = null;
 
       Position position;
       try {
@@ -908,6 +1010,9 @@ void _onStart(ServiceInstance service) async {
       }),
     );
   });
+  service.on('refreshTracking').listen((_) {
+    unawaited(startTicks());
+  });
   service.on('stopService').listen((_) {
     unawaited(
       stopSelf().then(
@@ -934,6 +1039,17 @@ bool _isUsablePosition(Position position) {
       position.latitude <= 90 &&
       position.longitude >= -180 &&
       position.longitude <= 180;
+}
+
+bool _isValidLatLng(double? latitude, double? longitude) {
+  return latitude != null &&
+      longitude != null &&
+      latitude.isFinite &&
+      longitude.isFinite &&
+      latitude >= -90 &&
+      latitude <= 90 &&
+      longitude >= -180 &&
+      longitude <= 180;
 }
 
 Future<double> _calculateKm(String attendanceId, {String? employeeCode}) async {
