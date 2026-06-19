@@ -329,6 +329,7 @@ class TrackingService {
         _updatesSub = null;
       }
       _pausedForSiteVisit = true;
+      BackgroundTrackingService.refreshAfterSiteVisitChange();
 
       final attendance = await LocalStore.getAttendance();
       final attendanceId = attendance == null
@@ -416,6 +417,7 @@ class TrackingService {
   }) async {
     try {
       _pausedForSiteVisit = false;
+      BackgroundTrackingService.refreshAfterSiteVisitChange();
       final attendanceId = _remoteAttendanceId(attendance);
       LocationLog? checkoutLog;
       if (attendanceId != null && checkoutPosition != null) {
