@@ -2,6 +2,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/fo_models.dart';
 import '../utils/date_utils.dart';
+import '../utils/mobile_roles.dart';
 import 'config_service.dart';
 import 'crash_log_service.dart';
 
@@ -89,6 +90,7 @@ class SupabaseService {
     final cleanDepartment = department.trim();
     final cleanDesignation = designation.trim();
     final cleanBusiness = business?.trim();
+    final derivedRole = deriveMobileRole(cleanDepartment, cleanDesignation);
 
     if (cleanEmployeeId.isEmpty) {
       throw ArgumentError('Employee ID is required.');
@@ -118,7 +120,7 @@ class SupabaseService {
         'department': cleanDepartment,
         'designation': cleanDesignation,
         'business': cleanBusiness?.isEmpty == true ? null : cleanBusiness,
-        'role': 'FO',
+        'role': derivedRole,
         'status': 'Active',
         'is_active': true,
       },
@@ -141,7 +143,7 @@ class SupabaseService {
       'department': cleanDepartment,
       'designation': cleanDesignation,
       'business': cleanBusiness?.isEmpty == true ? null : cleanBusiness,
-      'role': 'FO',
+      'role': derivedRole,
       'status': 'Active',
       'is_active': true,
     }, onConflict: 'auth_user_id');
@@ -170,12 +172,15 @@ class SupabaseService {
     }
     final row = await client
         .from('profiles')
-        .select('email')
+        .select('email, role, department, designation, is_active')
         .eq('mobile', mobile)
-        .eq('role', 'FO')
+        .inFilter('role', mobileLoginRoles.toList())
+        .eq('is_active', true)
         .maybeSingle();
     final email = row == null ? '' : row['email']?.toString().trim() ?? '';
-    if (email.isEmpty) throw StateError('No active FO found for this mobile.');
+    if (email.isEmpty) {
+      throw StateError('No active mobile user found for this mobile.');
+    }
     return email;
   }
 
@@ -185,14 +190,20 @@ class SupabaseService {
     final row = await client
         .from('profiles')
         .select(
-          'id, auth_user_id, employee_code, username, full_name, display_name, mobile, email, state, role, department, designation, business',
+          'id, auth_user_id, employee_code, username, full_name, display_name, mobile, email, state, role, department, designation, business, status, is_active',
         )
         .eq('auth_user_id', authUser.id)
         .maybeSingle();
-    if (row == null) throw StateError('FO profile not found.');
+    if (row == null) throw StateError('Mobile profile not found.');
     final user = FoUser.fromJson(Map<String, dynamic>.from(row));
+    if (!isMobileLoginRole(user.role)) {
+      throw StateError('This profile is not eligible for mobile access.');
+    }
+    if (row['is_active'] == false) {
+      throw StateError('This mobile profile is inactive.');
+    }
     if (user.employeeCode.isEmpty) {
-      throw StateError('FO employee_code is missing.');
+      throw StateError('Mobile employee_code is missing.');
     }
     return user;
   }
@@ -201,12 +212,17 @@ class SupabaseService {
     Attendance attendance,
     FoUser user,
   ) async {
+    final employeeCode = user.employeeCode.trim();
+    if (employeeCode.isEmpty) {
+      throw StateError('Attendance employee_code is missing.');
+    }
     try {
       final row = await client
           .from('fo_attendance')
           .insert({
-            'fo_user_id': user.employeeCode,
-            'username': user.employeeCode,
+            'fo_user_id': employeeCode,
+            'employee_code': employeeCode,
+            'username': employeeCode,
             'display_name': user.fullName,
             'attendance_date':
                 attendance.attendanceDate ?? indiaDateKey(attendance.startTime),
@@ -791,6 +807,10 @@ class SupabaseService {
   }
 
   static Future<String?> insertLocation(LocationLog log) async {
+    final employeeCode = log.employeeCode.trim();
+    if (employeeCode.isEmpty) {
+      throw StateError('GPS log employee_code is missing.');
+    }
     final attendanceId = _uuidOrNull(log.attendanceId);
     if (attendanceId == null) {
       await CrashLogService.record(
@@ -840,6 +860,14 @@ class SupabaseService {
     final validLogs = <LocationLog>[];
     final payload = <Map<String, dynamic>>[];
     for (final log in logs) {
+      if (log.employeeCode.trim().isEmpty) {
+        await CrashLogService.record(
+          screen: 'tracking',
+          action: 'LOCATION_LOG_SKIPPED_NO_EMPLOYEE_CODE',
+          error: 'local_id=${log.id}',
+        );
+        continue;
+      }
       final attendanceId = _uuidOrNull(log.attendanceId);
       if (attendanceId == null) {
         await CrashLogService.record(
@@ -897,9 +925,14 @@ class SupabaseService {
     LocationLog log,
     String attendanceId,
   ) {
+    final employeeCode = log.employeeCode.trim();
+    if (employeeCode.isEmpty) {
+      throw StateError('GPS log employee_code is missing.');
+    }
     return {
-      'fo_user_id': log.employeeCode,
-      'username': log.employeeCode,
+      'fo_user_id': employeeCode,
+      'employee_code': employeeCode,
+      'username': employeeCode,
       'attendance_id': attendanceId,
       'latitude': log.latitude,
       'longitude': log.longitude,

@@ -89,16 +89,21 @@ const ACTIVE_OPERATIONAL_STATUSES = new Set([
   "ON_TRAVEL",
   "ACTIVE_STATIONARY",
 ]);
-const FIELD_APP_ROLE_KEYS = new Set([
+const REGISTERED_OPERATIONS_ROLE_KEYS = new Set([
   "FO",
   "FIELD_OFFICER",
-  "KEY_ACCOUNT_MANAGER",
-  "KEY_ACCOUNTS_MANAGER",
   "KAM",
+  "KEY_ACCOUNT_MANAGER",
   "OPERATIONS_MANAGER",
-  "MANAGER",
+  "OM",
   "BRANCH_HEAD",
-  "PROJECT_COORDINATOR",
+  "GM",
+]);
+const BUSINESS_DEVELOPMENT_ROLE_KEYS = new Set([
+  "BD",
+  "BD_EXECUTIVE",
+  "BD_HEAD",
+  "BUSINESS_DEVELOPMENT",
 ]);
 const OPERATIONAL_STATUS_LABELS = {
   ON_SITE: "On Site",
@@ -387,12 +392,23 @@ function profileKeys(row) {
 function isRealFoProfile(profile) {
   const role = normalizeFieldRole(profile?.role);
   const designation = normalizeFieldRole(profile?.designation);
+  const department = normalizeFieldRole(profile?.department);
   const status = String(profile?.status || "")
     .trim()
     .toLowerCase();
   const keys = profileKeys(profile);
+  if (
+    BUSINESS_DEVELOPMENT_ROLE_KEYS.has(role) ||
+    BUSINESS_DEVELOPMENT_ROLE_KEYS.has(designation) ||
+    department === "BUSINESS_DEVELOPMENT"
+  ) {
+    return false;
+  }
   return (
-    (FIELD_APP_ROLE_KEYS.has(role) || FIELD_APP_ROLE_KEYS.has(designation)) &&
+    profile?.is_active === true &&
+    department === "OPERATIONS" &&
+    (REGISTERED_OPERATIONS_ROLE_KEYS.has(role) ||
+      REGISTERED_OPERATIONS_ROLE_KEYS.has(designation)) &&
     !["deleted", "disabled", "inactive", "blocked"].includes(status) &&
     keys.length > 0
   );
@@ -1006,7 +1022,17 @@ function enrichOfficer({ officer, attendance, visits = [], live, profilesByCode 
   ];
   const kmMatch = kmCandidates.find(([value]) => value !== null && value !== undefined);
   const eligibleKm = Number(kmMatch?.[0] || 0);
-  const kmSource = kmMatch?.[1] || "zero";
+  const profileOnly = Boolean(
+    profile &&
+      !live &&
+      !attendance &&
+      visits.length === 0 &&
+      (officer.logs?.length || 0) === 0,
+  );
+  const resolvedEmployeeCode = profileOnly
+    ? firstNonEmptyText(profile?.employee_code, profile?.username, employeeCode)
+    : employeeCode;
+  const kmSource = profileOnly ? "none" : kmMatch?.[1] || "zero";
   const sourceTimestamp =
     locationSource === "live_status"
       ? liveStatusTimestamp(live)
@@ -1023,13 +1049,19 @@ function enrichOfficer({ officer, attendance, visits = [], live, profilesByCode 
   return {
     ...officer,
     profile,
-    employeeCode,
-    employeeKey: normalizeFoKey(employeeCode),
+    employeeCode: resolvedEmployeeCode,
+    employeeKey: normalizeFoKey(resolvedEmployeeCode),
     name,
     state: profile?.state || officer.state || "--",
     branch: profile?.state || officer.branch || officer.state || "--",
     phone: profile?.mobile || profile?.phone || officer.phone || "--",
-    displayNameSource,
+    email: profile?.email || officer.email || "",
+    username: profile?.username || officer.username || "",
+    role: profile?.role || officer.role || "--",
+    designation: profile?.designation || officer.designation || "--",
+    department: profile?.department || officer.department || "--",
+    business: profile?.business || officer.business || "--",
+    displayNameSource: profileOnly ? "profile" : displayNameSource,
     coordinates,
     locationSource,
     locationSourceTime: sourceTimestamp || officer.locationSourceTime || null,
@@ -1051,7 +1083,8 @@ function enrichOfficer({ officer, attendance, visits = [], live, profilesByCode 
     routeKmSource: kmSource,
     kmSource,
     dataSources,
-    sourceUsed: dataSources.join(" / ") || "unknown",
+    sourceUsed: profileOnly ? "profile_only" : dataSources.join(" / ") || "unknown",
+    isProfileOnly: profileOnly,
   };
 }
 
@@ -1480,7 +1513,12 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
     checkIn: formatTime(record.login_time),
     lastSeen: formatDateTime(sourceTimestamp),
     battery: batteryFromRow(live),
-    action: live?.current_status || record.status || "Attendance captured",
+    action:
+      live?.current_status ||
+      record.status ||
+      (attendance || foVisits.length || foLogs.length
+        ? "Attendance captured"
+        : "Not Started"),
     phone: record.mobile || live?.mobile || "--",
     coordinates,
     heading: gpsPoint?.heading ?? null,
@@ -1504,7 +1542,7 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
     locationSourceTime: sourceTimestamp,
     locationSource: gpsPoint?.source ?? null,
     hasLiveStatus: Boolean(live),
-    attendance: record,
+    attendance: attendance || null,
     tasks: [],
     visits: foVisits,
     logs: foLogs,
@@ -1512,7 +1550,7 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
   };
   return enrichOfficer({
     officer: baseOfficer,
-    attendance: record,
+    attendance: attendance || null,
     visits: foVisits,
     live,
     profilesByCode,
@@ -1520,18 +1558,38 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
 }
 
 function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statusDate }) {
-  const latestAttendance = latestBy(attendance, "login_time");
-  const latestLiveStatus = latestLiveStatusByFo(liveStatus);
+  const eligibleProfiles = profiles.filter(isRealFoProfile);
   const profilesByCode = profileByEmployeeCode(profiles);
+  const canonicalProfileCode = new Map();
+  profiles.forEach((profile) => {
+    const canonical = normalizeFoKey(profile?.employee_code || profile?.username);
+    if (!canonical) return;
+    profileKeys(profile).forEach((key) => canonicalProfileCode.set(key, canonical));
+  });
+  const canonicalFoId = (value) => {
+    const normalized = normalizeFoKey(value);
+    return canonicalProfileCode.get(normalized) || normalized;
+  };
+  const remapLatestRows = (rowsByFo) => {
+    const canonicalRows = new Map();
+    rowsByFo.forEach((row, foId) => {
+      const canonical = canonicalFoId(foId);
+      if (canonical && !canonicalRows.has(canonical)) canonicalRows.set(canonical, row);
+    });
+    return canonicalRows;
+  };
+  const latestAttendance = remapLatestRows(latestBy(attendance, "login_time"));
+  const latestLiveStatus = remapLatestRows(latestLiveStatusByFo(liveStatus));
   const visitsByFo = visits.reduce((map, visit) => {
-    const id = normalizeFoKey(foIdFromRow(visit));
+    const id = canonicalFoId(foIdFromRow(visit));
+    if (!id) return map;
     const list = map.get(id) || [];
     list.push(visit);
     map.set(id, list);
     return map;
   }, new Map());
   const logsByFo = (logs || []).reduce((map, log) => {
-    const id = normalizeFoKey(foIdFromRow(log));
+    const id = canonicalFoId(foIdFromRow(log));
     if (!id) return map;
     const list = map.get(id) || [];
     list.push(log);
@@ -1540,14 +1598,6 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
   }, new Map());
 
   const officerIds = new Set();
-  profiles.filter(isRealFoProfile).forEach((profile) => {
-    const code = normalizeFoKey(profile?.employee_code);
-    if (code) {
-      officerIds.add(code);
-      return;
-    }
-    profileKeys(profile).forEach((key) => officerIds.add(key));
-  });
   latestLiveStatus.forEach((_, foId) => officerIds.add(foId));
   latestAttendance.forEach((_, foId) => officerIds.add(foId));
   visitsByFo.forEach((_, foId) => officerIds.add(foId));
@@ -1563,6 +1613,22 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
       profilesByCode,
     }),
   );
+  eligibleProfiles.forEach((profile) => {
+    const foId = canonicalFoId(profile?.employee_code || profile?.username);
+    if (!foId || officerIds.has(foId)) return;
+    officerIds.add(foId);
+    officers.push(
+      officerFromRows({
+        foId,
+        live: null,
+        attendance: null,
+        visits: [],
+        logs: [],
+        statusDate,
+        profilesByCode,
+      }),
+    );
+  });
   if (import.meta.env.DEV) {
     officers.forEach((officer) => {
       console.debug("FO_OFFICER_ENRICHED", {
@@ -1575,8 +1641,10 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
     });
     console.debug("FO_OFFICER_ENRICHMENT_SUMMARY", {
       officersMissingProfileName: officers.filter(
-        (officer) => officer.displayNameSource !== "profile.full_name",
+        (officer) =>
+          !["profile", "profile.full_name"].includes(officer.displayNameSource),
       ).length,
+      profileOnlyOfficers: officers.filter((officer) => officer.isProfileOnly).length,
     });
   }
   return officers;
@@ -1896,7 +1964,10 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
               : "No Location Available"}
           </p>
           <p className="mt-0.5 text-xs font-semibold text-slate-400">
-            {officer.lastSeen}
+            {officer.isProfileOnly ? "Not Started" : officer.lastSeen}
+          </p>
+          <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">
+            {officer.designation || officer.role || "Operations"} · {officer.business || "--"} · {officer.state || "--"}
           </p>
         </div>
       </div>
@@ -2528,6 +2599,14 @@ async function exportFoOperationsExcel({
     const visits = visitRows.filter(
       (row) => normalizeFoKey(row.fo_user_id || row.employee_code) === foId,
     );
+    const exportState = firstNonEmptyText(
+      officer.state,
+      officer.profile?.state,
+      attendance.state,
+      attendance.profile?.state,
+      visits.find((visit) => firstNonEmptyText(visit?.state))?.state,
+      "--",
+    );
     const rawLogs = logRows
       .filter(
         (row) => normalizeFoKey(row.fo_user_id || row.employee_code) === foId,
@@ -2737,6 +2816,7 @@ async function exportFoOperationsExcel({
     summaryRows.push({
       "Employee ID": foId,
       "FO Name": foName,
+      State: exportState,
       Date: `${toDateInputValue(from)} to ${toDateInputValue(to)}`,
       "Start Time": formatDateTime(attendance.login_time),
       "End Time": formatDateTime(attendance.logout_time),
@@ -2783,6 +2863,7 @@ async function exportFoOperationsExcel({
   appendSheet(workbook, "Summary", summaryRows, [
     "Employee ID",
     "FO Name",
+    "State",
     "Date",
     "Start Time",
     "End Time",
@@ -4615,6 +4696,12 @@ function FoSupportActionPanel({
                 <div className="truncate text-slate-600 dark:text-slate-300">
                   Lat/Lng: <strong className="text-slate-800 dark:text-slate-100">{coordinateLabel}</strong>
                 </div>
+                <div className="truncate text-slate-600 dark:text-slate-300">
+                  Role: <strong className="text-slate-800 dark:text-slate-100">{officer.designation || officer.role || "--"}</strong>
+                </div>
+                <div className="truncate text-slate-600 dark:text-slate-300">
+                  Business / State: <strong className="text-slate-800 dark:text-slate-100">{officer.business || "--"} / {officer.state || "--"}</strong>
+                </div>
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 text-center text-[11px] font-semibold text-slate-500">
@@ -5038,8 +5125,9 @@ export default function FOActivities() {
             supabase
               .from("profiles")
               .select(
-                "full_name, display_name, employee_code, username, mobile, role, state, status",
+                "full_name, display_name, employee_code, username, mobile, email, role, department, designation, business, state, status, is_active",
               )
+              .eq("is_active", true)
               .limit(5000),
             supabase
               .from("fo_location_logs")
@@ -5182,9 +5270,9 @@ export default function FOActivities() {
           stateFilter === "All States" || officer.state === stateFilter;
         const searchMatches =
           !search ||
-          `${officer.name} ${officer.employeeCode || officer.foId} ${officer.assignedSite} ${officer.branch}`
+          `${officer.name} ${officer.employeeCode || officer.foId} ${officer.username || ""} ${officer.phone || ""} ${officer.email || ""} ${officer.role || ""} ${officer.designation || ""} ${officer.department || ""} ${officer.business || ""} ${officer.assignedSite} ${officer.branch}`
             .toLowerCase()
-            .includes(search.toLowerCase());
+            .includes(search.trim().toLowerCase());
         return stateMatches && searchMatches;
       }),
     [officers, search, stateFilter],

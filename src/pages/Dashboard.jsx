@@ -172,6 +172,16 @@ function normalizeFoKey(value = '') {
   return String(value).trim().toUpperCase();
 }
 
+const OPERATIONAL_MOBILE_ROLE_KEYS = new Set([
+  'fo',
+  'field officer',
+  'kam',
+  'key account manager',
+  'operations manager',
+  'branch head',
+  'gm',
+]);
+
 function dashboardFoKeys(row) {
   return [row?.employee_code, row?.username, row?.fo_user_id]
     .map(normalizeFoKey)
@@ -185,9 +195,14 @@ function isMockFoUser(value = '') {
 
 function isRealFoProfile(profile) {
   const role = String(profile?.role || '').trim().toLowerCase();
+  const designation = String(profile?.designation || '').trim().toLowerCase();
+  const department = String(profile?.department || '').trim().toLowerCase();
   const status = String(profile?.status || '').trim().toLowerCase();
   const keys = dashboardFoKeys(profile);
-  return ['fo', 'field officer'].includes(role)
+  if (['bd', 'bd executive', 'bd head'].includes(role)
+    || ['bd executive', 'bd head'].includes(designation)
+    || department === 'business development') return false;
+  return (OPERATIONAL_MOBILE_ROLE_KEYS.has(role) || OPERATIONAL_MOBILE_ROLE_KEYS.has(designation))
     && !['deleted', 'disabled', 'inactive', 'blocked'].includes(status)
     && keys.length > 0
     && keys.every((key) => !isMockFoUser(key));
@@ -211,7 +226,7 @@ function FoGpsTestDashboard() {
         const start = `${date}T00:00:00`;
         const end = `${date}T23:59:59`;
         const [profilesRes, attendanceRes, liveRes, logsRes] = await Promise.all([
-          supabase.from('profiles').select('username, employee_code, display_name, full_name, role, status').in('role', ['FO', 'Field Officer']),
+          supabase.from('profiles').select('username, employee_code, display_name, full_name, role, department, designation, status').in('role', ['FO', 'Field Officer', 'KAM', 'Operations Manager', 'Branch Head', 'GM']),
           supabase.from('fo_attendance').select('*').gte('login_time', start).lte('login_time', end).order('login_time', { ascending: false }),
           supabase.from('fo_live_status').select('*'),
           supabase.from('fo_location_logs').select('fo_user_id, attendance_id, logged_at, captured_at, battery_percentage').gte('logged_at', start).lte('logged_at', end).order('logged_at', { ascending: false }).limit(1000),

@@ -250,6 +250,7 @@ void _onStart(ServiceInstance service) async {
               mobile: '',
               email: '',
               state: '',
+              role: 'FO',
             );
         await _checkpoint(
           employeeCode: user.employeeCode,

@@ -367,8 +367,16 @@ class _HomeScreenState extends State<HomeScreen>
   Future<void> _startDay() async {
     setState(() => _busy = true);
     try {
+      final employeeCode = widget.user.employeeCode.trim();
+      if (employeeCode.isEmpty) {
+        await _showErrorDialog(
+          'Start Day failed',
+          'Employee code is missing. Please log out, sign in again, and retry.',
+        );
+        return;
+      }
       await CrashLogService.record(
-        employeeCode: widget.user.employeeCode,
+        employeeCode: employeeCode,
         screen: 'home',
         action: 'START_DAY_CLICKED',
       );

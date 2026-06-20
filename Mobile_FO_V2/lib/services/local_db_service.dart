@@ -82,14 +82,18 @@ class LocalDbService {
     bool? localSynced,
     String? syncStatus,
   }) async {
+    final employeeCode = log.employeeCode.trim();
+    if (employeeCode.isEmpty) {
+      throw StateError('GPS log employee_code is missing.');
+    }
     final db = await database;
     final now = DateTime.now().toUtc().toIso8601String();
     final synced = localSynced ?? log.synced;
     final row = <String, Object?>{
       'id': log.id,
       'remote_id': log.remoteId,
-      'fo_user_id': log.employeeCode,
-      'username': log.employeeCode,
+      'fo_user_id': employeeCode,
+      'username': employeeCode,
       'attendance_id': log.attendanceId,
       'latitude': log.latitude,
       'longitude': log.longitude,
@@ -113,6 +117,8 @@ class LocalDbService {
       'local_gps_logs',
       {
         'remote_id': log.remoteId,
+        'fo_user_id': employeeCode,
+        'username': employeeCode,
         'sync_status': row['sync_status'],
         'local_synced': row['local_synced'],
         'event_type': eventType,

@@ -1,3 +1,5 @@
+import '../utils/mobile_roles.dart';
+
 class FoUser {
   const FoUser({
     required this.authUserId,
@@ -6,7 +8,7 @@ class FoUser {
     required this.mobile,
     required this.email,
     required this.state,
-    this.role = 'FO',
+    required this.role,
     this.department,
     this.designation,
     this.business,
@@ -43,7 +45,11 @@ class FoUser {
     mobile: _text(json['mobile']),
     email: _text(json['email']),
     state: _text(json['state']),
-    role: _text(json['role']).isEmpty ? 'FO' : _text(json['role']),
+    role: resolveMobileRole(
+      role: _nullableText(json['role']),
+      department: _nullableText(json['department']),
+      designation: _nullableText(json['designation']),
+    ),
     department: _nullableText(json['department']),
     designation: _nullableText(json['designation']),
     business: _nullableText(json['business']),
@@ -161,6 +167,7 @@ class LocationLog {
     'local_id': id,
     'remote_id': remoteId,
     'fo_user_id': employeeCode,
+    'employee_code': employeeCode,
     'attendance_id': attendanceId,
     'latitude': latitude,
     'longitude': longitude,

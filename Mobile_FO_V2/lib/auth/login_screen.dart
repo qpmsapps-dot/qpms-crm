@@ -136,7 +136,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   );
                               if (user != null) widget.onAuthenticated(user);
                             },
-                      child: const Text('Register as Field Officer'),
+                      child: const Text('Register for Mobile Access'),
                     ),
                   ],
                 ),

@@ -18,11 +18,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _mobile = TextEditingController();
   final _email = TextEditingController();
   final _birth = TextEditingController();
-  final _state = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
   DateTime? _birthDate;
   String? _gender;
+  String? _state;
   String? _department;
   String? _designation;
   String? _business;
@@ -36,11 +36,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
     'Other',
     'Prefer not to say',
   ];
+  static const _stateOptions = ['KL', 'AP', 'TN', 'TG', 'KA'];
   static const _departmentOptions = ['Operations', 'Business Development'];
   static const _operationsDesignationOptions = [
     'Field Officer',
     'Key Account Manager',
     'Operations Manager',
+    'Branch Head',
+    'GM',
   ];
   static const _businessDevelopmentDesignationOptions = [
     'BD Executive',
@@ -68,7 +71,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
       _mobile,
       _email,
       _birth,
-      _state,
       _password,
       _confirm,
     ]) {
@@ -85,6 +87,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
     if (_gender == null) {
       setState(() => _message = 'Please select gender.');
+      return;
+    }
+    if (_state == null) {
+      setState(() => _message = 'Please select state.');
       return;
     }
     if (_department == null || _designation == null) {
@@ -111,7 +117,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         email: _email.text,
         birthDate: _isoDate(_birthDate!),
         gender: _gender!,
-        state: _state.text,
+        state: _state!,
         department: _department!,
         designation: _designation!,
         business: _department == 'Operations' ? _business : null,
@@ -167,7 +173,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             if (_department == 'Operations') _businessField(),
             _birthDateField(),
             _genderField(),
-            _field(_state, 'State'),
+            _stateField(),
             _field(
               _password,
               'Password',
@@ -273,6 +279,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
         validator: (value) =>
             value == null || value.isEmpty ? 'Please select gender.' : null,
       ),
+    );
+  }
+
+  Widget _stateField() {
+    return _dropdownField(
+      label: 'State',
+      value: _state,
+      options: _stateOptions,
+      emptyMessage: 'Please select state.',
+      onChanged: (value) => setState(() => _state = value),
     );
   }
 

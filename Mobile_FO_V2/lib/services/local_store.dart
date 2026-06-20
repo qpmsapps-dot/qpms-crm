@@ -121,6 +121,9 @@ class LocalStore {
     LocationLog log, {
     String eventType = 'gps',
   }) async {
+    if (log.employeeCode.trim().isEmpty) {
+      throw StateError('GPS log employee_code is missing.');
+    }
     await LocalDbService.upsertGpsLog(log, eventType: eventType);
   }
 

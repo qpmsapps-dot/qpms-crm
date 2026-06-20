@@ -71,6 +71,15 @@ class TrackingService {
     required Attendance attendance,
     required void Function(LocationLog log, double liveKm) onLog,
   }) async {
+    if (user.employeeCode.trim().isEmpty) {
+      _lastTrackingError = 'Employee code is missing.';
+      await CrashLogService.record(
+        screen: 'tracking',
+        action: 'TRACKING_START_BLOCKED_NO_EMPLOYEE_CODE',
+        error: _lastTrackingError,
+      );
+      return false;
+    }
     if (_starting) {
       await CrashLogService.record(
         employeeCode: user.employeeCode,
