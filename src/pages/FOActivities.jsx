@@ -355,16 +355,9 @@ function isActiveProfile(profile) {
 
 function isValidRoutePoint(log) {
   if (log?.is_mocked || log?.metadata?.mock === true) return false;
-  const lat = Number(log?.latitude);
-  const lng = Number(log?.longitude);
   const accuracy = Number(log?.accuracy);
   return (
-    Number.isFinite(lat) &&
-    Number.isFinite(lng) &&
-    lat >= -90 &&
-    lat <= 90 &&
-    lng >= -180 &&
-    lng <= 180 &&
+    isValidLatLng(log?.latitude, log?.longitude) &&
     Number.isFinite(accuracy) &&
     accuracy <= MAX_GPS_ACCURACY_METERS
   );
@@ -372,16 +365,7 @@ function isValidRoutePoint(log) {
 
 function isValidGpsLog(log) {
   if (log?.is_mocked || log?.metadata?.mock === true) return false;
-  const lat = Number(log?.latitude);
-  const lng = Number(log?.longitude);
-  return (
-    Number.isFinite(lat) &&
-    Number.isFinite(lng) &&
-    lat >= -90 &&
-    lat <= 90 &&
-    lng >= -180 &&
-    lng <= 180
-  );
+  return isValidLatLng(log?.latitude, log?.longitude);
 }
 
 function locationTimestampMs(log) {
@@ -671,8 +655,43 @@ function actualTravelKmFromAttendanceOrLogs(attendance, logs = [], visits = []) 
 }
 
 function numberOrNull(value) {
+  if (value === null || value === undefined || String(value).trim() === "") {
+    return null;
+  }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isValidLatLng(lat, lng) {
+  if (
+    lat === null ||
+    lat === undefined ||
+    lng === null ||
+    lng === undefined ||
+    String(lat).trim() === "" ||
+    String(lng).trim() === ""
+  ) {
+    return false;
+  }
+  const latitude = Number(lat);
+  const longitude = Number(lng);
+  return (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180
+  );
+}
+
+function warnSkippedInvalidCoordinate({ employeeCode, source, lat, lng }) {
+  console.warn("[Operations Map] skipped invalid coordinate", {
+    employeeCode: employeeCode || "--",
+    source: source || "unknown",
+    lat,
+    lng,
+  });
 }
 
 function liveStatusTimestamp(row) {
@@ -686,15 +705,7 @@ function liveStatusTimestamp(row) {
 }
 
 function hasFiniteCoordinates(coordinates) {
-  return (
-    Array.isArray(coordinates) &&
-    Number.isFinite(Number(coordinates[0])) &&
-    Number.isFinite(Number(coordinates[1])) &&
-    Number(coordinates[0]) >= -90 &&
-    Number(coordinates[0]) <= 90 &&
-    Number(coordinates[1]) >= -180 &&
-    Number(coordinates[1]) <= 180
-  );
+  return Array.isArray(coordinates) && isValidLatLng(coordinates[0], coordinates[1]);
 }
 
 function normalizeCoordinates(coordinates) {
@@ -717,15 +728,7 @@ function gpsPointFromLiveOrLogs(live, logs = []) {
   const liveLat = Number(live?.latitude ?? live?.lat);
   const liveLng = Number(live?.longitude ?? live?.lng ?? live?.long);
   const liveTimestamp = liveStatusTimestamp(live);
-  if (
-    Number.isFinite(liveLat) &&
-    Number.isFinite(liveLng) &&
-    liveLat >= -90 &&
-    liveLat <= 90 &&
-    liveLng >= -180 &&
-    liveLng <= 180 &&
-    liveTimestamp
-  ) {
+  if (isValidLatLng(live?.latitude ?? live?.lat, live?.longitude ?? live?.lng ?? live?.long) && liveTimestamp) {
     candidates.push({
       coordinates: [liveLat, liveLng],
       timestamp: liveTimestamp,
@@ -2127,7 +2130,10 @@ function SelectedOfficerSummary({
 }
 
 function flattenRouteLinePoints(routeLines = []) {
-  return routeLines.flatMap((route) => route.positions || []).filter(hasFiniteCoordinates);
+  return routeLines
+    .flatMap((route) => route.positions || [])
+    .map(normalizeCoordinates)
+    .filter(Boolean);
 }
 
 function MapViewport({ pins, sitePins, routeLines, expanded, command }) {
@@ -2139,15 +2145,22 @@ function MapViewport({ pins, sitePins, routeLines, expanded, command }) {
   }, [expanded, map]);
 
   useEffect(() => {
-    if (!pins.length && !didInitialFitRef.current) {
+    const validPinPoints = pins
+      .map((pin) => normalizeCoordinates(pin.coordinates))
+      .filter(Boolean);
+    const validSitePoints = sitePins
+      .map((site) => normalizeCoordinates(site.coordinates))
+      .filter(Boolean);
+
+    if (!validPinPoints.length && !didInitialFitRef.current) {
       map.setView(SOUTH_INDIA_CENTER, 6);
       didInitialFitRef.current = true;
       return;
     }
 
-    if (!command && !didInitialFitRef.current && pins.length) {
+    if (!command && !didInitialFitRef.current && validPinPoints.length) {
       map.fitBounds(
-        pins.map((pin) => pin.coordinates),
+        validPinPoints,
         { padding: [44, 44], maxZoom: 13 },
       );
       didInitialFitRef.current = true;
@@ -2156,31 +2169,44 @@ function MapViewport({ pins, sitePins, routeLines, expanded, command }) {
 
     if (!command) return;
 
-    if (command.type === "current-location" && hasFiniteCoordinates(command.coordinates)) {
-      map.flyTo(command.coordinates, 15, { duration: 0.55 });
+    if (command.type === "current-location") {
+      const coordinates = normalizeCoordinates(command.coordinates);
+      if (!coordinates) {
+        warnSkippedInvalidCoordinate({
+          employeeCode: command.employeeCode,
+          source: command.source || "current-location",
+          lat: command.coordinates?.[0],
+          lng: command.coordinates?.[1],
+        });
+        return;
+      }
+      map.flyTo(coordinates, 15, { duration: 0.55 });
       return;
     }
 
     if (command.type === "fit-route") {
       const routePoints = flattenRouteLinePoints(routeLines);
-      const sitePoints = sitePins.map((site) => site.coordinates).filter(hasFiniteCoordinates);
-      const points = [...routePoints, ...sitePoints];
+      const points = [...routePoints, ...validSitePoints];
       if (points.length === 1) {
         map.flyTo(points[0], 14, { duration: 0.45 });
       } else if (points.length > 1) {
         map.fitBounds(points, { padding: [56, 56], maxZoom: 15 });
+      } else {
+        console.warn("[Operations Map] Fit Route skipped: no valid coordinates");
       }
       return;
     }
 
     if (command.type === "fit-all") {
-      if (pins.length === 1) {
-        map.flyTo(pins[0].coordinates, 13, { duration: 0.45 });
-      } else if (pins.length > 1) {
+      if (validPinPoints.length === 1) {
+        map.flyTo(validPinPoints[0], 13, { duration: 0.45 });
+      } else if (validPinPoints.length > 1) {
         map.fitBounds(
-          pins.map((pin) => pin.coordinates),
+          validPinPoints,
           { padding: [44, 44], maxZoom: 13 },
         );
+      } else {
+        console.warn("[Operations Map] Fit All skipped: no valid coordinates");
       }
     }
   }, [command, map, pins, routeLines, sitePins]);
@@ -2219,6 +2245,62 @@ function OperationsMap({
     mapTheme === "satellite"
       ? "Tiles &copy; Esri"
       : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+  const safePins = useMemo(
+    () =>
+      pins.flatMap((pin) => {
+        const coordinates = normalizeCoordinates(pin.coordinates);
+        if (!coordinates) {
+          warnSkippedInvalidCoordinate({
+            employeeCode:
+              pin.officers?.[0]?.employeeCode || pin.officers?.[0]?.foId,
+            source: "officer_marker",
+            lat: pin.coordinates?.[0],
+            lng: pin.coordinates?.[1],
+          });
+          return [];
+        }
+        return [{ ...pin, coordinates }];
+      }),
+    [pins],
+  );
+  const safeSitePins = useMemo(
+    () =>
+      sitePins.flatMap((site) => {
+        const coordinates = normalizeCoordinates(site.coordinates);
+        if (!coordinates) {
+          warnSkippedInvalidCoordinate({
+            employeeCode: site.foId,
+            source: "site_marker",
+            lat: site.coordinates?.[0],
+            lng: site.coordinates?.[1],
+          });
+          return [];
+        }
+        return [{ ...site, coordinates }];
+      }),
+    [sitePins],
+  );
+  const safeRouteLines = useMemo(
+    () =>
+      routeLines.flatMap((route) => {
+        const positions = (route.positions || [])
+          .map((position) => {
+            const coordinates = normalizeCoordinates(position);
+            if (!coordinates) {
+              warnSkippedInvalidCoordinate({
+                employeeCode: route.employeeCode,
+                source: route.source || "route_trail",
+                lat: position?.[0],
+                lng: position?.[1],
+              });
+            }
+            return coordinates;
+          })
+          .filter(Boolean);
+        return positions.length >= 2 ? [{ ...route, positions }] : [];
+      }),
+    [routeLines],
+  );
   return (
     <MapContainer
       center={SOUTH_INDIA_CENTER}
@@ -2230,15 +2312,15 @@ function OperationsMap({
     >
       <TileLayer attribution={attribution} url={tileUrl} />
       <MapViewport
-        pins={pins}
-        sitePins={sitePins}
-        routeLines={routeLines}
+        pins={safePins}
+        sitePins={safeSitePins}
+        routeLines={safeRouteLines}
         expanded={expanded}
         command={command}
       />
       <MapBackgroundClose onClose={onCloseSelection} />
       {showRoutes
-        ? routeLines.map((route) => (
+        ? safeRouteLines.map((route) => (
             <Polyline
               key={route.id}
               positions={route.positions}
@@ -2258,7 +2340,7 @@ function OperationsMap({
         </div>
       ) : null}
       {showSites
-        ? sitePins.map((site) => (
+        ? safeSitePins.map((site) => (
             <Marker
               key={site.id}
               position={site.coordinates}
@@ -2282,7 +2364,7 @@ function OperationsMap({
             </Marker>
           ))
         : null}
-      {pins.map((pin) => (
+      {safePins.map((pin) => (
         <Marker
           key={pin.id}
           position={pin.coordinates}
@@ -5508,11 +5590,21 @@ export default function FOActivities() {
       liveOfficers.find((item) => item.id === officerId);
     if (!officer) return;
     setMapRouteOfficerId(officerId);
-    if (hasFiniteCoordinates(officer.coordinates)) {
+    const coordinates = normalizeCoordinates(officer.coordinates);
+    if (coordinates) {
       setMapCommand({
         type: "current-location",
-        coordinates: officer.coordinates,
+        coordinates,
+        employeeCode: officer.employeeCode || officer.foId,
+        source: officer.locationSource || "officer_card",
         at: Date.now(),
+      });
+    } else {
+      warnSkippedInvalidCoordinate({
+        employeeCode: officer.employeeCode || officer.foId,
+        source: officer.locationSource || "officer_card",
+        lat: officer.coordinates?.[0],
+        lng: officer.coordinates?.[1],
       });
     }
     setSupportOfficerId(officerId);
@@ -5645,7 +5737,46 @@ export default function FOActivities() {
     setDetailDraftToDate(selectedRange.toDate);
     setSelectedOfficerId(officerId);
     setKmRecalcResult(null);
-    setMapCommand({ type: "recenter", at: Date.now() });
+    const officer =
+      filteredOfficers.find((item) => item.id === officerId) ||
+      liveOfficers.find((item) => item.id === officerId);
+    const coordinates = normalizeCoordinates(officer?.coordinates);
+    if (coordinates) {
+      setMapCommand({
+        type: "current-location",
+        coordinates,
+        employeeCode: officer?.employeeCode || officer?.foId,
+        source: officer?.locationSource || "selected_officer",
+        at: Date.now(),
+      });
+    } else {
+      warnSkippedInvalidCoordinate({
+        employeeCode: officer?.employeeCode || officer?.foId,
+        source: officer?.locationSource || "selected_officer",
+        lat: officer?.coordinates?.[0],
+        lng: officer?.coordinates?.[1],
+      });
+    }
+  }
+
+  function focusCurrentOfficerOnMap(source) {
+    const coordinates = normalizeCoordinates(routeOfficer?.coordinates);
+    if (!coordinates) {
+      warnSkippedInvalidCoordinate({
+        employeeCode: routeOfficer?.employeeCode || routeOfficer?.foId,
+        source,
+        lat: routeOfficer?.coordinates?.[0],
+        lng: routeOfficer?.coordinates?.[1],
+      });
+      return;
+    }
+    setMapCommand({
+      type: "current-location",
+      coordinates,
+      employeeCode: routeOfficer?.employeeCode || routeOfficer?.foId,
+      source,
+      at: Date.now(),
+    });
   }
 
   function openSupportDetailedView() {
@@ -5728,11 +5859,13 @@ export default function FOActivities() {
   const pins = useMemo(() => {
     const markerOfficers = visualFilteredOfficers.filter((officer) => {
       const canShow = canShowOfficerMarker(officer);
-      if (!canShow && !hasFiniteCoordinates(officer.coordinates)) {
-        console.debug(
-          "FO_MARKER_SKIPPED_NO_COORDINATES",
-          officer.foId || officer.employeeCode,
-        );
+      if (!canShow) {
+        warnSkippedInvalidCoordinate({
+          employeeCode: officer.employeeCode || officer.foId,
+          source: officer.locationSource || "officer_marker",
+          lat: officer.coordinates?.[0],
+          lng: officer.coordinates?.[1],
+        });
       }
       return canShow;
     });
@@ -6103,13 +6236,7 @@ export default function FOActivities() {
               </button>
               <button
                 type="button"
-                onClick={() =>
-                  setMapCommand({
-                    type: "current-location",
-                    coordinates: routeOfficer?.coordinates,
-                    at: Date.now(),
-                  })
-                }
+                onClick={() => focusCurrentOfficerOnMap("map_location_button")}
                 className="grid h-12 w-12 place-items-center text-slate-700"
               >
                 <LocateFixed className="h-5 w-5" />
@@ -6198,13 +6325,7 @@ export default function FOActivities() {
                     <ControlButton
                       icon={LocateFixed}
                       label="Current Location"
-                      onClick={() =>
-                        setMapCommand({
-                          type: "current-location",
-                          coordinates: routeOfficer?.coordinates,
-                          at: Date.now(),
-                        })
-                      }
+                      onClick={() => focusCurrentOfficerOnMap("map_controls")}
                     />
                     <ControlButton
                       icon={Maximize2}
