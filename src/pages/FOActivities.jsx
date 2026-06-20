@@ -89,22 +89,6 @@ const ACTIVE_OPERATIONAL_STATUSES = new Set([
   "ON_TRAVEL",
   "ACTIVE_STATIONARY",
 ]);
-const REGISTERED_OPERATIONS_ROLE_KEYS = new Set([
-  "FO",
-  "FIELD_OFFICER",
-  "KAM",
-  "KEY_ACCOUNT_MANAGER",
-  "OPERATIONS_MANAGER",
-  "OM",
-  "BRANCH_HEAD",
-  "GM",
-]);
-const BUSINESS_DEVELOPMENT_ROLE_KEYS = new Set([
-  "BD",
-  "BD_EXECUTIVE",
-  "BD_HEAD",
-  "BUSINESS_DEVELOPMENT",
-]);
 const OPERATIONAL_STATUS_LABELS = {
   ON_SITE: "On Site",
   ON_TRAVEL: "On Travel",
@@ -349,23 +333,6 @@ function formatDateTime(value) {
   });
 }
 
-function latestBy(rows, key) {
-  const grouped = new Map();
-  rows.forEach((row) => {
-    const id = normalizeFoKey(foIdFromRow(row));
-    if (!id) return;
-    const current = grouped.get(id);
-    if (!current || new Date(row[key] || 0) > new Date(current[key] || 0)) {
-      grouped.set(id, row);
-    }
-  });
-  return grouped;
-}
-
-function foIdFromRow(row) {
-  return String(row?.fo_user_id || row?.employee_code || "").trim();
-}
-
 function normalizeFoKey(value = "") {
   return String(value || "").replace(/\s+/g, "").trim().toUpperCase();
 }
@@ -376,42 +343,14 @@ function formatDisplayKm(value) {
   return `${number > 0 && number < 0.1 ? number.toFixed(2) : number.toFixed(1)} km`;
 }
 
-function normalizeFieldRole(value = "") {
-  return String(value || "")
-    .trim()
-    .toUpperCase()
-    .replace(/[\s-]+/g, "_");
-}
-
 function profileKeys(row) {
   return [row?.fo_user_id, row?.id, row?.employee_code, row?.username]
     .map(normalizeFoKey)
     .filter(Boolean);
 }
 
-function isRealFoProfile(profile) {
-  const role = normalizeFieldRole(profile?.role);
-  const designation = normalizeFieldRole(profile?.designation);
-  const department = normalizeFieldRole(profile?.department);
-  const status = String(profile?.status || "")
-    .trim()
-    .toLowerCase();
-  const keys = profileKeys(profile);
-  if (
-    BUSINESS_DEVELOPMENT_ROLE_KEYS.has(role) ||
-    BUSINESS_DEVELOPMENT_ROLE_KEYS.has(designation) ||
-    department === "BUSINESS_DEVELOPMENT"
-  ) {
-    return false;
-  }
-  return (
-    profile?.is_active === true &&
-    department === "OPERATIONS" &&
-    (REGISTERED_OPERATIONS_ROLE_KEYS.has(role) ||
-      REGISTERED_OPERATIONS_ROLE_KEYS.has(designation)) &&
-    !["deleted", "disabled", "inactive", "blocked"].includes(status) &&
-    keys.length > 0
-  );
+function isActiveProfile(profile) {
+  return profile?.is_active === true && profileKeys(profile).length > 0;
 }
 
 function isValidRoutePoint(log) {
@@ -746,18 +685,6 @@ function liveStatusTimestamp(row) {
   );
 }
 
-function liveStatusFromRow(row) {
-  const timestamp = liveStatusTimestamp(row);
-  if (!timestamp) return "Offline";
-  const ageMs = timestamp
-    ? Date.now() - new Date(timestamp).getTime()
-    : Number.POSITIVE_INFINITY;
-  if (!Number.isFinite(ageMs)) return "Offline";
-  const ageMinutes = ageMs / 60000;
-  if (ageMinutes <= 2) return "Active";
-  return "Offline";
-}
-
 function hasFiniteCoordinates(coordinates) {
   return (
     Array.isArray(coordinates) &&
@@ -889,30 +816,10 @@ function batteryFromRow(...rows) {
   return null;
 }
 
-function latestLiveStatusByFo(rows = []) {
-  const grouped = new Map();
-  rows.forEach((row) => {
-    const id = normalizeFoKey(row?.fo_user_id);
-    if (!id) return;
-    const current = grouped.get(id);
-    if (
-      !current ||
-      new Date(liveStatusTimestamp(row) || 0) >
-        new Date(liveStatusTimestamp(current) || 0)
-    ) {
-      grouped.set(id, row);
-    }
-  });
-  return grouped;
-}
-
 function profileByEmployeeCode(rows = []) {
   const profilesByCode = new Map();
   rows.forEach((profile) => {
-    [profile?.employee_code, profile?.username].forEach((value) => {
-      const key = normalizeFoKey(value);
-      if (key) profilesByCode.set(key, profile);
-    });
+    profileKeys(profile).forEach((key) => profilesByCode.set(key, profile));
   });
   return profilesByCode;
 }
@@ -1096,21 +1003,6 @@ function mergeLiveStatusRows(...groups) {
     rowsByFo.set(id, row);
   });
   return Array.from(rowsByFo.values());
-}
-
-async function fetchPagedLiveStatusRows(baseQuery, pageSize = 1000) {
-  const rows = [];
-  let from = 0;
-  while (true) {
-    const to = from + pageSize - 1;
-    const { data, error } = await baseQuery.range(from, to);
-    if (error) throw error;
-    const page = data || [];
-    rows.push(...page);
-    if (page.length < pageSize) break;
-    from += pageSize;
-  }
-  return rows;
 }
 
 async function fetchFoLiveStatusRows() {
@@ -1558,30 +1450,64 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
 }
 
 function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statusDate }) {
-  const eligibleProfiles = profiles.filter(isRealFoProfile);
-  const profilesByCode = profileByEmployeeCode(profiles);
+  const activeProfiles = profiles.filter(isActiveProfile);
+  const uniqueProfilesByCode = new Map();
+  activeProfiles.forEach((profile) => {
+    const canonical = normalizeFoKey(
+      profile?.employee_code || profile?.username || profile?.id,
+    );
+    if (canonical && !uniqueProfilesByCode.has(canonical)) {
+      uniqueProfilesByCode.set(canonical, profile);
+    }
+  });
+  const uniqueProfiles = Array.from(uniqueProfilesByCode.values());
+  const profilesByCode = profileByEmployeeCode(uniqueProfiles);
   const canonicalProfileCode = new Map();
-  profiles.forEach((profile) => {
-    const canonical = normalizeFoKey(profile?.employee_code || profile?.username);
+  uniqueProfilesByCode.forEach((profile, canonical) => {
     if (!canonical) return;
     profileKeys(profile).forEach((key) => canonicalProfileCode.set(key, canonical));
   });
-  const canonicalFoId = (value) => {
-    const normalized = normalizeFoKey(value);
-    return canonicalProfileCode.get(normalized) || normalized;
+  const matchedActivityIds = new Set();
+  const missingFromProfiles = new Set();
+  const activityKeys = (row) =>
+    [row?.fo_user_id, row?.employee_code, row?.username]
+      .map(normalizeFoKey)
+      .filter(Boolean);
+  const canonicalActivityId = (row) => {
+    const keys = activityKeys(row);
+    const canonical = keys
+      .map((key) => canonicalProfileCode.get(key))
+      .find(Boolean);
+    if (canonical) {
+      matchedActivityIds.add(canonical);
+      return canonical;
+    }
+    if (keys[0]) missingFromProfiles.add(keys[0]);
+    return null;
   };
-  const remapLatestRows = (rowsByFo) => {
-    const canonicalRows = new Map();
-    rowsByFo.forEach((row, foId) => {
-      const canonical = canonicalFoId(foId);
-      if (canonical && !canonicalRows.has(canonical)) canonicalRows.set(canonical, row);
+  const latestMatchedRows = (rows, timestampForRow) => {
+    const latestRows = new Map();
+    rows.forEach((row) => {
+      const canonical = canonicalActivityId(row);
+      if (!canonical) return;
+      const current = latestRows.get(canonical);
+      if (
+        !current ||
+        new Date(timestampForRow(row) || 0) >
+          new Date(timestampForRow(current) || 0)
+      ) {
+        latestRows.set(canonical, row);
+      }
     });
-    return canonicalRows;
+    return latestRows;
   };
-  const latestAttendance = remapLatestRows(latestBy(attendance, "login_time"));
-  const latestLiveStatus = remapLatestRows(latestLiveStatusByFo(liveStatus));
+  const latestAttendance = latestMatchedRows(
+    attendance,
+    (row) => row?.login_time || row?.created_at,
+  );
+  const latestLiveStatus = latestMatchedRows(liveStatus, liveStatusTimestamp);
   const visitsByFo = visits.reduce((map, visit) => {
-    const id = canonicalFoId(foIdFromRow(visit));
+    const id = canonicalActivityId(visit);
     if (!id) return map;
     const list = map.get(id) || [];
     list.push(visit);
@@ -1589,7 +1515,7 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
     return map;
   }, new Map());
   const logsByFo = (logs || []).reduce((map, log) => {
-    const id = canonicalFoId(foIdFromRow(log));
+    const id = canonicalActivityId(log);
     if (!id) return map;
     const list = map.get(id) || [];
     list.push(log);
@@ -1597,12 +1523,7 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
     return map;
   }, new Map());
 
-  const officerIds = new Set();
-  latestLiveStatus.forEach((_, foId) => officerIds.add(foId));
-  latestAttendance.forEach((_, foId) => officerIds.add(foId));
-  visitsByFo.forEach((_, foId) => officerIds.add(foId));
-  logsByFo.forEach((_, foId) => officerIds.add(foId));
-  const officers = Array.from(officerIds).map((foId) =>
+  const officers = Array.from(uniqueProfilesByCode.keys()).map((foId) =>
     officerFromRows({
       foId,
       live: latestLiveStatus.get(foId),
@@ -1613,22 +1534,17 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
       profilesByCode,
     }),
   );
-  eligibleProfiles.forEach((profile) => {
-    const foId = canonicalFoId(profile?.employee_code || profile?.username);
-    if (!foId || officerIds.has(foId)) return;
-    officerIds.add(foId);
-    officers.push(
-      officerFromRows({
-        foId,
-        live: null,
-        attendance: null,
-        visits: [],
-        logs: [],
-        statusDate,
-        profilesByCode,
-      }),
-    );
-  });
+  const mergeDiagnostics = {
+    activeProfilesCount: activeProfiles.length,
+    activityDerivedOfficerCount: matchedActivityIds.size,
+    finalMergedOfficerCount: officers.length,
+    profileOnlyOfficerCount: officers.filter((officer) => officer.isProfileOnly)
+      .length,
+    missingFromProfilesCount: missingFromProfiles.size,
+    duplicateEmployeeCodesRemoved:
+      activeProfiles.length - uniqueProfilesByCode.size,
+  };
+  console.debug("FO_PROFILE_MASTER_MERGE", mergeDiagnostics);
   if (import.meta.env.DEV) {
     officers.forEach((officer) => {
       console.debug("FO_OFFICER_ENRICHED", {
@@ -1644,7 +1560,7 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
         (officer) =>
           !["profile", "profile.full_name"].includes(officer.displayNameSource),
       ).length,
-      profileOnlyOfficers: officers.filter((officer) => officer.isProfileOnly).length,
+      ...mergeDiagnostics,
     });
   }
   return officers;
@@ -1757,16 +1673,27 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
 
 function mergeRealtimeOfficer(officers, liveRow, profileRows) {
   const profilesByCode = profileByEmployeeCode(profileRows);
-  const foId = normalizeFoKey(liveRow?.fo_user_id);
+  const liveFoId = normalizeFoKey(liveRow?.fo_user_id);
+  const profile = profilesByCode.get(liveFoId);
+  if (!profile) return officers;
+  const foId = normalizeFoKey(
+    profile?.employee_code || profile?.username || profile?.id,
+  );
   const existingIndex = officers.findIndex(
     (officer) =>
       normalizeFoKey(officer.foId) === foId ||
-      normalizeFoKey(officer.employeeCode) === foId,
+      normalizeFoKey(officer.employeeCode) === foId ||
+      profileKeys(profile).includes(normalizeFoKey(officer.foId)) ||
+      profileKeys(profile).includes(normalizeFoKey(officer.employeeCode)),
   );
   const existing = existingIndex >= 0 ? officers[existingIndex] : {};
-  const nextOfficer = officerFromLiveStatus(liveRow, profilesByCode, existing);
+  const nextOfficer = officerFromLiveStatus(
+    { ...liveRow, fo_user_id: foId },
+    profilesByCode,
+    existing,
+  );
   if (!nextOfficer) return officers;
-  if (existingIndex < 0) return [...officers, nextOfficer];
+  if (existingIndex < 0) return officers;
   const next = officers.slice();
   next[existingIndex] = nextOfficer;
   return next;
@@ -5125,7 +5052,7 @@ export default function FOActivities() {
             supabase
               .from("profiles")
               .select(
-                "full_name, display_name, employee_code, username, mobile, email, role, department, designation, business, state, status, is_active",
+                "id, full_name, display_name, employee_code, username, mobile, email, role, department, designation, business, state, status, is_active",
               )
               .eq("is_active", true)
               .limit(5000),
@@ -5270,7 +5197,7 @@ export default function FOActivities() {
           stateFilter === "All States" || officer.state === stateFilter;
         const searchMatches =
           !search ||
-          `${officer.name} ${officer.employeeCode || officer.foId} ${officer.username || ""} ${officer.phone || ""} ${officer.email || ""} ${officer.role || ""} ${officer.designation || ""} ${officer.department || ""} ${officer.business || ""} ${officer.assignedSite} ${officer.branch}`
+          `${officer.name} ${officer.employeeCode || officer.foId} ${officer.username || ""} ${officer.phone || ""} ${officer.email || ""} ${officer.role || ""} ${officer.designation || ""} ${officer.department || ""} ${officer.state || ""} ${officer.business || ""} ${officer.assignedSite} ${officer.branch}`
             .toLowerCase()
             .includes(search.trim().toLowerCase());
         return stateMatches && searchMatches;
