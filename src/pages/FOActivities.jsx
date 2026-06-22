@@ -353,6 +353,18 @@ function isActiveProfile(profile) {
   return profile?.is_active === true && profileKeys(profile).length > 0;
 }
 
+function operationalFoIdForOfficer(officer = {}) {
+  return normalizeFoKey(
+    officer?.profile?.employee_code ||
+      officer?.employeeCode ||
+      officer?.profile?.username ||
+      officer?.username ||
+      officer?.attendance?.employee_code ||
+      officer?.attendance?.fo_user_id ||
+      officer?.foId,
+  );
+}
+
 function isValidRoutePoint(log) {
   if (log?.is_mocked || log?.metadata?.mock === true) return false;
   const accuracy = Number(log?.accuracy);
@@ -628,6 +640,7 @@ function actualTravelKmFromAttendanceOrLogs(attendance, logs = [], visits = []) 
   const storedRawGpsKm = Number(attendance?.raw_gps_km);
   const storedFilteredGpsKm = Number(attendance?.filtered_gps_km);
   const storedActualTravelKm = Number(attendance?.actual_travel_km);
+  const gpsAuditMetrics = logs.length ? foSafeKmFromLogs(logs, visits) : null;
   if (
     Number.isFinite(storedRawGpsKm) &&
     Number.isFinite(storedFilteredGpsKm) &&
@@ -636,6 +649,7 @@ function actualTravelKmFromAttendanceOrLogs(attendance, logs = [], visits = []) 
   ) {
     return {
       ...emptyFoSafeKmMetrics(storedActualTravelKm),
+      ...(gpsAuditMetrics || {}),
       rawGpsKm: storedRawGpsKm,
       filteredGpsKm: storedFilteredGpsKm,
       gapAdjustedKm: storedActualTravelKm,
@@ -644,7 +658,7 @@ function actualTravelKmFromAttendanceOrLogs(attendance, logs = [], visits = []) 
       adjustmentApplied: "Stored in fo_attendance",
     };
   }
-  if (logs.length) return foSafeKmFromLogs(logs, visits);
+  if (gpsAuditMetrics) return gpsAuditMetrics;
   const fallbackKm = Number(attendance?.actual_km ?? attendance?.total_raw_km ?? 0);
   return {
     ...emptyFoSafeKmMetrics(fallbackKm),
@@ -3404,6 +3418,16 @@ function isValidGpsTrailLog(log) {
   );
 }
 
+async function fetchLocationLogsByAttendanceId(attendanceId) {
+  const { data, error } = await supabase
+    .from("fo_location_logs")
+    .select("*")
+    .eq("attendance_id", attendanceId)
+    .limit(10000);
+  if (error) throw error;
+  return data || [];
+}
+
 function gpsTrailGapReason(previous, current) {
   const secondsGap = (current.timestampMs - previous.timestampMs) / 1000;
   const distanceKm = distanceKmBetween(
@@ -5375,29 +5399,27 @@ export default function FOActivities() {
       }
       const fromIso = formatDateForDb(selectedRange.from);
       const toIso = formatDateForDb(selectedRange.to);
-      const selectedFoKeys = Array.from(
-        new Set(
-          [
-            routeOfficer.foId,
-            routeOfficer.employeeCode,
-            routeOfficer.attendance?.fo_user_id,
-            routeOfficer.attendance?.employee_code,
-          ]
-            .map(normalizeFoKey)
-            .filter(Boolean),
-        ),
-      );
+      const operationalFoId = operationalFoIdForOfficer(routeOfficer);
+      const attendanceId = routeOfficer.attendance?.id || null;
       const fetchedRows = [];
-      const idColumns = ["fo_user_id", "employee_code", "profile_id"];
       const timeColumns = ["captured_at", "recorded_at", "created_at", "logged_at"];
+      let source = "employee_code_date";
 
       try {
-        for (const idValue of selectedFoKeys) {
-          for (const idColumn of idColumns) {
+        if (attendanceId) {
+          try {
+            fetchedRows.push(...(await fetchLocationLogsByAttendanceId(attendanceId)));
+          } catch (attendanceError) {
+            console.warn("[myQPMS FO] Attendance GPS lookup failed; using employee/date fallback.", attendanceError);
+          }
+          if (fetchedRows.length) source = "attendance_id";
+        }
+        if (!fetchedRows.length && operationalFoId) {
+          for (const idColumn of ["fo_user_id", "employee_code", "username"]) {
             for (const timeColumn of timeColumns) {
               const rows = await fetchLocationLogsByColumn({
                 idColumn,
-                idValue,
+                idValue: operationalFoId,
                 timeColumn,
                 fromIso,
                 toIso,
@@ -5425,11 +5447,14 @@ export default function FOActivities() {
       const selectedLogs = Array.from(routeRowsById.values()).sort(
         (a, b) => routePointTime(a) - routePointTime(b),
       );
-      console.debug("FO_DRILLDOWN_GPS_LOGS_FETCHED", {
-        officer_name: routeOfficer.name,
-        officer_id: routeOfficer.foId || routeOfficer.employeeCode,
-        date_range: `${selectedRange.fromDate} to ${selectedRange.toDate}`,
-        gps_logs_fetched_count: selectedLogs.length,
+      console.debug("FO_GPS_AUDIT_DIAGNOSTICS", {
+        "profile.id": routeOfficer.profile?.id || null,
+        employee_code: routeOfficer.profile?.employee_code || routeOfficer.employeeCode || null,
+        operationalFoId,
+        attendance_id: attendanceId,
+        gps_logs_count_result: selectedLogs.length,
+        source,
+        dateRange: `${selectedRange.fromDate} to ${selectedRange.toDate}`,
       });
       setSelectedRouteLogs(selectedLogs);
     }
