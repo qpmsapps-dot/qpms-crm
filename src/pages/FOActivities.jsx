@@ -3054,6 +3054,26 @@ function visitBusinessType(visit) {
   );
 }
 
+function visitRouteSourceLabel(visit) {
+  const metadata = visit?.metadata && typeof visit.metadata === "object" && !Array.isArray(visit.metadata)
+    ? visit.metadata
+    : {};
+  const source = String(metadata.distance_source || visit?.distance_source || "").trim().toLowerCase();
+  const api = String(metadata.route_api || "").trim().toLowerCase();
+  const status = String(metadata.route_request_status || "").trim();
+  if (source === "google_distance_matrix" || (source === "google" && api === "distance_matrix")) {
+    return "Google Distance Matrix";
+  }
+  if (source === "unavailable" || metadata.needs_review === true) {
+    return status ? `Missing / Needs Review (${status})` : "Missing / Needs Review";
+  }
+  if (source === "google_directions" || source === "google_directions_recalculation") {
+    return "Google Directions";
+  }
+  if (Number(visit?.route_km) > 0) return "Unknown old data";
+  return "Missing / Needs Review";
+}
+
 function isAttendanceForDate(attendance, dateInput) {
   if (!attendance || !dateInput) return false;
   if (String(attendance.attendance_date || "").slice(0, 10) === dateInput) return true;
@@ -4273,6 +4293,7 @@ function FieldOfficerDetailsView({
         duration: "--",
         travelFromPrevious: "--",
         distance: "--",
+        routeSource: "--",
         activity: "Start Day",
       });
     }
@@ -4287,6 +4308,7 @@ function FieldOfficerDetailsView({
         duration: durationMinutesLabel(visitMinutes(visit)),
         travelFromPrevious: index === 0 ? "Start Day" : visitTitle(visits[index - 1]),
         distance: numberLabel(visit.route_km, ""),
+        routeSource: visitRouteSourceLabel(visit),
         activity: siteVisitStatus(visit),
         visitIndex: index,
       });
@@ -4304,6 +4326,7 @@ function FieldOfficerDetailsView({
         duration: durationMinutesLabel(workingMinutes),
         travelFromPrevious: visits.length ? visitTitle(visits.at(-1)) : "--",
         distance: "--",
+        routeSource: "--",
         activity: "End Day",
       });
     }
@@ -4403,7 +4426,7 @@ function FieldOfficerDetailsView({
               <table className="min-w-[900px] text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-black text-slate-600">
                   <tr>
-                    {["#", "Site / Client", "Location", "Check-in", "Check-out", "Duration", "Travel From Previous", "Distance (km)", "Activity", "View"].map((heading) => (
+                    {["#", "Site / Client", "Location", "Check-in", "Check-out", "Duration", "Travel From Previous", "Distance (km)", "Route Source", "Activity", "View"].map((heading) => (
                       <th key={heading} className="whitespace-nowrap border-b border-slate-100 px-3 py-2">{heading}</th>
                     ))}
                   </tr>
@@ -4421,6 +4444,7 @@ function FieldOfficerDetailsView({
                       <td className="whitespace-nowrap px-3 py-2">{row.duration}</td>
                       <td className="min-w-36 px-3 py-2">{row.travelFromPrevious}</td>
                       <td className="whitespace-nowrap px-3 py-2">{row.distance}</td>
+                      <td className="whitespace-nowrap px-3 py-2">{row.routeSource}</td>
                       <td className="whitespace-nowrap px-3 py-2">{row.activity}</td>
                       <td className="px-3 py-2">
                         {row.visitIndex !== undefined ? (
@@ -4433,7 +4457,7 @@ function FieldOfficerDetailsView({
                   ))}
                   {!timelineRows.length ? (
                     <tr>
-                      <td colSpan={10} className="px-3 py-8 text-center text-sm text-slate-500">No visit timeline available for selected filters.</td>
+                      <td colSpan={11} className="px-3 py-8 text-center text-sm text-slate-500">No visit timeline available for selected filters.</td>
                     </tr>
                   ) : null}
                 </tbody>
@@ -4471,6 +4495,7 @@ function FieldOfficerDetailsView({
                   ["Check-in", formatDateTime(selectedVisit?.check_in_time)],
                   ["Check-out", formatDateTime(siteVisitCheckoutValue(selectedVisit))],
                   ["Duration", durationMinutesLabel(visitMinutes(selectedVisit))],
+                  ["Route Source", visitRouteSourceLabel(selectedVisit)],
                   ["Remarks", visitRemarks(selectedVisit)],
                 ].map(([label, value]) => (
                   <div key={label} className="grid grid-cols-[120px_1fr] gap-2 py-1 text-xs font-semibold">

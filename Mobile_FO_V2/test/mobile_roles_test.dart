@@ -47,4 +47,22 @@ void main() {
 
     expect(user.role, 'FO');
   });
+
+  test('allows all required Operations mobile login roles', () {
+    for (final role in <String>[
+      'FO',
+      'KAM',
+      'Operations Manager',
+      'Manager',
+      'Branch Head',
+      'GM',
+    ]) {
+      expect(isMobileLoginRole(role), isTrue, reason: role);
+    }
+  });
+
+  test('mobile login role matching is case and whitespace insensitive', () {
+    expect(isMobileLoginRole(' field_officer '), isTrue);
+    expect(isMobileLoginRole('operations   manager'), isTrue);
+  });
 }

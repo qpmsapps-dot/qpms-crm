@@ -367,14 +367,18 @@ class _HomeScreenState extends State<HomeScreen>
   Future<void> _startDay() async {
     setState(() => _busy = true);
     try {
-      final employeeCode = widget.user.employeeCode.trim();
-      if (employeeCode.isEmpty) {
-        await _showErrorDialog(
-          'Start Day failed',
-          'Employee code is missing. Please log out, sign in again, and retry.',
+      final authValidation = SupabaseService.validateStartDayAuth(widget.user);
+      if (!authValidation.isValid) {
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'home',
+          action: authValidation.action,
+          error: authValidation.diagnostics(),
         );
+        await _showErrorDialog('Start Day failed', authValidation.message!);
         return;
       }
+      final employeeCode = widget.user.employeeCode.trim();
       await CrashLogService.record(
         employeeCode: employeeCode,
         screen: 'home',
@@ -478,18 +482,25 @@ class _HomeScreenState extends State<HomeScreen>
           widget.user,
         );
       } catch (error, stackTrace) {
+        final failureValidation = SupabaseService.validateStartDayAuth(
+          widget.user,
+        );
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'home',
           action: 'ATTENDANCE_CREATE_FAILED',
-          error: error,
+          error: failureValidation.diagnostics(error: error),
           stackTrace: stackTrace,
         );
-        final restored = await _restoreSameDayAttendanceAfterCreateFailure();
-        if (restored) return;
+        if (failureValidation.isValid) {
+          final restored = await _restoreSameDayAttendanceAfterCreateFailure();
+          if (restored) return;
+        }
         await _showErrorDialog(
           'Start Day failed',
-          'Attendance sync failed. GPS tracking not started.',
+          failureValidation.isValid
+              ? 'Attendance sync failed. GPS tracking not started.'
+              : failureValidation.message!,
         );
         return;
       }

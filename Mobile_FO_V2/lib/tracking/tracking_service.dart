@@ -71,12 +71,14 @@ class TrackingService {
     required Attendance attendance,
     required void Function(LocationLog log, double liveKm) onLog,
   }) async {
-    if (user.employeeCode.trim().isEmpty) {
-      _lastTrackingError = 'Employee code is missing.';
+    final authValidation = SupabaseService.validateStartDayAuth(user);
+    if (!authValidation.isValid) {
+      _lastTrackingError = authValidation.message;
       await CrashLogService.record(
+        employeeCode: user.employeeCode,
         screen: 'tracking',
-        action: 'TRACKING_START_BLOCKED_NO_EMPLOYEE_CODE',
-        error: _lastTrackingError,
+        action: 'TRACKING_START_BLOCKED_AUTH',
+        error: authValidation.diagnostics(),
       );
       return false;
     }

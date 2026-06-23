@@ -620,7 +620,7 @@ class _TasksScreenState extends State<TasksScreen>
     final origin = await _routeOriginForVisit(attendance);
     final destinationLat = store.latitude ?? position.latitude;
     final destinationLng = store.longitude ?? position.longitude;
-    final routeKm = origin == null
+    final routeDistance = origin == null
         ? null
         : await RouteDistanceService.roadDistanceKm(
             employeeCode: widget.user.employeeCode,
@@ -629,6 +629,7 @@ class _TasksScreenState extends State<TasksScreen>
             destinationLat: destinationLat,
             destinationLng: destinationLng,
           );
+    final routeKm = routeDistance?.routeKm;
     if (routeKm != null && origin != null) {
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
@@ -638,6 +639,14 @@ class _TasksScreenState extends State<TasksScreen>
             : 'ROUTE_LEG_CALCULATED_SITE_TO_SITE',
         error:
             'attendance_id=${attendance.remoteId} origin=${origin.lat},${origin.lng} destination=$destinationLat,$destinationLng route_km=$routeKm',
+      );
+    } else if (origin != null && routeDistance != null) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tracking',
+        action: 'ROUTE_LEG_NEEDS_REVIEW',
+        error:
+            'attendance_id=${attendance.remoteId} origin=${origin.lat},${origin.lng} destination=$destinationLat,$destinationLng status=${routeDistance.status}',
       );
     }
     final visit = SiteVisit(
@@ -661,6 +670,21 @@ class _TasksScreenState extends State<TasksScreen>
       destinationLatitude: destinationLat,
       destinationLongitude: destinationLng,
       routeKm: routeKm,
+      metadata:
+          routeDistance?.toMetadata(
+            routeOriginSource: origin?.source ?? 'missing',
+          ) ??
+          {
+            'distance_source': 'unavailable',
+            'route_provider': 'google',
+            'route_api': 'distance_matrix',
+            'route_request_status': 'missing_origin',
+            'route_calculated_at': DateTime.now().toUtc().toIso8601String(),
+            'route_origin_source': 'missing',
+            'destination_lat': destinationLat,
+            'destination_lng': destinationLng,
+            'needs_review': true,
+          },
       status: 'Checked In',
     );
     await CrashLogService.record(
@@ -2699,13 +2723,13 @@ class _AddStoreDialogState extends State<_AddStoreDialog> {
         if (proceed != true) return;
       }
       final id = await SupabaseService.createStore(
-        user: widget.user,
+        user: profile,
         attendance: widget.attendance,
         storeName: _name.text.trim(),
         clientName: _client.text.trim(),
         storeCode: _siteId.text.trim(),
         state: profileState,
-        business: _business,
+        business: _business ?? profile.business,
         latitude: latitude,
         longitude: longitude,
         accuracy: accuracy,
@@ -2730,6 +2754,24 @@ class _AddStoreDialogState extends State<_AddStoreDialog> {
           gpsAccuracy: accuracy,
         ),
       );
+    } on StoreCreateException catch (error) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tasks',
+        action: 'FO_ADD_SITE_ERROR_SHOWN',
+        error: 'store_error_code=${error.code ?? '--'}',
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } on StateError catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message.toString())));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }

@@ -10,6 +10,7 @@ const mobileRegistrationRoles = <String>{
 
 const mobileLoginRoles = <String>{
   ...mobileRegistrationRoles,
+  'Manager',
   // Preserve profiles created before registration standardized on FO.
   'Field Officer',
 };
@@ -66,4 +67,12 @@ String resolveMobileRole({
   throw StateError('Mobile profile role and designation are missing.');
 }
 
-bool isMobileLoginRole(String role) => mobileLoginRoles.contains(role.trim());
+String _normalizedMobileRole(String role) =>
+    role.trim().replaceAll(RegExp(r'[\s_]+'), '').toUpperCase();
+
+bool isMobileLoginRole(String role) {
+  final normalizedRole = _normalizedMobileRole(role);
+  return mobileLoginRoles.any(
+    (allowedRole) => _normalizedMobileRole(allowedRole) == normalizedRole,
+  );
+}

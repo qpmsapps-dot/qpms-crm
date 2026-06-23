@@ -16,6 +16,37 @@ class DuplicateEmployeeIdException implements Exception {
   String toString() => message;
 }
 
+enum MobileLoginFailureType {
+  profileNotFound,
+  authUserMissing,
+  wrongPassword,
+  roleNotAllowed,
+  inactiveProfile,
+}
+
+class MobileLoginException implements Exception {
+  const MobileLoginException(this.type, this.message, {this.details});
+
+  final MobileLoginFailureType type;
+  final String message;
+  final String? details;
+
+  String get action => 'LOGIN_${type.name.toUpperCase()}';
+
+  @override
+  String toString() => details == null ? message : '$message ($details)';
+}
+
+class StoreCreateException implements Exception {
+  const StoreCreateException(this.message, {this.code});
+
+  final String message;
+  final String? code;
+
+  @override
+  String toString() => message;
+}
+
 class EndDayAttendanceResolution {
   const EndDayAttendanceResolution({
     required this.attendance,
@@ -28,13 +59,130 @@ class EndDayAttendanceResolution {
   final bool usedFallback;
 }
 
+class StartDayAuthValidation {
+  const StartDayAuthValidation({
+    required this.isValid,
+    required this.message,
+    required this.action,
+    required this.employeeCode,
+    required this.profileAuthUserId,
+    required this.supabaseAuthUserId,
+    required this.sessionExists,
+    required this.accessTokenExists,
+    required this.sessionUserMatchesProfile,
+  });
+
+  final bool isValid;
+  final String? message;
+  final String action;
+  final String employeeCode;
+  final String profileAuthUserId;
+  final String supabaseAuthUserId;
+  final bool sessionExists;
+  final bool accessTokenExists;
+  final bool sessionUserMatchesProfile;
+
+  String diagnostics({Object? error}) {
+    final errorCode = error is PostgrestException ? error.code : null;
+    final errorMessage = error is PostgrestException
+        ? error.message
+        : error?.toString();
+    return [
+      'employee_code=${employeeCode.isEmpty ? '--' : employeeCode}',
+      'profile_auth_user_id=${profileAuthUserId.isEmpty ? '--' : profileAuthUserId}',
+      'supabase_auth_user_id=${supabaseAuthUserId.isEmpty ? '--' : supabaseAuthUserId}',
+      'session_exists=$sessionExists',
+      'access_token_exists=$accessTokenExists',
+      'session_user_matches_profile=$sessionUserMatchesProfile',
+      'supabase_error_code=${errorCode?.trim().isNotEmpty == true ? errorCode : '--'}',
+      'supabase_error_message=${errorMessage?.trim().isNotEmpty == true ? errorMessage : '--'}',
+      'attendance_insert_payload_keys=${SupabaseService.startDayAttendancePayloadKeys.join(',')}',
+    ].join(' ');
+  }
+}
+
 class SupabaseService {
+  static const startDayAttendancePayloadKeys = <String>[
+    'fo_user_id',
+    'employee_code',
+    'username',
+    'display_name',
+    'attendance_date',
+    'login_time',
+    'start_latitude',
+    'start_longitude',
+    'start_battery_percentage',
+    'status',
+    'local_id',
+  ];
   static bool _initialized = false;
   static bool _runtimeConfigured = false;
 
   static bool get isReady =>
       _initialized && (AppConfig.hasSupabase || _runtimeConfigured);
   static SupabaseClient get client => Supabase.instance.client;
+
+  static StartDayAuthValidation validateStartDayAuth(FoUser user) {
+    final employeeCode = user.employeeCode.trim();
+    final profileAuthUserId = user.authUserId.trim();
+    final session = isReady ? client.auth.currentSession : null;
+    final authUser = isReady ? client.auth.currentUser : null;
+    final accessTokenExists = session?.accessToken.trim().isNotEmpty == true;
+    final expiresAt = session?.expiresAt;
+    final sessionExpired =
+        expiresAt != null &&
+        DateTime.now().millisecondsSinceEpoch >= expiresAt * 1000;
+    final sessionExists = session != null;
+    final supabaseAuthUserId = authUser?.id.trim() ?? '';
+    final sessionUserMatchesProfile =
+        profileAuthUserId.isNotEmpty &&
+        supabaseAuthUserId.isNotEmpty &&
+        profileAuthUserId == supabaseAuthUserId;
+
+    StartDayAuthValidation result({
+      required bool isValid,
+      required String? message,
+      required String action,
+    }) {
+      return StartDayAuthValidation(
+        isValid: isValid,
+        message: message,
+        action: action,
+        employeeCode: employeeCode,
+        profileAuthUserId: profileAuthUserId,
+        supabaseAuthUserId: supabaseAuthUserId,
+        sessionExists: sessionExists,
+        accessTokenExists: accessTokenExists,
+        sessionUserMatchesProfile: sessionUserMatchesProfile,
+      );
+    }
+
+    if (employeeCode.isEmpty) {
+      return result(
+        isValid: false,
+        message: 'Employee code missing. Please logout and login again.',
+        action: 'START_DAY_AUTH_BLOCKED_EMPLOYEE_CODE_MISSING',
+      );
+    }
+    if (!sessionExists ||
+        authUser == null ||
+        !accessTokenExists ||
+        sessionExpired) {
+      return result(
+        isValid: false,
+        message: 'Session expired. Please logout and login again.',
+        action: 'START_DAY_AUTH_BLOCKED_SESSION_EXPIRED',
+      );
+    }
+    if (profileAuthUserId.isNotEmpty && !sessionUserMatchesProfile) {
+      return result(
+        isValid: false,
+        message: 'Login session mismatch. Please logout and login again.',
+        action: 'START_DAY_AUTH_BLOCKED_SESSION_MISMATCH',
+      );
+    }
+    return result(isValid: true, message: null, action: 'START_DAY_AUTH_VALID');
+  }
 
   static Future<void> initialize() async {
     if (_initialized || !AppConfig.hasSupabase) return;
@@ -154,32 +302,80 @@ class SupabaseService {
     required String mobile,
     required String password,
   }) async {
-    final email = await _resolveEmail(_digits(mobile));
-    await client.auth.signInWithPassword(email: email, password: password);
+    final cleanMobile = _digits(mobile);
+    final email = await _resolveEmail(cleanMobile);
+    try {
+      await client.auth.signInWithPassword(email: email, password: password);
+    } on AuthException catch (error) {
+      final isInvalidCredentials =
+          error.code == 'invalid_credentials' ||
+          error.message.toLowerCase().contains('invalid login credentials');
+      if (!isInvalidCredentials) rethrow;
+      throw MobileLoginException(
+        MobileLoginFailureType.wrongPassword,
+        'Incorrect password. Please try again.',
+        details: 'mobile=$cleanMobile auth_code=${error.code ?? '--'}',
+      );
+    }
     return fetchCurrentProfile();
   }
 
   static Future<String> _resolveEmail(String mobile) async {
     try {
       final value = await client.rpc(
-        'rpc_resolve_fo_login_email',
+        'rpc_resolve_mobile_login_profile',
         params: {'p_mobile': mobile},
       );
-      final email = value?.toString().trim() ?? '';
-      if (email.isNotEmpty) return email;
+      final result = value is Map
+          ? Map<String, dynamic>.from(value)
+          : <String, dynamic>{};
+      final status = result['status']?.toString() ?? '';
+      final email = result['email']?.toString().trim() ?? '';
+      if (status == 'ok' && email.isNotEmpty) return email;
+      if (status == 'profile_not_found') {
+        throw MobileLoginException(
+          MobileLoginFailureType.profileNotFound,
+          'No profile was found for this mobile number.',
+          details: 'mobile=$mobile',
+        );
+      }
+      if (status == 'auth_user_missing') {
+        throw MobileLoginException(
+          MobileLoginFailureType.authUserMissing,
+          'This profile is not linked to an authentication user. Please contact admin.',
+          details: 'mobile=$mobile',
+        );
+      }
+      if (status == 'inactive_profile') {
+        throw MobileLoginException(
+          MobileLoginFailureType.inactiveProfile,
+          'This mobile profile is inactive. Please contact admin.',
+          details: 'mobile=$mobile',
+        );
+      }
+      if (status == 'role_not_allowed') {
+        throw MobileLoginException(
+          MobileLoginFailureType.roleNotAllowed,
+          'Your role is not allowed to use the Operations mobile app.',
+          details: 'mobile=$mobile role=${result['role'] ?? '--'}',
+        );
+      }
+    } on MobileLoginException {
+      rethrow;
     } catch (_) {
-      // Fall back to profile lookup when the RPC is unavailable.
+      // Fall back while deployments transition to the diagnostic RPC.
     }
-    final row = await client
-        .from('profiles')
-        .select('email, role, department, designation, is_active')
-        .eq('mobile', mobile)
-        .inFilter('role', mobileLoginRoles.toList())
-        .eq('is_active', true)
-        .maybeSingle();
-    final email = row == null ? '' : row['email']?.toString().trim() ?? '';
+    final value = await client.rpc(
+      'rpc_resolve_fo_login_email',
+      params: {'p_mobile': mobile},
+    );
+    final email = value?.toString().trim() ?? '';
     if (email.isEmpty) {
-      throw StateError('No active mobile user found for this mobile.');
+      throw MobileLoginException(
+        MobileLoginFailureType.profileNotFound,
+        'No eligible profile was found for this mobile number.',
+        details: 'mobile=$mobile legacy_resolver=true',
+      );
     }
     return email;
   }
@@ -194,13 +390,25 @@ class SupabaseService {
         )
         .eq('auth_user_id', authUser.id)
         .maybeSingle();
-    if (row == null) throw StateError('Mobile profile not found.');
+    if (row == null) {
+      throw const MobileLoginException(
+        MobileLoginFailureType.profileNotFound,
+        'The authenticated profile was not found. Please contact admin.',
+      );
+    }
     final user = FoUser.fromJson(Map<String, dynamic>.from(row));
     if (!isMobileLoginRole(user.role)) {
-      throw StateError('This profile is not eligible for mobile access.');
+      throw MobileLoginException(
+        MobileLoginFailureType.roleNotAllowed,
+        'Your role is not allowed to use the Operations mobile app.',
+        details: 'role=${user.role}',
+      );
     }
     if (row['is_active'] == false) {
-      throw StateError('This mobile profile is inactive.');
+      throw const MobileLoginException(
+        MobileLoginFailureType.inactiveProfile,
+        'This mobile profile is inactive. Please contact admin.',
+      );
     }
     if (user.employeeCode.isEmpty) {
       throw StateError('Mobile employee_code is missing.');
@@ -212,10 +420,17 @@ class SupabaseService {
     Attendance attendance,
     FoUser user,
   ) async {
-    final employeeCode = user.employeeCode.trim();
-    if (employeeCode.isEmpty) {
-      throw StateError('Attendance employee_code is missing.');
+    final authValidation = validateStartDayAuth(user);
+    if (!authValidation.isValid) {
+      await CrashLogService.record(
+        employeeCode: user.employeeCode,
+        screen: 'home',
+        action: authValidation.action,
+        error: authValidation.diagnostics(),
+      );
+      throw StateError(authValidation.message!);
     }
+    final employeeCode = user.employeeCode.trim();
     try {
       final row = await client
           .from('fo_attendance')
@@ -242,11 +457,12 @@ class SupabaseService {
       );
       return row?['id']?.toString();
     } catch (error, stackTrace) {
+      final failureValidation = validateStartDayAuth(user);
       await CrashLogService.record(
         employeeCode: user.employeeCode,
         screen: 'home',
         action: 'ATTENDANCE_CREATE_FAILED',
-        error: error,
+        error: failureValidation.diagnostics(error: error),
         stackTrace: stackTrace,
       );
       rethrow;
@@ -1180,47 +1396,53 @@ class SupabaseService {
     double? longitude,
     double? accuracy,
   }) async {
+    final employeeCode = user.employeeCode.trim();
+    final fullName = user.fullName.trim();
+    if (employeeCode.isEmpty) {
+      throw const StoreCreateException(
+        'Your employee code is missing. Please sign out and sign in again.',
+      );
+    }
+    final code = storeCode?.trim().isNotEmpty == true
+        ? storeCode!.trim()
+        : 'FO-$employeeCode-${DateTime.now().millisecondsSinceEpoch}';
+    final cleanBusiness = business?.trim();
+    final metadata = {
+      'approval_status': 'pending_approval',
+      'verification_status': 'Pending',
+      'source': 'created_by_fo',
+      'created_by_employee_code': employeeCode,
+      'created_by_full_name': fullName,
+      'is_temporary': true,
+      'first_captured_by': employeeCode,
+      'first_captured_by_name': fullName,
+      if (locationName?.trim().isNotEmpty == true)
+        'mall_building_location_name': locationName!.trim(),
+      if (addressLandmark?.trim().isNotEmpty == true)
+        'address_landmark': addressLandmark!.trim(),
+      if (remarks?.trim().isNotEmpty == true) 'remarks': remarks!.trim(),
+    };
+    final payload = <String, dynamic>{
+      'store_name': storeName.trim(),
+      'client_name': clientName.trim(),
+      'store_code': code,
+      'state': state.trim(),
+      'business': cleanBusiness?.isEmpty == true ? null : cleanBusiness,
+      'created_by_employee_code': employeeCode,
+      'created_by_full_name': fullName,
+      'captured_at': DateTime.now().toUtc().toIso8601String(),
+      'status': 'Active',
+      'metadata': metadata,
+    };
+    if (latitude != null) payload['latitude'] = latitude;
+    if (longitude != null) payload['longitude'] = longitude;
+    if (accuracy != null) payload['gps_accuracy'] = accuracy;
+    final attendanceId = _uuidOrNull(attendance.remoteId);
+    if (attendanceId != null) payload['attendance_id'] = attendanceId;
     try {
-      final code = storeCode?.trim().isNotEmpty == true
-          ? storeCode!.trim()
-          : 'FO-${user.employeeCode}-${DateTime.now().millisecondsSinceEpoch}';
-      final cleanBusiness = business?.trim();
-      final metadata = {
-        'approval_status': 'pending_approval',
-        'verification_status': 'Pending',
-        'source': 'created_by_fo',
-        'created_by': user.authUserId.isNotEmpty
-            ? user.authUserId
-            : user.employeeCode,
-        'created_by_employee_code': user.employeeCode,
-        'created_by_full_name': user.fullName,
-        'is_temporary': true,
-        'first_captured_by': user.employeeCode,
-        'first_captured_by_name': user.fullName,
-        if (locationName?.trim().isNotEmpty == true)
-          'mall_building_location_name': locationName!.trim(),
-        if (addressLandmark?.trim().isNotEmpty == true)
-          'address_landmark': addressLandmark!.trim(),
-        if (remarks?.trim().isNotEmpty == true) 'remarks': remarks!.trim(),
-      };
       final row = await client
           .from('store_master')
-          .insert({
-            'store_name': storeName,
-            'client_name': clientName,
-            'store_code': code,
-            'state': state,
-            'business': cleanBusiness?.isEmpty == true ? null : cleanBusiness,
-            'latitude': latitude,
-            'longitude': longitude,
-            'gps_accuracy': accuracy,
-            'created_by_employee_code': user.employeeCode,
-            'created_by_full_name': user.fullName,
-            'attendance_id': _uuidOrNull(attendance.remoteId),
-            'captured_at': DateTime.now().toUtc().toIso8601String(),
-            'status': 'Active',
-            'metadata': metadata,
-          })
+          .insert(payload)
           .select('id')
           .maybeSingle();
       await CrashLogService.record(
@@ -1229,15 +1451,47 @@ class SupabaseService {
         action: 'STORE_CREATE_SUCCESS',
       );
       return row?['id']?.toString();
-    } catch (error, stackTrace) {
+    } on PostgrestException catch (error, stackTrace) {
       await CrashLogService.record(
-        employeeCode: user.employeeCode,
+        employeeCode: employeeCode,
         screen: 'tasks',
         action: 'STORE_CREATE_FAILED',
-        error: error,
+        error:
+            'supabase_code=${error.code} supabase_message=${error.message} payload_keys=${payload.keys.join(',')}',
         stackTrace: stackTrace,
       );
-      rethrow;
+      throw StoreCreateException(
+        _storeCreateErrorMessage(error),
+        code: error.code,
+      );
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: employeeCode,
+        screen: 'tasks',
+        action: 'STORE_CREATE_FAILED',
+        error:
+            'error_type=${error.runtimeType} payload_keys=${payload.keys.join(',')}',
+        stackTrace: stackTrace,
+      );
+      throw const StoreCreateException(
+        'Store could not be saved. Please check your connection and try again.',
+      );
+    }
+  }
+
+  static String _storeCreateErrorMessage(PostgrestException error) {
+    switch (error.code) {
+      case '42501':
+        return 'Store permission was denied. Please sign out, sign in again, and retry.';
+      case '23505':
+        return 'This Store ID already exists. Please use a different Store ID.';
+      case '23502':
+        return 'A required store field is missing. Please complete all fields and retry.';
+      case '42703':
+      case 'PGRST204':
+        return 'The app store form does not match the server schema. Please contact support.';
+      default:
+        return 'Store could not be saved (error ${error.code}). Please retry or contact support.';
     }
   }
 
@@ -1273,6 +1527,7 @@ class SupabaseService {
         'destination_lat': visit.destinationLatitude,
         'destination_lng': visit.destinationLongitude,
         'route_km': visit.routeKm,
+        'metadata': visit.metadata,
         'visit_duration_minutes': visit.durationMinutes,
         'status': visit.status,
       };

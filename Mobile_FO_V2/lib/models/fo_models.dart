@@ -256,6 +256,7 @@ class SiteVisit {
     this.destinationLatitude,
     this.destinationLongitude,
     this.routeKm,
+    this.metadata = const {},
     this.checkOutDistanceMeters,
     this.checkOutLocationStatus,
     this.checkOutNote,
@@ -291,6 +292,7 @@ class SiteVisit {
   double? destinationLatitude;
   double? destinationLongitude;
   double? routeKm;
+  Map<String, dynamic> metadata;
   double? checkOutDistanceMeters;
   String? checkOutLocationStatus;
   String? checkOutNote;
@@ -328,6 +330,7 @@ class SiteVisit {
     'destination_lat': destinationLatitude,
     'destination_lng': destinationLongitude,
     'route_km': routeKm,
+    'metadata': metadata,
     'checkout_distance_meters': checkOutDistanceMeters,
     'checkout_location_status': checkOutLocationStatus,
     'checkout_note': checkOutNote,
@@ -364,6 +367,7 @@ class SiteVisit {
     destinationLatitude: _double(json['destination_lat']),
     destinationLongitude: _double(json['destination_lng']),
     routeKm: _double(json['route_km']),
+    metadata: _map(json['metadata']),
     checkOutDistanceMeters: _double(json['checkout_distance_meters']),
     checkOutLocationStatus: _nullableText(json['checkout_location_status']),
     checkOutNote: _nullableText(json['checkout_note']),
@@ -389,6 +393,12 @@ double? _double(Object? value) {
   if (value == null) return null;
   if (value is num) return value.toDouble();
   return double.tryParse(value.toString());
+}
+
+Map<String, dynamic> _map(Object? value) {
+  if (value is Map<String, dynamic>) return value;
+  if (value is Map) return Map<String, dynamic>.from(value);
+  return <String, dynamic>{};
 }
 
 int? _int(Object? value) {
