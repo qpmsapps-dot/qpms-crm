@@ -39,7 +39,7 @@ export default function Login() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isWelcoming, setIsWelcoming] = useState(false);
   const navigate = useNavigate();
-  const { loginWithAppPassword, loginWithPassword, isProductionAuthMode } = useAuth();
+  const { loginWithAppPassword, loginWithPassword, isDemoAuthEnabled } = useAuth();
   usePageTitle('Sign in');
 
   async function handleSubmit(event) {
@@ -49,7 +49,7 @@ export default function Login() {
 
     const normalizedUsername = username.trim().toLowerCase();
 
-    if (isProductionAuthMode) {
+    if (!isDemoAuthEnabled) {
       try {
         const nextUser = await loginWithPassword(normalizedUsername, password);
         setIsSubmitting(false);
@@ -99,7 +99,7 @@ export default function Login() {
     }, 650);
   }
 
-  const matchedWelcomeUser = isProductionAuthMode ? null : findMockUser(username, password);
+  const matchedWelcomeUser = isDemoAuthEnabled ? findMockUser(username, password) : null;
   const welcomeText = matchedWelcomeUser ? `Welcome, ${matchedWelcomeUser.name}` : 'Welcome Back';
 
   return (
