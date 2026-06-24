@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import { api, clearBackendToken, readBackendToken, setBackendToken } from '../services/api.js';
-import { isProductionAuthMode, normalizeAppRole } from '../utils/authRoles.js';
+import { normalizeAppRole } from '../utils/authRoles.js';
 import { AuthContext } from './auth-context.js';
 
 const authStorageKey = 'qpms-crm-auth-user';
+const isDemoAuthEnabled =
+  String(import.meta.env.VITE_ENABLE_DEMO_AUTH || '').trim().toLowerCase() === 'true';
+const isProductionAuthMode = !isDemoAuthEnabled;
 
 function readStoredUser() {
   if (typeof window === 'undefined') return null;
@@ -32,8 +35,24 @@ function profileToUser(profile, sessionUser) {
     access: `${role} access`,
     isActive: profile ? Boolean(profile.is_active) : true,
     status: profile?.status || 'Active',
+    webAccessEnabled: profile?.web_access_enabled === true,
     authProvider: 'supabase',
   };
+}
+
+function validateWebProfile(profile) {
+  if (!profile) {
+    throw new Error('No profile is linked to this Supabase Auth user. Please contact Admin.');
+  }
+  if (String(profile.status || '').trim().toLowerCase() !== 'active') {
+    throw new Error(`User access is ${profile.status || 'not active'}. Please contact Admin.`);
+  }
+  if (profile.is_active !== true) {
+    throw new Error('This user profile is inactive. Please contact Admin.');
+  }
+  if (profile.web_access_enabled !== true) {
+    throw new Error('Web access is disabled for this user. Please contact Admin.');
+  }
 }
 
 async function fetchProfileForSession(session) {
@@ -46,16 +65,11 @@ async function fetchProfileForSession(session) {
     .maybeSingle();
 
   if (error) {
-    console.warn('[myQPMS Auth] Profile fetch failed', error);
-    return profileToUser(null, session.user);
+    throw new Error(error.message || 'Unable to load the linked user profile.');
   }
 
-  if (data) {
-    await supabase.from('profiles').update({ last_login_at: new Date().toISOString() }).eq('id', data.id);
-    return profileToUser(data, session.user);
-  }
-
-  return profileToUser(null, session.user);
+  validateWebProfile(data);
+  return profileToUser(data, session.user);
 }
 
 export function AuthProvider({ children }) {
@@ -97,6 +111,7 @@ export function AuthProvider({ children }) {
       .catch((error) => {
         if (!active) return;
         console.warn('[myQPMS Auth] Session restore failed', error);
+        void supabase.auth.signOut();
         setUserState(null);
         setAuthStatus(isProductionAuthMode ? 'error' : 'ready');
         setAuthError(error.message || 'Session restore failed');
@@ -125,6 +140,7 @@ export function AuthProvider({ children }) {
         .catch((error) => {
           if (!active) return;
           console.warn('[myQPMS Auth] Auth state profile sync failed', error);
+          void supabase.auth.signOut();
           setUserState(null);
           setAuthStatus(isProductionAuthMode ? 'error' : 'ready');
           setAuthError(error.message || 'Profile sync failed');
@@ -156,6 +172,12 @@ export function AuthProvider({ children }) {
   }, []);
 
   const loginBackend = useCallback(async (email, password) => {
+    if (!isDemoAuthEnabled) {
+      throw new Error('Demo backend authentication is disabled.');
+    }
+
+    // Legacy backend credentials are permitted only for explicit local demo mode.
+    // The real Supabase login flow below never calls this function.
     const response = await api.post('/api/auth/login', {
       email: email.trim().toLowerCase(),
       password,
@@ -190,19 +212,23 @@ export function AuthProvider({ children }) {
       throw error;
     }
 
-    const nextUser = await fetchProfileForSession(data.session);
-    if (!nextUser?.isActive && nextUser?.role !== 'Admin') {
+    let nextUser;
+    try {
+      nextUser = await fetchProfileForSession(data.session);
+    } catch (profileError) {
       await supabase.auth.signOut();
       setUserState(null);
       setAuthStatus('ready');
-      throw new Error(`User access is ${nextUser?.status || 'not active'}. Please contact Admin.`);
+      setAuthError(profileError.message);
+      throw profileError;
     }
 
-    await loginBackend(email, password);
+    clearBackendToken();
+    setBackendTokenState('');
     setUserState(nextUser);
     setAuthStatus('ready');
     return nextUser;
-  }, [loginBackend]);
+  }, []);
 
   const logout = useCallback(async () => {
     if (isSupabaseConfigured && supabase) {
@@ -226,6 +252,7 @@ export function AuthProvider({ children }) {
       logout,
       authStatus,
       authError,
+      isDemoAuthEnabled,
       isProductionAuthMode,
       backendToken,
     }),

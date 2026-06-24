@@ -1,5 +1,10 @@
-export const appMode = String(import.meta.env.VITE_APP_MODE || 'demo').toLowerCase();
-export const isProductionAuthMode = appMode === 'production';
+const explicitDemoAuthFlag = String(
+  import.meta.env.VITE_ENABLE_DEMO_AUTH ?? import.meta.env.VITE_DEMO_MODE ?? '',
+).trim().toLowerCase();
+
+export const isDemoAuthEnabled = explicitDemoAuthFlag === 'true';
+export const appMode = isDemoAuthEnabled ? 'demo' : 'production';
+export const isProductionAuthMode = !isDemoAuthEnabled;
 
 export const roleGroups = {
   BD: ['BD', 'BD Team', 'BD Executive', 'BD Head'],

@@ -35,6 +35,8 @@ dotenv.config({ path: './backend/.env' });
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
+const demoBackendAuthEnabled =
+  String(process.env.ENABLE_DEMO_AUTH || '').trim().toLowerCase() === 'true';
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
   .split(',')
   .map((origin) => origin.trim())
@@ -1182,6 +1184,13 @@ app.post('/api/test/reset', async (request, response) => {
 });
 
 app.post('/api/auth/login', (request, response) => {
+  if (!demoBackendAuthEnabled) {
+    response.status(404).json({
+      ok: false,
+      message: 'Demo backend authentication is disabled.',
+    });
+    return;
+  }
   const email = String(request.body?.email || '').trim().toLowerCase();
   const password = String(request.body?.password || '');
   const user = apiDemoUsers.find((item) => item.email === email && item.password === password);
