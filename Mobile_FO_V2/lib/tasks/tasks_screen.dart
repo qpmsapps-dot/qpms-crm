@@ -9,6 +9,7 @@ import '../models/fo_models.dart';
 import '../services/crash_log_service.dart';
 import '../services/local_db_service.dart';
 import '../services/local_store.dart';
+import '../services/permission_service.dart';
 import '../services/route_distance_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
@@ -306,6 +307,19 @@ class _TasksScreenState extends State<TasksScreen>
           action: 'CHECKOUT_CACHE_CLEARED',
           error: 'stale_local_active_visit_id=${localActiveVisit.id}',
         );
+      }
+
+      final locationReadiness =
+          await PermissionService.ensureForegroundLocation(
+            employeeCode: widget.user.employeeCode,
+            action: 'CHECKIN_LOCATION_READINESS',
+          );
+      if (!locationReadiness.allowed) {
+        _toast(
+          locationReadiness.message ??
+              'Location/GPS is required before checking in.',
+        );
+        return;
       }
 
       await CrashLogService.record(
@@ -606,7 +620,7 @@ class _TasksScreenState extends State<TasksScreen>
     final origin = await _routeOriginForVisit(attendance);
     final destinationLat = store.latitude ?? position.latitude;
     final destinationLng = store.longitude ?? position.longitude;
-    final routeKm = origin == null
+    final routeDistance = origin == null
         ? null
         : await RouteDistanceService.roadDistanceKm(
             employeeCode: widget.user.employeeCode,
@@ -615,6 +629,7 @@ class _TasksScreenState extends State<TasksScreen>
             destinationLat: destinationLat,
             destinationLng: destinationLng,
           );
+    final routeKm = routeDistance?.routeKm;
     if (routeKm != null && origin != null) {
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
@@ -624,6 +639,14 @@ class _TasksScreenState extends State<TasksScreen>
             : 'ROUTE_LEG_CALCULATED_SITE_TO_SITE',
         error:
             'attendance_id=${attendance.remoteId} origin=${origin.lat},${origin.lng} destination=$destinationLat,$destinationLng route_km=$routeKm',
+      );
+    } else if (origin != null && routeDistance != null) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tracking',
+        action: 'ROUTE_LEG_NEEDS_REVIEW',
+        error:
+            'attendance_id=${attendance.remoteId} origin=${origin.lat},${origin.lng} destination=$destinationLat,$destinationLng status=${routeDistance.status}',
       );
     }
     final visit = SiteVisit(
@@ -647,6 +670,21 @@ class _TasksScreenState extends State<TasksScreen>
       destinationLatitude: destinationLat,
       destinationLongitude: destinationLng,
       routeKm: routeKm,
+      metadata:
+          routeDistance?.toMetadata(
+            routeOriginSource: origin?.source ?? 'missing',
+          ) ??
+          {
+            'distance_source': 'unavailable',
+            'route_provider': 'google',
+            'route_api': 'distance_matrix',
+            'route_request_status': 'missing_origin',
+            'route_calculated_at': DateTime.now().toUtc().toIso8601String(),
+            'route_origin_source': 'missing',
+            'destination_lat': destinationLat,
+            'destination_lng': destinationLng,
+            'needs_review': true,
+          },
       status: 'Checked In',
     );
     await CrashLogService.record(
@@ -879,6 +917,18 @@ class _TasksScreenState extends State<TasksScreen>
         }
       }
       if (visit == null) return;
+      final locationReadiness =
+          await PermissionService.ensureForegroundLocation(
+            employeeCode: widget.user.employeeCode,
+            action: 'CHECKOUT_LOCATION_READINESS',
+          );
+      if (!locationReadiness.allowed) {
+        _toast(
+          locationReadiness.message ??
+              'Location/GPS is required before checking out.',
+        );
+        return;
+      }
       Position? position;
       try {
         position = await Geolocator.getCurrentPosition(
@@ -935,12 +985,31 @@ class _TasksScreenState extends State<TasksScreen>
           await CrashLogService.record(
             employeeCode: widget.user.employeeCode,
             screen: 'tasks',
-            action: 'CHECKOUT_NEAR_WRONG_LOCATION_BLOCKED',
+            action: 'CHECKOUT_AWAY_LOCATION_WARNING_SHOWN',
             error:
                 'site_visit_id=${visit.remoteId ?? visit.id} distance_m=$checkoutDistance',
           );
-          await _showNearWrongCheckoutDialog(visit, checkoutDistance);
-          return;
+          final confirmed = await _showNearWrongCheckoutDialog(
+            visit,
+            checkoutDistance,
+          );
+          if (confirmed != true) {
+            await CrashLogService.record(
+              employeeCode: widget.user.employeeCode,
+              screen: 'tasks',
+              action: 'CHECKOUT_AWAY_LOCATION_CANCELLED',
+              error:
+                  'site_visit_id=${visit.remoteId ?? visit.id} distance_m=$checkoutDistance',
+            );
+            return;
+          }
+          await CrashLogService.record(
+            employeeCode: widget.user.employeeCode,
+            screen: 'tasks',
+            action: 'CHECKOUT_AWAY_LOCATION_CONFIRMED',
+            error:
+                'site_visit_id=${visit.remoteId ?? visit.id} distance_m=$checkoutDistance',
+          );
         } else {
           await CrashLogService.record(
             employeeCode: widget.user.employeeCode,
@@ -985,7 +1054,7 @@ class _TasksScreenState extends State<TasksScreen>
           visit.petrolPenaltyDistanceMeters;
       final previousDurationMinutes = visit.durationMinutes;
       final previousStatus = visit.status;
-      final wrongLocation = checkoutDistance != null && checkoutDistance > 1000;
+      final awayCheckout = checkoutDistance != null && checkoutDistance > 100;
       final end = DateTime.now();
       visit
         ..checkOutTime = end
@@ -993,12 +1062,12 @@ class _TasksScreenState extends State<TasksScreen>
         ..checkOutLongitude = position.longitude
         ..checkOutAccuracy = position.accuracy
         ..checkOutDistanceMeters = checkoutDistance
-        ..checkOutLocationStatus = wrongLocation ? 'wrong_location' : 'valid'
-        ..checkOutNote = wrongLocation
-            ? 'FO checked out more than 1 km away from checked-in site'
+        ..checkOutLocationStatus = awayCheckout ? 'wrong_location' : 'valid'
+        ..checkOutNote = awayCheckout
+            ? 'FO checked out more than 100 m away from checked-in site'
             : null
-        ..petrolEligibleAfterCheckout = !wrongLocation
-        ..petrolPenaltyDistanceMeters = wrongLocation ? checkoutDistance : 0
+        ..petrolEligibleAfterCheckout = !awayCheckout
+        ..petrolPenaltyDistanceMeters = awayCheckout ? checkoutDistance : 0
         ..durationMinutes = end.difference(visit.checkInTime).inMinutes
         ..status = 'Checked Out';
       try {
@@ -1012,7 +1081,7 @@ class _TasksScreenState extends State<TasksScreen>
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'tasks',
-          action: wrongLocation
+          action: awayCheckout
               ? 'CHECKOUT_WRONG_LOCATION_UPDATE_SUCCESS'
               : 'CHECKOUT_VALID_UPDATE_SUCCESS',
           error:
@@ -1105,22 +1174,26 @@ class _TasksScreenState extends State<TasksScreen>
     );
   }
 
-  Future<void> _showNearWrongCheckoutDialog(
+  Future<bool?> _showNearWrongCheckoutDialog(
     SiteVisit visit,
     double distanceMeters,
   ) async {
-    if (!mounted) return;
-    await showDialog<void>(
+    if (!mounted) return false;
+    return showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Return to Site'),
+        title: const Text('Checkout Away From Site'),
         content: Text(
-          'You are still checked in at ${visit.storeName}. You are approximately ${distanceMeters.round()} meters away from the site. Please go back to the store/site and check out properly.',
+          'You are ${(distanceMeters / 1000).toStringAsFixed(2)} km away from the checked-in site. This distance from site to your current location will not be added to payable KM/petrol. Continue checkout?',
         ),
         actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('OK'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Continue Checkout'),
           ),
         ],
       ),
@@ -1137,7 +1210,7 @@ class _TasksScreenState extends State<TasksScreen>
       builder: (context) => AlertDialog(
         title: const Text('Wrong Checkout Location'),
         content: Text(
-          'You are checking out far away from ${visit.storeName}. You are approximately ${(distanceMeters / 1000).toStringAsFixed(1)} km away. This will be marked as Wrong Checkout Location. The distance travelled from ${visit.storeName} to your current location will not be counted for petrol/conveyance. Do you want to continue?',
+          'You are ${(distanceMeters / 1000).toStringAsFixed(2)} km away from the checked-in site. You can continue checkout, but this distance from site to your current location will not be added to payable KM/petrol.',
         ),
         actions: [
           TextButton(
@@ -1146,7 +1219,7 @@ class _TasksScreenState extends State<TasksScreen>
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Continue'),
+            child: const Text('Continue Checkout'),
           ),
         ],
       ),
@@ -2650,13 +2723,13 @@ class _AddStoreDialogState extends State<_AddStoreDialog> {
         if (proceed != true) return;
       }
       final id = await SupabaseService.createStore(
-        user: widget.user,
+        user: profile,
         attendance: widget.attendance,
         storeName: _name.text.trim(),
         clientName: _client.text.trim(),
         storeCode: _siteId.text.trim(),
         state: profileState,
-        business: _business,
+        business: _business ?? profile.business,
         latitude: latitude,
         longitude: longitude,
         accuracy: accuracy,
@@ -2681,6 +2754,24 @@ class _AddStoreDialogState extends State<_AddStoreDialog> {
           gpsAccuracy: accuracy,
         ),
       );
+    } on StoreCreateException catch (error) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tasks',
+        action: 'FO_ADD_SITE_ERROR_SHOWN',
+        error: 'store_error_code=${error.code ?? '--'}',
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } on StateError catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message.toString())));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }

@@ -7,6 +7,18 @@ import 'package:permission_handler/permission_handler.dart' as ph;
 import 'crash_log_service.dart';
 import '../tracking/tracking_flags.dart';
 
+class LocationReadinessResult {
+  const LocationReadinessResult._({required this.allowed, this.message});
+
+  const LocationReadinessResult.allowed() : this._(allowed: true);
+
+  const LocationReadinessResult.blocked(String message)
+    : this._(allowed: false, message: message);
+
+  final bool allowed;
+  final String? message;
+}
+
 class PermissionService {
   static const message =
       'For reliable field tracking, set Location permission to Allow all the time and Battery usage to Unrestricted.';
@@ -16,44 +28,93 @@ class PermissionService {
   static String backgroundLocationStatus = 'unknown';
   static String? warning;
 
-  static Future<bool> ensureLocation() async {
+  static Future<LocationReadinessResult> ensureForegroundLocation({
+    String? employeeCode,
+    String action = 'LOCATION_READINESS_CHECK',
+  }) async {
     try {
-      warning = null;
       if (!await Geolocator.isLocationServiceEnabled()) {
         locationStatus = 'service disabled';
         await CrashLogService.record(
+          employeeCode: employeeCode,
           screen: 'permissions',
-          action: 'LOCATION_SERVICE_DISABLED',
+          action: '${action}_SERVICE_DISABLED',
         );
-        return false;
+        return const LocationReadinessResult.blocked(
+          'Location/GPS is turned off. Please turn it on and try again.',
+        );
       }
+
       var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
+      if (permission == LocationPermission.deniedForever) {
+        locationStatus = 'denied forever';
+        await CrashLogService.record(
+          employeeCode: employeeCode,
+          screen: 'permissions',
+          action: '${action}_PERMISSION_DENIED_FOREVER',
+        );
+        return const LocationReadinessResult.blocked(
+          'Location permission is disabled. Enable Precise Location in app settings and try again.',
+        );
+      }
+      if (permission == LocationPermission.denied) {
         locationStatus = 'denied';
         await CrashLogService.record(
+          employeeCode: employeeCode,
           screen: 'permissions',
-          action: 'BACKGROUND_PERMISSION_MISSING',
-          error: 'Location permission denied.',
+          action: '${action}_PERMISSION_DENIED',
         );
-        return false;
+        return const LocationReadinessResult.blocked(
+          'Location permission is required. Please allow location access and try again.',
+        );
       }
+
       locationStatus = permission.name;
+      final accuracy = await Geolocator.getLocationAccuracy();
+      if (accuracy == LocationAccuracyStatus.reduced) {
+        locationStatus = 'reduced accuracy';
+        await CrashLogService.record(
+          employeeCode: employeeCode,
+          screen: 'permissions',
+          action: '${action}_PRECISE_LOCATION_MISSING',
+        );
+        return const LocationReadinessResult.blocked(
+          'Precise Location is required. Enable precise GPS access and try again.',
+        );
+      }
+
+      await CrashLogService.record(
+        employeeCode: employeeCode,
+        screen: 'permissions',
+        action: '${action}_READY',
+      );
+      return const LocationReadinessResult.allowed();
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: employeeCode,
+        screen: 'permissions',
+        action: '${action}_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      return const LocationReadinessResult.blocked(
+        'Unable to verify GPS access. Please check location settings and try again.',
+      );
+    }
+  }
+
+  static Future<bool> ensureLocation() async {
+    try {
+      warning = null;
+      final foreground = await ensureForegroundLocation(
+        action: 'START_DAY_LOCATION_READINESS',
+      );
+      if (!foreground.allowed) return false;
       if (Platform.isAndroid) {
         final sdkInt = await _androidSdkInt();
-        final accuracy = await Geolocator.getLocationAccuracy();
-        if (accuracy == LocationAccuracyStatus.reduced) {
-          locationStatus = 'reduced accuracy';
-          await CrashLogService.record(
-            screen: 'permissions',
-            action: 'BACKGROUND_PERMISSION_MISSING',
-            error: 'Precise location is disabled.',
-          );
-          return false;
-        }
         if (TrackingFlags.enableAndroidForegroundLocationService) {
           final always = await ph.Permission.locationAlways.status;
           if (!always.isGranted && !always.isLimited) {

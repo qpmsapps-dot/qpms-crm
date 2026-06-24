@@ -41,14 +41,18 @@ class _LoginScreenState extends State<LoginScreen> {
       );
       widget.onAuthenticated(user);
     } catch (error, stackTrace) {
+      final loginError = error is MobileLoginException ? error : null;
       await CrashLogService.record(
         screen: 'login',
-        action: 'LOGIN_FAILED',
+        action: loginError?.action ?? 'LOGIN_FAILED',
         error: error,
         stackTrace: stackTrace,
       );
       if (mounted) {
-        setState(() => _message = 'Login failed. Please check details.');
+        setState(
+          () => _message =
+              loginError?.message ?? 'Login failed. Please try again.',
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -136,7 +140,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   );
                               if (user != null) widget.onAuthenticated(user);
                             },
-                      child: const Text('Register as Field Officer'),
+                      child: const Text('Register for Mobile Access'),
                     ),
                   ],
                 ),

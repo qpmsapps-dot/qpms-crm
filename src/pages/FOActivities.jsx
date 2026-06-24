@@ -64,8 +64,14 @@ const HIGH_CONFIDENCE_MULTIPLIER = 1.03;
 const MEDIUM_CONFIDENCE_MULTIPLIER = 1.08;
 const LOW_CONFIDENCE_MULTIPLIER = 1.12;
 const SITE_GEOFENCE_METERS = 100;
+const HIDDEN_EMPLOYEE_CODES = [
+  "QPMSTN15702",
+  "QPMSTN12345",
+  "QPMSTN09876",
+];
+const HIDDEN_EMPLOYEE_CODE_SET = new Set(HIDDEN_EMPLOYEE_CODES);
 const FO_SITE_VISIT_SELECT =
-  "id,fo_user_id,employee_code,attendance_id,store_id,store_name,site_name,client_name,store_code,state,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,current_latitude,current_longitude,origin_lat,origin_lng,destination_lat,destination_lng,route_km,google_route_polyline,visit_duration_minutes,status,visit_status,checkout_note,metadata";
+  "id,fo_user_id,employee_code,full_name,attendance_id,store_id,store_name,site_name,client_name,store_code,state,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,current_latitude,current_longitude,origin_lat,origin_lng,destination_lat,destination_lng,route_km,google_route_polyline,visit_duration_minutes,status,visit_status,checkout_note,metadata";
 const FO_LIVE_STATUS_SELECT =
   "fo_user_id,latitude,longitude,last_seen_at,updated_at,route_km_today,is_online,is_tracking,current_status,display_name,username,accuracy,battery_percentage";
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:4000").replace(/\/+$/, "");
@@ -80,8 +86,6 @@ const SNAP_TO_ROADS_MAX_INPUT_POINTS = 500;
 const ROUTE_MAP_SEGMENT_MAX_GAP_SECONDS = 10 * 60;
 const ROUTE_MAP_SEGMENT_MAX_DISTANCE_KM = 2;
 const ROUTE_MAP_SEGMENT_MAX_SPEED_KMPH = 120;
-const MAIN_ROUTE_GAP_DISTANCE_METERS = 500;
-const MAIN_ROUTE_GAP_SECONDS = 120;
 const KM_RECALC_COOLDOWN_MS = 60 * 1000;
 const KM_RECALC_RUNNING_MESSAGE = "Recalculation already running. Please wait.";
 const MOVEMENT_FRESHNESS_MS = 5 * 60 * 1000;
@@ -90,17 +94,6 @@ const ACTIVE_OPERATIONAL_STATUSES = new Set([
   "ON_SITE",
   "ON_TRAVEL",
   "ACTIVE_STATIONARY",
-]);
-const FIELD_APP_ROLE_KEYS = new Set([
-  "FO",
-  "FIELD_OFFICER",
-  "KEY_ACCOUNT_MANAGER",
-  "KEY_ACCOUNTS_MANAGER",
-  "KAM",
-  "OPERATIONS_MANAGER",
-  "MANAGER",
-  "BRANCH_HEAD",
-  "PROJECT_COORDINATOR",
 ]);
 const OPERATIONAL_STATUS_LABELS = {
   ON_SITE: "On Site",
@@ -346,32 +339,35 @@ function formatDateTime(value) {
   });
 }
 
-function latestBy(rows, key) {
-  const grouped = new Map();
-  rows.forEach((row) => {
-    const id = normalizeFoKey(foIdFromRow(row));
-    if (!id) return;
-    const current = grouped.get(id);
-    if (!current || new Date(row[key] || 0) > new Date(current[key] || 0)) {
-      grouped.set(id, row);
-    }
-  });
-  return grouped;
-}
-
-function foIdFromRow(row) {
-  return String(row?.fo_user_id || row?.employee_code || "").trim();
-}
-
 function normalizeFoKey(value = "") {
-  return String(value).trim().toUpperCase();
+  return String(value || "").replace(/\s+/g, "").trim().toUpperCase();
 }
 
-function normalizeFieldRole(value = "") {
-  return String(value || "")
-    .trim()
-    .toUpperCase()
-    .replace(/[\s-]+/g, "_");
+function normalizeEmployeeCode(code) {
+  return String(code ?? "").trim().toUpperCase();
+}
+
+function isHiddenEmployeeCode(code) {
+  return HIDDEN_EMPLOYEE_CODE_SET.has(normalizeEmployeeCode(code));
+}
+
+function isHiddenEmployeeRecord(record) {
+  return [
+    record?.employeeCode,
+    record?.employee_code,
+    record?.fo_user_id,
+    record?.user_id,
+    record?.profile?.employee_code,
+    record?.attendance?.employee_code,
+    record?.attendance?.fo_user_id,
+    record?.foId,
+  ].some(isHiddenEmployeeCode);
+}
+
+function formatDisplayKm(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return `${number > 0 && number < 0.1 ? number.toFixed(2) : number.toFixed(1)} km`;
 }
 
 function profileKeys(row) {
@@ -380,32 +376,27 @@ function profileKeys(row) {
     .filter(Boolean);
 }
 
-function isRealFoProfile(profile) {
-  const role = normalizeFieldRole(profile?.role);
-  const designation = normalizeFieldRole(profile?.designation);
-  const status = String(profile?.status || "")
-    .trim()
-    .toLowerCase();
-  const keys = profileKeys(profile);
-  return (
-    (FIELD_APP_ROLE_KEYS.has(role) || FIELD_APP_ROLE_KEYS.has(designation)) &&
-    !["deleted", "disabled", "inactive", "blocked"].includes(status) &&
-    keys.length > 0
+function isActiveProfile(profile) {
+  return profile?.is_active === true && profileKeys(profile).length > 0;
+}
+
+function operationalFoIdForOfficer(officer = {}) {
+  return normalizeFoKey(
+    officer?.profile?.employee_code ||
+      officer?.employeeCode ||
+      officer?.profile?.username ||
+      officer?.username ||
+      officer?.attendance?.employee_code ||
+      officer?.attendance?.fo_user_id ||
+      officer?.foId,
   );
 }
 
 function isValidRoutePoint(log) {
   if (log?.is_mocked || log?.metadata?.mock === true) return false;
-  const lat = Number(log?.latitude);
-  const lng = Number(log?.longitude);
   const accuracy = Number(log?.accuracy);
   return (
-    Number.isFinite(lat) &&
-    Number.isFinite(lng) &&
-    lat >= -90 &&
-    lat <= 90 &&
-    lng >= -180 &&
-    lng <= 180 &&
+    isValidLatLng(log?.latitude, log?.longitude) &&
     Number.isFinite(accuracy) &&
     accuracy <= MAX_GPS_ACCURACY_METERS
   );
@@ -413,16 +404,7 @@ function isValidRoutePoint(log) {
 
 function isValidGpsLog(log) {
   if (log?.is_mocked || log?.metadata?.mock === true) return false;
-  const lat = Number(log?.latitude);
-  const lng = Number(log?.longitude);
-  return (
-    Number.isFinite(lat) &&
-    Number.isFinite(lng) &&
-    lat >= -90 &&
-    lat <= 90 &&
-    lng >= -180 &&
-    lng <= 180
-  );
+  return isValidLatLng(log?.latitude, log?.longitude);
 }
 
 function locationTimestampMs(log) {
@@ -513,77 +495,30 @@ function routeSegmentsFromLogs(logs = [], visits = []) {
   return segments;
 }
 
-function routePointCoordinates(log) {
-  if (!isValidRoutePoint(log)) return null;
-  return [Number(log.latitude), Number(log.longitude)];
-}
-
-function mainRouteGap(previous, current) {
-  const secondsDiff = (routePointTime(current) - routePointTime(previous)) / 1000;
-  const distanceMeters = distanceKmBetween(previous, current) * 1000;
-  return {
-    hasGap:
-      distanceMeters > MAIN_ROUTE_GAP_DISTANCE_METERS ||
-      secondsDiff > MAIN_ROUTE_GAP_SECONDS,
-    secondsDiff,
-    distanceMeters,
+async function buildMainMapRouteLines({ logs = [], color = "#2563eb", idPrefix = "route" }) {
+  const gpsTrail = gpsTrailFromLogs(logs);
+  const lines = gpsTrail.segments.map((positions, index) => ({
+    id: `${idPrefix}-gps-${index}`,
+    positions,
+    color,
+    source: "segmented_raw_gps",
+  }));
+  const routeUnavailable = gpsTrail.acceptedGpsPoints >= 2 && lines.length === 0;
+  const diagnostics = {
+    rawGpsPoints: gpsTrail.rawGpsPoints,
+    acceptedGpsPoints: gpsTrail.acceptedGpsPoints,
+    segmentsCreated: lines.length,
+    skippedGapPoints: gpsTrail.skippedGapPoints,
+    googleRouteApiFailed: false,
   };
-}
-
-async function buildMainMapRouteLines({ logs = [], visits = [], color = "#2563eb", idPrefix = "route" }) {
-  const ordered = logs
-    .filter(isValidRoutePoint)
-    .slice()
-    .sort((a, b) => routePointTime(a) - routePointTime(b));
-  if (ordered.length < 2) return [];
-
-  const lines = [];
-  let currentGpsSegment = [routePointCoordinates(ordered[0])].filter(Boolean);
-
-  for (let index = 1; index < ordered.length; index += 1) {
-    const previous = ordered[index - 1];
-    const current = ordered[index];
-    const currentPoint = routePointCoordinates(current);
-    if (!currentPoint) continue;
-    const gap = mainRouteGap(previous, current);
-    const sameSiteDrift = isSameSiteDrift(previous, current, visits);
-
-    if (gap.hasGap || sameSiteDrift) {
-      if (currentGpsSegment.length > 1) {
-        lines.push({
-          id: `${idPrefix}-gps-${lines.length}`,
-          positions: currentGpsSegment,
-          color,
-          source: "gps",
-        });
-      }
-
-      // Frontend Directions disabled for billing protection.
-      const filledPath = null;
-      lines.push({
-        id: `${idPrefix}-gap-${index}`,
-        positions:
-          filledPath && filledPath.length > 1
-            ? filledPath
-            : [routePointCoordinates(previous), currentPoint].filter(Boolean),
-        color,
-        source: filledPath ? "reconstructed/google_filled" : "fallback/straight_line",
-      });
-      currentGpsSegment = [currentPoint];
-    } else {
-      currentGpsSegment.push(currentPoint);
-    }
-  }
-
-  if (currentGpsSegment.length > 1) {
-    lines.push({
-      id: `${idPrefix}-gps-${lines.length}`,
-      positions: currentGpsSegment,
-      color,
-      source: "gps",
-    });
-  }
-  return lines;
+  console.debug("FO_MAIN_MAP_ROUTE_FALLBACK_DIAGNOSTICS", diagnostics);
+  return {
+    lines,
+    diagnostics,
+    message: routeUnavailable
+      ? "Route trail unavailable. Showing available points."
+      : null,
+  };
 }
 
 function routeKmFromLogs(logs = [], visits = []) {
@@ -732,6 +667,7 @@ function actualTravelKmFromAttendanceOrLogs(attendance, logs = [], visits = []) 
   const storedRawGpsKm = Number(attendance?.raw_gps_km);
   const storedFilteredGpsKm = Number(attendance?.filtered_gps_km);
   const storedActualTravelKm = Number(attendance?.actual_travel_km);
+  const gpsAuditMetrics = logs.length ? foSafeKmFromLogs(logs, visits) : null;
   if (
     Number.isFinite(storedRawGpsKm) &&
     Number.isFinite(storedFilteredGpsKm) &&
@@ -740,6 +676,7 @@ function actualTravelKmFromAttendanceOrLogs(attendance, logs = [], visits = []) 
   ) {
     return {
       ...emptyFoSafeKmMetrics(storedActualTravelKm),
+      ...(gpsAuditMetrics || {}),
       rawGpsKm: storedRawGpsKm,
       filteredGpsKm: storedFilteredGpsKm,
       gapAdjustedKm: storedActualTravelKm,
@@ -748,7 +685,7 @@ function actualTravelKmFromAttendanceOrLogs(attendance, logs = [], visits = []) 
       adjustmentApplied: "Stored in fo_attendance",
     };
   }
-  if (logs.length) return foSafeKmFromLogs(logs, visits);
+  if (gpsAuditMetrics) return gpsAuditMetrics;
   const fallbackKm = Number(attendance?.actual_km ?? attendance?.total_raw_km ?? 0);
   return {
     ...emptyFoSafeKmMetrics(fallbackKm),
@@ -759,8 +696,43 @@ function actualTravelKmFromAttendanceOrLogs(attendance, logs = [], visits = []) 
 }
 
 function numberOrNull(value) {
+  if (value === null || value === undefined || String(value).trim() === "") {
+    return null;
+  }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isValidLatLng(lat, lng) {
+  if (
+    lat === null ||
+    lat === undefined ||
+    lng === null ||
+    lng === undefined ||
+    String(lat).trim() === "" ||
+    String(lng).trim() === ""
+  ) {
+    return false;
+  }
+  const latitude = Number(lat);
+  const longitude = Number(lng);
+  return (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180
+  );
+}
+
+function warnSkippedInvalidCoordinate({ employeeCode, source, lat, lng }) {
+  console.warn("[Operations Map] skipped invalid coordinate", {
+    employeeCode: employeeCode || "--",
+    source: source || "unknown",
+    lat,
+    lng,
+  });
 }
 
 function liveStatusTimestamp(row) {
@@ -773,28 +745,8 @@ function liveStatusTimestamp(row) {
   );
 }
 
-function liveStatusFromRow(row) {
-  const timestamp = liveStatusTimestamp(row);
-  if (!timestamp) return "Offline";
-  const ageMs = timestamp
-    ? Date.now() - new Date(timestamp).getTime()
-    : Number.POSITIVE_INFINITY;
-  if (!Number.isFinite(ageMs)) return "Offline";
-  const ageMinutes = ageMs / 60000;
-  if (ageMinutes <= 2) return "Active";
-  return "Offline";
-}
-
 function hasFiniteCoordinates(coordinates) {
-  return (
-    Array.isArray(coordinates) &&
-    Number.isFinite(Number(coordinates[0])) &&
-    Number.isFinite(Number(coordinates[1])) &&
-    Number(coordinates[0]) >= -90 &&
-    Number(coordinates[0]) <= 90 &&
-    Number(coordinates[1]) >= -180 &&
-    Number(coordinates[1]) <= 180
-  );
+  return Array.isArray(coordinates) && isValidLatLng(coordinates[0], coordinates[1]);
 }
 
 function normalizeCoordinates(coordinates) {
@@ -817,15 +769,7 @@ function gpsPointFromLiveOrLogs(live, logs = []) {
   const liveLat = Number(live?.latitude ?? live?.lat);
   const liveLng = Number(live?.longitude ?? live?.lng ?? live?.long);
   const liveTimestamp = liveStatusTimestamp(live);
-  if (
-    Number.isFinite(liveLat) &&
-    Number.isFinite(liveLng) &&
-    liveLat >= -90 &&
-    liveLat <= 90 &&
-    liveLng >= -180 &&
-    liveLng <= 180 &&
-    liveTimestamp
-  ) {
+  if (isValidLatLng(live?.latitude ?? live?.lat, live?.longitude ?? live?.lng ?? live?.long) && liveTimestamp) {
     candidates.push({
       coordinates: [liveLat, liveLng],
       timestamp: liveTimestamp,
@@ -916,31 +860,183 @@ function batteryFromRow(...rows) {
   return null;
 }
 
-function latestLiveStatusByFo(rows = []) {
-  const grouped = new Map();
-  rows.forEach((row) => {
-    const id = normalizeFoKey(row?.fo_user_id);
-    if (!id) return;
-    const current = grouped.get(id);
-    if (
-      !current ||
-      new Date(liveStatusTimestamp(row) || 0) >
-        new Date(liveStatusTimestamp(current) || 0)
-    ) {
-      grouped.set(id, row);
-    }
-  });
-  return grouped;
-}
-
-function profileByFoKey(rows = []) {
+function profileByEmployeeCode(rows = []) {
   const profilesByCode = new Map();
-  rows.filter(isRealFoProfile).forEach((profile) => {
-    profileKeys(profile).forEach((key) => {
-      if (key) profilesByCode.set(key, profile);
-    });
+  rows.forEach((profile) => {
+    profileKeys(profile).forEach((key) => profilesByCode.set(key, profile));
   });
   return profilesByCode;
+}
+
+function firstNonEmptyText(...values) {
+  return values
+    .map((value) => String(value || "").trim())
+    .find(Boolean) || "";
+}
+
+function firstPositiveNumber(...values) {
+  return values
+    .map(Number)
+    .find((value) => Number.isFinite(value) && value > 0) ?? null;
+}
+
+function optionalFiniteNumber(value) {
+  if (value === null || value === undefined || String(value).trim() === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function coordinatesFromFields(row, latitudeField, longitudeField) {
+  const latitude = optionalFiniteNumber(row?.[latitudeField]);
+  const longitude = optionalFiniteNumber(row?.[longitudeField]);
+  return hasFiniteCoordinates([latitude, longitude])
+    ? [latitude, longitude]
+    : null;
+}
+
+function matchOfficerProfile({ officer = {}, attendance, visits = [], profilesByCode }) {
+  const identifiers = [
+    officer.employee_code,
+    officer.employeeCode,
+    officer.fo_user_id,
+    officer.foId,
+    attendance?.employee_code,
+    attendance?.fo_user_id,
+    ...visits.flatMap((visit) => [visit?.employee_code, visit?.fo_user_id]),
+  ];
+  for (const identifier of identifiers) {
+    const profile = profilesByCode.get(normalizeFoKey(identifier));
+    if (profile) return profile;
+  }
+  return null;
+}
+
+function enrichOfficer({ officer, attendance, visits = [], live, profilesByCode }) {
+  const activeVisit = visits.find(isSiteVisitOpen) || null;
+  const profile = matchOfficerProfile({ officer, attendance, visits, profilesByCode });
+  const employeeCode = firstNonEmptyText(
+    officer.employee_code,
+    officer.employeeCode,
+    officer.fo_user_id,
+    officer.foId,
+    attendance?.employee_code,
+    attendance?.fo_user_id,
+    activeVisit?.employee_code,
+    activeVisit?.fo_user_id,
+    profile?.employee_code,
+    profile?.username,
+  );
+
+  const displayNameCandidates = [
+    [profile?.full_name, "profile.full_name"],
+    [activeVisit?.full_name, "site_visit.full_name"],
+    [attendance?.full_name, "attendance.full_name"],
+    [officer.full_name, "officer.full_name"],
+    [employeeCode, "employee_code"],
+  ];
+  const displayNameMatch = displayNameCandidates.find(([value]) =>
+    Boolean(firstNonEmptyText(value)),
+  );
+  const name = firstNonEmptyText(displayNameMatch?.[0], employeeCode);
+  const displayNameSource = displayNameMatch?.[1] || "employee_code";
+
+  const locationCandidates = [
+    [coordinatesFromFields(live, "latitude", "longitude"), "live_status"],
+    [coordinatesFromFields(activeVisit, "current_latitude", "current_longitude"), "site_visit.current"],
+    [coordinatesFromFields(activeVisit, "check_in_latitude", "check_in_longitude"), "site_visit.check_in"],
+    [coordinatesFromFields(activeVisit, "destination_lat", "destination_lng"), "site_visit.destination"],
+    [coordinatesFromFields(attendance, "start_latitude", "start_longitude"), "attendance.start"],
+  ];
+  const locationMatch = locationCandidates.find(([coordinates]) => coordinates);
+  const coordinates = locationMatch?.[0] || null;
+  const locationSource = locationMatch?.[1] || "none";
+
+  const attendanceKm = firstPositiveNumber(
+    attendance?.total_route_km,
+    attendance?.eligible_km,
+    attendance?.total_approved_km,
+  );
+  const liveKm = firstPositiveNumber(live?.route_km_today);
+  const siteVisitKm = visits.reduce((sum, visit) => {
+    const routeKm = Number(visit?.route_km);
+    return Number.isFinite(routeKm) && routeKm > 0 ? sum + routeKm : sum;
+  }, 0);
+  const activeVisitKm = firstPositiveNumber(activeVisit?.route_km);
+  const kmCandidates = [
+    [attendanceKm, "attendance"],
+    [liveKm, "live_status.route_km_today"],
+    [siteVisitKm > 0 ? siteVisitKm : null, "site_visits.route_km_sum"],
+    [activeVisitKm, "active_site_visit.route_km"],
+    [0, "zero"],
+  ];
+  const kmMatch = kmCandidates.find(([value]) => value !== null && value !== undefined);
+  const eligibleKm = Number(kmMatch?.[0] || 0);
+  const profileOnly = Boolean(
+    profile &&
+      !live &&
+      !attendance &&
+      visits.length === 0 &&
+      (officer.logs?.length || 0) === 0,
+  );
+  const resolvedEmployeeCode = profileOnly
+    ? firstNonEmptyText(profile?.employee_code, profile?.username, employeeCode)
+    : employeeCode;
+  const kmSource = profileOnly ? "none" : kmMatch?.[1] || "zero";
+  const sourceTimestamp =
+    locationSource === "live_status"
+      ? liveStatusTimestamp(live)
+      : locationSource.startsWith("site_visit")
+        ? activeVisit?.check_in_time
+        : attendance?.login_time;
+  const dataSources = [
+    live ? "live_status" : null,
+    attendance ? "attendance" : null,
+    visits.length ? "site_visit" : null,
+    profile ? "profile" : null,
+  ].filter(Boolean);
+
+  return {
+    ...officer,
+    profile,
+    employeeCode: resolvedEmployeeCode,
+    employeeKey: normalizeFoKey(resolvedEmployeeCode),
+    name,
+    state: profile?.state || officer.state || "--",
+    branch: profile?.state || officer.branch || officer.state || "--",
+    phone: profile?.mobile || profile?.phone || officer.phone || "--",
+    email: profile?.email || officer.email || "",
+    username: profile?.username || officer.username || "",
+    role: profile?.role || officer.role || "--",
+    designation: profile?.designation || officer.designation || "--",
+    department: profile?.department || officer.department || "--",
+    business: profile?.business || officer.business || "--",
+    displayNameSource: profileOnly ? "profile" : displayNameSource,
+    coordinates,
+    locationSource,
+    locationSourceTime: sourceTimestamp || officer.locationSourceTime || null,
+    accuracy:
+      locationSource === "live_status"
+        ? optionalFiniteNumber(live?.accuracy)
+        : optionalFiniteNumber(activeVisit?.current_gps_accuracy ?? activeVisit?.checkin_accuracy),
+    heading: locationSource === "live_status" ? live?.heading ?? live?.bearing ?? null : null,
+    speed: locationSource === "live_status" ? optionalFiniteNumber(live?.speed) : null,
+    foLatitude: coordinates?.[0] ?? null,
+    foLongitude: coordinates?.[1] ?? null,
+    siteCoordinates: activeVisit
+      ? coordinatesFromFields(activeVisit, "current_latitude", "current_longitude") ||
+        coordinatesFromFields(activeVisit, "check_in_latitude", "check_in_longitude") ||
+        coordinatesFromFields(activeVisit, "destination_lat", "destination_lng")
+      : null,
+    eligibleKm,
+    routeKmToday: eligibleKm,
+    routeKmSource: kmSource,
+    kmSource,
+    dataSources,
+    sourceUsed: profileOnly ? "profile_only" : dataSources.join(" / ") || "unknown",
+    isProfileOnly: profileOnly,
+  };
 }
 
 function mergeLiveStatusRows(...groups) {
@@ -951,21 +1047,6 @@ function mergeLiveStatusRows(...groups) {
     rowsByFo.set(id, row);
   });
   return Array.from(rowsByFo.values());
-}
-
-async function fetchPagedLiveStatusRows(baseQuery, pageSize = 1000) {
-  const rows = [];
-  let from = 0;
-  while (true) {
-    const to = from + pageSize - 1;
-    const { data, error } = await baseQuery.range(from, to);
-    if (error) throw error;
-    const page = data || [];
-    rows.push(...page);
-    if (page.length < pageSize) break;
-    from += pageSize;
-  }
-  return rows;
 }
 
 async function fetchFoLiveStatusRows() {
@@ -1297,7 +1378,7 @@ function reviewFlagsForOfficer({ systemKm = 0, attendance, visits = [], logs = [
   return [...flags];
 }
 
-function officerFromRows({ foId, profile, live, attendance, visits, logs, statusDate }) {
+function officerFromRows({ foId, live, attendance, visits, logs, statusDate, profilesByCode }) {
   const record = attendance || {};
   const foVisits = visits || [];
   const foLogs = logs || [];
@@ -1307,11 +1388,9 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs, status
       record.fo_user_id ||
       foVisits[0]?.fo_user_id ||
       foLogs[0]?.fo_user_id ||
-      profile?.id ||
       record.employee_code ||
       foVisits[0]?.employee_code ||
       foLogs[0]?.employee_code ||
-      profile?.employee_code ||
       foId,
   );
   const operational = deriveOperationalStatus({
@@ -1343,21 +1422,22 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs, status
     visits: foVisits,
     logs: foLogs,
   });
-  const name =
-    profile?.full_name ||
-    profile?.display_name ||
-    live?.display_name ||
-    live?.username ||
-    live?.fo_user_id ||
-    foId;
-  const state = profile?.state || live?.state || record.state || "--";
+  const employeeCode = firstNonEmptyText(
+    record.employee_code,
+    record.fo_user_id,
+    foVisits[0]?.employee_code,
+    foVisits[0]?.fo_user_id,
+    live?.fo_user_id,
+    foId,
+  );
+  const state = live?.state || record.state || "--";
 
-  return {
+  const baseOfficer = {
     id: `live-${foId}`,
     employeeKey,
     foId,
-    name,
-    employeeCode: profile?.employee_code || live?.fo_user_id || foId,
+    name: employeeCode,
+    employeeCode,
     status: operational.operationalStatus,
     ...operational,
     assignedSite:
@@ -1369,8 +1449,13 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs, status
     checkIn: formatTime(record.login_time),
     lastSeen: formatDateTime(sourceTimestamp),
     battery: batteryFromRow(live),
-    action: live?.current_status || record.status || "Attendance captured",
-    phone: profile?.mobile || profile?.phone || record.mobile || live?.mobile || "--",
+    action:
+      live?.current_status ||
+      record.status ||
+      (attendance || foVisits.length || foLogs.length
+        ? "Attendance captured"
+        : "Not Started"),
+    phone: record.mobile || live?.mobile || "--",
     coordinates,
     heading: gpsPoint?.heading ?? null,
     speed: gpsPoint?.speed ?? null,
@@ -1393,27 +1478,88 @@ function officerFromRows({ foId, profile, live, attendance, visits, logs, status
     locationSourceTime: sourceTimestamp,
     locationSource: gpsPoint?.source ?? null,
     hasLiveStatus: Boolean(live),
-    attendance: record,
+    attendance: attendance || null,
     tasks: [],
     visits: foVisits,
     logs: foLogs,
     conveyance: null,
   };
+  return enrichOfficer({
+    officer: baseOfficer,
+    attendance: attendance || null,
+    visits: foVisits,
+    live,
+    profilesByCode,
+  });
 }
 
 function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statusDate }) {
-  const latestAttendance = latestBy(attendance, "login_time");
-  const latestLiveStatus = latestLiveStatusByFo(liveStatus);
-  const profilesByCode = profileByFoKey(profiles);
+  const activeProfiles = profiles.filter(isActiveProfile);
+  const uniqueProfilesByCode = new Map();
+  activeProfiles.forEach((profile) => {
+    const canonical = normalizeFoKey(
+      profile?.employee_code || profile?.username || profile?.id,
+    );
+    if (canonical && !uniqueProfilesByCode.has(canonical)) {
+      uniqueProfilesByCode.set(canonical, profile);
+    }
+  });
+  const uniqueProfiles = Array.from(uniqueProfilesByCode.values());
+  const profilesByCode = profileByEmployeeCode(uniqueProfiles);
+  const canonicalProfileCode = new Map();
+  uniqueProfilesByCode.forEach((profile, canonical) => {
+    if (!canonical) return;
+    profileKeys(profile).forEach((key) => canonicalProfileCode.set(key, canonical));
+  });
+  const matchedActivityIds = new Set();
+  const missingFromProfiles = new Set();
+  const activityKeys = (row) =>
+    [row?.fo_user_id, row?.employee_code, row?.username]
+      .map(normalizeFoKey)
+      .filter(Boolean);
+  const canonicalActivityId = (row) => {
+    const keys = activityKeys(row);
+    const canonical = keys
+      .map((key) => canonicalProfileCode.get(key))
+      .find(Boolean);
+    if (canonical) {
+      matchedActivityIds.add(canonical);
+      return canonical;
+    }
+    if (keys[0]) missingFromProfiles.add(keys[0]);
+    return null;
+  };
+  const latestMatchedRows = (rows, timestampForRow) => {
+    const latestRows = new Map();
+    rows.forEach((row) => {
+      const canonical = canonicalActivityId(row);
+      if (!canonical) return;
+      const current = latestRows.get(canonical);
+      if (
+        !current ||
+        new Date(timestampForRow(row) || 0) >
+          new Date(timestampForRow(current) || 0)
+      ) {
+        latestRows.set(canonical, row);
+      }
+    });
+    return latestRows;
+  };
+  const latestAttendance = latestMatchedRows(
+    attendance,
+    (row) => row?.login_time || row?.created_at,
+  );
+  const latestLiveStatus = latestMatchedRows(liveStatus, liveStatusTimestamp);
   const visitsByFo = visits.reduce((map, visit) => {
-    const id = normalizeFoKey(foIdFromRow(visit));
+    const id = canonicalActivityId(visit);
+    if (!id) return map;
     const list = map.get(id) || [];
     list.push(visit);
     map.set(id, list);
     return map;
   }, new Map());
   const logsByFo = (logs || []).reduce((map, log) => {
-    const id = normalizeFoKey(foIdFromRow(log));
+    const id = canonicalActivityId(log);
     if (!id) return map;
     const list = map.get(id) || [];
     list.push(log);
@@ -1421,30 +1567,47 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
     return map;
   }, new Map());
 
-  const officerIds = new Set();
-  profiles.filter(isRealFoProfile).forEach((profile) => {
-    const code = normalizeFoKey(profile?.employee_code);
-    if (code) {
-      officerIds.add(code);
-      return;
-    }
-    profileKeys(profile).forEach((key) => officerIds.add(key));
-  });
-  latestLiveStatus.forEach((_, foId) => officerIds.add(foId));
-  latestAttendance.forEach((_, foId) => officerIds.add(foId));
-  visitsByFo.forEach((_, foId) => officerIds.add(foId));
-  logsByFo.forEach((_, foId) => officerIds.add(foId));
-  return Array.from(officerIds).map((foId) =>
+  const officers = Array.from(uniqueProfilesByCode.keys()).map((foId) =>
     officerFromRows({
       foId,
-      profile: profilesByCode.get(foId),
       live: latestLiveStatus.get(foId),
       attendance: latestAttendance.get(foId),
       visits: visitsByFo.get(foId) || [],
       logs: logsByFo.get(foId) || [],
       statusDate,
+      profilesByCode,
     }),
   );
+  const mergeDiagnostics = {
+    activeProfilesCount: activeProfiles.length,
+    activityDerivedOfficerCount: matchedActivityIds.size,
+    finalMergedOfficerCount: officers.length,
+    profileOnlyOfficerCount: officers.filter((officer) => officer.isProfileOnly)
+      .length,
+    missingFromProfilesCount: missingFromProfiles.size,
+    duplicateEmployeeCodesRemoved:
+      activeProfiles.length - uniqueProfilesByCode.size,
+  };
+  console.debug("FO_PROFILE_MASTER_MERGE", mergeDiagnostics);
+  if (import.meta.env.DEV) {
+    officers.forEach((officer) => {
+      console.debug("FO_OFFICER_ENRICHED", {
+        employeeCode: officer.employeeCode || officer.foId,
+        sourceUsed: officer.sourceUsed,
+        displayNameSource: officer.displayNameSource,
+        locationSource: officer.locationSource,
+        kmSource: officer.kmSource,
+      });
+    });
+    console.debug("FO_OFFICER_ENRICHMENT_SUMMARY", {
+      officersMissingProfileName: officers.filter(
+        (officer) =>
+          !["profile", "profile.full_name"].includes(officer.displayNameSource),
+      ).length,
+      ...mergeDiagnostics,
+    });
+  }
+  return officers;
 }
 
 function officerFromLiveStatus(row, profilesByCode, existing = {}) {
@@ -1452,7 +1615,6 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     row?.fo_user_id || existing.foId || existing.employeeCode,
   );
   if (!foId) return null;
-  const profile = profilesByCode.get(foId);
   const gpsPoint = gpsPointFromLiveOrLogs(row, []);
   const coordinates =
     gpsPoint?.coordinates ??
@@ -1488,29 +1650,25 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     visits: existing.visits || [],
     logs: existing.logs || [],
   });
-  return {
+  const employeeCode = firstNonEmptyText(
+    existing.employeeCode,
+    existing.attendance?.employee_code,
+    existing.attendance?.fo_user_id,
+    row?.fo_user_id,
+    foId,
+  );
+  const baseOfficer = {
     ...existing,
     id: existing.id || `live-${foId}`,
     employeeKey,
     foId,
-    name:
-      profile?.full_name ||
-      profile?.display_name ||
-      row?.display_name ||
-      row?.username ||
-      row?.fo_user_id ||
-      existing.name ||
-      foId,
-    employeeCode:
-      profile?.employee_code ||
-      row?.fo_user_id ||
-      existing.employeeCode ||
-      foId,
+    name: existing.name || employeeCode,
+    employeeCode,
     status: operational.operationalStatus,
     ...operational,
     assignedSite: existing.assignedSite || "No active store visit",
-    branch: profile?.state || row?.state || existing.state || "--",
-    state: profile?.state || row?.state || existing.state || "--",
+    branch: row?.state || existing.state || "--",
+    state: row?.state || existing.state || "--",
     lastSeen: formatDateTime(timestamp),
     battery: battery ?? existing.battery ?? null,
     action: row?.current_status || existing.action || "Attendance captured",
@@ -1538,20 +1696,48 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     logs: existing.logs || [],
     conveyance: null,
   };
+  const enrichedOfficer = enrichOfficer({
+    officer: baseOfficer,
+    attendance: existing.attendance,
+    visits: existing.visits || [],
+    live: row,
+    profilesByCode,
+  });
+  if (import.meta.env.DEV) {
+    console.debug("FO_REALTIME_OFFICER_ENRICHED", {
+      employeeCode: enrichedOfficer.employeeCode || enrichedOfficer.foId,
+      sourceUsed: enrichedOfficer.sourceUsed,
+      displayNameSource: enrichedOfficer.displayNameSource,
+      locationSource: enrichedOfficer.locationSource,
+      kmSource: enrichedOfficer.kmSource,
+    });
+  }
+  return enrichedOfficer;
 }
 
 function mergeRealtimeOfficer(officers, liveRow, profileRows) {
-  const profilesByCode = profileByFoKey(profileRows);
-  const foId = normalizeFoKey(liveRow?.fo_user_id);
+  const profilesByCode = profileByEmployeeCode(profileRows);
+  const liveFoId = normalizeFoKey(liveRow?.fo_user_id);
+  const profile = profilesByCode.get(liveFoId);
+  if (!profile) return officers;
+  const foId = normalizeFoKey(
+    profile?.employee_code || profile?.username || profile?.id,
+  );
   const existingIndex = officers.findIndex(
     (officer) =>
       normalizeFoKey(officer.foId) === foId ||
-      normalizeFoKey(officer.employeeCode) === foId,
+      normalizeFoKey(officer.employeeCode) === foId ||
+      profileKeys(profile).includes(normalizeFoKey(officer.foId)) ||
+      profileKeys(profile).includes(normalizeFoKey(officer.employeeCode)),
   );
   const existing = existingIndex >= 0 ? officers[existingIndex] : {};
-  const nextOfficer = officerFromLiveStatus(liveRow, profilesByCode, existing);
+  const nextOfficer = officerFromLiveStatus(
+    { ...liveRow, fo_user_id: foId },
+    profilesByCode,
+    existing,
+  );
   if (!nextOfficer) return officers;
-  if (existingIndex < 0) return [...officers, nextOfficer];
+  if (existingIndex < 0) return officers;
   const next = officers.slice();
   next[existingIndex] = nextOfficer;
   return next;
@@ -1737,7 +1923,7 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
             </span>
             <span className="inline-flex items-center gap-1">
               <Route className="h-3.5 w-3.5" />
-              {distanceToday.toFixed(1)} km
+              {formatDisplayKm(distanceToday)}
             </span>
             <span>GPS audit {actualTravelKm.toFixed(1)} km</span>
             <span>{formatInr(officer.petrolAmount ?? distanceToday * RATE_PER_KM)}</span>
@@ -1749,7 +1935,10 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
               : "No Location Available"}
           </p>
           <p className="mt-0.5 text-xs font-semibold text-slate-400">
-            {officer.lastSeen}
+            {officer.isProfileOnly ? "Not Started" : officer.lastSeen}
+          </p>
+          <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">
+            {officer.designation || officer.role || "Operations"} · {officer.business || "--"} · {officer.state || "--"}
           </p>
         </div>
       </div>
@@ -1786,7 +1975,7 @@ function SelectedOfficerSummary({
         roadKmEstimate.usedFallback ? " fallback" : ""
       }`
     : "--";
-  const claimKmLabel = hasClaimKm ? `${claimKm.toFixed(1)} km` : "--";
+  const claimKmLabel = hasClaimKm ? formatDisplayKm(claimKm) : "--";
   const claimPetrol = Number(officer.petrolAmount ?? claimKm * RATE_PER_KM);
   const statusText = status.label;
   const statusClass = isOperationallyActive(officer)
@@ -1982,7 +2171,10 @@ function SelectedOfficerSummary({
 }
 
 function flattenRouteLinePoints(routeLines = []) {
-  return routeLines.flatMap((route) => route.positions || []).filter(hasFiniteCoordinates);
+  return routeLines
+    .flatMap((route) => route.positions || [])
+    .map(normalizeCoordinates)
+    .filter(Boolean);
 }
 
 function MapViewport({ pins, sitePins, routeLines, expanded, command }) {
@@ -1994,15 +2186,22 @@ function MapViewport({ pins, sitePins, routeLines, expanded, command }) {
   }, [expanded, map]);
 
   useEffect(() => {
-    if (!pins.length && !didInitialFitRef.current) {
+    const validPinPoints = pins
+      .map((pin) => normalizeCoordinates(pin.coordinates))
+      .filter(Boolean);
+    const validSitePoints = sitePins
+      .map((site) => normalizeCoordinates(site.coordinates))
+      .filter(Boolean);
+
+    if (!validPinPoints.length && !didInitialFitRef.current) {
       map.setView(SOUTH_INDIA_CENTER, 6);
       didInitialFitRef.current = true;
       return;
     }
 
-    if (!command && !didInitialFitRef.current && pins.length) {
+    if (!command && !didInitialFitRef.current && validPinPoints.length) {
       map.fitBounds(
-        pins.map((pin) => pin.coordinates),
+        validPinPoints,
         { padding: [44, 44], maxZoom: 13 },
       );
       didInitialFitRef.current = true;
@@ -2011,31 +2210,44 @@ function MapViewport({ pins, sitePins, routeLines, expanded, command }) {
 
     if (!command) return;
 
-    if (command.type === "current-location" && hasFiniteCoordinates(command.coordinates)) {
-      map.flyTo(command.coordinates, 15, { duration: 0.55 });
+    if (command.type === "current-location") {
+      const coordinates = normalizeCoordinates(command.coordinates);
+      if (!coordinates) {
+        warnSkippedInvalidCoordinate({
+          employeeCode: command.employeeCode,
+          source: command.source || "current-location",
+          lat: command.coordinates?.[0],
+          lng: command.coordinates?.[1],
+        });
+        return;
+      }
+      map.flyTo(coordinates, 15, { duration: 0.55 });
       return;
     }
 
     if (command.type === "fit-route") {
       const routePoints = flattenRouteLinePoints(routeLines);
-      const sitePoints = sitePins.map((site) => site.coordinates).filter(hasFiniteCoordinates);
-      const points = [...routePoints, ...sitePoints];
+      const points = [...routePoints, ...validSitePoints];
       if (points.length === 1) {
         map.flyTo(points[0], 14, { duration: 0.45 });
       } else if (points.length > 1) {
         map.fitBounds(points, { padding: [56, 56], maxZoom: 15 });
+      } else {
+        console.warn("[Operations Map] Fit Route skipped: no valid coordinates");
       }
       return;
     }
 
     if (command.type === "fit-all") {
-      if (pins.length === 1) {
-        map.flyTo(pins[0].coordinates, 13, { duration: 0.45 });
-      } else if (pins.length > 1) {
+      if (validPinPoints.length === 1) {
+        map.flyTo(validPinPoints[0], 13, { duration: 0.45 });
+      } else if (validPinPoints.length > 1) {
         map.fitBounds(
-          pins.map((pin) => pin.coordinates),
+          validPinPoints,
           { padding: [44, 44], maxZoom: 13 },
         );
+      } else {
+        console.warn("[Operations Map] Fit All skipped: no valid coordinates");
       }
     }
   }, [command, map, pins, routeLines, sitePins]);
@@ -2054,6 +2266,7 @@ function OperationsMap({
   pins,
   sitePins,
   routeLines,
+  routeTrailMessage,
   expanded,
   showSites,
   showRoutes,
@@ -2073,6 +2286,62 @@ function OperationsMap({
     mapTheme === "satellite"
       ? "Tiles &copy; Esri"
       : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+  const safePins = useMemo(
+    () =>
+      pins.flatMap((pin) => {
+        const coordinates = normalizeCoordinates(pin.coordinates);
+        if (!coordinates) {
+          warnSkippedInvalidCoordinate({
+            employeeCode:
+              pin.officers?.[0]?.employeeCode || pin.officers?.[0]?.foId,
+            source: "officer_marker",
+            lat: pin.coordinates?.[0],
+            lng: pin.coordinates?.[1],
+          });
+          return [];
+        }
+        return [{ ...pin, coordinates }];
+      }),
+    [pins],
+  );
+  const safeSitePins = useMemo(
+    () =>
+      sitePins.flatMap((site) => {
+        const coordinates = normalizeCoordinates(site.coordinates);
+        if (!coordinates) {
+          warnSkippedInvalidCoordinate({
+            employeeCode: site.foId,
+            source: "site_marker",
+            lat: site.coordinates?.[0],
+            lng: site.coordinates?.[1],
+          });
+          return [];
+        }
+        return [{ ...site, coordinates }];
+      }),
+    [sitePins],
+  );
+  const safeRouteLines = useMemo(
+    () =>
+      routeLines.flatMap((route) => {
+        const positions = (route.positions || [])
+          .map((position) => {
+            const coordinates = normalizeCoordinates(position);
+            if (!coordinates) {
+              warnSkippedInvalidCoordinate({
+                employeeCode: route.employeeCode,
+                source: route.source || "route_trail",
+                lat: position?.[0],
+                lng: position?.[1],
+              });
+            }
+            return coordinates;
+          })
+          .filter(Boolean);
+        return positions.length >= 2 ? [{ ...route, positions }] : [];
+      }),
+    [routeLines],
+  );
   return (
     <MapContainer
       center={SOUTH_INDIA_CENTER}
@@ -2084,15 +2353,15 @@ function OperationsMap({
     >
       <TileLayer attribution={attribution} url={tileUrl} />
       <MapViewport
-        pins={pins}
-        sitePins={sitePins}
-        routeLines={routeLines}
+        pins={safePins}
+        sitePins={safeSitePins}
+        routeLines={safeRouteLines}
         expanded={expanded}
         command={command}
       />
       <MapBackgroundClose onClose={onCloseSelection} />
       {showRoutes
-        ? routeLines.map((route) => (
+        ? safeRouteLines.map((route) => (
             <Polyline
               key={route.id}
               positions={route.positions}
@@ -2106,8 +2375,13 @@ function OperationsMap({
             />
           ))
         : null}
+      {showRoutes && routeTrailMessage ? (
+        <div className="pointer-events-none absolute bottom-4 left-1/2 z-[500] -translate-x-1/2 rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-xs font-bold text-amber-800 shadow-sm">
+          {routeTrailMessage}
+        </div>
+      ) : null}
       {showSites
-        ? sitePins.map((site) => (
+        ? safeSitePins.map((site) => (
             <Marker
               key={site.id}
               position={site.coordinates}
@@ -2131,7 +2405,7 @@ function OperationsMap({
             </Marker>
           ))
         : null}
-      {pins.map((pin) => (
+      {safePins.map((pin) => (
         <Marker
           key={pin.id}
           position={pin.coordinates}
@@ -2283,7 +2557,9 @@ async function exportFoOperationsExcel({
   to,
 }) {
   if (!isSupabaseConfigured || !supabase) return;
-  const exportOfficers = selectedOfficer ? [selectedOfficer] : officers;
+  const exportOfficers = (selectedOfficer ? [selectedOfficer] : officers).filter(
+    (officer) => !isHiddenEmployeeRecord(officer),
+  );
   const officerIds = Array.from(
     new Set(
       exportOfficers
@@ -2374,6 +2650,14 @@ async function exportFoOperationsExcel({
       liveRows.find((row) => normalizeFoKey(row.fo_user_id) === foId) || {};
     const visits = visitRows.filter(
       (row) => normalizeFoKey(row.fo_user_id || row.employee_code) === foId,
+    );
+    const exportState = firstNonEmptyText(
+      officer.state,
+      officer.profile?.state,
+      attendance.state,
+      attendance.profile?.state,
+      visits.find((visit) => firstNonEmptyText(visit?.state))?.state,
+      "--",
     );
     const rawLogs = logRows
       .filter(
@@ -2584,6 +2868,7 @@ async function exportFoOperationsExcel({
     summaryRows.push({
       "Employee ID": foId,
       "FO Name": foName,
+      State: exportState,
       Date: `${toDateInputValue(from)} to ${toDateInputValue(to)}`,
       "Start Time": formatDateTime(attendance.login_time),
       "End Time": formatDateTime(attendance.logout_time),
@@ -2630,6 +2915,7 @@ async function exportFoOperationsExcel({
   appendSheet(workbook, "Summary", summaryRows, [
     "Employee ID",
     "FO Name",
+    "State",
     "Date",
     "Start Time",
     "End Time",
@@ -2795,6 +3081,26 @@ function visitBusinessType(visit) {
     visit?.client_name ||
     "--"
   );
+}
+
+function visitRouteSourceLabel(visit) {
+  const metadata = visit?.metadata && typeof visit.metadata === "object" && !Array.isArray(visit.metadata)
+    ? visit.metadata
+    : {};
+  const source = String(metadata.distance_source || visit?.distance_source || "").trim().toLowerCase();
+  const api = String(metadata.route_api || "").trim().toLowerCase();
+  const status = String(metadata.route_request_status || "").trim();
+  if (source === "google_distance_matrix" || (source === "google" && api === "distance_matrix")) {
+    return "Google Distance Matrix";
+  }
+  if (source === "unavailable" || metadata.needs_review === true) {
+    return status ? `Missing / Needs Review (${status})` : "Missing / Needs Review";
+  }
+  if (source === "google_directions" || source === "google_directions_recalculation") {
+    return "Google Directions";
+  }
+  if (Number(visit?.route_km) > 0) return "Unknown old data";
+  return "Missing / Needs Review";
 }
 
 function isAttendanceForDate(attendance, dateInput) {
@@ -3153,7 +3459,22 @@ function storedRoutePolylinesFromVisits(visits = [], stats = createRouteMapCoord
 function isValidGpsTrailLog(log) {
   if (!isValidGpsLog(log)) return false;
   const accuracy = Number(log?.accuracy);
-  return !Number.isFinite(accuracy) || accuracy <= MAX_GPS_ACCURACY_METERS;
+  const timestampMs = routePointTime(log).getTime();
+  return (
+    Number.isFinite(accuracy) &&
+    accuracy <= MAX_GPS_ACCURACY_METERS &&
+    Number.isFinite(timestampMs)
+  );
+}
+
+async function fetchLocationLogsByAttendanceId(attendanceId) {
+  const { data, error } = await supabase
+    .from("fo_location_logs")
+    .select("*")
+    .eq("attendance_id", attendanceId)
+    .limit(10000);
+  if (error) throw error;
+  return data || [];
 }
 
 function gpsTrailGapReason(previous, current) {
@@ -3163,6 +3484,14 @@ function gpsTrailGapReason(previous, current) {
     { latitude: current.point[0], longitude: current.point[1] },
   );
   const speedKmph = secondsGap > 0 ? distanceKm / (secondsGap / 3600) : Number.POSITIVE_INFINITY;
+  const previousDate = toDateInputValue(new Date(previous.timestampMs));
+  const currentDate = toDateInputValue(new Date(current.timestampMs));
+  if (previousDate !== currentDate) {
+    return { reason: "date_mismatch", secondsGap, distanceKm, speedKmph };
+  }
+  if (secondsGap <= 0) {
+    return { reason: "invalid_time", secondsGap, distanceKm, speedKmph };
+  }
   if (secondsGap > ROUTE_MAP_SEGMENT_MAX_GAP_SECONDS) {
     return { reason: "time_gap", secondsGap, distanceKm, speedKmph };
   }
@@ -3227,10 +3556,15 @@ function gpsTrailFromLogs(logs = [], stats = createRouteMapCoordinateStats()) {
   return {
     trail: segments[0] || [],
     segments,
+    rawGpsPoints: logs.length,
+    acceptedGpsPoints: normalizedPoints.length,
     validPointsCount: ordered.length,
     duplicatesRemoved,
     gapBreakExamples,
     segmentsSkippedCount: normalizedPoints.length - segments.reduce((sum, segment) => sum + segment.length, 0),
+    skippedGapPoints:
+      logs.length - normalizedPoints.length +
+      normalizedPoints.length - segments.reduce((sum, segment) => sum + segment.length, 0),
   };
 }
 
@@ -3472,13 +3806,12 @@ function buildDetailMapPoints(officer, routeLogs) {
     }),
     detailRouteAnchor("end", "end", "E", end, "End Day"),
   ].filter(Boolean);
-  const fallbackTrail = anchors.map((anchor) => anchor.coordinates).filter(hasFiniteCoordinates);
   const hasGpsTrail = gpsTrail.segments.length > 0;
   const routeTrail = hasGpsTrail
     ? gpsTrail.trail
     : storedPolylines.length
       ? storedPolylines[0]
-      : fallbackTrail;
+      : [];
   const markers = spreadDetailMarkers(
     anchors.filter((anchor) => ["start", "site", "end"].includes(anchor.type)),
   );
@@ -3489,11 +3822,14 @@ function buildDetailMapPoints(officer, routeLogs) {
     routeTrail,
     gpsSegments: gpsTrail.segments,
     gpsFetchedCount: routeLogs.length,
+    rawGpsPoints: gpsTrail.rawGpsPoints,
+    acceptedGpsPoints: gpsTrail.acceptedGpsPoints,
     gpsValidPointsCount: gpsTrail.validPointsCount,
     gpsDuplicatesRemoved: gpsTrail.duplicatesRemoved,
     gpsSegmentCount: gpsTrail.segments.length,
     gpsSegmentPointCounts: gpsTrail.segments.map((segment) => segment.length),
     gpsSegmentsSkippedCount: gpsTrail.segmentsSkippedCount,
+    skippedGapPoints: gpsTrail.skippedGapPoints,
     gpsGapBreakExamples: gpsTrail.gapBreakExamples,
     coordinateStats,
     routeSource: hasGpsTrail
@@ -3583,7 +3919,7 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
       return { paths: [], source: "markers_only", label: "Markers Only" };
     }
     if (routeViewMode === "raw") {
-      return { paths: points.gpsSegments.length ? points.gpsSegments : [points.routeTrail], source: "raw_gps", label: "Raw GPS" };
+      return { paths: points.gpsSegments, source: "raw_gps", label: "Segmented Raw GPS" };
     }
     if (["success", "partial"].includes(snapResult.status) && snapResult.paths?.length) {
       return {
@@ -3598,9 +3934,14 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
     if (points.routeSource === "stored-polyline") {
       return { paths: points.storedPolylines, source: "polyline", label: "Stored Polyline" };
     }
-    return { paths: [points.routeTrail], source: "anchors", label: "Anchors" };
-  }, [points.routeSource, points.routeTrail, points.storedPolylines, routeViewMode, simplifiedGpsTrail, snapResult]);
+    return { paths: [], source: "markers_only", label: "Markers Only" };
+  }, [points.gpsSegments, points.routeSource, points.storedPolylines, routeViewMode, simplifiedGpsTrail, snapResult]);
   const renderedPolylinePointCount = selectedRoute.paths.reduce((sum, path) => sum + path.length, 0);
+  const renderedSegmentsCreated = selectedRoute.paths.filter((path) => path.length > 1).length;
+  const routeTrailUnavailable =
+    points.acceptedGpsPoints >= 2 &&
+    points.gpsSegmentCount === 0 &&
+    !points.storedPolylines.length;
   const hasMapGeometry = renderedPolylinePointCount > 1 || points.markers.length > 0;
 
   useEffect(() => {
@@ -3697,7 +4038,11 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
       gps_logs_fetched_count: points.gpsFetchedCount,
       valid_gps_points_count: points.gpsValidPointsCount,
       duplicate_points_removed_count: points.gpsDuplicatesRemoved,
-      rawGpsPoints: points.gpsValidPointsCount,
+      rawGpsPoints: points.rawGpsPoints,
+      acceptedGpsPoints: points.acceptedGpsPoints,
+      segmentsCreated: points.gpsSegmentCount,
+      skippedGapPoints: points.skippedGapPoints,
+      googleRouteApiFailed: ["failed", "partial"].includes(snapResult.status),
       downsampledGpsPoints: snapResult.downsampledGpsPoints,
       snapApiChunkCount: snapResult.snapApiChunkCount,
       snappedPointsReturned: snapResult.snappedPointsReturned,
@@ -3705,7 +4050,7 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
       finalPathSource: selectedRoute.source,
       selectedRouteViewMode: routeViewMode,
       renderedPolylinePointCount,
-      renderedPolylineSegmentCount: selectedRoute.paths.filter((path) => path.length > 1).length,
+      renderedPolylineSegmentCount: renderedSegmentsCreated,
       renderedPolylineSource: selectedRoute.source,
       gpsSegmentCount: points.gpsSegmentCount,
       gpsSegmentPointCounts: points.gpsSegmentPointCounts,
@@ -3728,7 +4073,7 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
         total_points: coordinateStats.routeMapOriginalPointCount,
       });
     }
-  }, [fromDate, officer, points, renderedPolylinePointCount, routeViewMode, selectedRoute.source, snapResult, toDate]);
+  }, [fromDate, officer, points, renderedPolylinePointCount, renderedSegmentsCreated, routeViewMode, selectedRoute.source, snapResult, toDate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3838,9 +4183,16 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
           No GPS trail or route anchors available for selected filters.
         </div>
       ) : null}
-      {routeViewMode === "road" && ["failed", "partial"].includes(snapResult.status) ? (
+      {routeViewMode === "road" &&
+      !routeTrailUnavailable &&
+      ["failed", "partial"].includes(snapResult.status) ? (
         <div className="absolute bottom-4 left-4 z-10 rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-xs font-bold text-amber-800 shadow-sm">
-          Road snapping unavailable — showing simplified GPS trail
+          Road snapping unavailable — showing segmented raw GPS trail
+        </div>
+      ) : null}
+      {routeTrailUnavailable ? (
+        <div className="absolute bottom-4 left-4 z-10 rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-xs font-bold text-amber-800 shadow-sm">
+          Route trail unavailable. Showing available points.
         </div>
       ) : null}
       <div className="absolute left-4 top-4 z-10 flex flex-wrap gap-1 rounded-lg border border-slate-200 bg-white/95 p-1 text-xs font-black text-slate-600 shadow-sm">
@@ -3970,6 +4322,7 @@ function FieldOfficerDetailsView({
         duration: "--",
         travelFromPrevious: "--",
         distance: "--",
+        routeSource: "--",
         activity: "Start Day",
       });
     }
@@ -3984,6 +4337,7 @@ function FieldOfficerDetailsView({
         duration: durationMinutesLabel(visitMinutes(visit)),
         travelFromPrevious: index === 0 ? "Start Day" : visitTitle(visits[index - 1]),
         distance: numberLabel(visit.route_km, ""),
+        routeSource: visitRouteSourceLabel(visit),
         activity: siteVisitStatus(visit),
         visitIndex: index,
       });
@@ -4001,6 +4355,7 @@ function FieldOfficerDetailsView({
         duration: durationMinutesLabel(workingMinutes),
         travelFromPrevious: visits.length ? visitTitle(visits.at(-1)) : "--",
         distance: "--",
+        routeSource: "--",
         activity: "End Day",
       });
     }
@@ -4100,7 +4455,7 @@ function FieldOfficerDetailsView({
               <table className="min-w-[900px] text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-black text-slate-600">
                   <tr>
-                    {["#", "Site / Client", "Location", "Check-in", "Check-out", "Duration", "Travel From Previous", "Distance (km)", "Activity", "View"].map((heading) => (
+                    {["#", "Site / Client", "Location", "Check-in", "Check-out", "Duration", "Travel From Previous", "Distance (km)", "Route Source", "Activity", "View"].map((heading) => (
                       <th key={heading} className="whitespace-nowrap border-b border-slate-100 px-3 py-2">{heading}</th>
                     ))}
                   </tr>
@@ -4118,6 +4473,7 @@ function FieldOfficerDetailsView({
                       <td className="whitespace-nowrap px-3 py-2">{row.duration}</td>
                       <td className="min-w-36 px-3 py-2">{row.travelFromPrevious}</td>
                       <td className="whitespace-nowrap px-3 py-2">{row.distance}</td>
+                      <td className="whitespace-nowrap px-3 py-2">{row.routeSource}</td>
                       <td className="whitespace-nowrap px-3 py-2">{row.activity}</td>
                       <td className="px-3 py-2">
                         {row.visitIndex !== undefined ? (
@@ -4130,7 +4486,7 @@ function FieldOfficerDetailsView({
                   ))}
                   {!timelineRows.length ? (
                     <tr>
-                      <td colSpan={10} className="px-3 py-8 text-center text-sm text-slate-500">No visit timeline available for selected filters.</td>
+                      <td colSpan={11} className="px-3 py-8 text-center text-sm text-slate-500">No visit timeline available for selected filters.</td>
                     </tr>
                   ) : null}
                 </tbody>
@@ -4168,6 +4524,7 @@ function FieldOfficerDetailsView({
                   ["Check-in", formatDateTime(selectedVisit?.check_in_time)],
                   ["Check-out", formatDateTime(siteVisitCheckoutValue(selectedVisit))],
                   ["Duration", durationMinutesLabel(visitMinutes(selectedVisit))],
+                  ["Route Source", visitRouteSourceLabel(selectedVisit)],
                   ["Remarks", visitRemarks(selectedVisit)],
                 ].map(([label, value]) => (
                   <div key={label} className="grid grid-cols-[120px_1fr] gap-2 py-1 text-xs font-semibold">
@@ -4332,7 +4689,7 @@ function FoSupportActionPanel({
         roadKmEstimate.usedFallback ? " fallback" : ""
       }`
     : "--";
-  const claimKmLabel = hasClaimKm ? `${claimKm.toFixed(1)} km` : "--";
+  const claimKmLabel = hasClaimKm ? formatDisplayKm(claimKm) : "--";
   const claimPetrol = Number(officer.petrolAmount ?? claimKm * RATE_PER_KM);
   const statusText = status.label;
   const statusClass = isOperationallyActive(officer)
@@ -4425,6 +4782,12 @@ function FoSupportActionPanel({
                 </div>
                 <div className="truncate text-slate-600 dark:text-slate-300">
                   Lat/Lng: <strong className="text-slate-800 dark:text-slate-100">{coordinateLabel}</strong>
+                </div>
+                <div className="truncate text-slate-600 dark:text-slate-300">
+                  Role: <strong className="text-slate-800 dark:text-slate-100">{officer.designation || officer.role || "--"}</strong>
+                </div>
+                <div className="truncate text-slate-600 dark:text-slate-300">
+                  Business / State: <strong className="text-slate-800 dark:text-slate-100">{officer.business || "--"} / {officer.state || "--"}</strong>
                 </div>
               </div>
 
@@ -4796,6 +5159,7 @@ export default function FOActivities() {
   const [siteVisitRows, setSiteVisitRows] = useState([]);
   const [selectedRouteLogs, setSelectedRouteLogs] = useState([]);
   const [mainMapRouteLines, setMainMapRouteLines] = useState([]);
+  const [mainMapRouteMessage, setMainMapRouteMessage] = useState(null);
   const [selectedActivitySubmissions, setSelectedActivitySubmissions] = useState([]);
   const [selectedActivityUploads, setSelectedActivityUploads] = useState([]);
   const [showSiteMarkers, setShowSiteMarkers] = useState(true);
@@ -4848,10 +5212,10 @@ export default function FOActivities() {
             supabase
               .from("profiles")
               .select(
-                "full_name, display_name, employee_code, username, mobile, role, state, status",
+                "id, full_name, display_name, employee_code, username, mobile, email, role, department, designation, business, state, status, is_active",
               )
-              .or("role.ilike.FO,role.ilike.Field Officer")
-              .limit(1000),
+              .eq("is_active", true)
+              .limit(5000),
             supabase
               .from("fo_location_logs")
               .select("*")
@@ -4880,8 +5244,8 @@ export default function FOActivities() {
         if (errors.length) {
           throw errors[0];
         }
-        const profileRows = (profilesRes.data || []).filter(isRealFoProfile);
-        const profilesByCode = profileByFoKey(profileRows);
+        const profileRows = profilesRes.data || [];
+        const profilesByCode = profileByEmployeeCode(profileRows);
         console.debug("FO_PROFILES_LOADED", profileRows.length);
         liveStatusRows.forEach((row) => {
           const foId = normalizeFoKey(row?.fo_user_id);
@@ -4984,7 +5348,18 @@ export default function FOActivities() {
     };
   }, []);
 
-  const officers = liveOfficers;
+  const officers = useMemo(
+    () => liveOfficers.filter((officer) => !isHiddenEmployeeRecord(officer)),
+    [liveOfficers],
+  );
+  const visibleAttendanceKpiRows = useMemo(
+    () => attendanceKpiRows.filter((row) => !isHiddenEmployeeRecord(row)),
+    [attendanceKpiRows],
+  );
+  const visibleSiteVisitRows = useMemo(
+    () => siteVisitRows.filter((visit) => !isHiddenEmployeeRecord(visit)),
+    [siteVisitRows],
+  );
 
   const structurallyFilteredOfficers = useMemo(
     () =>
@@ -4993,9 +5368,9 @@ export default function FOActivities() {
           stateFilter === "All States" || officer.state === stateFilter;
         const searchMatches =
           !search ||
-          `${officer.name} ${officer.employeeCode || officer.foId} ${officer.assignedSite} ${officer.branch}`
+          `${officer.name} ${officer.employeeCode || officer.foId} ${officer.username || ""} ${officer.phone || ""} ${officer.email || ""} ${officer.role || ""} ${officer.designation || ""} ${officer.department || ""} ${officer.state || ""} ${officer.business || ""} ${officer.assignedSite} ${officer.branch}`
             .toLowerCase()
-            .includes(search.toLowerCase());
+            .includes(search.trim().toLowerCase());
         return stateMatches && searchMatches;
       }),
     [officers, search, stateFilter],
@@ -5010,9 +5385,9 @@ export default function FOActivities() {
   );
 
   const stateSummaryRows = useMemo(() => {
-    if (!liveOfficers.length) return [];
+    if (!officers.length) return [];
     const byState = new Map();
-    liveOfficers.forEach((officer) => {
+    officers.forEach((officer) => {
       const current = byState.get(officer.state) || {
         id: officer.state,
         state: officer.state,
@@ -5033,7 +5408,7 @@ export default function FOActivities() {
       byState.set(officer.state, current);
     });
     return Array.from(byState.values());
-  }, [liveOfficers]);
+  }, [officers]);
 
   const filteredStates = useMemo(
     () =>
@@ -5052,12 +5427,12 @@ export default function FOActivities() {
     null;
   const mapRouteOfficer =
     filteredOfficers.find((officer) => officer.id === mapRouteOfficerId) ||
-    liveOfficers.find((officer) => officer.id === mapRouteOfficerId) ||
+    officers.find((officer) => officer.id === mapRouteOfficerId) ||
     null;
   const routeOfficer = selectedOfficer || mapRouteOfficer;
   const supportOfficer =
     filteredOfficers.find((officer) => officer.id === supportOfficerId) ||
-    liveOfficers.find((officer) => officer.id === supportOfficerId) ||
+    officers.find((officer) => officer.id === supportOfficerId) ||
     null;
   const animatedMarkers = useAnimatedOfficerMarkers(
     filteredOfficers,
@@ -5089,29 +5464,27 @@ export default function FOActivities() {
       }
       const fromIso = formatDateForDb(selectedRange.from);
       const toIso = formatDateForDb(selectedRange.to);
-      const selectedFoKeys = Array.from(
-        new Set(
-          [
-            routeOfficer.foId,
-            routeOfficer.employeeCode,
-            routeOfficer.attendance?.fo_user_id,
-            routeOfficer.attendance?.employee_code,
-          ]
-            .map(normalizeFoKey)
-            .filter(Boolean),
-        ),
-      );
+      const operationalFoId = operationalFoIdForOfficer(routeOfficer);
+      const attendanceId = routeOfficer.attendance?.id || null;
       const fetchedRows = [];
-      const idColumns = ["fo_user_id", "employee_code", "profile_id"];
       const timeColumns = ["captured_at", "recorded_at", "created_at", "logged_at"];
+      let source = "employee_code_date";
 
       try {
-        for (const idValue of selectedFoKeys) {
-          for (const idColumn of idColumns) {
+        if (attendanceId) {
+          try {
+            fetchedRows.push(...(await fetchLocationLogsByAttendanceId(attendanceId)));
+          } catch (attendanceError) {
+            console.warn("[myQPMS FO] Attendance GPS lookup failed; using employee/date fallback.", attendanceError);
+          }
+          if (fetchedRows.length) source = "attendance_id";
+        }
+        if (!fetchedRows.length && operationalFoId) {
+          for (const idColumn of ["fo_user_id", "employee_code", "username"]) {
             for (const timeColumn of timeColumns) {
               const rows = await fetchLocationLogsByColumn({
                 idColumn,
-                idValue,
+                idValue: operationalFoId,
                 timeColumn,
                 fromIso,
                 toIso,
@@ -5139,11 +5512,14 @@ export default function FOActivities() {
       const selectedLogs = Array.from(routeRowsById.values()).sort(
         (a, b) => routePointTime(a) - routePointTime(b),
       );
-      console.debug("FO_DRILLDOWN_GPS_LOGS_FETCHED", {
-        officer_name: routeOfficer.name,
-        officer_id: routeOfficer.foId || routeOfficer.employeeCode,
-        date_range: `${selectedRange.fromDate} to ${selectedRange.toDate}`,
-        gps_logs_fetched_count: selectedLogs.length,
+      console.debug("FO_GPS_AUDIT_DIAGNOSTICS", {
+        "profile.id": routeOfficer.profile?.id || null,
+        employee_code: routeOfficer.profile?.employee_code || routeOfficer.employeeCode || null,
+        operationalFoId,
+        attendance_id: attendanceId,
+        gps_logs_count_result: selectedLogs.length,
+        source,
+        dateRange: `${selectedRange.fromDate} to ${selectedRange.toDate}`,
       });
       setSelectedRouteLogs(selectedLogs);
     }
@@ -5301,14 +5677,24 @@ export default function FOActivities() {
   function openSupportActions(officerId) {
     const officer =
       filteredOfficers.find((item) => item.id === officerId) ||
-      liveOfficers.find((item) => item.id === officerId);
+      officers.find((item) => item.id === officerId);
     if (!officer) return;
     setMapRouteOfficerId(officerId);
-    if (hasFiniteCoordinates(officer.coordinates)) {
+    const coordinates = normalizeCoordinates(officer.coordinates);
+    if (coordinates) {
       setMapCommand({
         type: "current-location",
-        coordinates: officer.coordinates,
+        coordinates,
+        employeeCode: officer.employeeCode || officer.foId,
+        source: officer.locationSource || "officer_card",
         at: Date.now(),
+      });
+    } else {
+      warnSkippedInvalidCoordinate({
+        employeeCode: officer.employeeCode || officer.foId,
+        source: officer.locationSource || "officer_card",
+        lat: officer.coordinates?.[0],
+        lng: officer.coordinates?.[1],
       });
     }
     setSupportOfficerId(officerId);
@@ -5441,7 +5827,46 @@ export default function FOActivities() {
     setDetailDraftToDate(selectedRange.toDate);
     setSelectedOfficerId(officerId);
     setKmRecalcResult(null);
-    setMapCommand({ type: "recenter", at: Date.now() });
+    const officer =
+      filteredOfficers.find((item) => item.id === officerId) ||
+      officers.find((item) => item.id === officerId);
+    const coordinates = normalizeCoordinates(officer?.coordinates);
+    if (coordinates) {
+      setMapCommand({
+        type: "current-location",
+        coordinates,
+        employeeCode: officer?.employeeCode || officer?.foId,
+        source: officer?.locationSource || "selected_officer",
+        at: Date.now(),
+      });
+    } else {
+      warnSkippedInvalidCoordinate({
+        employeeCode: officer?.employeeCode || officer?.foId,
+        source: officer?.locationSource || "selected_officer",
+        lat: officer?.coordinates?.[0],
+        lng: officer?.coordinates?.[1],
+      });
+    }
+  }
+
+  function focusCurrentOfficerOnMap(source) {
+    const coordinates = normalizeCoordinates(routeOfficer?.coordinates);
+    if (!coordinates) {
+      warnSkippedInvalidCoordinate({
+        employeeCode: routeOfficer?.employeeCode || routeOfficer?.foId,
+        source,
+        lat: routeOfficer?.coordinates?.[0],
+        lng: routeOfficer?.coordinates?.[1],
+      });
+      return;
+    }
+    setMapCommand({
+      type: "current-location",
+      coordinates,
+      employeeCode: routeOfficer?.employeeCode || routeOfficer?.foId,
+      source,
+      at: Date.now(),
+    });
   }
 
   function openSupportDetailedView() {
@@ -5524,11 +5949,13 @@ export default function FOActivities() {
   const pins = useMemo(() => {
     const markerOfficers = visualFilteredOfficers.filter((officer) => {
       const canShow = canShowOfficerMarker(officer);
-      if (!canShow && !hasFiniteCoordinates(officer.coordinates)) {
-        console.debug(
-          "FO_MARKER_SKIPPED_NO_COORDINATES",
-          officer.foId || officer.employeeCode,
-        );
+      if (!canShow) {
+        warnSkippedInvalidCoordinate({
+          employeeCode: officer.employeeCode || officer.foId,
+          source: officer.locationSource || "officer_marker",
+          lat: officer.coordinates?.[0],
+          lng: officer.coordinates?.[1],
+        });
       }
       return canShow;
     });
@@ -5590,7 +6017,7 @@ export default function FOActivities() {
     const selectedFoId = routeOfficer
       ? normalizeFoKey(routeOfficer.foId || routeOfficer.employeeCode)
       : null;
-    const pinsForVisits = siteVisitRows
+    const pinsForVisits = visibleSiteVisitRows
       .filter((visit) => {
         if (!selectedFoId) return true;
         return siteVisitFoId(visit) === selectedFoId;
@@ -5599,22 +6026,25 @@ export default function FOActivities() {
       .filter(Boolean);
     console.debug("FO_SITE_MARKERS_BUILT", pinsForVisits.length);
     return pinsForVisits;
-  }, [filteredOfficers, routeOfficer, siteVisitRows]);
+  }, [filteredOfficers, routeOfficer, visibleSiteVisitRows]);
 
   useEffect(() => {
     let cancelled = false;
     async function rebuildMainRouteLines() {
       if (!routeOfficer) {
         setMainMapRouteLines([]);
+        setMainMapRouteMessage(null);
         return;
       }
-      const lines = await buildMainMapRouteLines({
+      const result = await buildMainMapRouteLines({
         logs: selectedRouteLogs,
-        visits: routeOfficer.visits || [],
         color: foMarkerColor(routeOfficer),
         idPrefix: `route-${routeOfficer.id}`,
       });
-      if (!cancelled) setMainMapRouteLines(lines);
+      if (!cancelled) {
+        setMainMapRouteLines(result.lines);
+        setMainMapRouteMessage(result.message);
+      }
     }
     rebuildMainRouteLines();
     return () => {
@@ -5675,7 +6105,7 @@ export default function FOActivities() {
   const onSiteOfficers = kpiOfficers.filter(
     (officer) => officer.operationalStatus === "ON_SITE",
   ).length;
-  const payableKpi = attendanceKpiRows.reduce(
+  const payableKpi = visibleAttendanceKpiRows.reduce(
     (summary, row) => ({
       payableKm: summary.payableKm + payableKmFromAttendance(row),
       totalPetrol: summary.totalPetrol + petrolAmountFromAttendance(row),
@@ -5858,6 +6288,7 @@ export default function FOActivities() {
               pins={pins}
               sitePins={sitePins}
               routeLines={routeLines}
+              routeTrailMessage={mainMapRouteMessage}
               expanded={false}
               showSites={showSiteMarkers}
               showRoutes={showRouteTrail}
@@ -5895,13 +6326,7 @@ export default function FOActivities() {
               </button>
               <button
                 type="button"
-                onClick={() =>
-                  setMapCommand({
-                    type: "current-location",
-                    coordinates: routeOfficer?.coordinates,
-                    at: Date.now(),
-                  })
-                }
+                onClick={() => focusCurrentOfficerOnMap("map_location_button")}
                 className="grid h-12 w-12 place-items-center text-slate-700"
               >
                 <LocateFixed className="h-5 w-5" />
@@ -5990,13 +6415,7 @@ export default function FOActivities() {
                     <ControlButton
                       icon={LocateFixed}
                       label="Current Location"
-                      onClick={() =>
-                        setMapCommand({
-                          type: "current-location",
-                          coordinates: routeOfficer?.coordinates,
-                          at: Date.now(),
-                        })
-                      }
+                      onClick={() => focusCurrentOfficerOnMap("map_controls")}
                     />
                     <ControlButton
                       icon={Maximize2}
@@ -6228,6 +6647,7 @@ export default function FOActivities() {
                 pins={pins}
                 sitePins={sitePins}
                 routeLines={routeLines}
+                routeTrailMessage={mainMapRouteMessage}
                 expanded
                 showSites={showSiteMarkers}
                 showRoutes={showRouteTrail}
