@@ -629,6 +629,7 @@ class SupabaseService {
         .eq('fo_user_id', user.employeeCode)
         .eq('attendance_id', attendanceId!)
         .filter('checkout_time', 'is', null)
+        .filter('check_out_time', 'is', null)
         .order('check_in_time', ascending: false)
         .limit(1);
     final records = List<Map<String, dynamic>>.from(rows);
@@ -648,8 +649,85 @@ class SupabaseService {
         .eq('fo_user_id', user.employeeCode)
         .eq('attendance_id', attendanceId!)
         .filter('checkout_time', 'is', null)
+        .filter('check_out_time', 'is', null)
         .limit(100);
     return List<Map<String, dynamic>>.from(rows).length;
+  }
+
+  static Future<({String? firstClosedVisitId, int closedCount})>
+  autoCloseOpenSiteVisitsForEndDay({
+    required FoUser user,
+    required Attendance attendance,
+    required DateTime closedAt,
+  }) async {
+    final attendanceId = attendance.remoteId?.trim();
+    if (!isValidUuid(attendanceId)) {
+      return (firstClosedVisitId: null, closedCount: 0);
+    }
+    final rows = await client
+        .from('fo_site_visits')
+        .select(
+          'id, check_in_latitude, check_in_longitude, current_latitude, current_longitude, route_km, metadata',
+        )
+        .eq('fo_user_id', user.employeeCode)
+        .eq('attendance_id', attendanceId!)
+        .filter('checkout_time', 'is', null)
+        .filter('check_out_time', 'is', null)
+        .order('check_in_time', ascending: false)
+        .limit(100);
+    final visits = List<Map<String, dynamic>>.from(rows);
+    String? firstClosedVisitId;
+    var closedCount = 0;
+    final closedAtIso = closedAt.toUtc().toIso8601String();
+    for (final visit in visits) {
+      final visitId = visit['id']?.toString();
+      if (!isValidUuid(visitId)) continue;
+      firstClosedVisitId ??= visitId;
+      final metadata = _jsonMap(visit['metadata'])
+        ..addAll({
+          'closed_source': 'end_day_open_site_auto_close',
+          'closed_reason': 'User ended day while site visit was still open',
+          'payable_km_after_site_checkin_added': false,
+          'closed_at': closedAtIso,
+        });
+      final checkInLatitude =
+          _double(visit['check_in_latitude']) ??
+          _double(visit['current_latitude']);
+      final checkInLongitude =
+          _double(visit['check_in_longitude']) ??
+          _double(visit['current_longitude']);
+      final payload = <String, dynamic>{
+        'checkout_time': closedAtIso,
+        'check_out_time': closedAtIso,
+        'check_out_latitude': checkInLatitude,
+        'check_out_longitude': checkInLongitude,
+        'status': 'Closed by End Day',
+        'visit_status': 'Closed by End Day',
+        'route_km': _double(visit['route_km']) ?? 0,
+        'metadata': metadata,
+        'updated_at': closedAtIso,
+      };
+      final updatedRows = await client
+          .from('fo_site_visits')
+          .update(payload)
+          .eq('id', visitId!)
+          .filter('checkout_time', 'is', null)
+          .filter('check_out_time', 'is', null)
+          .select('id');
+      if (List<Map<String, dynamic>>.from(updatedRows).isNotEmpty) {
+        closedCount += 1;
+      }
+    }
+    if (closedCount > 0) {
+      await CrashLogService.record(
+        employeeCode: user.employeeCode,
+        screen: 'home',
+        action: 'END_DAY_OPEN_SITE_AUTO_CLOSED',
+        error:
+            'attendance_id=$attendanceId first_site_visit_id=$firstClosedVisitId closed_count=$closedCount',
+      );
+    }
+    return (firstClosedVisitId: firstClosedVisitId, closedCount: closedCount);
   }
 
   static Future<void> reopenAttendanceForToday(Attendance attendance) async {
@@ -729,6 +807,9 @@ class SupabaseService {
   static Future<EndDayAttendanceResolution> endCurrentActiveAttendance({
     required FoUser user,
     required Attendance attendance,
+    bool endDayWithOpenSite = false,
+    bool openSiteAutoClosed = false,
+    String? autoClosedSiteVisitId,
   }) async {
     final resolution = await resolveEndDayAttendance(
       user: user,
@@ -743,6 +824,15 @@ class SupabaseService {
     await _syncAttendanceRouteKmFromVisits(attendance);
     final id = remoteActive.remoteId!;
     final logoutTime = attendance.endTime ?? DateTime.now();
+    final existingMetadata = _jsonMap(remoteActive.metadata);
+    final metadata = {
+      ...existingMetadata,
+      if (endDayWithOpenSite) 'end_day_with_open_site': true,
+      if (openSiteAutoClosed) 'open_site_auto_closed': true,
+      if (endDayWithOpenSite) 'payable_km_after_site_checkin_added': false,
+      if (autoClosedSiteVisitId?.trim().isNotEmpty == true)
+        'auto_closed_site_visit_id': autoClosedSiteVisitId!.trim(),
+    };
     final rows = await client
         .from('fo_attendance')
         .update({
@@ -758,6 +848,7 @@ class SupabaseService {
           'rate_per_km': 4,
           'petrol_amount': attendance.eligibleKm * 4,
           'status': 'Completed',
+          'metadata': metadata,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
         })
         .eq('id', id)
@@ -998,6 +1089,7 @@ class SupabaseService {
           _double(row['eligible_km']) ??
           _double(row['total_approved_km']) ??
           0,
+      metadata: _jsonMap(row['metadata']),
     );
   }
 
@@ -1020,6 +1112,12 @@ class SupabaseService {
     if (value == null) return null;
     if (value is num) return value.toInt();
     return int.tryParse(value.toString());
+  }
+
+  static Map<String, dynamic> _jsonMap(Object? value) {
+    if (value is Map<String, dynamic>) return Map<String, dynamic>.from(value);
+    if (value is Map) return Map<String, dynamic>.from(value);
+    return <String, dynamic>{};
   }
 
   static Future<String?> insertLocation(LocationLog log) async {

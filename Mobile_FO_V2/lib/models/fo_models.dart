@@ -74,6 +74,7 @@ class Attendance {
     this.eligibleKm = 0,
     this.totalRouteKm = 0,
     this.endRouteKm = 0,
+    this.metadata = const {},
   });
 
   final String id;
@@ -92,6 +93,7 @@ class Attendance {
   double eligibleKm;
   double totalRouteKm;
   double endRouteKm;
+  Map<String, dynamic> metadata;
 
   bool get isActive => endTime == null;
 
@@ -112,6 +114,7 @@ class Attendance {
     'eligible_km': eligibleKm,
     'total_route_km': totalRouteKm,
     'end_route_km': endRouteKm,
+    'metadata': metadata,
   };
 
   factory Attendance.fromJson(Map<String, dynamic> json) => Attendance(
@@ -132,6 +135,7 @@ class Attendance {
     totalRouteKm:
         _double(json['total_route_km']) ?? _double(json['eligible_km']) ?? 0,
     endRouteKm: _double(json['end_route_km']) ?? 0,
+    metadata: _map(json['metadata']),
   );
 }
 
