@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import { api, clearBackendToken, readBackendToken, setBackendToken } from '../services/api.js';
-import {
-  isDemoAuthEnabled,
-  isProductionAuthMode,
-  normalizeAppRole,
-} from '../utils/authRoles.js';
+import { normalizeAppRole } from '../utils/authRoles.js';
 import { AuthContext } from './auth-context.js';
 
 const authStorageKey = 'qpms-crm-auth-user';
+const isDemoAuthEnabled =
+  String(import.meta.env.VITE_ENABLE_DEMO_AUTH || '').trim().toLowerCase() === 'true';
+const isProductionAuthMode = !isDemoAuthEnabled;
 
 function readStoredUser() {
   if (typeof window === 'undefined') return null;
@@ -176,6 +175,9 @@ export function AuthProvider({ children }) {
     if (!isDemoAuthEnabled) {
       throw new Error('Demo backend authentication is disabled.');
     }
+
+    // Legacy backend credentials are permitted only for explicit local demo mode.
+    // The real Supabase login flow below never calls this function.
     const response = await api.post('/api/auth/login', {
       email: email.trim().toLowerCase(),
       password,
