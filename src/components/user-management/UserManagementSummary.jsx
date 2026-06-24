@@ -1,10 +1,10 @@
-export default function UserManagementSummary({ employees }) {
+export default function UserManagementSummary({ employees, total }) {
   const stats = [
-    ['Total Users', employees.length],
-    ['Draft', employees.filter((item) => item.accountStatus === 'Draft').length],
-    ['Ready to Create', employees.filter((item) => item.accountStatus === 'Ready to Create').length],
-    ['Mobile Access Enabled', employees.filter((item) => item.mobileAccess).length],
-    ['Disabled', employees.filter((item) => item.accountStatus === 'Disabled').length],
+    ['Total Users', total],
+    ['Active on Page', employees.filter((item) => item.isActive).length],
+    ['Inactive on Page', employees.filter((item) => !item.isActive).length],
+    ['Provisioned on Page', employees.filter((item) => item.provisioningStatus === 'provisioned').length],
+    ['Access Disabled', employees.filter((item) => !item.webAccess || !item.mobileAccess).length],
   ];
 
   return (
@@ -12,7 +12,7 @@ export default function UserManagementSummary({ employees }) {
       {stats.map(([label, value]) => (
         <article key={label} className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
           <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
-          <p className="mt-1 text-2xl font-bold text-slate-950">{value}</p>
+          <p className="mt-1 text-2xl font-bold text-slate-950">{value || 0}</p>
         </article>
       ))}
     </section>
