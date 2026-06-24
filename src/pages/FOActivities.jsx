@@ -64,6 +64,12 @@ const HIGH_CONFIDENCE_MULTIPLIER = 1.03;
 const MEDIUM_CONFIDENCE_MULTIPLIER = 1.08;
 const LOW_CONFIDENCE_MULTIPLIER = 1.12;
 const SITE_GEOFENCE_METERS = 100;
+const HIDDEN_EMPLOYEE_CODES = [
+  "QPMSTN15702",
+  "QPMSTN12345",
+  "QPMSTN09876",
+];
+const HIDDEN_EMPLOYEE_CODE_SET = new Set(HIDDEN_EMPLOYEE_CODES);
 const FO_SITE_VISIT_SELECT =
   "id,fo_user_id,employee_code,full_name,attendance_id,store_id,store_name,site_name,client_name,store_code,state,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,current_latitude,current_longitude,origin_lat,origin_lng,destination_lat,destination_lng,route_km,google_route_polyline,visit_duration_minutes,status,visit_status,checkout_note,metadata";
 const FO_LIVE_STATUS_SELECT =
@@ -335,6 +341,27 @@ function formatDateTime(value) {
 
 function normalizeFoKey(value = "") {
   return String(value || "").replace(/\s+/g, "").trim().toUpperCase();
+}
+
+function normalizeEmployeeCode(code) {
+  return String(code ?? "").trim().toUpperCase();
+}
+
+function isHiddenEmployeeCode(code) {
+  return HIDDEN_EMPLOYEE_CODE_SET.has(normalizeEmployeeCode(code));
+}
+
+function isHiddenEmployeeRecord(record) {
+  return [
+    record?.employeeCode,
+    record?.employee_code,
+    record?.fo_user_id,
+    record?.user_id,
+    record?.profile?.employee_code,
+    record?.attendance?.employee_code,
+    record?.attendance?.fo_user_id,
+    record?.foId,
+  ].some(isHiddenEmployeeCode);
 }
 
 function formatDisplayKm(value) {
@@ -2530,7 +2557,9 @@ async function exportFoOperationsExcel({
   to,
 }) {
   if (!isSupabaseConfigured || !supabase) return;
-  const exportOfficers = selectedOfficer ? [selectedOfficer] : officers;
+  const exportOfficers = (selectedOfficer ? [selectedOfficer] : officers).filter(
+    (officer) => !isHiddenEmployeeRecord(officer),
+  );
   const officerIds = Array.from(
     new Set(
       exportOfficers
@@ -5319,7 +5348,18 @@ export default function FOActivities() {
     };
   }, []);
 
-  const officers = liveOfficers;
+  const officers = useMemo(
+    () => liveOfficers.filter((officer) => !isHiddenEmployeeRecord(officer)),
+    [liveOfficers],
+  );
+  const visibleAttendanceKpiRows = useMemo(
+    () => attendanceKpiRows.filter((row) => !isHiddenEmployeeRecord(row)),
+    [attendanceKpiRows],
+  );
+  const visibleSiteVisitRows = useMemo(
+    () => siteVisitRows.filter((visit) => !isHiddenEmployeeRecord(visit)),
+    [siteVisitRows],
+  );
 
   const structurallyFilteredOfficers = useMemo(
     () =>
@@ -5345,9 +5385,9 @@ export default function FOActivities() {
   );
 
   const stateSummaryRows = useMemo(() => {
-    if (!liveOfficers.length) return [];
+    if (!officers.length) return [];
     const byState = new Map();
-    liveOfficers.forEach((officer) => {
+    officers.forEach((officer) => {
       const current = byState.get(officer.state) || {
         id: officer.state,
         state: officer.state,
@@ -5368,7 +5408,7 @@ export default function FOActivities() {
       byState.set(officer.state, current);
     });
     return Array.from(byState.values());
-  }, [liveOfficers]);
+  }, [officers]);
 
   const filteredStates = useMemo(
     () =>
@@ -5387,12 +5427,12 @@ export default function FOActivities() {
     null;
   const mapRouteOfficer =
     filteredOfficers.find((officer) => officer.id === mapRouteOfficerId) ||
-    liveOfficers.find((officer) => officer.id === mapRouteOfficerId) ||
+    officers.find((officer) => officer.id === mapRouteOfficerId) ||
     null;
   const routeOfficer = selectedOfficer || mapRouteOfficer;
   const supportOfficer =
     filteredOfficers.find((officer) => officer.id === supportOfficerId) ||
-    liveOfficers.find((officer) => officer.id === supportOfficerId) ||
+    officers.find((officer) => officer.id === supportOfficerId) ||
     null;
   const animatedMarkers = useAnimatedOfficerMarkers(
     filteredOfficers,
@@ -5637,7 +5677,7 @@ export default function FOActivities() {
   function openSupportActions(officerId) {
     const officer =
       filteredOfficers.find((item) => item.id === officerId) ||
-      liveOfficers.find((item) => item.id === officerId);
+      officers.find((item) => item.id === officerId);
     if (!officer) return;
     setMapRouteOfficerId(officerId);
     const coordinates = normalizeCoordinates(officer.coordinates);
@@ -5789,7 +5829,7 @@ export default function FOActivities() {
     setKmRecalcResult(null);
     const officer =
       filteredOfficers.find((item) => item.id === officerId) ||
-      liveOfficers.find((item) => item.id === officerId);
+      officers.find((item) => item.id === officerId);
     const coordinates = normalizeCoordinates(officer?.coordinates);
     if (coordinates) {
       setMapCommand({
@@ -5977,7 +6017,7 @@ export default function FOActivities() {
     const selectedFoId = routeOfficer
       ? normalizeFoKey(routeOfficer.foId || routeOfficer.employeeCode)
       : null;
-    const pinsForVisits = siteVisitRows
+    const pinsForVisits = visibleSiteVisitRows
       .filter((visit) => {
         if (!selectedFoId) return true;
         return siteVisitFoId(visit) === selectedFoId;
@@ -5986,7 +6026,7 @@ export default function FOActivities() {
       .filter(Boolean);
     console.debug("FO_SITE_MARKERS_BUILT", pinsForVisits.length);
     return pinsForVisits;
-  }, [filteredOfficers, routeOfficer, siteVisitRows]);
+  }, [filteredOfficers, routeOfficer, visibleSiteVisitRows]);
 
   useEffect(() => {
     let cancelled = false;
@@ -6065,7 +6105,7 @@ export default function FOActivities() {
   const onSiteOfficers = kpiOfficers.filter(
     (officer) => officer.operationalStatus === "ON_SITE",
   ).length;
-  const payableKpi = attendanceKpiRows.reduce(
+  const payableKpi = visibleAttendanceKpiRows.reduce(
     (summary, row) => ({
       payableKm: summary.payableKm + payableKmFromAttendance(row),
       totalPetrol: summary.totalPetrol + petrolAmountFromAttendance(row),
