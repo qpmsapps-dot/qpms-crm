@@ -8,6 +8,7 @@ function initials(name = '') {
 
 export default function EmployeeCard({ employee, onOpen, onAction }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const actions = ['View', 'Edit', employee.isActive ? 'Deactivate' : 'Reactivate'];
 
   return (
     <article
@@ -20,7 +21,7 @@ export default function EmployeeCard({ employee, onOpen, onAction }) {
           onOpen(employee);
         }
       }}
-      className="min-h-[142px] rounded-lg border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.055)] outline-none transition hover:border-qpms-200 hover:shadow-[0_16px_30px_rgba(15,23,42,0.08)] focus-visible:ring-2 focus-visible:ring-qpms-300"
+      className="min-h-[168px] rounded-lg border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.055)] outline-none transition hover:border-qpms-200 hover:shadow-[0_16px_30px_rgba(15,23,42,0.08)] focus-visible:ring-2 focus-visible:ring-qpms-300"
     >
       <div className="flex items-start gap-3">
         <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-gradient-to-br from-qpms-50 to-sky-100 text-sm font-black text-qpms-700 ring-1 ring-qpms-100">
@@ -38,8 +39,8 @@ export default function EmployeeCard({ employee, onOpen, onAction }) {
               </button>
               {menuOpen ? (
                 <div className="absolute right-0 top-8 z-10 w-40 rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
-                  {['View', 'Edit', 'Duplicate', 'Delete'].map((action) => (
-                    <button key={action} type="button" onClick={() => onAction(action, employee)} className="block w-full rounded-lg px-3 py-2 text-left text-xs font-bold text-slate-600 hover:bg-slate-50">
+                  {actions.map((action) => (
+                    <button key={action} type="button" onClick={() => { setMenuOpen(false); onAction(action, employee); }} className="block w-full rounded-lg px-3 py-2 text-left text-xs font-bold text-slate-600 hover:bg-slate-50">
                       {action}
                     </button>
                   ))}
@@ -47,11 +48,14 @@ export default function EmployeeCard({ employee, onOpen, onAction }) {
               ) : null}
             </div>
           </div>
-          <p className="mt-2 truncate text-xs font-bold text-slate-800">{employee.designation}</p>
-          <p className="truncate text-xs font-medium text-slate-500">{employee.department} · HOD: {employee.hod || 'Not assigned'}</p>
-          <p className="truncate text-xs font-medium text-slate-500">Login ID: {employee.loginId}</p>
+          <p className="mt-2 truncate text-xs font-bold text-slate-800">{employee.designation || 'No designation'}</p>
+          <p className="truncate text-xs font-medium text-slate-500">{employee.department || 'No department'} · {employee.business || 'No business'}</p>
+          <p className="truncate text-xs font-medium text-slate-500">{employee.email || employee.mobile || 'No contact details'}</p>
           <div className="mt-2 flex flex-wrap gap-1.5">
             <UserStatusBadge status={employee.accountStatus} />
+            <UserStatusBadge status={employee.provisioningLabel} />
+            {!employee.webAccess ? <UserStatusBadge status="Web disabled" /> : null}
+            {!employee.mobileAccess ? <UserStatusBadge status="Mobile disabled" /> : null}
           </div>
         </div>
       </div>

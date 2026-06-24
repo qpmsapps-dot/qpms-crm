@@ -6,6 +6,29 @@ import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
 import { recalculateFoKm, recalculateFoKmForToday } from './foKmRecalculationService.js';
 import { cleanupStaleFoSessions } from './foStaleSessionCleanupService.js';
+import {
+  USER_MANAGEMENT_PROFILE_SELECT,
+  assertUserManagementFoundation,
+  attachOperationalCounts,
+  booleanValue,
+  buildEmployeeCodeRepairPreview,
+  buildHardDeletePreview,
+  hasOwn,
+  hierarchyPayloadFromBody,
+  loadHierarchy,
+  loadOperationalCounts,
+  loadProfileById,
+  normalizeEmail,
+  normalizeEmployeeCode,
+  profileMetadataForAuth,
+  safeAuthError,
+  sanitizeAuditData,
+  saveHierarchy,
+  textOrNull,
+  isAuthUserNotFoundError,
+  userManagementErrorMessage,
+  writeUserManagementAudit,
+} from './userManagementService.js';
 
 dotenv.config({ path: './.env' });
 dotenv.config({ path: './backend/.env' });
@@ -121,9 +144,9 @@ function normalizeSupabaseUrl(url) {
 }
 
 const supabaseUrl = normalizeSupabaseUrl(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey, {
+const supabaseAnon = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey, {
   realtime: {
     enabled: false,
   },
@@ -142,9 +165,9 @@ const serviceRoleSupabase = supabaseUrl && supabaseServiceRoleKey ? createClient
   },
 }) : null;
 const supabaseConfigStatus = {
-  configured: Boolean(supabase),
+  configured: Boolean(supabaseAnon),
   urlPresent: Boolean(supabaseUrl),
-  keyPresent: Boolean(supabaseKey),
+  keyPresent: Boolean(supabaseAnonKey),
   serviceRolePresent: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
 };
 
@@ -195,6 +218,122 @@ function requireApiAuth(request, response, next) {
   next();
 }
 
+function createUserScopedSupabase(accessToken) {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    const error = new Error('Supabase URL and anon key are required for JWT-authenticated backend routes.');
+    error.statusCode = 503;
+    throw error;
+  }
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+    realtime: {
+      enabled: false,
+    },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+}
+
+async function requireSupabaseJwt(request, response, next) {
+  const accessToken = getBearerToken(request);
+  if (!accessToken) {
+    response.status(401).json({ ok: false, message: 'Supabase Bearer token required.' });
+    return;
+  }
+  if (!supabaseAnon) {
+    response.status(503).json({ ok: false, message: 'Supabase JWT verification is not configured on the API server.' });
+    return;
+  }
+
+  try {
+    const { data: authData, error: authError } = await supabaseAnon.auth.getUser(accessToken);
+    if (authError || !authData?.user) {
+      response.status(401).json({ ok: false, message: 'Invalid or expired Supabase access token.' });
+      return;
+    }
+
+    const userScopedSupabase = createUserScopedSupabase(accessToken);
+    const { data: profile, error: profileError } = await userScopedSupabase
+      .from('profiles')
+      .select('*')
+      .eq('auth_user_id', authData.user.id)
+      .maybeSingle();
+    if (profileError) throw profileError;
+    if (!profile) {
+      response.status(403).json({ ok: false, message: 'Authenticated user profile was not found.' });
+      return;
+    }
+
+    request.authUser = authData.user;
+    request.profile = profile;
+    request.employeeCode = String(profile.employee_code || '').trim() || null;
+    request.userRole = String(profile.role || '').trim();
+    request.userSupabase = userScopedSupabase;
+    next();
+  } catch (error) {
+    console.warn('[myQPMS Auth] Supabase JWT verification failed', {
+      message: error.message,
+      code: error.code || null,
+    });
+    response.status(error.statusCode || 401).json({
+      ok: false,
+      message: error.statusCode === 503
+        ? error.message
+        : 'Unable to verify Supabase access token.',
+    });
+  }
+}
+
+const USER_MANAGEMENT_ROLE_KEYS = new Set([
+  'ADMIN',
+  'MD',
+  'COO',
+  'GM',
+  'GENERALMANAGER',
+  'GMTOPMANAGEMENT',
+  'TOPMANAGEMENT',
+  'MANAGEMENT',
+  'HR',
+  'HUMANRESOURCES',
+  'HRREVIEWER',
+  'HRGM',
+  'FINANCEGM',
+]);
+
+function normalizePermissionRole(role) {
+  return String(role || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '');
+}
+
+function hasUserManagementPermission(profile) {
+  if (!profile || profile.is_active !== true) return false;
+  if (profile.web_access_enabled === false) return false;
+  if (['INACTIVE', 'DISABLED', 'DEACTIVATED'].includes(normalizePermissionRole(profile.status))) {
+    return false;
+  }
+  return USER_MANAGEMENT_ROLE_KEYS.has(normalizePermissionRole(profile.role));
+}
+
+function requireUserManagementPermission(request, response, next) {
+  if (!hasUserManagementPermission(request.profile)) {
+    response.status(403).json({
+      ok: false,
+      message: `Role ${request.userRole || 'Unknown'} cannot access User Management.`,
+    });
+    return;
+  }
+  next();
+}
+
 function requireRoles(roles) {
   return (request, response, next) => {
     if (!roles.includes(request.apiUser?.role)) {
@@ -206,21 +345,204 @@ function requireRoles(roles) {
 }
 
 function requireSupabase() {
-  if (!supabase) {
-    const error = new Error('Supabase backend configuration is missing on the API server. Set SUPABASE_URL and SUPABASE_ANON_KEY on Render, or set SUPABASE_SERVICE_ROLE_KEY for backend-only workflow writes.');
+  if (!supabaseAnon) {
+    const error = new Error('Supabase backend configuration is missing on the API server. Set SUPABASE_URL and SUPABASE_ANON_KEY.');
     error.statusCode = 503;
     throw error;
   }
-  return supabase;
+  return supabaseAnon;
 }
 
 function requireServiceRoleSupabase() {
+  // Service role bypasses RLS. Call this only inside explicitly authorized
+  // admin handlers or trusted server jobs, never as ordinary request identity.
   if (!serviceRoleSupabase) {
     const error = new Error('SUPABASE_SERVICE_ROLE_KEY is required for backend-only admin FO actions.');
     error.statusCode = 503;
     throw error;
   }
   return serviceRoleSupabase;
+}
+
+function userManagementHttpError(statusCode, message, details = null) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.details = details;
+  return error;
+}
+
+function respondUserManagementError(response, error) {
+  const payload = {
+    ok: false,
+    message: userManagementErrorMessage(error),
+  };
+  if (error?.details) payload.details = sanitizeAuditData(error.details);
+  response.status(error?.statusCode || 500).json(payload);
+}
+
+function parsePositiveInteger(value, fallback, maximum) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, maximum);
+}
+
+function safeSearchTerm(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[,%()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .slice(0, 120);
+}
+
+function profileCreatePayload(body, authUserId, usedTemporaryPassword) {
+  const employeeCode = normalizeEmployeeCode(body.employee_code);
+  const fullName = textOrNull(body.full_name);
+  const email = normalizeEmail(body.email);
+  return {
+    auth_user_id: authUserId,
+    employee_code: employeeCode,
+    username: textOrNull(body.username) || employeeCode,
+    full_name: fullName,
+    display_name: textOrNull(body.display_name) || fullName,
+    mobile: textOrNull(body.mobile),
+    email,
+    state: textOrNull(body.state),
+    role: textOrNull(body.role) || 'FO',
+    designation: textOrNull(body.designation),
+    department: textOrNull(body.department),
+    business: textOrNull(body.business),
+    status: 'Active',
+    is_active: true,
+    requires_password_change: usedTemporaryPassword
+      ? true
+      : booleanValue(body.requires_password_change, false),
+    mobile_access_enabled: booleanValue(body.mobile_access_enabled, true),
+    web_access_enabled: booleanValue(body.web_access_enabled, true),
+    auth_provisioning_status: 'provisioned',
+    auth_provisioning_error: null,
+    auth_provisioned_at: new Date().toISOString(),
+    last_profile_sync_at: new Date().toISOString(),
+  };
+}
+
+function profilePatchPayload(body) {
+  const textFields = [
+    'full_name',
+    'display_name',
+    'mobile',
+    'email',
+    'state',
+    'role',
+    'designation',
+    'department',
+    'business',
+    'status',
+  ];
+  const booleanFields = [
+    'is_active',
+    'requires_password_change',
+    'mobile_access_enabled',
+    'web_access_enabled',
+  ];
+  const payload = {};
+  for (const field of textFields) {
+    if (!hasOwn(body, field)) continue;
+    payload[field] = field === 'email'
+      ? normalizeEmail(body[field]) || null
+      : textOrNull(body[field]);
+  }
+  for (const field of booleanFields) {
+    if (hasOwn(body, field)) payload[field] = booleanValue(body[field]);
+  }
+  return payload;
+}
+
+async function ensureUniqueProfileIdentity(client, { employeeCode, email, excludeProfileId = null }) {
+  if (employeeCode) {
+    let employeeQuery = client
+      .from('profiles')
+      .select('id,is_active')
+      .ilike('employee_code', employeeCode)
+      .limit(1);
+    if (excludeProfileId) employeeQuery = employeeQuery.neq('id', excludeProfileId);
+    const { data, error } = await employeeQuery;
+    if (error) throw error;
+    if (data?.length) {
+      throw userManagementHttpError(
+        409,
+        data[0].is_active
+          ? 'Employee code already exists in an active profile.'
+          : 'Employee code already exists in an inactive profile and cannot be reused.',
+      );
+    }
+  }
+  if (email) {
+    let emailQuery = client
+      .from('profiles')
+      .select('id')
+      .ilike('email', email)
+      .limit(1);
+    if (excludeProfileId) emailQuery = emailQuery.neq('id', excludeProfileId);
+    const { data, error } = await emailQuery;
+    if (error) throw error;
+    if (data?.length) {
+      throw userManagementHttpError(409, 'Email is already linked to another profile.');
+    }
+  }
+}
+
+async function markProfileAuthSyncFailure(client, profileId, error) {
+  const safeError = safeAuthError(error);
+  const { data, error: updateError } = await client
+    .from('profiles')
+    .update({
+      auth_provisioning_status: 'profile_updated_auth_sync_failed',
+      auth_provisioning_error: safeError.message,
+      last_profile_sync_at: new Date().toISOString(),
+    })
+    .eq('id', profileId)
+    .select(USER_MANAGEMENT_PROFILE_SELECT)
+    .single();
+  if (updateError) throw updateError;
+  return data;
+}
+
+async function prepareEmployeeCodeRepairPreview(client, profileId, body) {
+  const profile = await loadProfileById(client, profileId);
+  if (!profile) throw userManagementHttpError(404, 'User profile not found.');
+  const oldEmployeeCode = normalizeEmployeeCode(body?.old_employee_code);
+  const newEmployeeCode = normalizeEmployeeCode(body?.new_employee_code);
+  const reason = textOrNull(body?.reason);
+  if (!oldEmployeeCode) {
+    throw userManagementHttpError(400, 'old_employee_code is required.');
+  }
+  if (!newEmployeeCode) {
+    throw userManagementHttpError(400, 'new_employee_code is required.');
+  }
+  if (!reason) throw userManagementHttpError(400, 'reason is required.');
+  if (normalizeEmployeeCode(profile.employee_code) !== oldEmployeeCode) {
+    throw userManagementHttpError(
+      409,
+      'Profile employee code does not match old_employee_code.',
+    );
+  }
+  if (oldEmployeeCode === newEmployeeCode) {
+    throw userManagementHttpError(
+      400,
+      'old_employee_code and new_employee_code must be different.',
+    );
+  }
+  await ensureUniqueProfileIdentity(client, {
+    employeeCode: newEmployeeCode,
+    excludeProfileId: profile.id,
+  });
+  const preview = await buildEmployeeCodeRepairPreview(
+    client,
+    profile,
+    oldEmployeeCode,
+    newEmployeeCode,
+  );
+  return { profile, preview, reason, oldEmployeeCode, newEmployeeCode };
 }
 
 function stageToDepartment(stage) {
@@ -880,6 +1202,1108 @@ app.post('/api/auth/login', (request, response) => {
     },
   });
 });
+
+app.get(
+  '/api/admin/users/me',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  (request, response) => {
+    response.json({
+      ok: true,
+      authUserId: request.authUser.id,
+      profileId: request.profile.id,
+      employee_code: request.employeeCode,
+      full_name: request.profile.full_name || null,
+      role: request.userRole,
+      designation: request.profile.designation || null,
+      department: request.profile.department || null,
+      business: request.profile.business || null,
+      hasUserManagementPermission: true,
+    });
+  },
+);
+
+app.get(
+  '/api/admin/users',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const page = parsePositiveInteger(request.query.page, 1, 100000);
+      const pageSize = parsePositiveInteger(request.query.pageSize, 25, 200);
+      const from = (page - 1) * pageSize;
+      const to = from + pageSize - 1;
+      let query = client
+        .from('profiles')
+        .select(USER_MANAGEMENT_PROFILE_SELECT, { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      const exactFilters = [
+        'state',
+        'role',
+        'designation',
+        'department',
+        'business',
+        'status',
+        'auth_provisioning_status',
+      ];
+      for (const field of exactFilters) {
+        const value = textOrNull(request.query[field]);
+        if (value) query = query.eq(field, value);
+      }
+      if (request.query.is_active !== undefined) {
+        const normalized = String(request.query.is_active).trim().toLowerCase();
+        if (!['true', 'false', '1', '0'].includes(normalized)) {
+          throw userManagementHttpError(400, 'is_active must be true or false.');
+        }
+        query = query.eq('is_active', booleanValue(normalized));
+      }
+      const search = safeSearchTerm(request.query.search);
+      if (search) {
+        query = query.or(
+          [
+            'employee_code',
+            'username',
+            'full_name',
+            'display_name',
+            'mobile',
+            'email',
+          ]
+            .map((field) => `${field}.ilike.%${search}%`)
+            .join(','),
+        );
+      }
+
+      const { data, error, count } = await query;
+      if (error) throw error;
+      const profiles = data || [];
+      const counts = await loadOperationalCounts(
+        client,
+        profiles.map((profile) => profile.employee_code),
+      );
+      response.json({
+        ok: true,
+        page,
+        pageSize,
+        total: count || 0,
+        totalPages: count ? Math.ceil(count / pageSize) : 0,
+        users: profiles.map((profile) => attachOperationalCounts(profile, counts)),
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.post(
+  '/api/admin/users/sync-auth-to-profiles',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const authUsers = [];
+      let authPage = 1;
+      const perPage = 1000;
+      while (true) {
+        const { data, error } = await client.auth.admin.listUsers({
+          page: authPage,
+          perPage,
+        });
+        if (error) throw error;
+        authUsers.push(...(data.users || []));
+        if (!data.nextPage || !(data.users || []).length) break;
+        authPage = data.nextPage;
+      }
+
+      const existingProfiles = [];
+      const profilePageSize = 1000;
+      for (let from = 0; ; from += profilePageSize) {
+        const { data, error } = await client
+          .from('profiles')
+          .select(USER_MANAGEMENT_PROFILE_SELECT)
+          .not('auth_user_id', 'is', null)
+          .range(from, from + profilePageSize - 1);
+        if (error) throw error;
+        existingProfiles.push(...(data || []));
+        if ((data || []).length < profilePageSize) break;
+      }
+      const profilesByAuthUserId = new Map(
+        existingProfiles.map((profile) => [String(profile.auth_user_id), profile]),
+      );
+      const summary = {
+        total_auth_users_scanned: authUsers.length,
+        profiles_created: 0,
+        profiles_updated: 0,
+        profiles_already_existing: 0,
+        skipped_users: 0,
+        errors: [],
+      };
+      const syncedAt = new Date().toISOString();
+
+      for (const authUser of authUsers) {
+        const existing = profilesByAuthUserId.get(String(authUser.id));
+        try {
+          if (existing) {
+            summary.profiles_already_existing += 1;
+            const patch = {
+              last_profile_sync_at: syncedAt,
+              auth_provisioning_status: 'provisioned',
+              auth_provisioning_error: null,
+              auth_provisioned_at:
+                existing.auth_provisioned_at || authUser.created_at || syncedAt,
+            };
+            if (!textOrNull(existing.email) && normalizeEmail(authUser.email)) {
+              patch.email = normalizeEmail(authUser.email);
+            }
+            const { error } = await client
+              .from('profiles')
+              .update(patch)
+              .eq('id', existing.id);
+            if (error) throw error;
+            summary.profiles_updated += 1;
+            continue;
+          }
+
+          const metadata = authUser.user_metadata || {};
+          const email = normalizeEmail(authUser.email);
+          if (!email) {
+            summary.skipped_users += 1;
+            summary.errors.push({
+              auth_user_id: authUser.id,
+              message: 'Auth user has no email; no approved placeholder-email strategy is configured.',
+            });
+            continue;
+          }
+          const employeeCode = normalizeEmployeeCode(metadata.employee_code);
+          const fullName =
+            textOrNull(metadata.full_name) ||
+            textOrNull(metadata.name) ||
+            email.split('@')[0] ||
+            'Supabase User';
+          const { data: createdProfile, error } = await client
+            .from('profiles')
+            .insert({
+              auth_user_id: authUser.id,
+              employee_code: employeeCode || null,
+              username: employeeCode || email,
+              full_name: fullName,
+              display_name: textOrNull(metadata.display_name) || fullName,
+              mobile: textOrNull(authUser.phone || metadata.mobile),
+              email,
+              state: textOrNull(metadata.state),
+              role: textOrNull(metadata.role) || 'BD',
+              designation: textOrNull(metadata.designation),
+              department: textOrNull(metadata.department),
+              business: textOrNull(metadata.business),
+              status: 'Active',
+              is_active: true,
+              auth_provisioning_status: 'provisioned',
+              auth_provisioning_error: null,
+              auth_provisioned_at: authUser.created_at || syncedAt,
+              last_profile_sync_at: syncedAt,
+            })
+            .select(USER_MANAGEMENT_PROFILE_SELECT)
+            .single();
+          if (error) throw error;
+          profilesByAuthUserId.set(String(authUser.id), createdProfile);
+          summary.profiles_created += 1;
+        } catch (error) {
+          summary.errors.push({
+            auth_user_id: authUser.id,
+            email: authUser.email || null,
+            message: userManagementErrorMessage(error),
+            code: error.code || null,
+          });
+        }
+      }
+
+      await writeUserManagementAudit(client, {
+        action: 'SYNC_AUTH_TO_PROFILES',
+        newData: summary,
+        metadata: {
+          source: 'supabase_auth_admin_list_users',
+        },
+        request,
+      });
+      response.json({ ok: true, ...summary });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.post(
+  '/api/admin/users',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    let createdAuthUser = null;
+    let createdProfile = null;
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const body = request.body || {};
+      const employeeCode = normalizeEmployeeCode(body.employee_code);
+      const fullName = textOrNull(body.full_name);
+      const email = normalizeEmail(body.email);
+      const temporaryPassword = textOrNull(body.temporary_password);
+      const password = temporaryPassword || textOrNull(body.password);
+      if (!employeeCode) throw userManagementHttpError(400, 'employee_code is required.');
+      if (!fullName) throw userManagementHttpError(400, 'full_name is required.');
+      if (!email) {
+        throw userManagementHttpError(
+          400,
+          'email is required for Supabase Auth user creation; no placeholder-email strategy is configured.',
+        );
+      }
+      if (!password) {
+        throw userManagementHttpError(400, 'password or temporary_password is required.');
+      }
+      await ensureUniqueProfileIdentity(client, { employeeCode, email });
+
+      const authMetadata = {
+        employee_code: employeeCode,
+        full_name: fullName,
+        display_name: textOrNull(body.display_name) || fullName,
+        mobile: textOrNull(body.mobile),
+        role: textOrNull(body.role) || 'FO',
+        designation: textOrNull(body.designation),
+        department: textOrNull(body.department),
+        business: textOrNull(body.business),
+        state: textOrNull(body.state),
+      };
+      const { data: authData, error: authError } = await client.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: authMetadata,
+      });
+      if (authError) throw authError;
+      createdAuthUser = authData.user;
+
+      const profilePayload = profileCreatePayload(
+        body,
+        createdAuthUser.id,
+        Boolean(temporaryPassword),
+      );
+      const { data: profile, error: profileError } = await client
+        .from('profiles')
+        .insert(profilePayload)
+        .select(USER_MANAGEMENT_PROFILE_SELECT)
+        .single();
+      if (profileError) {
+        const safeFailure = safeAuthError(profileError);
+        const { error: provisioningMarkError } = await client.auth.admin.updateUserById(
+          createdAuthUser.id,
+          {
+            app_metadata: {
+              ...(createdAuthUser.app_metadata || {}),
+              profile_provisioning_status: 'failed',
+              profile_provisioning_error: safeFailure.message,
+            },
+          },
+        );
+        const safeProvisioningMarkError = provisioningMarkError
+          ? safeAuthError(provisioningMarkError)
+          : null;
+        await writeUserManagementAudit(client, {
+          action: 'CREATE_USER_PROFILE_FAILED',
+          targetProfile: {
+            auth_user_id: createdAuthUser.id,
+            employee_code: employeeCode,
+          },
+          newData: profilePayload,
+          metadata: {
+            auth_user_created: true,
+            profile_created: false,
+            error: safeFailure,
+            auth_failure_marker_error: safeProvisioningMarkError,
+          },
+          request,
+        });
+        throw userManagementHttpError(
+          500,
+          'Supabase Auth user was created, but profile creation failed. The Auth user was retained and marked for provisioning review.',
+          {
+            auth_user_id: createdAuthUser.id,
+            error: safeFailure,
+            auth_failure_marker_error: safeProvisioningMarkError,
+          },
+        );
+      }
+      createdProfile = profile;
+
+      let hierarchy = null;
+      try {
+        hierarchy = await saveHierarchy(
+          client,
+          createdProfile.employee_code,
+          body,
+          request.authUser.id,
+        );
+      } catch (hierarchyError) {
+        await writeUserManagementAudit(client, {
+          action: 'CREATE_USER_HIERARCHY_FAILED',
+          targetProfile: createdProfile,
+          newData: createdProfile,
+          metadata: {
+            profile_created: true,
+            hierarchy_saved: false,
+            error: safeAuthError(hierarchyError),
+          },
+          request,
+        });
+        throw userManagementHttpError(
+          500,
+          'User and profile were created, but hierarchy could not be saved. No user data was deleted.',
+          { profile_id: createdProfile.id, error: safeAuthError(hierarchyError) },
+        );
+      }
+
+      await writeUserManagementAudit(client, {
+        action: 'CREATE_USER',
+        targetProfile: createdProfile,
+        newData: {
+          profile: createdProfile,
+          hierarchy,
+        },
+        metadata: {
+          auth_user_created: true,
+          temporary_password_used: Boolean(temporaryPassword),
+        },
+        request,
+      });
+      response.status(201).json({
+        ok: true,
+        profile: createdProfile,
+        hierarchy,
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.get(
+  '/api/admin/users/:profileId',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const profile = await loadProfileById(client, request.params.profileId);
+      if (!profile) throw userManagementHttpError(404, 'User profile not found.');
+      const [counts, hierarchy] = await Promise.all([
+        loadOperationalCounts(client, [profile.employee_code]),
+        loadHierarchy(client, profile.employee_code),
+      ]);
+      response.json({
+        ok: true,
+        profile: attachOperationalCounts(profile, counts),
+        hierarchy,
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.patch(
+  '/api/admin/users/:profileId',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const body = request.body || {};
+      const oldProfile = await loadProfileById(client, request.params.profileId);
+      if (!oldProfile) throw userManagementHttpError(404, 'User profile not found.');
+      if (
+        hasOwn(body, 'employee_code') &&
+        normalizeEmployeeCode(body.employee_code) !== normalizeEmployeeCode(oldProfile.employee_code)
+      ) {
+        throw userManagementHttpError(
+          400,
+          'Employee code repair must use the dedicated repair flow.',
+        );
+      }
+      if (hasOwn(body, 'full_name') && !textOrNull(body.full_name)) {
+        throw userManagementHttpError(400, 'full_name cannot be empty.');
+      }
+      if (hasOwn(body, 'email') && !normalizeEmail(body.email)) {
+        throw userManagementHttpError(400, 'email cannot be empty.');
+      }
+      const profilePatch = profilePatchPayload(body);
+      const hierarchySupplied = Boolean(
+        hierarchyPayloadFromBody(body, oldProfile.employee_code),
+      );
+      if (!Object.keys(profilePatch).length && !hierarchySupplied) {
+        throw userManagementHttpError(400, 'No supported profile or hierarchy fields were supplied.');
+      }
+      const nextEmail = hasOwn(profilePatch, 'email') ? profilePatch.email : oldProfile.email;
+      if (nextEmail && normalizeEmail(nextEmail) !== normalizeEmail(oldProfile.email)) {
+        await ensureUniqueProfileIdentity(client, {
+          email: normalizeEmail(nextEmail),
+          excludeProfileId: oldProfile.id,
+        });
+      }
+
+      let updatedProfile = oldProfile;
+      if (Object.keys(profilePatch).length) {
+        const { data, error } = await client
+          .from('profiles')
+          .update(profilePatch)
+          .eq('id', oldProfile.id)
+          .select(USER_MANAGEMENT_PROFILE_SELECT)
+          .single();
+        if (error) throw error;
+        updatedProfile = data;
+      }
+
+      const warnings = [];
+      if (updatedProfile.auth_user_id) {
+        try {
+          const { data: authLookup, error: authLookupError } =
+            await client.auth.admin.getUserById(updatedProfile.auth_user_id);
+          if (authLookupError) throw authLookupError;
+          const authPatch = {
+            user_metadata: {
+              ...(authLookup.user?.user_metadata || {}),
+              ...profileMetadataForAuth(updatedProfile),
+            },
+          };
+          if (
+            normalizeEmail(updatedProfile.email) &&
+            normalizeEmail(updatedProfile.email) !== normalizeEmail(oldProfile.email)
+          ) {
+            authPatch.email = normalizeEmail(updatedProfile.email);
+            authPatch.email_confirm = true;
+          }
+          const { error: authUpdateError } = await client.auth.admin.updateUserById(
+            updatedProfile.auth_user_id,
+            authPatch,
+          );
+          if (authUpdateError) throw authUpdateError;
+          const { data, error } = await client
+            .from('profiles')
+            .update({
+              auth_provisioning_status: 'provisioned',
+              auth_provisioning_error: null,
+              last_profile_sync_at: new Date().toISOString(),
+            })
+            .eq('id', updatedProfile.id)
+            .select(USER_MANAGEMENT_PROFILE_SELECT)
+            .single();
+          if (error) throw error;
+          updatedProfile = data;
+        } catch (authSyncError) {
+          updatedProfile = await markProfileAuthSyncFailure(
+            client,
+            updatedProfile.id,
+            authSyncError,
+          );
+          warnings.push({
+            code: 'AUTH_METADATA_SYNC_FAILED',
+            message: safeAuthError(authSyncError).message,
+          });
+        }
+      }
+
+      let hierarchy = await loadHierarchy(client, updatedProfile.employee_code);
+      if (hierarchySupplied) {
+        try {
+          hierarchy = await saveHierarchy(
+            client,
+            updatedProfile.employee_code,
+            body,
+            request.authUser.id,
+          );
+        } catch (hierarchyError) {
+          warnings.push({
+            code: 'HIERARCHY_SYNC_FAILED',
+            message: safeAuthError(hierarchyError).message,
+          });
+        }
+      }
+
+      await writeUserManagementAudit(client, {
+        action: 'UPDATE_USER',
+        targetProfile: updatedProfile,
+        oldData: oldProfile,
+        newData: {
+          profile: updatedProfile,
+          hierarchy,
+        },
+        metadata: { warnings },
+        request,
+      });
+      response.json({
+        ok: true,
+        profile: updatedProfile,
+        hierarchy,
+        warnings,
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.post(
+  '/api/admin/users/:profileId/deactivate',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const reason = textOrNull(request.body?.reason);
+      if (!reason) throw userManagementHttpError(400, 'reason is required.');
+      const oldProfile = await loadProfileById(client, request.params.profileId);
+      if (!oldProfile) throw userManagementHttpError(404, 'User profile not found.');
+      const nowIso = new Date().toISOString();
+      const { data: updatedProfile, error } = await client
+        .from('profiles')
+        .update({
+          is_active: false,
+          status: 'Inactive',
+          deactivated_at: nowIso,
+          deactivated_by: request.authUser.id,
+          deactivation_reason: reason,
+          mobile_access_enabled: false,
+          web_access_enabled: false,
+        })
+        .eq('id', oldProfile.id)
+        .select(USER_MANAGEMENT_PROFILE_SELECT)
+        .single();
+      if (error) throw error;
+
+      const warnings = [];
+      if (updatedProfile.auth_user_id) {
+        const { error: banError } = await client.auth.admin.updateUserById(
+          updatedProfile.auth_user_id,
+          { ban_duration: '876000h' },
+        );
+        if (banError) {
+          warnings.push({
+            code: 'AUTH_SUSPEND_FAILED',
+            message: safeAuthError(banError).message,
+          });
+        }
+      }
+      await writeUserManagementAudit(client, {
+        action: 'DEACTIVATE_USER',
+        targetProfile: updatedProfile,
+        oldData: oldProfile,
+        newData: updatedProfile,
+        reason,
+        metadata: {
+          auth_suspended: Boolean(updatedProfile.auth_user_id) && !warnings.length,
+          warnings,
+        },
+        request,
+      });
+      response.json({
+        ok: true,
+        profile: updatedProfile,
+        warnings,
+        operational_history_deleted: false,
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.post(
+  '/api/admin/users/:profileId/reactivate',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const reason = textOrNull(request.body?.reason);
+      if (!reason) throw userManagementHttpError(400, 'reason is required.');
+      const oldProfile = await loadProfileById(client, request.params.profileId);
+      if (!oldProfile) throw userManagementHttpError(404, 'User profile not found.');
+      const { data: updatedProfile, error } = await client
+        .from('profiles')
+        .update({
+          is_active: true,
+          status: 'Active',
+          deactivated_at: null,
+          deactivated_by: null,
+          deactivation_reason: null,
+          mobile_access_enabled: true,
+          web_access_enabled: true,
+        })
+        .eq('id', oldProfile.id)
+        .select(USER_MANAGEMENT_PROFILE_SELECT)
+        .single();
+      if (error) throw error;
+
+      const warnings = [];
+      if (updatedProfile.auth_user_id) {
+        const { error: unbanError } = await client.auth.admin.updateUserById(
+          updatedProfile.auth_user_id,
+          { ban_duration: 'none' },
+        );
+        if (unbanError) {
+          warnings.push({
+            code: 'AUTH_REACTIVATE_FAILED',
+            message: safeAuthError(unbanError).message,
+          });
+        }
+      }
+      await writeUserManagementAudit(client, {
+        action: 'REACTIVATE_USER',
+        targetProfile: updatedProfile,
+        oldData: oldProfile,
+        newData: updatedProfile,
+        reason,
+        metadata: {
+          auth_reactivated: Boolean(updatedProfile.auth_user_id) && !warnings.length,
+          warnings,
+        },
+        request,
+      });
+      response.json({
+        ok: true,
+        profile: updatedProfile,
+        warnings,
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.post(
+  '/api/admin/users/:profileId/reset-password',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const reason = textOrNull(request.body?.reason);
+      const temporaryPassword = textOrNull(request.body?.temporary_password);
+      const password = temporaryPassword || textOrNull(request.body?.new_password);
+      if (!reason) throw userManagementHttpError(400, 'reason is required.');
+      if (!password) {
+        throw userManagementHttpError(
+          400,
+          'new_password or temporary_password is required.',
+        );
+      }
+      const oldProfile = await loadProfileById(client, request.params.profileId);
+      if (!oldProfile) throw userManagementHttpError(404, 'User profile not found.');
+      if (!oldProfile.auth_user_id) {
+        throw userManagementHttpError(
+          409,
+          'Profile has no auth_user_id; password cannot be reset until Auth provisioning is repaired.',
+        );
+      }
+      const requiresPasswordChange = hasOwn(request.body, 'requires_password_change')
+        ? booleanValue(request.body.requires_password_change, true)
+        : true;
+      const { error: authError } = await client.auth.admin.updateUserById(
+        oldProfile.auth_user_id,
+        { password },
+      );
+      if (authError) throw authError;
+
+      const { data: updatedProfile, error: profileError } = await client
+        .from('profiles')
+        .update({
+          requires_password_change: requiresPasswordChange,
+          auth_provisioning_status: 'provisioned',
+          auth_provisioning_error: null,
+          last_profile_sync_at: new Date().toISOString(),
+        })
+        .eq('id', oldProfile.id)
+        .select(USER_MANAGEMENT_PROFILE_SELECT)
+        .single();
+      if (profileError) {
+        await writeUserManagementAudit(client, {
+          action: 'RESET_PASSWORD_PROFILE_SYNC_FAILED',
+          targetProfile: oldProfile,
+          oldData: {
+            requires_password_change: oldProfile.requires_password_change,
+          },
+          newData: {
+            requires_password_change: requiresPasswordChange,
+          },
+          reason,
+          metadata: {
+            auth_password_updated: true,
+            profile_sync_error: safeAuthError(profileError),
+            temporary_password_used: Boolean(temporaryPassword),
+          },
+          request,
+        });
+        throw userManagementHttpError(
+          500,
+          'Password was updated in Supabase Auth, but the profile password-change flag could not be synchronized.',
+          { error: safeAuthError(profileError) },
+        );
+      }
+      await writeUserManagementAudit(client, {
+        action: 'RESET_PASSWORD',
+        targetProfile: updatedProfile,
+        oldData: {
+          requires_password_change: oldProfile.requires_password_change,
+        },
+        newData: {
+          requires_password_change: updatedProfile.requires_password_change,
+        },
+        reason,
+        metadata: {
+          temporary_password_used: Boolean(temporaryPassword),
+        },
+        request,
+      });
+      response.json({
+        ok: true,
+        profile_id: updatedProfile.id,
+        auth_user_id: updatedProfile.auth_user_id,
+        requires_password_change: updatedProfile.requires_password_change,
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.get(
+  '/api/admin/users/:profileId/hard-delete-preview',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const profile = await loadProfileById(client, request.params.profileId);
+      if (!profile) throw userManagementHttpError(404, 'User profile not found.');
+      const preview = await buildHardDeletePreview(client, profile);
+      response.json({ ok: true, ...preview });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.delete(
+  '/api/admin/users/:profileId/hard-delete',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const reason = textOrNull(request.body?.reason);
+      const confirmationText = String(request.body?.confirmation_text || '');
+      if (!reason) throw userManagementHttpError(400, 'reason is required.');
+      if (confirmationText !== 'HARD DELETE TEST USER') {
+        throw userManagementHttpError(
+          400,
+          'confirmation_text must exactly equal HARD DELETE TEST USER.',
+        );
+      }
+      const profile = await loadProfileById(client, request.params.profileId);
+      if (!profile) throw userManagementHttpError(404, 'User profile not found.');
+      if (String(profile.auth_user_id || '') === String(request.authUser.id || '')) {
+        throw userManagementHttpError(
+          409,
+          'You cannot hard delete your own authenticated profile.',
+        );
+      }
+      const preview = await buildHardDeletePreview(client, profile);
+      if (!preview.hard_delete_allowed) {
+        const hierarchyBlocked = preview.has_important_hierarchy_reference === true;
+        throw userManagementHttpError(
+          409,
+          preview.has_meaningful_history
+            ? 'User has attendance/site visit/GPS/store history. Please deactivate instead.'
+            : 'User is referenced in employee hierarchy. Reassign hierarchy references before hard delete.',
+          {
+            blocked_reason: hierarchyBlocked
+              ? 'important_hierarchy_reference_exists'
+              : 'meaningful_business_history_exists',
+            preview,
+          },
+        );
+      }
+
+      await writeUserManagementAudit(client, {
+        action: 'HARD_DELETE_USER_REQUESTED',
+        targetProfile: profile,
+        oldData: profile,
+        reason,
+        metadata: {
+          confirmation_text_verified: true,
+          preview,
+          business_history_deleted: false,
+        },
+        request,
+      });
+
+      let authDeleted = false;
+      let authAlreadyMissing = false;
+      if (profile.auth_user_id) {
+        const { error: authDeleteError } = await client.auth.admin.deleteUser(
+          profile.auth_user_id,
+          false,
+        );
+        if (authDeleteError && !isAuthUserNotFoundError(authDeleteError)) {
+          throw userManagementHttpError(
+            502,
+            'Supabase Auth user deletion failed. Profile and hierarchy were not deleted.',
+            { auth_error: safeAuthError(authDeleteError) },
+          );
+        }
+        authDeleted = !authDeleteError;
+        authAlreadyMissing = Boolean(authDeleteError);
+      }
+
+      const employeeCode = normalizeEmployeeCode(profile.employee_code);
+      let hierarchyDeletedCount = 0;
+      if (employeeCode) {
+        const { data: deletedHierarchy, error: hierarchyDeleteError } = await client
+          .from('employee_hierarchy')
+          .delete()
+          .ilike('employee_code', employeeCode)
+          .select('id');
+        if (hierarchyDeleteError) {
+          throw userManagementHttpError(
+            500,
+            'Auth user was removed or already missing, but hierarchy deletion failed. Profile was retained.',
+            {
+              auth_deleted: authDeleted,
+              auth_already_missing: authAlreadyMissing,
+              hierarchy_error: safeAuthError(hierarchyDeleteError),
+            },
+          );
+        }
+        hierarchyDeletedCount = deletedHierarchy?.length || 0;
+      }
+
+      const { data: deletedProfiles, error: profileDeleteError } = await client
+        .from('profiles')
+        .delete()
+        .eq('id', profile.id)
+        .select('id');
+      if (profileDeleteError) {
+        throw userManagementHttpError(
+          500,
+          'Profile deletion failed after Auth/hierarchy processing. No business history was deleted.',
+          {
+            auth_deleted: authDeleted,
+            auth_already_missing: authAlreadyMissing,
+            hierarchy_deleted_count: hierarchyDeletedCount,
+            profile_error: safeAuthError(profileDeleteError),
+          },
+        );
+      }
+      const profileDeleted = (deletedProfiles?.length || 0) === 1;
+      if (profileDeleted) {
+        await writeUserManagementAudit(client, {
+          action: 'HARD_DELETE_USER_COMPLETED',
+          targetProfile: profile,
+          oldData: profile,
+          reason,
+          metadata: {
+            auth_deleted: authDeleted,
+            auth_already_missing: authAlreadyMissing,
+            hierarchy_deleted_count: hierarchyDeletedCount,
+            profile_deleted: true,
+            business_history_deleted: false,
+          },
+          request,
+        });
+      }
+      response.json({
+        ok: profileDeleted,
+        auth_deleted: authDeleted,
+        auth_already_missing: authAlreadyMissing,
+        hierarchy_deleted_count: hierarchyDeletedCount,
+        profile_deleted: profileDeleted,
+        business_history_deleted: false,
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.post(
+  '/api/admin/users/:profileId/repair-employee-code-preview',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const { preview } = await prepareEmployeeCodeRepairPreview(
+        client,
+        request.params.profileId,
+        request.body || {},
+      );
+      response.json({ ok: true, ...preview });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.post(
+  '/api/admin/users/:profileId/repair-employee-code',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const confirmationText = String(request.body?.confirmation_text || '');
+      if (confirmationText !== 'REPAIR EMPLOYEE CODE') {
+        throw userManagementHttpError(
+          400,
+          'confirmation_text must exactly equal REPAIR EMPLOYEE CODE.',
+        );
+      }
+      const {
+        profile,
+        preview,
+        reason,
+        oldEmployeeCode,
+        newEmployeeCode,
+      } = await prepareEmployeeCodeRepairPreview(
+        client,
+        request.params.profileId,
+        request.body || {},
+      );
+      if (!preview.repair_allowed) {
+        throw userManagementHttpError(409, 'Employee-code repair is not allowed.');
+      }
+
+      const { data: repairCapabilities, error: capabilitiesError } = await client.rpc(
+        'admin_employee_code_repair_capabilities',
+      );
+      if (
+        capabilitiesError ||
+        Number(repairCapabilities?.version || 0) < 2 ||
+        repairCapabilities?.updates_confirmed_aliases !== true
+      ) {
+        throw userManagementHttpError(
+          503,
+          'Employee-code alias repair support is unavailable. Apply supabase/migrations_2_0/011_admin_employee_code_repair_aliases.sql and retry.',
+        );
+      }
+
+      const { data: repairResult, error: repairError } = await client.rpc(
+        'admin_repair_employee_code',
+        {
+          p_profile_id: profile.id,
+          p_old_employee_code: oldEmployeeCode,
+          p_new_employee_code: newEmployeeCode,
+          p_reason: reason,
+          p_actor_auth_user_id: request.authUser.id,
+          p_actor_profile_id: request.profile.id,
+          p_actor_employee_code: request.employeeCode,
+          p_actor_role: request.userRole,
+        },
+      );
+      if (repairError) {
+        if (
+          ['42883', 'PGRST202'].includes(repairError.code) ||
+          /admin_repair_employee_code/i.test(String(repairError.message || ''))
+        ) {
+          throw userManagementHttpError(
+            503,
+            'Employee-code repair RPC is unavailable. Apply supabase/migrations_2_0/010_admin_employee_code_repair.sql and retry.',
+          );
+        }
+        throw repairError;
+      }
+
+      let updatedProfile = await loadProfileById(client, profile.id);
+      const warnings = [];
+      if (updatedProfile?.auth_user_id) {
+        try {
+          const { data: authLookup, error: authLookupError } =
+            await client.auth.admin.getUserById(updatedProfile.auth_user_id);
+          if (authLookupError) throw authLookupError;
+          const { error: authUpdateError } = await client.auth.admin.updateUserById(
+            updatedProfile.auth_user_id,
+            {
+              user_metadata: {
+                ...(authLookup.user?.user_metadata || {}),
+                ...profileMetadataForAuth(updatedProfile),
+                employee_code: newEmployeeCode,
+              },
+            },
+          );
+          if (authUpdateError) throw authUpdateError;
+          const { data, error: profileSyncError } = await client
+            .from('profiles')
+            .update({
+              auth_provisioning_status: 'provisioned',
+              auth_provisioning_error: null,
+              last_profile_sync_at: new Date().toISOString(),
+            })
+            .eq('id', updatedProfile.id)
+            .select(USER_MANAGEMENT_PROFILE_SELECT)
+            .single();
+          if (profileSyncError) throw profileSyncError;
+          updatedProfile = data;
+        } catch (authSyncError) {
+          updatedProfile = await markProfileAuthSyncFailure(
+            client,
+            profile.id,
+            authSyncError,
+          );
+          const warning = {
+            code: 'AUTH_METADATA_SYNC_FAILED',
+            message: safeAuthError(authSyncError).message,
+          };
+          warnings.push(warning);
+          await writeUserManagementAudit(client, {
+            action: 'REPAIR_EMPLOYEE_CODE_AUTH_SYNC_FAILED',
+            targetProfile: updatedProfile,
+            oldData: { employee_code: oldEmployeeCode },
+            newData: { employee_code: newEmployeeCode },
+            reason,
+            metadata: {
+              warning,
+              database_repair_completed: true,
+            },
+            request,
+          });
+        }
+      }
+
+      response.json({
+        ok: true,
+        profile: updatedProfile,
+        old_employee_code: oldEmployeeCode,
+        new_employee_code: newEmployeeCode,
+        affected_counts: repairResult?.affected_counts || {},
+        rpc_result: repairResult,
+        warnings,
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
 
 app.get('/api/leads', requireApiAuth, async (request, response) => {
   try {

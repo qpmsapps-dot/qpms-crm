@@ -37,7 +37,7 @@ async function closeOpenVisitsForAttendance(client, attendance, executedAt) {
   if (!closeAt) return 0;
   const { data: visits, error: visitsError } = await client
     .from('fo_site_visits')
-    .select('id, metadata')
+    .select('id, check_in_latitude, check_in_longitude, current_latitude, current_longitude, route_km, metadata')
     .eq('attendance_id', attendanceId)
     .filter('checkout_time', 'is', null)
     .filter('check_out_time', 'is', null)
@@ -51,7 +51,10 @@ async function closeOpenVisitsForAttendance(client, attendance, executedAt) {
       cleanup_reason: 'Previous-day open visit',
       cleanup_source: 'backend_day_rollover',
       cleanup_executed_at: executedAt,
+      payable_km_after_site_checkin_added: false,
     });
+    const checkInLatitude = Number(visit.check_in_latitude ?? visit.current_latitude);
+    const checkInLongitude = Number(visit.check_in_longitude ?? visit.current_longitude);
     const { error } = await client
       .from('fo_site_visits')
       .update({
@@ -59,6 +62,9 @@ async function closeOpenVisitsForAttendance(client, attendance, executedAt) {
         visit_status: STALE_VISIT_STATUS,
         checkout_time: closeAt,
         check_out_time: closeAt,
+        check_out_latitude: Number.isFinite(checkInLatitude) ? checkInLatitude : null,
+        check_out_longitude: Number.isFinite(checkInLongitude) ? checkInLongitude : null,
+        route_km: Number.isFinite(Number(visit.route_km)) ? Number(visit.route_km) : 0,
         metadata,
         updated_at: executedAt,
       })

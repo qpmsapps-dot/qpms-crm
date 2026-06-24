@@ -5,7 +5,7 @@ export const roleGroups = {
   BD: ['BD', 'BD Team', 'BD Executive', 'BD Head'],
   Operations: ['Operations', 'Operations Team'],
   Coordinator: ['Coordinator'],
-  HR: ['HR', 'HR Reviewer'],
+  HR: ['HR', 'HR Reviewer', 'HR GM'],
   Commercial: ['Commercial', 'Commercial Team', 'Commercial Reviewer'],
   Finance: ['Finance', 'Finance Team', 'Finance Reviewer'],
   FinanceLeadership: ['Finance GM', 'CFO'],
@@ -32,6 +32,9 @@ export function hasAnyRole(user, allowedRoles = []) {
 
 export function routeAllowedRoles(pathname = '') {
   if (pathname.startsWith('/dashboard')) return [];
+  if (pathname.startsWith('/settings/user-management')) {
+    return ['Admin', 'Management', 'HR', 'FinanceLeadership'];
+  }
   if (pathname.startsWith('/settings')) return [];
   if (pathname.startsWith('/crm')) return ['Admin', 'Management', 'FinanceLeadership', 'BD'];
   if (pathname.startsWith('/sites') || pathname.startsWith('/site-visit')) return ['Admin', 'BD'];

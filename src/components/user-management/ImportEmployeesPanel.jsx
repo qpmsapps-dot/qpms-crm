@@ -1,6 +1,6 @@
 import { AlertTriangle, FileSpreadsheet, X } from 'lucide-react';
 
-export default function ImportEmployeesPanel({ open, review, error, importing, onFile, onCancel, onAccept, onDownloadErrors }) {
+export default function ImportEmployeesPanel({ open, review, employees = [], error, importing, onFile, onCancel, onAccept, onDownloadErrors }) {
   if (!open) return null;
 
   const stats = review ? [
@@ -42,10 +42,37 @@ export default function ImportEmployeesPanel({ open, review, error, importing, o
               </div>
             ))}
           </div>
+          <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+            <table className="min-w-[760px] divide-y divide-slate-200 text-left">
+              <thead className="bg-slate-50">
+                <tr>
+                  {['Employee Code', 'Name', 'Email', 'Designation', 'Department', 'Manager'].map((label) => (
+                    <th key={label} className="px-3 py-2 text-[10px] font-bold uppercase text-slate-500">{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {employees.slice(0, 20).map((employee) => (
+                  <tr key={`${employee.employeeCode}-${employee.sourceRow}`}>
+                    <td className="px-3 py-2 text-xs font-bold text-slate-700">{employee.employeeCode}</td>
+                    <td className="px-3 py-2 text-xs font-semibold text-slate-600">{employee.employeeName || '—'}</td>
+                    <td className="px-3 py-2 text-xs font-semibold text-slate-600">{employee.email || 'Missing'}</td>
+                    <td className="px-3 py-2 text-xs font-semibold text-slate-600">{employee.designation || '—'}</td>
+                    <td className="px-3 py-2 text-xs font-semibold text-slate-600">{employee.department || '—'}</td>
+                    <td className="px-3 py-2 text-xs font-semibold text-slate-600">{employee.managerCode || 'Missing'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {employees.length > 20 ? <p className="border-t border-slate-200 px-3 py-2 text-xs font-semibold text-slate-500">Showing first 20 of {employees.length} parsed employees.</p> : null}
+          </div>
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800">
+            Bulk import API not implemented yet. This preview is temporary and is not saved.
+          </div>
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <button type="button" onClick={onCancel} className="focus-ring rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700">Cancel</button>
             <button type="button" onClick={onDownloadErrors} className="focus-ring rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700">Download Error Report</button>
-            <button type="button" onClick={onAccept} className="focus-ring rounded-xl bg-qpms-600 px-3 py-2 text-sm font-bold text-white">Import to Preview</button>
+            <button type="button" onClick={onAccept} className="focus-ring rounded-xl bg-slate-400 px-3 py-2 text-sm font-bold text-white">Bulk Import Unavailable</button>
           </div>
         </>
       ) : null}

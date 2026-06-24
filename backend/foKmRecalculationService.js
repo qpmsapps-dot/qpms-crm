@@ -410,7 +410,22 @@ function attendanceEndCoordinate(attendance) {
   );
 }
 
+function attendanceEndedWithOpenSite(attendance) {
+  const metadata = attendance?.metadata && typeof attendance.metadata === 'object' && !Array.isArray(attendance.metadata)
+    ? attendance.metadata
+    : {};
+  return metadata.end_day_with_open_site === true || String(metadata.end_day_with_open_site || '').toLowerCase() === 'true';
+}
+
 async function calculateFinalReturnLegKm(attendance, visits = [], options = {}) {
+  if (attendanceEndedWithOpenSite(attendance)) {
+    const reason = 'end_day_with_open_site';
+    log('FINAL_RETURN_LEG_SKIPPED', {
+      attendance_id: attendance.id,
+      reason,
+    });
+    return { km: 0, calculated: false, reason };
+  }
   const checkedOutVisit = latestCheckedOutVisit(visits);
   const origin = checkedOutVisit
     ? coordinateFrom(checkedOutVisit, ['check_out_latitude'], ['check_out_longitude'])

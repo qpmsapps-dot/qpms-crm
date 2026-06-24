@@ -8,7 +8,7 @@ export default function EmployeeCardGrid({ employees, onOpen, onAction }) {
   return (
     <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
       {employees.map((employee) => (
-        <EmployeeCard key={employee.employeeCode} employee={employee} onOpen={onOpen} onAction={onAction} />
+        <EmployeeCard key={employee.id} employee={employee} onOpen={onOpen} onAction={onAction} />
       ))}
     </section>
   );
