@@ -220,29 +220,6 @@ function requireApiAuth(request, response, next) {
   next();
 }
 
-function createUserScopedSupabase(accessToken) {
-  if (!supabaseUrl || !supabaseAnonKey) {
-    const error = new Error('Supabase URL and anon key are required for JWT-authenticated backend routes.');
-    error.statusCode = 503;
-    throw error;
-  }
-  return createClient(supabaseUrl, supabaseAnonKey, {
-    global: {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    },
-    realtime: {
-      enabled: false,
-    },
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-    },
-  });
-}
-
 async function requireSupabaseJwt(request, response, next) {
   const accessToken = getBearerToken(request);
   if (!accessToken) {
@@ -261,13 +238,28 @@ async function requireSupabaseJwt(request, response, next) {
       return;
     }
 
-    const userScopedSupabase = createUserScopedSupabase(accessToken);
-    const { data: profile, error: profileError } = await userScopedSupabase
+    // The JWT is verified above with Supabase Auth. Resolve only that verified
+    // user's profile with the backend service role so admin authorization does
+    // not depend on frontend-facing profiles RLS.
+    const adminClient = requireServiceRoleSupabase();
+    const { data: profile, error: profileError } = await adminClient
       .from('profiles')
       .select('*')
       .eq('auth_user_id', authData.user.id)
       .maybeSingle();
-    if (profileError) throw profileError;
+    if (profileError) {
+      if (
+        profileError.code === '42501' ||
+        /permission denied|row-level security/i.test(String(profileError.message || ''))
+      ) {
+        const configurationError = new Error(
+          'Backend Supabase service-role access is misconfigured. Verify SUPABASE_SERVICE_ROLE_KEY.',
+        );
+        configurationError.statusCode = 503;
+        throw configurationError;
+      }
+      throw profileError;
+    }
     if (!profile) {
       response.status(403).json({ ok: false, message: 'Authenticated user profile was not found.' });
       return;
@@ -277,7 +269,6 @@ async function requireSupabaseJwt(request, response, next) {
     request.profile = profile;
     request.employeeCode = String(profile.employee_code || '').trim() || null;
     request.userRole = String(profile.role || '').trim();
-    request.userSupabase = userScopedSupabase;
     next();
   } catch (error) {
     console.warn('[myQPMS Auth] Supabase JWT verification failed', {
@@ -359,7 +350,9 @@ function requireServiceRoleSupabase() {
   // Service role bypasses RLS. Call this only inside explicitly authorized
   // admin handlers or trusted server jobs, never as ordinary request identity.
   if (!serviceRoleSupabase) {
-    const error = new Error('SUPABASE_SERVICE_ROLE_KEY is required for backend-only admin FO actions.');
+    const error = new Error(
+      'SUPABASE_SERVICE_ROLE_KEY is required for protected backend admin operations.',
+    );
     error.statusCode = 503;
     throw error;
   }
