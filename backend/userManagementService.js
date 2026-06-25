@@ -343,6 +343,14 @@ export function sanitizeSupabaseDiagnosticError(error) {
   };
 }
 
+export function serviceRoleClientNotConfiguredError() {
+  const error = new Error('Backend service-role client is not configured.');
+  error.statusCode = 503;
+  error.code = 'service_role_client_not_configured';
+  error.diagnosticReason = 'service_role_client_not_configured';
+  return error;
+}
+
 function isMissingRelationError(error) {
   return ['42P01', 'PGRST205'].includes(error?.code);
 }

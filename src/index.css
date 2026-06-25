@@ -397,6 +397,79 @@
   filter: saturate(1.03) contrast(1.02);
 }
 
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
+
+  body {
+    background: #fff !important;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .fo-print-report,
+  .fo-print-report * {
+    visibility: visible !important;
+  }
+
+  .fo-print-report {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    max-width: none !important;
+    padding: 0 !important;
+    color: #0f172a !important;
+    background: #fff !important;
+    font-size: 11px;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .fo-print-report table {
+    width: 100%;
+    page-break-inside: auto;
+  }
+
+  .fo-print-report thead {
+    display: table-header-group;
+  }
+
+  .fo-print-report tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .fo-report-header,
+  .fo-report-section,
+  .fo-report-acknowledgement {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .fo-report-table-section {
+    break-before: auto;
+    page-break-before: auto;
+  }
+
+  .fo-report-acknowledgement {
+    min-height: 150px;
+  }
+
+  .fo-report-shell {
+    border: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .fo-screen-only {
+    display: none !important;
+  }
+}
+
 @keyframes fo-live-pulse {
   0% {
     opacity: 0.55;
