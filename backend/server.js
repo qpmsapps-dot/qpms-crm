@@ -22,6 +22,7 @@ import {
   normalizeEmployeeCode,
   profileMetadataForAuth,
   safeAuthError,
+  sanitizeSupabaseDiagnosticError,
   sanitizeAuditData,
   saveHierarchy,
   textOrNull,
@@ -145,8 +146,8 @@ function normalizeSupabaseUrl(url) {
   return String(url || '').replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
 }
 
-const supabaseUrl = normalizeSupabaseUrl(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = normalizeSupabaseUrl(process.env.SUPABASE_URL);
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabaseAnon = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey, {
   realtime: {
@@ -169,9 +170,81 @@ const serviceRoleSupabase = supabaseUrl && supabaseServiceRoleKey ? createClient
 const supabaseConfigStatus = {
   configured: Boolean(supabaseAnon),
   urlPresent: Boolean(supabaseUrl),
-  keyPresent: Boolean(supabaseAnonKey),
-  serviceRolePresent: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+  urlHostname: null,
+  projectRef: null,
+  anonKeyPresent: Boolean(supabaseAnonKey),
+  anonKeyLength: String(supabaseAnonKey || '').length,
+  serviceRoleKeyPresent: Boolean(supabaseServiceRoleKey),
+  serviceRoleKeyLength: String(supabaseServiceRoleKey || '').length,
+  serviceRoleClientConfigured: Boolean(serviceRoleSupabase),
 };
+
+try {
+  const parsedSupabaseUrl = new URL(supabaseUrl);
+  supabaseConfigStatus.urlHostname = parsedSupabaseUrl.hostname || null;
+  supabaseConfigStatus.projectRef =
+    parsedSupabaseUrl.hostname?.endsWith('.supabase.co')
+      ? parsedSupabaseUrl.hostname.split('.')[0] || null
+      : null;
+} catch {
+  // Invalid or absent URLs are represented only by the safe null fields above.
+}
+
+function safeSupabaseConfigDiagnostics() {
+  return {
+    supabaseUrlPresent: supabaseConfigStatus.urlPresent,
+    supabaseUrlHostname: supabaseConfigStatus.urlHostname,
+    supabaseProjectRef: supabaseConfigStatus.projectRef,
+    supabaseAnonKeyPresent: supabaseConfigStatus.anonKeyPresent,
+    supabaseAnonKeyLength: supabaseConfigStatus.anonKeyLength,
+    supabaseServiceRoleKeyPresent: supabaseConfigStatus.serviceRoleKeyPresent,
+    supabaseServiceRoleKeyLength: supabaseConfigStatus.serviceRoleKeyLength,
+    serviceRoleClientConfigured: supabaseConfigStatus.serviceRoleClientConfigured,
+  };
+}
+
+function serviceRoleConfigurationReason() {
+  if (!supabaseConfigStatus.urlPresent) return 'missing_url';
+  if (!supabaseConfigStatus.anonKeyPresent) return 'missing_anon_key';
+  if (!supabaseConfigStatus.serviceRoleKeyPresent) return 'missing_service_role_key';
+  if (!supabaseConfigStatus.serviceRoleClientConfigured) {
+    return 'service_role_client_not_initialized';
+  }
+  return null;
+}
+
+async function testServiceRoleAuthAdmin(client = serviceRoleSupabase) {
+  const configurationReason = serviceRoleConfigurationReason();
+  if (configurationReason || !client) {
+    return {
+      success: false,
+      reason: configurationReason || 'service_role_client_not_initialized',
+      error: null,
+    };
+  }
+  try {
+    const { error } = await client.auth.admin.listUsers({ page: 1, perPage: 1 });
+    if (error) throw error;
+    return { success: true, reason: null, error: null };
+  } catch (error) {
+    return {
+      success: false,
+      reason: 'service_role_auth_admin_failed',
+      error: sanitizeSupabaseDiagnosticError(error),
+    };
+  }
+}
+
+async function assertServiceRoleAuthAdminAccess(client) {
+  const result = await testServiceRoleAuthAdmin(client);
+  if (result.success) return;
+  const error = new Error(
+    result.error?.message || 'Supabase service-role Auth Admin access is unavailable.',
+  );
+  error.statusCode = 503;
+  error.diagnosticReason = result.reason;
+  throw error;
+}
 
 const approvalRoleMap = {
   Commercial: 'Commercial Reviewer',
@@ -227,7 +300,11 @@ async function requireSupabaseJwt(request, response, next) {
     return;
   }
   if (!supabaseAnon) {
-    response.status(503).json({ ok: false, message: 'Supabase JWT verification is not configured on the API server.' });
+    response.status(503).json({
+      ok: false,
+      message: 'Supabase JWT verification is not configured on the API server.',
+      diagnosticReason: serviceRoleConfigurationReason(),
+    });
     return;
   }
 
@@ -242,6 +319,7 @@ async function requireSupabaseJwt(request, response, next) {
     // user's profile with the backend service role so admin authorization does
     // not depend on frontend-facing profiles RLS.
     const adminClient = requireServiceRoleSupabase();
+    await assertServiceRoleAuthAdminAccess(adminClient);
     const { data: profile, error: profileError } = await adminClient
       .from('profiles')
       .select('*')
@@ -256,6 +334,7 @@ async function requireSupabaseJwt(request, response, next) {
           'Backend Supabase service-role access is misconfigured. Verify SUPABASE_SERVICE_ROLE_KEY.',
         );
         configurationError.statusCode = 503;
+        configurationError.diagnosticReason = 'service_role_auth_admin_failed';
         throw configurationError;
       }
       throw profileError;
@@ -271,15 +350,79 @@ async function requireSupabaseJwt(request, response, next) {
     request.userRole = String(profile.role || '').trim();
     next();
   } catch (error) {
+    const safeError = sanitizeSupabaseDiagnosticError(error);
     console.warn('[myQPMS Auth] Supabase JWT verification failed', {
-      message: error.message,
-      code: error.code || null,
+      message: safeError.message,
+      code: safeError.code,
     });
     response.status(error.statusCode || 401).json({
       ok: false,
       message: error.statusCode === 503
         ? error.message
         : 'Unable to verify Supabase access token.',
+      ...(error.statusCode === 503 && error.diagnosticReason
+        ? { diagnosticReason: error.diagnosticReason }
+        : {}),
+    });
+  }
+}
+
+async function requireSupabaseJwtWithUserScopedProfile(request, response, next) {
+  const accessToken = getBearerToken(request);
+  if (!accessToken) {
+    response.status(401).json({ ok: false, message: 'Supabase Bearer token required.' });
+    return;
+  }
+  if (!supabaseAnon || !supabaseUrl || !supabaseAnonKey) {
+    response.status(503).json({
+      ok: false,
+      message: 'Supabase JWT verification is not configured on the API server.',
+      diagnosticReason: serviceRoleConfigurationReason(),
+    });
+    return;
+  }
+
+  try {
+    const { data: authData, error: authError } = await supabaseAnon.auth.getUser(accessToken);
+    if (authError || !authData?.user) {
+      response.status(401).json({ ok: false, message: 'Invalid or expired Supabase access token.' });
+      return;
+    }
+    const userScopedSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
+    const { data: profile, error: profileError } = await userScopedSupabase
+      .from('profiles')
+      .select('*')
+      .eq('auth_user_id', authData.user.id)
+      .maybeSingle();
+    if (profileError) throw profileError;
+    if (!profile) {
+      response.status(403).json({ ok: false, message: 'Authenticated user profile was not found.' });
+      return;
+    }
+
+    request.authUser = authData.user;
+    request.profile = profile;
+    request.employeeCode = String(profile.employee_code || '').trim() || null;
+    request.userRole = String(profile.role || '').trim();
+    next();
+  } catch (error) {
+    console.warn('[myQPMS diagnostics auth] User-scoped profile lookup failed', {
+      message: sanitizeSupabaseDiagnosticError(error).message,
+      code: error.code || null,
+    });
+    response.status(403).json({
+      ok: false,
+      message: 'Unable to verify User Management permission for diagnostics.',
     });
   }
 }
@@ -354,6 +497,8 @@ function requireServiceRoleSupabase() {
       'SUPABASE_SERVICE_ROLE_KEY is required for protected backend admin operations.',
     );
     error.statusCode = 503;
+    error.diagnosticReason =
+      serviceRoleConfigurationReason() || 'service_role_client_not_initialized';
     throw error;
   }
   return serviceRoleSupabase;
@@ -371,6 +516,9 @@ function respondUserManagementError(response, error) {
     ok: false,
     message: userManagementErrorMessage(error),
   };
+  if (error?.statusCode === 503 && error?.diagnosticReason) {
+    payload.diagnosticReason = error.diagnosticReason;
+  }
   if (error?.details) payload.details = sanitizeAuditData(error.details);
   response.status(error?.statusCode || 500).json(payload);
 }
@@ -1221,6 +1369,24 @@ app.get(
       department: request.profile.department || null,
       business: request.profile.business || null,
       hasUserManagementPermission: true,
+    });
+  },
+);
+
+app.get(
+  '/api/admin/diagnostics/supabase',
+  requireSupabaseJwtWithUserScopedProfile,
+  requireUserManagementPermission,
+  async (request, response) => {
+    const serviceRoleTest = await testServiceRoleAuthAdmin();
+    response.json({
+      ok: true,
+      ...safeSupabaseConfigDiagnostics(),
+      serviceRoleTest: {
+        success: serviceRoleTest.success,
+        reason: serviceRoleTest.reason,
+        error: serviceRoleTest.error,
+      },
     });
   },
 );
@@ -3076,8 +3242,8 @@ app.listen(port, () => {
     emailUserConfigured: Boolean(process.env.EMAIL_USER),
     emailPassConfigured: Boolean(process.env.EMAIL_PASS),
     supabaseConfigured: supabaseConfigStatus.configured,
-    supabaseUrlPresent: supabaseConfigStatus.urlPresent,
-    supabaseKeyPresent: supabaseConfigStatus.keyPresent,
+    ...safeSupabaseConfigDiagnostics(),
+    serviceRoleSupabaseInitialized: Boolean(serviceRoleSupabase),
   });
   verifyMailTransporter();
   runFoStaleSessionCleanup('startup');

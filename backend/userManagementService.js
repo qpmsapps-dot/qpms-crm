@@ -331,6 +331,18 @@ export function safeAuthError(error) {
   };
 }
 
+export function sanitizeSupabaseDiagnosticError(error) {
+  const message = String(error?.message || 'Supabase service-role test failed.')
+    .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+    .replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g, '[redacted-jwt]')
+    .replace(/[A-Za-z0-9_-]{40,}/g, '[redacted-secret]')
+    .slice(0, 300);
+  return {
+    message,
+    code: error?.code || error?.status || error?.statusCode || null,
+  };
+}
+
 function isMissingRelationError(error) {
   return ['42P01', 'PGRST205'].includes(error?.code);
 }
