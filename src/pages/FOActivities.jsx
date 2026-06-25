@@ -3445,6 +3445,48 @@ function visitLocation(visit) {
   return visit?.state || "--";
 }
 
+function visitCheckInCoordinates(visit) {
+  const metadata =
+    visit?.metadata &&
+    typeof visit.metadata === "object" &&
+    !Array.isArray(visit.metadata)
+      ? visit.metadata
+      : {};
+  const latitude = numberOrNull(
+    visit?.check_in_latitude ??
+      visit?.checkin_latitude ??
+      visit?.check_in_lat ??
+      visit?.latitude ??
+      metadata.check_in_latitude ??
+      metadata.checkin_latitude ??
+      metadata.check_in_lat ??
+      metadata.latitude,
+  );
+  const longitude = numberOrNull(
+    visit?.check_in_longitude ??
+      visit?.checkin_longitude ??
+      visit?.check_in_lng ??
+      visit?.longitude ??
+      metadata.check_in_longitude ??
+      metadata.checkin_longitude ??
+      metadata.check_in_lng ??
+      metadata.longitude,
+  );
+  return isValidLatLng(latitude, longitude)
+    ? { latitude, longitude }
+    : null;
+}
+
+function formatVisitCoordinates(coordinates) {
+  if (!coordinates) return "--";
+  return `${coordinates.latitude.toFixed(6)}, ${coordinates.longitude.toFixed(6)}`;
+}
+
+function visitGoogleMapsUrl(coordinates) {
+  if (!coordinates) return null;
+  return `https://www.google.com/maps?q=${coordinates.latitude},${coordinates.longitude}`;
+}
+
 function visitRemarks(visit) {
   return visit?.checkout_note || visit?.visit_status || visit?.status || "--";
 }
@@ -4844,6 +4886,7 @@ function FieldOfficerDetailsView({
         index: index + 1,
         site: `${visitTitle(visit)} / ${visitClient(visit)}`,
         location: visitLocation(visit),
+        checkInCoordinates: visitCheckInCoordinates(visit),
         checkIn: formatDateTime(visit.check_in_time),
         checkOut: formatDateTime(siteVisitCheckoutValue(visit)),
         duration: durationMinutesLabel(visitMinutes(visit)),
@@ -4884,6 +4927,9 @@ function FieldOfficerDetailsView({
     : null;
   const selectedCheckoutReviewStatus = selectedVisit
     ? checkoutReviewStatus(selectedVisit)
+    : null;
+  const selectedCheckInCoordinates = selectedVisit
+    ? visitCheckInCoordinates(selectedVisit)
     : null;
   const generatedByName =
     generatedByUser?.full_name ||
@@ -5292,7 +5338,7 @@ function FieldOfficerDetailsView({
               <table className="min-w-[920px] w-full text-left text-xs">
                 <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-500">
                   <tr>
-                    {["#", "Site / Client", "Check-in", "Check-out", "Duration", "Travel from Previous", "Route KM", "Remarks"].map((heading) => (
+                    {["#", "Site / Client", "Check-in Lat/Lng", "Check-in", "Check-out", "Duration", "Travel from Previous", "Route KM", "Remarks"].map((heading) => (
                       <th key={heading} className="whitespace-nowrap px-3 py-3">{heading}</th>
                     ))}
                   </tr>
@@ -5308,6 +5354,22 @@ function FieldOfficerDetailsView({
                         <span className={`grid h-6 w-6 place-items-center rounded-full text-[10px] font-black text-white ${row.key === "start" ? "bg-emerald-500" : row.key === "end" ? "bg-slate-500" : "bg-blue-600"}`}>{row.index}</span>
                       </td>
                       <td className="min-w-44 px-3 py-3 font-black text-slate-900">{row.site}</td>
+                      <td className="min-w-44 px-3 py-3">
+                        {row.checkInCoordinates ? (
+                          <a
+                            href={visitGoogleMapsUrl(row.checkInCoordinates)}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(event) => event.stopPropagation()}
+                            className="font-bold text-qpms-700 underline decoration-qpms-200 underline-offset-2 hover:text-qpms-900"
+                            title="Open check-in location in Google Maps"
+                          >
+                            {formatVisitCoordinates(row.checkInCoordinates)}
+                          </a>
+                        ) : (
+                          "--"
+                        )}
+                      </td>
                       <td className="whitespace-nowrap px-3 py-3">{row.checkIn}</td>
                       <td className="whitespace-nowrap px-3 py-3">{row.checkOut}</td>
                       <td className="whitespace-nowrap px-3 py-3">{row.duration}</td>
@@ -5373,7 +5435,7 @@ function FieldOfficerDetailsView({
                     </tr>
                   ))}
                   {!timelineRows.length ? (
-                    <tr><td colSpan={8} className="px-3 py-10 text-center text-sm text-slate-500">No visit timeline available for selected filters.</td></tr>
+                    <tr><td colSpan={9} className="px-3 py-10 text-center text-sm text-slate-500">No visit timeline available for selected filters.</td></tr>
                   ) : null}
                 </tbody>
               </table>
@@ -5401,6 +5463,12 @@ function FieldOfficerDetailsView({
                 ["Client Name", visitClient(selectedVisit)],
                 ["Business Type", visitBusinessType(selectedVisit)],
                 ["Address / Coordinates", selectedVisit?.address || selectedVisit?.location_name || visitLocation(selectedVisit)],
+                [
+                  "Check-in Lat/Lng",
+                  selectedCheckInCoordinates
+                    ? formatVisitCoordinates(selectedCheckInCoordinates)
+                    : "--",
+                ],
                 ["Check-in", formatDateTime(selectedVisit?.check_in_time)],
                 ["Check-out", formatDateTime(siteVisitCheckoutValue(selectedVisit))],
                 ["Duration", durationMinutesLabel(visitMinutes(selectedVisit))],
@@ -5411,7 +5479,19 @@ function FieldOfficerDetailsView({
               ].map(([label, value]) => (
                 <div key={label} className="rounded-xl bg-slate-50 p-3">
                   <p className="text-[10px] font-bold uppercase tracking-wide text-qpms-700">{label}</p>
-                  <p className="mt-1 break-words text-xs font-semibold text-slate-700">{displayValue(value)}</p>
+                  {label === "Check-in Lat/Lng" &&
+                  selectedCheckInCoordinates ? (
+                    <a
+                      href={visitGoogleMapsUrl(selectedCheckInCoordinates)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 block break-words text-xs font-bold text-qpms-700 underline decoration-qpms-200 underline-offset-2 hover:text-qpms-900"
+                    >
+                      {value}
+                    </a>
+                  ) : (
+                    <p className="mt-1 break-words text-xs font-semibold text-slate-700">{displayValue(value)}</p>
+                  )}
                 </div>
               ))}
               <div className="rounded-xl bg-slate-50 p-3">
@@ -5805,6 +5885,13 @@ function FieldOfficerDetailsView({
                       <td className="border border-slate-200 px-2 py-2">{index + 1}</td>
                       <td className="border border-slate-200 px-2 py-2">
                         {visitTitle(visit)} / {visitClient(visit)}
+                        <br />
+                        <span className="text-[10px] text-slate-500">
+                          Check-in:{" "}
+                          {formatVisitCoordinates(
+                            visitCheckInCoordinates(visit),
+                          )}
+                        </span>
                       </td>
                       <td className="border border-slate-200 px-2 py-2">
                         {formatDateTime(visit.check_in_time)}
