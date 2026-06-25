@@ -748,11 +748,12 @@ class _HomeScreenState extends State<HomeScreen>
         );
         return;
       }
-      final openVisitsCount =
-          await SupabaseService.countOpenSiteVisitsForAttendance(
+      final openSiteVisit =
+          await SupabaseService.findActiveSiteVisitForAttendance(
             user: widget.user,
             attendance: resolvedAttendance.attendance,
           );
+      final openVisitsCount = openSiteVisit == null ? 0 : 1;
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
         screen: 'home',
@@ -760,22 +761,43 @@ class _HomeScreenState extends State<HomeScreen>
         error:
             'count=$openVisitsCount attendance_id=${resolvedAttendance.attendance.remoteId}',
       );
-      if (openVisitsCount > 0) {
+      var endDayWithOpenSite = false;
+      if (openSiteVisit != null) {
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'home',
-          action: 'END_DAY_BLOCKED_OPEN_VISITS_FOUND',
+          action: 'END_DAY_OPEN_SITE_WARNING_SHOWN',
           error:
-              'count=$openVisitsCount attendance_id=${resolvedAttendance.attendance.remoteId}',
+              'site_visit_id=${openSiteVisit.remoteId ?? openSiteVisit.id} attendance_id=${resolvedAttendance.attendance.remoteId}',
         );
-        _toast('Please Check Out from current store before ending the day.');
-        return;
+        final continueEndDay = await _confirmEndDayWithOpenSiteVisit();
+        if (continueEndDay != true) {
+          await CrashLogService.record(
+            employeeCode: widget.user.employeeCode,
+            screen: 'home',
+            action: 'END_DAY_OPEN_SITE_WARNING_CANCELLED',
+            error:
+                'site_visit_id=${openSiteVisit.remoteId ?? openSiteVisit.id} attendance_id=${resolvedAttendance.attendance.remoteId}',
+          );
+          return;
+        }
+        endDayWithOpenSite = true;
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'home',
+          action: 'END_DAY_OPEN_SITE_WARNING_ACCEPTED',
+          error:
+              'site_visit_id=${openSiteVisit.remoteId ?? openSiteVisit.id} attendance_id=${resolvedAttendance.attendance.remoteId}',
+        );
       }
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
         screen: 'home',
-        action: 'END_DAY_ALLOWED_NO_OPEN_VISITS',
-        error: 'attendance_id=${resolvedAttendance.attendance.remoteId}',
+        action: endDayWithOpenSite
+            ? 'END_DAY_ALLOWED_WITH_OPEN_SITE'
+            : 'END_DAY_ALLOWED_NO_OPEN_VISITS',
+        error:
+            'attendance_id=${resolvedAttendance.attendance.remoteId} end_day_with_open_site=$endDayWithOpenSite',
       );
       Position? position;
       try {
@@ -842,8 +864,15 @@ class _HomeScreenState extends State<HomeScreen>
       }
       await TrackingService.syncQueuedLogs(force: true);
       final actualKm = await _calculateContinuedKm(attendance);
-      final routeKm = await _routeKmFromVisits(attendance);
       final endTime = DateTime.now();
+      final autoCloseResult = endDayWithOpenSite
+          ? await SupabaseService.autoCloseOpenSiteVisitsForEndDay(
+              user: widget.user,
+              attendance: attendance,
+              closedAt: endTime,
+            )
+          : (firstClosedVisitId: null, closedCount: 0);
+      final routeKm = await _routeKmFromVisits(attendance);
       attendance
         ..endTime = endTime
         ..endLat = endLatitude
@@ -863,6 +892,9 @@ class _HomeScreenState extends State<HomeScreen>
             await SupabaseService.endCurrentActiveAttendance(
               user: widget.user,
               attendance: attendance,
+              endDayWithOpenSite: endDayWithOpenSite,
+              openSiteAutoClosed: autoCloseResult.closedCount > 0,
+              autoClosedSiteVisitId: autoCloseResult.firstClosedVisitId,
             );
         attendance
           ..remoteId = completedAttendance.attendance.remoteId
@@ -1065,6 +1097,30 @@ class _HomeScreenState extends State<HomeScreen>
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<bool?> _confirmEndDayWithOpenSiteVisit() async {
+    if (!mounted) return false;
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Site visit not checked out'),
+        content: const Text(
+          'One site visit is still not checked out. If you continue End Day, this site visit will be auto-closed, but any KM travelled after site Check-In will not be added for petrol/KM calculation. Please continue only if you forgot to check out or have completed the day.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Continue & End Day'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _showErrorDialog(String title, Object error) async {

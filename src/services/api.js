@@ -44,14 +44,32 @@ async function adminApiRequest(config) {
   if (!accessToken) {
     throw new Error('An active Supabase session is required.');
   }
-  const response = await api.request({
-    ...config,
-    headers: {
-      ...(config.headers || {}),
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
-  return response.data;
+  try {
+    const response = await api.request({
+      ...config,
+      headers: {
+        ...(config.headers || {}),
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    return response.data;
+  } catch (requestError) {
+    const status = requestError.response?.status;
+    const serverMessage = requestError.response?.data?.message;
+    if (status === 401) {
+      throw new Error(serverMessage || 'Your Supabase session has expired. Sign in again.');
+    }
+    if (status === 403) {
+      throw new Error(serverMessage || 'Your profile does not have User Management permission.');
+    }
+    if (status === 503) {
+      throw new Error(
+        serverMessage ||
+          'User Management backend access is unavailable. Check the server Supabase service-role configuration.',
+      );
+    }
+    throw requestError;
+  }
 }
 
 export function getAdminUserMe() {

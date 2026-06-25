@@ -3056,7 +3056,13 @@ function visitMinutes(visit) {
 }
 
 function sortedOfficerVisits(officer) {
+  const attendanceId = officer?.attendance?.id ? String(officer.attendance.id) : null;
   return (officer?.visits || [])
+    .filter((visit) => {
+      if (!attendanceId) return true;
+      const visitAttendanceId = visit?.attendance_id ? String(visit.attendance_id) : "";
+      return visitAttendanceId === attendanceId;
+    })
     .slice()
     .sort((a, b) => new Date(a.check_in_time || 0) - new Date(b.check_in_time || 0));
 }
@@ -3090,6 +3096,13 @@ function visitRouteSourceLabel(visit) {
   const source = String(metadata.distance_source || visit?.distance_source || "").trim().toLowerCase();
   const api = String(metadata.route_api || "").trim().toLowerCase();
   const status = String(metadata.route_request_status || "").trim();
+  if (
+    metadata.closed_source === "end_day_open_site_auto_close" ||
+    String(visit?.status || "").toLowerCase() === "closed by end day" ||
+    String(visit?.visit_status || "").toLowerCase() === "closed by end day"
+  ) {
+    return "Closed by End Day / No payable KM after check-in";
+  }
   if (source === "google_distance_matrix" || (source === "google" && api === "distance_matrix")) {
     return "Google Distance Matrix";
   }
