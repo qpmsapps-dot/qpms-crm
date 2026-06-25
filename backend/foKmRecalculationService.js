@@ -13,6 +13,17 @@ function log(event, detail = {}) {
   console.log(`[${event}]`, detail);
 }
 
+function requireServiceRoleClient(serviceRoleClient) {
+  if (!serviceRoleClient || typeof serviceRoleClient.from !== 'function') {
+    const error = new Error('Backend service-role client is not configured.');
+    error.statusCode = 503;
+    error.code = 'service_role_client_not_configured';
+    error.diagnosticReason = 'service_role_client_not_configured';
+    throw error;
+  }
+  return serviceRoleClient;
+}
+
 function redactForLog(value, secrets = []) {
   let text = value == null ? '' : String(value);
   for (const secret of secrets) {
@@ -563,8 +574,13 @@ function confidenceFor({ usedPoints, totalPoints, segmentsRejected, segmentsReco
   return 'LOW';
 }
 
-export async function recalculateFoKm(client, payload = {}, options = {}) {
-  log('FO_KM_RECALC_STARTED', payload);
+export async function recalculateFoKm(serviceRoleClient, payload = {}, options = {}) {
+  const client = requireServiceRoleClient(serviceRoleClient);
+  log('FO_KM_RECALC_STARTED', {
+    attendance_id: payload.attendance_id || null,
+    fo_user_id: payload.fo_user_id || null,
+    date: payload.date || null,
+  });
   const attendance = await findAttendance(client, payload);
   const rows = await loadGpsLogs(client, attendance);
   const visits = await loadSiteVisits(client, attendance);
@@ -678,7 +694,8 @@ export async function recalculateFoKm(client, payload = {}, options = {}) {
   return result;
 }
 
-export async function recalculateFoKmForToday(client, payload = {}, options = {}) {
+export async function recalculateFoKmForToday(serviceRoleClient, payload = {}, options = {}) {
+  const client = requireServiceRoleClient(serviceRoleClient);
   const date = payload.date || indiaDateKey();
   let query = client
     .from('fo_attendance')

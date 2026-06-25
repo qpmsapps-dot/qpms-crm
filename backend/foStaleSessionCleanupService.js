@@ -30,6 +30,17 @@ function logCleanup(event, detail = {}) {
   console.log('[myQPMS FO stale cleanup]', event, detail);
 }
 
+function requireServiceRoleClient(serviceRoleClient) {
+  if (!serviceRoleClient || typeof serviceRoleClient.from !== 'function') {
+    const error = new Error('Backend service-role client is not configured.');
+    error.statusCode = 503;
+    error.code = 'service_role_client_not_configured';
+    error.diagnosticReason = 'service_role_client_not_configured';
+    throw error;
+  }
+  return serviceRoleClient;
+}
+
 async function closeOpenVisitsForAttendance(client, attendance, executedAt) {
   const attendanceId = String(attendance.id || '').trim();
   if (!attendanceId) return 0;
@@ -138,10 +149,11 @@ async function closeStaleAttendance(client, attendance, executedAt) {
   return Boolean(data?.length);
 }
 
-export async function cleanupStaleFoSessions(client, options = {}) {
+export async function cleanupStaleFoSessions(serviceRoleClient, options = {}) {
   if (cleanupInFlight) {
     return { ok: false, skipped: true, reason: 'cleanup_in_flight' };
   }
+  const client = requireServiceRoleClient(serviceRoleClient);
   cleanupInFlight = true;
   const today = options.today || currentIndiaDateInput();
   const executedAt = new Date().toISOString();

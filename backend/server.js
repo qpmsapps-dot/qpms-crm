@@ -25,6 +25,7 @@ import {
   sanitizeSupabaseDiagnosticError,
   sanitizeAuditData,
   saveHierarchy,
+  serviceRoleClientNotConfiguredError,
   textOrNull,
   isAuthUserNotFoundError,
   userManagementErrorMessage,
@@ -147,8 +148,8 @@ function normalizeSupabaseUrl(url) {
 }
 
 const supabaseUrl = normalizeSupabaseUrl(process.env.SUPABASE_URL);
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseAnonKey = String(process.env.SUPABASE_ANON_KEY || '').trim();
+const supabaseServiceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 const supabaseAnon = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey, {
   realtime: {
     enabled: false,
@@ -242,8 +243,32 @@ async function assertServiceRoleAuthAdminAccess(client) {
     result.error?.message || 'Supabase service-role Auth Admin access is unavailable.',
   );
   error.statusCode = 503;
+  error.code = result.reason;
   error.diagnosticReason = result.reason;
   throw error;
+}
+
+async function testServiceRoleTableAccess(table) {
+  if (!serviceRoleSupabase) {
+    return {
+      success: false,
+      reason: serviceRoleConfigurationReason() || 'service_role_client_not_initialized',
+      error: null,
+    };
+  }
+  const { error } = await serviceRoleSupabase
+    .from(table)
+    .select('id')
+    .limit(1);
+  if (!error) return { success: true, reason: null, error: null };
+  return {
+    success: false,
+    reason:
+      error.code === '42501'
+        ? 'service_role_database_access_failed'
+        : 'service_role_table_test_failed',
+    error: sanitizeSupabaseDiagnosticError(error),
+  };
 }
 
 const approvalRoleMap = {
@@ -326,18 +351,13 @@ async function requireSupabaseJwt(request, response, next) {
       .eq('auth_user_id', authData.user.id)
       .maybeSingle();
     if (profileError) {
-      if (
-        profileError.code === '42501' ||
-        /permission denied|row-level security/i.test(String(profileError.message || ''))
-      ) {
-        const configurationError = new Error(
-          'Backend Supabase service-role access is misconfigured. Verify SUPABASE_SERVICE_ROLE_KEY.',
-        );
-        configurationError.statusCode = 503;
-        configurationError.diagnosticReason = 'service_role_auth_admin_failed';
-        throw configurationError;
-      }
-      throw profileError;
+      const configurationError = new Error(
+        'Backend service-role profile lookup failed.',
+      );
+      configurationError.statusCode = 503;
+      configurationError.code = 'service_role_profile_lookup_failed';
+      configurationError.diagnosticReason = 'service_role_profile_lookup_failed';
+      throw configurationError;
     }
     if (!profile) {
       response.status(403).json({ ok: false, message: 'Authenticated user profile was not found.' });
@@ -493,15 +513,27 @@ function requireServiceRoleSupabase() {
   // Service role bypasses RLS. Call this only inside explicitly authorized
   // admin handlers or trusted server jobs, never as ordinary request identity.
   if (!serviceRoleSupabase) {
-    const error = new Error(
-      'SUPABASE_SERVICE_ROLE_KEY is required for protected backend admin operations.',
-    );
-    error.statusCode = 503;
+    const error = serviceRoleClientNotConfiguredError();
     error.diagnosticReason =
       serviceRoleConfigurationReason() || 'service_role_client_not_initialized';
     throw error;
   }
   return serviceRoleSupabase;
+}
+
+function safeServiceRoleError(error, fallbackReason = 'service_role_auth_admin_failed') {
+  const safeError = sanitizeSupabaseDiagnosticError(error);
+  const databaseAccessFailed =
+    error?.code === '42501' ||
+    /permission denied|row-level security/i.test(String(error?.message || ''));
+  return {
+    message: safeError.message,
+    code: safeError.code,
+    statusCode: error?.statusCode || (databaseAccessFailed ? 503 : 500),
+    diagnosticReason:
+      error?.diagnosticReason ||
+      (databaseAccessFailed ? 'service_role_database_access_failed' : fallbackReason),
+  };
 }
 
 function userManagementHttpError(statusCode, message, details = null) {
@@ -512,6 +544,16 @@ function userManagementHttpError(statusCode, message, details = null) {
 }
 
 function respondUserManagementError(response, error) {
+  if (
+    !error?.diagnosticReason &&
+    (
+      error?.code === '42501' ||
+      /permission denied|row-level security/i.test(String(error?.message || ''))
+    )
+  ) {
+    error.statusCode = 503;
+    error.diagnosticReason = 'service_role_profile_lookup_failed';
+  }
   const payload = {
     ok: false,
     message: userManagementErrorMessage(error),
@@ -1378,7 +1420,12 @@ app.get(
   requireSupabaseJwtWithUserScopedProfile,
   requireUserManagementPermission,
   async (request, response) => {
-    const serviceRoleTest = await testServiceRoleAuthAdmin();
+    const [serviceRoleTest, profilesTableTest, foAttendanceTableTest] =
+      await Promise.all([
+        testServiceRoleAuthAdmin(),
+        testServiceRoleTableAccess('profiles'),
+        testServiceRoleTableAccess('fo_attendance'),
+      ]);
     response.json({
       ok: true,
       ...safeSupabaseConfigDiagnostics(),
@@ -1386,6 +1433,10 @@ app.get(
         success: serviceRoleTest.success,
         reason: serviceRoleTest.reason,
         error: serviceRoleTest.error,
+      },
+      databaseTests: {
+        profiles: profilesTableTest,
+        foAttendance: foAttendanceTableTest,
       },
     });
   },
@@ -1482,7 +1533,15 @@ app.post(
           page: authPage,
           perPage,
         });
-        if (error) throw error;
+        if (error) {
+          const authAdminError = new Error(
+            sanitizeSupabaseDiagnosticError(error).message,
+          );
+          authAdminError.statusCode = 503;
+          authAdminError.code = 'service_role_auth_admin_failed';
+          authAdminError.diagnosticReason = 'service_role_auth_admin_failed';
+          throw authAdminError;
+        }
         authUsers.push(...(data.users || []));
         if (!data.nextPage || !(data.users || []).length) break;
         authPage = data.nextPage;
@@ -3163,13 +3222,21 @@ app.post('/api/fo/km/recalculate', async (request, response) => {
   }
   foKmRecalculationLocks.add(lockKey);
   try {
-    const client = requireSupabase();
+    const client = requireServiceRoleSupabase();
+    await assertServiceRoleAuthAdminAccess(client);
     const result = await recalculateFoKm(client, payload, {
       maxGoogleDirectionsCalls: payload.max_google_directions_calls,
     });
     response.json({ ok: true, ...result });
   } catch (error) {
-    response.status(error.statusCode || 500).json({ ok: false, message: error.message });
+    const safeError = safeServiceRoleError(error, 'service_role_auth_admin_failed');
+    response.status(safeError.statusCode).json({
+      ok: false,
+      message: safeError.message,
+      ...(safeError.diagnosticReason
+        ? { diagnosticReason: safeError.diagnosticReason }
+        : {}),
+    });
   } finally {
     foKmRecalculationLocks.delete(lockKey);
   }
@@ -3184,13 +3251,21 @@ app.post('/api/fo/km/recalculate-all', async (request, response) => {
   }
   foKmRecalculateAllLocks.add(lockDate);
   try {
-    const client = requireSupabase();
+    const client = requireServiceRoleSupabase();
+    await assertServiceRoleAuthAdminAccess(client);
     const result = await recalculateFoKmForToday(client, payload, {
       maxGoogleDirectionsCalls: payload.max_google_directions_calls,
     });
     response.json({ ok: true, ...result });
   } catch (error) {
-    response.status(error.statusCode || 500).json({ ok: false, message: error.message });
+    const safeError = safeServiceRoleError(error, 'service_role_auth_admin_failed');
+    response.status(safeError.statusCode).json({
+      ok: false,
+      message: safeError.message,
+      ...(safeError.diagnosticReason
+        ? { diagnosticReason: safeError.diagnosticReason }
+        : {}),
+    });
   } finally {
     foKmRecalculateAllLocks.delete(lockDate);
   }
@@ -3199,6 +3274,7 @@ app.post('/api/fo/km/recalculate-all', async (request, response) => {
 async function runFoStaleSessionCleanup(reason = 'scheduled') {
   try {
     const client = requireServiceRoleSupabase();
+    await assertServiceRoleAuthAdminAccess(client);
     const result = await cleanupStaleFoSessions(client);
     console.log('[myQPMS FO stale cleanup] run complete', {
       reason,
@@ -3213,12 +3289,20 @@ async function runFoStaleSessionCleanup(reason = 'scheduled') {
     });
     return result;
   } catch (error) {
+    const safeError = safeServiceRoleError(error, 'service_role_auth_admin_failed');
     console.warn('[myQPMS FO stale cleanup] run failed', {
       reason,
-      message: error.message,
-      code: error.code,
+      message: safeError.message,
+      code: safeError.code,
+      diagnosticReason: safeError.diagnosticReason,
+      serviceRoleClientAvailable: Boolean(serviceRoleSupabase),
     });
-    return { ok: false, message: error.message, code: error.code };
+    return {
+      ok: false,
+      message: safeError.message,
+      code: safeError.code,
+      diagnosticReason: safeError.diagnosticReason,
+    };
   }
 }
 
@@ -3243,6 +3327,7 @@ app.listen(port, () => {
     emailPassConfigured: Boolean(process.env.EMAIL_PASS),
     supabaseConfigured: supabaseConfigStatus.configured,
     ...safeSupabaseConfigDiagnostics(),
+    serviceRoleClientAvailable: Boolean(serviceRoleSupabase),
     serviceRoleSupabaseInitialized: Boolean(serviceRoleSupabase),
   });
   verifyMailTransporter();

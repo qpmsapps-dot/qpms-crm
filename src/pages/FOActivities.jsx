@@ -3214,6 +3214,38 @@ function displayValue(value, suffix = "") {
   return `${value}${suffix}`;
 }
 
+function sanitizeReportFilenamePart(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function buildFieldActivityReportFilename(employee, fromDate, toDate) {
+  const employeeCode = sanitizeReportFilenamePart(
+    employee?.employee_code ||
+      employee?.employeeCode ||
+      employee?.fo_user_id ||
+      employee?.foId,
+  );
+  const employeeName = sanitizeReportFilenamePart(
+    employee?.full_name ||
+      employee?.display_name ||
+      employee?.name,
+  );
+  const identity = [employeeCode, employeeName].filter(Boolean).join("_");
+  const reportName = [identity, "Field_Activity_KM_Report"]
+    .filter(Boolean)
+    .join("_");
+  const fromValue = fromDate ? toDateInputValue(new Date(fromDate)) : "";
+  const toValue = toDate ? toDateInputValue(new Date(toDate)) : "";
+  const dateSuffix =
+    fromValue && toValue ? `_${fromValue}_to_${toValue}` : "";
+  return `${reportName || "Field_Activity_KM_Report"}${dateSuffix}`;
+}
+
 function numberLabel(value, suffix = "") {
   const number = Number(value);
   if (!Number.isFinite(number)) return "--";
@@ -3411,6 +3443,48 @@ function visitLocation(visit) {
   const lng = numberOrNull(visit?.check_in_longitude ?? visit?.current_longitude ?? visit?.destination_lng);
   if (lat !== null && lng !== null) return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
   return visit?.state || "--";
+}
+
+function visitCheckInCoordinates(visit) {
+  const metadata =
+    visit?.metadata &&
+    typeof visit.metadata === "object" &&
+    !Array.isArray(visit.metadata)
+      ? visit.metadata
+      : {};
+  const latitude = numberOrNull(
+    visit?.check_in_latitude ??
+      visit?.checkin_latitude ??
+      visit?.check_in_lat ??
+      visit?.latitude ??
+      metadata.check_in_latitude ??
+      metadata.checkin_latitude ??
+      metadata.check_in_lat ??
+      metadata.latitude,
+  );
+  const longitude = numberOrNull(
+    visit?.check_in_longitude ??
+      visit?.checkin_longitude ??
+      visit?.check_in_lng ??
+      visit?.longitude ??
+      metadata.check_in_longitude ??
+      metadata.checkin_longitude ??
+      metadata.check_in_lng ??
+      metadata.longitude,
+  );
+  return isValidLatLng(latitude, longitude)
+    ? { latitude, longitude }
+    : null;
+}
+
+function formatVisitCoordinates(coordinates) {
+  if (!coordinates) return "--";
+  return `${coordinates.latitude.toFixed(6)}, ${coordinates.longitude.toFixed(6)}`;
+}
+
+function visitGoogleMapsUrl(coordinates) {
+  if (!coordinates) return null;
+  return `https://www.google.com/maps?q=${coordinates.latitude},${coordinates.longitude}`;
 }
 
 function visitRemarks(visit) {
@@ -4681,6 +4755,7 @@ function DetailSummaryCard({ icon, label, value, hint, tone = "blue" }) {
 
 function FieldOfficerDetailsView({
   officer,
+  generatedByUser,
   routeLogs,
   activitySubmissions = [],
   activityUploads = [],
@@ -4811,6 +4886,7 @@ function FieldOfficerDetailsView({
         index: index + 1,
         site: `${visitTitle(visit)} / ${visitClient(visit)}`,
         location: visitLocation(visit),
+        checkInCoordinates: visitCheckInCoordinates(visit),
         checkIn: formatDateTime(visit.check_in_time),
         checkOut: formatDateTime(siteVisitCheckoutValue(visit)),
         duration: durationMinutesLabel(visitMinutes(visit)),
@@ -4852,6 +4928,23 @@ function FieldOfficerDetailsView({
   const selectedCheckoutReviewStatus = selectedVisit
     ? checkoutReviewStatus(selectedVisit)
     : null;
+  const selectedCheckInCoordinates = selectedVisit
+    ? visitCheckInCoordinates(selectedVisit)
+    : null;
+  const generatedByName =
+    generatedByUser?.full_name ||
+    generatedByUser?.display_name ||
+    generatedByUser?.name ||
+    generatedByUser?.profile?.full_name ||
+    generatedByUser?.profile?.display_name ||
+    generatedByUser?.email ||
+    generatedByUser?.employee_code ||
+    "myQPMS User";
+  const generatedByRole =
+    generatedByUser?.rawRole || generatedByUser?.role || "";
+  const generatedByLabel = generatedByRole
+    ? `${generatedByName} (${generatedByRole})`
+    : generatedByName;
   const showCheckoutReviewPreview = (visit, action) => {
     setCheckoutReviewPreview({
       visitKey:
@@ -4869,10 +4962,34 @@ function FieldOfficerDetailsView({
     ...(fullTechnicalAccess ? [["route", "Route / GPS Evidence"]] : []),
     ["report", "Report"],
   ];
+  const printReport = () => {
+    const previousTitle = document.title;
+    const reportTitle = buildFieldActivityReportFilename(
+      officer,
+      fromDate,
+      toDate,
+    );
+    let restored = false;
+    let fallbackTimer;
+    const restoreTitle = () => {
+      if (restored) return;
+      restored = true;
+      document.title = previousTitle;
+      window.removeEventListener("afterprint", restoreTitle);
+      window.removeEventListener("focus", restoreTitle);
+      if (fallbackTimer) window.clearTimeout(fallbackTimer);
+    };
+
+    document.title = reportTitle;
+    window.addEventListener("afterprint", restoreTitle, { once: true });
+    window.addEventListener("focus", restoreTitle, { once: true });
+    fallbackTimer = window.setTimeout(restoreTitle, 60000);
+    window.print();
+  };
   const openPrintReport = () => {
     setDrillDownOpen(true);
     setActiveTab("report");
-    window.setTimeout(() => window.print(), 120);
+    window.setTimeout(printReport, 120);
   };
 
   if (!drillDownOpen) {
@@ -5221,7 +5338,7 @@ function FieldOfficerDetailsView({
               <table className="min-w-[920px] w-full text-left text-xs">
                 <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-500">
                   <tr>
-                    {["#", "Site / Client", "Check-in", "Check-out", "Duration", "Travel from Previous", "Route KM", "Remarks"].map((heading) => (
+                    {["#", "Site / Client", "Check-in Lat/Lng", "Check-in", "Check-out", "Duration", "Travel from Previous", "Route KM", "Remarks"].map((heading) => (
                       <th key={heading} className="whitespace-nowrap px-3 py-3">{heading}</th>
                     ))}
                   </tr>
@@ -5237,6 +5354,22 @@ function FieldOfficerDetailsView({
                         <span className={`grid h-6 w-6 place-items-center rounded-full text-[10px] font-black text-white ${row.key === "start" ? "bg-emerald-500" : row.key === "end" ? "bg-slate-500" : "bg-blue-600"}`}>{row.index}</span>
                       </td>
                       <td className="min-w-44 px-3 py-3 font-black text-slate-900">{row.site}</td>
+                      <td className="min-w-44 px-3 py-3">
+                        {row.checkInCoordinates ? (
+                          <a
+                            href={visitGoogleMapsUrl(row.checkInCoordinates)}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(event) => event.stopPropagation()}
+                            className="font-bold text-qpms-700 underline decoration-qpms-200 underline-offset-2 hover:text-qpms-900"
+                            title="Open check-in location in Google Maps"
+                          >
+                            {formatVisitCoordinates(row.checkInCoordinates)}
+                          </a>
+                        ) : (
+                          "--"
+                        )}
+                      </td>
                       <td className="whitespace-nowrap px-3 py-3">{row.checkIn}</td>
                       <td className="whitespace-nowrap px-3 py-3">{row.checkOut}</td>
                       <td className="whitespace-nowrap px-3 py-3">{row.duration}</td>
@@ -5302,7 +5435,7 @@ function FieldOfficerDetailsView({
                     </tr>
                   ))}
                   {!timelineRows.length ? (
-                    <tr><td colSpan={8} className="px-3 py-10 text-center text-sm text-slate-500">No visit timeline available for selected filters.</td></tr>
+                    <tr><td colSpan={9} className="px-3 py-10 text-center text-sm text-slate-500">No visit timeline available for selected filters.</td></tr>
                   ) : null}
                 </tbody>
               </table>
@@ -5330,6 +5463,12 @@ function FieldOfficerDetailsView({
                 ["Client Name", visitClient(selectedVisit)],
                 ["Business Type", visitBusinessType(selectedVisit)],
                 ["Address / Coordinates", selectedVisit?.address || selectedVisit?.location_name || visitLocation(selectedVisit)],
+                [
+                  "Check-in Lat/Lng",
+                  selectedCheckInCoordinates
+                    ? formatVisitCoordinates(selectedCheckInCoordinates)
+                    : "--",
+                ],
                 ["Check-in", formatDateTime(selectedVisit?.check_in_time)],
                 ["Check-out", formatDateTime(siteVisitCheckoutValue(selectedVisit))],
                 ["Duration", durationMinutesLabel(visitMinutes(selectedVisit))],
@@ -5340,7 +5479,19 @@ function FieldOfficerDetailsView({
               ].map(([label, value]) => (
                 <div key={label} className="rounded-xl bg-slate-50 p-3">
                   <p className="text-[10px] font-bold uppercase tracking-wide text-qpms-700">{label}</p>
-                  <p className="mt-1 break-words text-xs font-semibold text-slate-700">{displayValue(value)}</p>
+                  {label === "Check-in Lat/Lng" &&
+                  selectedCheckInCoordinates ? (
+                    <a
+                      href={visitGoogleMapsUrl(selectedCheckInCoordinates)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 block break-words text-xs font-bold text-qpms-700 underline decoration-qpms-200 underline-offset-2 hover:text-qpms-900"
+                    >
+                      {value}
+                    </a>
+                  ) : (
+                    <p className="mt-1 break-words text-xs font-semibold text-slate-700">{displayValue(value)}</p>
+                  )}
                 </div>
               ))}
               <div className="rounded-xl bg-slate-50 p-3">
@@ -5624,7 +5775,7 @@ function FieldOfficerDetailsView({
         <div className="fo-report-shell rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="fo-screen-only mb-4 flex items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50 p-3">
             <p className="text-xs font-semibold text-blue-800">This layout is optimized for print and PDF. Use Export PDF to generate a shareable report.</p>
-            <button type="button" onClick={() => window.print()} className="focus-ring rounded-lg bg-qpms-700 px-4 py-2 text-xs font-black text-white">Export PDF</button>
+            <button type="button" onClick={printReport} className="focus-ring rounded-lg bg-qpms-700 px-4 py-2 text-xs font-black text-white">Export PDF</button>
           </div>
           <article className="fo-print-report mx-auto max-w-[980px] bg-white text-slate-900">
             <div className="fo-report-header flex items-start justify-between gap-6 border-b-2 border-qpms-700 pb-4">
@@ -5652,7 +5803,7 @@ function FieldOfficerDetailsView({
               <div className="shrink-0 text-right text-xs leading-5 text-slate-500">
                 <p>
                   <strong className="text-slate-700">Generated by:</strong>{" "}
-                  myQPMS Operations
+                  {generatedByLabel}
                 </p>
                 <p>
                   <strong className="text-slate-700">Generated at:</strong>{" "}
@@ -5734,6 +5885,13 @@ function FieldOfficerDetailsView({
                       <td className="border border-slate-200 px-2 py-2">{index + 1}</td>
                       <td className="border border-slate-200 px-2 py-2">
                         {visitTitle(visit)} / {visitClient(visit)}
+                        <br />
+                        <span className="text-[10px] text-slate-500">
+                          Check-in:{" "}
+                          {formatVisitCoordinates(
+                            visitCheckInCoordinates(visit),
+                          )}
+                        </span>
                       </td>
                       <td className="border border-slate-200 px-2 py-2">
                         {formatDateTime(visit.check_in_time)}
@@ -7406,6 +7564,7 @@ export default function FOActivities() {
       <FieldOfficerDetailsView
         key={selectedOfficer.id}
         officer={selectedOfficer}
+        generatedByUser={user}
         routeLogs={selectedRouteLogs}
         activitySubmissions={selectedActivitySubmissions}
         activityUploads={selectedActivityUploads}
