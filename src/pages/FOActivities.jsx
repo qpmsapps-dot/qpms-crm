@@ -45,7 +45,9 @@ import {
 } from "react-leaflet";
 import * as XLSX from "xlsx";
 import "leaflet/dist/leaflet.css";
+import qpmsLogo from "../assets/qpms-logo.png";
 import PageHeader from "../components/PageHeader.jsx";
+import { useAuth } from "../context/auth-context.js";
 import { usePageTitle } from "../hooks/usePageTitle.js";
 import { isSupabaseConfigured, supabase } from "../lib/supabase.js";
 import { api } from "../services/api.js";
@@ -118,6 +120,22 @@ function formatInr(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "--";
   return INR_CURRENCY.format(number);
+}
+
+function toSafeNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function calculatePetrolAmount(
+  payableKm,
+  ratePerKm = RATE_PER_KM,
+) {
+  return toSafeNumber(payableKm) * toSafeNumber(ratePerKm, RATE_PER_KM);
+}
+
+function formatCurrency(value) {
+  return formatInr(value);
 }
 
 function toDateInputValue(date) {
@@ -1275,11 +1293,6 @@ function payableKmFromAttendance(row) {
   return value || 0;
 }
 
-function petrolAmountFromAttendance(row) {
-  const value = Number(row?.petrol_amount);
-  return Number.isFinite(value) ? value : 0;
-}
-
 function logPayableKmSource(foId, source, km) {
   console.debug("FO_PAYABLE_KM_SOURCE_SELECTED", foId, source, km);
   console.debug("FO_ROUTE_KM_TODAY_VALUE", foId, km);
@@ -1549,6 +1562,14 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
     attendance,
     (row) => row?.login_time || row?.created_at,
   );
+  const attendanceByFo = attendance.reduce((map, row) => {
+    const id = canonicalActivityId(row);
+    if (!id) return map;
+    const list = map.get(id) || [];
+    list.push(row);
+    map.set(id, list);
+    return map;
+  }, new Map());
   const latestLiveStatus = latestMatchedRows(liveStatus, liveStatusTimestamp);
   const visitsByFo = visits.reduce((map, visit) => {
     const id = canonicalActivityId(visit);
@@ -1567,8 +1588,8 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
     return map;
   }, new Map());
 
-  const officers = Array.from(uniqueProfilesByCode.keys()).map((foId) =>
-    officerFromRows({
+  const officers = Array.from(uniqueProfilesByCode.keys()).map((foId) => {
+    const officer = officerFromRows({
       foId,
       live: latestLiveStatus.get(foId),
       attendance: latestAttendance.get(foId),
@@ -1576,8 +1597,28 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
       logs: logsByFo.get(foId) || [],
       statusDate,
       profilesByCode,
-    }),
-  );
+    });
+    const rangeAttendances = (attendanceByFo.get(foId) || []).sort(
+      (a, b) => new Date(a.login_time || 0) - new Date(b.login_time || 0),
+    );
+    const rangePayableKm = rangeAttendances.reduce(
+      (sum, row) => sum + payableKmFromAttendance(row),
+      0,
+    );
+    return {
+      ...officer,
+      attendances: rangeAttendances,
+      eligibleKm: rangeAttendances.length
+        ? rangePayableKm
+        : officer.eligibleKm,
+      routeKmToday: rangeAttendances.length
+        ? rangePayableKm
+        : officer.routeKmToday,
+      petrolAmount: rangeAttendances.length
+        ? calculatePetrolAmount(rangePayableKm)
+        : calculatePetrolAmount(officer.eligibleKm ?? officer.routeKmToday),
+    };
+  });
   const mergeDiagnostics = {
     activeProfilesCount: activeProfiles.length,
     activityDerivedOfficerCount: matchedActivityIds.size,
@@ -1876,27 +1917,33 @@ function LegendItem({ color, label, helper, dashed = false, site = false }) {
 }
 
 function OfficerDirectoryRow({ officer, selected, onSelect }) {
-  const status = officerStatus(officer);
-  const battery = batteryState(officer);
   const distanceToday = Number(
     officer.eligibleKm ?? officer.routeKmToday ?? 0,
   );
-  const actualTravelKm = Number(officer.actualTravelKm ?? officer.actualKm ?? 0);
-  const statusText = status.label;
-  const statusClass = isOperationallyActive(officer)
-    ? "bg-emerald-50 text-emerald-700"
-    : "bg-rose-50 text-rose-700";
+  const hasReviewWarning =
+    Boolean(officer.reviewFlags?.length) || officer.foSafeKm?.reviewRequired;
+  const statusStyles =
+    officer.operationalStatus === "ON_TRAVEL"
+      ? { chip: "bg-blue-50 text-blue-700", icon: "bg-blue-600" }
+      : ["ON_SITE", "ACTIVE_STATIONARY"].includes(officer.operationalStatus)
+        ? { chip: "bg-emerald-50 text-emerald-700", icon: "bg-emerald-500" }
+        : officer.operationalStatus === "ENDED"
+          ? { chip: "bg-slate-100 text-slate-600", icon: "bg-slate-500" }
+          : { chip: "bg-rose-50 text-rose-700", icon: "bg-rose-500" };
 
   return (
     <button
       type="button"
       onClick={onSelect}
-      className={`focus-ring w-full border-b border-slate-100 px-4 py-3 text-left transition last:border-b-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/70 ${selected ? "bg-qpms-50/70 dark:bg-qpms-500/10" : "bg-white dark:bg-slate-900"}`}
+      className={`focus-ring m-0.5 w-[calc(100%-4px)] rounded-xl border px-3.5 py-3 text-left transition hover:border-qpms-200 hover:bg-qpms-50/40 dark:hover:bg-slate-800/70 ${
+        selected
+          ? "border-qpms-300 bg-qpms-50/80 shadow-sm dark:border-qpms-700 dark:bg-qpms-500/10"
+          : "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
+      }`}
     >
       <div className="flex items-start gap-3">
         <span
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-white shadow-sm"
-          style={{ backgroundColor: foMarkerColor(officer) }}
+          className={`grid h-10 w-10 shrink-0 place-items-center rounded-full text-white shadow-sm ${statusStyles.icon}`}
         >
           <Bike className="h-5 w-5" />
         </span>
@@ -1906,43 +1953,184 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
               <p className="truncate text-sm font-black text-slate-950 dark:text-white">
                 {officer.name}
               </p>
-              <p className="truncate text-xs font-semibold text-slate-600 dark:text-slate-300">
-                Employee ID: {officer.employeeCode || officer.foId}
+              <p className="truncate text-[11px] font-semibold text-slate-500">
+                {officer.employeeCode || officer.foId}
               </p>
             </div>
             <span
-              className={`rounded-md px-2 py-1 text-[10px] font-black ${statusClass}`}
+              className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-black ${statusStyles.chip}`}
             >
-              {statusText}
+              {operationalStatusLabel(officer.operationalStatus)}
             </span>
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold text-slate-500">
-            <span className={`inline-flex items-center gap-1 ${battery.tone}`}>
-              <Battery className="h-3.5 w-3.5" />
-              {battery.label}
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <Route className="h-3.5 w-3.5" />
-              {formatDisplayKm(distanceToday)}
-            </span>
-            <span>GPS audit {actualTravelKm.toFixed(1)} km</span>
-            <span>{formatInr(officer.petrolAmount ?? distanceToday * RATE_PER_KM)}</span>
-          </div>
-          <p className="mt-1 truncate text-xs font-medium text-slate-500">
-            <MapPin className="mr-1 inline h-3.5 w-3.5 text-slate-400" />
-            {hasFiniteCoordinates(officer.coordinates)
-              ? `${Number(officer.coordinates[0]).toFixed(5)}, ${Number(officer.coordinates[1]).toFixed(5)}`
-              : "No Location Available"}
-          </p>
-          <p className="mt-0.5 text-xs font-semibold text-slate-400">
-            {officer.isProfileOnly ? "Not Started" : officer.lastSeen}
-          </p>
           <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">
-            {officer.designation || officer.role || "Operations"} · {officer.business || "--"} · {officer.state || "--"}
+            {officer.designation || officer.role || "Field Operations"} ·{" "}
+            {officer.state || "--"}
           </p>
+          <div className="mt-3 grid grid-cols-2 gap-3 border-t border-slate-100 pt-2.5 dark:border-slate-800">
+            <div>
+              <span className="block text-[9px] font-bold uppercase tracking-wide text-slate-400">
+                Payable KM
+              </span>
+              <strong className="mt-0.5 block text-xs text-emerald-700">
+                {formatDisplayKm(distanceToday)}
+              </strong>
+            </div>
+            <div>
+              <span className="block text-[9px] font-bold uppercase tracking-wide text-slate-400">
+                Petrol Amount
+              </span>
+              <strong className="mt-0.5 block text-xs text-slate-900 dark:text-white">
+                {formatCurrency(calculatePetrolAmount(distanceToday))}
+              </strong>
+            </div>
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-2 text-[10px] font-semibold text-slate-400">
+            <span className="truncate">
+              <Clock className="mr-1 inline h-3 w-3" />
+              {officer.isProfileOnly ? "Not started" : officer.lastSeen || "--"}
+            </span>
+            {hasReviewWarning ? (
+              <span className="shrink-0 rounded bg-amber-50 px-1.5 py-0.5 font-black text-amber-700">
+                Review
+              </span>
+            ) : null}
+          </div>
         </div>
       </div>
     </button>
+  );
+}
+
+function ExecutiveOfficerPanel({
+  officer,
+  onDetailedView,
+  onClose,
+  siteVisitCount,
+}) {
+  if (!officer) return null;
+  const routeKm = Number(officer.eligibleKm ?? officer.routeKmToday ?? 0);
+  const petrolAmount = calculatePetrolAmount(routeKm);
+  const status = officerStatus(officer);
+  const activeVisit = (officer.visits || []).find(isSiteVisitOpen);
+  const coordinates = normalizeCoordinates(officer.coordinates);
+  const hasReviewWarning =
+    Boolean(officer.reviewFlags?.length) || officer.foSafeKm?.reviewRequired;
+  const statusClass =
+    officer.operationalStatus === "ON_TRAVEL"
+      ? "bg-blue-50 text-blue-700"
+      : isOperationallyActive(officer)
+        ? "bg-emerald-50 text-emerald-700"
+        : officer.operationalStatus === "ENDED"
+          ? "bg-slate-100 text-slate-600"
+          : "bg-rose-50 text-rose-700";
+
+  return (
+    <div className="border-b border-slate-100 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="truncate text-sm font-black text-slate-950 dark:text-white">
+                {officer.name}
+              </h2>
+              <span className={`rounded-md px-2 py-0.5 text-[10px] font-black ${statusClass}`}>
+                {status.label}
+              </span>
+              {hasReviewWarning ? (
+                <span className="rounded-md bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-700">
+                  Review
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-1 text-[11px] font-bold text-slate-500">
+              {officer.employeeCode || officer.foId || "--"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-slate-200 text-xs font-black text-slate-500 hover:text-rose-600 dark:border-slate-700"
+            aria-label="Close selected employee"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="space-y-3 p-4">
+          <div className="space-y-2 text-xs font-semibold">
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">Last update</span>
+              <strong className="text-right text-slate-800 dark:text-slate-100">
+                {officer.lastSeen || "--"}
+              </strong>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">Location</span>
+              <strong className="text-right text-slate-800 dark:text-slate-100">
+                {coordinates
+                  ? `${coordinates[0].toFixed(5)}, ${coordinates[1].toFixed(5)}`
+                  : "No Location Available"}
+              </strong>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">Role</span>
+              <strong className="text-right text-slate-800 dark:text-slate-100">
+                {officer.designation || officer.role || "--"}
+              </strong>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">Business / State</span>
+              <strong className="text-right text-slate-800 dark:text-slate-100">
+                {officer.business || "--"} / {officer.state || "--"}
+              </strong>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-lg bg-emerald-50 p-2 text-center">
+              <span className="block text-[9px] font-bold uppercase text-emerald-600">
+                Payable KM
+              </span>
+              <strong className="mt-1 block text-sm text-emerald-800">
+                {Number.isFinite(routeKm) ? `${routeKm.toFixed(1)} km` : "--"}
+              </strong>
+            </div>
+            <div className="rounded-lg bg-amber-50 p-2 text-center">
+              <span className="block text-[9px] font-bold uppercase text-amber-600">
+                Petrol
+              </span>
+              <strong className="mt-1 block text-sm text-amber-900">
+                {formatCurrency(petrolAmount)}
+              </strong>
+            </div>
+            <div className="rounded-lg bg-violet-50 p-2 text-center">
+              <span className="block text-[9px] font-bold uppercase text-violet-600">
+                Sites
+              </span>
+              <strong className="mt-1 block text-sm text-violet-900">
+                {siteVisitCount ?? officer.visits?.length ?? 0}
+              </strong>
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-slate-50 px-3 py-2.5 text-xs font-semibold dark:bg-slate-900">
+            <span className="text-slate-500">Active site</span>
+            <strong className="ml-2 text-slate-900 dark:text-white">
+              {activeVisit ? visitTitle(activeVisit) : "None"}
+            </strong>
+          </div>
+
+          <button
+            type="button"
+            onClick={onDetailedView}
+            className="focus-ring w-full rounded-lg bg-qpms-700 px-4 py-2.5 text-sm font-black text-white hover:bg-qpms-800"
+          >
+            Detailed View
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1976,7 +2164,7 @@ function SelectedOfficerSummary({
       }`
     : "--";
   const claimKmLabel = hasClaimKm ? formatDisplayKm(claimKm) : "--";
-  const claimPetrol = Number(officer.petrolAmount ?? claimKm * RATE_PER_KM);
+  const claimPetrol = calculatePetrolAmount(claimKm);
   const statusText = status.label;
   const statusClass = isOperationallyActive(officer)
     ? "bg-emerald-50 text-emerald-700"
@@ -2184,6 +2372,17 @@ function MapViewport({ pins, sitePins, routeLines, expanded, command }) {
   useEffect(() => {
     window.setTimeout(() => map.invalidateSize(), 80);
   }, [expanded, map]);
+
+  useEffect(() => {
+    const container = map.getContainer();
+    const parent = container.parentElement;
+    if (!parent || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(() => {
+      window.requestAnimationFrame(() => map.invalidateSize());
+    });
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, [map]);
 
   useEffect(() => {
     const validPinPoints = pins
@@ -3022,7 +3221,7 @@ function numberLabel(value, suffix = "") {
 }
 
 function moneyLabel(value) {
-  return formatInr(value);
+  return formatCurrency(value);
 }
 
 function durationMinutesLabel(minutes) {
@@ -3056,13 +3255,7 @@ function visitMinutes(visit) {
 }
 
 function sortedOfficerVisits(officer) {
-  const attendanceId = officer?.attendance?.id ? String(officer.attendance.id) : null;
   return (officer?.visits || [])
-    .filter((visit) => {
-      if (!attendanceId) return true;
-      const visitAttendanceId = visit?.attendance_id ? String(visit.attendance_id) : "";
-      return visitAttendanceId === attendanceId;
-    })
     .slice()
     .sort((a, b) => new Date(a.check_in_time || 0) - new Date(b.check_in_time || 0));
 }
@@ -3222,6 +3415,207 @@ function visitLocation(visit) {
 
 function visitRemarks(visit) {
   return visit?.checkout_note || visit?.visit_status || visit?.status || "--";
+}
+
+function checkoutDistanceFromVisit(visit) {
+  const metadata =
+    visit?.metadata &&
+    typeof visit.metadata === "object" &&
+    !Array.isArray(visit.metadata)
+      ? visit.metadata
+      : {};
+  const candidates = [
+    metadata.checkout_distance_meters,
+    metadata.checkout_distance_from_site_meters,
+    metadata.distance_from_site_meters,
+    metadata.checkout_distance,
+    visit?.checkout_distance_meters,
+    visit?.distance_from_site_meters,
+  ];
+  const value = candidates
+    .map(Number)
+    .find((candidate) => Number.isFinite(candidate) && candidate >= 0);
+  return value ?? null;
+}
+
+function checkoutExceptionForVisit(visit) {
+  const metadata =
+    visit?.metadata &&
+    typeof visit.metadata === "object" &&
+    !Array.isArray(visit.metadata)
+      ? visit.metadata
+      : {};
+  const checkoutValue = siteVisitCheckoutValue(visit);
+  const combinedText = [
+    visit?.status,
+    visit?.visit_status,
+    visit?.checkout_note,
+    metadata.closed_source,
+    metadata.checkout_reason,
+    metadata.warning,
+    metadata.checkout_warning,
+    metadata.stale_reason,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const distanceMeters = checkoutDistanceFromVisit(visit);
+  const isAutoClosed =
+    metadata.stale_auto_closed === true ||
+    metadata.closed_source === "end_day_open_site_auto_close" ||
+    /stale|auto[\s_-]*clos|closed by end day/.test(combinedText);
+  const isManual =
+    metadata.force_checkout === true ||
+    metadata.admin_support_source === "backend_force_checkout" ||
+    /force[\s_-]*checkout|manual[\s_-]*checkout|admin[\s_-]*checkout/.test(
+      combinedText,
+    );
+  const isFarCheckout =
+    metadata.checkout_outside_site === true ||
+    metadata.outside_geofence === true ||
+    metadata.distance_warning === true ||
+    /far from|away from|outside (site|geofence)|distance warning/.test(
+      combinedText,
+    );
+  const needsReview =
+    metadata.needs_review === true ||
+    /needs review|clarification|required review/.test(combinedText);
+
+  if (!checkoutValue && !isAutoClosed) {
+    return {
+      type: "missing",
+      label: "Checkout Missing",
+      tone: "red",
+      requiresReview: true,
+      distanceMeters,
+    };
+  }
+  if (isFarCheckout) {
+    return {
+      type: "exception",
+      label: "Checkout Exception",
+      tone: "amber",
+      requiresReview: true,
+      distanceMeters,
+    };
+  }
+  if (isManual) {
+    return {
+      type: "manual",
+      label: "Manual Checkout",
+      tone: "amber",
+      requiresReview: true,
+      distanceMeters,
+    };
+  }
+  if (isAutoClosed) {
+    return {
+      type: "auto",
+      label: "Auto Closed",
+      tone: "slate",
+      requiresReview: true,
+      distanceMeters,
+    };
+  }
+  if (needsReview) {
+    return {
+      type: "review",
+      label: "Needs Review",
+      tone: "amber",
+      requiresReview: true,
+      distanceMeters,
+    };
+  }
+  return {
+    type: "normal",
+    label: "Checked Out",
+    tone: "green",
+    requiresReview: false,
+    distanceMeters,
+  };
+}
+
+function normalizeRoleKey(role = "") {
+  return String(role || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function canReviewCheckoutException(role) {
+  const roleKey = normalizeRoleKey(role);
+  return [
+    "admin",
+    "developer",
+    "operations manager",
+    "operation manager",
+    "om",
+    "branch head",
+    "bh",
+    "coo",
+    "gm",
+    "management",
+  ].includes(roleKey);
+}
+
+function checkoutReviewStatus(visit) {
+  const metadata =
+    visit?.metadata &&
+    typeof visit.metadata === "object" &&
+    !Array.isArray(visit.metadata)
+      ? visit.metadata
+      : {};
+  const value = [
+    metadata.checkout_review_status,
+    metadata.exception_review_status,
+    metadata.review_status,
+    visit?.review_status,
+  ]
+    .find(Boolean);
+  const normalized = String(value || "").trim().toLowerCase();
+  if (/approv/.test(normalized)) {
+    return { label: "Approved", tone: "green" };
+  }
+  if (/reject/.test(normalized)) {
+    return { label: "Rejected", tone: "red" };
+  }
+  if (/clarif/.test(normalized)) {
+    return { label: "Clarification Needed", tone: "blue" };
+  }
+  return { label: "Pending Review", tone: "amber" };
+}
+
+function CheckoutStatusChip({ exception }) {
+  const tones = {
+    green: "bg-emerald-50 text-emerald-700",
+    amber: "bg-amber-50 text-amber-800",
+    red: "bg-rose-50 text-rose-700",
+    slate: "bg-slate-100 text-slate-600",
+  };
+  return (
+    <span
+      className={`inline-flex rounded-md px-2 py-1 text-[10px] font-black ${tones[exception?.tone] || tones.slate}`}
+    >
+      {exception?.label || "Needs Review"}
+    </span>
+  );
+}
+
+function CheckoutReviewStatusChip({ status }) {
+  const tones = {
+    amber: "bg-amber-100 text-amber-800",
+    green: "bg-emerald-100 text-emerald-700",
+    red: "bg-rose-100 text-rose-700",
+    blue: "bg-blue-100 text-blue-700",
+  };
+  return (
+    <span
+      className={`inline-flex rounded-md px-2 py-1 text-[10px] font-black ${tones[status?.tone] || tones.amber}`}
+    >
+      {status?.label || "Pending Review"}
+    </span>
+  );
 }
 
 function normalizeActivityGroup(value, uploadRole = "") {
@@ -4264,17 +4658,23 @@ function DetailSummaryCard({ icon, label, value, hint, tone = "blue" }) {
     purple: "bg-violet-50 text-violet-700",
   };
   return (
-    <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.06)]">
-      <div className="flex items-center gap-3">
+    <div className="min-h-[116px] rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.06)]">
+      <div className="flex h-full items-start gap-3">
         <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-full ${tones[tone] || tones.blue}`}>
           <Icon className="h-5 w-5" />
         </span>
-        <div className="min-w-0">
-          <p className="text-xs font-semibold text-slate-600">{label}</p>
-          <p className="mt-1 truncate text-base font-black text-slate-950">{value || "--"}</p>
-          <p className="mt-1 truncate text-xs font-semibold text-slate-500">{hint || "--"}</p>
+        <div className="min-w-0 flex-1">
+          <p className="whitespace-normal break-words text-[11px] font-semibold leading-4 text-slate-600">
+            {label}
+          </p>
+          <p className="mt-1 whitespace-normal break-words text-lg font-black leading-tight text-slate-950 sm:text-xl xl:text-[22px]">
+            {value || "--"}
+          </p>
+          <p className="mt-1 whitespace-normal break-words text-xs font-semibold leading-4 text-slate-500">
+            {hint || "--"}
+          </p>
         </div>
-        </div>
+      </div>
     </div>
   );
 }
@@ -4293,12 +4693,37 @@ function FieldOfficerDetailsView({
   onApplyDate,
   onBack,
   onExport,
+  onRecalculateKm,
+  recalculatingKm = false,
+  recalculationResult = null,
+  fullTechnicalAccess = false,
+  canReviewCheckoutExceptions = false,
 }) {
   const [selectedVisitIndex, setSelectedVisitIndex] = useState(0);
   const [photoFilter, setPhotoFilter] = useState("All");
   const [routeMapOpen, setRouteMapOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("visits");
+  const [drillDownOpen, setDrillDownOpen] = useState(true);
+  const [checkoutReviewPreview, setCheckoutReviewPreview] = useState(null);
   const visits = useMemo(() => sortedOfficerVisits(officer), [officer]);
+  const attendances = useMemo(
+    () =>
+      (officer?.attendances?.length
+        ? officer.attendances
+        : officer?.attendance
+          ? [officer.attendance]
+          : []
+      )
+        .slice()
+        .sort(
+          (a, b) =>
+            new Date(a.login_time || 0) - new Date(b.login_time || 0),
+        ),
+    [officer],
+  );
   const attendance = useMemo(() => officer?.attendance || {}, [officer?.attendance]);
+  const firstAttendance = attendances[0] || attendance;
+  const lastAttendance = attendances.at(-1) || attendance;
   const activeVisitIndex = visits.length
     ? Math.min(selectedVisitIndex, visits.length - 1)
     : 0;
@@ -4315,28 +4740,69 @@ function FieldOfficerDetailsView({
   }, [activityUploads, photoFilter, selectedVisit]);
   const status = officerStatus(officer);
   const isLive = isOperationallyActive(officer);
-  const workingMinutes = attendanceWorkingMinutes(attendance);
-  const totalVisitMinutes = visits.reduce((sum, visit) => sum + (visitMinutes(visit) || 0), 0);
+  const workingMinutes = attendances.reduce(
+    (sum, row) => sum + Number(attendanceWorkingMinutes(row) || 0),
+    0,
+  );
   const totalKm = Number(officer?.eligibleKm ?? officer?.routeKmToday);
-  const petrolAmount = Number(attendance?.petrol_amount ?? officer?.petrolAmount);
-  const ratePerKm = Number(attendance?.rate_per_km);
+  const gpsMetrics = useMemo(
+    () =>
+      actualTravelKmFromAttendanceOrLogs(
+        attendance,
+        routeLogs,
+        visits,
+      ),
+    [attendance, routeLogs, visits],
+  );
+  const gpsAuditKm = Number(
+    routeLogs.length
+      ? gpsMetrics.actualTravelKm
+      : officer?.actualTravelKm ?? gpsMetrics.actualTravelKm ?? officer?.actualKm,
+  );
+  const kmDelta =
+    Number.isFinite(totalKm) && Number.isFinite(gpsAuditKm)
+      ? totalKm - gpsAuditKm
+      : null;
+  const differencePercent =
+    Number.isFinite(kmDelta) && Number.isFinite(gpsAuditKm) && gpsAuditKm > 0
+      ? (kmDelta / gpsAuditKm) * 100
+      : null;
+  const ratePerKm = RATE_PER_KM;
+  const petrolAmount = calculatePetrolAmount(totalKm, ratePerKm);
+  const startPoint = pointFromAttendanceStart(firstAttendance);
+  const endPoint = routePointFromAttendanceEnd(lastAttendance);
+  const startBattery =
+    firstAttendance.start_battery_percentage ?? firstAttendance.battery_start;
+  const endBattery =
+    lastAttendance.end_battery_percentage ?? lastAttendance.battery_end;
+  const reviewFlags = officer?.reviewFlags || [];
+  const checkoutExceptions = useMemo(
+    () =>
+      visits
+        .map((visit, index) => ({
+          visit,
+          index,
+          exception: checkoutExceptionForVisit(visit),
+        }))
+        .filter((item) => item.exception.requiresReview),
+    [visits],
+  );
   const timelineRows = useMemo(() => {
     const rows = [];
-    if (attendance.login_time) {
+    if (firstAttendance.login_time) {
       rows.push({
         key: "start",
         index: <PlayCircle className="h-4 w-4" />,
         site: "Start Day",
-        location: pointFromAttendanceStart(attendance)
-          ? `${pointFromAttendanceStart(attendance).latitude.toFixed(5)}, ${pointFromAttendanceStart(attendance).longitude.toFixed(5)}`
+        location: pointFromAttendanceStart(firstAttendance)
+          ? `${pointFromAttendanceStart(firstAttendance).latitude.toFixed(5)}, ${pointFromAttendanceStart(firstAttendance).longitude.toFixed(5)}`
           : "--",
-        checkIn: formatDateTime(attendance.login_time),
+        checkIn: formatDateTime(firstAttendance.login_time),
         checkOut: "--",
         duration: "--",
         travelFromPrevious: "--",
         distance: "--",
-        routeSource: "--",
-        activity: "Start Day",
+        remarks: "Start of day",
       });
     }
     visits.forEach((visit, index) => {
@@ -4349,268 +4815,1006 @@ function FieldOfficerDetailsView({
         checkOut: formatDateTime(siteVisitCheckoutValue(visit)),
         duration: durationMinutesLabel(visitMinutes(visit)),
         travelFromPrevious: index === 0 ? "Start Day" : visitTitle(visits[index - 1]),
-        distance: numberLabel(visit.route_km, ""),
-        routeSource: visitRouteSourceLabel(visit),
-        activity: siteVisitStatus(visit),
+        distance: numberLabel(visit.route_km, " km"),
+        remarks: visitRemarks(visit),
+        exception: checkoutExceptionForVisit(visit),
+        visit,
         visitIndex: index,
       });
     });
-    if (attendance.logout_time) {
+    if (lastAttendance.logout_time) {
       rows.push({
         key: "end",
         index: <Square className="h-3.5 w-3.5" />,
         site: "End Day",
-        location: routePointFromAttendanceEnd(attendance)
-          ? `${routePointFromAttendanceEnd(attendance)[0].toFixed(5)}, ${routePointFromAttendanceEnd(attendance)[1].toFixed(5)}`
+        location: routePointFromAttendanceEnd(lastAttendance)
+          ? `${routePointFromAttendanceEnd(lastAttendance)[0].toFixed(5)}, ${routePointFromAttendanceEnd(lastAttendance)[1].toFixed(5)}`
           : "--",
         checkIn: "--",
-        checkOut: formatDateTime(attendance.logout_time),
+        checkOut: formatDateTime(lastAttendance.logout_time),
         duration: durationMinutesLabel(workingMinutes),
         travelFromPrevious: visits.length ? visitTitle(visits.at(-1)) : "--",
         distance: "--",
-        routeSource: "--",
-        activity: "End Day",
+        remarks: "End of day",
       });
     }
     return rows;
-  }, [attendance, visits, workingMinutes]);
+  }, [firstAttendance, lastAttendance, visits, workingMinutes]);
+
+  const selectedTravelFromPrevious = selectedVisit
+    ? activeVisitIndex === 0
+      ? "Start Day"
+      : visitTitle(visits[activeVisitIndex - 1])
+    : "--";
+  const selectedCheckoutException = selectedVisit
+    ? checkoutExceptionForVisit(selectedVisit)
+    : null;
+  const selectedCheckoutReviewStatus = selectedVisit
+    ? checkoutReviewStatus(selectedVisit)
+    : null;
+  const showCheckoutReviewPreview = (visit, action) => {
+    setCheckoutReviewPreview({
+      visitKey:
+        visit?.id ||
+        `${visit?.check_in_time || "visit"}-${visitTitle(visit)}`,
+      action,
+      message:
+        "Approval saving requires backend support. This is currently a UI preview only.",
+    });
+  };
+  const tabs = [
+    ["overview", "Overview"],
+    ["visits", "Visits"],
+    ["km", "KM & Petrol"],
+    ...(fullTechnicalAccess ? [["route", "Route / GPS Evidence"]] : []),
+    ["report", "Report"],
+  ];
+  const openPrintReport = () => {
+    setDrillDownOpen(true);
+    setActiveTab("report");
+    window.setTimeout(() => window.print(), 120);
+  };
+
+  if (!drillDownOpen) {
+    return (
+      <div className="min-h-screen space-y-4 bg-slate-50/70 p-1 sm:p-2">
+        <header className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-3">
+              <button
+                type="button"
+                onClick={onBack}
+                className="focus-ring grid h-9 w-9 shrink-0 place-items-center rounded-full border border-slate-200 text-qpms-700 hover:bg-qpms-50"
+                aria-label="Back to list"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+              <div>
+                <h1 className="text-xl font-black text-slate-950 sm:text-2xl">
+                  {officer?.name || "--"}
+                </h1>
+                <p className="mt-1 text-sm font-semibold text-slate-500">
+                  Employee ID: {displayValue(officer?.employeeCode || officer?.foId)} ·{" "}
+                  {displayValue(officer?.designation || officer?.role)} ·{" "}
+                  {displayValue(officer?.state)}
+                </p>
+                <p className="mt-1 text-xs font-semibold text-qpms-700">
+                  Selected range: {formatDateOnly(fromDate)} to {formatDateOnly(toDate)}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-end gap-2">
+              <input
+                type="date"
+                value={draftFromDate}
+                onChange={(event) => onDraftFromDate(event.target.value)}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
+                aria-label="Detail from date"
+              />
+              <span className="pb-2 text-xs text-slate-400">to</span>
+              <input
+                type="date"
+                value={draftToDate}
+                onChange={(event) => onDraftToDate(event.target.value)}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
+                aria-label="Detail to date"
+              />
+              <button
+                type="button"
+                onClick={onApplyDate}
+                className="focus-ring rounded-lg border border-qpms-200 px-3 py-2 text-xs font-black text-qpms-700"
+              >
+                Apply
+              </button>
+              <button
+                type="button"
+                onClick={() => setDrillDownOpen(true)}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg bg-qpms-700 px-4 py-2 text-xs font-black text-white hover:bg-qpms-800"
+              >
+                <ClipboardList className="h-4 w-4" /> Open Drill Down
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <div className="grid grid-cols-2 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:grid-cols-3 xl:grid-cols-6">
+          <DetailSummaryCard icon={PlayCircle} label="Start Day" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
+          <DetailSummaryCard icon={Square} label="End Day" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
+          <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Selected range" tone="purple" />
+          <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint="Approved route" tone="green" />
+          <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`@ ${formatInr(ratePerKm)} / km`} tone="amber" />
+          <DetailSummaryCard icon={ShieldCheck} label="Status" value={displayValue(lastAttendance.status || status.label)} hint={attendances.length > 1 ? `${attendances.length} attendance days` : "--"} tone={isLive ? "green" : "blue"} />
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-black text-slate-950">Visit Timeline Summary</h2>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {visits.length} visits in the selected date range
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRouteMapOpen((value) => !value)}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-qpms-200 px-3 py-2 text-xs font-black text-qpms-700"
+              >
+                <MapPinned className="h-4 w-4" />
+                {routeMapOpen ? "Hide Route Map" : "Show Route Map"}
+              </button>
+            </div>
+            <div className="mt-3 overflow-auto rounded-xl border border-slate-100">
+              <table className="min-w-[680px] text-left text-xs">
+                <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-500">
+                  <tr>
+                    {["#", "Site / Client", "Check-in", "Check-out", "Duration", "Route KM", "Remarks"].map((heading) => (
+                      <th key={heading} className="px-3 py-3">{heading}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-semibold text-slate-600">
+                  {visits.map((visit, index) => (
+                    <tr key={visit.id || index}>
+                      <td className="px-3 py-3">{index + 1}</td>
+                      <td className="px-3 py-3 font-black text-slate-900">{visitTitle(visit)} / {visitClient(visit)}</td>
+                      <td className="whitespace-nowrap px-3 py-3">{formatDateTime(visit.check_in_time)}</td>
+                      <td className="whitespace-nowrap px-3 py-3">{formatDateTime(siteVisitCheckoutValue(visit))}</td>
+                      <td className="px-3 py-3">{durationMinutesLabel(visitMinutes(visit))}</td>
+                      <td className="px-3 py-3">{numberLabel(visit.route_km, " km")}</td>
+                      <td className="px-3 py-3">{visitRemarks(visit)}</td>
+                    </tr>
+                  ))}
+                  {!visits.length ? (
+                    <tr><td colSpan={7} className="px-3 py-10 text-center text-sm text-slate-500">No visits available for this date range.</td></tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+            {routeMapOpen ? (
+              <div className="mt-4">
+                <GoogleRouteMap officer={officer} routeLogs={routeLogs} fromDate={fromDate} toDate={toDate} />
+              </div>
+            ) : null}
+          </section>
+
+          <aside className="space-y-4">
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="text-base font-black text-slate-950">Business Summary</h2>
+              <div className="mt-4 space-y-3 text-sm font-semibold">
+                <div className="flex justify-between"><span className="text-slate-500">Attendance days</span><strong>{attendances.length || "--"}</strong></div>
+                <div className="flex justify-between"><span className="text-slate-500">Site visits</span><strong>{visits.length}</strong></div>
+                <div className="flex justify-between"><span className="text-slate-500">Payable KM</span><strong className="text-emerald-600">{Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"}</strong></div>
+                <div className="flex justify-between border-t border-slate-100 pt-3"><span className="text-slate-600">Petrol Amount</span><strong className="text-lg">{moneyLabel(petrolAmount)}</strong></div>
+              </div>
+            </section>
+            {reviewFlags.length ? (
+              <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <h2 className="text-sm font-black text-amber-900">Needs attention</h2>
+                <p className="mt-2 text-xs font-semibold leading-5 text-amber-800">
+                  Some attendance or route records need administrative review.
+                </p>
+              </section>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setDrillDownOpen(true)}
+              className="focus-ring w-full rounded-xl bg-qpms-700 px-4 py-3 text-sm font-black text-white"
+            >
+              View KM Report
+            </button>
+          </aside>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="max-w-full overflow-x-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-500">
-            <span>Operations</span>
-            <ChevronRight className="h-4 w-4" />
-            <span className="font-black text-slate-950">Field Officer Details</span>
-          </div>
-          <div className="mt-5 flex min-w-0 items-center gap-5">
-            <span className="grid h-16 w-16 place-items-center rounded-full bg-slate-100 text-qpms-800">
-              <User className="h-8 w-8" />
-            </span>
+    <div className="fo-activity-detail min-h-screen space-y-4 bg-slate-50/70 p-1 sm:p-2">
+      <header className="fo-screen-only rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <button
+              type="button"
+              onClick={onBack}
+              className="focus-ring mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-full border border-slate-200 text-qpms-700 hover:bg-qpms-50"
+              aria-label="Back to operations dashboard"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
             <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-3">
-                <h1 className="min-w-0 break-words text-3xl font-black tracking-normal text-slate-950">{officer?.name || "--"}</h1>
-                <span className={`rounded-full px-3 py-1 text-xs font-black ${isLive ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                  {displayValue(status.label)}
-                </span>
-              </div>
-              <div className="mt-3 flex flex-wrap items-center gap-6 text-sm font-semibold text-slate-600">
-                <span>Employee ID: {displayValue(officer?.employeeCode || officer?.foId)}</span>
-                <span className="inline-flex items-center gap-2"><Phone className="h-4 w-4 text-qpms-700" /> {displayValue(officer?.phone)}</span>
-                <span className="inline-flex items-center gap-2"><MapPin className="h-4 w-4 text-qpms-700" /> {displayValue(officer?.state)}</span>
-              </div>
+              <h1 className="break-words text-xl font-black text-slate-950 sm:text-2xl">
+                {officer?.name || "--"} — Field Activity & KM Report
+              </h1>
+              <p className="mt-1 text-sm font-semibold text-slate-500">
+                Employee ID: {displayValue(officer?.employeeCode || officer?.foId)} ·{" "}
+                {displayValue(officer?.designation || officer?.role)} ·{" "}
+                {displayValue(officer?.state)}
+              </p>
             </div>
           </div>
-        </div>
-        <div className="min-w-0 max-w-full grid gap-3">
-          <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-wrap items-end justify-end gap-2">
             <label>
-              <span className="text-xs font-bold text-slate-600">From Date</span>
-              <input type="date" value={draftFromDate} onChange={(event) => onDraftFromDate(event.target.value)} className="mt-1 rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-800 outline-none focus:border-qpms-500" />
+              <span className="sr-only">From Date</span>
+              <input
+                type="date"
+                value={draftFromDate}
+                onChange={(event) => onDraftFromDate(event.target.value)}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 outline-none focus:border-qpms-500"
+              />
             </label>
-            <span className="pb-2 text-slate-400">to</span>
+            <span className="pb-2 text-xs font-semibold text-slate-400">to</span>
             <label>
-              <span className="text-xs font-bold text-slate-600">To Date</span>
-              <input type="date" value={draftToDate} onChange={(event) => onDraftToDate(event.target.value)} className="mt-1 rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-800 outline-none focus:border-qpms-500" />
+              <span className="sr-only">To Date</span>
+              <input
+                type="date"
+                value={draftToDate}
+                onChange={(event) => onDraftToDate(event.target.value)}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 outline-none focus:border-qpms-500"
+              />
             </label>
-            <button type="button" onClick={onApplyDate} className="focus-ring rounded-lg border border-qpms-600 px-5 py-2 text-sm font-black text-qpms-700 hover:bg-qpms-50">Apply</button>
-            <button type="button" onClick={onExport} className="focus-ring inline-flex items-center gap-2 rounded-lg bg-qpms-700 px-5 py-2 text-sm font-black text-white hover:bg-qpms-800">
-              <Download className="h-4 w-4" /> Export Report
+            <button
+              type="button"
+              onClick={onApplyDate}
+              className="focus-ring rounded-lg border border-qpms-200 px-3 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50"
+            >
+              Apply
+            </button>
+            <button
+              type="button"
+              onClick={openPrintReport}
+              className="focus-ring inline-flex items-center gap-2 rounded-lg border border-qpms-200 bg-white px-3 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50"
+            >
+              <Download className="h-4 w-4" /> Export PDF
+            </button>
+            <button
+              type="button"
+              onClick={onExport}
+              className="focus-ring inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700"
+            >
+              <FileSpreadsheet className="h-4 w-4" /> Export Excel
+            </button>
+            <button
+              type="button"
+              onClick={onBack}
+              className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-qpms-700 hover:bg-slate-50"
+            >
+              <ChevronLeft className="h-4 w-4" /> Back to List
             </button>
           </div>
-          <button type="button" onClick={onBack} className="focus-ring ml-auto inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-sm font-black text-qpms-700 hover:bg-slate-50">
-            <ChevronLeft className="h-4 w-4" /> Back to List
-          </button>
         </div>
+      </header>
+
+      <div className="fo-screen-only grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-3 shadow-sm sm:grid-cols-2 xl:grid-cols-4">
+        <DetailSummaryCard icon={PlayCircle} label="Start Day" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
+        <DetailSummaryCard icon={Square} label="End Day" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
+        <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Visited" tone="purple" />
+        <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint="Approved route" tone="green" />
+        {fullTechnicalAccess ? <DetailSummaryCard icon={Navigation2} label="GPS Audit KM" value={Number.isFinite(gpsAuditKm) ? `${gpsAuditKm.toFixed(1)} km` : "--"} hint="Supporting evidence" tone="blue" /> : null}
+        {fullTechnicalAccess ? <DetailSummaryCard icon={CircleGauge} label="Delta" value={Number.isFinite(kmDelta) ? `${kmDelta.toFixed(1)} km` : "--"} hint={Number.isFinite(differencePercent) ? `${differencePercent.toFixed(1)}%` : "--"} tone={Math.abs(kmDelta || 0) > 2 ? "amber" : "green"} /> : null}
+        <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`@ ${formatInr(ratePerKm)} / km`} tone="amber" />
+        <DetailSummaryCard icon={ShieldCheck} label="Status" value={displayValue(lastAttendance.status || status.label)} hint={isLive ? "Active" : "--"} tone={isLive ? "green" : "red"} />
       </div>
 
-      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
-        <DetailSummaryCard icon={PlayCircle} label="Start Day" value={formatTime(attendance.login_time)} hint={formatDateOnly(attendance.login_time)} tone="green" />
-        <DetailSummaryCard icon={Square} label="End Day" value={formatTime(attendance.logout_time)} hint={formatDateOnly(attendance.logout_time)} tone="red" />
-        <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length ? visits.length : "--"} hint="--" tone="purple" />
-        <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint="--" tone="blue" />
-        <DetailSummaryCard icon={Clock} label="Working Hours" value={durationMinutesLabel(workingMinutes)} hint="--" tone="amber" />
-        <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`@ ${formatInr(ratePerKm)} / km`} tone="green" />
-        <DetailSummaryCard icon={ShieldCheck} label="Status" value={displayValue(attendance.status || status.label)} hint="--" tone="green" />
-      </div>
-
-      <section className="mt-3 min-w-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-base font-black text-slate-950">Route Map</h2>
-            <p className="text-xs font-semibold text-slate-500">Visual route proof from GPS logs, stored map data, or route anchors.</p>
-          </div>
+      <nav className="fo-screen-only flex overflow-x-auto rounded-2xl border border-slate-200 bg-white px-2 shadow-sm">
+        {tabs.map(([id, label]) => (
           <button
+            key={id}
             type="button"
-            onClick={() => setRouteMapOpen((value) => !value)}
-            className="focus-ring inline-flex items-center gap-2 rounded-lg border border-qpms-200 px-4 py-2 text-sm font-black text-qpms-700 hover:bg-qpms-50"
+            onClick={() => setActiveTab(id)}
+            className={`focus-ring min-w-max border-b-2 px-5 py-3 text-sm font-bold ${
+              activeTab === id
+                ? "border-qpms-600 text-qpms-700"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
           >
-            <MapPinned className="h-4 w-4" />
-            {routeMapOpen ? "Hide Route Map" : "Show Route Map"}
+            {label}
           </button>
-        </div>
-        {routeMapOpen ? (
-          <div className="mt-3">
-            <GoogleRouteMap officer={officer} routeLogs={routeLogs} fromDate={fromDate} toDate={toDate} />
-          </div>
-        ) : null}
-      </section>
+        ))}
+      </nav>
 
-      <div className="mt-3 grid min-w-0 gap-3 overflow-hidden 2xl:grid-cols-[minmax(0,1fr)_minmax(390px,460px)]">
-        <div className="grid min-w-0 content-start gap-3">
-          <section className="min-h-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-            <div className="mb-3 flex items-center gap-2">
-              <h2 className="text-base font-black text-slate-950">Visit Timeline</h2>
-              <span className="text-sm font-semibold text-slate-500">({formatDateOnly(fromDate)} - {formatDateOnly(toDate)})</span>
+      {activeTab === "overview" ? (
+        <div className="fo-screen-only grid gap-4 xl:grid-cols-2">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-base font-black text-slate-950">Employee & Attendance</h2>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {[
+                ["Employee Name", officer?.name],
+                ["Employee ID", officer?.employeeCode || officer?.foId],
+                ["Role / Designation", officer?.designation || officer?.role],
+                ["State", officer?.state],
+                ["Mobile", officer?.phone],
+                ["Attendance Status", attendance.status || status.label],
+                ["Working Duration", durationMinutesLabel(workingMinutes)],
+                ["Total Visits", visits.length],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-[11px] font-bold uppercase text-slate-400">{label}</p>
+                  <p className="mt-1 text-sm font-black text-slate-800">{displayValue(value)}</p>
+                </div>
+              ))}
             </div>
-            <div className="max-h-[390px] overflow-auto rounded-lg border border-slate-100">
-              <table className="min-w-[900px] text-left text-xs">
-                <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-black text-slate-600">
+          </section>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-base font-black text-slate-950">Start / End Day Evidence</h2>
+            <div className="mt-4 space-y-3">
+              {[
+                ["Start Day", formatDateTime(attendance.login_time), startPoint ? `${startPoint.latitude.toFixed(5)}, ${startPoint.longitude.toFixed(5)}` : "--", startBattery],
+                ["End Day", formatDateTime(attendance.logout_time), endPoint ? `${endPoint[0].toFixed(5)}, ${endPoint[1].toFixed(5)}` : "--", endBattery],
+              ].map(([label, time, location, battery]) => (
+                <div key={label} className="rounded-xl border border-slate-200 p-4">
+                  <div className="flex items-center justify-between">
+                    <strong className="text-sm text-slate-900">{label}</strong>
+                    <span className="text-xs font-bold text-slate-500">{time}</span>
+                  </div>
+                  <p className="mt-2 text-xs font-semibold text-slate-500">Location: {location}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    Battery: {battery === null || battery === undefined ? "--" : `${battery}%`}
+                  </p>
+                </div>
+              ))}
+              {reviewFlags.length ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
+                  Review warnings: {reviewFlags.join(", ")}
+                </div>
+              ) : null}
+            </div>
+          </section>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm xl:col-span-2">
+            <h2 className="text-base font-black text-slate-950">
+              Site Visit Summary
+            </h2>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                ["Total Sites Visited", visits.length],
+                ["First Site", visits.length ? visitTitle(visits[0]) : "--"],
+                ["Last Site", visits.length ? visitTitle(visits.at(-1)) : "--"],
+                ["Checkout Exceptions", checkoutExceptions.length],
+                ["Open / Missing Checkout", checkoutExceptions.filter((item) => item.exception.type === "missing").length],
+                ["Total Payable KM", Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"],
+                ["Petrol Amount", moneyLabel(petrolAmount)],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-[11px] font-bold uppercase text-slate-400">
+                    {label}
+                  </p>
+                  <p className="mt-1 break-words text-sm font-black text-slate-800">
+                    {displayValue(value)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {activeTab === "visits" ? (
+        <div className="fo-screen-only min-w-0 space-y-4">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-base font-black text-slate-950">
+              Visit Timeline{" "}
+              <span className="text-sm font-semibold text-slate-500">
+                ({visits.length} Sites Visited)
+              </span>
+            </h2>
+            <div className="mt-3 w-full overflow-x-auto rounded-xl border border-slate-100">
+              <table className="min-w-[920px] w-full text-left text-xs">
+                <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-500">
                   <tr>
-                    {["#", "Site / Client", "Location", "Check-in", "Check-out", "Duration", "Travel From Previous", "Distance (km)", "Route Source", "Activity", "View"].map((heading) => (
-                      <th key={heading} className="whitespace-nowrap border-b border-slate-100 px-3 py-2">{heading}</th>
+                    {["#", "Site / Client", "Check-in", "Check-out", "Duration", "Travel from Previous", "Route KM", "Remarks"].map((heading) => (
+                      <th key={heading} className="whitespace-nowrap px-3 py-3">{heading}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-semibold text-slate-600">
                   {timelineRows.map((row) => (
-                    <tr key={row.key} className="hover:bg-slate-50">
-                      <td className="px-3 py-2">
-                        <span className={`grid h-6 w-6 place-items-center rounded-full text-[11px] font-black text-white ${row.key === "start" ? "bg-emerald-500" : row.key === "end" ? "bg-red-500" : "bg-blue-600"}`}>{row.index}</span>
+                    <tr
+                      key={row.key}
+                      onClick={() => row.visitIndex !== undefined && setSelectedVisitIndex(row.visitIndex)}
+                      className={row.visitIndex !== undefined ? "cursor-pointer hover:bg-qpms-50/40" : ""}
+                    >
+                      <td className="px-3 py-3">
+                        <span className={`grid h-6 w-6 place-items-center rounded-full text-[10px] font-black text-white ${row.key === "start" ? "bg-emerald-500" : row.key === "end" ? "bg-slate-500" : "bg-blue-600"}`}>{row.index}</span>
                       </td>
-                      <td className="min-w-40 px-3 py-2 text-slate-900">{row.site}</td>
-                      <td className="min-w-28 px-3 py-2">{row.location}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{row.checkIn}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{row.checkOut}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{row.duration}</td>
-                      <td className="min-w-36 px-3 py-2">{row.travelFromPrevious}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{row.distance}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{row.routeSource}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{row.activity}</td>
-                      <td className="px-3 py-2">
-                        {row.visitIndex !== undefined ? (
-                          <button type="button" onClick={() => setSelectedVisitIndex(row.visitIndex)} className="focus-ring grid h-8 w-8 place-items-center rounded-full text-qpms-700 hover:bg-qpms-50" aria-label="View site details">
-                            <Eye className="h-4 w-4" />
-                          </button>
-                        ) : "--"}
+                      <td className="min-w-44 px-3 py-3 font-black text-slate-900">{row.site}</td>
+                      <td className="whitespace-nowrap px-3 py-3">{row.checkIn}</td>
+                      <td className="whitespace-nowrap px-3 py-3">{row.checkOut}</td>
+                      <td className="whitespace-nowrap px-3 py-3">{row.duration}</td>
+                      <td className="min-w-36 px-3 py-3">{row.travelFromPrevious}</td>
+                      <td className="whitespace-nowrap px-3 py-3">{row.distance}</td>
+                      <td className="min-w-44 px-3 py-3">
+                        <div className="space-y-1.5">
+                          {row.exception ? <CheckoutStatusChip exception={row.exception} /> : null}
+                          <p className="break-words text-[11px] text-slate-500">{row.remarks}</p>
+                          {row.exception?.requiresReview ? (
+                            <>
+                              <CheckoutReviewStatusChip
+                                status={checkoutReviewStatus(row.visit)}
+                              />
+                              <p className="text-[10px] font-semibold text-amber-700">
+                                Operation Manager / Branch Head review required
+                              </p>
+                              {canReviewCheckoutExceptions ? (
+                                <div
+                                  className="flex flex-wrap gap-1"
+                                  onClick={(event) => event.stopPropagation()}
+                                >
+                                  {[
+                                    ["Approve", "Approve"],
+                                    ["Reject", "Reject"],
+                                    ["Ask Clarification", "Ask Clarification"],
+                                  ].map(([label, action]) => (
+                                    <button
+                                      key={action}
+                                      type="button"
+                                      onClick={() =>
+                                        showCheckoutReviewPreview(
+                                          row.visit,
+                                          action,
+                                        )
+                                      }
+                                      className="focus-ring rounded-md border border-slate-200 bg-white px-2 py-1 text-[9px] font-black text-slate-700 hover:border-qpms-300 hover:bg-qpms-50"
+                                    >
+                                      {label}
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {checkoutReviewPreview?.visitKey ===
+                              (row.visit?.id ||
+                                `${row.visit?.check_in_time || "visit"}-${visitTitle(row.visit)}`) ? (
+                                <div className="rounded-md bg-slate-100 p-2 text-[10px] font-semibold text-slate-600">
+                                  <strong>
+                                    Preview only — not saved
+                                    {checkoutReviewPreview.action
+                                      ? ` (${checkoutReviewPreview.action})`
+                                      : ""}
+                                  </strong>
+                                  <p className="mt-1">
+                                    {checkoutReviewPreview.message}
+                                  </p>
+                                </div>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))}
                   {!timelineRows.length ? (
-                    <tr>
-                      <td colSpan={11} className="px-3 py-8 text-center text-sm text-slate-500">No visit timeline available for selected filters.</td>
-                    </tr>
+                    <tr><td colSpan={8} className="px-3 py-10 text-center text-sm text-slate-500">No visit timeline available for selected filters.</td></tr>
                   ) : null}
                 </tbody>
               </table>
             </div>
           </section>
-        </div>
 
-        <div className="grid min-w-0 content-start gap-3">
-          <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-base font-black text-slate-950">Site Selector <span className="text-sm text-slate-500">({visits.length} Sites Visited)</span></h2>
-              <div className="flex shrink-0 gap-2">
-                <button type="button" disabled={visits.length <= 1} onClick={() => setSelectedVisitIndex((value) => Math.max(0, value - 1))} className="focus-ring grid h-8 w-8 place-items-center rounded-lg border border-slate-200 text-qpms-700 disabled:cursor-not-allowed disabled:opacity-40"><ChevronLeft className="h-4 w-4" /></button>
-                <button type="button" disabled={visits.length <= 1} onClick={() => setSelectedVisitIndex((value) => Math.min(visits.length - 1, value + 1))} className="focus-ring grid h-8 w-8 place-items-center rounded-lg border border-slate-200 text-qpms-700 disabled:cursor-not-allowed disabled:opacity-40"><ChevronRight className="h-4 w-4" /></button>
-              </div>
-            </div>
-            <div className="mt-3 flex max-w-full gap-2 overflow-x-auto pb-1">
-              {visits.map((visit, index) => (
-                <button key={visit.id || `${visit.check_in_time}-${index}`} type="button" onClick={() => setSelectedVisitIndex(index)} className={`focus-ring inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-black ${index === activeVisitIndex ? "border-qpms-600 bg-qpms-50 text-qpms-700" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
-                  <span className="grid h-5 w-5 place-items-center rounded-full bg-slate-100 text-[11px]">{index + 1}</span>
-                  {visitTitle(visit)}
-                </button>
-              ))}
-              {!visits.length ? <span className="text-sm font-semibold text-slate-500">No sites visited.</span> : null}
-            </div>
-            <div className="mt-5 grid min-w-0 grid-cols-1 gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(140px,0.65fr)]">
-              <div className="min-w-0">
-                <h3 className="mb-3 text-base font-black text-slate-950">Site Details</h3>
-                {[
-                  ["Site / Client", `${visitTitle(selectedVisit)} / ${visitClient(selectedVisit)}`],
-                  ["Client Name", visitClient(selectedVisit)],
-                  ["Business Type", visitBusinessType(selectedVisit)],
-                  ["Address", selectedVisit?.address || selectedVisit?.location_name],
-                  ["Check-in", formatDateTime(selectedVisit?.check_in_time)],
-                  ["Check-out", formatDateTime(siteVisitCheckoutValue(selectedVisit))],
-                  ["Duration", durationMinutesLabel(visitMinutes(selectedVisit))],
-                  ["Route Source", visitRouteSourceLabel(selectedVisit)],
-                  ["Remarks", visitRemarks(selectedVisit)],
-                ].map(([label, value]) => (
-                  <div key={label} className="grid grid-cols-[120px_1fr] gap-2 py-1 text-xs font-semibold">
-                    <span className="text-qpms-800">{label}</span>
-                    <span className="truncate text-slate-700">{displayValue(value)}</span>
-                  </div>
-                ))}
-              </div>
               <div>
-                <div className="grid h-44 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-300">
-                  <Image className="h-14 w-14" />
+                <h2 className="text-base font-black text-slate-950">
+                  Selected Site Details
+                </h2>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {visits.length ? `Site ${activeVisitIndex + 1} of ${visits.length}` : "No site selected"}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" disabled={visits.length <= 1} onClick={() => setSelectedVisitIndex((value) => Math.max(0, value - 1))} className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-slate-200 text-qpms-700 disabled:opacity-40"><ChevronLeft className="h-4 w-4" /></button>
+                <button type="button" disabled={visits.length <= 1} onClick={() => setSelectedVisitIndex((value) => Math.min(visits.length - 1, value + 1))} className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-slate-200 text-qpms-700 disabled:opacity-40"><ChevronRight className="h-4 w-4" /></button>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {[
+                ["Site / Client", selectedVisit ? `${visitTitle(selectedVisit)} / ${visitClient(selectedVisit)}` : "--"],
+                ["Client Name", visitClient(selectedVisit)],
+                ["Business Type", visitBusinessType(selectedVisit)],
+                ["Address / Coordinates", selectedVisit?.address || selectedVisit?.location_name || visitLocation(selectedVisit)],
+                ["Check-in", formatDateTime(selectedVisit?.check_in_time)],
+                ["Check-out", formatDateTime(siteVisitCheckoutValue(selectedVisit))],
+                ["Duration", durationMinutesLabel(visitMinutes(selectedVisit))],
+                ["Travel from Previous", selectedTravelFromPrevious],
+                ["Route KM", numberLabel(selectedVisit?.route_km, " km")],
+                ["Route Source", visitRouteSourceLabel(selectedVisit)],
+                ["Remarks", visitRemarks(selectedVisit)],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-qpms-700">{label}</p>
+                  <p className="mt-1 break-words text-xs font-semibold text-slate-700">{displayValue(value)}</p>
                 </div>
-                <p className="mt-2 text-center text-sm font-black text-qpms-800">{visits.length ? `${activeVisitIndex + 1} / ${visits.length}` : "--"}</p>
+              ))}
+              <div className="rounded-xl bg-slate-50 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-qpms-700">Checkout Status</p>
+                <div className="mt-2">
+                  {selectedCheckoutException ? <CheckoutStatusChip exception={selectedCheckoutException} /> : "--"}
+                </div>
               </div>
             </div>
           </section>
-        </div>
-      </div>
 
-      <section className="mt-3 min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-base font-black text-slate-950">Activity Photos <span className="text-sm text-slate-500">({visibleActivityUploads.length})</span></h2>
-        <div className="mt-3 flex max-w-full flex-wrap gap-2 overflow-x-auto pb-1">
-          {ACTIVITY_PHOTO_TABS.map((tab) => (
-            <button key={tab} type="button" onClick={() => setPhotoFilter(tab)} className={`focus-ring shrink-0 rounded-lg border px-3 py-2 text-xs font-black ${photoFilter === tab ? "border-qpms-700 bg-qpms-700 text-white" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{tab}</button>
-          ))}
-        </div>
-        <div className="mt-4 min-h-[165px] max-h-[260px] overflow-y-auto rounded-lg border border-dashed border-slate-200 bg-white p-3">
-          {visibleActivityUploads.length ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {visibleActivityUploads.map((upload) => (
-                <a
-                  key={upload.id || upload.local_id || upload.file_url}
-                  href={upload.displayUrl || upload.file_url || undefined}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="group grid grid-cols-[56px_1fr] gap-3 rounded-lg border border-slate-100 bg-slate-50 p-2 text-left hover:border-qpms-200 hover:bg-qpms-50"
-                >
-                  <span className="grid h-14 w-14 place-items-center overflow-hidden rounded-md bg-white text-slate-300">
-                    {activityUploadIsImage(upload) && upload.displayUrl ? (
-                      <img src={upload.displayUrl} alt={activityUploadName(upload)} className="h-full w-full object-cover" />
-                    ) : (
-                      <Image className="h-7 w-7" />
-                    )}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block truncate text-xs font-black text-slate-800">{activityUploadName(upload)}</span>
-                    <span className="mt-1 block truncate text-[11px] font-semibold text-qpms-700">{upload.activityGroup}</span>
-                    <span className="mt-1 block truncate text-[11px] font-semibold text-slate-500">{formatDateTime(activityUploadTime(upload))}</span>
-                  </span>
-                </a>
+          {selectedCheckoutException?.requiresReview ? (
+            <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+              <h2 className="text-base font-black text-amber-950">
+                Checkout Exception Review
+              </h2>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {[
+                  ["Site / Client", `${visitTitle(selectedVisit)} / ${visitClient(selectedVisit)}`],
+                  ["Exception Type", selectedCheckoutException.label],
+                  ["Existing Remarks", visitRemarks(selectedVisit)],
+                  ["Checkout Distance", selectedCheckoutException.distanceMeters === null ? "--" : `${selectedCheckoutException.distanceMeters.toFixed(0)} m`],
+                  ["Check-in Time", formatDateTime(selectedVisit?.check_in_time)],
+                  ["Check-out Time", formatDateTime(siteVisitCheckoutValue(selectedVisit))],
+                  ["Route KM", numberLabel(selectedVisit?.route_km, " km")],
+                  ["Payable KM Impact", Number(selectedVisit?.route_km) > 0 ? `${Number(selectedVisit.route_km).toFixed(1)} km route contribution` : "--"],
+                  ["Review Status", selectedCheckoutReviewStatus?.label || "Pending Review"],
+                ].map(([label, value]) => (
+                  <div key={label}>
+                    <p className="text-[10px] font-bold uppercase text-amber-700">{label}</p>
+                    <p className="mt-1 break-words text-xs font-semibold text-amber-950">{displayValue(value)}</p>
+                  </div>
+                ))}
+              </div>
+              {canReviewCheckoutExceptions ? (
+                <div className="mt-4">
+                  <div className="flex flex-wrap gap-2">
+                    {["Approve", "Reject", "Ask Clarification"].map((action) => (
+                      <button
+                        key={action}
+                        type="button"
+                        onClick={() =>
+                          showCheckoutReviewPreview(selectedVisit, action)
+                        }
+                        className="focus-ring rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-black text-amber-800 hover:bg-amber-100"
+                      >
+                        {action}
+                      </button>
+                    ))}
+                  </div>
+                  {checkoutReviewPreview?.visitKey ===
+                  (selectedVisit?.id ||
+                    `${selectedVisit?.check_in_time || "visit"}-${visitTitle(selectedVisit)}`) ? (
+                    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-100 p-3 text-xs font-semibold text-slate-700">
+                      <strong>
+                        Preview only — not saved
+                        {checkoutReviewPreview.action
+                          ? ` (${checkoutReviewPreview.action})`
+                          : ""}
+                      </strong>
+                      <p className="mt-1">{checkoutReviewPreview.message}</p>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs font-semibold text-amber-800">
+                      Approval saving requires backend support.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-4 text-xs font-semibold text-amber-800">
+                  This exception requires Operations Manager / Branch Head review.
+                </p>
+              )}
+            </section>
+          ) : null}
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-base font-black text-slate-950">Activity Photos <span className="text-sm text-slate-500">({visibleActivityUploads.length})</span></h2>
+            <div className="mt-3 flex max-w-full flex-wrap gap-2">
+              {ACTIVITY_PHOTO_TABS.map((tab) => (
+                <button key={tab} type="button" onClick={() => setPhotoFilter(tab)} className={`focus-ring rounded-lg border px-3 py-2 text-xs font-black ${photoFilter === tab ? "border-qpms-700 bg-qpms-700 text-white" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{tab}</button>
               ))}
             </div>
-          ) : (
-            <div className="grid min-h-[150px] place-items-center text-center">
-              <div>
-                <Image className="mx-auto h-12 w-12 text-slate-300" />
-                <p className="mt-3 text-sm font-semibold text-slate-500">No activity photos uploaded for selected filters.</p>
-                {activitySubmissions.length && !activityUploads.length ? (
-                  <p className="mt-1 text-xs font-semibold text-slate-400">Activity submissions found, but no upload files are linked.</p>
+            <div className="mt-4 min-h-[180px] rounded-xl border border-dashed border-slate-200 bg-slate-50/40 p-4">
+              {visibleActivityUploads.length ? (
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {visibleActivityUploads.map((upload) => (
+                    <a key={upload.id || upload.local_id || upload.file_url} href={upload.displayUrl || upload.file_url || undefined} target="_blank" rel="noreferrer" className="grid grid-cols-[56px_1fr] gap-3 rounded-lg border border-slate-100 bg-white p-2 hover:border-qpms-200">
+                      <span className="grid h-14 w-14 place-items-center overflow-hidden rounded-md bg-slate-50 text-slate-300">
+                        {activityUploadIsImage(upload) && upload.displayUrl ? <img src={upload.displayUrl} alt={activityUploadName(upload)} className="h-full w-full object-cover" /> : <Image className="h-7 w-7" />}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-xs font-black text-slate-800">{activityUploadName(upload)}</span>
+                        <span className="mt-1 block truncate text-[11px] font-semibold text-qpms-700">{upload.activityGroup}</span>
+                        <span className="mt-1 block truncate text-[11px] font-semibold text-slate-500">{formatDateTime(activityUploadTime(upload))}</span>
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <div className="grid min-h-[145px] place-items-center text-center">
+                  <div>
+                    <Image className="mx-auto h-12 w-12 text-slate-300" />
+                    <p className="mt-3 text-sm font-semibold text-slate-500">No activity photos uploaded for selected filters.</p>
+                    {activitySubmissions.length && !activityUploads.length ? <p className="mt-1 text-xs font-semibold text-slate-400">Activity submissions found, but no upload files are linked.</p> : null}
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {activeTab === "km" ? (
+        <section className="fo-screen-only rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            {[
+              ["Payable KM", Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--", "text-emerald-600"],
+              ...(fullTechnicalAccess
+                ? [
+                    ["GPS Audit KM", Number.isFinite(gpsAuditKm) ? `${gpsAuditKm.toFixed(1)} km` : "--", "text-blue-600"],
+                    ["Difference", Number.isFinite(kmDelta) ? `${kmDelta.toFixed(1)} km` : "--", "text-amber-600"],
+                    ["Difference %", Number.isFinite(differencePercent) ? `${differencePercent.toFixed(1)}%` : "--", "text-amber-600"],
+                  ]
+                : []),
+              [`Petrol @ ₹${ratePerKm}/km`, moneyLabel(petrolAmount), "text-slate-950"],
+            ].map(([label, value, tone]) => (
+              <div key={label} className="rounded-xl border border-slate-200 p-4">
+                <p className="text-xs font-bold text-slate-500">{label}</p>
+                <p className={`mt-2 text-2xl font-black ${tone}`}>{value}</p>
+              </div>
+            ))}
+          </div>
+          {fullTechnicalAccess ? <p className="mt-5 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm font-semibold text-blue-800">
+            Payable KM is used for reimbursement. GPS Audit KM is supporting evidence only.
+          </p> : null}
+          <div className="mt-5 overflow-x-auto rounded-xl border border-slate-200">
+            <table className="min-w-[760px] w-full text-left text-xs">
+              <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-500">
+                <tr>
+                  {["Site / Client", "Travel From Previous", "Route KM", "Payable KM Contribution", "Remarks / Exception"].map((heading) => (
+                    <th key={heading} className="px-3 py-3">{heading}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {visits.map((visit, index) => {
+                  const exception = checkoutExceptionForVisit(visit);
+                  const routeKm = Number(visit?.route_km);
+                  return (
+                    <tr key={visit.id || index}>
+                      <td className="px-3 py-3 font-black text-slate-900">
+                        {visitTitle(visit)} / {visitClient(visit)}
+                      </td>
+                      <td className="px-3 py-3 text-slate-600">
+                        {index === 0 ? "Start Day" : visitTitle(visits[index - 1])}
+                      </td>
+                      <td className="px-3 py-3 text-slate-700">
+                        {numberLabel(visit.route_km, " km")}
+                      </td>
+                      <td className="px-3 py-3 font-bold text-emerald-700">
+                        {Number.isFinite(routeKm) && routeKm > 0
+                          ? `${routeKm.toFixed(1)} km`
+                          : "--"}
+                      </td>
+                      <td className="px-3 py-3">
+                        <div className="space-y-1">
+                          <CheckoutStatusChip exception={exception} />
+                          <p className="text-[11px] text-slate-500">
+                            {visitRemarks(visit)}
+                          </p>
+                          {exception.requiresReview ? (
+                            <>
+                              <CheckoutReviewStatusChip
+                                status={checkoutReviewStatus(visit)}
+                              />
+                              {canReviewCheckoutExceptions ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {["Approve", "Reject", "Ask Clarification"].map(
+                                    (action) => (
+                                      <button
+                                        key={action}
+                                        type="button"
+                                        onClick={() =>
+                                          showCheckoutReviewPreview(visit, action)
+                                        }
+                                        className="focus-ring rounded-md border border-slate-200 bg-white px-2 py-1 text-[9px] font-black text-slate-700 hover:bg-qpms-50"
+                                      >
+                                        {action}
+                                      </button>
+                                    ),
+                                  )}
+                                </div>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!visits.length ? (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-8 text-center text-slate-500">
+                      No site-wise KM data available for the selected range.
+                    </td>
+                  </tr>
                 ) : null}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-4 flex flex-wrap justify-end gap-6 rounded-xl bg-slate-50 p-4 text-sm font-semibold">
+            <span>
+              Total Payable KM:{" "}
+              <strong className="text-emerald-700">
+                {Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"}
+              </strong>
+            </span>
+            <span>
+              Petrol @ ₹4/km:{" "}
+              <strong className="text-slate-950">
+                {moneyLabel(petrolAmount)}
+              </strong>
+            </span>
+          </div>
+        </section>
+      ) : null}
+
+      {activeTab === "route" ? (
+        <div className="fo-screen-only space-y-4">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-black text-slate-950">Route / GPS Evidence</h2>
+                <p className="mt-1 text-xs font-semibold text-slate-500">GPS evidence is shown separately from payable route KM.</p>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={onRecalculateKm} disabled={recalculatingKm} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-qpms-200 px-4 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50 disabled:opacity-50">
+                  <RefreshCw className={`h-4 w-4 ${recalculatingKm ? "animate-spin" : ""}`} />
+                  {recalculatingKm ? "Recalculating..." : "Recalculate KM"}
+                </button>
+                <button type="button" onClick={() => setRouteMapOpen((value) => !value)} className="focus-ring inline-flex items-center gap-2 rounded-lg bg-qpms-700 px-4 py-2 text-xs font-black text-white hover:bg-qpms-800">
+                  <MapPinned className="h-4 w-4" /> {routeMapOpen ? "Hide Route Map" : "Show Route Map"}
+                </button>
               </div>
             </div>
-          )}
+            {recalculationResult?.message ? <p className={`mt-3 rounded-lg p-3 text-xs font-semibold ${recalculationResult.ok ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{recalculationResult.message}</p> : null}
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                ["GPS Log Count", gpsMetrics.gpsLogsCount],
+                ["Raw GPS KM", `${Number(gpsMetrics.rawGpsKm || 0).toFixed(1)} km`],
+                ["Filtered GPS KM", `${Number(gpsMetrics.filteredGpsKm || 0).toFixed(1)} km`],
+                ["GPS Audit KM", `${Number(gpsAuditKm || 0).toFixed(1)} km`],
+                ["Valid Points", gpsMetrics.validPointsCount],
+                ["Rejected Points", gpsMetrics.rejectedPointsCount],
+                ["Max GPS Gap", formatDurationSeconds(gpsMetrics.maxGapSeconds)],
+                ["Confidence", gpsMetrics.kmConfidence || "Needs Review"],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl bg-slate-50 p-4">
+                  <p className="text-[11px] font-bold uppercase text-slate-400">{label}</p>
+                  <p className="mt-1 text-base font-black text-slate-900">{displayValue(value)}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border border-slate-200 p-4 text-sm">
+                <strong className="text-slate-900">Route source</strong>
+                <p className="mt-1 text-slate-600">{officer.routeKmSource || "--"}</p>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-4 text-sm">
+                <strong className="text-slate-900">Review flags</strong>
+                <p className="mt-1 text-slate-600">{reviewFlags.length ? reviewFlags.join(", ") : "No review flags"}</p>
+              </div>
+            </div>
+            {routeMapOpen ? <div className="mt-4"><GoogleRouteMap officer={officer} routeLogs={routeLogs} fromDate={fromDate} toDate={toDate} /></div> : null}
+          </section>
         </div>
-      </section>
+      ) : null}
 
-      <div className="mt-3 grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
-        <DetailStripItem icon={UserRoundCheck} label="Total Sites Visited" value={visits.length ? visits.length : "--"} />
-        <DetailStripItem icon={Route} label="Total Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} />
-        <DetailStripItem icon={Clock} label="Total Working Hours" value={durationMinutesLabel(workingMinutes)} />
-        <DetailStripItem icon={CalendarDays} label="Total Duration" value={durationMinutesLabel(totalVisitMinutes)} />
-        <DetailStripItem icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`@ ${formatInr(ratePerKm)} / km`} />
-      </div>
+      {activeTab === "report" ? (
+        <div className="fo-report-shell rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="fo-screen-only mb-4 flex items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50 p-3">
+            <p className="text-xs font-semibold text-blue-800">This layout is optimized for print and PDF. Use Export PDF to generate a shareable report.</p>
+            <button type="button" onClick={() => window.print()} className="focus-ring rounded-lg bg-qpms-700 px-4 py-2 text-xs font-black text-white">Export PDF</button>
+          </div>
+          <article className="fo-print-report mx-auto max-w-[980px] bg-white text-slate-900">
+            <div className="fo-report-header flex items-start justify-between gap-6 border-b-2 border-qpms-700 pb-4">
+              <div className="flex min-w-0 items-start gap-4">
+                <img
+                  src={qpmsLogo}
+                  alt="QPMS logo"
+                  className="h-16 w-16 shrink-0 rounded-xl object-cover"
+                />
+                <div>
+                  <p className="text-xl font-black leading-none text-qpms-700">
+                    QPMS
+                  </p>
+                  <p className="mt-1 text-xs font-bold text-slate-600">
+                    Quality Property Management Services
+                  </p>
+                  <h1 className="mt-3 text-2xl font-black">
+                    Field Activity & KM Report
+                  </h1>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">
+                    {formatDateOnly(fromDate)} to {formatDateOnly(toDate)}
+                  </p>
+                </div>
+              </div>
+              <div className="shrink-0 text-right text-xs leading-5 text-slate-500">
+                <p>
+                  <strong className="text-slate-700">Generated by:</strong>{" "}
+                  myQPMS Operations
+                </p>
+                <p>
+                  <strong className="text-slate-700">Generated at:</strong>{" "}
+                  {formatDateTime(new Date())}
+                </p>
+              </div>
+            </div>
+
+            <section className="fo-report-section mt-5">
+              <h2 className="mb-3 text-base font-black text-slate-900">
+                Employee & Attendance Details
+              </h2>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-lg border border-slate-200 p-4 text-sm md:grid-cols-4">
+              {[
+                ["Employee Name", officer?.name],
+                ["Employee ID", officer?.employeeCode || officer?.foId],
+                ["Role / Designation", officer?.designation || officer?.role],
+                ["State", officer?.state],
+                ["Mobile", officer?.phone],
+                ["Attendance Status", lastAttendance.status || status.label],
+                ["Start Day", formatDateTime(firstAttendance.login_time)],
+                ["End Day", formatDateTime(lastAttendance.logout_time)],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <p className="text-xs font-bold text-slate-400">{label}</p>
+                  <p className="mt-1 font-bold text-slate-800">
+                    {displayValue(value)}
+                  </p>
+                </div>
+              ))}
+              </div>
+            </section>
+
+            <section className="fo-report-section mt-5">
+              <h2 className="mb-3 text-base font-black text-slate-900">
+                KM & Petrol Summary
+              </h2>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+                  <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">
+                    Payable KM
+                  </p>
+                  <p className="mt-2 text-2xl font-black text-emerald-900">
+                    {Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-emerald-700">
+                    Approved route KM
+                  </p>
+                </div>
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                  <p className="text-xs font-bold uppercase tracking-wide text-amber-700">
+                    Petrol Amount
+                  </p>
+                  <p className="mt-2 text-2xl font-black text-amber-950">
+                    {moneyLabel(petrolAmount)}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-amber-700">
+                    @ ₹4 / km
+                  </p>
+                </div>
+              </div>
+            </section>
+
+            <section className="fo-report-table-section mt-6">
+              <h2 className="text-base font-black">Site Visit Summary</h2>
+              <table className="mt-2 w-full border-collapse text-left text-xs">
+                <thead>
+                  <tr className="bg-slate-100">
+                    {["#", "Site / Client", "Check-in", "Check-out", "Duration", "Route KM", "Remarks"].map((heading) => (
+                      <th key={heading} className="border border-slate-200 px-2 py-2">
+                        {heading}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {visits.map((visit, index) => (
+                    <tr key={visit.id || index}>
+                      <td className="border border-slate-200 px-2 py-2">{index + 1}</td>
+                      <td className="border border-slate-200 px-2 py-2">
+                        {visitTitle(visit)} / {visitClient(visit)}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2">
+                        {formatDateTime(visit.check_in_time)}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2">
+                        {formatDateTime(siteVisitCheckoutValue(visit))}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2">
+                        {durationMinutesLabel(visitMinutes(visit))}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2">
+                        {numberLabel(visit.route_km, " km")}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-2">
+                        {checkoutExceptionForVisit(visit).label}:{" "}
+                        {visitRemarks(visit)}
+                        {checkoutExceptionForVisit(visit).requiresReview ? (
+                          <>
+                            <br />
+                            Review status: {checkoutReviewStatus(visit).label}
+                            <br />
+                            Requires Operation Manager / Branch Head review
+                          </>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                  {!visits.length ? (
+                    <tr>
+                      <td colSpan={7} className="border border-slate-200 px-2 py-5 text-center">
+                        No site visits available.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+              {checkoutExceptions.length ? (
+                <p className="mt-2 text-[10px] font-semibold text-amber-800">
+                  Checkout exception rows require Operations Manager / Branch
+                  Head review where applicable.
+                </p>
+              ) : null}
+            </section>
+
+            <section className="fo-report-acknowledgement mt-6 rounded-lg border border-slate-300 p-4">
+              <h2 className="text-base font-black text-slate-900">
+                Employee Acknowledgement
+              </h2>
+              <p className="mt-2 text-xs leading-5 text-slate-600">
+                I confirm that the above site visit and payable KM details are
+                verified for the selected period.
+              </p>
+              <div className="mt-5 grid grid-cols-2 gap-x-8 gap-y-5 text-xs">
+                <div>
+                  <div className="h-14 border-b border-slate-500" />
+                  <p className="mt-2 font-bold text-slate-600">
+                    Employee Signature
+                  </p>
+                </div>
+                <div>
+                  <div className="h-14 border-b border-slate-500" />
+                  <p className="mt-2 font-bold text-slate-600">Employee Name</p>
+                </div>
+                <div>
+                  <div className="h-8 border-b border-slate-500" />
+                  <p className="mt-2 font-bold text-slate-600">Date</p>
+                </div>
+                <div>
+                  <div className="h-8 border-b border-slate-500" />
+                  <p className="mt-2 font-bold text-slate-600">Remarks</p>
+                </div>
+              </div>
+            </section>
+
+            <p className="mt-5 border-t border-slate-200 pt-3 text-[11px] leading-5 text-slate-500">
+              Payable KM is based on approved route KM used for petrol
+              reimbursement. Petrol amount is calculated at ₹4 per km.
+            </p>
+          </article>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -4703,7 +5907,7 @@ function FoSupportActionPanel({
       }`
     : "--";
   const claimKmLabel = hasClaimKm ? formatDisplayKm(claimKm) : "--";
-  const claimPetrol = Number(officer.petrolAmount ?? claimKm * RATE_PER_KM);
+  const claimPetrol = calculatePetrolAmount(claimKm);
   const statusText = status.label;
   const statusClass = isOperationallyActive(officer)
     ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
@@ -5154,8 +6358,14 @@ function useAnimatedOfficerMarkers(officers, selectedOfficerId, selectedRouteLog
 
 export default function FOActivities() {
   usePageTitle("FO Activities");
+  const { user } = useAuth();
+  const currentRole = normalizeRoleKey(user?.rawRole || user?.role);
+  const fullTechnicalAccess = ["admin", "developer", "md"].includes(currentRole);
+  const canReviewCheckoutExceptions =
+    canReviewCheckoutException(currentRole);
   const [stateFilter, setStateFilter] = useState("All States");
   const [statusFilter, setStatusFilter] = useState("All Status");
+  const [businessFilter, setBusinessFilter] = useState("All Business");
   const [search, setSearch] = useState("");
   const [expandedMap, setExpandedMap] = useState(false);
   const [selectedOfficerId, setSelectedOfficerId] = useState(null);
@@ -5183,7 +6393,6 @@ export default function FOActivities() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [kmRecalcBusy, setKmRecalcBusy] = useState(false);
   const [kmRecalcResult, setKmRecalcResult] = useState(null);
-  const [datePreset, setDatePreset] = useState("today");
   const [customFromDate, setCustomFromDate] = useState(
     toDateInputValue(new Date()),
   );
@@ -5198,8 +6407,8 @@ export default function FOActivities() {
   const kmRecalcInFlightRef = useRef(new Set());
 
   const selectedRange = useMemo(
-    () => dateRangeForPreset(datePreset, customFromDate, customToDate),
-    [customFromDate, customToDate, datePreset],
+    () => dateRangeForPreset("custom", customFromDate, customToDate),
+    [customFromDate, customToDate],
   );
 
   useEffect(() => {
@@ -5379,14 +6588,30 @@ export default function FOActivities() {
       officers.filter((officer) => {
         const stateMatches =
           stateFilter === "All States" || officer.state === stateFilter;
+        const businessLabel = officer.business || "--";
+        const businessMatches =
+          businessFilter === "All Business" ||
+          businessLabel === businessFilter;
         const searchMatches =
           !search ||
           `${officer.name} ${officer.employeeCode || officer.foId} ${officer.username || ""} ${officer.phone || ""} ${officer.email || ""} ${officer.role || ""} ${officer.designation || ""} ${officer.department || ""} ${officer.state || ""} ${officer.business || ""} ${officer.assignedSite} ${officer.branch}`
             .toLowerCase()
             .includes(search.trim().toLowerCase());
-        return stateMatches && searchMatches;
+        return stateMatches && businessMatches && searchMatches;
       }),
-    [officers, search, stateFilter],
+    [businessFilter, officers, search, stateFilter],
+  );
+
+  const businessOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          officers
+            .map((officer) => String(officer.business || "").trim())
+            .filter(Boolean),
+        ),
+      ).sort((a, b) => a.localeCompare(b)),
+    [officers],
   );
 
   const filteredOfficers = useMemo(
@@ -5435,9 +6660,44 @@ export default function FOActivities() {
     [filteredOfficers, stateFilter, stateSummaryRows],
   );
 
-  const selectedOfficer =
+  const selectedOfficerBase =
     filteredOfficers.find((officer) => officer.id === selectedOfficerId) ||
     null;
+  const selectedOfficer = useMemo(() => {
+    if (!selectedOfficerBase) return null;
+    const selectedKey = normalizeFoKey(
+      selectedOfficerBase.foId || selectedOfficerBase.employeeCode,
+    );
+    const rangeAttendances = visibleAttendanceKpiRows
+      .filter(
+        (row) =>
+          normalizeFoKey(row.fo_user_id || row.employee_code) === selectedKey,
+      )
+      .sort(
+        (a, b) =>
+          new Date(a.login_time || 0) - new Date(b.login_time || 0),
+      );
+    const payableKm = rangeAttendances.reduce(
+      (sum, row) => sum + payableKmFromAttendance(row),
+      0,
+    );
+    return {
+      ...selectedOfficerBase,
+      attendances: rangeAttendances,
+      eligibleKm: rangeAttendances.length
+        ? payableKm
+        : selectedOfficerBase.eligibleKm,
+      routeKmToday: rangeAttendances.length
+        ? payableKm
+        : selectedOfficerBase.routeKmToday,
+      petrolAmount: rangeAttendances.length
+        ? calculatePetrolAmount(payableKm)
+        : calculatePetrolAmount(
+            selectedOfficerBase.eligibleKm ??
+              selectedOfficerBase.routeKmToday,
+          ),
+    };
+  }, [selectedOfficerBase, visibleAttendanceKpiRows]);
   const mapRouteOfficer =
     filteredOfficers.find((officer) => officer.id === mapRouteOfficerId) ||
     officers.find((officer) => officer.id === mapRouteOfficerId) ||
@@ -5478,7 +6738,10 @@ export default function FOActivities() {
       const fromIso = formatDateForDb(selectedRange.from);
       const toIso = formatDateForDb(selectedRange.to);
       const operationalFoId = operationalFoIdForOfficer(routeOfficer);
-      const attendanceId = routeOfficer.attendance?.id || null;
+      const attendanceId =
+        selectedRange.fromDate === selectedRange.toDate
+          ? routeOfficer.attendance?.id || null
+          : null;
       const fetchedRows = [];
       const timeColumns = ["captured_at", "recorded_at", "created_at", "logged_at"];
       let source = "employee_code_date";
@@ -5883,8 +7146,9 @@ export default function FOActivities() {
   }
 
   function openSupportDetailedView() {
-    if (!supportOfficer) return;
-    const officerId = supportOfficer.id;
+    const officer = supportOfficer || routeOfficer;
+    if (!officer) return;
+    const officerId = officer.id;
     closeSupportActions();
     focusOfficer(officerId);
   }
@@ -5892,7 +7156,6 @@ export default function FOActivities() {
   function applyDetailDateRange() {
     setCustomFromDate(detailDraftFromDate);
     setCustomToDate(detailDraftToDate);
-    setDatePreset("custom");
   }
 
   function selectedOfficerKmRecalcKey() {
@@ -6121,9 +7384,8 @@ export default function FOActivities() {
   const payableKpi = visibleAttendanceKpiRows.reduce(
     (summary, row) => ({
       payableKm: summary.payableKm + payableKmFromAttendance(row),
-      totalPetrol: summary.totalPetrol + petrolAmountFromAttendance(row),
     }),
-    { payableKm: 0, totalPetrol: 0 },
+    { payableKm: 0 },
   );
   const liveRouteKm = payableKpi.payableKm;
   const liveActualTravelKm = filteredOfficers.reduce(
@@ -6131,7 +7393,7 @@ export default function FOActivities() {
       sum + Number(officer.actualTravelKm ?? officer.actualKm ?? 0),
     0,
   );
-  const totalPetrolAmount = payableKpi.totalPetrol;
+  const totalPetrolAmount = calculatePetrolAmount(liveRouteKm);
   const distanceTravelled = `${liveRouteKm.toFixed(1)} km`;
   const actualTravelled = `${liveActualTravelKm.toFixed(1)} km`;
   const routeVsActual = `${(liveRouteKm - liveActualTravelKm).toFixed(1)} km`;
@@ -6142,7 +7404,7 @@ export default function FOActivities() {
   if (selectedOfficer) {
     return (
       <FieldOfficerDetailsView
-        key={`${selectedOfficer.id}-${selectedRange.fromDate}-${selectedRange.toDate}`}
+        key={selectedOfficer.id}
         officer={selectedOfficer}
         routeLogs={selectedRouteLogs}
         activitySubmissions={selectedActivitySubmissions}
@@ -6163,6 +7425,11 @@ export default function FOActivities() {
             to: selectedRange.to,
           })
         }
+        onRecalculateKm={recalculateSelectedOfficerKm}
+        recalculatingKm={kmRecalcBusy}
+        recalculationResult={kmRecalcResult}
+        fullTechnicalAccess={fullTechnicalAccess}
+        canReviewCheckoutExceptions={canReviewCheckoutExceptions}
       />
     );
   }
@@ -6171,76 +7438,126 @@ export default function FOActivities() {
     <div className="space-y-3">
       <PageHeader
         title="Operations Command Center"
+        description="Real-time field operations overview and performance"
         actions={
-          <span className="command-pill">
-            <RadioTower className="h-3.5 w-3.5 text-emerald-500" /> Live
-            updating every 12s
-          </span>
+          <>
+            <button
+              type="button"
+              onClick={() => routeOfficer && focusOfficer(routeOfficer.id)}
+              disabled={!routeOfficer}
+              className="focus-ring inline-flex items-center gap-2 rounded-xl bg-qpms-700 px-4 py-2.5 text-sm font-black text-white shadow-sm hover:bg-qpms-800"
+              title={
+                routeOfficer
+                  ? `Open ${routeOfficer.name}`
+                  : "Select an employee from the directory first"
+              }
+            >
+              <User className="h-4 w-4" /> Open Drill-down
+            </button>
+            <button
+              type="button"
+              onClick={() => setRefreshToken((value) => value + 1)}
+              className="focus-ring grid h-10 w-10 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:text-qpms-700"
+              aria-label="Refresh operations data"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </button>
+            <span className="command-pill">
+              <RadioTower className="h-3.5 w-3.5 text-emerald-500" /> Live
+              every 12s
+            </span>
+          </>
         }
       />
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.05)] dark:border-slate-800 dark:bg-slate-900">
-        <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-            <label className="lg:col-span-2">
-              <span className="text-[11px] font-bold uppercase text-slate-500">
-                Date Filter
-              </span>
-              <select
-                value={datePreset}
-                onChange={(event) => setDatePreset(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400"
-              >
-                <option value="today">Today</option>
-                <option value="yesterday">Yesterday</option>
-                <option value="last7">Last 7 Days</option>
-                <option value="month">This Month</option>
-                <option value="custom">Custom From / To</option>
-              </select>
-            </label>
-            <label className="lg:col-span-2">
-              <span className="text-[11px] font-bold uppercase text-slate-500">
-                From Date
-              </span>
-              <input
-                type="date"
-                value={customFromDate}
-                onChange={(event) => {
-                  setCustomFromDate(event.target.value);
-                  setDatePreset("custom");
-                }}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400"
-              />
-            </label>
-            <label className="lg:col-span-2">
-              <span className="text-[11px] font-bold uppercase text-slate-500">
-                To Date
-              </span>
-              <input
-                type="date"
-                value={customToDate}
-                onChange={(event) => {
-                  setCustomToDate(event.target.value);
-                  setDatePreset("custom");
-                }}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400"
-              />
-            </label>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <label>
+            <span className="text-[11px] font-bold uppercase text-slate-500">
+              From Date
+            </span>
+            <input
+              type="date"
+              value={customFromDate}
+              onChange={(event) => setCustomFromDate(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400"
+            />
+          </label>
+          <label>
+            <span className="text-[11px] font-bold uppercase text-slate-500">
+              To Date
+            </span>
+            <input
+              type="date"
+              value={customToDate}
+              onChange={(event) => setCustomToDate(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400"
+            />
+          </label>
+          <label>
+            <span className="text-[11px] font-bold uppercase text-slate-500">
+              State
+            </span>
+            <select
+              value={stateFilter}
+              onChange={(event) => setStateFilter(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400"
+            >
+              <option>All States</option>
+              {stateSummaryRows.map((item) => (
+                <option key={item.id}>{item.state}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="text-[11px] font-bold uppercase text-slate-500">
+              Business
+            </span>
+            <select
+              value={businessFilter}
+              onChange={(event) => setBusinessFilter(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400"
+            >
+              <option>All Business</option>
+              {businessOptions.map((business) => (
+                <option key={business}>{business}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="text-[11px] font-bold uppercase text-slate-500">
+              Status
+            </span>
+            <select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400"
+            >
+              <option>All Status</option>
+              <option value="Active">Active</option>
+              <option value="ON_TRAVEL">On Travel</option>
+              <option value="ON_SITE">On Site</option>
+              <option value="ACTIVE_STATIONARY">Active / Stationary</option>
+              <option value="NOT_STARTED">Not Started</option>
+              <option value="ENDED">Ended</option>
+              <option>Offline</option>
+            </select>
+          </label>
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={() => {
+                setCustomFromDate(toDateInputValue(new Date()));
+                setCustomToDate(toDateInputValue(new Date()));
+                setStateFilter("All States");
+                setBusinessFilter("All Business");
+                setStatusFilter("All Status");
+              }}
+              className="focus-ring w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-black text-slate-600 hover:bg-slate-100"
+            >
+              Reset
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() =>
-              exportFoOperationsExcel({
-                officers: filteredOfficers,
-                selectedOfficer,
-                from: selectedRange.from,
-                to: selectedRange.to,
-              })
-            }
-            className="focus-ring inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700 hover:bg-emerald-100"
-          >
-            <FileSpreadsheet className="h-4 w-4" /> Export Excel
-          </button>
         </div>
       </section>
 
@@ -6252,7 +7569,7 @@ export default function FOActivities() {
           tone="blue"
         />
         <FleetKpi
-          label="Live / Active Now"
+          label="Active Today"
           value={activeOfficers}
           hint={
             totalFieldUsers
@@ -6269,13 +7586,13 @@ export default function FOActivities() {
           tone="blue"
         />
         <FleetKpi
-          label="On Site Visit"
+          label="On Site"
           value={onSiteOfficers}
           icon={MapPin}
           tone="purple"
         />
         <FleetKpi
-          label="Offline"
+          label="Not Started / Offline"
           value={offlineOfficers}
           icon={ShieldAlert}
           tone={offlineOfficers ? "red" : "slate"}
@@ -6287,7 +7604,7 @@ export default function FOActivities() {
           tone="green"
         />
         <FleetKpi
-          label="Total Petrol Amount"
+          label="Petrol Amount"
           value={formatInr(totalPetrolAmount)}
           icon={CircleGauge}
           tone="amber"
@@ -6295,8 +7612,17 @@ export default function FOActivities() {
       </div>
 
       <section className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-[0_18px_46px_rgba(15,23,42,0.08)] dark:border-slate-800 dark:bg-slate-900">
-        <div className="grid min-h-[675px] xl:grid-cols-[minmax(0,1fr)_330px] 2xl:grid-cols-[minmax(0,1fr)_365px]">
-          <div className="relative isolate min-h-[620px] overflow-hidden bg-sky-50">
+        <div className="grid min-h-[675px] xl:grid-cols-[minmax(0,1.85fr)_minmax(360px,1fr)]">
+          <div className="order-2 min-w-0 xl:order-1">
+            <div className="border-b border-slate-100 px-5 py-4 dark:border-slate-800">
+              <h2 className="text-lg font-black text-slate-950 dark:text-white">
+                Field Operations Map
+              </h2>
+              <p className="mt-1 text-xs font-semibold text-slate-500">
+                Live view of field activity across South India
+              </p>
+            </div>
+          <div className="relative isolate h-[420px] overflow-hidden bg-sky-50 sm:h-[480px] lg:h-[520px] xl:h-[620px]">
             <OperationsMap
               pins={pins}
               sitePins={sitePins}
@@ -6319,12 +7645,12 @@ export default function FOActivities() {
             <button
               type="button"
               onClick={() => setMapCommand({ type: "fit-all", at: Date.now() })}
-              className="focus-ring absolute left-5 top-[45%] z-[520] inline-flex items-center gap-2 rounded-lg border border-white/70 bg-white/95 px-4 py-3 text-xs font-black text-slate-700 shadow-xl backdrop-blur hover:text-qpms-700"
+              className="focus-ring absolute right-5 top-5 z-[520] inline-flex items-center gap-2 rounded-lg border border-white/70 bg-white/95 px-4 py-2.5 text-xs font-black text-slate-700 shadow-lg backdrop-blur hover:text-qpms-700"
             >
               <Maximize2 className="h-4 w-4" /> Fit All
             </button>
 
-            <div className="absolute left-5 top-[56%] z-[520] overflow-hidden rounded-xl border border-slate-200 bg-white/95 shadow-xl backdrop-blur">
+            <div className="hidden">
               <button
                 type="button"
                 className="grid h-12 w-12 place-items-center border-b border-slate-200 text-2xl font-light text-slate-900"
@@ -6346,13 +7672,14 @@ export default function FOActivities() {
               </button>
             </div>
 
-            <div className="absolute bottom-[118px] left-5 z-[520] flex flex-wrap items-center gap-4 rounded-xl border border-white/80 bg-white/95 px-4 py-3 shadow-xl backdrop-blur">
-              <LegendItem color="#10b981" label="Started Day / Active" />
-              <LegendItem color="#ef4444" label="Not Started or Ended Day" />
+            <div className="absolute bottom-5 left-5 z-[520] flex max-w-[calc(100%-40px)] flex-wrap items-center gap-4 rounded-xl border border-white/80 bg-white/95 px-4 py-3 shadow-xl backdrop-blur">
+              <LegendItem color="#10b981" label="Active / On Site" />
+              <LegendItem color="#2563eb" label="On Travel" />
+              <LegendItem color="#ef4444" label="Not Started / Offline" />
               <LegendItem color="#2563eb" label="Site / Office" site />
             </div>
 
-            <div className="absolute bottom-5 left-5 z-[520] w-[min(720px,calc(100%-40px))] rounded-xl border border-white/80 bg-white/95 p-3 shadow-xl backdrop-blur">
+            <div className="hidden">
               <div className="grid gap-3 md:grid-cols-4">
                 <label>
                   <span className="sr-only">Region</span>
@@ -6399,9 +7726,7 @@ export default function FOActivities() {
               </div>
             </div>
 
-            <div
-              className={`absolute right-5 top-5 z-[540] w-[255px] rounded-xl border border-slate-200 bg-white/96 shadow-[0_20px_50px_rgba(15,23,42,0.18)] backdrop-blur dark:border-slate-700 dark:bg-slate-950/90 ${mapControlsCollapsed ? "p-3" : "p-4"}`}
-            >
+            <div className="hidden">
               <button
                 type="button"
                 onClick={() => setMapControlsCollapsed((value) => !value)}
@@ -6478,7 +7803,7 @@ export default function FOActivities() {
               ) : null}
             </div>
 
-            <div className="absolute right-5 bottom-[88px] z-[540] w-[255px] rounded-xl border border-slate-200 bg-white/96 p-4 shadow-[0_20px_50px_rgba(15,23,42,0.18)] backdrop-blur dark:border-slate-700 dark:bg-slate-950/90">
+            <div className="hidden">
               <h2 className="mb-3 text-base font-black text-slate-950 dark:text-white">
                 Legend
               </h2>
@@ -6501,64 +7826,72 @@ export default function FOActivities() {
               </div>
             </div>
           </div>
+          </div>
 
-          <aside className="border-l border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+          <aside className="order-1 border-b border-slate-200 bg-white xl:order-2 xl:border-b-0 xl:border-l dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4 dark:border-slate-800">
               <div>
                 <h2 className="text-lg font-black text-slate-950 dark:text-white">
-                  Operations ({filteredOfficers.length})
+                  Operations Directory
                 </h2>
                 <p className="mt-1 text-xs font-semibold text-slate-500">
-                  Operational directory
+                  {filteredOfficers.length} field users
                 </p>
               </div>
-              <button
-                type="button"
-                className="focus-ring inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
-              >
-                <Filter className="h-4 w-4" /> Filter
-              </button>
+              <Filter className="h-4 w-4 text-slate-400" />
             </div>
             <label className="relative block border-b border-slate-100 p-4 dark:border-slate-800">
               <Search className="absolute left-7 top-7 h-4 w-4 text-slate-400" />
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search officer..."
+                placeholder="Search employee by name or ID"
                 className="w-full rounded-lg border border-slate-200 bg-white py-3 pl-10 pr-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400 focus:border-qpms-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
               />
             </label>
-            <FoSupportActionPanel
-              officer={supportOfficer || routeOfficer}
-              context={supportContext}
-              loading={supportLoading}
-              busy={supportBusy}
-              pendingAction={supportPendingAction}
-              remarks={supportRemarks}
-              message={supportMessage}
-              onRemarksChange={setSupportRemarks}
-              onBeginAction={(action) => {
-                setSupportPendingAction(action);
-                setSupportRemarks("");
-                setSupportMessage("");
-              }}
-              onCancelAction={() => {
-                setSupportPendingAction(null);
-                setSupportRemarks("");
-              }}
-              onConfirmAction={confirmSupportAction}
-              onDetailedView={openSupportDetailedView}
-              onClose={() => {
-                setMapRouteOfficerId(null);
-                closeSupportActions();
-              }}
-              onRecalculateKm={recalculateSelectedOfficerKm}
-              recalculatingKm={kmRecalcBusy}
-              recalculationResult={kmRecalcResult}
-              foSafeKm={selectedActualTravelMetrics}
-              siteVisitCount={(supportOfficer || routeOfficer)?.visits?.length || 0}
-            />
-            <div className="max-h-[584px] overflow-y-auto">
+            {fullTechnicalAccess ? (
+              <FoSupportActionPanel
+                officer={supportOfficer || routeOfficer}
+                context={supportContext}
+                loading={supportLoading}
+                busy={supportBusy}
+                pendingAction={supportPendingAction}
+                remarks={supportRemarks}
+                message={supportMessage}
+                onRemarksChange={setSupportRemarks}
+                onBeginAction={(action) => {
+                  setSupportPendingAction(action);
+                  setSupportRemarks("");
+                  setSupportMessage("");
+                }}
+                onCancelAction={() => {
+                  setSupportPendingAction(null);
+                  setSupportRemarks("");
+                }}
+                onConfirmAction={confirmSupportAction}
+                onDetailedView={openSupportDetailedView}
+                onClose={() => {
+                  setMapRouteOfficerId(null);
+                  closeSupportActions();
+                }}
+                onRecalculateKm={recalculateSelectedOfficerKm}
+                recalculatingKm={kmRecalcBusy}
+                recalculationResult={kmRecalcResult}
+                foSafeKm={selectedActualTravelMetrics}
+                siteVisitCount={(supportOfficer || routeOfficer)?.visits?.length || 0}
+              />
+            ) : (
+              <ExecutiveOfficerPanel
+                officer={supportOfficer || routeOfficer}
+                onDetailedView={openSupportDetailedView}
+                onClose={() => {
+                  setMapRouteOfficerId(null);
+                  closeSupportActions();
+                }}
+                siteVisitCount={(supportOfficer || routeOfficer)?.visits?.length || 0}
+              />
+            )}
+            <div className="max-h-[640px] space-y-2 overflow-y-auto p-2">
               {visualFilteredOfficers.map((officer) => (
                 <OfficerDirectoryRow
                   key={officer.id}
@@ -6577,13 +7910,13 @@ export default function FOActivities() {
               type="button"
               className="focus-ring flex w-full items-center justify-center gap-2 border-t border-slate-100 px-4 py-4 text-sm font-black text-qpms-700 dark:border-slate-800 dark:text-blue-300"
             >
-              View All Officers <ChevronRight className="h-4 w-4" />
+              View all employees <ChevronRight className="h-4 w-4" />
             </button>
           </aside>
         </div>
       </section>
 
-      <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.05)] sm:grid-cols-2 lg:grid-cols-6 xl:grid-cols-9 dark:border-slate-800 dark:bg-slate-900">
+      <div className="hidden">
         <MetricTile
           label="Payable KM"
           value={distanceTravelled}
