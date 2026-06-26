@@ -5,10 +5,12 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../build_info.dart';
 import '../models/fo_models.dart';
+import '../services/app_state_sync_service.dart';
 import '../services/crash_log_service.dart';
 import '../services/local_store.dart';
 import '../services/permission_service.dart';
 import '../services/supabase_service.dart';
+import '../services/tracking_health_service.dart';
 import '../theme/app_theme.dart';
 import '../tracking/route_km_calculator.dart';
 import '../tracking/tracking_service.dart';
@@ -35,6 +37,8 @@ class _HomeScreenState extends State<HomeScreen>
   String? _currentSite;
   bool _firstGpsPingLogged = false;
   String _buildNumber = '--';
+  bool _manualSyncing = false;
+  TrackingHealthSnapshot? _trackingHealth;
 
   bool get _showTrackingDebug {
     final role = widget.user.role.trim().toLowerCase();
@@ -91,21 +95,29 @@ class _HomeScreenState extends State<HomeScreen>
     var visits = await LocalStore.getVisits();
     final today = startOfToday();
     final todayKey = indiaDateKey(DateTime.now());
-    var activeVisit = await LocalStore.activeVisit();
+    var activeVisit = await LocalStore.activeVisit(
+      user: widget.user,
+      attendance: attendance,
+    );
     if (attendance != null) {
       final attendanceDate = _attendanceDateKey(attendance);
+      final employeeMismatch =
+          attendance.employeeCode.trim() != widget.user.employeeCode.trim();
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
         screen: 'home',
         action: 'RECOVERY_ATTENDANCE_DATE_CHECK',
         error:
-            'source=local attendance_id=${attendance.remoteId ?? attendance.id} attendance_date=$attendanceDate today=$todayKey active=${attendance.isActive}',
+            'source=local attendance_id=${attendance.remoteId ?? attendance.id} attendance_date=$attendanceDate today=$todayKey active=${attendance.isActive} employee_mismatch=$employeeMismatch',
       );
-      if (attendanceDate != todayKey) {
+      if (attendanceDate != todayKey || employeeMismatch) {
         await _clearPreviousDayLocalSession(
           attendance: attendance,
           attendanceDate: attendanceDate,
           todayKey: todayKey,
+          cleanupAction: employeeMismatch
+              ? 'DIFFERENT_EMPLOYEE_LOCAL_SESSION_CLEANUP'
+              : 'PREVIOUS_DAY_LOCAL_SESSION_CLEANUP',
         );
         attendance = null;
         activeVisit = null;
@@ -313,6 +325,13 @@ class _HomeScreenState extends State<HomeScreen>
       error:
           'attendance_id=${attendance?.remoteId ?? '--'} active=$hasActiveAttendanceToday active_visit=${activeVisit?.remoteId ?? activeVisit?.id ?? '--'}',
     );
+    await _loadTrackingHealth();
+  }
+
+  Future<void> _loadTrackingHealth() async {
+    final health = await TrackingHealthService.load(user: widget.user);
+    if (!mounted) return;
+    setState(() => _trackingHealth = health);
   }
 
   Future<void> _clearLocalActiveVisitCache(Attendance attendance) async {
@@ -385,6 +404,23 @@ class _HomeScreenState extends State<HomeScreen>
     );
     if (message != null && mounted) {
       _toast(message);
+    }
+  }
+
+  Future<void> _syncNow() async {
+    if (_manualSyncing || _busy) return;
+    setState(() => _manualSyncing = true);
+    try {
+      final result = await AppStateSyncService.syncNow(widget.user);
+      if (!mounted) return;
+      _toast(result.message);
+      await _load();
+      await _loadTrackingHealth();
+    } catch (error) {
+      if (!mounted) return;
+      _toast('Sync failed. Please check internet and try again.');
+    } finally {
+      if (mounted) setState(() => _manualSyncing = false);
     }
   }
 
@@ -1082,7 +1118,11 @@ class _HomeScreenState extends State<HomeScreen>
       );
     }
     _attendance?.actualKm = liveKm;
-    LocalStore.activeVisit().then((visit) {
+    final activeVisitFuture = LocalStore.activeVisit(
+      user: widget.user,
+      attendance: _attendance,
+    );
+    activeVisitFuture.then((visit) {
       if (!mounted) return;
       setState(() => _currentSite = visit?.storeName);
     });
@@ -1174,6 +1214,8 @@ class _HomeScreenState extends State<HomeScreen>
           _homeHeader(),
           const SizedBox(height: 22),
           _overviewCard(),
+          const SizedBox(height: 16),
+          _trackingHealthCard(),
           if (_showTrackingDebug) ...[
             const SizedBox(height: 14),
             _debugIdentityCard(),
@@ -1361,6 +1403,22 @@ class _HomeScreenState extends State<HomeScreen>
               );
             },
           ),
+          const SizedBox(height: 14),
+          OutlinedButton.icon(
+            onPressed: _busy || _manualSyncing ? null : _syncNow,
+            icon: _manualSyncing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.sync_rounded),
+            label: Text(
+              _manualSyncing
+                  ? 'Syncing app state...'
+                  : 'Sync Now • Refresh app state from server',
+            ),
+          ),
         ],
       ),
     );
@@ -1422,6 +1480,137 @@ class _HomeScreenState extends State<HomeScreen>
         ),
       ),
     );
+  }
+
+  Widget _trackingHealthCard() {
+    final health = _trackingHealth;
+    return FoCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          FoSectionTitle(
+            title: 'Tracking Health',
+            trailing: FoStatusBadge(
+              label: health == null ? 'Loading' : _overallHealthLabel(health),
+              color: health == null || _hasNeedsAction(health)
+                  ? foOrange
+                  : foGreen,
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (health == null)
+            const Text(
+              'Checking app health...',
+              style: TextStyle(color: Color(0xFF53607D)),
+            )
+          else ...[
+            _healthRow(
+              'GPS Permission',
+              health.locationPermissionLabel,
+              health.locationPermission,
+            ),
+            _healthRow(
+              'Background Location',
+              health.backgroundLocationLabel,
+              health.backgroundLocation,
+            ),
+            _healthRow('Battery', health.batteryLabel, health.battery),
+            _healthRow('Tracking', health.trackingLabel, health.tracking),
+            _plainHealthRow(
+              'Last GPS',
+              health.lastGpsAt == null
+                  ? 'Not available'
+                  : formatTime(health.lastGpsAt),
+            ),
+            _plainHealthRow('Pending GPS Logs', '${health.pendingGpsLogs}'),
+            _plainHealthRow(
+              'Last Sync',
+              health.lastSyncAt == null
+                  ? 'Not available'
+                  : formatTime(health.lastSyncAt),
+            ),
+            if (health.guidance.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              ...health.guidance.map(
+                (message) => Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(
+                        Icons.info_outline_rounded,
+                        size: 18,
+                        color: foOrange,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          message,
+                          style: const TextStyle(
+                            color: Color(0xFF53607D),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _healthRow(String label, String value, HealthLevel level) {
+    return _plainHealthRow(
+      label,
+      value,
+      valueColor: switch (level) {
+        HealthLevel.ok => foGreen,
+        HealthLevel.needsAction => foOrange,
+        HealthLevel.unknown => qpmsMuted,
+      },
+    );
+  }
+
+  Widget _plainHealthRow(String label, String value, {Color? valueColor}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 9),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Color(0xFF53607D),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              color: valueColor ?? foNavy,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool _hasNeedsAction(TrackingHealthSnapshot health) {
+    return health.locationPermission == HealthLevel.needsAction ||
+        health.backgroundLocation == HealthLevel.needsAction ||
+        health.battery == HealthLevel.needsAction ||
+        health.tracking == HealthLevel.needsAction;
+  }
+
+  String _overallHealthLabel(TrackingHealthSnapshot health) {
+    if (_hasNeedsAction(health)) return 'Needs Action';
+    return 'OK';
   }
 
   Widget _dutyCard(bool active) {

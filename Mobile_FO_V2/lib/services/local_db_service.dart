@@ -165,6 +165,18 @@ class LocalDbService {
     return Sqflite.firstIntValue(rows) ?? 0;
   }
 
+  static Future<DateTime?> latestGpsLogTime() async {
+    final db = await database;
+    final rows = await db.query(
+      'local_gps_logs',
+      columns: ['captured_at'],
+      orderBy: 'captured_at DESC',
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return DateTime.tryParse(rows.first['captured_at']?.toString() ?? '');
+  }
+
   static Future<void> markGpsLogsSynced(Map<String, String?> remoteIds) async {
     if (remoteIds.isEmpty) return;
     final db = await database;
