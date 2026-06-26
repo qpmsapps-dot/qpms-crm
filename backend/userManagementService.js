@@ -65,6 +65,30 @@ export function booleanValue(value, fallback = false) {
   return fallback;
 }
 
+export function canonicalProfileRole(value, fallback = null) {
+  const text = textOrNull(value);
+  if (!text) return fallback;
+  const normalized = text
+    .replace(/[\s_-]+/g, '')
+    .toUpperCase();
+  const canonicalByNormalized = {
+    FO: 'FO',
+    FIELDOFFICER: 'FO',
+    KAM: 'KAM',
+    KEYACCOUNTMANAGER: 'KAM',
+    OM: 'Operations Manager',
+    OPERATIONSMANAGER: 'Operations Manager',
+    BRANCHHEAD: 'Branch Head',
+    BH: 'Branch Head',
+    GM: 'GM',
+    BDEXECUTIVE: 'BD Executive',
+    BUSINESSDEVELOPMENTEXECUTIVE: 'BD Executive',
+    BDHEAD: 'BD Head',
+    BUSINESSDEVELOPMENTHEAD: 'BD Head',
+  };
+  return canonicalByNormalized[normalized] || text;
+}
+
 export function hasOwn(object, key) {
   return Object.prototype.hasOwnProperty.call(object || {}, key);
 }
@@ -316,7 +340,7 @@ export function profileMetadataForAuth(profile) {
     full_name: profile.full_name || null,
     display_name: profile.display_name || null,
     mobile: profile.mobile || null,
-    role: profile.role || null,
+    role: canonicalProfileRole(profile.role),
     designation: profile.designation || null,
     department: profile.department || null,
     business: profile.business || null,

@@ -202,11 +202,47 @@ class LocalStore {
     )).map((e) => SiteVisit.fromJson(e)).toList();
   }
 
-  static Future<SiteVisit?> activeVisit() async {
+  static Future<SiteVisit?> activeVisit({
+    FoUser? user,
+    Attendance? attendance,
+  }) async {
+    final employeeCode = user?.employeeCode.trim();
+    final attendanceIds = <String>{
+      if (attendance?.remoteId?.trim().isNotEmpty == true)
+        attendance!.remoteId!.trim(),
+      if (attendance?.id.trim().isNotEmpty == true) attendance!.id.trim(),
+    };
     for (final visit in await getVisits()) {
-      if (visit.isActive) return visit;
+      if (!visit.isActive) continue;
+      if (employeeCode != null &&
+          employeeCode.isNotEmpty &&
+          visit.employeeCode.trim() != employeeCode) {
+        continue;
+      }
+      if (attendanceIds.isNotEmpty) {
+        final visitAttendanceId = visit.attendanceId?.trim();
+        if (visitAttendanceId == null ||
+            visitAttendanceId.isEmpty ||
+            !attendanceIds.contains(visitAttendanceId)) {
+          continue;
+        }
+      }
+      return visit;
     }
     return null;
+  }
+
+  static Future<void> clearActiveVisits({String? employeeCode}) async {
+    final cleanEmployeeCode = employeeCode?.trim();
+    final visits = await getVisits();
+    visits.removeWhere(
+      (visit) =>
+          visit.isActive &&
+          (cleanEmployeeCode == null ||
+              cleanEmployeeCode.isEmpty ||
+              visit.employeeCode.trim() == cleanEmployeeCode),
+    );
+    await _saveList(_visitsKey, visits.map((e) => e.toJson()).toList());
   }
 
   static Future<void> clearActiveVisitsForAttendance(

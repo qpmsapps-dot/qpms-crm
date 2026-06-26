@@ -8,7 +8,10 @@ import 'supabase_service.dart';
 
 class CrashLogService {
   static const _key = 'mobile_crash_logs_queue';
+  static const _generalThrottleWindow = Duration(minutes: 10);
+  static const _gpsThrottleWindow = Duration(minutes: 30);
   static bool _syncing = false;
+  static final Map<String, DateTime> _lastRecordedByFingerprint = {};
 
   static Future<void> record({
     String? employeeCode,
@@ -22,6 +25,34 @@ class CrashLogService {
       final foUserId = employeeCode ?? user?.employeeCode;
       final errorMessage = error?.toString() ?? '';
       final stack = stackTrace?.toString() ?? '';
+      final fingerprint = _fingerprint(
+        employeeCode: foUserId,
+        screen: screen,
+        action: action,
+        errorMessage: errorMessage,
+      );
+      final window = _isHighFrequencyGpsLog(screen, action)
+          ? _gpsThrottleWindow
+          : _generalThrottleWindow;
+      final now = DateTime.now().toUtc();
+      final lastRecorded = _lastRecordedByFingerprint[fingerprint];
+      if (lastRecorded != null && now.difference(lastRecorded) < window) {
+        debugPrint('[myQPMS FO V2] $screen/$action duplicate log throttled');
+        return;
+      }
+      final queuedDuplicate = await _hasRecentQueuedDuplicate(
+        fingerprint,
+        window,
+        now,
+      );
+      if (queuedDuplicate) {
+        _lastRecordedByFingerprint[fingerprint] = now;
+        debugPrint(
+          '[myQPMS FO V2] $screen/$action queued duplicate log throttled',
+        );
+        return;
+      }
+      _lastRecordedByFingerprint[fingerprint] = now;
       final row = {
         'id': '${DateTime.now().microsecondsSinceEpoch}-$screen-$action',
         'fo_user_id': foUserId,
@@ -32,6 +63,7 @@ class CrashLogService {
         'error_message': errorMessage,
         'stack_trace': stack,
         'created_at': DateTime.now().toUtc().toIso8601String(),
+        'fingerprint': fingerprint,
         'synced': false,
       };
       debugPrint(
@@ -85,6 +117,47 @@ class CrashLogService {
     return (jsonDecode(value) as List<dynamic>)
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
+  }
+
+  static String _fingerprint({
+    required String? employeeCode,
+    required String screen,
+    required String action,
+    required String errorMessage,
+  }) {
+    final normalizedError = errorMessage
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim()
+        .toLowerCase();
+    return [
+      employeeCode?.trim().toLowerCase() ?? '',
+      screen.trim().toLowerCase(),
+      action.trim().toLowerCase(),
+      normalizedError,
+    ].join('|');
+  }
+
+  static bool _isHighFrequencyGpsLog(String screen, String action) {
+    final value = '${screen}_$action'.toLowerCase();
+    return value.contains('gps') ||
+        value.contains('tracking') ||
+        value.contains('background');
+  }
+
+  static Future<bool> _hasRecentQueuedDuplicate(
+    String fingerprint,
+    Duration window,
+    DateTime now,
+  ) async {
+    final logs = await _read();
+    for (final log in logs.reversed) {
+      if (log['fingerprint'] != fingerprint) continue;
+      final createdAt = DateTime.tryParse(log['created_at']?.toString() ?? '');
+      if (createdAt == null) continue;
+      if (now.difference(createdAt.toUtc()) < window) return true;
+      return false;
+    }
+    return false;
   }
 
   static Future<void> _insertLog(Map<String, dynamic> log) async {

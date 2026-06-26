@@ -121,6 +121,8 @@ class SupabaseService {
   static bool get isReady =>
       _initialized && (AppConfig.hasSupabase || _runtimeConfigured);
   static SupabaseClient get client => Supabase.instance.client;
+  static String? get currentAccessToken =>
+      client.auth.currentSession?.accessToken;
 
   static StartDayAuthValidation validateStartDayAuth(FoUser user) {
     final employeeCode = user.employeeCode.trim();
@@ -239,6 +241,7 @@ class SupabaseService {
     final cleanDesignation = designation.trim();
     final cleanBusiness = business?.trim();
     final derivedRole = deriveMobileRole(cleanDepartment, cleanDesignation);
+    final provisionedAt = DateTime.now().toUtc().toIso8601String();
 
     if (cleanEmployeeId.isEmpty) {
       throw ArgumentError('Employee ID is required.');
@@ -269,6 +272,7 @@ class SupabaseService {
         'designation': cleanDesignation,
         'business': cleanBusiness?.isEmpty == true ? null : cleanBusiness,
         'role': derivedRole,
+        'source': 'mobile_registration',
         'status': 'Active',
         'is_active': true,
       },
@@ -294,16 +298,33 @@ class SupabaseService {
       'role': derivedRole,
       'status': 'Active',
       'is_active': true,
+      'mobile_access_enabled': true,
+      'web_access_enabled': true,
+      'auth_provisioning_status': 'provisioned',
+      'auth_provisioning_error': null,
+      'auth_provisioned_at': provisionedAt,
+      'last_profile_sync_at': provisionedAt,
+      'requires_password_change': false,
     }, onConflict: 'auth_user_id');
     return fetchCurrentProfile();
   }
 
   static Future<FoUser> login({
-    required String mobile,
+    String? loginId,
+    String? mobile,
     required String password,
   }) async {
-    final cleanMobile = _digits(mobile);
-    final email = await _resolveEmail(cleanMobile);
+    final cleanLoginId = (loginId ?? mobile ?? '').trim();
+    if (cleanLoginId.isEmpty) {
+      throw const MobileLoginException(
+        MobileLoginFailureType.profileNotFound,
+        'Invalid login details. Please check your email/mobile and password.',
+      );
+    }
+    final isEmail = cleanLoginId.contains('@');
+    final email = isEmail
+        ? cleanLoginId.toLowerCase()
+        : await _resolveEmail(_digits(cleanLoginId));
     try {
       await client.auth.signInWithPassword(email: email, password: password);
     } on AuthException catch (error) {
@@ -311,13 +332,54 @@ class SupabaseService {
           error.code == 'invalid_credentials' ||
           error.message.toLowerCase().contains('invalid login credentials');
       if (!isInvalidCredentials) rethrow;
+      if (isEmail && !await _emailProfileExists(email)) {
+        throw MobileLoginException(
+          MobileLoginFailureType.profileNotFound,
+          'No active profile found for this email. Please contact admin.',
+          details: 'email=$email auth_code=${error.code ?? '--'}',
+        );
+      }
       throw MobileLoginException(
         MobileLoginFailureType.wrongPassword,
-        'Incorrect password. Please try again.',
-        details: 'mobile=$cleanMobile auth_code=${error.code ?? '--'}',
+        'Invalid login details. Please check your email/mobile and password.',
+        details:
+            'login_type=${isEmail ? 'email' : 'mobile'} auth_code=${error.code ?? '--'}',
       );
     }
-    return fetchCurrentProfile();
+    try {
+      return await fetchCurrentProfile();
+    } on MobileLoginException catch (error) {
+      if (error.type == MobileLoginFailureType.profileNotFound) {
+        throw MobileLoginException(
+          MobileLoginFailureType.profileNotFound,
+          isEmail
+              ? 'No active profile found for this email. Please contact admin.'
+              : 'No active profile found for this mobile number. Please contact admin.',
+          details: error.details,
+        );
+      }
+      rethrow;
+    }
+  }
+
+  static Future<bool> _emailProfileExists(String email) async {
+    try {
+      final row = await client
+          .from('profiles')
+          .select('id, is_active, status, mobile_access_enabled')
+          .eq('email', email)
+          .maybeSingle();
+      if (row == null) return false;
+      if (row['is_active'] == false) return false;
+      if (row['mobile_access_enabled'] == false) return false;
+      final status = row['status']?.toString().trim().toLowerCase();
+      if (status != null && status.isNotEmpty && status != 'active') {
+        return false;
+      }
+      return true;
+    } catch (_) {
+      return true;
+    }
   }
 
   static Future<String> _resolveEmail(String mobile) async {
@@ -335,7 +397,7 @@ class SupabaseService {
       if (status == 'profile_not_found') {
         throw MobileLoginException(
           MobileLoginFailureType.profileNotFound,
-          'No profile was found for this mobile number.',
+          'No active profile found for this mobile number. Please contact admin.',
           details: 'mobile=$mobile',
         );
       }
@@ -349,7 +411,7 @@ class SupabaseService {
       if (status == 'inactive_profile') {
         throw MobileLoginException(
           MobileLoginFailureType.inactiveProfile,
-          'This mobile profile is inactive. Please contact admin.',
+          'Your profile is inactive. Please contact admin.',
           details: 'mobile=$mobile',
         );
       }
@@ -373,7 +435,7 @@ class SupabaseService {
     if (email.isEmpty) {
       throw MobileLoginException(
         MobileLoginFailureType.profileNotFound,
-        'No eligible profile was found for this mobile number.',
+        'No active profile found for this mobile number. Please contact admin.',
         details: 'mobile=$mobile legacy_resolver=true',
       );
     }
@@ -386,7 +448,7 @@ class SupabaseService {
     final row = await client
         .from('profiles')
         .select(
-          'id, auth_user_id, employee_code, username, full_name, display_name, mobile, email, state, role, department, designation, business, status, is_active',
+          'id, auth_user_id, employee_code, username, full_name, display_name, mobile, email, state, role, department, designation, business, status, is_active, mobile_access_enabled',
         )
         .eq('auth_user_id', authUser.id)
         .maybeSingle();
@@ -407,7 +469,20 @@ class SupabaseService {
     if (row['is_active'] == false) {
       throw const MobileLoginException(
         MobileLoginFailureType.inactiveProfile,
-        'This mobile profile is inactive. Please contact admin.',
+        'Your profile is inactive. Please contact admin.',
+      );
+    }
+    final status = row['status']?.toString().trim().toLowerCase();
+    if (status != null && status.isNotEmpty && status != 'active') {
+      throw const MobileLoginException(
+        MobileLoginFailureType.inactiveProfile,
+        'Your profile is inactive. Please contact admin.',
+      );
+    }
+    if (row['mobile_access_enabled'] == false) {
+      throw const MobileLoginException(
+        MobileLoginFailureType.roleNotAllowed,
+        'Mobile access is not enabled for your profile. Please contact admin.',
       );
     }
     if (user.employeeCode.isEmpty) {

@@ -13,6 +13,7 @@ import {
   booleanValue,
   buildEmployeeCodeRepairPreview,
   buildHardDeletePreview,
+  canonicalProfileRole,
   hasOwn,
   hierarchyPayloadFromBody,
   loadHierarchy,
@@ -500,6 +501,175 @@ function requireRoles(roles) {
   };
 }
 
+function normalizeMobileLeadRole(role) {
+  const normalized = String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+  const roleMap = {
+    BDEXECUTIVE: 'BD Executive',
+    BUSINESSDEVELOPMENTEXECUTIVE: 'BD Executive',
+    BDHEAD: 'BD Head',
+    BUSINESSDEVELOPMENTHEAD: 'BD Head',
+    ADMIN: 'Admin',
+    MANAGEMENT: 'Management',
+    MD: 'Management',
+    COO: 'Management',
+    GM: 'Management',
+    GENERALMANAGER: 'Management',
+    GMTOPMANAGEMENT: 'Management',
+    TOPMANAGEMENT: 'Management',
+  };
+  return roleMap[normalized] || String(role || '').trim();
+}
+
+function hasMobileLeadAccess(profile) {
+  const role = normalizeMobileLeadRole(profile?.role);
+  if (!['BD Executive', 'BD Head', 'Admin', 'Management'].includes(role)) return false;
+  if (profile?.is_active !== true) return false;
+  if (profile?.mobile_access_enabled === false) return false;
+  const status = String(profile?.status || '').trim().toUpperCase();
+  if (status && status !== 'ACTIVE') return false;
+  return true;
+}
+
+function requireMobileLeadAccess(request, response, next) {
+  if (!hasMobileLeadAccess(request.profile)) {
+    response.status(403).json({
+      ok: false,
+      message: 'Your profile cannot access mobile lead management.',
+    });
+    return;
+  }
+  request.mobileLeadRole = normalizeMobileLeadRole(request.profile.role);
+  next();
+}
+
+function mobileLeadActor(profile, authUser = {}) {
+  return {
+    profileId: String(profile?.id || '').trim(),
+    authUserId: String(profile?.auth_user_id || authUser?.id || '').trim(),
+    name: String(profile?.full_name || profile?.display_name || profile?.employee_code || profile?.email || '').trim(),
+    email: String(profile?.email || authUser?.email || '').trim().toLowerCase(),
+    role: normalizeMobileLeadRole(profile?.role),
+  };
+}
+
+function canAccessMobileLead(lead, actor) {
+  if (['BD Head', 'Admin', 'Management'].includes(actor.role)) return true;
+  const assignedEmail = String(lead?.assigned_bd_email || '').trim().toLowerCase();
+  const assignedName = String(lead?.assigned_bd_executive || '').trim().toLowerCase();
+  const createdByUserId = String(lead?.created_by_user_id || '').trim();
+  return actor.role === 'BD Executive' && (
+    assignedEmail && assignedEmail === actor.email ||
+    assignedName && assignedName === actor.name.toLowerCase() ||
+    createdByUserId && [actor.authUserId, actor.profileId].includes(createdByUserId)
+  );
+}
+
+function validateLeadPriority(value) {
+  const priority = String(value || '').trim();
+  return ['High', 'Medium', 'Low'].includes(priority) ? priority : '';
+}
+
+function normalizeServiceScopePayload(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean);
+  if (typeof value === 'string') {
+    return value.split(',').map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function groupBy(items = [], key) {
+  return items.reduce((grouped, item) => {
+    const value = item?.[key];
+    if (!value) return grouped;
+    grouped[value] = [...(grouped[value] || []), item];
+    return grouped;
+  }, {});
+}
+
+function compactMobileLead(lead, contactsByLeadId = {}, momByLeadId = {}, activityByLeadId = {}) {
+  const contacts = contactsByLeadId[lead.id] || [];
+  const primaryContact = contacts.find((contact) => contact.is_primary) || contacts[0] || null;
+  const momRows = momByLeadId[lead.id] || [];
+  const latestMom = [...momRows].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0] || null;
+  return {
+    id: lead.id,
+    client_name: lead.client_name,
+    industry_type: lead.industry_type,
+    lead_source: lead.lead_source,
+    site_location: lead.site_location,
+    state: lead.state,
+    city: lead.city,
+    lead_priority: lead.lead_priority,
+    service_scope: lead.service_scope || [],
+    remarks: lead.remarks,
+    assigned_bd_executive: lead.assigned_bd_executive,
+    assigned_bd_email: lead.assigned_bd_email,
+    created_by_user_id: lead.created_by_user_id,
+    created_by_name: lead.created_by_name,
+    lead_stage: lead.lead_stage,
+    status: lead.status,
+    created_at: lead.created_at,
+    updated_at: lead.updated_at,
+    primary_contact: primaryContact,
+    contacts,
+    latest_mom: latestMom,
+    next_followup_date: latestMom?.next_followup_date || null,
+    activity_logs: activityByLeadId[lead.id] || [],
+  };
+}
+
+async function fetchMobileLeadRelations(client, leadIds) {
+  if (!leadIds.length) {
+    return { contactsByLeadId: {}, momByLeadId: {}, activityByLeadId: {} };
+  }
+  const [contactsResponse, momResponse, activityResponse] = await Promise.all([
+    client.from('lead_contacts').select('*').in('lead_id', leadIds),
+    client.from('lead_mom').select('*').in('lead_id', leadIds),
+    client.from('activity_logs').select('*').in('lead_id', leadIds).order('created_at', { ascending: false }),
+  ]);
+  if (contactsResponse.error && !isMissingTable(contactsResponse.error)) throw contactsResponse.error;
+  if (momResponse.error && !isMissingTable(momResponse.error)) throw momResponse.error;
+  if (activityResponse.error && !isMissingTable(activityResponse.error)) throw activityResponse.error;
+  return {
+    contactsByLeadId: groupBy(contactsResponse.data || [], 'lead_id'),
+    momByLeadId: groupBy(momResponse.data || [], 'lead_id'),
+    activityByLeadId: groupBy(activityResponse.data || [], 'lead_id'),
+  };
+}
+
+function mobileLeadMatchesFilters(lead, query = {}) {
+  const status = String(query.status || '').trim().toLowerCase();
+  const stage = String(query.stage || '').trim().toLowerCase();
+  const priority = String(query.priority || '').trim().toLowerCase();
+  const search = String(query.search || '').trim().toLowerCase();
+  if (status && String(lead.status || '').trim().toLowerCase() !== status) return false;
+  if (stage && String(lead.lead_stage || '').trim().toLowerCase() !== stage) return false;
+  if (priority && String(lead.lead_priority || '').trim().toLowerCase() !== priority) return false;
+  if (search) {
+    const haystack = [
+      lead.client_name,
+      lead.site_location,
+      lead.city,
+      lead.state,
+      lead.assigned_bd_executive,
+    ].join(' ').toLowerCase();
+    if (!haystack.includes(search)) return false;
+  }
+  return true;
+}
+
+async function insertMobileLeadActivity(client, { leadId, type, message, createdBy }) {
+  const { error } = await client.from('activity_logs').insert({
+    lead_id: leadId,
+    activity_type: type,
+    activity_message: message,
+    created_by: createdBy,
+  });
+  if (error && !isMissingTable(error)) {
+    console.warn('[myQPMS Mobile Leads] activity log insert failed', sanitizeSupabaseDiagnosticError(error));
+  }
+}
+
 function requireSupabase() {
   if (!supabaseAnon) {
     const error = new Error('Supabase backend configuration is missing on the API server. Set SUPABASE_URL and SUPABASE_ANON_KEY.');
@@ -592,7 +762,7 @@ function profileCreatePayload(body, authUserId, usedTemporaryPassword) {
     mobile: textOrNull(body.mobile),
     email,
     state: textOrNull(body.state),
-    role: textOrNull(body.role) || 'FO',
+    role: canonicalProfileRole(body.role, 'FO'),
     designation: textOrNull(body.designation),
     department: textOrNull(body.department),
     business: textOrNull(body.business),
@@ -632,9 +802,13 @@ function profilePatchPayload(body) {
   const payload = {};
   for (const field of textFields) {
     if (!hasOwn(body, field)) continue;
-    payload[field] = field === 'email'
-      ? normalizeEmail(body[field]) || null
-      : textOrNull(body[field]);
+    if (field === 'email') {
+      payload[field] = normalizeEmail(body[field]) || null;
+    } else if (field === 'role') {
+      payload[field] = canonicalProfileRole(body[field]);
+    } else {
+      payload[field] = textOrNull(body[field]);
+    }
   }
   for (const field of booleanFields) {
     if (hasOwn(body, field)) payload[field] = booleanValue(body[field]);
@@ -1623,7 +1797,7 @@ app.post(
               mobile: textOrNull(authUser.phone || metadata.mobile),
               email,
               state: textOrNull(metadata.state),
-              role: textOrNull(metadata.role) || 'BD',
+              role: canonicalProfileRole(metadata.role, 'BD'),
               designation: textOrNull(metadata.designation),
               department: textOrNull(metadata.department),
               business: textOrNull(metadata.business),
@@ -1698,7 +1872,7 @@ app.post(
         full_name: fullName,
         display_name: textOrNull(body.display_name) || fullName,
         mobile: textOrNull(body.mobile),
-        role: textOrNull(body.role) || 'FO',
+        role: canonicalProfileRole(body.role, 'FO'),
         designation: textOrNull(body.designation),
         department: textOrNull(body.department),
         business: textOrNull(body.business),
@@ -2531,6 +2705,244 @@ app.post(
     }
   },
 );
+
+app.get('/api/mobile/leads', requireSupabaseJwt, requireMobileLeadAccess, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const actor = mobileLeadActor(request.profile, request.authUser);
+    const { data, error } = await client
+      .from('leads')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (error) throw error;
+
+    const visibleLeads = (data || [])
+      .filter((lead) => canAccessMobileLead(lead, actor))
+      .filter((lead) => mobileLeadMatchesFilters(lead, request.query));
+    const leadIds = visibleLeads.map((lead) => lead.id).filter(Boolean);
+    const relations = await fetchMobileLeadRelations(client, leadIds);
+    response.json({
+      ok: true,
+      count: visibleLeads.length,
+      scope: actor.role === 'BD Executive' ? 'own' : 'team',
+      leads: visibleLeads.map((lead) => compactMobileLead(lead, relations.contactsByLeadId, relations.momByLeadId)),
+    });
+  } catch (error) {
+    response.status(error.statusCode || 500).json({ ok: false, message: error.message });
+  }
+});
+
+app.get('/api/mobile/leads/:leadId', requireSupabaseJwt, requireMobileLeadAccess, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const actor = mobileLeadActor(request.profile, request.authUser);
+    const { data: lead, error } = await client
+      .from('leads')
+      .select('*')
+      .eq('id', request.params.leadId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!lead) {
+      response.status(404).json({ ok: false, message: 'Lead not found.' });
+      return;
+    }
+    if (!canAccessMobileLead(lead, actor)) {
+      response.status(403).json({ ok: false, message: 'You cannot access this lead.' });
+      return;
+    }
+    const relations = await fetchMobileLeadRelations(client, [lead.id]);
+    response.json({
+      ok: true,
+      lead: compactMobileLead(lead, relations.contactsByLeadId, relations.momByLeadId, relations.activityByLeadId),
+    });
+  } catch (error) {
+    response.status(error.statusCode || 500).json({ ok: false, message: error.message });
+  }
+});
+
+app.post('/api/mobile/leads', requireSupabaseJwt, requireMobileLeadAccess, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const actor = mobileLeadActor(request.profile, request.authUser);
+    const clientName = String(request.body?.client_name || request.body?.clientName || '').trim();
+    const siteLocation = String(request.body?.site_location || request.body?.siteLocation || request.body?.location || '').trim();
+    const state = String(request.body?.state || '').trim();
+    const city = String(request.body?.city || '').trim();
+    const contactName = String(request.body?.contact_person_name || request.body?.contactName || '').trim();
+    const contactPhone = String(request.body?.contact_number || request.body?.contactNumber || '').trim();
+    const contactEmail = String(request.body?.email_id || request.body?.email || '').trim();
+    const priority = validateLeadPriority(request.body?.lead_priority || request.body?.leadPriority);
+
+    const errors = [];
+    if (!clientName) errors.push('client_name is required');
+    if (!state) errors.push('state is required');
+    if (!city || !siteLocation) errors.push('city and site_location are required');
+    if (!contactName && !contactPhone && !contactEmail) errors.push('contact name or phone/email is required');
+    if (!priority) errors.push('lead_priority must be High, Medium, or Low');
+    if (errors.length) {
+      response.status(400).json({ ok: false, message: errors.join('; ') });
+      return;
+    }
+
+    const payload = {
+      client_name: clientName,
+      industry_type: String(request.body?.industry_type || request.body?.industryType || '').trim(),
+      lead_source: String(request.body?.lead_source || request.body?.leadSource || '').trim(),
+      site_location: siteLocation,
+      state,
+      city,
+      lead_priority: priority,
+      service_scope: normalizeServiceScopePayload(request.body?.service_scope || request.body?.serviceScope),
+      remarks: String(request.body?.remarks || '').trim(),
+      assigned_bd_executive: actor.name,
+      assigned_bd_email: actor.email,
+      created_by_user_id: actor.authUserId || actor.profileId,
+      created_by_name: actor.name,
+      lead_stage: 'New Lead',
+      status: 'Active',
+      updated_at: new Date().toISOString(),
+    };
+    const { data: lead, error } = await client.from('leads').insert(payload).select('*').single();
+    if (error) throw error;
+
+    if (contactName || contactPhone || contactEmail) {
+      const contactPayload = {
+        lead_id: lead.id,
+        contact_person_name: contactName || 'Primary Contact',
+        contact_person_designation: String(request.body?.contact_person_designation || request.body?.contactDesignation || '').trim(),
+        contact_number: contactPhone || null,
+        email_id: contactEmail || null,
+        is_primary: true,
+      };
+      const { error: contactError } = await client.from('lead_contacts').insert(contactPayload);
+      if (contactError) throw contactError;
+    }
+    await insertMobileLeadActivity(client, {
+      leadId: lead.id,
+      type: 'Lead Created',
+      message: 'Lead Created from Mobile',
+      createdBy: actor.name || actor.email,
+    });
+    const relations = await fetchMobileLeadRelations(client, [lead.id]);
+    response.status(201).json({
+      ok: true,
+      leadId: lead.id,
+      lead: compactMobileLead(lead, relations.contactsByLeadId, relations.momByLeadId),
+    });
+  } catch (error) {
+    response.status(error.statusCode || 500).json({ ok: false, message: error.message });
+  }
+});
+
+app.patch('/api/mobile/leads/:leadId', requireSupabaseJwt, requireMobileLeadAccess, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const actor = mobileLeadActor(request.profile, request.authUser);
+    const { data: lead, error: leadError } = await client.from('leads').select('*').eq('id', request.params.leadId).maybeSingle();
+    if (leadError) throw leadError;
+    if (!lead) {
+      response.status(404).json({ ok: false, message: 'Lead not found.' });
+      return;
+    }
+    if (!canAccessMobileLead(lead, actor)) {
+      response.status(403).json({ ok: false, message: 'You cannot update this lead.' });
+      return;
+    }
+
+    const patch = {};
+    if (request.body?.lead_priority || request.body?.leadPriority) {
+      const priority = validateLeadPriority(request.body.lead_priority || request.body.leadPriority);
+      if (!priority) {
+        response.status(400).json({ ok: false, message: 'lead_priority must be High, Medium, or Low' });
+        return;
+      }
+      patch.lead_priority = priority;
+    }
+    if (Object.prototype.hasOwnProperty.call(request.body || {}, 'remarks')) {
+      patch.remarks = String(request.body.remarks || '').trim();
+    }
+    if (request.body?.status) {
+      const status = String(request.body.status).trim();
+      if (!['Active', 'Pending', 'Escalated', 'Completed', 'MOM Sent', 'Converted to Assessment', 'Archived', 'Lost'].includes(status)) {
+        response.status(400).json({ ok: false, message: 'Unsupported lead status.' });
+        return;
+      }
+      patch.status = status;
+    }
+    if (request.body?.lead_stage || request.body?.leadStage) {
+      const stage = String(request.body.lead_stage || request.body.leadStage).trim();
+      if (!['New Lead', 'Lead MOM Sent', 'Converted', 'Site Visit Scheduled', 'Proposal Sent', 'Lost'].includes(stage)) {
+        response.status(400).json({ ok: false, message: 'Unsupported lead stage.' });
+        return;
+      }
+      patch.lead_stage = stage;
+    }
+    if (Object.keys(patch).length) {
+      patch.updated_at = new Date().toISOString();
+      const { error } = await client.from('leads').update(patch).eq('id', lead.id);
+      if (error) throw error;
+    }
+    if (request.body?.next_followup_date || request.body?.nextFollowUpDate) {
+      const nextFollowUp = String(request.body.next_followup_date || request.body.nextFollowUpDate).trim();
+      const { error } = await client.from('lead_mom').upsert({
+        lead_id: lead.id,
+        next_followup_date: nextFollowUp || null,
+        mom_status: 'Draft',
+      }, { onConflict: 'lead_id' });
+      if (error) throw error;
+    }
+    await insertMobileLeadActivity(client, {
+      leadId: lead.id,
+      type: 'Lead Updated',
+      message: 'Lead Updated from Mobile',
+      createdBy: actor.name || actor.email,
+    });
+    response.json({ ok: true });
+  } catch (error) {
+    response.status(error.statusCode || 500).json({ ok: false, message: error.message });
+  }
+});
+
+app.post('/api/mobile/leads/:leadId/follow-up', requireSupabaseJwt, requireMobileLeadAccess, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const actor = mobileLeadActor(request.profile, request.authUser);
+    const { data: lead, error: leadError } = await client.from('leads').select('*').eq('id', request.params.leadId).maybeSingle();
+    if (leadError) throw leadError;
+    if (!lead) {
+      response.status(404).json({ ok: false, message: 'Lead not found.' });
+      return;
+    }
+    if (!canAccessMobileLead(lead, actor)) {
+      response.status(403).json({ ok: false, message: 'You cannot update this lead.' });
+      return;
+    }
+    const remark = String(request.body?.remark || request.body?.remarks || '').trim();
+    const nextFollowUp = String(request.body?.next_followup_date || request.body?.nextFollowUpDate || '').trim();
+    if (!remark && !nextFollowUp) {
+      response.status(400).json({ ok: false, message: 'Follow-up remark or date is required.' });
+      return;
+    }
+    if (nextFollowUp) {
+      const { error } = await client.from('lead_mom').upsert({
+        lead_id: lead.id,
+        next_followup_date: nextFollowUp,
+        mom_status: 'Draft',
+      }, { onConflict: 'lead_id' });
+      if (error) throw error;
+    }
+    await insertMobileLeadActivity(client, {
+      leadId: lead.id,
+      type: 'Follow-up',
+      message: remark || `Next follow-up set to ${nextFollowUp}`,
+      createdBy: actor.name || actor.email,
+    });
+    response.json({ ok: true });
+  } catch (error) {
+    response.status(error.statusCode || 500).json({ ok: false, message: error.message });
+  }
+});
 
 app.get('/api/leads', requireApiAuth, async (request, response) => {
   try {

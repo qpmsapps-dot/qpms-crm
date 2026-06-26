@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../models/fo_models.dart';
+import '../services/app_state_sync_service.dart';
 import '../services/crash_log_service.dart';
 import '../services/local_db_service.dart';
 import '../services/local_store.dart';
@@ -17,6 +18,8 @@ import '../tracking/tracking_service.dart';
 import '../ui/fo_ui.dart';
 import '../utils/date_utils.dart';
 import '../utils/local_id.dart';
+
+enum _CheckoutRecoveryAction { retry, fixState }
 
 class TasksScreen extends StatefulWidget {
   const TasksScreen({required this.user, this.isSelected = true, super.key});
@@ -58,7 +61,10 @@ class _TasksScreenState extends State<TasksScreen>
 
   Future<void> _load() async {
     var attendance = await LocalStore.getAttendance();
-    var activeVisit = await LocalStore.activeVisit();
+    var activeVisit = await LocalStore.activeVisit(
+      user: widget.user,
+      attendance: attendance,
+    );
     final todayKey = indiaDateKey(DateTime.now());
     await CrashLogService.record(
       employeeCode: widget.user.employeeCode,
@@ -69,11 +75,16 @@ class _TasksScreenState extends State<TasksScreen>
     );
     if (attendance != null) {
       final attendanceDate = _attendanceDateKey(attendance);
-      if (attendanceDate != todayKey) {
+      final employeeMismatch =
+          attendance.employeeCode.trim() != widget.user.employeeCode.trim();
+      if (attendanceDate != todayKey || employeeMismatch) {
         await _clearPreviousDayLocalSession(
           attendance: attendance,
           attendanceDate: attendanceDate,
           todayKey: todayKey,
+          cleanupAction: employeeMismatch
+              ? 'DIFFERENT_EMPLOYEE_LOCAL_SESSION_CLEANUP'
+              : 'PREVIOUS_DAY_LOCAL_SESSION_CLEANUP',
         );
         attendance = null;
         activeVisit = null;
@@ -209,11 +220,12 @@ class _TasksScreenState extends State<TasksScreen>
     required Attendance attendance,
     required String attendanceDate,
     required String todayKey,
+    String cleanupAction = 'PREVIOUS_DAY_LOCAL_SESSION_CLEANUP',
   }) async {
     await CrashLogService.record(
       employeeCode: widget.user.employeeCode,
       screen: 'tasks',
-      action: 'PREVIOUS_DAY_LOCAL_SESSION_CLEANUP_STARTED',
+      action: '${cleanupAction}_STARTED',
       error:
           'attendance_id=${attendance.remoteId ?? attendance.id} attendance_date=$attendanceDate today=$todayKey active=${attendance.isActive}',
     );
@@ -248,7 +260,7 @@ class _TasksScreenState extends State<TasksScreen>
     await CrashLogService.record(
       employeeCode: widget.user.employeeCode,
       screen: 'tasks',
-      action: 'PREVIOUS_DAY_LOCAL_SESSION_CLEANUP_COMPLETE',
+      action: '${cleanupAction}_COMPLETE',
     );
   }
 
@@ -298,7 +310,10 @@ class _TasksScreenState extends State<TasksScreen>
         );
         return;
       }
-      final localActiveVisit = await LocalStore.activeVisit();
+      final localActiveVisit = await LocalStore.activeVisit(
+        user: widget.user,
+        attendance: activeAttendance,
+      );
       if (localActiveVisit != null) {
         await _clearLocalActiveVisitCache(activeAttendance);
         await CrashLogService.record(
@@ -549,7 +564,10 @@ class _TasksScreenState extends State<TasksScreen>
         );
         return;
       }
-      final localActiveVisit = await LocalStore.activeVisit();
+      final localActiveVisit = await LocalStore.activeVisit(
+        user: widget.user,
+        attendance: activeAttendance,
+      );
       if (localActiveVisit != null) {
         await _clearLocalActiveVisitCache(activeAttendance);
         await CrashLogService.record(
@@ -1108,7 +1126,23 @@ class _TasksScreenState extends State<TasksScreen>
           error: error,
           stackTrace: stackTrace,
         );
-        _toast('Check Out sync failed. Tracking remains paused.');
+        _toast(
+          'Checkout sync failed. Please check internet and tap Retry Checkout.',
+        );
+        final action = await _showCheckoutSyncFailureDialog();
+        if (action == _CheckoutRecoveryAction.fixState) {
+          try {
+            final result = await AppStateSyncService.syncNow(widget.user);
+            _toast(result.message);
+            await _load();
+          } catch (_) {
+            _toast('Sync failed. Please check internet and try again.');
+          }
+        } else if (action == _CheckoutRecoveryAction.retry) {
+          Future<void>.delayed(const Duration(milliseconds: 250), () {
+            if (mounted) _checkOut();
+          });
+        }
         return;
       }
       await LocalStore.saveVisit(visit);
@@ -1244,6 +1278,35 @@ class _TasksScreenState extends State<TasksScreen>
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<_CheckoutRecoveryAction?> _showCheckoutSyncFailureDialog() async {
+    if (!mounted) return null;
+    return showDialog<_CheckoutRecoveryAction>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Checkout Sync Failed'),
+        content: const Text(
+          'Your checkout was not saved to the server. The active visit is kept safely. Please check internet and retry, or refresh app state from the server.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+          TextButton(
+            onPressed: () =>
+                Navigator.of(context).pop(_CheckoutRecoveryAction.fixState),
+            child: const Text('Fix App State'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(context).pop(_CheckoutRecoveryAction.retry),
+            child: const Text('Retry Checkout'),
           ),
         ],
       ),
