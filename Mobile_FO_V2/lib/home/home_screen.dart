@@ -195,7 +195,8 @@ class _HomeScreenState extends State<HomeScreen>
           final completed =
               await SupabaseService.findCompletedAttendanceForToday(
                 widget.user,
-              );
+              ) ??
+              await SupabaseService.findClosedAttendanceForToday(widget.user);
           if (completed != null) {
             final attendanceDate = _attendanceDateKey(completed);
             await CrashLogService.record(
@@ -232,8 +233,26 @@ class _HomeScreenState extends State<HomeScreen>
               attendance = completed;
               hasActiveAttendanceToday = false;
               await LocalStore.saveAttendance(completed);
+              if (activeVisit != null) {
+                await _clearLocalActiveVisitCache(completed);
+                activeVisit = null;
+              }
               visits = await LocalStore.getVisits();
             }
+          } else if (attendance?.isActive == true) {
+            final localAttendance = attendance!;
+            await _clearPreviousDayLocalSession(
+              attendance: localAttendance,
+              attendanceDate: _attendanceDateKey(localAttendance),
+              todayKey: todayKey,
+              cleanupAction: 'REMOTE_NO_ACTIVE_ATTENDANCE_LOCAL_CLEANUP',
+              message:
+                  'Previous day was auto-closed. You can start a new day now.',
+            );
+            attendance = null;
+            activeVisit = null;
+            hasActiveAttendanceToday = false;
+            visits = await LocalStore.getVisits();
           }
         }
       } catch (error, stackTrace) {
@@ -317,11 +336,13 @@ class _HomeScreenState extends State<HomeScreen>
     required Attendance attendance,
     required String attendanceDate,
     required String todayKey,
+    String cleanupAction = 'PREVIOUS_DAY_LOCAL_SESSION_CLEANUP',
+    String? message,
   }) async {
     await CrashLogService.record(
       employeeCode: widget.user.employeeCode,
       screen: 'home',
-      action: 'PREVIOUS_DAY_LOCAL_SESSION_CLEANUP_STARTED',
+      action: '${cleanupAction}_STARTED',
       error:
           'attendance_id=${attendance.remoteId ?? attendance.id} attendance_date=$attendanceDate today=$todayKey active=${attendance.isActive}',
     );
@@ -360,8 +381,11 @@ class _HomeScreenState extends State<HomeScreen>
     await CrashLogService.record(
       employeeCode: widget.user.employeeCode,
       screen: 'home',
-      action: 'PREVIOUS_DAY_LOCAL_SESSION_CLEANUP_COMPLETE',
+      action: '${cleanupAction}_COMPLETE',
     );
+    if (message != null && mounted) {
+      _toast(message);
+    }
   }
 
   Future<void> _startDay() async {

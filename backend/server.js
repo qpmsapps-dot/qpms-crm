@@ -3283,6 +3283,8 @@ async function runFoStaleSessionCleanup(reason = 'scheduled') {
       visitsClosed: result.visitsClosed,
       attendanceClosed: result.attendanceClosed,
       liveStatusesReset: result.liveStatusesReset,
+      reviewEvidenceCaptured: result.reviewEvidenceCaptured,
+      skippedStaleGps: result.skippedStaleGps,
       skippedBecauseTodayAttendanceExists: result.skippedBecauseTodayAttendanceExists,
       errors: result.errors?.length || 0,
       skipped: result.skipped,

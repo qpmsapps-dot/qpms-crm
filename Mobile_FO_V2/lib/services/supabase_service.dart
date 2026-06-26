@@ -617,6 +617,21 @@ class SupabaseService {
     return _attendanceFromRow(records.first, user);
   }
 
+  static Future<Attendance?> findClosedAttendanceForToday(FoUser user) async {
+    final today = indiaDateKey(DateTime.now());
+    final rows = await client
+        .from('fo_attendance')
+        .select('*')
+        .eq('fo_user_id', user.employeeCode)
+        .eq('attendance_date', today)
+        .order('login_time', ascending: false)
+        .limit(10);
+    final records = List<Map<String, dynamic>>.from(rows);
+    final closed = records.where(_isCompletedAttendanceRow).toList();
+    if (closed.isEmpty) return null;
+    return _attendanceFromRow(closed.first, user);
+  }
+
   static Future<SiteVisit?> findActiveSiteVisitForAttendance({
     required FoUser user,
     required Attendance attendance,
