@@ -361,7 +361,14 @@ class SiteVisit {
     currentLatitude: _double(json['current_latitude']),
     currentLongitude: _double(json['current_longitude']),
     currentGpsAccuracy: _double(json['current_gps_accuracy']),
-    checkOutTime: _date(json['checkout_time']),
+    checkOutTime: _date(
+      json['checkout_time'] ??
+          json['check_out_time'] ??
+          json['checkOutTime'] ??
+          _map(json['metadata'])['checkout_time'] ??
+          _map(json['metadata'])['check_out_time'] ??
+          _map(json['metadata'])['checkOutTime'],
+    ),
     checkOutLatitude: _double(json['check_out_latitude']),
     checkOutLongitude: _double(json['check_out_longitude']),
     checkInAccuracy: _double(json['checkin_accuracy']),

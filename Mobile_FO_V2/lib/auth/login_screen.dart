@@ -16,7 +16,7 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _mobile = TextEditingController();
+  final _loginId = TextEditingController();
   final _password = TextEditingController();
   bool _busy = false;
   bool _showPassword = false;
@@ -24,7 +24,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _mobile.dispose();
+    _loginId.dispose();
     _password.dispose();
     super.dispose();
   }
@@ -36,7 +36,7 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     try {
       final user = await SupabaseService.login(
-        mobile: _mobile.text,
+        loginId: _loginId.text,
         password: _password.text,
       );
       widget.onAuthenticated(user);
@@ -87,10 +87,11 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: Column(
                   children: [
                     TextField(
-                      controller: _mobile,
-                      keyboardType: TextInputType.phone,
+                      controller: _loginId,
+                      keyboardType: TextInputType.emailAddress,
                       decoration: const InputDecoration(
-                        labelText: 'Mobile Number',
+                        labelText: 'Email or Mobile Number',
+                        hintText: 'Enter company email or mobile number',
                       ),
                     ),
                     const SizedBox(height: 12),

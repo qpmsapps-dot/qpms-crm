@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { lazy, Suspense } from 'react';
 import App from '../App.jsx';
 import MainLayout from '../layouts/MainLayout.jsx';
+import AccountDeletion from '../pages/AccountDeletion.jsx';
 import Login from '../pages/Login.jsx';
 import Dashboard from '../pages/Dashboard.jsx';
 import CRM from '../pages/CRM.jsx';
@@ -30,6 +31,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/login" replace /> },
       { path: 'login', element: <Login /> },
+      { path: 'account-deletion', element: <AccountDeletion /> },
       {
         element: <MainLayout />,
         children: [

@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../bd/bd_shell.dart';
 import '../models/fo_models.dart';
 import '../profile/profile_screen.dart';
 import '../tasks/tasks_screen.dart';
 import '../theme/app_theme.dart';
 import '../ui/fo_ui.dart';
 import '../visits/visits_screen.dart';
+import '../utils/mobile_roles.dart';
 import 'home_screen.dart';
 
 class HomeShell extends StatefulWidget {
@@ -45,6 +47,9 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    if (isBusinessDevelopmentRole(widget.user.role)) {
+      return BdShell(user: widget.user, onLogout: widget.onLogout);
+    }
     return Scaffold(
       body: PageView(
         controller: _pageController,

@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { motion as Motion } from 'framer-motion';
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Logo from '../components/Logo.jsx';
 import { useAuth } from '../context/auth-context.js';
 import { findMockUser } from '../data/mockUsers.js';
@@ -247,6 +247,11 @@ export default function Login() {
                   <item.icon className="h-4.5 w-4.5" />
                 </a>
               ))}
+            </div>
+            <div className="mt-5 text-xs font-semibold text-white/70">
+              <Link className="underline decoration-white/30 underline-offset-4 transition hover:text-white" to="/account-deletion">
+                Account Deletion Request
+              </Link>
             </div>
           </div>
           </Motion.div>
