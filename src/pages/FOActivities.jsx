@@ -2718,8 +2718,36 @@ function pointFromVisit(visit, phase, store) {
 }
 
 function pointFromAttendanceStart(attendance) {
-  const lat = numberOrNull(attendance?.start_latitude);
-  const lng = numberOrNull(attendance?.start_longitude);
+  const metadata =
+    attendance?.metadata &&
+    typeof attendance.metadata === "object" &&
+    !Array.isArray(attendance.metadata)
+      ? attendance.metadata
+      : {};
+  const lat = numberOrNull(
+    attendance?.start_latitude ??
+      attendance?.start_lat ??
+      attendance?.login_latitude ??
+      attendance?.login_lat ??
+      attendance?.start_location_latitude ??
+      metadata.start_latitude ??
+      metadata.start_lat ??
+      metadata.login_latitude ??
+      metadata.login_lat ??
+      metadata.start_location_latitude,
+  );
+  const lng = numberOrNull(
+    attendance?.start_longitude ??
+      attendance?.start_lng ??
+      attendance?.login_longitude ??
+      attendance?.login_lng ??
+      attendance?.start_location_longitude ??
+      metadata.start_longitude ??
+      metadata.start_lng ??
+      metadata.login_longitude ??
+      metadata.login_lng ??
+      metadata.start_location_longitude,
+  );
   return lat !== null && lng !== null
     ? { latitude: lat, longitude: lng }
     : null;
@@ -3525,6 +3553,8 @@ function checkoutExceptionForVisit(visit) {
     visit?.visit_status,
     visit?.checkout_note,
     metadata.closed_source,
+    metadata.auto_closed_reason,
+    metadata.checkout_exception_type,
     metadata.checkout_reason,
     metadata.warning,
     metadata.checkout_warning,
@@ -3535,7 +3565,9 @@ function checkoutExceptionForVisit(visit) {
     .toLowerCase();
   const distanceMeters = checkoutDistanceFromVisit(visit);
   const isAutoClosed =
+    metadata.auto_closed === true ||
     metadata.stale_auto_closed === true ||
+    metadata.checkout_exception_type === "missed_checkout_auto_closed" ||
     metadata.closed_source === "end_day_open_site_auto_close" ||
     /stale|auto[\s_-]*clos|closed by end day/.test(combinedText);
   const isManual =
@@ -3552,6 +3584,7 @@ function checkoutExceptionForVisit(visit) {
       combinedText,
     );
   const needsReview =
+    metadata.requires_checkout_review === true ||
     metadata.needs_review === true ||
     /needs review|clarification|required review/.test(combinedText);
 
@@ -3658,6 +3691,65 @@ function checkoutReviewStatus(visit) {
     return { label: "Clarification Needed", tone: "blue" };
   }
   return { label: "Pending Review", tone: "amber" };
+}
+
+function missingCheckoutEvidence(visit) {
+  const metadata =
+    visit?.metadata &&
+    typeof visit.metadata === "object" &&
+    !Array.isArray(visit.metadata)
+      ? visit.metadata
+      : {};
+  const detectedKm = numberOrNull(
+    metadata.missing_checkout_km_detected ??
+      metadata.missing_km_detected ??
+      visit?.missing_checkout_km_detected,
+  );
+  const approvedKm = numberOrNull(
+    metadata.approved_missing_km ??
+      metadata.approved_missing_checkout_km ??
+      visit?.approved_missing_km,
+  );
+  const gpsEvidence =
+    metadata.latest_gps_evidence &&
+    typeof metadata.latest_gps_evidence === "object" &&
+    !Array.isArray(metadata.latest_gps_evidence)
+      ? metadata.latest_gps_evidence
+      : null;
+  const evidenceStatus =
+    metadata.latest_gps_evidence_status ||
+    metadata.gps_evidence_status ||
+    (gpsEvidence ? "fresh" : "");
+  const detectedAt =
+    gpsEvidence?.detected_at ||
+    gpsEvidence?.captured_at ||
+    metadata.latest_gps_detected_at ||
+    null;
+  return {
+    detectedKm,
+    approvedKm: approvedKm ?? 0,
+    evidenceStatus,
+    detectedAt,
+    gpsEvidence,
+    hasDetectedKm: detectedKm !== null,
+  };
+}
+
+function missingCheckoutKmLabel(visit) {
+  const evidence = missingCheckoutEvidence(visit);
+  if (evidence.hasDetectedKm) return `${evidence.detectedKm.toFixed(1)} km`;
+  return "--";
+}
+
+function missingCheckoutEvidenceLabel(visit) {
+  const evidence = missingCheckoutEvidence(visit);
+  if (evidence.detectedAt) {
+    return `Latest GPS: ${formatTime(evidence.detectedAt)}`;
+  }
+  if (String(evidence.evidenceStatus || "").toLowerCase() === "stale") {
+    return "GPS evidence stale";
+  }
+  return "No fresh GPS evidence";
 }
 
 function CheckoutStatusChip({ exception }) {
@@ -3808,9 +3900,42 @@ function detailRouteAnchor(id, type, label, coordinates, title) {
 }
 
 function routePointFromAttendanceEnd(attendance) {
-  const lat = numberOrNull(attendance?.end_latitude ?? attendance?.logout_latitude ?? attendance?.end_lat);
-  const lng = numberOrNull(attendance?.end_longitude ?? attendance?.logout_longitude ?? attendance?.end_lng);
+  const metadata =
+    attendance?.metadata &&
+    typeof attendance.metadata === "object" &&
+    !Array.isArray(attendance.metadata)
+      ? attendance.metadata
+      : {};
+  const lat = numberOrNull(
+    attendance?.end_latitude ??
+      attendance?.logout_latitude ??
+      attendance?.end_lat ??
+      attendance?.logout_lat ??
+      attendance?.end_location_latitude ??
+      metadata.end_latitude ??
+      metadata.logout_latitude ??
+      metadata.end_lat ??
+      metadata.logout_lat ??
+      metadata.end_location_latitude,
+  );
+  const lng = numberOrNull(
+    attendance?.end_longitude ??
+      attendance?.logout_longitude ??
+      attendance?.end_lng ??
+      attendance?.logout_lng ??
+      attendance?.end_location_longitude ??
+      metadata.end_longitude ??
+      metadata.logout_longitude ??
+      metadata.end_lng ??
+      metadata.logout_lng ??
+      metadata.end_location_longitude,
+  );
   return lat !== null && lng !== null ? [lat, lng] : null;
+}
+
+function attendanceEndCoordinates(attendance) {
+  const point = routePointFromAttendanceEnd(attendance);
+  return point ? { latitude: point[0], longitude: point[1] } : null;
 }
 
 let googleMapsScriptPromise = null;
@@ -4865,52 +4990,61 @@ function FieldOfficerDetailsView({
   const timelineRows = useMemo(() => {
     const rows = [];
     if (firstAttendance.login_time) {
+      const startCoordinates = pointFromAttendanceStart(firstAttendance);
       rows.push({
         key: "start",
         index: <PlayCircle className="h-4 w-4" />,
         site: "Start Day",
-        location: pointFromAttendanceStart(firstAttendance)
-          ? `${pointFromAttendanceStart(firstAttendance).latitude.toFixed(5)}, ${pointFromAttendanceStart(firstAttendance).longitude.toFixed(5)}`
+        location: startCoordinates
+          ? `${startCoordinates.latitude.toFixed(5)}, ${startCoordinates.longitude.toFixed(5)}`
           : "--",
+        locationCoordinates: startCoordinates,
         checkIn: formatDateTime(firstAttendance.login_time),
         checkOut: "--",
         duration: "--",
         travelFromPrevious: "--",
         distance: "--",
+        missingKm: "--",
         remarks: "Start of day",
       });
     }
     visits.forEach((visit, index) => {
+      const exception = checkoutExceptionForVisit(visit);
       rows.push({
         key: visit.id || `${visit.check_in_time}-${index}`,
         index: index + 1,
         site: `${visitTitle(visit)} / ${visitClient(visit)}`,
         location: visitLocation(visit),
-        checkInCoordinates: visitCheckInCoordinates(visit),
+        locationCoordinates: visitCheckInCoordinates(visit),
         checkIn: formatDateTime(visit.check_in_time),
         checkOut: formatDateTime(siteVisitCheckoutValue(visit)),
         duration: durationMinutesLabel(visitMinutes(visit)),
         travelFromPrevious: index === 0 ? "Start Day" : visitTitle(visits[index - 1]),
         distance: numberLabel(visit.route_km, " km"),
+        missingKm: exception.requiresReview ? missingCheckoutKmLabel(visit) : "--",
+        missingEvidence: exception.requiresReview ? missingCheckoutEvidenceLabel(visit) : "",
         remarks: visitRemarks(visit),
-        exception: checkoutExceptionForVisit(visit),
+        exception,
         visit,
         visitIndex: index,
       });
     });
     if (lastAttendance.logout_time) {
+      const endCoordinates = attendanceEndCoordinates(lastAttendance);
       rows.push({
         key: "end",
         index: <Square className="h-3.5 w-3.5" />,
         site: "End Day",
-        location: routePointFromAttendanceEnd(lastAttendance)
-          ? `${routePointFromAttendanceEnd(lastAttendance)[0].toFixed(5)}, ${routePointFromAttendanceEnd(lastAttendance)[1].toFixed(5)}`
+        location: endCoordinates
+          ? `${endCoordinates.latitude.toFixed(5)}, ${endCoordinates.longitude.toFixed(5)}`
           : "--",
+        locationCoordinates: endCoordinates,
         checkIn: "--",
         checkOut: formatDateTime(lastAttendance.logout_time),
         duration: durationMinutesLabel(workingMinutes),
         travelFromPrevious: visits.length ? visitTitle(visits.at(-1)) : "--",
         distance: "--",
+        missingKm: "--",
         remarks: "End of day",
       });
     }
@@ -5276,8 +5410,8 @@ function FieldOfficerDetailsView({
             <h2 className="text-base font-black text-slate-950">Start / End Day Evidence</h2>
             <div className="mt-4 space-y-3">
               {[
-                ["Start Day", formatDateTime(attendance.login_time), startPoint ? `${startPoint.latitude.toFixed(5)}, ${startPoint.longitude.toFixed(5)}` : "--", startBattery],
-                ["End Day", formatDateTime(attendance.logout_time), endPoint ? `${endPoint[0].toFixed(5)}, ${endPoint[1].toFixed(5)}` : "--", endBattery],
+                ["Start Day", formatDateTime(attendance.login_time), startPoint ? formatVisitCoordinates(startPoint) : "--", startBattery],
+                ["End Day", formatDateTime(attendance.logout_time), endPoint ? formatVisitCoordinates({ latitude: endPoint[0], longitude: endPoint[1] }) : "--", endBattery],
               ].map(([label, time, location, battery]) => (
                 <div key={label} className="rounded-xl border border-slate-200 p-4">
                   <div className="flex items-center justify-between">
@@ -5335,10 +5469,10 @@ function FieldOfficerDetailsView({
               </span>
             </h2>
             <div className="mt-3 w-full overflow-x-auto rounded-xl border border-slate-100">
-              <table className="min-w-[920px] w-full text-left text-xs">
+              <table className="min-w-[1080px] w-full text-left text-xs">
                 <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-500">
                   <tr>
-                    {["#", "Site / Client", "Check-in Lat/Lng", "Check-in", "Check-out", "Duration", "Travel from Previous", "Route KM", "Remarks"].map((heading) => (
+                    {["#", "Site / Client", "Location Lat/Lng", "Check-in", "Check-out", "Duration", "Travel from Previous", "Route KM", "Missing KM", "Remarks / Review"].map((heading) => (
                       <th key={heading} className="whitespace-nowrap px-3 py-3">{heading}</th>
                     ))}
                   </tr>
@@ -5355,16 +5489,16 @@ function FieldOfficerDetailsView({
                       </td>
                       <td className="min-w-44 px-3 py-3 font-black text-slate-900">{row.site}</td>
                       <td className="min-w-44 px-3 py-3">
-                        {row.checkInCoordinates ? (
+                        {row.locationCoordinates ? (
                           <a
-                            href={visitGoogleMapsUrl(row.checkInCoordinates)}
+                            href={visitGoogleMapsUrl(row.locationCoordinates)}
                             target="_blank"
                             rel="noreferrer"
                             onClick={(event) => event.stopPropagation()}
                             className="font-bold text-qpms-700 underline decoration-qpms-200 underline-offset-2 hover:text-qpms-900"
-                            title="Open check-in location in Google Maps"
+                            title="Open location in Google Maps"
                           >
-                            {formatVisitCoordinates(row.checkInCoordinates)}
+                            {formatVisitCoordinates(row.locationCoordinates)}
                           </a>
                         ) : (
                           "--"
@@ -5375,6 +5509,16 @@ function FieldOfficerDetailsView({
                       <td className="whitespace-nowrap px-3 py-3">{row.duration}</td>
                       <td className="min-w-36 px-3 py-3">{row.travelFromPrevious}</td>
                       <td className="whitespace-nowrap px-3 py-3">{row.distance}</td>
+                      <td className="min-w-32 px-3 py-3">
+                        <div className="space-y-1">
+                          <p className="font-black text-slate-800">{row.missingKm || "--"}</p>
+                          {row.missingEvidence ? (
+                            <p className="text-[10px] font-semibold text-slate-500">
+                              {row.missingEvidence}
+                            </p>
+                          ) : null}
+                        </div>
+                      </td>
                       <td className="min-w-44 px-3 py-3">
                         <div className="space-y-1.5">
                           {row.exception ? <CheckoutStatusChip exception={row.exception} /> : null}
@@ -5435,11 +5579,14 @@ function FieldOfficerDetailsView({
                     </tr>
                   ))}
                   {!timelineRows.length ? (
-                    <tr><td colSpan={9} className="px-3 py-10 text-center text-sm text-slate-500">No visit timeline available for selected filters.</td></tr>
+                    <tr><td colSpan={10} className="px-3 py-10 text-center text-sm text-slate-500">No visit timeline available for selected filters.</td></tr>
                   ) : null}
                 </tbody>
               </table>
             </div>
+            <p className="mt-3 rounded-xl border border-amber-100 bg-amber-50 p-3 text-xs font-semibold text-amber-800">
+              Missing KM is captured for review only. It is added to payable KM only after Operations Manager / Branch Head approval.
+            </p>
           </section>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -5464,7 +5611,7 @@ function FieldOfficerDetailsView({
                 ["Business Type", visitBusinessType(selectedVisit)],
                 ["Address / Coordinates", selectedVisit?.address || selectedVisit?.location_name || visitLocation(selectedVisit)],
                 [
-                  "Check-in Lat/Lng",
+                  "Location Lat/Lng",
                   selectedCheckInCoordinates
                     ? formatVisitCoordinates(selectedCheckInCoordinates)
                     : "--",
@@ -5474,12 +5621,15 @@ function FieldOfficerDetailsView({
                 ["Duration", durationMinutesLabel(visitMinutes(selectedVisit))],
                 ["Travel from Previous", selectedTravelFromPrevious],
                 ["Route KM", numberLabel(selectedVisit?.route_km, " km")],
+                ["Missing KM Detected", selectedCheckoutException?.requiresReview ? missingCheckoutKmLabel(selectedVisit) : "--"],
+                ["Approved Missing KM", `${missingCheckoutEvidence(selectedVisit).approvedKm.toFixed(1)} km`],
+                ["GPS Evidence", selectedCheckoutException?.requiresReview ? missingCheckoutEvidenceLabel(selectedVisit) : "--"],
                 ["Route Source", visitRouteSourceLabel(selectedVisit)],
                 ["Remarks", visitRemarks(selectedVisit)],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-xl bg-slate-50 p-3">
                   <p className="text-[10px] font-bold uppercase tracking-wide text-qpms-700">{label}</p>
-                  {label === "Check-in Lat/Lng" &&
+                  {label === "Location Lat/Lng" &&
                   selectedCheckInCoordinates ? (
                     <a
                       href={visitGoogleMapsUrl(selectedCheckInCoordinates)}
@@ -5629,10 +5779,10 @@ function FieldOfficerDetailsView({
             Payable KM is used for reimbursement. GPS Audit KM is supporting evidence only.
           </p> : null}
           <div className="mt-5 overflow-x-auto rounded-xl border border-slate-200">
-            <table className="min-w-[760px] w-full text-left text-xs">
+            <table className="min-w-[980px] w-full text-left text-xs">
               <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-500">
                 <tr>
-                  {["Site / Client", "Travel From Previous", "Route KM", "Payable KM Contribution", "Remarks / Exception"].map((heading) => (
+                  {["Site / Client", "Travel From Previous", "Route KM", "Missing KM Detected", "Approved Missing KM", "Final Payable KM", "Remarks / Exception"].map((heading) => (
                     <th key={heading} className="px-3 py-3">{heading}</th>
                   ))}
                 </tr>
@@ -5641,6 +5791,10 @@ function FieldOfficerDetailsView({
                 {visits.map((visit, index) => {
                   const exception = checkoutExceptionForVisit(visit);
                   const routeKm = Number(visit?.route_km);
+                  const missingEvidence = missingCheckoutEvidence(visit);
+                  const finalPayableKm =
+                    (Number.isFinite(routeKm) && routeKm > 0 ? routeKm : 0) +
+                    (Number.isFinite(missingEvidence.approvedKm) ? missingEvidence.approvedKm : 0);
                   return (
                     <tr key={visit.id || index}>
                       <td className="px-3 py-3 font-black text-slate-900">
@@ -5652,9 +5806,28 @@ function FieldOfficerDetailsView({
                       <td className="px-3 py-3 text-slate-700">
                         {numberLabel(visit.route_km, " km")}
                       </td>
+                      <td className="px-3 py-3 text-amber-700">
+                        <div className="space-y-1">
+                          <span className="font-bold">
+                            {exception.requiresReview
+                              ? missingCheckoutKmLabel(visit)
+                              : "--"}
+                          </span>
+                          {exception.requiresReview ? (
+                            <p className="text-[10px] font-semibold text-slate-500">
+                              {missingCheckoutEvidenceLabel(visit)}
+                            </p>
+                          ) : null}
+                        </div>
+                      </td>
                       <td className="px-3 py-3 font-bold text-emerald-700">
-                        {Number.isFinite(routeKm) && routeKm > 0
-                          ? `${routeKm.toFixed(1)} km`
+                        {missingEvidence.approvedKm > 0
+                          ? `${missingEvidence.approvedKm.toFixed(1)} km`
+                          : "0.0 km"}
+                      </td>
+                      <td className="px-3 py-3 font-bold text-emerald-700">
+                        {finalPayableKm > 0
+                          ? `${finalPayableKm.toFixed(1)} km`
                           : "--"}
                       </td>
                       <td className="px-3 py-3">
@@ -5695,7 +5868,7 @@ function FieldOfficerDetailsView({
                 })}
                 {!visits.length ? (
                   <tr>
-                    <td colSpan={5} className="px-3 py-8 text-center text-slate-500">
+                    <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
                       No site-wise KM data available for the selected range.
                     </td>
                   </tr>
@@ -5825,7 +5998,9 @@ function FieldOfficerDetailsView({
                 ["Mobile", officer?.phone],
                 ["Attendance Status", lastAttendance.status || status.label],
                 ["Start Day", formatDateTime(firstAttendance.login_time)],
+                ["Start Location", formatVisitCoordinates(pointFromAttendanceStart(firstAttendance))],
                 ["End Day", formatDateTime(lastAttendance.logout_time)],
+                ["End Location", formatVisitCoordinates(attendanceEndCoordinates(lastAttendance))],
               ].map(([label, value]) => (
                 <div key={label}>
                   <p className="text-xs font-bold text-slate-400">{label}</p>
@@ -5887,7 +6062,7 @@ function FieldOfficerDetailsView({
                         {visitTitle(visit)} / {visitClient(visit)}
                         <br />
                         <span className="text-[10px] text-slate-500">
-                          Check-in:{" "}
+                          Location:{" "}
                           {formatVisitCoordinates(
                             visitCheckInCoordinates(visit),
                           )}
@@ -5911,7 +6086,11 @@ function FieldOfficerDetailsView({
                         {checkoutExceptionForVisit(visit).requiresReview ? (
                           <>
                             <br />
+                            Missing KM: {missingCheckoutKmLabel(visit)}
+                            <br />
                             Review status: {checkoutReviewStatus(visit).label}
+                            <br />
+                            {missingCheckoutEvidenceLabel(visit)}
                             <br />
                             Requires Operation Manager / Branch Head review
                           </>
