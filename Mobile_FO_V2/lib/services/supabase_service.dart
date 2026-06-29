@@ -820,18 +820,84 @@ class SupabaseService {
     return (firstClosedVisitId: firstClosedVisitId, closedCount: closedCount);
   }
 
-  static Future<void> reopenAttendanceForToday(Attendance attendance) async {
-    final id = attendance.remoteId;
-    if (id == null || id.isEmpty) return;
-    await client
-        .from('fo_attendance')
-        .update({
-          'status': 'Active',
-          'logout_time': null,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        })
-        .eq('id', id);
-    attendance.endTime = null;
+  static Map<String, dynamic> buildReopenAttendanceMetadata({
+    required Map<String, dynamic> existingMetadata,
+    required String? previousLogoutTime,
+    required DateTime reopenedAt,
+  }) {
+    final existingCount = _int(existingMetadata['reopen_count']) ?? 0;
+    return {
+      ...existingMetadata,
+      'reopened_after_end_day': true,
+      'reopen_count': existingCount + 1,
+      'last_reopened_at': reopenedAt.toUtc().toIso8601String(),
+      'previous_logout_time': previousLogoutTime,
+      'reopen_reason': 'Employee restarted duty after accidental End Day',
+    };
+  }
+
+  static Future<Attendance> reopenAttendanceForToday({
+    required FoUser user,
+    required Attendance attendance,
+  }) async {
+    final id = attendance.remoteId?.trim();
+    if (!isValidUuid(id)) {
+      throw StateError(
+        'Attendance sync missing. Please logout and login again.',
+      );
+    }
+    final today = indiaDateKey(DateTime.now());
+    final reopenedAt = DateTime.now().toUtc();
+    final previousLogoutTime = attendance.endTime?.toUtc().toIso8601String();
+    final payload = <String, dynamic>{
+      'status': 'Active',
+      'logout_time': null,
+      'metadata': buildReopenAttendanceMetadata(
+        existingMetadata: attendance.metadata,
+        previousLogoutTime: previousLogoutTime,
+        reopenedAt: reopenedAt,
+      ),
+      'updated_at': reopenedAt.toIso8601String(),
+    };
+    dynamic rows;
+    try {
+      rows = await client
+          .from('fo_attendance')
+          .update(payload)
+          .eq('id', id!)
+          .eq('fo_user_id', user.employeeCode)
+          .eq('attendance_date', today)
+          .not('logout_time', 'is', null)
+          .select('*');
+    } on PostgrestException catch (error) {
+      if (!_isMissingColumnError(error)) rethrow;
+      payload.remove('metadata');
+      rows = await client
+          .from('fo_attendance')
+          .update(payload)
+          .eq('id', id!)
+          .eq('fo_user_id', user.employeeCode)
+          .eq('attendance_date', today)
+          .not('logout_time', 'is', null)
+          .select('*');
+      await CrashLogService.record(
+        employeeCode: user.employeeCode,
+        screen: 'home',
+        action: 'RESTART_DAY_METADATA_AUDIT_SKIPPED',
+        error: 'fo_attendance.metadata unavailable',
+      );
+    }
+    final records = List<Map<String, dynamic>>.from(rows);
+    if (records.length != 1) {
+      throw StateError('Restart Day update affected ${records.length} rows.');
+    }
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'home',
+      action: 'RESTART_DAY_ATTENDANCE_REOPENED',
+      error: 'attendance_id=$id',
+    );
+    return _attendanceFromRow(records.first, user);
   }
 
   static Future<void> endAttendance(Attendance attendance) async {
@@ -1238,11 +1304,11 @@ class SupabaseService {
       );
       return row?['id']?.toString();
     } catch (error, stackTrace) {
-      if (error is PostgrestException && error.code == '23505') {
+      if (_isDuplicateLocationLocalIdError(error)) {
         await CrashLogService.record(
           employeeCode: log.employeeCode,
           screen: 'tracking',
-          action: 'LOCATION_LOG_DUPLICATE_LOCAL_ID_SKIPPED',
+          action: 'GPS_LOG_DUPLICATE_TREATED_SYNCED',
           error: 'local_id=${log.id}',
         );
         return null;
@@ -1316,13 +1382,53 @@ class SupabaseService {
       final result = <String, String?>{};
       for (final log in validLogs) {
         try {
-          result[log.id] = await insertLocation(log);
-        } catch (_) {
+          final remoteId = await insertLocation(log);
+          result[log.id] = remoteId;
+          if (remoteId == null) {
+            await CrashLogService.record(
+              employeeCode: log.employeeCode,
+              screen: 'tracking',
+              action: 'GPS_LOG_QUEUE_ITEM_REMOVED_AFTER_DUPLICATE',
+              error: 'local_id=${log.id}',
+            );
+          }
+        } catch (itemError) {
+          if (_isDuplicateLocationLocalIdError(itemError)) {
+            result[log.id] = null;
+            await CrashLogService.record(
+              employeeCode: log.employeeCode,
+              screen: 'tracking',
+              action: 'GPS_LOG_QUEUE_ITEM_REMOVED_AFTER_DUPLICATE',
+              error: 'local_id=${log.id}',
+            );
+            continue;
+          }
           break;
         }
       }
+      if (result.isNotEmpty) {
+        await CrashLogService.record(
+          screen: 'tracking',
+          action: 'GPS_LOG_BATCH_SYNC_CONTINUED',
+          error:
+              'synced_or_duplicate=${result.length} total=${validLogs.length}',
+        );
+      }
       return result;
     }
+  }
+
+  static bool _isDuplicateLocationLocalIdError(Object error) {
+    if (error is! PostgrestException) return false;
+    final message = error.message.toLowerCase();
+    final details = (error.details ?? '').toString().toLowerCase();
+    final hint = (error.hint ?? '').toString().toLowerCase();
+    final code = error.code;
+    return (code == '23505' || code == '409') &&
+        (message.contains('ux_fo_location_logs_local_id') ||
+            details.contains('ux_fo_location_logs_local_id') ||
+            hint.contains('ux_fo_location_logs_local_id') ||
+            message.contains('local_id'));
   }
 
   static Map<String, dynamic> _locationPayload(

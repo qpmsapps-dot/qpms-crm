@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import { api, clearBackendToken, readBackendToken, setBackendToken } from '../services/api.js';
 import { normalizeAppRole } from '../utils/authRoles.js';
+import { isDemoReadOnlyUser } from '../utils/demoAccess.js';
 import { AuthContext } from './auth-context.js';
 
 const authStorageKey = 'qpms-crm-auth-user';
@@ -24,7 +25,7 @@ function profileToUser(profile, sessionUser) {
   if (!profile && !sessionUser) return null;
   const email = profile?.email || sessionUser?.email || '';
   const role = normalizeAppRole(profile?.role || sessionUser?.user_metadata?.role || 'BD');
-  return {
+  const user = {
     id: profile?.auth_user_id || sessionUser?.id || profile?.id,
     profileId: profile?.id || '',
     name: profile?.full_name || sessionUser?.user_metadata?.full_name || sessionUser?.user_metadata?.name || email,
@@ -37,6 +38,10 @@ function profileToUser(profile, sessionUser) {
     status: profile?.status || 'Active',
     webAccessEnabled: profile?.web_access_enabled === true,
     authProvider: 'supabase',
+  };
+  return {
+    ...user,
+    isDemoReadOnly: isDemoReadOnlyUser(user),
   };
 }
 

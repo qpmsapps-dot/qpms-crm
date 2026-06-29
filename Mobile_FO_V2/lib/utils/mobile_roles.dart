@@ -4,6 +4,7 @@ const mobileRegistrationRoles = <String>{
   'Operations Manager',
   'Branch Head',
   'GM',
+  'Admin',
   'BD Executive',
   'BD Head',
 };
@@ -30,6 +31,7 @@ String canonicalMobileRole(String role) {
     'BRANCHHEAD': 'Branch Head',
     'BH': 'Branch Head',
     'GM': 'GM',
+    'ADMIN': 'Admin',
     'BDEXECUTIVE': 'BD Executive',
     'BUSINESSDEVELOPMENTEXECUTIVE': 'BD Executive',
     'BDHEAD': 'BD Head',
@@ -119,4 +121,30 @@ bool isBusinessDevelopmentRole(String role) {
   } catch (_) {
     return false;
   }
+}
+
+String _normalizedRoleText(String? value) =>
+    (value ?? '').trim().replaceAll(RegExp(r'[\s_-]+'), '').toUpperCase();
+
+bool isMobileDebugVisible({
+  String? role,
+  String? designation,
+  String? department,
+}) {
+  const allowed = <String>{
+    'ADMIN',
+    'QPMSADMIN',
+    'SUPPORT',
+    'DEVELOPER',
+    'MD',
+    'COO',
+    'GM',
+    'GENERALMANAGER',
+    'MANAGEMENT',
+    'TOPMANAGEMENT',
+    'OPERATIONSHEAD',
+  };
+  return allowed.contains(_normalizedRoleText(role)) ||
+      allowed.contains(_normalizedRoleText(designation)) ||
+      allowed.contains(_normalizedRoleText(department));
 }

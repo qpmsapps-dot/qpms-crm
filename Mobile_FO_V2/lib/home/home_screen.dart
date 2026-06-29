@@ -17,14 +17,23 @@ import '../tracking/tracking_service.dart';
 import '../ui/fo_ui.dart';
 import '../utils/date_utils.dart';
 import '../utils/local_id.dart';
+import '../utils/mobile_roles.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({required this.user, super.key});
+  const HomeScreen({required this.user, required this.onLogout, super.key});
 
   final FoUser user;
+  final Future<void> Function() onLogout;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _DebugGpsCounts {
+  const _DebugGpsCounts({this.localToday, this.syncedToday});
+
+  final int? localToday;
+  final int? syncedToday;
 }
 
 class _HomeScreenState extends State<HomeScreen>
@@ -39,10 +48,15 @@ class _HomeScreenState extends State<HomeScreen>
   String _buildNumber = '--';
   bool _manualSyncing = false;
   TrackingHealthSnapshot? _trackingHealth;
+  int? _localGpsLogsToday;
+  int? _syncedGpsLogsToday;
 
   bool get _showTrackingDebug {
-    final role = widget.user.role.trim().toLowerCase();
-    return role == 'admin' || role == 'debug';
+    return isMobileDebugVisible(
+      role: widget.user.role,
+      designation: widget.user.designation,
+      department: widget.user.department,
+    );
   }
 
   @override
@@ -330,8 +344,72 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _loadTrackingHealth() async {
     final health = await TrackingHealthService.load(user: widget.user);
+    final counts = _showTrackingDebug
+        ? await _loadDebugGpsCounts(_attendance)
+        : const _DebugGpsCounts();
     if (!mounted) return;
-    setState(() => _trackingHealth = health);
+    setState(() {
+      _trackingHealth = health;
+      _localGpsLogsToday = counts.localToday;
+      _syncedGpsLogsToday = counts.syncedToday;
+    });
+  }
+
+  Future<_DebugGpsCounts> _loadDebugGpsCounts(Attendance? attendance) async {
+    if (attendance == null) return const _DebugGpsCounts();
+    final attendanceId = _remoteOrLocalAttendanceId(attendance);
+    if (attendanceId.isEmpty) return const _DebugGpsCounts();
+    final todayKey = indiaDateKey(DateTime.now());
+    int? localToday;
+    try {
+      final localLogs = await LocalStore.getLocationLogs();
+      localToday = localLogs
+          .where(
+            (log) =>
+                log.employeeCode.trim() == widget.user.employeeCode.trim() &&
+                log.attendanceId.trim() == attendanceId &&
+                indiaDateKey(log.capturedAt) == todayKey,
+          )
+          .length;
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'home',
+        action: 'DEBUG_LOCAL_GPS_COUNT_REFRESH_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    int? syncedToday;
+    final remoteAttendanceId = attendance.remoteId?.trim() ?? '';
+    if (SupabaseService.isReady &&
+        SupabaseService.isValidUuid(remoteAttendanceId)) {
+      try {
+        final remoteLogs = await SupabaseService.fetchLocationLogsForAttendance(
+          user: widget.user,
+          attendanceId: remoteAttendanceId,
+        );
+        syncedToday = remoteLogs
+            .where((log) => indiaDateKey(log.capturedAt) == todayKey)
+            .length;
+      } catch (error, stackTrace) {
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'home',
+          action: 'DEBUG_GPS_COUNT_REFRESH_FAILED',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    }
+    return _DebugGpsCounts(localToday: localToday, syncedToday: syncedToday);
+  }
+
+  String _remoteOrLocalAttendanceId(Attendance attendance) {
+    final remoteId = attendance.remoteId?.trim() ?? '';
+    if (remoteId.isNotEmpty) return remoteId;
+    return attendance.id.trim();
   }
 
   Future<void> _clearLocalActiveVisitCache(Attendance attendance) async {
@@ -436,6 +514,7 @@ class _HomeScreenState extends State<HomeScreen>
           error: authValidation.diagnostics(),
         );
         await _showErrorDialog('Start Day failed', authValidation.message!);
+        await widget.onLogout();
         return;
       }
       final employeeCode = widget.user.employeeCode.trim();
@@ -465,7 +544,7 @@ class _HomeScreenState extends State<HomeScreen>
           return;
         }
         final completed = SupabaseService.isReady
-            ? await SupabaseService.findCompletedAttendanceForToday(widget.user)
+            ? await SupabaseService.findClosedAttendanceForToday(widget.user)
             : null;
         if (completed != null) {
           await CrashLogService.record(
@@ -474,20 +553,18 @@ class _HomeScreenState extends State<HomeScreen>
             action: 'REMOTE_COMPLETED_ATTENDANCE_FOUND',
             error: 'attendance_id=${completed.remoteId}',
           );
-          await CrashLogService.record(
-            employeeCode: widget.user.employeeCode,
-            screen: 'home',
-            action: 'DUPLICATE_START_DAY_BLOCKED',
-            error: 'completed_attendance_id=${completed.remoteId}',
-          );
-          await LocalStore.saveAttendance(completed);
-          if (mounted) {
-            setState(() {
-              _attendance = completed;
-              _km = completed.eligibleKm;
-            });
+          final restart = await _confirmRestartDay();
+          if (restart != true) {
+            await LocalStore.saveAttendance(completed);
+            if (mounted) {
+              setState(() {
+                _attendance = completed;
+                _km = completed.eligibleKm;
+              });
+            }
+            return;
           }
-          _toast('Today\'s duty is already completed.');
+          await _restartCompletedAttendance(completed);
           return;
         }
       } catch (error, stackTrace) {
@@ -688,6 +765,27 @@ class _HomeScreenState extends State<HomeScreen>
         onLog: _onLog,
       );
     }
+  }
+
+  Future<void> _restartCompletedAttendance(Attendance completed) async {
+    final reopened = await SupabaseService.reopenAttendanceForToday(
+      user: widget.user,
+      attendance: completed,
+    );
+    if (!SupabaseService.isValidUuid(reopened.remoteId)) {
+      throw StateError('Restart Day failed. Attendance sync is missing.');
+    }
+    await SupabaseService.updateLiveStatus(
+      user: widget.user,
+      isTracking: true,
+      status: 'Active',
+      isOnline: true,
+      routeKm: reopened.eligibleKm,
+      attendanceId: reopened.remoteId,
+      clearActiveSiteVisit: true,
+    );
+    await _resumeAttendance(reopened);
+    _toast('Day restarted. Tracking resumed.');
   }
 
   Future<double> _calculateContinuedKm(Attendance attendance) async {
@@ -1107,6 +1205,29 @@ class _HomeScreenState extends State<HomeScreen>
     return false;
   }
 
+  Future<bool?> _confirmRestartDay() async {
+    if (!mounted) return false;
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Restart Day?'),
+        content: const Text(
+          'You have already ended your day today. If this was accidental, you can restart duty and GPS tracking will continue for the same attendance day.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Restart Day'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _onLog(LocationLog log, double liveKm) {
     if (!mounted) return;
     if (!_firstGpsPingLogged) {
@@ -1215,11 +1336,12 @@ class _HomeScreenState extends State<HomeScreen>
           const SizedBox(height: 22),
           _overviewCard(),
           const SizedBox(height: 16),
-          _trackingHealthCard(),
           if (_showTrackingDebug) ...[
+            _trackingHealthCard(),
             const SizedBox(height: 14),
             _debugIdentityCard(),
-          ],
+          ] else
+            _employeeTrackingStatusCard(),
           const SizedBox(height: 16),
           _dutyCard(active),
           const SizedBox(height: 16),
@@ -1563,6 +1685,60 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  Widget _employeeTrackingStatusCard() {
+    final health = _trackingHealth;
+    final permissionOk =
+        health == null || health.locationPermission == HealthLevel.ok;
+    final lastSync = health?.lastSyncAt ?? TrackingService.lastSuccessfulSync;
+    return FoCard(
+      child: Row(
+        children: [
+          FoIconCircle(
+            icon: Icons.verified_rounded,
+            color: permissionOk ? foGreen : foOrange,
+            size: 48,
+            iconSize: 26,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'App is ready',
+                  style: TextStyle(
+                    color: foNavy,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  permissionOk
+                      ? 'Location permission OK'
+                      : 'Location permission needs attention',
+                  style: const TextStyle(
+                    color: Color(0xFF53607D),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Last synced: ${lastSync == null ? '--' : formatTime(lastSync)}',
+                  style: const TextStyle(
+                    color: qpmsMuted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _healthRow(String label, String value, HealthLevel level) {
     return _plainHealthRow(
       label,
@@ -1684,7 +1860,7 @@ class _HomeScreenState extends State<HomeScreen>
             FoPrimaryButton(
               label: 'Start Day',
               icon: Icons.play_arrow_rounded,
-              onPressed: _busy || completed ? null : _startDay,
+              onPressed: _busy ? null : _startDay,
             ),
         ],
       ),
@@ -1878,10 +2054,18 @@ class _HomeScreenState extends State<HomeScreen>
               _formatMeters(TrackingService.lastAccuracy),
             ),
             _debugRow(
-              'GPS logs today',
-              TrackingService.gpsLogsToday.toString(),
+              'Local GPS logs today',
+              (_localGpsLogsToday ?? TrackingService.gpsLogsToday).toString(),
             ),
-            _debugRow('Location queue', TrackingService.queueLength.toString()),
+            _debugRow(
+              'Synced GPS logs today',
+              _syncedGpsLogsToday?.toString() ?? '--',
+            ),
+            _debugRow(
+              'Pending GPS logs',
+              (_trackingHealth?.pendingGpsLogs ?? TrackingService.queueLength)
+                  .toString(),
+            ),
             _debugRow('Accepted KM today', _km.toStringAsFixed(2)),
             _debugRow(
               'Last tracking error',

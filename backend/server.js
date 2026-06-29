@@ -40,6 +40,10 @@ const app = express();
 const port = Number(process.env.PORT || 4000);
 const demoBackendAuthEnabled =
   String(process.env.ENABLE_DEMO_AUTH || '').trim().toLowerCase() === 'true';
+const DEMO_READ_ONLY_MESSAGE =
+  'Demo access is read-only. Changes are disabled for this account.';
+const DEMO_READ_ONLY_EMAILS = new Set(['admin@qpms.co.in']);
+const DEMO_READ_ONLY_ROLES = new Set(['DEMOADMIN', 'READONLYADMIN']);
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
   .split(',')
   .map((origin) => origin.trim())
@@ -68,7 +72,7 @@ const apiDemoUsers = [
   { id: 'coo', name: 'COO', email: 'coo@qpms.co.in', password: '123456', role: 'COO' },
   { id: 'gm', name: 'General Manager', email: 'gm@qpms.co.in', password: '123456', role: 'GM / Top Management' },
   { id: 'existing-operations', name: 'Existing Business Operations', email: 'existingoperations@qpms.co.in', password: '123456', role: 'Existing Business Operations Team' },
-  { id: 'admin', name: 'Admin', email: 'admin@qpms.co.in', password: '123456', role: 'Admin' },
+  { id: 'admin', name: 'Admin', email: 'admin@qpms.co.in', password: '123456', role: 'Admin', isDemoReadOnly: true },
 ];
 
 const apiSessions = new Map();
@@ -308,6 +312,39 @@ function getBearerToken(request) {
   return String(request.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
 }
 
+function normalizeDemoAccessRole(role) {
+  return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+function isMutationRequest(request) {
+  return !['GET', 'HEAD', 'OPTIONS'].includes(String(request.method || 'GET').toUpperCase());
+}
+
+function isDemoReadOnlyIdentity(identity = {}, authUser = {}) {
+  const email = String(
+    identity.email ||
+      identity.username ||
+      authUser.email ||
+      authUser.user_metadata?.email ||
+      '',
+  ).trim().toLowerCase();
+  const role = normalizeDemoAccessRole(identity.rawRole || identity.role);
+  return Boolean(identity.isDemoReadOnly) ||
+    DEMO_READ_ONLY_EMAILS.has(email) ||
+    DEMO_READ_ONLY_ROLES.has(role);
+}
+
+function blockDemoReadOnlyMutation(request, response, identity = {}, authUser = {}) {
+  if (!isMutationRequest(request)) return false;
+  if (!isDemoReadOnlyIdentity(identity, authUser)) return false;
+  response.status(403).json({
+    ok: false,
+    code: 'DEMO_READ_ONLY',
+    message: DEMO_READ_ONLY_MESSAGE,
+  });
+  return true;
+}
+
 function requireApiAuth(request, response, next) {
   const token = getBearerToken(request);
   const user = apiSessions.get(token);
@@ -316,6 +353,7 @@ function requireApiAuth(request, response, next) {
     return;
   }
   request.apiUser = user;
+  if (blockDemoReadOnlyMutation(request, response, user)) return;
   next();
 }
 
@@ -369,6 +407,7 @@ async function requireSupabaseJwt(request, response, next) {
     request.profile = profile;
     request.employeeCode = String(profile.employee_code || '').trim() || null;
     request.userRole = String(profile.role || '').trim();
+    if (blockDemoReadOnlyMutation(request, response, profile, authData.user)) return;
     next();
   } catch (error) {
     const safeError = sanitizeSupabaseDiagnosticError(error);
@@ -435,6 +474,7 @@ async function requireSupabaseJwtWithUserScopedProfile(request, response, next) 
     request.profile = profile;
     request.employeeCode = String(profile.employee_code || '').trim() || null;
     request.userRole = String(profile.role || '').trim();
+    if (blockDemoReadOnlyMutation(request, response, profile, authData.user)) return;
     next();
   } catch (error) {
     console.warn('[myQPMS diagnostics auth] User-scoped profile lookup failed', {
@@ -1565,6 +1605,7 @@ app.post('/api/auth/login', (request, response) => {
       name: user.name,
       email: user.email,
       role: user.role,
+      isDemoReadOnly: isDemoReadOnlyIdentity(user),
     },
   });
 });
