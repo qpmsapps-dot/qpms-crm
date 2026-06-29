@@ -18,6 +18,7 @@ import Logo from '../components/Logo.jsx';
 import { useAuth } from '../context/auth-context.js';
 import { findMockUser } from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
+import { isDemoReadOnlyUser } from '../utils/demoAccess.js';
 
 const socialLinks = [
   { label: 'LinkedIn', href: 'https://www.linkedin.com/company/qpms-india/', icon: Linkedin },
@@ -79,8 +80,10 @@ export default function Login() {
       username: matchedUser.email,
       email: matchedUser.email,
       role: matchedUser.role,
+      rawRole: matchedUser.role,
       access: matchedUser.access,
     };
+    nextUser.isDemoReadOnly = isDemoReadOnlyUser(nextUser);
 
     window.setTimeout(() => {
       loginWithAppPassword(normalizedUsername, password, nextUser)

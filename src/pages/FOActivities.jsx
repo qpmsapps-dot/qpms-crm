@@ -51,6 +51,7 @@ import { useAuth } from "../context/auth-context.js";
 import { usePageTitle } from "../hooks/usePageTitle.js";
 import { isSupabaseConfigured, supabase } from "../lib/supabase.js";
 import { api } from "../services/api.js";
+import { assertDemoWriteAllowed } from "../utils/demoAccess.js";
 
 const SOUTH_INDIA_CENTER = [13.0827, 80.2707];
 const INDIA_TIME_ZONE = "Asia/Kolkata";
@@ -7557,6 +7558,13 @@ export default function FOActivities() {
 
   async function confirmSupportAction() {
     if (!supportOfficer || !supportPendingAction || !supportRemarks.trim()) return;
+    try {
+      assertDemoWriteAllowed(user);
+    } catch (error) {
+      setSupportMessage(error.message);
+      setSupportPendingAction(null);
+      return;
+    }
     if (!isSupabaseConfigured || !supabase) {
       setSupportMessage("Supabase is not configured.");
       return;
@@ -7720,6 +7728,12 @@ export default function FOActivities() {
 
   async function recalculateSelectedOfficerKm() {
     if (!selectedOfficer) return;
+    try {
+      assertDemoWriteAllowed(user);
+    } catch (error) {
+      setKmRecalcResult({ ok: false, message: error.message, confidence: "BLOCKED" });
+      return;
+    }
     const recalcKey = selectedOfficerKmRecalcKey();
     const now = Date.now();
     const lastStartedAt = recalcKey ? kmRecalcCooldownRef.current.get(recalcKey) : null;
