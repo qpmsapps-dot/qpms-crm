@@ -3,6 +3,7 @@ export const demoReadOnlyMessage =
 
 export const demoReadOnlyEmails = new Set(['admin@qpms.co.in']);
 export const demoReadOnlyRoles = new Set(['DEMOADMIN', 'READONLYADMIN']);
+export const demoReadOnlyPassword = '123456';
 
 const authStorageKey = 'qpms-crm-auth-user';
 
@@ -19,6 +20,31 @@ export function isDemoReadOnlyUser(user = {}) {
   return Boolean(user?.isDemoReadOnly) ||
     demoReadOnlyEmails.has(email) ||
     demoReadOnlyRoles.has(role);
+}
+
+export function isDemoReadOnlyCredentials(email = '', password = '') {
+  return demoReadOnlyEmails.has(String(email || '').trim().toLowerCase()) &&
+    String(password || '') === demoReadOnlyPassword;
+}
+
+export function createDemoReadOnlyUser(email = 'admin@qpms.co.in') {
+  const normalizedEmail = String(email || 'admin@qpms.co.in').trim().toLowerCase();
+  return {
+    id: 'demo-read-only-admin',
+    profileId: 'demo-read-only-admin',
+    name: 'QPMS Demo Admin',
+    username: normalizedEmail,
+    email: normalizedEmail,
+    role: 'DEMO_ADMIN',
+    rawRole: 'DEMO_ADMIN',
+    access: 'Demo read-only admin access',
+    isActive: true,
+    status: 'Active',
+    webAccessEnabled: true,
+    authProvider: 'demo-read-only',
+    isDemoReadOnly: true,
+    read_only: true,
+  };
 }
 
 export function readStoredAuthUser() {
