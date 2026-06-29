@@ -32,6 +32,7 @@ import {
   Square,
   User,
   UserRoundCheck,
+  X,
 } from "lucide-react";
 import L from "leaflet";
 import {
@@ -46,7 +47,6 @@ import {
 import * as XLSX from "xlsx";
 import "leaflet/dist/leaflet.css";
 import qpmsLogo from "../assets/qpms-logo.png";
-import PageHeader from "../components/PageHeader.jsx";
 import { useAuth } from "../context/auth-context.js";
 import { usePageTitle } from "../hooks/usePageTitle.js";
 import { isSupabaseConfigured, supabase } from "../lib/supabase.js";
@@ -1835,10 +1835,10 @@ function FleetKpi({ label, value, icon, tone = "blue", hint }) {
   };
 
   return (
-    <div className="rounded-xl border border-slate-200/90 bg-white p-4 shadow-[0_10px_26px_rgba(15,23,42,0.06)] dark:border-slate-800 dark:bg-slate-900">
-      <div className="flex items-center justify-between gap-4">
+    <div className="rounded-xl border border-slate-200/90 bg-white p-3.5 shadow-[0_10px_26px_rgba(15,23,42,0.06)] dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-[11px] font-semibold text-slate-600 dark:text-slate-400">
+          <p className="whitespace-normal text-[11px] font-semibold leading-tight text-slate-600 dark:text-slate-400">
             {label}
           </p>
           <div className="mt-2 flex items-end gap-2">
@@ -2775,6 +2775,194 @@ function appendSheet(workbook, name, rows, headers) {
     skipHeader: false,
   });
   XLSX.utils.book_append_sheet(workbook, worksheet, name);
+}
+
+function findOfficerForFoId(officers = [], foId) {
+  const normalized = normalizeFoKey(foId);
+  if (!normalized) return null;
+  return (
+    officers.find(
+      (officer) =>
+        normalizeFoKey(officer.foId || officer.employeeCode) === normalized,
+    ) || null
+  );
+}
+
+function officerForAttendanceRow(officers = [], row = {}) {
+  return findOfficerForFoId(officers, row.fo_user_id || row.employee_code);
+}
+
+function officerForVisitRow(officers = [], row = {}) {
+  return findOfficerForFoId(officers, row.fo_user_id || row.employee_code);
+}
+
+function attendanceDateLabel(row) {
+  return row?.attendance_date || formatDateOnly(row?.login_time);
+}
+
+function exportFilteredOperationsDashboardExcel({
+  officers,
+  attendanceRows,
+  siteVisitRows,
+  from,
+  to,
+  filters,
+}) {
+  const exportOfficers = (officers || []).filter(
+    (officer) => !isHiddenEmployeeRecord(officer),
+  );
+  const officerIds = new Set(
+    exportOfficers
+      .map((officer) => normalizeFoKey(officer.foId || officer.employeeCode))
+      .filter(Boolean),
+  );
+  const workbook = XLSX.utils.book_new();
+
+  const attendanceSummaryRows = (attendanceRows || [])
+    .filter((row) => officerIds.has(normalizeFoKey(row.fo_user_id || row.employee_code)))
+    .map((row) => {
+      const officer = officerForAttendanceRow(exportOfficers, row) || {};
+      const totalVisits = (siteVisitRows || []).filter(
+        (visit) =>
+          normalizeFoKey(visit.fo_user_id || visit.employee_code) ===
+          normalizeFoKey(row.fo_user_id || row.employee_code),
+      ).length;
+      const payableKm = payableKmFromAttendance(row);
+      return {
+        "Employee Code": officer.employeeCode || row.employee_code || row.fo_user_id || "",
+        "Employee Name":
+          officer.name || row.full_name || row.display_name || row.employee_name || "",
+        "Role / Designation": officer.designation || officer.role || row.designation || "",
+        State: officer.state || row.state || "",
+        Business: officer.business || row.business || "",
+        "Attendance Date": attendanceDateLabel(row),
+        "Start Day Time / Login Time": formatDateTime(row.login_time),
+        "End Day Time / Logout Time": formatDateTime(row.logout_time),
+        "Current Status":
+          officer.operationalStatusLabel ||
+          operationalStatusLabel(officer.operationalStatus) ||
+          row.status ||
+          "",
+        "Total Visits": totalVisits,
+        "Payable KM": payableKm.toFixed(2),
+        "Petrol Amount": calculatePetrolAmount(payableKm).toFixed(2),
+        "Last Location Time": formatDateTime(
+          officer.locationSourceTime || row.last_location_time || row.updated_at,
+        ),
+      };
+    });
+
+  const siteVisitDetailRows = (siteVisitRows || [])
+    .filter((visit) => officerIds.has(normalizeFoKey(visit.fo_user_id || visit.employee_code)))
+    .map((visit) => {
+      const officer = officerForVisitRow(exportOfficers, visit) || {};
+      const routeKm = Number(visit.route_km);
+      return {
+        "Employee Code": officer.employeeCode || visit.employee_code || visit.fo_user_id || "",
+        "Employee Name":
+          officer.name || visit.full_name || visit.display_name || visit.fo_name || "",
+        State: officer.state || visit.state || "",
+        Business: officer.business || visit.business || "",
+        "Store Code": visit.store_code || visit.site_code || "",
+        "Store Name / Site Name": visit.store_name || visit.site_name || "",
+        "Client Name": visit.client_name || "",
+        "Check-In Time": formatDateTime(visit.check_in_time),
+        "Check-Out Time": formatDateTime(siteVisitCheckoutValue(visit)),
+        "Visit Status": siteVisitStatus(visit),
+        "Visit Duration": siteVisitDuration(visit),
+        "Route KM / Payable KM": Number.isFinite(routeKm) ? routeKm.toFixed(2) : "",
+        "Checkout Note": visit.checkout_note || visit.check_out_note || "",
+      };
+    });
+
+  const userSummaryRows = exportOfficers.map((officer) => {
+    const foId = normalizeFoKey(officer.foId || officer.employeeCode);
+    const officerAttendances = (attendanceRows || []).filter(
+      (row) => normalizeFoKey(row.fo_user_id || row.employee_code) === foId,
+    );
+    const officerVisits = (siteVisitRows || []).filter(
+      (visit) => normalizeFoKey(visit.fo_user_id || visit.employee_code) === foId,
+    );
+    const payableKm = officerAttendances.reduce(
+      (sum, row) => sum + payableKmFromAttendance(row),
+      0,
+    );
+    return {
+      "Employee Code": officer.employeeCode || officer.foId || "",
+      "Employee Name": officer.name || "",
+      "Role / Designation": officer.designation || officer.role || "",
+      State: officer.state || "",
+      Business: officer.business || "",
+      "Current Status":
+        officer.operationalStatusLabel ||
+        operationalStatusLabel(officer.operationalStatus),
+      "Attendance Records": officerAttendances.length,
+      "Total Visits": officerVisits.length,
+      "Payable KM": payableKm.toFixed(2),
+      "Petrol Amount": calculatePetrolAmount(payableKm).toFixed(2),
+      "Last Location Time": formatDateTime(officer.locationSourceTime),
+    };
+  });
+
+  appendSheet(workbook, "Attendance Summary", attendanceSummaryRows, [
+    "Employee Code",
+    "Employee Name",
+    "Role / Designation",
+    "State",
+    "Business",
+    "Attendance Date",
+    "Start Day Time / Login Time",
+    "End Day Time / Logout Time",
+    "Current Status",
+    "Total Visits",
+    "Payable KM",
+    "Petrol Amount",
+    "Last Location Time",
+  ]);
+  appendSheet(workbook, "Site Visit Details", siteVisitDetailRows, [
+    "Employee Code",
+    "Employee Name",
+    "State",
+    "Business",
+    "Store Code",
+    "Store Name / Site Name",
+    "Client Name",
+    "Check-In Time",
+    "Check-Out Time",
+    "Visit Status",
+    "Visit Duration",
+    "Route KM / Payable KM",
+    "Checkout Note",
+  ]);
+  if (userSummaryRows.length) {
+    appendSheet(workbook, "User Summary", userSummaryRows, [
+      "Employee Code",
+      "Employee Name",
+      "Role / Designation",
+      "State",
+      "Business",
+      "Current Status",
+      "Attendance Records",
+      "Total Visits",
+      "Payable KM",
+      "Petrol Amount",
+      "Last Location Time",
+    ]);
+  }
+
+  const filterLabel = [
+    filters?.state !== "All States" ? filters?.state : "All_States",
+    filters?.business !== "All Business" ? filters?.business : "All_Business",
+    filters?.status !== "All Status" ? filters?.status : "All_Status",
+  ]
+    .map(sanitizeReportFilenamePart)
+    .filter(Boolean)
+    .join("_");
+
+  XLSX.writeFile(
+    workbook,
+    `Operations_Command_Center_${toDateInputValue(from)}_${toDateInputValue(to)}_${filterLabel || "Filtered"}.xlsx`,
+  );
 }
 
 async function exportFoOperationsExcel({
@@ -6929,11 +7117,32 @@ export default function FOActivities() {
         const businessMatches =
           businessFilter === "All Business" ||
           businessLabel === businessFilter;
+        const searchText = search.trim().toLowerCase();
+        const searchableFields = [
+          officer.name,
+          officer.employeeCode,
+          officer.foId,
+          officer.username,
+          officer.phone,
+          officer.email,
+          officer.role,
+          officer.designation,
+          officer.department,
+          officer.state,
+          officer.business,
+          officer.operationalStatus,
+          officer.operationalStatusLabel,
+          operationalStatusLabel(officer.operationalStatus),
+          officer.assignedSite,
+          officer.branch,
+        ];
         const searchMatches =
-          !search ||
-          `${officer.name} ${officer.employeeCode || officer.foId} ${officer.username || ""} ${officer.phone || ""} ${officer.email || ""} ${officer.role || ""} ${officer.designation || ""} ${officer.department || ""} ${officer.state || ""} ${officer.business || ""} ${officer.assignedSite} ${officer.branch}`
+          !searchText ||
+          searchableFields
+            .filter(Boolean)
+            .join(" ")
             .toLowerCase()
-            .includes(search.trim().toLowerCase());
+            .includes(searchText);
         return stateMatches && businessMatches && searchMatches;
       }),
     [businessFilter, officers, search, stateFilter],
@@ -7064,6 +7273,8 @@ export default function FOActivities() {
       }),
     [animatedMarkers, filteredOfficers],
   );
+  const directorySearchPlaceholder =
+    "Search by name, employee ID, state, business";
 
   useEffect(() => {
     let cancelled = false;
@@ -7774,24 +7985,11 @@ export default function FOActivities() {
 
   return (
     <div className="space-y-3">
-      <PageHeader
-        title="Operations Command Center"
-        description="Real-time field operations overview and performance"
-        actions={
-          <>
-            <button
-              type="button"
-              onClick={() => routeOfficer && focusOfficer(routeOfficer.id)}
-              disabled={!routeOfficer}
-              className="focus-ring inline-flex items-center gap-2 rounded-xl bg-qpms-700 px-4 py-2.5 text-sm font-black text-white shadow-sm hover:bg-qpms-800"
-              title={
-                routeOfficer
-                  ? `Open ${routeOfficer.name}`
-                  : "Select an employee from the directory first"
-              }
-            >
-              <User className="h-4 w-4" /> Open Drill-down
-            </button>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-xl font-black tracking-normal text-slate-950 dark:text-white sm:text-2xl">
+          Operations Command Center
+        </h1>
+        <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setRefreshToken((value) => value + 1)}
@@ -7804,12 +8002,11 @@ export default function FOActivities() {
               <RadioTower className="h-3.5 w-3.5 text-emerald-500" /> Live
               every 12s
             </span>
-          </>
-        }
-      />
+        </div>
+      </div>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.05)] dark:border-slate-800 dark:bg-slate-900">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_10px_28px_rgba(15,23,42,0.05)] dark:border-slate-800 dark:bg-slate-900">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto]">
           <label>
             <span className="text-[11px] font-bold uppercase text-slate-500">
               From Date
@@ -7896,6 +8093,28 @@ export default function FOActivities() {
               Reset
             </button>
           </div>
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={() =>
+                exportFilteredOperationsDashboardExcel({
+                  officers: filteredOfficers,
+                  attendanceRows: visibleAttendanceKpiRows,
+                  siteVisitRows: visibleSiteVisitRows,
+                  from: selectedRange.from,
+                  to: selectedRange.to,
+                  filters: {
+                    state: stateFilter,
+                    business: businessFilter,
+                    status: statusFilter,
+                  },
+                })
+              }
+              className="focus-ring inline-flex w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm font-black text-emerald-700 hover:bg-emerald-100"
+            >
+              <FileSpreadsheet className="h-4 w-4" /> Export Excel
+            </button>
+          </div>
         </div>
       </section>
 
@@ -7930,7 +8149,7 @@ export default function FOActivities() {
           tone="purple"
         />
         <FleetKpi
-          label="Not Started / Offline"
+          label="Not Started"
           value={offlineOfficers}
           icon={ShieldAlert}
           tone={offlineOfficers ? "red" : "slate"}
@@ -7950,17 +8169,21 @@ export default function FOActivities() {
       </div>
 
       <section className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-[0_18px_46px_rgba(15,23,42,0.08)] dark:border-slate-800 dark:bg-slate-900">
-        <div className="grid min-h-[675px] xl:grid-cols-[minmax(0,1.85fr)_minmax(360px,1fr)]">
+        <div className="grid min-h-[720px] xl:grid-cols-[minmax(0,2.2fr)_minmax(340px,0.8fr)]">
           <div className="order-2 min-w-0 xl:order-1">
-            <div className="border-b border-slate-100 px-5 py-4 dark:border-slate-800">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-3 dark:border-slate-800">
               <h2 className="text-lg font-black text-slate-950 dark:text-white">
                 Field Operations Map
               </h2>
-              <p className="mt-1 text-xs font-semibold text-slate-500">
-                Live view of field activity across South India
-              </p>
+              <button
+                type="button"
+                onClick={() => setExpandedMap(true)}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 shadow-sm hover:text-qpms-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
+              >
+                <Maximize2 className="h-4 w-4" /> Full Screen Map
+              </button>
             </div>
-          <div className="relative isolate h-[420px] overflow-hidden bg-sky-50 sm:h-[480px] lg:h-[520px] xl:h-[620px]">
+          <div className="relative isolate h-[500px] overflow-hidden bg-sky-50 sm:h-[560px] lg:h-[640px] xl:h-[675px]">
             <OperationsMap
               pins={pins}
               sitePins={sitePins}
@@ -8057,7 +8280,7 @@ export default function FOActivities() {
                   <input
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search FO by name or ID..."
+                    placeholder={directorySearchPlaceholder}
                     className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-xs font-bold text-slate-700 outline-none placeholder:text-slate-400 focus:border-qpms-400"
                   />
                 </label>
@@ -8183,7 +8406,7 @@ export default function FOActivities() {
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search employee by name or ID"
+                placeholder={directorySearchPlaceholder}
                 className="w-full rounded-lg border border-slate-200 bg-white py-3 pl-10 pr-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400 focus:border-qpms-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
               />
             </label>
@@ -8311,36 +8534,106 @@ export default function FOActivities() {
       </div>
 
       {expandedMap ? (
-        <div className="fixed inset-0 z-[1200] bg-slate-950/45 p-4 backdrop-blur-sm sm:p-7">
-          <div className="flex h-full flex-col rounded-2xl bg-white p-4 shadow-2xl dark:bg-slate-900">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-bold text-slate-950 dark:text-white">
-                Live Location - South India
-              </h2>
-              <button
-                type="button"
-                onClick={() => setExpandedMap(false)}
-                className="focus-ring rounded-lg border border-slate-200 bg-white p-2 text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
-                aria-label="Close expanded map"
-              >
-                <Minimize2 className="h-4 w-4" />
-              </button>
+        <div className="fixed inset-0 z-[1200] bg-slate-950/70 p-3 backdrop-blur-sm">
+          <div className="grid h-full overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-slate-900 lg:grid-cols-[minmax(0,1fr)_380px]">
+            <div className="flex min-h-0 min-w-0 flex-col">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+                <h2 className="text-base font-black text-slate-950 dark:text-white">
+                  Field Operations Map
+                </h2>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setMapCommand({ type: "fit-all", at: Date.now() })
+                    }
+                    className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:text-qpms-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
+                  >
+                    <Maximize2 className="h-4 w-4" /> Fit All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedMap(false)}
+                    className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:text-rose-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
+                    aria-label="Close full screen map"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="relative isolate min-h-0 flex-1 overflow-hidden bg-sky-50">
+                <OperationsMap
+                  pins={pins}
+                  sitePins={sitePins}
+                  routeLines={routeLines}
+                  routeTrailMessage={mainMapRouteMessage}
+                  expanded
+                  showSites={showSiteMarkers}
+                  showRoutes={showRouteTrail}
+                  mapTheme={mapTheme}
+                  command={mapCommand}
+                  onSelectOfficer={openSupportActions}
+                  onCloseSelection={() => setSelectedOfficerId(null)}
+                />
+                {routeOfficer && !routeLines.length ? (
+                  <div className="absolute left-5 top-5 z-[540] rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-semibold text-slate-600 shadow-xl backdrop-blur">
+                    No route data available for selected date.
+                  </div>
+                ) : null}
+                <div className="absolute bottom-5 left-5 z-[520] flex max-w-[calc(100%-40px)] flex-wrap items-center gap-4 rounded-xl border border-white/80 bg-white/95 px-4 py-3 shadow-xl backdrop-blur">
+                  <LegendItem color="#10b981" label="Active / On Site" />
+                  <LegendItem color="#2563eb" label="On Travel" />
+                  <LegendItem color="#ef4444" label="Not Started / Offline" />
+                  <LegendItem color="#2563eb" label="Site / Office" site />
+                </div>
+              </div>
             </div>
-            <div className="isolate min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
-              <OperationsMap
-                pins={pins}
-                sitePins={sitePins}
-                routeLines={routeLines}
-                routeTrailMessage={mainMapRouteMessage}
-                expanded
-                showSites={showSiteMarkers}
-                showRoutes={showRouteTrail}
-                mapTheme={mapTheme}
-                command={mapCommand}
-                onSelectOfficer={openSupportActions}
-                onCloseSelection={() => setSelectedOfficerId(null)}
-              />
-            </div>
+            <aside className="flex min-h-0 flex-col border-t border-slate-200 bg-white lg:border-l lg:border-t-0 dark:border-slate-800 dark:bg-slate-900">
+              <div className="border-b border-slate-100 px-4 py-4 dark:border-slate-800">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-black text-slate-950 dark:text-white">
+                      Operations Directory
+                    </h2>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                      {filteredOfficers.length} field users
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedMap(false)}
+                    className="focus-ring grid h-8 w-8 place-items-center rounded-lg border border-slate-200 text-slate-500 hover:text-rose-600 dark:border-slate-700"
+                    aria-label="Exit full screen map"
+                  >
+                    <Minimize2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+              <label className="relative block border-b border-slate-100 p-4 dark:border-slate-800">
+                <Search className="absolute left-7 top-7 h-4 w-4 text-slate-400" />
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder={directorySearchPlaceholder}
+                  className="w-full rounded-lg border border-slate-200 bg-white py-3 pl-10 pr-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400 focus:border-qpms-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
+                />
+              </label>
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+                {visualFilteredOfficers.map((officer) => (
+                  <OfficerDirectoryRow
+                    key={officer.id}
+                    officer={officer}
+                    selected={routeOfficer?.id === officer.id}
+                    onSelect={() => openSupportActions(officer.id)}
+                  />
+                ))}
+                {!filteredOfficers.length ? (
+                  <div className="m-4 rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm font-semibold text-slate-500 dark:border-slate-800">
+                    No field officers match these filters.
+                  </div>
+                ) : null}
+              </div>
+            </aside>
           </div>
         </div>
       ) : null}
