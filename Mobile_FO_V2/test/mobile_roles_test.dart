@@ -65,4 +65,28 @@ void main() {
     expect(isMobileLoginRole(' field_officer '), isTrue);
     expect(isMobileLoginRole('operations   manager'), isTrue);
   });
+
+  test('debug panels are visible only for admin and support roles', () {
+    for (final role in <String>[
+      'Admin',
+      'QPMS Admin',
+      'Support',
+      'Developer',
+      'MD',
+      'COO',
+      'GM',
+    ]) {
+      expect(isMobileDebugVisible(role: role), isTrue, reason: role);
+    }
+
+    for (final role in <String>[
+      'FO',
+      'KAM',
+      'Operations Manager',
+      'BD Executive',
+      'Employee',
+    ]) {
+      expect(isMobileDebugVisible(role: role), isFalse, reason: role);
+    }
+  });
 }

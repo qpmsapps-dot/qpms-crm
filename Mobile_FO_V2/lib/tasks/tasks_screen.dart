@@ -422,9 +422,16 @@ class _TasksScreenState extends State<TasksScreen>
         if (!mounted) return;
         final selected = nearby.length == 1
             ? nearby.first
-            : await showDialog<_NearbyStore?>(
+            : await showModalBottomSheet<_NearbyStore?>(
                 context: context,
-                builder: (_) => _NearbySitesDialog(matches: nearby),
+                isScrollControlled: true,
+                useSafeArea: true,
+                backgroundColor: Colors.transparent,
+                builder: (_) => _NearbySitesSheet(
+                  matches: nearby,
+                  isLoading: false,
+                  errorMessage: null,
+                ),
               );
         if (selected == null || !mounted) return;
         final confirmed = await showDialog<bool>(
@@ -2533,8 +2540,9 @@ class _NearbyStore {
   final double distanceMeters;
 }
 
-class _NearbySitesDialog extends StatelessWidget {
-  const _NearbySitesDialog({required this.matches});
+// ignore: unused_element
+class _LegacyNearbySitesDialog extends StatelessWidget {
+  const _LegacyNearbySitesDialog({required this.matches});
 
   final List<_NearbyStore> matches;
 
@@ -2565,6 +2573,418 @@ class _NearbySitesDialog extends StatelessWidget {
           child: const Text('Cancel'),
         ),
       ],
+    );
+  }
+}
+
+class _NearbySitesSheet extends StatefulWidget {
+  const _NearbySitesSheet({
+    required this.matches,
+    required this.isLoading,
+    required this.errorMessage,
+  });
+
+  final List<_NearbyStore> matches;
+  final bool isLoading;
+  final String? errorMessage;
+
+  @override
+  State<_NearbySitesSheet> createState() => _NearbySitesSheetState();
+}
+
+class _NearbySitesSheetState extends State<_NearbySitesSheet> {
+  final TextEditingController _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  List<_NearbyStore> get _filteredMatches {
+    final query = _query.trim().toLowerCase();
+    final sorted = [...widget.matches]
+      ..sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
+    if (query.isEmpty) return sorted;
+    return sorted.where((match) {
+      final store = match.store;
+      return store.storeName.toLowerCase().contains(query) ||
+          store.storeCode.toLowerCase().contains(query) ||
+          store.clientName.toLowerCase().contains(query) ||
+          (store.business ?? '').toLowerCase().contains(query);
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final matches = _filteredMatches;
+
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.88,
+      ),
+      padding: EdgeInsets.fromLTRB(
+        20,
+        10,
+        20,
+        16 + MediaQuery.of(context).viewInsets.bottom,
+      ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 42,
+            height: 4,
+            margin: const EdgeInsets.only(bottom: 18),
+            decoration: BoxDecoration(
+              color: const Color(0xFFD6DBE7),
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Select Site',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        color: qpmsText,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Choose the site you are visiting today',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: qpmsMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Close',
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _searchController,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              hintText: 'Search site or store code',
+              prefixIcon: const Icon(Icons.search_rounded),
+              filled: true,
+              fillColor: const Color(0xFFF6F8FC),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+                borderSide: BorderSide.none,
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 14,
+              ),
+            ),
+            onChanged: (value) => setState(() => _query = value),
+          ),
+          const SizedBox(height: 14),
+          Flexible(
+            child: _NearbySitesContent(
+              matches: matches,
+              isLoading: widget.isLoading,
+              errorMessage: widget.errorMessage,
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NearbySitesContent extends StatelessWidget {
+  const _NearbySitesContent({
+    required this.matches,
+    required this.isLoading,
+    this.errorMessage,
+  });
+
+  final List<_NearbyStore> matches;
+  final bool isLoading;
+  final String? errorMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return const _NearbySitesState(
+        icon: Icons.near_me_rounded,
+        message: 'Finding nearby sites...',
+        showSpinner: true,
+      );
+    }
+
+    if (errorMessage != null && errorMessage!.trim().isNotEmpty) {
+      return _NearbySitesState(
+        icon: Icons.location_off_rounded,
+        message: 'We could not load nearby sites. Please try again.',
+        detail: errorMessage,
+      );
+    }
+
+    if (matches.isEmpty) {
+      return const _NearbySitesState(
+        icon: Icons.location_off_rounded,
+        message: 'No nearby sites found',
+      );
+    }
+
+    return ListView.separated(
+      shrinkWrap: true,
+      itemCount: matches.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final match = matches[index];
+        return _NearbySiteTile(match: match, isNearest: index == 0);
+      },
+    );
+  }
+}
+
+class _NearbySiteTile extends StatelessWidget {
+  const _NearbySiteTile({required this.match, required this.isNearest});
+
+  final _NearbyStore match;
+  final bool isNearest;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final store = match.store;
+    final business = (store.business?.trim().isNotEmpty ?? false)
+        ? store.business!.trim()
+        : store.clientName;
+
+    return Material(
+      color: const Color(0xFFF8FAFE),
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => Navigator.of(context).pop(match),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: qpmsBlue.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.location_pin, color: qpmsBlue),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            store.storeName.isEmpty
+                                ? 'Unnamed site'
+                                : store.storeName,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              color: qpmsText,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        _DistanceChip(label: _distanceLabel(match)),
+                      ],
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      business.isEmpty
+                          ? 'Client details unavailable'
+                          : business,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: qpmsMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        _StoreCodeChip(
+                          label: store.storeCode.isEmpty
+                              ? 'No store code'
+                              : store.storeCode,
+                        ),
+                        if (isNearest) const _NearestBadge(),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _distanceLabel(_NearbyStore match) {
+    final distance = match.distanceMeters;
+    if (!distance.isFinite) return '--';
+    if (distance >= 1000) return '${(distance / 1000).toStringAsFixed(1)} km';
+    return '${distance.round()} m';
+  }
+}
+
+class _DistanceChip extends StatelessWidget {
+  const _DistanceChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: qpmsBlue,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: Colors.white,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _StoreCodeChip extends StatelessWidget {
+  const _StoreCodeChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFFE1E7F0)),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: qpmsText,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _NearestBadge extends StatelessWidget {
+  const _NearestBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF7EF),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        'Nearest',
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: const Color(0xFF16703A),
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _NearbySitesState extends StatelessWidget {
+  const _NearbySitesState({
+    required this.icon,
+    required this.message,
+    this.detail,
+    this.showSpinner = false,
+  });
+
+  final IconData icon;
+  final String message;
+  final String? detail;
+  final bool showSpinner;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (showSpinner)
+              const CircularProgressIndicator()
+            else
+              Icon(icon, size: 42, color: qpmsMuted),
+            const SizedBox(height: 14),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.titleSmall?.copyWith(
+                color: qpmsText,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            if (detail != null && detail!.trim().isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                detail!,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(color: qpmsMuted),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

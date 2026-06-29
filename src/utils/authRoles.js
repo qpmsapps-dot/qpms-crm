@@ -18,7 +18,7 @@ export const roleGroups = {
   ExistingOperations: ['Existing Business Operations Team'],
   FieldOfficer: ['Field Officer', 'FO'],
   Client: ['Client', 'Client Login'],
-  Admin: ['Admin'],
+  Admin: ['Admin', 'DEMO_ADMIN', 'Demo Admin', 'Read Only Admin', 'Read-Only Admin'],
 };
 
 export const protectedNavRoutes = ['/dashboard', '/crm', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/assets', '/reports', '/employees', '/settings'];

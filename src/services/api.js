@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
+import { assertDemoWriteAllowed } from '../utils/demoAccess.js';
 
 const API_BASE =
   import.meta.env.VITE_API_URL?.replace(/\/+$/, '') ||
@@ -177,6 +178,10 @@ api.interceptors.request.use((config) => {
     return Promise.reject(
       new Error('VITE_API_URL is missing.')
     );
+  }
+  const method = String(config.method || 'GET').toUpperCase();
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    assertDemoWriteAllowed();
   }
   const token = readBackendToken();
   if (token && !config.headers.Authorization) {

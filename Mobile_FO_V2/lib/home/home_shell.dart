@@ -55,7 +55,11 @@ class _HomeShellState extends State<HomeShell> {
         controller: _pageController,
         onPageChanged: (value) => setState(() => _index = value),
         children: [
-          HomeScreen(user: widget.user, key: const PageStorageKey('home')),
+          HomeScreen(
+            user: widget.user,
+            onLogout: widget.onLogout,
+            key: const PageStorageKey('home'),
+          ),
           TasksScreen(
             user: widget.user,
             isSelected: _index == 1,
