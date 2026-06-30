@@ -197,7 +197,7 @@ export function isHrReviewer(user) {
 }
 
 export function isOperationsTeam(user) {
-  return user?.role === 'Operations Team';
+  return ['Operations Team', 'Operations Manager', 'Business Head', 'Branch Head', 'KAM'].includes(user?.role);
 }
 
 export function isCoordinator(user) {
@@ -205,7 +205,7 @@ export function isCoordinator(user) {
 }
 
 export function isManagement(user) {
-  return ['MD', 'Admin', 'COO', 'Management', 'GM', 'Top Management', 'GM / Top Management'].includes(user?.role);
+  return ['MD', 'Admin', 'DEMO_ADMIN', 'COO', 'Management', 'GM', 'Top Management', 'GM / Top Management'].includes(user?.role);
 }
 
 export function isFinanceLeadership(user) {
@@ -213,7 +213,7 @@ export function isFinanceLeadership(user) {
 }
 
 export function isAdmin(user) {
-  return user?.role === 'Admin';
+  return ['Admin', 'DEMO_ADMIN'].includes(user?.role);
 }
 
 export function isExistingBusinessOperations(user) {

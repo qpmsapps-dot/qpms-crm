@@ -69,6 +69,9 @@ async function adminApiRequest(config) {
           'User Management backend access is unavailable. Check the server Supabase service-role configuration.',
       );
     }
+    if (status === 404 && String(config.url || '').includes('/api/profile/me')) {
+      throw new Error('Profile update route not available. Please redeploy backend or contact admin.');
+    }
     throw requestError;
   }
 }
@@ -77,6 +80,29 @@ export function getAdminUserMe() {
   return adminApiRequest({
     method: 'GET',
     url: '/api/admin/users/me',
+  });
+}
+
+export function getMyProfile() {
+  return adminApiRequest({
+    method: 'GET',
+    url: '/api/profile/me',
+  });
+}
+
+export function updateMyProfile(payload) {
+  return adminApiRequest({
+    method: 'PUT',
+    url: '/api/profile/me',
+    data: payload,
+  });
+}
+
+export function createProfileAvatarUpload(payload) {
+  return adminApiRequest({
+    method: 'POST',
+    url: '/api/profile/avatar',
+    data: payload,
   });
 }
 
@@ -106,6 +132,22 @@ export function createAdminUser(payload) {
   return adminApiRequest({
     method: 'POST',
     url: '/api/admin/users',
+    data: payload,
+  });
+}
+
+export function getHierarchyOptions(params = {}) {
+  return adminApiRequest({
+    method: 'GET',
+    url: '/api/users/hierarchy-options',
+    params,
+  });
+}
+
+export function enableLoginAccess(employeeCode, payload = {}) {
+  return adminApiRequest({
+    method: 'POST',
+    url: `/api/admin/users/${encodeURIComponent(employeeCode)}/enable-login`,
     data: payload,
   });
 }

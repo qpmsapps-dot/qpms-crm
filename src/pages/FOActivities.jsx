@@ -1836,14 +1836,14 @@ function FleetKpi({ label, value, icon, tone = "blue", hint }) {
   };
 
   return (
-    <div className="rounded-xl border border-slate-200/90 bg-white p-3.5 shadow-[0_10px_26px_rgba(15,23,42,0.06)] dark:border-slate-800 dark:bg-slate-900">
-      <div className="flex items-center justify-between gap-3">
+    <div className="flex min-h-[116px] rounded-xl border border-slate-200/90 bg-white p-3.5 shadow-[0_10px_26px_rgba(15,23,42,0.06)] transition hover:border-qpms-200 hover:shadow-[0_14px_34px_rgba(15,23,42,0.08)] dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex w-full items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="whitespace-normal text-[11px] font-semibold leading-tight text-slate-600 dark:text-slate-400">
             {label}
           </p>
           <div className="mt-2 flex items-end gap-2">
-            <p className="text-2xl font-black leading-none tracking-tight text-slate-950 dark:text-white">
+            <p className="break-words text-2xl font-black leading-none tracking-normal text-slate-950 dark:text-white">
               {value}
             </p>
             {hint ? (
@@ -1965,7 +1965,7 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
             </span>
           </div>
           <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">
-            {officer.designation || officer.role || "Field Operations"} ·{" "}
+            {officer.designation || officer.role || "Field Operations"} -{" "}
             {officer.state || "--"}
           </p>
           <div className="mt-3 grid grid-cols-2 gap-3 border-t border-slate-100 pt-2.5 dark:border-slate-800">
@@ -8019,8 +8019,8 @@ export default function FOActivities() {
         </div>
       </div>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_10px_28px_rgba(15,23,42,0.05)] dark:border-slate-800 dark:bg-slate-900">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto]">
+      <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-[0_10px_28px_rgba(15,23,42,0.05)] dark:border-slate-800 dark:bg-slate-900">
+        <div className="grid items-end gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto]">
           <label>
             <span className="text-[11px] font-bold uppercase text-slate-500">
               From Date
@@ -8029,7 +8029,7 @@ export default function FOActivities() {
               type="date"
               value={customFromDate}
               onChange={(event) => setCustomFromDate(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400"
+              className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             />
           </label>
           <label>
@@ -8040,7 +8040,7 @@ export default function FOActivities() {
               type="date"
               value={customToDate}
               onChange={(event) => setCustomToDate(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400"
+              className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             />
           </label>
           <label>
@@ -8050,7 +8050,7 @@ export default function FOActivities() {
             <select
               value={stateFilter}
               onChange={(event) => setStateFilter(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400"
+              className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             >
               <option>All States</option>
               {stateSummaryRows.map((item) => (
@@ -8065,7 +8065,7 @@ export default function FOActivities() {
             <select
               value={businessFilter}
               onChange={(event) => setBusinessFilter(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400"
+              className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             >
               <option>All Business</option>
               {businessOptions.map((business) => (
@@ -8080,7 +8080,7 @@ export default function FOActivities() {
             <select
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400"
+              className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             >
               <option>All Status</option>
               <option value="Active">Active</option>
@@ -8102,7 +8102,7 @@ export default function FOActivities() {
                 setBusinessFilter("All Business");
                 setStatusFilter("All Status");
               }}
-              className="focus-ring w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-black text-slate-600 hover:bg-slate-100"
+              className="focus-ring h-10 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-black text-slate-600 hover:bg-slate-100"
             >
               Reset
             </button>
@@ -8124,7 +8124,7 @@ export default function FOActivities() {
                   },
                 })
               }
-              className="focus-ring inline-flex w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm font-black text-emerald-700 hover:bg-emerald-100"
+              className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-sm font-black text-emerald-700 hover:bg-emerald-100"
             >
               <FileSpreadsheet className="h-4 w-4" /> Export Excel
             </button>
@@ -8183,7 +8183,7 @@ export default function FOActivities() {
       </div>
 
       <section className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-[0_18px_46px_rgba(15,23,42,0.08)] dark:border-slate-800 dark:bg-slate-900">
-        <div className="grid min-h-[720px] xl:grid-cols-[minmax(0,2.2fr)_minmax(340px,0.8fr)]">
+        <div className="grid min-h-[700px] xl:grid-cols-[minmax(0,2.15fr)_minmax(360px,0.85fr)]">
           <div className="order-2 min-w-0 xl:order-1">
             <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-3 dark:border-slate-800">
               <h2 className="text-lg font-black text-slate-950 dark:text-white">
@@ -8197,7 +8197,7 @@ export default function FOActivities() {
                 <Maximize2 className="h-4 w-4" /> Full Screen Map
               </button>
             </div>
-          <div className="relative isolate h-[500px] overflow-hidden bg-sky-50 sm:h-[560px] lg:h-[640px] xl:h-[675px]">
+          <div className="relative isolate h-[500px] overflow-hidden bg-sky-50 sm:h-[560px] lg:h-[640px] xl:h-[655px]">
             <OperationsMap
               pins={pins}
               sitePins={sitePins}
@@ -8403,7 +8403,7 @@ export default function FOActivities() {
           </div>
           </div>
 
-          <aside className="order-1 border-b border-slate-200 bg-white xl:order-2 xl:border-b-0 xl:border-l dark:border-slate-800 dark:bg-slate-900">
+          <aside className="order-1 flex min-h-0 flex-col border-b border-slate-200 bg-white xl:order-2 xl:border-b-0 xl:border-l dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4 dark:border-slate-800">
               <div>
                 <h2 className="text-lg font-black text-slate-950 dark:text-white">
@@ -8415,13 +8415,13 @@ export default function FOActivities() {
               </div>
               <Filter className="h-4 w-4 text-slate-400" />
             </div>
-            <label className="relative block border-b border-slate-100 p-4 dark:border-slate-800">
+            <label className="relative block min-w-0 border-b border-slate-100 p-4 dark:border-slate-800">
               <Search className="absolute left-7 top-7 h-4 w-4 text-slate-400" />
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder={directorySearchPlaceholder}
-                className="w-full rounded-lg border border-slate-200 bg-white py-3 pl-10 pr-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400 focus:border-qpms-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
+                className="w-full min-w-0 rounded-lg border border-slate-200 bg-white py-3 pl-10 pr-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400 focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
               />
             </label>
             {fullTechnicalAccess ? (
@@ -8466,7 +8466,7 @@ export default function FOActivities() {
                 siteVisitCount={(supportOfficer || routeOfficer)?.visits?.length || 0}
               />
             )}
-            <div className="max-h-[640px] space-y-2 overflow-y-auto p-2">
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2 xl:max-h-[540px]">
               {visualFilteredOfficers.map((officer) => (
                 <OfficerDirectoryRow
                   key={officer.id}
@@ -8623,13 +8623,13 @@ export default function FOActivities() {
                   </button>
                 </div>
               </div>
-              <label className="relative block border-b border-slate-100 p-4 dark:border-slate-800">
+              <label className="relative block min-w-0 border-b border-slate-100 p-4 dark:border-slate-800">
                 <Search className="absolute left-7 top-7 h-4 w-4 text-slate-400" />
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   placeholder={directorySearchPlaceholder}
-                  className="w-full rounded-lg border border-slate-200 bg-white py-3 pl-10 pr-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400 focus:border-qpms-400 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
+                  className="w-full min-w-0 rounded-lg border border-slate-200 bg-white py-3 pl-10 pr-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400 focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
                 />
               </label>
               <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">

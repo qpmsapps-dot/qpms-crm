@@ -20,6 +20,7 @@ import {
   reactivateAdminUser,
   repairEmployeeCode,
   resetAdminUserPassword,
+  enableLoginAccess,
   syncAuthUsersToProfiles,
   updateAdminUser,
 } from '../../services/api.js';
@@ -67,6 +68,9 @@ function mapProfile(profile, hierarchy = null) {
     business: profile.business || '',
     status: profile.status || (isActive ? 'Active' : 'Inactive'),
     isActive,
+    authUserId: profile.auth_user_id || '',
+    loginEnabled: Boolean(profile.auth_user_id),
+    loginLabel: profile.auth_user_id ? 'Login Enabled' : 'Profile Only',
     accountStatus: isActive ? 'Active' : 'Inactive',
     webAccess: profile.web_access_enabled !== false,
     mobileAccess: profile.mobile_access_enabled !== false,
@@ -125,6 +129,9 @@ export default function UserManagement() {
   const [importEmployees, setImportEmployees] = useState([]);
   const [importError, setImportError] = useState('');
   const [importing, setImporting] = useState(false);
+  const [enableLoginUser, setEnableLoginUser] = useState(null);
+  const [enableLoginEmail, setEnableLoginEmail] = useState('');
+  const [enableLoginMobile, setEnableLoginMobile] = useState('');
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -239,7 +246,13 @@ export default function UserManagement() {
       setFormOpen(false);
       setEditingUser(null);
       refreshList();
-      showMessage(formMode === 'edit' ? 'User profile updated.' : 'User and Supabase Auth account created.');
+      if (formMode === 'edit') {
+        showMessage('User profile updated.');
+      } else if (result.invite?.setup_link) {
+        showMessage(`${result.invite.message} Link: ${result.invite.setup_link}`);
+      } else {
+        showMessage(result.invite?.message || 'User account created and invite prepared.');
+      }
     } catch (error) {
       setFormError(apiErrorMessage(error));
     } finally {
@@ -255,6 +268,12 @@ export default function UserManagement() {
     }
     if (action === 'Edit') {
       openEditUser(user);
+      return null;
+    }
+    if (action === 'Enable Login Access') {
+      setEnableLoginUser(user);
+      setEnableLoginEmail(user.email || '');
+      setEnableLoginMobile(user.mobile || '');
       return null;
     }
 
@@ -297,6 +316,30 @@ export default function UserManagement() {
       if (initiatedFromActionPanel) throw new Error(messageText);
       showMessage(messageText);
       return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitEnableLogin(event) {
+    event.preventDefault();
+    if (!enableLoginUser) return;
+    setBusy(true);
+    try {
+      const result = await enableLoginAccess(enableLoginUser.employeeCode, {
+        email: enableLoginEmail.trim().toLowerCase(),
+        mobile: enableLoginMobile.trim() || undefined,
+      });
+      if (result.profile && drawerUser?.employeeCode === enableLoginUser.employeeCode) {
+        setDrawerUser(mapProfile(result.profile, drawerUser.hierarchy));
+      }
+      setEnableLoginUser(null);
+      setEnableLoginEmail('');
+      setEnableLoginMobile('');
+      refreshList();
+      showMessage(result.invite?.setup_link ? `${result.invite.message} Link: ${result.invite.setup_link}` : result.invite?.message || 'Login access enabled.');
+    } catch (error) {
+      showMessage(apiErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -476,6 +519,41 @@ export default function UserManagement() {
         <div className="fixed bottom-5 right-5 z-[70] flex max-w-lg items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 shadow-xl">
           <span>{message}</span>
           <button type="button" aria-label="Dismiss message" onClick={() => setMessage('')} className="grid h-7 w-7 place-items-center rounded-full text-slate-400 hover:bg-slate-50"><X className="h-4 w-4" /></button>
+        </div>
+      ) : null}
+
+      {enableLoginUser ? (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-slate-950/35 px-4">
+          <form onSubmit={submitEnableLogin} className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <h2 className="text-lg font-bold text-slate-950">Enable Login Access</h2>
+            <p className="mt-1 text-sm font-semibold text-slate-500">
+              {enableLoginUser.fullName} - {enableLoginUser.employeeCode}
+            </p>
+            <label className="mt-4 block">
+              <span className="text-[11px] font-bold uppercase text-slate-500">Email *</span>
+              <input
+                type="email"
+                required
+                value={enableLoginEmail}
+                onChange={(event) => setEnableLoginEmail(event.target.value)}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
+              />
+            </label>
+            <label className="mt-3 block">
+              <span className="text-[11px] font-bold uppercase text-slate-500">Mobile Number</span>
+              <input
+                value={enableLoginMobile}
+                onChange={(event) => setEnableLoginMobile(event.target.value)}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
+              />
+            </label>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" disabled={busy} onClick={() => setEnableLoginUser(null)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700">Cancel</button>
+              <button type="submit" disabled={busy} className="rounded-xl bg-qpms-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-60">
+                {busy ? 'Sending invite...' : 'Enable Login Access'}
+              </button>
+            </div>
+          </form>
         </div>
       ) : null}
 

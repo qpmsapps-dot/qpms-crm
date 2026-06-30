@@ -8,7 +8,12 @@ function initials(name = '') {
 
 export default function EmployeeCard({ employee, onOpen, onAction }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const actions = ['View', 'Edit', employee.isActive ? 'Deactivate' : 'Reactivate'];
+  const actions = [
+    'View',
+    'Edit',
+    ...(!employee.loginEnabled ? ['Enable Login Access'] : []),
+    employee.isActive ? 'Deactivate' : 'Reactivate',
+  ];
 
   return (
     <article
@@ -53,6 +58,7 @@ export default function EmployeeCard({ employee, onOpen, onAction }) {
           <p className="truncate text-xs font-medium text-slate-500">{employee.email || employee.mobile || 'No contact details'}</p>
           <div className="mt-2 flex flex-wrap gap-1.5">
             <UserStatusBadge status={employee.accountStatus} />
+            <UserStatusBadge status={employee.loginLabel} />
             <UserStatusBadge status={employee.provisioningLabel} />
             {!employee.webAccess ? <UserStatusBadge status="Web disabled" /> : null}
             {!employee.mobileAccess ? <UserStatusBadge status="Mobile disabled" /> : null}

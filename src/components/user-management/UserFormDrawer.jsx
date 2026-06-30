@@ -1,5 +1,6 @@
 import { X } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { getHierarchyOptions } from '../../services/api.js';
 
 const emptyForm = {
   employee_code: '',
@@ -12,7 +13,7 @@ const emptyForm = {
   designation: '',
   department: '',
   business: '',
-  temporary_password: '',
+  create_profile_only: false,
   requires_password_change: true,
   mobile_access_enabled: true,
   web_access_enabled: true,
@@ -26,9 +27,12 @@ const emptyForm = {
 };
 
 const roleOptions = [
-  'Admin', 'MD', 'COO', 'GM', 'Management', 'HR', 'HR Reviewer', 'HR GM',
-  'Finance GM', 'Operations Manager', 'Manager', 'Branch Head', 'KAM', 'FO',
+  'MD', 'COO', 'GM', 'Business Head', 'Branch Head', 'Operations Manager', 'KAM', 'FO', 'Admin',
 ];
+const stateOptions = ['TN', 'AP', 'KA', 'KL', 'TG'];
+const businessOptions = ['Reliance Retail', 'Private Clients', 'DME', 'AP DSH', 'TN Government', 'Osmania Hospitals'];
+const operationalRoles = new Set(['FO', 'KAM', 'Operations Manager', 'Branch Head', 'Business Head']);
+const reportingRequiredRoles = new Set(['FO', 'KAM', 'Operations Manager']);
 
 function normalizeInitial(initialUser) {
   if (!initialUser) return emptyForm;
@@ -50,7 +54,6 @@ function normalizeInitial(initialUser) {
     is_active: initialUser.isActive,
     mobile_access_enabled: initialUser.mobileAccess,
     web_access_enabled: initialUser.webAccess,
-    temporary_password: '',
   };
 }
 
@@ -86,6 +89,59 @@ function TextField({
   );
 }
 
+function SelectField({ name, label, value, onChange, options, required = false, error, disabled = false }) {
+  return (
+    <label className="block">
+      <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+        {label}{required ? ' *' : ''}
+      </span>
+      <select
+        value={value || ''}
+        disabled={disabled}
+        onChange={(event) => onChange(name, event.target.value)}
+        className={`mt-1 h-10 w-full rounded-xl border px-3 text-sm font-semibold outline-none ${
+          disabled
+            ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-500'
+            : 'border-slate-200 bg-white text-slate-800 focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100'
+        } ${error ? 'border-rose-300' : ''}`}
+      >
+        <option value="">Select {label}</option>
+        {options.map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+      {error ? <p className="mt-1 text-xs font-semibold text-rose-600">{error}</p> : null}
+    </label>
+  );
+}
+
+function HierarchySelect({ label, value, options, onChange, required = false, error }) {
+  return (
+    <label className="block">
+      <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+        {label}{required ? ' *' : ''}
+      </span>
+      <select
+        value={value || ''}
+        onChange={(event) => onChange(event.target.value)}
+        className={`mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100 ${error ? 'border-rose-300' : ''}`}
+      >
+        <option value="">Search / select reporting user</option>
+        {options.map((option) => (
+          <option key={option.employee_code} value={option.employee_code}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      {error ? <p className="mt-1 text-xs font-semibold text-rose-600">{error}</p> : null}
+    </label>
+  );
+}
+
+function employeeLabel(option) {
+  return option?.label || (option?.employee_code ? `${option.full_name || 'User'} - ${option.employee_code}` : 'Not found');
+}
+
 export default function UserFormDrawer({
   open,
   mode,
@@ -97,11 +153,119 @@ export default function UserFormDrawer({
 }) {
   const [values, setValues] = useState(() => normalizeInitial(initialUser));
   const [errors, setErrors] = useState({});
+  const [hierarchyOptions, setHierarchyOptions] = useState({
+    operationsManagers: [],
+    branchHeads: [],
+    businessHeads: [],
+    gms: [],
+    coo: null,
+    md: null,
+    warnings: [],
+  });
+  const [hierarchyLoading, setHierarchyLoading] = useState(false);
+  const [hierarchyError, setHierarchyError] = useState('');
+
+  useEffect(() => {
+    if (!open || mode !== 'add') return undefined;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setHierarchyLoading(true);
+      setHierarchyError('');
+    });
+    getHierarchyOptions({
+      role: values.role || undefined,
+      state: values.state || undefined,
+      business: values.business || undefined,
+    })
+      .then((result) => {
+        if (!active) return;
+        setHierarchyOptions({
+          operationsManagers: result.operationsManagers || [],
+          branchHeads: result.branchHeads || [],
+          businessHeads: result.businessHeads || [],
+          gms: result.gms || [],
+          coo: result.coo || null,
+          md: result.md || null,
+          warnings: result.warnings || [],
+        });
+      })
+      .catch((error) => {
+        if (!active) return;
+        setHierarchyError(error.message || 'Unable to load hierarchy options.');
+      })
+      .finally(() => {
+        if (active) setHierarchyLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [mode, open, values.business, values.role, values.state]);
+
+  const reportingOptions = useMemo(() => {
+    if (values.role === 'FO') return hierarchyOptions.operationsManagers;
+    if (values.role === 'KAM') {
+      return [...hierarchyOptions.operationsManagers, ...hierarchyOptions.branchHeads];
+    }
+    if (values.role === 'Operations Manager') return hierarchyOptions.branchHeads;
+    return [];
+  }, [hierarchyOptions.branchHeads, hierarchyOptions.operationsManagers, values.role]);
+
+  const selectedReportingUser = useMemo(
+    () => reportingOptions.find((option) => option.employee_code === values.manager_employee_code) || null,
+    [reportingOptions, values.manager_employee_code],
+  );
+
+  const hierarchyPreview = useMemo(() => {
+    const branchHead =
+      values.role === 'Operations Manager'
+        ? selectedReportingUser
+        : values.role === 'KAM' && selectedReportingUser?.role === 'Branch Head'
+          ? selectedReportingUser
+          : hierarchyOptions.branchHeads[0] || null;
+    const operationsManager =
+      ['FO', 'KAM'].includes(values.role) && selectedReportingUser?.role === 'Operations Manager'
+        ? selectedReportingUser
+        : null;
+    return {
+      operationsManager,
+      branchHead,
+      coo: values.role === 'COO' ? null : hierarchyOptions.coo,
+      md: hierarchyOptions.md,
+    };
+  }, [hierarchyOptions.branchHeads, hierarchyOptions.coo, hierarchyOptions.md, selectedReportingUser, values.role]);
+  const profileOnlyMd = mode === 'add' && values.role === 'MD' && values.create_profile_only;
 
   if (!open) return null;
 
   function update(key, value) {
-    setValues((current) => ({ ...current, [key]: value }));
+    setValues((current) => ({
+      ...current,
+      [key]: value,
+      ...(key === 'role'
+        ? { create_profile_only: value === 'MD' }
+        : {}),
+      ...(mode === 'add' && ['role', 'state', 'business'].includes(key)
+        ? { manager_employee_code: '' }
+        : {}),
+    }));
+  }
+
+  function needsState(role) {
+    return operationalRoles.has(role);
+  }
+
+  function needsBusiness(role) {
+    return operationalRoles.has(role);
+  }
+
+  function reportingLabel(role) {
+    if (role === 'FO') return 'Reporting Operations Manager';
+    if (role === 'KAM') return 'Reporting To';
+    if (role === 'Operations Manager') return 'Branch Head';
+    if (role === 'Branch Head' || role === 'Business Head' || role === 'GM') return 'Reporting To';
+    if (role === 'COO') return 'Reporting To';
+    return 'Reporting To';
   }
 
   async function submit(event) {
@@ -110,14 +274,19 @@ export default function UserFormDrawer({
     const employeeCode = values.employee_code.trim().toUpperCase();
     const fullName = values.full_name.trim();
     const email = values.email.trim().toLowerCase();
+    const profileOnlyMd = mode === 'add' && values.role === 'MD' && values.create_profile_only;
     if (!employeeCode) nextErrors.employee_code = 'Employee code is required.';
     if (!fullName) nextErrors.full_name = 'Full name is required.';
-    if (!email) nextErrors.email = 'Email is required for Supabase Auth.';
+    if (!profileOnlyMd && !email) nextErrors.email = 'Email is required for Supabase Auth.';
+    if (!profileOnlyMd && !values.mobile.trim()) nextErrors.mobile = 'Mobile number is required.';
+    if (!values.role) nextErrors.role = 'Role is required.';
+    if (mode === 'add' && needsState(values.role) && !values.state) nextErrors.state = 'State is required.';
+    if (mode === 'add' && needsBusiness(values.role) && !values.business) nextErrors.business = 'Business is required.';
+    if (mode === 'add' && reportingRequiredRoles.has(values.role) && !values.manager_employee_code) {
+      nextErrors.manager_employee_code = `${reportingLabel(values.role)} is required.`;
+    }
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       nextErrors.email = 'Enter a valid email.';
-    }
-    if (mode === 'add' && !values.temporary_password) {
-      nextErrors.temporary_password = 'Temporary password is required.';
     }
     if (
       values.manager_employee_code &&
@@ -151,7 +320,12 @@ export default function UserFormDrawer({
       coo_employee_code: values.coo_employee_code.trim().toUpperCase() || null,
     };
     if (mode === 'add') {
-      payload.temporary_password = values.temporary_password;
+      payload.requires_password_change = false;
+      payload.display_name = fullName;
+      payload.department = null;
+      payload.designation = null;
+      payload.reporting_manager_employee_code = values.manager_employee_code.trim().toUpperCase() || null;
+      payload.create_profile_only = profileOnlyMd;
     } else {
       delete payload.employee_code;
       payload.status = values.status;
@@ -171,7 +345,7 @@ export default function UserFormDrawer({
             <p className="text-sm font-semibold text-slate-500">
               {mode === 'edit'
                 ? 'Updates the profile and linked Supabase Auth metadata.'
-                : 'Creates a Supabase Auth account and profile.'}
+                : 'Creates the profile and sends a Supabase password setup invite.'}
             </p>
           </div>
           <button type="button" aria-label="Close user form" onClick={onClose} className="focus-ring grid h-9 w-9 place-items-center rounded-full border border-slate-200 text-slate-500">
@@ -186,45 +360,110 @@ export default function UserFormDrawer({
             </div>
           ) : null}
 
-          <section className="rounded-xl border border-slate-200 p-4">
-            <h3 className="text-sm font-bold text-slate-950">Employee Details</h3>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <TextField name="employee_code" label="Employee Code" required value={values.employee_code} readOnly={mode === 'edit'} error={errors.employee_code} onChange={update} />
-              <TextField name="full_name" label="Full Name" required value={values.full_name} error={errors.full_name} onChange={update} />
-              {mode === 'edit' ? (
+          {mode === 'add' ? (
+            <>
+              <section className="rounded-xl border border-slate-200 p-4">
+                <h3 className="text-sm font-bold text-slate-950">Basic Access Details</h3>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <TextField name="employee_code" label="Employee Code" required value={values.employee_code} error={errors.employee_code} onChange={update} />
+                  <TextField name="full_name" label="Full Name" required value={values.full_name} error={errors.full_name} onChange={update} />
+                  <TextField name="email" label="Email" required={!profileOnlyMd} type="email" value={values.email} error={errors.email} onChange={update} />
+                  <TextField name="mobile" label="Mobile Number" required={!profileOnlyMd} value={values.mobile} error={errors.mobile} onChange={update} />
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-slate-200 p-4">
+                <h3 className="text-sm font-bold text-slate-950">Work Mapping</h3>
+                <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                  <SelectField name="state" label="State" required={needsState(values.role)} value={values.state} options={stateOptions} error={errors.state} onChange={update} />
+                  <SelectField name="business" label="Business" required={needsBusiness(values.role)} value={values.business} options={businessOptions} error={errors.business} onChange={update} />
+                  <SelectField name="role" label="Role" required value={values.role} options={roleOptions} error={errors.role} onChange={update} />
+                </div>
+                {values.role === 'MD' ? (
+                  <label className="mt-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(values.create_profile_only)}
+                      onChange={(event) => update('create_profile_only', event.target.checked)}
+                    />
+                    Create profile only, no login access now
+                  </label>
+                ) : null}
+              </section>
+
+              {!profileOnlyMd ? <section className="rounded-xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-bold text-slate-950">Reporting Hierarchy</h3>
+                  {hierarchyLoading ? <span className="text-xs font-bold text-slate-400">Loading...</span> : null}
+                </div>
+
+                {reportingRequiredRoles.has(values.role) ? (
+                  <div className="mt-3">
+                    <HierarchySelect
+                      label={reportingLabel(values.role)}
+                      value={values.manager_employee_code}
+                      options={reportingOptions}
+                      required
+                      error={errors.manager_employee_code}
+                      onChange={(value) => update('manager_employee_code', value)}
+                    />
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">
+                    {values.role === 'MD'
+                      ? 'MD has no reporting manager.'
+                      : `${reportingLabel(values.role)}: ${values.role === 'COO' ? employeeLabel(hierarchyOptions.md) : employeeLabel(hierarchyOptions.coo)}`}
+                  </div>
+                )}
+
+                {hierarchyError ? (
+                  <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">{hierarchyError}</p>
+                ) : null}
+                {hierarchyOptions.warnings?.length ? (
+                  <div className="mt-3 space-y-1 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                    {hierarchyOptions.warnings.map((warning) => <p key={warning}>{warning}</p>)}
+                  </div>
+                ) : null}
+
+                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Hierarchy Preview</p>
+                  <div className="mt-2 space-y-1 text-sm font-semibold text-slate-700">
+                    {['FO', 'KAM'].includes(values.role) ? <p>Operations Manager: {employeeLabel(hierarchyPreview.operationsManager)}</p> : null}
+                    {['FO', 'KAM', 'Operations Manager'].includes(values.role) ? <p>Branch Head: {employeeLabel(hierarchyPreview.branchHead)}</p> : null}
+                    {values.role !== 'MD' ? <p>COO: {employeeLabel(hierarchyPreview.coo || hierarchyOptions.coo)}</p> : null}
+                    <p>MD: {values.role === 'MD' ? 'This user' : employeeLabel(hierarchyPreview.md)}</p>
+                  </div>
+                </div>
+              </section> : null}
+            </>
+          ) : (
+            <section className="rounded-xl border border-slate-200 p-4">
+              <h3 className="text-sm font-bold text-slate-950">Employee Details</h3>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <TextField name="employee_code" label="Employee Code" required value={values.employee_code} readOnly error={errors.employee_code} onChange={update} />
+                <TextField name="full_name" label="Full Name" required value={values.full_name} error={errors.full_name} onChange={update} />
                 <p className="sm:col-span-2 -mt-1 text-xs font-semibold text-amber-700">
                   Employee code repair must use the dedicated repair flow.
                 </p>
-              ) : null}
-              <TextField name="display_name" label="Display Name" value={values.display_name} onChange={update} />
-              <TextField name="email" label="Email" required type="email" value={values.email} error={errors.email} onChange={update} />
-              <TextField name="mobile" label="Mobile" value={values.mobile} onChange={update} />
-              <TextField name="state" label="State" value={values.state} onChange={update} />
-              <TextField name="designation" label="Designation" value={values.designation} onChange={update} />
-              <TextField name="department" label="Department" value={values.department} onChange={update} />
-              <TextField name="business" label="Business" value={values.business} onChange={update} />
-              <label className="block">
-                <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Role</span>
-                <select value={values.role} onChange={(event) => update('role', event.target.value)} className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold">
-                  {roleOptions.map((role) => <option key={role}>{role}</option>)}
-                </select>
-              </label>
-            </div>
-          </section>
+                <TextField name="email" label="Email" required type="email" value={values.email} error={errors.email} onChange={update} />
+                <TextField name="mobile" label="Mobile" required value={values.mobile} error={errors.mobile} onChange={update} />
+                <SelectField name="state" label="State" value={values.state} options={stateOptions} onChange={update} />
+                <SelectField name="business" label="Business" value={values.business} options={businessOptions} onChange={update} />
+                <SelectField name="role" label="Role" required value={values.role} options={roleOptions} error={errors.role} onChange={update} />
+              </div>
+            </section>
+          )}
 
           {mode === 'add' ? (
-            <section className="rounded-xl border border-violet-200 bg-violet-50/40 p-4">
-              <h3 className="text-sm font-bold text-slate-950">Temporary Password</h3>
-              <p className="mt-1 text-xs font-semibold text-slate-500">
-                The password remains only in this unsaved form and is never stored locally.
+            <section className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
+              <h3 className="text-sm font-bold text-slate-950">Password Setup Invite</h3>
+              <p className="mt-1 text-xs font-semibold leading-5 text-slate-600">
+                Admin does not need to enter a password. The employee will receive an invite or a secure setup link to create their own password.
               </p>
-              <div className="mt-3">
-                <TextField name="temporary_password" label="Temporary Password" required type="password" value={values.temporary_password} error={errors.temporary_password} onChange={update} />
-              </div>
             </section>
           ) : null}
 
-          <section className="rounded-xl border border-slate-200 p-4">
+          {mode === 'edit' ? <section className="rounded-xl border border-slate-200 p-4">
             <h3 className="text-sm font-bold text-slate-950">Hierarchy</h3>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <TextField name="manager_employee_code" label="Manager Employee Code" value={values.manager_employee_code} error={errors.manager_employee_code} onChange={update} />
@@ -233,7 +472,7 @@ export default function UserFormDrawer({
               <TextField name="gm_employee_code" label="GM Code" value={values.gm_employee_code} onChange={update} />
               <TextField name="coo_employee_code" label="COO Code" value={values.coo_employee_code} onChange={update} />
             </div>
-          </section>
+          </section> : null}
 
           <section className="rounded-xl border border-slate-200 p-4">
             <h3 className="text-sm font-bold text-slate-950">Access</h3>
@@ -241,7 +480,6 @@ export default function UserFormDrawer({
               {[
                 ['mobile_access_enabled', 'Mobile Access Enabled'],
                 ['web_access_enabled', 'Web Access Enabled'],
-                ['requires_password_change', 'Require Password Change'],
               ].map(([key, label]) => (
                 <label key={key} className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold">
                   <input type="checkbox" checked={Boolean(values[key])} onChange={(event) => update(key, event.target.checked)} />
@@ -260,7 +498,7 @@ export default function UserFormDrawer({
           <div className="sticky bottom-0 -mx-5 flex justify-end gap-2 border-t border-slate-200 bg-white px-5 py-4">
             <button type="button" disabled={busy} onClick={onClose} className="focus-ring rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700">Cancel</button>
             <button type="submit" disabled={busy} className="focus-ring rounded-xl bg-qpms-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-60">
-              {busy ? 'Saving...' : mode === 'edit' ? 'Save Changes' : 'Create User'}
+              {busy ? 'Saving...' : mode === 'edit' ? 'Save Changes' : profileOnlyMd ? 'Create MD Profile' : 'Create User'}
             </button>
           </div>
         </form>

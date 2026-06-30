@@ -35,14 +35,24 @@ export default function EmployeeTable({ employees, onOpen, onAction }) {
                 <td className="px-4 py-3 text-xs font-semibold text-slate-600">
                   Web: {employee.webAccess ? 'On' : 'Off'}<br />Mobile: {employee.mobileAccess ? 'On' : 'Off'}
                 </td>
-                <td className="px-4 py-3"><UserStatusBadge status={employee.provisioningLabel} /></td>
+                <td className="space-y-1 px-4 py-3">
+                  <UserStatusBadge status={employee.loginLabel} />
+                  <UserStatusBadge status={employee.provisioningLabel} />
+                </td>
                 <td className="px-4 py-3 text-sm font-bold text-slate-700">{employee.attendanceCount}</td>
                 <td className="px-4 py-3 text-sm font-bold text-slate-700">{employee.siteVisitCount}</td>
                 <td className="px-4 py-3 text-sm font-bold text-slate-700">{employee.gpsLogCount}</td>
                 <td className="px-4 py-3">
-                  <button type="button" aria-label={`Edit ${employee.fullName}`} onClick={() => onAction('Edit', employee)} className="focus-ring grid h-8 w-8 place-items-center rounded-full border border-slate-200 text-slate-500">
-                    <MoreVertical className="h-4 w-4" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {!employee.loginEnabled ? (
+                      <button type="button" onClick={() => onAction('Enable Login Access', employee)} className="focus-ring rounded-lg border border-emerald-200 px-2 py-1 text-[11px] font-bold text-emerald-700">
+                        Enable Login
+                      </button>
+                    ) : null}
+                    <button type="button" aria-label={`Edit ${employee.fullName}`} onClick={() => onAction('Edit', employee)} className="focus-ring grid h-8 w-8 place-items-center rounded-full border border-slate-200 text-slate-500">
+                      <MoreVertical className="h-4 w-4" />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

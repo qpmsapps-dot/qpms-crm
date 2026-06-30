@@ -2,7 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import { api, clearBackendToken, readBackendToken, setBackendToken } from '../services/api.js';
 import { normalizeAppRole } from '../utils/authRoles.js';
-import { isDemoReadOnlyUser } from '../utils/demoAccess.js';
+import {
+  createDemoReadOnlyUser,
+  isDemoReadOnlyCredentials,
+  isDemoReadOnlyUser,
+} from '../utils/demoAccess.js';
 import { AuthContext } from './auth-context.js';
 
 const authStorageKey = 'qpms-crm-auth-user';
@@ -84,6 +88,16 @@ export function AuthProvider({ children }) {
   const [authError, setAuthError] = useState('');
 
   useEffect(() => {
+    const storedUser = readStoredUser();
+    if (isDemoReadOnlyUser(storedUser)) {
+      queueMicrotask(() => {
+        setUserState(storedUser);
+        setAuthStatus('ready');
+        setAuthError('');
+      });
+      return undefined;
+    }
+
     if (isProductionAuthMode && !isSupabaseConfigured) {
       queueMicrotask(() => {
         setAuthStatus('error');
@@ -201,6 +215,20 @@ export function AuthProvider({ children }) {
   }, [loginBackend, setUser]);
 
   const loginWithPassword = useCallback(async (email, password) => {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (isDemoReadOnlyCredentials(normalizedEmail, password)) {
+      if (import.meta.env.DEV) {
+        console.info('Demo read-only login bypass activated');
+      }
+      const nextUser = createDemoReadOnlyUser(normalizedEmail);
+      clearBackendToken();
+      setBackendTokenState('');
+      setUserState(nextUser);
+      setAuthStatus('ready');
+      setAuthError('');
+      return nextUser;
+    }
+
     if (!isSupabaseConfigured || !supabase) {
       throw new Error('Supabase Auth is not configured.');
     }
@@ -208,7 +236,7 @@ export function AuthProvider({ children }) {
     setAuthStatus('loading');
     setAuthError('');
     const { data, error } = await supabase.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
+      email: normalizedEmail,
       password,
     });
     if (error) {
@@ -236,7 +264,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(async () => {
-    if (isSupabaseConfigured && supabase) {
+    if (isSupabaseConfigured && supabase && !isDemoReadOnlyUser(user)) {
       await supabase.auth.signOut();
     }
     if (typeof window !== 'undefined') {
@@ -245,7 +273,7 @@ export function AuthProvider({ children }) {
     clearBackendToken();
     setBackendTokenState('');
     setUserState(null);
-  }, []);
+  }, [user]);
 
   const value = useMemo(
     () => ({

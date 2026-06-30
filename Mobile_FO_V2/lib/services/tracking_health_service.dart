@@ -40,12 +40,19 @@ class TrackingHealthSnapshot {
 
   String get locationPermissionLabel =>
       _label(locationPermission, ok: 'OK', needsAction: 'Needs Action');
+  String get locationServiceLabel =>
+      locationServiceEnabled ? 'OK' : 'Needs Action';
   String get backgroundLocationLabel =>
       _label(backgroundLocation, ok: 'OK', needsAction: 'Needs Action');
-  String get batteryLabel =>
-      _label(battery, ok: 'OK', needsAction: 'Needs Action');
+  String get batteryLabel => switch (battery) {
+    HealthLevel.ok => 'OK',
+    HealthLevel.needsAction => 'Needs attention',
+    HealthLevel.unknown => 'Cannot verify on this phone',
+  };
   String get trackingLabel =>
       _label(tracking, ok: 'Running', needsAction: 'Stopped');
+  bool get requiredReady =>
+      locationPermission == HealthLevel.ok && locationServiceEnabled;
 
   static String _label(
     HealthLevel level, {
@@ -67,9 +74,7 @@ class TrackingHealthService {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       final locationPermission = await _locationPermission(serviceEnabled);
       if (locationPermission == HealthLevel.needsAction) {
-        guidance.add(
-          'Location permission is required for attendance and tracking.',
-        );
+        guidance.add('Location permission must be set to Allow all the time.');
       }
       if (!serviceEnabled) {
         guidance.add('Location/GPS is turned off. Please enable it.');
@@ -82,13 +87,10 @@ class TrackingHealthService {
 
       final battery = await _batteryOptimizationStatus();
       if (battery == HealthLevel.needsAction) {
-        guidance.add(
-          'Set battery usage to Unrestricted to avoid tracking stops.',
-        );
+        guidance.add(await PermissionService.batteryGuidanceText());
       } else if (battery == HealthLevel.unknown && Platform.isAndroid) {
-        guidance.add(
-          'Set battery usage to Unrestricted for reliable background tracking.',
-        );
+        guidance.add(PermissionService.batteryWarning);
+        guidance.add(await PermissionService.batteryGuidanceText());
       }
 
       final backgroundSession =
@@ -152,8 +154,8 @@ class TrackingHealthService {
     if (!serviceEnabled) return HealthLevel.needsAction;
     final permission = await Geolocator.checkPermission();
     return switch (permission) {
-      LocationPermission.always ||
-      LocationPermission.whileInUse => HealthLevel.ok,
+      LocationPermission.always => HealthLevel.ok,
+      LocationPermission.whileInUse => HealthLevel.needsAction,
       LocationPermission.denied ||
       LocationPermission.deniedForever => HealthLevel.needsAction,
       LocationPermission.unableToDetermine => HealthLevel.unknown,

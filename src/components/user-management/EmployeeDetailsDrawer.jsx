@@ -236,6 +236,7 @@ export default function EmployeeDetailsDrawer({
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <span className="text-xs font-bold text-slate-400">@{employee.employeeCode}</span>
               <UserStatusBadge status={employee.accountStatus} />
+              <UserStatusBadge status={employee.loginLabel} />
               <UserStatusBadge status={employee.provisioningLabel} />
             </div>
           </div>
@@ -274,7 +275,11 @@ export default function EmployeeDetailsDrawer({
             <h3 className="text-sm font-bold text-slate-950">Account Actions</h3>
             <div className="mt-3 flex flex-wrap gap-2">
               <button type="button" onClick={() => onEdit(employee)} className="focus-ring rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700">Edit Profile</button>
-              <button type="button" onClick={() => setActiveAction('Reset Password')} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700"><KeyRound className="h-3.5 w-3.5" /> Reset Password</button>
+              {employee.loginEnabled ? (
+                <button type="button" onClick={() => setActiveAction('Reset Password')} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700"><KeyRound className="h-3.5 w-3.5" /> Reset Password</button>
+              ) : (
+                <button type="button" onClick={() => submitAction('Enable Login Access', {})} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-xs font-bold text-emerald-700"><KeyRound className="h-3.5 w-3.5" /> Enable Login Access</button>
+              )}
               {inactive ? (
                 <button type="button" onClick={() => setActiveAction('Reactivate')} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-xs font-bold text-emerald-700"><ShieldCheck className="h-3.5 w-3.5" /> Reactivate</button>
               ) : (

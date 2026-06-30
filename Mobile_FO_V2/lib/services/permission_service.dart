@@ -21,7 +21,9 @@ class LocationReadinessResult {
 
 class PermissionService {
   static const message =
-      'For reliable field tracking, set Location permission to Allow all the time and Battery usage to Unrestricted.';
+      'Location permission must be Allow all the time and GPS must be on.';
+  static const batteryWarning =
+      'Battery/background setting could not be verified on this phone. For reliable tracking, manually enable Allow background activity / Don\'t optimize battery for myQPMS.';
   static String locationStatus = 'unknown';
   static String batteryOptimizationStatus = 'unknown';
   static String notificationStatus = 'not required';
@@ -123,15 +125,14 @@ class PermissionService {
           final alwaysAfterRequest = await ph.Permission.locationAlways.status;
           backgroundLocationStatus = alwaysAfterRequest.isGranted
               ? 'granted'
-              : 'permission pending';
-          if (!alwaysAfterRequest.isGranted && !alwaysAfterRequest.isLimited) {
-            warning =
-                'Background location permission pending. Tracking will continue while the foreground service is allowed, but may be limited after restrictions.';
+              : 'permission required';
+          if (!alwaysAfterRequest.isGranted) {
             await CrashLogService.record(
               screen: 'permissions',
               action: 'BACKGROUND_PERMISSION_MISSING',
               error: 'Background location is not allowed.',
             );
+            return false;
           }
         } else {
           backgroundLocationStatus = 'not required';
@@ -149,37 +150,14 @@ class PermissionService {
           if (!notificationAfterRequest.isGranted) {
             await CrashLogService.record(
               screen: 'permissions',
-              action: 'BACKGROUND_PERMISSION_MISSING',
+              action: 'NOTIFICATION_PERMISSION_WARNING',
               error: 'Notification permission is not granted.',
             );
-            return false;
           }
         } else {
           notificationStatus = 'not required';
         }
-        final battery = await ph.Permission.ignoreBatteryOptimizations.status;
-        if (!battery.isGranted) {
-          batteryOptimizationStatus = 'restricted';
-          await CrashLogService.record(
-            screen: 'permissions',
-            action: 'BATTERY_OPTIMIZATION_WARNING',
-          );
-          try {
-            await ph.Permission.ignoreBatteryOptimizations.request();
-          } catch (error, stackTrace) {
-            await CrashLogService.record(
-              screen: 'permissions',
-              action: 'BATTERY_OPTIMIZATION_REQUEST_FAILED',
-              error: error,
-              stackTrace: stackTrace,
-            );
-          }
-          if (!await ph.Permission.ignoreBatteryOptimizations.isGranted) {
-            warning = 'Battery restriction may affect live tracking accuracy.';
-          }
-        } else {
-          batteryOptimizationStatus = 'unrestricted';
-        }
+        await refreshBatteryOptimizationStatus();
       }
       return true;
     } catch (error, stackTrace) {
@@ -198,4 +176,98 @@ class PermissionService {
     final info = await DeviceInfoPlugin().androidInfo;
     return info.version.sdkInt;
   }
+
+  static Future<String> androidBrandKey() async {
+    if (!Platform.isAndroid) return 'stock';
+    try {
+      final info = await DeviceInfoPlugin().androidInfo;
+      final raw = '${info.manufacturer} ${info.brand} ${info.model}'
+          .toLowerCase();
+      if (raw.contains('oppo') ||
+          raw.contains('realme') ||
+          raw.contains('oneplus')) {
+        return 'oppo';
+      }
+      if (raw.contains('xiaomi') ||
+          raw.contains('redmi') ||
+          raw.contains('poco')) {
+        return 'xiaomi';
+      }
+      if (raw.contains('vivo') || raw.contains('iqoo')) return 'vivo';
+      if (raw.contains('samsung')) return 'samsung';
+      if (raw.contains('motorola') ||
+          raw.contains('moto') ||
+          raw.contains('google')) {
+        return 'stock';
+      }
+    } catch (_) {
+      return 'default';
+    }
+    return 'default';
+  }
+
+  static Future<String> batteryGuidanceText() async {
+    switch (await androidBrandKey()) {
+      case 'oppo':
+        return 'Enable Allow background activity and disable battery optimization for myQPMS.';
+      case 'xiaomi':
+        return 'Enable Autostart, set Battery saver to No restrictions, and allow background location for myQPMS.';
+      case 'vivo':
+        return 'Allow background power usage and disable battery optimization for myQPMS.';
+      case 'samsung':
+        return 'Set battery usage to Unrestricted and remove myQPMS from Sleeping apps.';
+      case 'stock':
+        return 'Set battery usage to Unrestricted or Don\'t optimize.';
+      default:
+        return 'Allow background activity and disable battery optimization for myQPMS.';
+    }
+  }
+
+  static Future<void> refreshBatteryOptimizationStatus() async {
+    if (!Platform.isAndroid) {
+      batteryOptimizationStatus = 'not required';
+      warning = null;
+      return;
+    }
+    try {
+      final status = await ph.Permission.ignoreBatteryOptimizations.status;
+      if (status.isGranted) {
+        batteryOptimizationStatus = 'unrestricted';
+        warning = null;
+      } else {
+        batteryOptimizationStatus = 'restricted';
+        warning =
+            'Tracking may stop in background. Please keep battery/background activity enabled for myQPMS.';
+        await CrashLogService.record(
+          screen: 'permissions',
+          action: 'BATTERY_OPTIMIZATION_ADVISORY',
+        );
+      }
+    } catch (error, stackTrace) {
+      batteryOptimizationStatus = 'unknown';
+      warning = batteryWarning;
+      await CrashLogService.record(
+        screen: 'permissions',
+        action: 'BATTERY_OPTIMIZATION_UNKNOWN',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+  }
+
+  static Future<void> openBatterySettings() async {
+    try {
+      await ph.Permission.ignoreBatteryOptimizations.request();
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        screen: 'permissions',
+        action: 'OPEN_BATTERY_SETTINGS_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      await ph.openAppSettings();
+    }
+  }
+
+  static Future<void> openAppSettings() => ph.openAppSettings();
 }
