@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import Logo from '../components/Logo.jsx';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
+import { completePasswordSetup } from '../services/api.js';
 
 export default function SetPassword() {
   usePageTitle('Set Password');
@@ -19,7 +20,7 @@ export default function SetPassword() {
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
       queueMicrotask(() => {
-        setError('Supabase Auth is not configured.');
+        setError('This invite link is invalid or expired. Please contact admin for a new invite.');
         setReady(true);
       });
       return undefined;
@@ -30,13 +31,14 @@ export default function SetPassword() {
         if (!active) return;
         if (sessionError) throw sessionError;
         if (!data.session) {
-          setError('Password setup link is invalid or expired. Please ask Admin to send a new invite.');
+          setError('This invite link is invalid or expired. Please contact admin for a new invite.');
         }
         setReady(true);
       })
       .catch((sessionError) => {
         if (!active) return;
-        setError(sessionError.message || 'Unable to verify password setup link.');
+        console.warn('[myQPMS SetPassword] Session verification failed', sessionError);
+        setError('This invite link is invalid or expired. Please contact admin for a new invite.');
         setReady(true);
       });
     return () => {
@@ -60,11 +62,19 @@ export default function SetPassword() {
     try {
       const { error: updateError } = await supabase.auth.updateUser({ password });
       if (updateError) throw updateError;
-      setMessage('Password set successfully. Redirecting to sign in...');
+      try {
+        await completePasswordSetup();
+      } catch (completeError) {
+        console.warn('[myQPMS SetPassword] Profile completion sync failed', completeError);
+        setError('Password was created, but profile status could not be updated. Please try again or contact admin.');
+        return;
+      }
+      setMessage('Password created successfully. Please login to continue.');
       await supabase.auth.signOut();
       window.setTimeout(() => navigate('/login', { replace: true }), 900);
     } catch (saveError) {
-      setError(saveError.message || 'Unable to set password.');
+      console.warn('[myQPMS SetPassword] Password update failed', saveError);
+      setError('Unable to create password. Please contact admin for a new invite.');
     } finally {
       setSaving(false);
     }

@@ -8,8 +8,11 @@ export default function Navbar({ onMenuClick, theme = 'light', onThemeToggle }) 
   const navigate = useNavigate();
   const accountRef = useRef(null);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState('');
   const displayName = user?.name || 'Admin';
   const role = user?.role || 'Admin';
+  const profileImageUrl = user?.profileImageUrl || user?.metadata?.profile_image_url || '';
+  const showProfileImage = Boolean(profileImageUrl) && failedAvatarUrl !== profileImageUrl;
   const initials = displayName
     .split(' ')
     .map((part) => part[0])
@@ -94,8 +97,17 @@ export default function Navbar({ onMenuClick, theme = 'light', onThemeToggle }) 
             aria-haspopup="menu"
             aria-expanded={isAccountOpen}
           >
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-qpms-600 text-sm font-bold text-white">
-              {initials}
+            <span className="grid h-9 w-9 place-items-center overflow-hidden rounded-xl bg-qpms-600 text-sm font-bold text-white">
+              {showProfileImage ? (
+                <img
+                  src={profileImageUrl}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  onError={() => setFailedAvatarUrl(profileImageUrl)}
+                />
+              ) : (
+                initials
+              )}
             </span>
             <span className="hidden min-w-0 text-left md:block">
               <span className="block truncate text-sm font-bold leading-5 text-slate-950 dark:text-white">{displayName}</span>

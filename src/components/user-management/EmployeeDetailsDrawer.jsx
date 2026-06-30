@@ -22,6 +22,10 @@ function CountCard({ label, value }) {
   );
 }
 
+function initials(name = '') {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'QP';
+}
+
 function ActionPanel({ action, employee, busy, onCancel, onSubmit }) {
   const [reason, setReason] = useState('');
   const [password, setPassword] = useState('');
@@ -213,6 +217,7 @@ export default function EmployeeDetailsDrawer({
       ['Role', employee.role],
       ['Profile status', employee.status],
       ['Provisioning', employee.provisioningStatus],
+      ['Invite status', employee.inviteLabel],
       ['Mobile access', employee.mobileAccess ? 'Enabled' : 'Disabled'],
       ['Web access', employee.webAccess ? 'Enabled' : 'Disabled'],
       ['Password change required', employee.requiresPasswordChange ? 'Yes' : 'No'],
@@ -231,13 +236,23 @@ export default function EmployeeDetailsDrawer({
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/30">
       <aside className="h-full w-full max-w-2xl overflow-y-auto bg-white shadow-2xl">
         <div className="sticky top-0 z-10 flex items-start justify-between border-b border-slate-200 bg-white px-5 py-4">
-          <div>
-            <h2 className="text-lg font-bold text-slate-950">{employee.fullName}</h2>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <span className="text-xs font-bold text-slate-400">@{employee.employeeCode}</span>
-              <UserStatusBadge status={employee.accountStatus} />
-              <UserStatusBadge status={employee.loginLabel} />
-              <UserStatusBadge status={employee.provisioningLabel} />
+          <div className="flex min-w-0 gap-3">
+            <div className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-full bg-qpms-50 text-sm font-black text-qpms-700 ring-1 ring-qpms-100">
+              {employee.avatarUrl ? (
+                <img src={employee.avatarUrl} alt="" className="h-full w-full object-cover" />
+              ) : (
+                initials(employee.fullName)
+              )}
+            </div>
+            <div className="min-w-0">
+              <h2 className="truncate text-lg font-bold text-slate-950">{employee.fullName}</h2>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold text-slate-400">@{employee.employeeCode}</span>
+                <UserStatusBadge status={employee.accountStatus} />
+                <UserStatusBadge status={employee.loginLabel} />
+                <UserStatusBadge status={employee.inviteLabel} />
+                <UserStatusBadge status={employee.provisioningLabel} />
+              </div>
             </div>
           </div>
           <button type="button" aria-label="Close employee details" onClick={onClose} className="focus-ring grid h-9 w-9 place-items-center rounded-full border border-slate-200 text-slate-500">

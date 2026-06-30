@@ -29,8 +29,12 @@ export default function EmployeeCard({ employee, onOpen, onAction }) {
       className="min-h-[168px] rounded-lg border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.055)] outline-none transition hover:border-qpms-200 hover:shadow-[0_16px_30px_rgba(15,23,42,0.08)] focus-visible:ring-2 focus-visible:ring-qpms-300"
     >
       <div className="flex items-start gap-3">
-        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-gradient-to-br from-qpms-50 to-sky-100 text-sm font-black text-qpms-700 ring-1 ring-qpms-100">
-          {initials(employee.fullName)}
+        <div className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-full bg-gradient-to-br from-qpms-50 to-sky-100 text-sm font-black text-qpms-700 ring-1 ring-qpms-100">
+          {employee.avatarUrl ? (
+            <img src={employee.avatarUrl} alt="" className="h-full w-full object-cover" />
+          ) : (
+            initials(employee.fullName)
+          )}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
@@ -59,6 +63,7 @@ export default function EmployeeCard({ employee, onOpen, onAction }) {
           <div className="mt-2 flex flex-wrap gap-1.5">
             <UserStatusBadge status={employee.accountStatus} />
             <UserStatusBadge status={employee.loginLabel} />
+            <UserStatusBadge status={employee.inviteLabel} />
             <UserStatusBadge status={employee.provisioningLabel} />
             {!employee.webAccess ? <UserStatusBadge status="Web disabled" /> : null}
             {!employee.mobileAccess ? <UserStatusBadge status="Mobile disabled" /> : null}

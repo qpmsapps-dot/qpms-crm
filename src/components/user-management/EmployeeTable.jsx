@@ -1,6 +1,10 @@
 import { MoreVertical } from 'lucide-react';
 import UserStatusBadge from './UserStatusBadge.jsx';
 
+function initials(name = '') {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'QP';
+}
+
 export default function EmployeeTable({ employees, onOpen, onAction }) {
   if (!employees.length) {
     return <div className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm font-semibold text-slate-500">No users match the current search or filters.</div>;
@@ -21,8 +25,19 @@ export default function EmployeeTable({ employees, onOpen, onAction }) {
             {employees.map((employee) => (
               <tr key={employee.id} className="hover:bg-qpms-50/40">
                 <td onClick={() => onOpen(employee)} className="cursor-pointer px-4 py-3">
-                  <p className="max-w-48 truncate text-sm font-bold text-slate-900">{employee.fullName}</p>
-                  <UserStatusBadge status={employee.accountStatus} />
+                  <div className="flex items-center gap-3">
+                    <div className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full bg-qpms-50 text-xs font-black text-qpms-700 ring-1 ring-qpms-100">
+                      {employee.avatarUrl ? (
+                        <img src={employee.avatarUrl} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        initials(employee.fullName)
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="max-w-48 truncate text-sm font-bold text-slate-900">{employee.fullName}</p>
+                      <UserStatusBadge status={employee.accountStatus} />
+                    </div>
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-sm font-semibold text-slate-700">{employee.employeeCode}</td>
                 <td className="px-4 py-3 text-xs font-semibold text-slate-600">
@@ -37,6 +52,7 @@ export default function EmployeeTable({ employees, onOpen, onAction }) {
                 </td>
                 <td className="space-y-1 px-4 py-3">
                   <UserStatusBadge status={employee.loginLabel} />
+                  <UserStatusBadge status={employee.inviteLabel} />
                   <UserStatusBadge status={employee.provisioningLabel} />
                 </td>
                 <td className="px-4 py-3 text-sm font-bold text-slate-700">{employee.attendanceCount}</td>

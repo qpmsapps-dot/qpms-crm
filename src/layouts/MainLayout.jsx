@@ -23,6 +23,10 @@ export default function MainLayout() {
     return <Navigate to="/login" replace />;
   }
 
+  if (user.requiresPasswordChange) {
+    return <Navigate to="/set-password" replace />;
+  }
+
   if (!canAccessRoute(user, location.pathname)) {
     return <Navigate to="/dashboard" replace />;
   }

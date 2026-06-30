@@ -46,12 +46,27 @@ function apiErrorMessage(error) {
 function provisioningLabel(status) {
   const normalized = String(status || '').trim().toLowerCase();
   if (normalized === 'provisioned') return 'Provisioned';
+  if (normalized === 'profile_only') return 'Profile Only';
   if (normalized.includes('fail') || normalized.includes('error')) return 'Failed provisioning';
   return 'Unknown provisioning';
 }
 
+function inviteLifecycleLabel(profile = {}) {
+  if (!profile.auth_user_id) return 'Profile Only';
+  if (profile.requires_password_change === true) return 'Password Change Required';
+  const metadata = profile.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
+  const status = String(metadata.invite_status || '').trim().toLowerCase();
+  const method = String(metadata.invite_method || '').trim().toLowerCase();
+  if (status === 'accepted') return 'Password Set / Accepted';
+  if (method === 'manual_setup_link') return 'Manual Setup Link Generated';
+  if (status === 'password_reset_sent') return 'Password Change Required';
+  if (status === 'sent') return 'Invite Sent';
+  return profile.auth_user_id ? 'Login Enabled' : 'Profile Only';
+}
+
 function mapProfile(profile, hierarchy = null) {
   const isActive = profile?.is_active === true;
+  const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
   return {
     id: profile.id,
     raw: profile,
@@ -66,11 +81,13 @@ function mapProfile(profile, hierarchy = null) {
     designation: profile.designation || '',
     department: profile.department || '',
     business: profile.business || '',
+    avatarUrl: metadata.profile_image_url || '',
     status: profile.status || (isActive ? 'Active' : 'Inactive'),
     isActive,
     authUserId: profile.auth_user_id || '',
     loginEnabled: Boolean(profile.auth_user_id),
     loginLabel: profile.auth_user_id ? 'Login Enabled' : 'Profile Only',
+    inviteLabel: inviteLifecycleLabel(profile),
     accountStatus: isActive ? 'Active' : 'Inactive',
     webAccess: profile.web_access_enabled !== false,
     mobileAccess: profile.mobile_access_enabled !== false,
@@ -124,6 +141,7 @@ export default function UserManagement() {
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState('');
+  const [messageLink, setMessageLink] = useState('');
   const [importOpen, setImportOpen] = useState(false);
   const [importReview, setImportReview] = useState(null);
   const [importEmployees, setImportEmployees] = useState([]);
@@ -189,9 +207,21 @@ export default function UserManagement() {
     setRefreshVersion((value) => value + 1);
   }
 
-  function showMessage(text) {
+  function showMessage(text, link = '') {
     setMessage(text);
-    window.setTimeout(() => setMessage(''), 5000);
+    setMessageLink(link);
+    window.setTimeout(() => {
+      setMessage('');
+      setMessageLink('');
+    }, link ? 30000 : 5000);
+  }
+
+  function showInviteMessage(invite, fallback) {
+    if (invite?.setup_link) {
+      showMessage(invite.message || 'Manual setup link generated. Share this link with the employee.', invite.setup_link);
+      return;
+    }
+    showMessage(invite?.message || fallback);
   }
 
   function openAddUser() {
@@ -248,10 +278,8 @@ export default function UserManagement() {
       refreshList();
       if (formMode === 'edit') {
         showMessage('User profile updated.');
-      } else if (result.invite?.setup_link) {
-        showMessage(`${result.invite.message} Link: ${result.invite.setup_link}`);
       } else {
-        showMessage(result.invite?.message || 'User account created and invite prepared.');
+        showInviteMessage(result.invite, 'User account created and invite prepared.');
       }
     } catch (error) {
       setFormError(apiErrorMessage(error));
@@ -337,7 +365,7 @@ export default function UserManagement() {
       setEnableLoginEmail('');
       setEnableLoginMobile('');
       refreshList();
-      showMessage(result.invite?.setup_link ? `${result.invite.message} Link: ${result.invite.setup_link}` : result.invite?.message || 'Login access enabled.');
+      showInviteMessage(result.invite, 'Login access enabled.');
     } catch (error) {
       showMessage(apiErrorMessage(error));
     } finally {
@@ -516,9 +544,23 @@ export default function UserManagement() {
       {activeTab === 'Employees' ? renderEmployees() : placeholderText(activeTab)}
 
       {message ? (
-        <div className="fixed bottom-5 right-5 z-[70] flex max-w-lg items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 shadow-xl">
-          <span>{message}</span>
-          <button type="button" aria-label="Dismiss message" onClick={() => setMessage('')} className="grid h-7 w-7 place-items-center rounded-full text-slate-400 hover:bg-slate-50"><X className="h-4 w-4" /></button>
+        <div className="fixed bottom-5 right-5 z-[70] max-w-xl rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 shadow-xl">
+          <div className="flex items-start gap-3">
+            <span className="min-w-0 flex-1">{message}</span>
+            <button type="button" aria-label="Dismiss message" onClick={() => { setMessage(''); setMessageLink(''); }} className="grid h-7 w-7 place-items-center rounded-full text-slate-400 hover:bg-slate-50"><X className="h-4 w-4" /></button>
+          </div>
+          {messageLink ? (
+            <div className="mt-3 flex gap-2">
+              <input readOnly value={messageLink} className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-600" />
+              <button
+                type="button"
+                onClick={() => navigator.clipboard?.writeText(messageLink)}
+                className="focus-ring rounded-lg border border-qpms-200 px-3 text-xs font-black text-qpms-700"
+              >
+                Copy
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

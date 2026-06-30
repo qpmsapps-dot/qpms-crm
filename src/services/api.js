@@ -106,6 +106,13 @@ export function createProfileAvatarUpload(payload) {
   });
 }
 
+export function completePasswordSetup() {
+  return adminApiRequest({
+    method: 'POST',
+    url: '/api/profile/password-setup-complete',
+  });
+}
+
 export function getAdminUsers(params = {}) {
   return adminApiRequest({
     method: 'GET',

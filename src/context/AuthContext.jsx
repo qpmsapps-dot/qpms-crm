@@ -29,6 +29,7 @@ function profileToUser(profile, sessionUser) {
   if (!profile && !sessionUser) return null;
   const email = profile?.email || sessionUser?.email || '';
   const role = normalizeAppRole(profile?.role || sessionUser?.user_metadata?.role || 'BD');
+  const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
   const user = {
     id: profile?.auth_user_id || sessionUser?.id || profile?.id,
     profileId: profile?.id || '',
@@ -42,6 +43,9 @@ function profileToUser(profile, sessionUser) {
     status: profile?.status || 'Active',
     webAccessEnabled: profile?.web_access_enabled === true,
     authProvider: 'supabase',
+    requiresPasswordChange: profile?.requires_password_change === true,
+    metadata,
+    profileImageUrl: metadata.profile_image_url || '',
   };
   return {
     ...user,
@@ -263,6 +267,17 @@ export function AuthProvider({ children }) {
     return nextUser;
   }, []);
 
+  const refreshUserProfile = useCallback(async () => {
+    if (!isSupabaseConfigured || !supabase) return null;
+    const { data, error } = await supabase.auth.getSession();
+    if (error) throw error;
+    const nextUser = await fetchProfileForSession(data.session);
+    setUserState(nextUser);
+    setAuthStatus('ready');
+    setAuthError('');
+    return nextUser;
+  }, []);
+
   const logout = useCallback(async () => {
     if (isSupabaseConfigured && supabase && !isDemoReadOnlyUser(user)) {
       await supabase.auth.signOut();
@@ -282,6 +297,7 @@ export function AuthProvider({ children }) {
       loginBackend,
       loginWithAppPassword,
       loginWithPassword,
+      refreshUserProfile,
       logout,
       authStatus,
       authError,
@@ -289,7 +305,7 @@ export function AuthProvider({ children }) {
       isProductionAuthMode,
       backendToken,
     }),
-    [user, setUser, loginBackend, loginWithAppPassword, loginWithPassword, logout, authStatus, authError, backendToken],
+    [user, setUser, loginBackend, loginWithAppPassword, loginWithPassword, refreshUserProfile, logout, authStatus, authError, backendToken],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
