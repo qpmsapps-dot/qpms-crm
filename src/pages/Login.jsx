@@ -54,6 +54,10 @@ export default function Login() {
       try {
         const nextUser = await loginWithPassword(normalizedUsername, password);
         setIsSubmitting(false);
+        if (nextUser?.requiresPasswordChange) {
+          navigate('/set-password', { replace: true });
+          return nextUser;
+        }
         setIsWelcoming(true);
         window.setTimeout(() => {
           navigate('/dashboard', { replace: true });

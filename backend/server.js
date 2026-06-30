@@ -1285,6 +1285,28 @@ function passwordSetupRedirectUrl() {
   return `${String(origin).replace(/\/+$/, '')}/set-password`;
 }
 
+function currentProfileMetadata(profileOrBody = {}) {
+  return profileOrBody?.metadata &&
+    typeof profileOrBody.metadata === 'object' &&
+    !Array.isArray(profileOrBody.metadata)
+    ? profileOrBody.metadata
+    : {};
+}
+
+function inviteMetadataForResult(invite = {}, timestamp = new Date().toISOString()) {
+  const method = invite.method === 'supabase_invite_link'
+    ? 'manual_setup_link'
+    : invite.method === 'temporary_password'
+      ? 'temporary_password'
+      : 'supabase_invite_email';
+  return {
+    invite_status: invite.method === 'temporary_password' ? 'password_change_required' : 'sent',
+    invite_sent_at: timestamp,
+    invite_method: method,
+    invite_redirect_to: '/set-password',
+  };
+}
+
 async function createInvitedAuthUser(client, { email, authMetadata, password }) {
   const redirectTo = passwordSetupRedirectUrl();
   const inviteResult = {
@@ -2126,13 +2148,57 @@ async function updateOwnProfile(request, response) {
 app.put('/api/profile/me', requireSupabaseJwt, updateOwnProfile);
 app.patch('/api/profile/me', requireSupabaseJwt, updateOwnProfile);
 
+app.post('/api/profile/password-setup-complete', requireSupabaseJwt, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const completedAt = new Date().toISOString();
+    const metadata = {
+      ...currentProfileMetadata(request.profile),
+      invite_status: 'accepted',
+      invite_accepted_at: completedAt,
+      password_setup_completed_at: completedAt,
+    };
+    const { data, error } = await client
+      .from('profiles')
+      .update({
+        requires_password_change: false,
+        metadata,
+        last_profile_sync_at: completedAt,
+      })
+      .eq('id', request.profile.id)
+      .eq('auth_user_id', request.authUser.id)
+      .select('employee_code,full_name,requires_password_change,metadata')
+      .single();
+    if (error) throw error;
+    response.json({
+      ok: true,
+      employee_code: data.employee_code,
+      full_name: data.full_name,
+      requires_password_change: data.requires_password_change,
+      metadata: data.metadata,
+    });
+  } catch (error) {
+    respondUserManagementError(response, error);
+  }
+});
+
 app.post('/api/profile/avatar', requireSupabaseJwt, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
+    const allowedAvatarTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+    const maxAvatarBytes = 2 * 1024 * 1024;
     const fileName = textOrNull(request.body?.fileName) || 'avatar.png';
     const contentType = textOrNull(request.body?.contentType) || 'image/png';
+    const fileSize = Number(request.body?.fileSize || 0);
+    if (!allowedAvatarTypes.has(contentType)) {
+      throw userManagementHttpError(400, 'Profile avatar must be a JPG, PNG, or WebP image.');
+    }
+    if (!Number.isFinite(fileSize) || fileSize < 1 || fileSize > maxAvatarBytes) {
+      throw userManagementHttpError(400, 'Profile avatar image must be 2 MB or smaller.');
+    }
     const bucket = textOrNull(process.env.SUPABASE_PROFILE_AVATAR_BUCKET) || 'profile-avatars';
-    const path = `${request.profile.employee_code || request.profile.id}/${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'avatar.png';
+    const path = `avatars/${request.authUser.id}/${Date.now()}_${safeFileName}`;
     const { data, error } = await client.storage.from(bucket).createSignedUploadUrl(path, {
       upsert: true,
       contentType,
@@ -2140,9 +2206,8 @@ app.post('/api/profile/avatar', requireSupabaseJwt, async (request, response) =>
     if (error) {
       response.status(503).json({
         ok: false,
-        message:
-          'Profile image upload is not available because the Supabase Storage bucket is not configured.',
-        todo: `Create a private/public Supabase Storage bucket named ${bucket} or set SUPABASE_PROFILE_AVATAR_BUCKET.`,
+        message: 'Profile avatar storage bucket is not configured.',
+        todo: `Apply supabase/migrations_2_0/012_profile_avatar_storage.sql or create bucket ${bucket}.`,
       });
       return;
     }
@@ -2519,7 +2584,7 @@ app.post(
 
       await ensureUniqueAuthEmail(client, email);
       const hierarchyResolution = await buildCreateHierarchyMetadata(client, body, employeeCode);
-      const createBody = {
+      let createBody = {
         ...body,
         display_name: textOrNull(body.display_name) || fullName,
         metadata: {
@@ -2548,6 +2613,13 @@ app.post(
         authMetadata,
       });
       createdAuthUser = invitedAuthUser;
+      createBody = {
+        ...createBody,
+        metadata: {
+          ...currentProfileMetadata(createBody),
+          ...inviteMetadataForResult(inviteResult),
+        },
+      };
 
       const profilePayload = profileCreatePayload(
         createBody,
@@ -2713,6 +2785,10 @@ app.post(
           auth_user_id: authUser.id,
           email,
           mobile: textOrNull(request.body?.mobile) || profile.mobile,
+          metadata: {
+            ...currentProfileMetadata(profile),
+            ...inviteMetadataForResult(invite),
+          },
           auth_provisioning_status: 'provisioned',
           auth_provisioning_error: null,
           auth_provisioned_at: new Date().toISOString(),
@@ -3079,6 +3155,17 @@ app.post(
         .from('profiles')
         .update({
           requires_password_change: requiresPasswordChange,
+          metadata: {
+            ...currentProfileMetadata(oldProfile),
+            ...(requiresPasswordChange
+              ? {
+                  invite_status: 'password_reset_sent',
+                  invite_sent_at: new Date().toISOString(),
+                  invite_method: 'admin_reset',
+                  invite_redirect_to: '/set-password',
+                }
+              : {}),
+          },
           auth_provisioning_status: 'provisioned',
           auth_provisioning_error: null,
           last_profile_sync_at: new Date().toISOString(),

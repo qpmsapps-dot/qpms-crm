@@ -88,7 +88,7 @@ function ProfileField({ label, value, onChange, readOnly = false, type = 'text' 
 
 export default function Profile() {
   usePageTitle('My Profile');
-  const { user } = useAuth();
+  const { user, refreshUserProfile } = useAuth();
   const [profile, setProfile] = useState(emptyProfile);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -159,6 +159,7 @@ export default function Profile() {
       }
       const result = await updateMyProfile(payload);
       setProfile({ ...emptyProfile, ...(result.profile || {}) });
+      await refreshUserProfile?.();
       setMessage('Profile updated.');
     } catch (saveError) {
       setError(saveError.message || 'Profile update failed.');
@@ -174,12 +175,21 @@ export default function Profile() {
       setError('Profile image upload is unavailable because Supabase is not configured.');
       return;
     }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setError('Profile image must be a JPG, PNG, or WebP file.');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setError('Profile image must be 2 MB or smaller.');
+      return;
+    }
     setError('');
     setMessage('');
     try {
       const upload = await createProfileAvatarUpload({
         fileName: file.name,
         contentType: file.type || 'image/png',
+        fileSize: file.size,
       });
       const { error: uploadError } = await supabase.storage
         .from(upload.bucket)
