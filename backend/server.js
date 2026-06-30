@@ -298,10 +298,6 @@ function normalizeDecision(value) {
   return '';
 }
 
-function createApiId(prefix) {
-  return `${prefix}-${randomUUID()}`;
-}
-
 function createToken(user) {
   const token = `qpms-demo-${user.id}-${randomUUID()}`;
   apiSessions.set(token, user);
@@ -793,6 +789,10 @@ function profileCreatePayload(body, authUserId, usedTemporaryPassword) {
   const employeeCode = normalizeEmployeeCode(body.employee_code);
   const fullName = textOrNull(body.full_name);
   const email = normalizeEmail(body.email);
+  const sourceMetadata =
+    body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+      ? body.metadata
+      : {};
   return {
     auth_user_id: authUserId,
     employee_code: employeeCode,
@@ -808,6 +808,10 @@ function profileCreatePayload(body, authUserId, usedTemporaryPassword) {
     business: textOrNull(body.business),
     status: 'Active',
     is_active: true,
+    metadata: {
+      ...sourceMetadata,
+      profile_completed: Boolean(sourceMetadata.profile_completed),
+    },
     requires_password_change: usedTemporaryPassword
       ? true
       : booleanValue(body.requires_password_change, false),
@@ -818,6 +822,82 @@ function profileCreatePayload(body, authUserId, usedTemporaryPassword) {
     auth_provisioned_at: new Date().toISOString(),
     last_profile_sync_at: new Date().toISOString(),
   };
+}
+
+const EXECUTIVE_PROFILE_ROLE_KEYS = new Set(['ADMIN', 'MD', 'COO']);
+const OPERATIONAL_PROFILE_ROLE_KEYS = new Set([
+  'BUSINESSHEAD',
+  'BRANCHHEAD',
+  'GM',
+  'GENERALMANAGER',
+  'OPERATIONSMANAGER',
+  'KAM',
+  'FO',
+  'FIELDOFFICER',
+]);
+
+const SELF_PROFILE_METADATA_FIELDS = ['profile_image_url', 'date_of_birth', 'profile_completed'];
+
+function profileRoleKey(role) {
+  return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+function isOperationalProfileRole(role) {
+  return OPERATIONAL_PROFILE_ROLE_KEYS.has(profileRoleKey(role));
+}
+
+function calculateProfileCompletion(profile = {}) {
+  const roleKey = profileRoleKey(profile.role);
+  const checks = EXECUTIVE_PROFILE_ROLE_KEYS.has(roleKey)
+    ? [
+        profile.full_name,
+        profile.employee_code,
+        profile.email,
+        profile.mobile,
+        profile.role,
+      ]
+    : [
+        profile.full_name,
+        profile.employee_code,
+        profile.email || profile.mobile,
+        profile.role,
+        profile.state,
+        profile.business,
+        profile.designation,
+      ];
+  const completed = checks.filter((value) => textOrNull(value)).length;
+  return Math.round((completed / checks.length) * 100);
+}
+
+function selfProfilePatchPayload(body, currentProfile) {
+  const patch = {};
+  const editableTextFields = ['full_name', 'display_name', 'mobile'];
+  if (isOperationalProfileRole(currentProfile?.role)) {
+    editableTextFields.push('state', 'business');
+  }
+  for (const field of editableTextFields) {
+    if (!hasOwn(body, field)) continue;
+    patch[field] = textOrNull(body[field]);
+  }
+
+  const currentMetadata =
+    currentProfile?.metadata && typeof currentProfile.metadata === 'object' && !Array.isArray(currentProfile.metadata)
+      ? currentProfile.metadata
+      : {};
+  const suppliedMetadata =
+    body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+      ? body.metadata
+      : {};
+  const nextMetadata = { ...currentMetadata };
+  for (const field of SELF_PROFILE_METADATA_FIELDS) {
+    if (!hasOwn(body, field) && !hasOwn(suppliedMetadata, field)) continue;
+    const rawValue = hasOwn(body, field) ? body[field] : suppliedMetadata[field];
+    if (field === 'profile_completed') continue;
+    nextMetadata[field] = textOrNull(rawValue);
+  }
+  nextMetadata.profile_completed = calculateProfileCompletion({ ...currentProfile, ...patch });
+  patch.metadata = nextMetadata;
+  return patch;
 }
 
 function profilePatchPayload(body) {
@@ -888,6 +968,392 @@ async function ensureUniqueProfileIdentity(client, { employeeCode, email, exclud
       throw userManagementHttpError(409, 'Email is already linked to another profile.');
     }
   }
+}
+
+async function ensureUniqueAuthEmail(client, email) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return;
+  let page = 1;
+  const perPage = 1000;
+  while (true) {
+    const { data, error } = await client.auth.admin.listUsers({ page, perPage });
+    if (error) throw error;
+    const exists = (data.users || []).some(
+      (authUser) => normalizeEmail(authUser.email) === normalizedEmail,
+    );
+    if (exists) {
+      throw userManagementHttpError(409, 'Email already exists in Supabase Auth.');
+    }
+    if (!data.nextPage || !(data.users || []).length) break;
+    page = data.nextPage;
+  }
+}
+
+const CREATE_USER_ROLE_OPTIONS = new Set([
+  'MD',
+  'COO',
+  'GM',
+  'BUSINESSHEAD',
+  'BRANCHHEAD',
+  'OPERATIONSMANAGER',
+  'KAM',
+  'FO',
+  'ADMIN',
+]);
+
+const OPERATIONAL_CREATE_ROLE_KEYS = new Set([
+  'FO',
+  'KAM',
+  'OPERATIONSMANAGER',
+  'BRANCHHEAD',
+  'BUSINESSHEAD',
+]);
+
+function createUserRoleKey(role) {
+  return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+function isActiveProfileForHierarchy(profile) {
+  return profile?.is_active === true &&
+    String(profile.status || '').trim().toLowerCase() === 'active';
+}
+
+function profileMatchesStateBusiness(profile, state, business) {
+  const requestedState = textOrNull(state);
+  const requestedBusiness = textOrNull(business);
+  if (requestedState && String(profile.state || '').trim() !== requestedState) return false;
+  if (requestedBusiness && String(profile.business || '').trim() !== requestedBusiness) return false;
+  return true;
+}
+
+function profileOption(profile) {
+  if (!profile) return null;
+  return {
+    id: profile.id,
+    employee_code: profile.employee_code || '',
+    full_name: profile.full_name || profile.display_name || profile.email || '',
+    email: profile.email || '',
+    role: profile.role || '',
+    state: profile.state || '',
+    business: profile.business || '',
+    label: `${profile.full_name || profile.display_name || profile.email || 'Unnamed'} - ${profile.employee_code || 'No Code'}`,
+  };
+}
+
+function pickPreferredLeader(profiles, role, preferredCode) {
+  const roleKey = createUserRoleKey(role);
+  const activeMatches = profiles.filter(
+    (profile) => isActiveProfileForHierarchy(profile) && createUserRoleKey(profile.role) === roleKey,
+  );
+  const preferred = activeMatches.find(
+    (profile) => normalizeEmployeeCode(profile.employee_code) === normalizeEmployeeCode(preferredCode),
+  );
+  return preferred || activeMatches[0] || null;
+}
+
+async function loadActiveHierarchyProfiles(client) {
+  const rows = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await client
+      .from('profiles')
+      .select(USER_MANAGEMENT_PROFILE_SELECT)
+      .eq('is_active', true)
+      .eq('status', 'Active')
+      .order('full_name', { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if ((data || []).length < pageSize) break;
+  }
+  return rows;
+}
+
+function buildHierarchyOptionsFromProfiles(profiles, { state, business } = {}) {
+  const filteredByMapping = profiles.filter((profile) =>
+    profileMatchesStateBusiness(profile, state, business),
+  );
+  const byRole = (role) =>
+    filteredByMapping
+      .filter((profile) => createUserRoleKey(profile.role) === createUserRoleKey(role))
+      .map(profileOption)
+      .filter(Boolean);
+  const allByRole = (role) =>
+    profiles
+      .filter((profile) => createUserRoleKey(profile.role) === createUserRoleKey(role))
+      .map(profileOption)
+      .filter(Boolean);
+  return {
+    operationsManagers: byRole('Operations Manager'),
+    branchHeads: byRole('Branch Head'),
+    businessHeads: byRole('Business Head'),
+    gms: allByRole('GM'),
+    coo: profileOption(pickPreferredLeader(profiles, 'COO', 'QPMSTN16278')),
+    md: profileOption(pickPreferredLeader(profiles, 'MD', 'QPMSTN15789')),
+  };
+}
+
+function optionByCode(options = [], code) {
+  const normalized = normalizeEmployeeCode(code);
+  return options.find((option) => normalizeEmployeeCode(option.employee_code) === normalized) || null;
+}
+
+function requiredReportingLabel(roleKey) {
+  if (roleKey === 'FO') return 'Reporting Operations Manager';
+  if (roleKey === 'KAM') return 'Reporting To';
+  if (roleKey === 'OPERATIONSMANAGER') return 'Branch Head';
+  if (roleKey === 'BRANCHHEAD') return 'COO';
+  if (roleKey === 'BUSINESSHEAD' || roleKey === 'GM') return 'COO';
+  if (roleKey === 'COO') return 'MD';
+  return null;
+}
+
+function hierarchyWarningsForOptions(roleKey, options) {
+  const warnings = [];
+  if (!options.md) warnings.push('MD profile not found. Please create MD user first.');
+  if (!options.coo && !['MD', 'COO', 'ADMIN'].includes(roleKey)) {
+    warnings.push('COO profile not found. Please create COO user first.');
+  }
+  return warnings;
+}
+
+async function buildCreateHierarchyMetadata(client, body, employeeCode) {
+  const role = canonicalProfileRole(body.role, 'FO');
+  const roleKey = createUserRoleKey(role);
+  const state = textOrNull(body.state);
+  const business = textOrNull(body.business);
+  const reportingManagerCode = normalizeEmployeeCode(
+    body.reporting_manager_employee_code || body.manager_employee_code,
+  );
+  const profiles = await loadActiveHierarchyProfiles(client);
+  const options = buildHierarchyOptionsFromProfiles(profiles, { state, business });
+  const warnings = hierarchyWarningsForOptions(roleKey, options);
+  let reportingManager = null;
+  let operationsManager = null;
+  let branchHead = null;
+  let coo = options.coo;
+  let md = options.md;
+
+  if (roleKey === 'MD' || roleKey === 'ADMIN') {
+    return {
+      metadata: {
+        reporting_manager_employee_code: null,
+        reporting_manager_name: null,
+        operations_manager_employee_code: null,
+        branch_head_employee_code: null,
+        coo_employee_code: null,
+        md_employee_code: roleKey === 'MD' ? employeeCode : md?.employee_code || null,
+        hierarchy_path: roleKey === 'MD' ? [employeeCode] : [employeeCode, md?.employee_code].filter(Boolean),
+        hierarchy_warnings: warnings,
+      },
+      hierarchyFields: {},
+      warnings,
+    };
+  }
+
+  if (roleKey === 'COO') {
+    if (!md) throw userManagementHttpError(400, 'MD profile not found. Please create MD user first.');
+    reportingManager = md;
+  } else if (roleKey === 'BRANCHHEAD' || roleKey === 'BUSINESSHEAD' || roleKey === 'GM') {
+    if (!coo) throw userManagementHttpError(400, 'COO profile not found. Please create COO user first.');
+    reportingManager = coo;
+  } else if (roleKey === 'OPERATIONSMANAGER') {
+    branchHead = optionByCode(options.branchHeads, reportingManagerCode);
+    if (!branchHead) throw userManagementHttpError(400, 'Branch Head is required for Operations Manager.');
+    reportingManager = branchHead;
+  } else if (roleKey === 'FO') {
+    operationsManager = optionByCode(options.operationsManagers, reportingManagerCode);
+    if (!operationsManager) throw userManagementHttpError(400, 'Reporting Operations Manager is required for FO.');
+    reportingManager = operationsManager;
+    branchHead = options.branchHeads[0] || null;
+    if (!branchHead) warnings.push('Branch Head profile not found for selected State and Business.');
+  } else if (roleKey === 'KAM') {
+    reportingManager =
+      optionByCode(options.operationsManagers, reportingManagerCode) ||
+      optionByCode(options.branchHeads, reportingManagerCode);
+    if (!reportingManager) throw userManagementHttpError(400, 'Reporting To is required for KAM.');
+    operationsManager = createUserRoleKey(reportingManager.role) === 'OPERATIONSMANAGER' ? reportingManager : null;
+    branchHead =
+      createUserRoleKey(reportingManager.role) === 'BRANCHHEAD'
+        ? reportingManager
+        : options.branchHeads[0] || null;
+  }
+
+  if (['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD', 'BUSINESSHEAD', 'GM'].includes(roleKey) && !coo) {
+    throw userManagementHttpError(400, 'COO profile not found. Please create COO user first.');
+  }
+  if (roleKey !== 'MD' && !md) {
+    throw userManagementHttpError(400, 'MD profile not found. Please create MD user first.');
+  }
+
+  const hierarchyPath = [
+    employeeCode,
+    operationsManager?.employee_code,
+    branchHead?.employee_code,
+    roleKey === 'COO' ? employeeCode : coo?.employee_code,
+    roleKey === 'MD' ? employeeCode : md?.employee_code,
+  ].filter(Boolean);
+  const metadata = {
+    reporting_manager_employee_code: reportingManager?.employee_code || null,
+    reporting_manager_name: reportingManager?.full_name || null,
+    operations_manager_employee_code: operationsManager?.employee_code || null,
+    branch_head_employee_code: branchHead?.employee_code || null,
+    coo_employee_code: roleKey === 'COO' ? employeeCode : coo?.employee_code || null,
+    md_employee_code: md?.employee_code || null,
+    hierarchy_path: Array.from(new Set(hierarchyPath)),
+    hierarchy_warnings: warnings,
+  };
+  return {
+    metadata,
+    hierarchyFields: {
+      manager_employee_code: metadata.reporting_manager_employee_code,
+      business_head_employee_code:
+        roleKey === 'BUSINESSHEAD' ? employeeCode : normalizeEmployeeCode(body.business_head_employee_code) || null,
+      gm_employee_code: roleKey === 'GM' ? employeeCode : normalizeEmployeeCode(body.gm_employee_code) || null,
+      coo_employee_code: metadata.coo_employee_code,
+      hierarchy_path: metadata.hierarchy_path,
+      metadata,
+    },
+    warnings,
+  };
+}
+
+function validateCreateUserBody(body) {
+  const roleKey = createUserRoleKey(body.role);
+  if (!CREATE_USER_ROLE_OPTIONS.has(roleKey)) {
+    throw userManagementHttpError(400, 'role must be one of MD, COO, GM, Business Head, Branch Head, Operations Manager, KAM, FO, or Admin.');
+  }
+  if (body.create_profile_only === true && roleKey === 'MD') return;
+  if (!textOrNull(body.mobile)) throw userManagementHttpError(400, 'mobile is required.');
+  if (OPERATIONAL_CREATE_ROLE_KEYS.has(roleKey) && !textOrNull(body.state)) {
+    throw userManagementHttpError(400, 'state is required for this role.');
+  }
+  if (OPERATIONAL_CREATE_ROLE_KEYS.has(roleKey) && !textOrNull(body.business)) {
+    throw userManagementHttpError(400, 'business is required for this role.');
+  }
+  const requiredLabel = requiredReportingLabel(roleKey);
+  if (requiredLabel && ['FO', 'KAM', 'OPERATIONSMANAGER'].includes(roleKey) && !textOrNull(body.reporting_manager_employee_code || body.manager_employee_code)) {
+    throw userManagementHttpError(400, `${requiredLabel} is required.`);
+  }
+}
+
+function profileOnlyMdPayload(body) {
+  const employeeCode = normalizeEmployeeCode(body.employee_code);
+  const fullName = textOrNull(body.full_name);
+  const email = normalizeEmail(body.email);
+  const metadata = body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+    ? body.metadata
+    : {};
+  return {
+    auth_user_id: null,
+    employee_code: employeeCode,
+    username: textOrNull(body.username) || employeeCode,
+    full_name: fullName,
+    display_name: textOrNull(body.display_name) || fullName,
+    mobile: textOrNull(body.mobile),
+    email: email || null,
+    state: textOrNull(body.state),
+    role: 'MD',
+    designation: textOrNull(body.designation),
+    department: textOrNull(body.department),
+    business: textOrNull(body.business),
+    status: 'Active',
+    is_active: true,
+    metadata: {
+      ...metadata,
+      reporting_manager_employee_code: null,
+      reporting_manager_name: null,
+      operations_manager_employee_code: null,
+      branch_head_employee_code: null,
+      coo_employee_code: null,
+      md_employee_code: employeeCode,
+      hierarchy_path: [employeeCode],
+      profile_only: true,
+    },
+    requires_password_change: false,
+    mobile_access_enabled: booleanValue(body.mobile_access_enabled, true),
+    web_access_enabled: booleanValue(body.web_access_enabled, true),
+    auth_provisioning_status: 'profile_only',
+    auth_provisioning_error: null,
+    auth_provisioned_at: null,
+    last_profile_sync_at: new Date().toISOString(),
+  };
+}
+
+function passwordSetupRedirectUrl() {
+  const origin = allowedOrigins[0] || process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
+  return `${String(origin).replace(/\/+$/, '')}/set-password`;
+}
+
+async function createInvitedAuthUser(client, { email, authMetadata, password }) {
+  const redirectTo = passwordSetupRedirectUrl();
+  const inviteResult = {
+    method: 'supabase_invite',
+    email_sent: false,
+    setup_link: null,
+    message: 'Invite email sent. The employee can set their own password from the email link.',
+    warning: null,
+  };
+
+  if (!password) {
+    const { data, error } = await client.auth.admin.inviteUserByEmail(email, {
+      data: authMetadata,
+      redirectTo,
+    });
+    if (!error && data?.user) {
+      return { user: data.user, invite: { ...inviteResult, email_sent: true } };
+    }
+
+    const inviteError = error;
+    const { data: linkData, error: linkError } = await client.auth.admin.generateLink({
+      type: 'invite',
+      email,
+      options: {
+        data: authMetadata,
+        redirectTo,
+      },
+    });
+    if (!linkError && linkData?.user) {
+      return {
+        user: linkData.user,
+        invite: {
+          method: 'supabase_invite_link',
+          email_sent: false,
+          setup_link: linkData.properties?.action_link || null,
+          message:
+            'Account created. Email invite could not be sent because SMTP is not configured. Please share the password setup link manually.',
+          warning: safeAuthError(inviteError).message,
+        },
+      };
+    }
+
+    throw userManagementHttpError(
+      503,
+      'Supabase invite email and manual setup link generation both failed.',
+      {
+        invite_error: safeAuthError(inviteError),
+        link_error: safeAuthError(linkError),
+      },
+    );
+  }
+
+  const { data: authData, error: authError } = await client.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: authMetadata,
+  });
+  if (authError) throw authError;
+  return {
+    user: authData.user,
+    invite: {
+      method: 'temporary_password',
+      email_sent: false,
+      setup_link: null,
+      message: 'Account created with a temporary password. User must change password on first login.',
+      warning: null,
+    },
+  };
 }
 
 async function markProfileAuthSyncFailure(client, profileId, error) {
@@ -1610,6 +2076,89 @@ app.post('/api/auth/login', (request, response) => {
   });
 });
 
+app.get('/api/profile/me', requireSupabaseJwt, (request, response) => {
+  response.json({
+    ok: true,
+    profile: request.profile,
+    profile_completed: calculateProfileCompletion(request.profile),
+  });
+});
+
+async function updateOwnProfile(request, response) {
+  try {
+    const client = requireServiceRoleSupabase();
+    const patch = selfProfilePatchPayload(request.body || {}, request.profile);
+    if (!Object.keys(patch).length) {
+      throw userManagementHttpError(400, 'No supported profile fields were supplied.');
+    }
+    const { data, error } = await client
+      .from('profiles')
+      .update({
+        ...patch,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', request.profile.id)
+      .eq('auth_user_id', request.authUser.id)
+      .select(USER_MANAGEMENT_PROFILE_SELECT)
+      .single();
+    if (error) throw error;
+
+    if (data.auth_user_id) {
+      try {
+        await client.auth.admin.updateUserById(data.auth_user_id, {
+          user_metadata: profileMetadataForAuth(data),
+        });
+      } catch (authSyncError) {
+        console.warn('[myQPMS profile] Auth metadata sync failed', safeAuthError(authSyncError));
+      }
+    }
+
+    response.json({
+      ok: true,
+      profile: data,
+      profile_completed: data.metadata?.profile_completed || calculateProfileCompletion(data),
+    });
+  } catch (error) {
+    respondUserManagementError(response, error);
+  }
+}
+
+app.put('/api/profile/me', requireSupabaseJwt, updateOwnProfile);
+app.patch('/api/profile/me', requireSupabaseJwt, updateOwnProfile);
+
+app.post('/api/profile/avatar', requireSupabaseJwt, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const fileName = textOrNull(request.body?.fileName) || 'avatar.png';
+    const contentType = textOrNull(request.body?.contentType) || 'image/png';
+    const bucket = textOrNull(process.env.SUPABASE_PROFILE_AVATAR_BUCKET) || 'profile-avatars';
+    const path = `${request.profile.employee_code || request.profile.id}/${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const { data, error } = await client.storage.from(bucket).createSignedUploadUrl(path, {
+      upsert: true,
+      contentType,
+    });
+    if (error) {
+      response.status(503).json({
+        ok: false,
+        message:
+          'Profile image upload is not available because the Supabase Storage bucket is not configured.',
+        todo: `Create a private/public Supabase Storage bucket named ${bucket} or set SUPABASE_PROFILE_AVATAR_BUCKET.`,
+      });
+      return;
+    }
+    response.json({
+      ok: true,
+      bucket,
+      path,
+      token: data.token,
+      signedUrl: data.signedUrl,
+      publicUrl: client.storage.from(bucket).getPublicUrl(path).data.publicUrl,
+    });
+  } catch (error) {
+    respondUserManagementError(response, error);
+  }
+});
+
 app.get(
   '/api/admin/users/me',
   requireSupabaseJwt,
@@ -1627,6 +2176,31 @@ app.get(
       business: request.profile.business || null,
       hasUserManagementPermission: true,
     });
+  },
+);
+
+app.get(
+  '/api/users/hierarchy-options',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const roleKey = createUserRoleKey(request.query.role);
+      const profiles = await loadActiveHierarchyProfiles(client);
+      const options = buildHierarchyOptionsFromProfiles(profiles, {
+        state: textOrNull(request.query.state),
+        business: textOrNull(request.query.business),
+      });
+      response.json({
+        ok: true,
+        ...options,
+        warnings: hierarchyWarningsForOptions(roleKey, options),
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
   },
 );
 
@@ -1898,20 +2472,69 @@ app.post(
       if (!employeeCode) throw userManagementHttpError(400, 'employee_code is required.');
       if (!fullName) throw userManagementHttpError(400, 'full_name is required.');
       if (!email) {
-        throw userManagementHttpError(
-          400,
-          'email is required for Supabase Auth user creation; no placeholder-email strategy is configured.',
-        );
+        const isProfileOnlyMd =
+          body.create_profile_only === true && createUserRoleKey(body.role) === 'MD';
+        if (!isProfileOnlyMd) {
+          throw userManagementHttpError(
+            400,
+            'email is required for Supabase Auth user creation; no placeholder-email strategy is configured.',
+          );
+        }
       }
-      if (!password) {
-        throw userManagementHttpError(400, 'password or temporary_password is required.');
-      }
+      validateCreateUserBody(body);
       await ensureUniqueProfileIdentity(client, { employeeCode, email });
+
+      if (body.create_profile_only === true && createUserRoleKey(body.role) === 'MD') {
+        const profilePayload = profileOnlyMdPayload(body);
+        const { data: profile, error: profileError } = await client
+          .from('profiles')
+          .insert(profilePayload)
+          .select(USER_MANAGEMENT_PROFILE_SELECT)
+          .single();
+        if (profileError) throw profileError;
+        createdProfile = profile;
+        await writeUserManagementAudit(client, {
+          action: 'CREATE_PROFILE_ONLY_MD',
+          targetProfile: createdProfile,
+          newData: { profile: createdProfile },
+          metadata: {
+            auth_user_created: false,
+            profile_only: true,
+          },
+          request,
+        });
+        response.status(201).json({
+          ok: true,
+          profile: createdProfile,
+          hierarchy: null,
+          invite: {
+            method: 'profile_only',
+            email_sent: false,
+            setup_link: null,
+            message: 'MD profile created without login access.',
+          },
+        });
+        return;
+      }
+
+      await ensureUniqueAuthEmail(client, email);
+      const hierarchyResolution = await buildCreateHierarchyMetadata(client, body, employeeCode);
+      const createBody = {
+        ...body,
+        display_name: textOrNull(body.display_name) || fullName,
+        metadata: {
+          ...(body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+            ? body.metadata
+            : {}),
+          ...hierarchyResolution.metadata,
+        },
+        ...hierarchyResolution.hierarchyFields,
+      };
 
       const authMetadata = {
         employee_code: employeeCode,
         full_name: fullName,
-        display_name: textOrNull(body.display_name) || fullName,
+        display_name: textOrNull(createBody.display_name) || fullName,
         mobile: textOrNull(body.mobile),
         role: canonicalProfileRole(body.role, 'FO'),
         designation: textOrNull(body.designation),
@@ -1919,17 +2542,15 @@ app.post(
         business: textOrNull(body.business),
         state: textOrNull(body.state),
       };
-      const { data: authData, error: authError } = await client.auth.admin.createUser({
+      const { user: invitedAuthUser, invite: inviteResult } = await createInvitedAuthUser(client, {
         email,
         password,
-        email_confirm: true,
-        user_metadata: authMetadata,
+        authMetadata,
       });
-      if (authError) throw authError;
-      createdAuthUser = authData.user;
+      createdAuthUser = invitedAuthUser;
 
       const profilePayload = profileCreatePayload(
-        body,
+        createBody,
         createdAuthUser.id,
         Boolean(temporaryPassword),
       );
@@ -1985,7 +2606,7 @@ app.post(
         hierarchy = await saveHierarchy(
           client,
           createdProfile.employee_code,
-          body,
+          createBody,
           request.authUser.id,
         );
       } catch (hierarchyError) {
@@ -2017,6 +2638,8 @@ app.post(
         metadata: {
           auth_user_created: true,
           temporary_password_used: Boolean(temporaryPassword),
+          invite: inviteResult,
+          hierarchy_warnings: hierarchyResolution.warnings,
         },
         request,
       });
@@ -2024,6 +2647,95 @@ app.post(
         ok: true,
         profile: createdProfile,
         hierarchy,
+        invite: inviteResult,
+        hierarchyWarnings: hierarchyResolution.warnings,
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.post(
+  '/api/admin/users/:employeeCode/enable-login',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const employeeCode = normalizeEmployeeCode(request.params.employeeCode);
+      if (!employeeCode) throw userManagementHttpError(400, 'employeeCode is required.');
+
+      const { data: profile, error: profileError } = await client
+        .from('profiles')
+        .select(USER_MANAGEMENT_PROFILE_SELECT)
+        .ilike('employee_code', employeeCode)
+        .maybeSingle();
+      if (profileError) throw profileError;
+      if (!profile) throw userManagementHttpError(404, 'User profile not found.');
+      if (profile.auth_user_id) {
+        response.json({
+          ok: true,
+          profile,
+          invite: {
+            method: 'already_enabled',
+            email_sent: false,
+            setup_link: null,
+            message: 'Login access already enabled.',
+          },
+        });
+        return;
+      }
+
+      const email = normalizeEmail(request.body?.email || profile.email);
+      if (!email) throw userManagementHttpError(400, 'Email is required to enable login access.');
+      await ensureUniqueProfileIdentity(client, {
+        email,
+        excludeProfileId: profile.id,
+      });
+      await ensureUniqueAuthEmail(client, email);
+
+      const nextProfileForAuth = {
+        ...profile,
+        email,
+        mobile: textOrNull(request.body?.mobile) || profile.mobile,
+      };
+      const { user: authUser, invite } = await createInvitedAuthUser(client, {
+        email,
+        password: null,
+        authMetadata: profileMetadataForAuth(nextProfileForAuth),
+      });
+
+      const { data: updatedProfile, error: updateError } = await client
+        .from('profiles')
+        .update({
+          auth_user_id: authUser.id,
+          email,
+          mobile: textOrNull(request.body?.mobile) || profile.mobile,
+          auth_provisioning_status: 'provisioned',
+          auth_provisioning_error: null,
+          auth_provisioned_at: new Date().toISOString(),
+          last_profile_sync_at: new Date().toISOString(),
+        })
+        .eq('id', profile.id)
+        .select(USER_MANAGEMENT_PROFILE_SELECT)
+        .single();
+      if (updateError) throw updateError;
+
+      await writeUserManagementAudit(client, {
+        action: 'ENABLE_LOGIN_ACCESS',
+        targetProfile: updatedProfile,
+        oldData: profile,
+        newData: updatedProfile,
+        metadata: { invite },
+        request,
+      });
+
+      response.json({
+        ok: true,
+        profile: updatedProfile,
+        invite,
       });
     } catch (error) {
       respondUserManagementError(response, error);

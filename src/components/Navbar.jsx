@@ -1,4 +1,4 @@
-import { Bell, ChevronDown, LogOut, Menu, Moon, Search, SlidersHorizontal, Sun } from 'lucide-react';
+import { Bell, ChevronDown, LogOut, Menu, Moon, Search, SlidersHorizontal, Sun, UserRound } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/auth-context.js';
@@ -32,6 +32,11 @@ export default function Navbar({ onMenuClick, theme = 'light', onThemeToggle }) 
     logout();
     setIsAccountOpen(false);
     navigate('/login', { replace: true });
+  }
+
+  function handleProfileOpen() {
+    setIsAccountOpen(false);
+    navigate('/profile');
   }
 
   return (
@@ -102,12 +107,21 @@ export default function Navbar({ onMenuClick, theme = 'light', onThemeToggle }) 
           {isAccountOpen ? (
             <div
               role="menu"
-              className="absolute right-0 top-14 z-30 w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_18px_50px_rgba(15,23,42,0.16)] dark:border-slate-800 dark:bg-slate-900"
-            >
+            className="absolute right-0 top-14 z-30 w-60 rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_18px_50px_rgba(15,23,42,0.16)] dark:border-slate-800 dark:bg-slate-900"
+          >
               <div className="border-b border-slate-100 px-3 py-2.5 dark:border-slate-800">
                 <p className="truncate text-sm font-bold text-slate-950 dark:text-white">{displayName}</p>
                 <p className="truncate text-xs font-medium text-slate-500">{role}</p>
               </div>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={handleProfileOpen}
+                className="mt-2 flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <UserRound className="h-4 w-4" />
+                My Profile
+              </button>
               <button
                 type="button"
                 role="menuitem"

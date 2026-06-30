@@ -585,6 +585,10 @@ class _HomeScreenState extends State<HomeScreen>
         _toast(PermissionService.message);
         return;
       }
+      if (_shouldShowBatteryAdvisory()) {
+        final continueStart = await _confirmBatteryAdvisory();
+        if (continueStart != true) return;
+      }
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
@@ -713,6 +717,38 @@ class _HomeScreenState extends State<HomeScreen>
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  bool _shouldShowBatteryAdvisory() {
+    final status = PermissionService.batteryOptimizationStatus.toLowerCase();
+    return status == 'unknown' || status == 'restricted';
+  }
+
+  Future<bool?> _confirmBatteryAdvisory() async {
+    final brandHelp = await PermissionService.batteryGuidanceText();
+    if (!mounted) return false;
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Battery setting not confirmed'),
+        content: Text(
+          'Battery setting is not confirmed. Tracking may pause in background on some phones. Continue after enabling background activity.\n\n$brandHelp',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await PermissionService.openBatterySettings();
+              if (context.mounted) Navigator.pop(context, false);
+            },
+            child: const Text('Open Settings'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _resumeAttendance(Attendance attendance) async {
@@ -1614,7 +1650,7 @@ class _HomeScreenState extends State<HomeScreen>
             title: 'Tracking Health',
             trailing: FoStatusBadge(
               label: health == null ? 'Loading' : _overallHealthLabel(health),
-              color: health == null || _hasNeedsAction(health)
+              color: health == null || !_requiredPermissionsReady(health)
                   ? foOrange
                   : foGreen,
             ),
@@ -1627,16 +1663,22 @@ class _HomeScreenState extends State<HomeScreen>
             )
           else ...[
             _healthRow(
-              'GPS Permission',
+              'Location permission (Required)',
               health.locationPermissionLabel,
               health.locationPermission,
             ),
             _healthRow(
-              'Background Location',
-              health.backgroundLocationLabel,
-              health.backgroundLocation,
+              'Location service / GPS (Required)',
+              health.locationServiceLabel,
+              health.locationServiceEnabled
+                  ? HealthLevel.ok
+                  : HealthLevel.needsAction,
             ),
-            _healthRow('Battery', health.batteryLabel, health.battery),
+            _healthRow(
+              'Battery / background activity (Recommended)',
+              health.batteryLabel,
+              health.battery,
+            ),
             _healthRow('Tracking', health.trackingLabel, health.tracking),
             _plainHealthRow(
               'Last GPS',
@@ -1679,6 +1721,31 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
             ],
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _loadTrackingHealth,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('Refresh permission status'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _busy
+                      ? null
+                      : () async => PermissionService.openBatterySettings(),
+                  icon: const Icon(Icons.settings_rounded),
+                  label: const Text('Open Battery Settings'),
+                ),
+                TextButton(
+                  onPressed: _busy
+                      ? null
+                      : () async => PermissionService.openAppSettings(),
+                  child: const Text('Open App Settings'),
+                ),
+              ],
+            ),
           ],
         ],
       ),
@@ -1687,8 +1754,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   Widget _employeeTrackingStatusCard() {
     final health = _trackingHealth;
-    final permissionOk =
-        health == null || health.locationPermission == HealthLevel.ok;
+    final permissionOk = health == null || _requiredPermissionsReady(health);
     final lastSync = health?.lastSyncAt ?? TrackingService.lastSuccessfulSync;
     return FoCard(
       child: Row(
@@ -1704,9 +1770,9 @@ class _HomeScreenState extends State<HomeScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'App is ready',
-                  style: TextStyle(
+                Text(
+                  permissionOk ? 'App is ready' : 'App not ready',
+                  style: const TextStyle(
                     color: foNavy,
                     fontSize: 16,
                     fontWeight: FontWeight.w900,
@@ -1715,8 +1781,8 @@ class _HomeScreenState extends State<HomeScreen>
                 const SizedBox(height: 4),
                 Text(
                   permissionOk
-                      ? 'Location permission OK'
-                      : 'Location permission needs attention',
+                      ? 'Required location settings OK'
+                      : 'Allow all the time location and turn GPS on',
                   style: const TextStyle(
                     color: Color(0xFF53607D),
                     fontWeight: FontWeight.w700,
@@ -1777,16 +1843,13 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  bool _hasNeedsAction(TrackingHealthSnapshot health) {
-    return health.locationPermission == HealthLevel.needsAction ||
-        health.backgroundLocation == HealthLevel.needsAction ||
-        health.battery == HealthLevel.needsAction ||
-        health.tracking == HealthLevel.needsAction;
+  String _overallHealthLabel(TrackingHealthSnapshot health) {
+    return _requiredPermissionsReady(health) ? 'App ready' : 'Needs Action';
   }
 
-  String _overallHealthLabel(TrackingHealthSnapshot health) {
-    if (_hasNeedsAction(health)) return 'Needs Action';
-    return 'OK';
+  bool _requiredPermissionsReady(TrackingHealthSnapshot health) {
+    return health.locationPermission == HealthLevel.ok &&
+        health.locationServiceEnabled;
   }
 
   Widget _dutyCard(bool active) {

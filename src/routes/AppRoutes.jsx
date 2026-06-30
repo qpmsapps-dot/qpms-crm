@@ -4,6 +4,8 @@ import App from '../App.jsx';
 import MainLayout from '../layouts/MainLayout.jsx';
 import AccountDeletion from '../pages/AccountDeletion.jsx';
 import Login from '../pages/Login.jsx';
+import Profile from '../pages/Profile.jsx';
+import SetPassword from '../pages/SetPassword.jsx';
 import Dashboard from '../pages/Dashboard.jsx';
 import CRM from '../pages/CRM.jsx';
 import Sites from '../pages/Sites.jsx';
@@ -31,6 +33,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/login" replace /> },
       { path: 'login', element: <Login /> },
+      { path: 'set-password', element: <SetPassword /> },
       { path: 'account-deletion', element: <AccountDeletion /> },
       {
         element: <MainLayout />,
@@ -58,6 +61,7 @@ export const router = createBrowserRouter([
           { path: 'employees', element: isDemoMode ? <Navigate to="/dashboard" replace /> : <Employees /> },
           { path: 'settings', element: <Settings /> },
           { path: 'settings/user-management', element: <UserManagement /> },
+          { path: 'profile', element: <Profile /> },
         ],
       },
       { path: '*', element: <Navigate to="/login" replace /> },

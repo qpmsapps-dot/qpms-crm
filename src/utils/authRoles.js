@@ -8,7 +8,7 @@ export const isProductionAuthMode = !isDemoAuthEnabled;
 
 export const roleGroups = {
   BD: ['BD', 'BD Team', 'BD Executive', 'BD Head'],
-  Operations: ['Operations', 'Operations Team'],
+  Operations: ['Operations', 'Operations Team', 'Operations Manager', 'Branch Head', 'Business Head', 'KAM'],
   Coordinator: ['Coordinator'],
   HR: ['HR', 'HR Reviewer', 'HR GM'],
   Commercial: ['Commercial', 'Commercial Team', 'Commercial Reviewer'],
@@ -43,16 +43,16 @@ export function routeAllowedRoles(pathname = '') {
   if (pathname.startsWith('/settings')) return [];
   if (pathname.startsWith('/crm')) return ['Admin', 'Management', 'FinanceLeadership', 'BD'];
   if (pathname.startsWith('/sites') || pathname.startsWith('/site-visit')) return ['Admin', 'BD'];
-  if (pathname.startsWith('/site-monitoring')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations'];
+  if (pathname.startsWith('/site-monitoring')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
   if (pathname.startsWith('/proposals')) return ['Admin', 'Management', 'FinanceLeadership', 'BD'];
   if (pathname.startsWith('/approvals')) return ['Admin', 'Management', 'FinanceLeadership'];
   if (pathname.startsWith('/tasks')) return ['Admin', 'Management', 'FinanceLeadership', 'Operations', 'Coordinator', 'HR', 'Commercial', 'Finance'];
-  if (pathname.startsWith('/existing-business')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations'];
-  if (pathname.startsWith('/fo-activities')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations'];
-  if (pathname.startsWith('/assets')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations'];
+  if (pathname.startsWith('/existing-business')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
+  if (pathname.startsWith('/fo-activities')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'FieldOfficer'];
+  if (pathname.startsWith('/assets')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
   if (pathname.startsWith('/employees')) return ['Admin', 'Management'];
-  if (pathname.startsWith('/reports')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations'];
-  if (pathname.startsWith('/tickets')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations'];
+  if (pathname.startsWith('/reports')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
+  if (pathname.startsWith('/tickets')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'FieldOfficer'];
   return [];
 }
 
