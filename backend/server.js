@@ -851,6 +851,7 @@ const OPERATIONAL_PROFILE_ROLE_KEYS = new Set([
   'BRANCHHEAD',
   'GM',
   'GENERALMANAGER',
+  'SOUTHHEAD',
   'OPERATIONSMANAGER',
   'KAM',
   'FO',
@@ -1014,6 +1015,7 @@ const CREATE_USER_ROLE_OPTIONS = new Set([
   'MD',
   'COO',
   'GM',
+  'SOUTHHEAD',
   'BUSINESSHEAD',
   'BRANCHHEAD',
   'OPERATIONSMANAGER',
@@ -1030,8 +1032,24 @@ const OPERATIONAL_CREATE_ROLE_KEYS = new Set([
   'BUSINESSHEAD',
 ]);
 
+const IFMS_BUSINESS_KEYS = new Set(['IFMS', 'RELIANCERETAIL', 'RELIANCE']);
+
 function createUserRoleKey(role) {
   return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+function businessKey(value) {
+  return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+function isIfmsBusiness(value) {
+  return IFMS_BUSINESS_KEYS.has(businessKey(value));
+}
+
+function normalizedHierarchyBusiness(value) {
+  const key = businessKey(value);
+  if (IFMS_BUSINESS_KEYS.has(key)) return 'IFMS';
+  return key;
 }
 
 function isActiveProfileForHierarchy(profile) {
@@ -1043,12 +1061,16 @@ function profileMatchesStateBusiness(profile, state, business) {
   const requestedState = textOrNull(state);
   const requestedBusiness = textOrNull(business);
   if (requestedState && String(profile.state || '').trim() !== requestedState) return false;
-  if (requestedBusiness && String(profile.business || '').trim() !== requestedBusiness) return false;
+  if (requestedBusiness && normalizedHierarchyBusiness(profile.business) !== normalizedHierarchyBusiness(requestedBusiness)) return false;
   return true;
 }
 
 function profileOption(profile) {
   if (!profile) return null;
+  const metadata =
+    profile.metadata && typeof profile.metadata === 'object' && !Array.isArray(profile.metadata)
+      ? profile.metadata
+      : {};
   return {
     id: profile.id,
     employee_code: profile.employee_code || '',
@@ -1057,6 +1079,14 @@ function profileOption(profile) {
     role: profile.role || '',
     state: profile.state || '',
     business: profile.business || '',
+    metadata,
+    manager_employee_code: metadata.reporting_manager_employee_code || null,
+    operations_manager_employee_code: metadata.operations_manager_employee_code || null,
+    branch_head_employee_code: metadata.branch_head_employee_code || null,
+    gm_employee_code: metadata.gm_employee_code || null,
+    south_head_employee_code: metadata.south_head_employee_code || null,
+    coo_employee_code: metadata.coo_employee_code || null,
+    md_employee_code: metadata.md_employee_code || null,
     label: `${profile.full_name || profile.display_name || profile.email || 'Unnamed'} - ${profile.employee_code || 'No Code'}`,
   };
 }
@@ -1109,6 +1139,8 @@ function buildHierarchyOptionsFromProfiles(profiles, { state, business } = {}) {
     branchHeads: byRole('Branch Head'),
     businessHeads: byRole('Business Head'),
     gms: allByRole('GM'),
+    southHeads: allByRole('South Head'),
+    kams: byRole('KAM'),
     coo: profileOption(pickPreferredLeader(profiles, 'COO', 'QPMSTN16278')),
     md: profileOption(pickPreferredLeader(profiles, 'MD', 'QPMSTN15789')),
   };
@@ -1121,10 +1153,10 @@ function optionByCode(options = [], code) {
 
 function requiredReportingLabel(roleKey) {
   if (roleKey === 'FO') return 'Reporting Operations Manager';
-  if (roleKey === 'KAM') return 'Reporting To';
+  if (roleKey === 'KAM') return 'GM / South Head';
   if (roleKey === 'OPERATIONSMANAGER') return 'Branch Head';
-  if (roleKey === 'BRANCHHEAD') return 'COO';
-  if (roleKey === 'BUSINESSHEAD' || roleKey === 'GM') return 'COO';
+  if (roleKey === 'BRANCHHEAD') return 'GM / South Head';
+  if (roleKey === 'BUSINESSHEAD' || roleKey === 'GM' || roleKey === 'SOUTHHEAD') return 'COO';
   if (roleKey === 'COO') return 'MD';
   return null;
 }
@@ -1135,6 +1167,11 @@ function hierarchyWarningsForOptions(roleKey, options) {
   if (!options.coo && !['MD', 'COO', 'ADMIN'].includes(roleKey)) {
     warnings.push('COO profile not found. Please create COO user first.');
   }
+  if (roleKey === 'BRANCHHEAD' || roleKey === 'KAM') {
+    if (!options.gms?.length && !options.southHeads?.length) {
+      warnings.push('GM/South Head profile not found. Please create GM or South Head user first.');
+    }
+  }
   return warnings;
 }
 
@@ -1143,6 +1180,7 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
   const roleKey = createUserRoleKey(role);
   const state = textOrNull(body.state);
   const business = textOrNull(body.business);
+  const ifmsBusiness = isIfmsBusiness(business);
   const reportingManagerCode = normalizeEmployeeCode(
     body.reporting_manager_employee_code || body.manager_employee_code,
   );
@@ -1154,6 +1192,33 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
   let branchHead = null;
   let coo = options.coo;
   let md = options.md;
+  let gm = null;
+  let southHead = null;
+  const gmLevelOptions = ifmsBusiness ? options.southHeads : options.gms;
+  const gmLevelLabel = ifmsBusiness ? 'South Head' : 'GM';
+  const byEmployeeCode = (code) =>
+    optionByCode([
+      ...options.operationsManagers,
+      ...options.branchHeads,
+      ...options.gms,
+      ...options.southHeads,
+      ...options.businessHeads,
+      options.coo,
+      options.md,
+    ].filter(Boolean), code);
+  const resolveFromMetadata = (source, key) => byEmployeeCode(source?.[key] || source?.metadata?.[key]);
+  const assignGmLevel = (leader) => {
+    if (!leader) return;
+    if (createUserRoleKey(leader.role) === 'SOUTHHEAD') southHead = leader;
+    if (createUserRoleKey(leader.role) === 'GM') gm = leader;
+  };
+  const inheritExecutiveChain = (source) => {
+    if (!source) return;
+    if (!gm) gm = resolveFromMetadata(source, 'gm_employee_code');
+    if (!southHead) southHead = resolveFromMetadata(source, 'south_head_employee_code');
+    if (!coo) coo = resolveFromMetadata(source, 'coo_employee_code') || coo;
+    if (!md) md = resolveFromMetadata(source, 'md_employee_code') || md;
+  };
 
   if (roleKey === 'MD' || roleKey === 'ADMIN') {
     return {
@@ -1162,6 +1227,8 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
         reporting_manager_name: null,
         operations_manager_employee_code: null,
         branch_head_employee_code: null,
+        gm_employee_code: null,
+        south_head_employee_code: null,
         coo_employee_code: null,
         md_employee_code: roleKey === 'MD' ? employeeCode : md?.employee_code || null,
         hierarchy_path: roleKey === 'MD' ? [employeeCode] : [employeeCode, md?.employee_code].filter(Boolean),
@@ -1175,32 +1242,52 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
   if (roleKey === 'COO') {
     if (!md) throw userManagementHttpError(400, 'MD profile not found. Please create MD user first.');
     reportingManager = md;
-  } else if (roleKey === 'BRANCHHEAD' || roleKey === 'BUSINESSHEAD' || roleKey === 'GM') {
+  } else if (roleKey === 'BUSINESSHEAD' || roleKey === 'GM' || roleKey === 'SOUTHHEAD') {
     if (!coo) throw userManagementHttpError(400, 'COO profile not found. Please create COO user first.');
     reportingManager = coo;
+    if (roleKey === 'GM') gm = { employee_code: employeeCode, full_name: textOrNull(body.full_name), role: 'GM' };
+    if (roleKey === 'SOUTHHEAD') southHead = { employee_code: employeeCode, full_name: textOrNull(body.full_name), role: 'South Head' };
+  } else if (roleKey === 'BRANCHHEAD') {
+    reportingManager = optionByCode(gmLevelOptions, reportingManagerCode);
+    if (!reportingManager) throw userManagementHttpError(400, `${gmLevelLabel} is required for Branch Head.`);
+    assignGmLevel(reportingManager);
   } else if (roleKey === 'OPERATIONSMANAGER') {
     branchHead = optionByCode(options.branchHeads, reportingManagerCode);
     if (!branchHead) throw userManagementHttpError(400, 'Branch Head is required for Operations Manager.');
     reportingManager = branchHead;
+    inheritExecutiveChain(branchHead);
   } else if (roleKey === 'FO') {
     operationsManager = optionByCode(options.operationsManagers, reportingManagerCode);
     if (!operationsManager) throw userManagementHttpError(400, 'Reporting Operations Manager is required for FO.');
     reportingManager = operationsManager;
-    branchHead = options.branchHeads[0] || null;
+    branchHead =
+      resolveFromMetadata(operationsManager, 'branch_head_employee_code') ||
+      options.branchHeads[0] ||
+      null;
+    inheritExecutiveChain(operationsManager);
+    inheritExecutiveChain(branchHead);
     if (!branchHead) warnings.push('Branch Head profile not found for selected State and Business.');
   } else if (roleKey === 'KAM') {
-    reportingManager =
-      optionByCode(options.operationsManagers, reportingManagerCode) ||
-      optionByCode(options.branchHeads, reportingManagerCode);
-    if (!reportingManager) throw userManagementHttpError(400, 'Reporting To is required for KAM.');
-    operationsManager = createUserRoleKey(reportingManager.role) === 'OPERATIONSMANAGER' ? reportingManager : null;
-    branchHead =
-      createUserRoleKey(reportingManager.role) === 'BRANCHHEAD'
-        ? reportingManager
-        : options.branchHeads[0] || null;
+    reportingManager = optionByCode(gmLevelOptions, reportingManagerCode);
+    if (!reportingManager) throw userManagementHttpError(400, `${gmLevelLabel} is required for KAM.`);
+    assignGmLevel(reportingManager);
   }
 
-  if (['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD', 'BUSINESSHEAD', 'GM'].includes(roleKey) && !coo) {
+  if (roleKey === 'BRANCHHEAD' || roleKey === 'KAM') {
+    assignGmLevel(reportingManager);
+  }
+  if (roleKey === 'BRANCHHEAD' && !reportingManager) {
+    throw userManagementHttpError(400, `${gmLevelLabel} is required for Branch Head.`);
+  }
+  if (roleKey === 'KAM' && createUserRoleKey(reportingManager?.role) === 'KAM') {
+    throw userManagementHttpError(400, 'KAM cannot be selected as a reporting manager.');
+  }
+  if (roleKey === 'OPERATIONSMANAGER') inheritExecutiveChain(branchHead);
+  if (roleKey === 'FO') inheritExecutiveChain(operationsManager);
+  if (!coo) coo = resolveFromMetadata(gm || southHead || branchHead || operationsManager, 'coo_employee_code') || options.coo;
+  if (!md) md = resolveFromMetadata(gm || southHead || branchHead || operationsManager, 'md_employee_code') || options.md;
+
+  if (['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD', 'BUSINESSHEAD', 'GM', 'SOUTHHEAD'].includes(roleKey) && !coo) {
     throw userManagementHttpError(400, 'COO profile not found. Please create COO user first.');
   }
   if (roleKey !== 'MD' && !md) {
@@ -1209,16 +1296,21 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
 
   const hierarchyPath = [
     employeeCode,
-    operationsManager?.employee_code,
-    branchHead?.employee_code,
+    roleKey === 'FO' ? operationsManager?.employee_code : null,
+    ['FO', 'OPERATIONSMANAGER'].includes(roleKey) ? branchHead?.employee_code : null,
+    ['FO', 'OPERATIONSMANAGER', 'BRANCHHEAD', 'KAM'].includes(roleKey)
+      ? (southHead?.employee_code || gm?.employee_code)
+      : null,
     roleKey === 'COO' ? employeeCode : coo?.employee_code,
     roleKey === 'MD' ? employeeCode : md?.employee_code,
   ].filter(Boolean);
   const metadata = {
     reporting_manager_employee_code: reportingManager?.employee_code || null,
     reporting_manager_name: reportingManager?.full_name || null,
-    operations_manager_employee_code: operationsManager?.employee_code || null,
-    branch_head_employee_code: branchHead?.employee_code || null,
+    operations_manager_employee_code: roleKey === 'OPERATIONSMANAGER' ? employeeCode : operationsManager?.employee_code || null,
+    branch_head_employee_code: roleKey === 'BRANCHHEAD' ? employeeCode : branchHead?.employee_code || null,
+    gm_employee_code: roleKey === 'GM' ? employeeCode : gm?.employee_code || null,
+    south_head_employee_code: roleKey === 'SOUTHHEAD' ? employeeCode : southHead?.employee_code || null,
     coo_employee_code: roleKey === 'COO' ? employeeCode : coo?.employee_code || null,
     md_employee_code: md?.employee_code || null,
     hierarchy_path: Array.from(new Set(hierarchyPath)),
@@ -1230,7 +1322,7 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
       manager_employee_code: metadata.reporting_manager_employee_code,
       business_head_employee_code:
         roleKey === 'BUSINESSHEAD' ? employeeCode : normalizeEmployeeCode(body.business_head_employee_code) || null,
-      gm_employee_code: roleKey === 'GM' ? employeeCode : normalizeEmployeeCode(body.gm_employee_code) || null,
+      gm_employee_code: metadata.gm_employee_code,
       coo_employee_code: metadata.coo_employee_code,
       hierarchy_path: metadata.hierarchy_path,
       metadata,
@@ -1242,7 +1334,7 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
 function validateCreateUserBody(body) {
   const roleKey = createUserRoleKey(body.role);
   if (!CREATE_USER_ROLE_OPTIONS.has(roleKey)) {
-    throw userManagementHttpError(400, 'role must be one of MD, COO, GM, Business Head, Branch Head, Operations Manager, KAM, FO, or Admin.');
+    throw userManagementHttpError(400, 'role must be one of MD, COO, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, or Admin.');
   }
   if (body.create_profile_only === true && roleKey === 'MD') return;
   if (!textOrNull(body.mobile)) throw userManagementHttpError(400, 'mobile is required.');
@@ -1253,7 +1345,7 @@ function validateCreateUserBody(body) {
     throw userManagementHttpError(400, 'business is required for this role.');
   }
   const requiredLabel = requiredReportingLabel(roleKey);
-  if (requiredLabel && ['FO', 'KAM', 'OPERATIONSMANAGER'].includes(roleKey) && !textOrNull(body.reporting_manager_employee_code || body.manager_employee_code)) {
+  if (requiredLabel && ['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD'].includes(roleKey) && !textOrNull(body.reporting_manager_employee_code || body.manager_employee_code)) {
     throw userManagementHttpError(400, `${requiredLabel} is required.`);
   }
 }

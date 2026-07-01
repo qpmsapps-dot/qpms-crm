@@ -27,12 +27,16 @@ const emptyForm = {
 };
 
 const roleOptions = [
-  'MD', 'COO', 'GM', 'Business Head', 'Branch Head', 'Operations Manager', 'KAM', 'FO', 'Admin',
+  'MD', 'COO', 'GM', 'South Head', 'Business Head', 'Branch Head', 'Operations Manager', 'KAM', 'FO', 'Admin',
 ];
 const stateOptions = ['TN', 'AP', 'KA', 'KL', 'TG'];
-const businessOptions = ['Reliance Retail', 'Private Clients', 'DME', 'AP DSH', 'TN Government', 'Osmania Hospitals'];
+const businessOptions = ['IFMS', 'Reliance Retail', 'Reliance', 'Private Clients', 'DME', 'AP DSH', 'TN Government', 'Osmania Hospitals'];
 const operationalRoles = new Set(['FO', 'KAM', 'Operations Manager', 'Branch Head', 'Business Head']);
-const reportingRequiredRoles = new Set(['FO', 'KAM', 'Operations Manager']);
+const reportingRequiredRoles = new Set(['FO', 'KAM', 'Operations Manager', 'Branch Head']);
+
+function isIfmsBusiness(value) {
+  return ['IFMS', 'RELIANCE RETAIL', 'RELIANCE'].includes(String(value || '').trim().toUpperCase());
+}
 
 function normalizeInitial(initialUser) {
   if (!initialUser) return emptyForm;
@@ -158,6 +162,8 @@ export default function UserFormDrawer({
     branchHeads: [],
     businessHeads: [],
     gms: [],
+    southHeads: [],
+    kams: [],
     coo: null,
     md: null,
     warnings: [],
@@ -185,6 +191,8 @@ export default function UserFormDrawer({
           branchHeads: result.branchHeads || [],
           businessHeads: result.businessHeads || [],
           gms: result.gms || [],
+          southHeads: result.southHeads || [],
+          kams: result.kams || [],
           coo: result.coo || null,
           md: result.md || null,
           warnings: result.warnings || [],
@@ -202,14 +210,18 @@ export default function UserFormDrawer({
     };
   }, [mode, open, values.business, values.role, values.state]);
 
+  const gmLevelOptions = useMemo(
+    () => (isIfmsBusiness(values.business) ? hierarchyOptions.southHeads : hierarchyOptions.gms),
+    [hierarchyOptions.gms, hierarchyOptions.southHeads, values.business],
+  );
+
   const reportingOptions = useMemo(() => {
     if (values.role === 'FO') return hierarchyOptions.operationsManagers;
-    if (values.role === 'KAM') {
-      return [...hierarchyOptions.operationsManagers, ...hierarchyOptions.branchHeads];
-    }
+    if (values.role === 'KAM') return gmLevelOptions;
     if (values.role === 'Operations Manager') return hierarchyOptions.branchHeads;
+    if (values.role === 'Branch Head') return gmLevelOptions;
     return [];
-  }, [hierarchyOptions.branchHeads, hierarchyOptions.operationsManagers, values.role]);
+  }, [gmLevelOptions, hierarchyOptions.branchHeads, hierarchyOptions.operationsManagers, values.role]);
 
   const selectedReportingUser = useMemo(
     () => reportingOptions.find((option) => option.employee_code === values.manager_employee_code) || null,
@@ -217,23 +229,29 @@ export default function UserFormDrawer({
   );
 
   const hierarchyPreview = useMemo(() => {
-    const branchHead =
-      values.role === 'Operations Manager'
-        ? selectedReportingUser
-        : values.role === 'KAM' && selectedReportingUser?.role === 'Branch Head'
-          ? selectedReportingUser
-          : hierarchyOptions.branchHeads[0] || null;
+    const branchHead = values.role === 'Operations Manager'
+      ? selectedReportingUser
+      : values.role === 'FO'
+        ? hierarchyOptions.branchHeads.find((option) => option.employee_code === selectedReportingUser?.branch_head_employee_code) || hierarchyOptions.branchHeads[0] || null
+        : null;
     const operationsManager =
-      ['FO', 'KAM'].includes(values.role) && selectedReportingUser?.role === 'Operations Manager'
+      values.role === 'FO' && selectedReportingUser?.role === 'Operations Manager'
         ? selectedReportingUser
         : null;
+    const gmLevel =
+      ['Branch Head', 'KAM'].includes(values.role)
+        ? selectedReportingUser
+        : branchHead?.south_head_employee_code
+          ? hierarchyOptions.southHeads.find((option) => option.employee_code === branchHead.south_head_employee_code)
+          : hierarchyOptions.gms.find((option) => option.employee_code === branchHead?.gm_employee_code) || null;
     return {
       operationsManager,
       branchHead,
+      gmLevel,
       coo: values.role === 'COO' ? null : hierarchyOptions.coo,
       md: hierarchyOptions.md,
     };
-  }, [hierarchyOptions.branchHeads, hierarchyOptions.coo, hierarchyOptions.md, selectedReportingUser, values.role]);
+  }, [hierarchyOptions.branchHeads, hierarchyOptions.coo, hierarchyOptions.gms, hierarchyOptions.md, hierarchyOptions.southHeads, selectedReportingUser, values.role]);
   const profileOnlyMd = mode === 'add' && values.role === 'MD' && values.create_profile_only;
 
   if (!open) return null;
@@ -261,9 +279,10 @@ export default function UserFormDrawer({
 
   function reportingLabel(role) {
     if (role === 'FO') return 'Reporting Operations Manager';
-    if (role === 'KAM') return 'Reporting To';
+    if (role === 'KAM') return isIfmsBusiness(values.business) ? 'South Head' : 'GM';
     if (role === 'Operations Manager') return 'Branch Head';
-    if (role === 'Branch Head' || role === 'Business Head' || role === 'GM') return 'Reporting To';
+    if (role === 'Branch Head') return isIfmsBusiness(values.business) ? 'South Head' : 'GM';
+    if (role === 'Business Head' || role === 'GM' || role === 'South Head') return 'COO';
     if (role === 'COO') return 'Reporting To';
     return 'Reporting To';
   }
@@ -428,8 +447,9 @@ export default function UserFormDrawer({
                 <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Hierarchy Preview</p>
                   <div className="mt-2 space-y-1 text-sm font-semibold text-slate-700">
-                    {['FO', 'KAM'].includes(values.role) ? <p>Operations Manager: {employeeLabel(hierarchyPreview.operationsManager)}</p> : null}
-                    {['FO', 'KAM', 'Operations Manager'].includes(values.role) ? <p>Branch Head: {employeeLabel(hierarchyPreview.branchHead)}</p> : null}
+                    {values.role === 'FO' ? <p>Operations Manager: {employeeLabel(hierarchyPreview.operationsManager)}</p> : null}
+                    {['FO', 'Operations Manager'].includes(values.role) ? <p>Branch Head: {employeeLabel(hierarchyPreview.branchHead)}</p> : null}
+                    {['FO', 'KAM', 'Operations Manager', 'Branch Head'].includes(values.role) ? <p>{isIfmsBusiness(values.business) ? 'South Head' : 'GM'}: {employeeLabel(hierarchyPreview.gmLevel)}</p> : null}
                     {values.role !== 'MD' ? <p>COO: {employeeLabel(hierarchyPreview.coo || hierarchyOptions.coo)}</p> : null}
                     <p>MD: {values.role === 'MD' ? 'This user' : employeeLabel(hierarchyPreview.md)}</p>
                   </div>

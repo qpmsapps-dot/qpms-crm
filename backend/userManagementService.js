@@ -81,6 +81,7 @@ export function canonicalProfileRole(value, fallback = null) {
     OPERATIONSMANAGER: 'Operations Manager',
     BRANCHHEAD: 'Branch Head',
     BUSINESSHEAD: 'Business Head',
+    SOUTHHEAD: 'South Head',
     BH: 'Branch Head',
     GM: 'GM',
     COO: 'COO',

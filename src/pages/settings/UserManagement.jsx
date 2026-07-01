@@ -67,10 +67,14 @@ function inviteLifecycleLabel(profile = {}) {
 function mapProfile(profile, hierarchy = null) {
   const isActive = profile?.is_active === true;
   const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
+  const mergedHierarchy = {
+    ...metadata,
+    ...(hierarchy || {}),
+  };
   return {
     id: profile.id,
     raw: profile,
-    hierarchy,
+    hierarchy: mergedHierarchy,
     employeeCode: profile.employee_code || profile.username || 'Not assigned',
     fullName: profile.full_name || profile.display_name || profile.email || 'Unnamed user',
     displayName: profile.display_name || '',
