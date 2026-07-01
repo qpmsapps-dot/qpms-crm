@@ -435,6 +435,69 @@ function isActiveProfile(profile) {
   return profile?.is_active === true && profileKeys(profile).length > 0;
 }
 
+const OPERATIONS_COMMAND_ALLOWED_ROLES = new Set([
+  "gm",
+  "south head",
+  "branch head",
+  "operations manager",
+  "operation manager",
+  "kam",
+  "fo",
+  "field officer",
+]);
+
+const OPERATIONS_COMMAND_EXCLUDED_ROLES = new Set([
+  "md",
+  "coo",
+  "admin",
+  "administrator",
+  "developer",
+  "finance",
+  "finance gm",
+  "cfo",
+  "hr",
+  "human resources",
+  "business head",
+]);
+
+function isOperationsCommandEligibleRecord(record = {}) {
+  const profile = record?.profile || record;
+  const roleKey = normalizeRoleKey(profile?.role || record?.role);
+  const designationKey = normalizeRoleKey(profile?.designation || record?.designation);
+  const departmentKey = normalizeRoleKey(profile?.department || record?.department);
+  const combinedKey = normalizeRoleKey([roleKey, designationKey, departmentKey].join(" "));
+
+  if (!roleKey) return false;
+  if (
+    OPERATIONS_COMMAND_EXCLUDED_ROLES.has(roleKey) ||
+    OPERATIONS_COMMAND_EXCLUDED_ROLES.has(designationKey) ||
+    OPERATIONS_COMMAND_EXCLUDED_ROLES.has(departmentKey)
+  ) {
+    return false;
+  }
+  if (roleKey === "manager") {
+    return combinedKey.includes("operation");
+  }
+  if (roleKey === "gm" && combinedKey.includes("finance")) {
+    return false;
+  }
+  return OPERATIONS_COMMAND_ALLOWED_ROLES.has(roleKey);
+}
+
+function recordMatchesOfficerKeys(record, officerKeys) {
+  if (!officerKeys?.size) return false;
+  return [
+    record?.fo_user_id,
+    record?.employee_code,
+    record?.username,
+    record?.profile?.employee_code,
+    record?.profile?.username,
+  ]
+    .map(normalizeFoKey)
+    .filter(Boolean)
+    .some((key) => officerKeys.has(key));
+}
+
 function operationalFoIdForOfficer(officer = {}) {
   return normalizeFoKey(
     officer?.profile?.employee_code ||
@@ -1554,7 +1617,9 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
 }
 
 function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statusDate }) {
-  const activeProfiles = profiles.filter(isActiveProfile);
+  const activeProfiles = profiles.filter(
+    (profile) => isActiveProfile(profile) && isOperationsCommandEligibleRecord(profile),
+  );
   const uniqueProfilesByCode = new Map();
   activeProfiles.forEach((profile) => {
     const canonical = normalizeFoKey(
@@ -1668,6 +1733,9 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
   });
   const mergeDiagnostics = {
     activeProfilesCount: activeProfiles.length,
+    operationsExcludedProfilesCount: profiles.filter(
+      (profile) => isActiveProfile(profile) && !isOperationsCommandEligibleRecord(profile),
+    ).length,
     activityDerivedOfficerCount: matchedActivityIds.size,
     finalMergedOfficerCount: officers.length,
     profileOnlyOfficerCount: officers.filter((officer) => officer.isProfileOnly)
@@ -1808,6 +1876,7 @@ function mergeRealtimeOfficer(officers, liveRow, profileRows) {
   const liveFoId = normalizeFoKey(liveRow?.fo_user_id);
   const profile = profilesByCode.get(liveFoId);
   if (!profile) return officers;
+  if (!isOperationsCommandEligibleRecord(profile)) return officers;
   const foId = normalizeFoKey(
     profile?.employee_code || profile?.username || profile?.id,
   );
@@ -7179,16 +7248,47 @@ export default function FOActivities() {
   }, []);
 
   const officers = useMemo(
-    () => liveOfficers.filter((officer) => !isHiddenEmployeeRecord(officer)),
+    () =>
+      liveOfficers.filter(
+        (officer) =>
+          !isHiddenEmployeeRecord(officer) &&
+          isOperationsCommandEligibleRecord(officer),
+      ),
     [liveOfficers],
   );
+  const operationalOfficerKeys = useMemo(() => {
+    const keys = new Set();
+    officers.forEach((officer) => {
+      [
+        officer.foId,
+        officer.employeeCode,
+        officer.username,
+        officer.profile?.employee_code,
+        officer.profile?.username,
+      ].forEach((value) => {
+        const key = normalizeFoKey(value);
+        if (key) keys.add(key);
+      });
+    });
+    return keys;
+  }, [officers]);
   const visibleAttendanceKpiRows = useMemo(
-    () => attendanceKpiRows.filter((row) => !isHiddenEmployeeRecord(row)),
-    [attendanceKpiRows],
+    () =>
+      attendanceKpiRows.filter(
+        (row) =>
+          !isHiddenEmployeeRecord(row) &&
+          recordMatchesOfficerKeys(row, operationalOfficerKeys),
+      ),
+    [attendanceKpiRows, operationalOfficerKeys],
   );
   const visibleSiteVisitRows = useMemo(
-    () => siteVisitRows.filter((visit) => !isHiddenEmployeeRecord(visit)),
-    [siteVisitRows],
+    () =>
+      siteVisitRows.filter(
+        (visit) =>
+          !isHiddenEmployeeRecord(visit) &&
+          recordMatchesOfficerKeys(visit, operationalOfficerKeys),
+      ),
+    [operationalOfficerKeys, siteVisitRows],
   );
 
   const structurallyFilteredOfficers = useMemo(
