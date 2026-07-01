@@ -26,6 +26,27 @@ function initials(name = '') {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'QP';
 }
 
+function hierarchyPathLabel(employee, hierarchy = {}) {
+  const role = String(employee.role || '').trim();
+  const gmLevel = hierarchy.south_head_employee_code || hierarchy.gm_employee_code;
+  const path = [role || 'User'];
+  if (role === 'MD') return 'MD';
+  if (role === 'COO') return ['COO', hierarchy.md_employee_code].filter(Boolean).join(' -> ');
+  if (role === 'FO') {
+    path.push(hierarchy.operations_manager_employee_code, hierarchy.branch_head_employee_code, gmLevel);
+  } else if (role === 'Operations Manager') {
+    path.push(hierarchy.branch_head_employee_code, gmLevel);
+  } else if (role === 'Branch Head' || role === 'KAM') {
+    path.push(gmLevel);
+  }
+  if (role === 'GM' || role === 'South Head' || role === 'Business Head') {
+    path.push(hierarchy.coo_employee_code, hierarchy.md_employee_code);
+  } else {
+    path.push(hierarchy.coo_employee_code, hierarchy.md_employee_code);
+  }
+  return path.filter(Boolean).join(' -> ');
+}
+
 function ActionPanel({ action, employee, busy, onCancel, onSubmit }) {
   const [reason, setReason] = useState('');
   const [password, setPassword] = useState('');
@@ -207,10 +228,12 @@ export default function EmployeeDetailsDrawer({
       ['Business', employee.business],
     ]],
     ['Hierarchy', [
+      ['Hierarchy path', hierarchyPathLabel(employee, hierarchy)],
       ['Manager', hierarchy.manager_employee_code],
       ["Manager's manager", hierarchy.managers_manager_employee_code],
       ['Business head', hierarchy.business_head_employee_code],
       ['GM', hierarchy.gm_employee_code],
+      ['South Head', hierarchy.south_head_employee_code],
       ['COO', hierarchy.coo_employee_code],
     ]],
     ['Access and Provisioning', [
