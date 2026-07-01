@@ -30,7 +30,21 @@ const roleOptions = [
   'MD', 'COO', 'GM', 'South Head', 'Business Head', 'Branch Head', 'Operations Manager', 'KAM', 'FO', 'Admin',
 ];
 const stateOptions = ['TN', 'AP', 'KA', 'KL', 'TG'];
-const businessOptions = ['IFMS', 'Reliance Retail', 'Reliance', 'Private Clients', 'DME', 'AP DSH', 'TN Government', 'Osmania Hospitals'];
+const businessOptions = [
+  'Standalone',
+  'Reliance Retail',
+  'IFMS',
+  'Reliance',
+  'Private Clients',
+  'DME',
+  'AP DSH',
+  'TN Government',
+  'Osmania Hospitals',
+  'Airport',
+  'Retail',
+  'Government',
+  'Private Hospital',
+];
 const operationalRoles = new Set(['FO', 'KAM', 'Operations Manager', 'Branch Head', 'Business Head']);
 const reportingRequiredRoles = new Set(['FO', 'KAM', 'Operations Manager', 'Branch Head']);
 
@@ -146,6 +160,13 @@ function employeeLabel(option) {
   return option?.label || (option?.employee_code ? `${option.full_name || 'User'} - ${option.employee_code}` : 'Not found');
 }
 
+function businessOptionsWithCurrent(currentBusiness) {
+  const current = String(currentBusiness || '').trim();
+  if (!current) return businessOptions;
+  const exists = businessOptions.some((option) => option.toLowerCase() === current.toLowerCase());
+  return exists ? businessOptions : [current, ...businessOptions];
+}
+
 export default function UserFormDrawer({
   open,
   mode,
@@ -253,6 +274,10 @@ export default function UserFormDrawer({
     };
   }, [hierarchyOptions.branchHeads, hierarchyOptions.coo, hierarchyOptions.gms, hierarchyOptions.md, hierarchyOptions.southHeads, selectedReportingUser, values.role]);
   const profileOnlyMd = mode === 'add' && values.role === 'MD' && values.create_profile_only;
+  const resolvedBusinessOptions = useMemo(
+    () => businessOptionsWithCurrent(values.business),
+    [values.business],
+  );
 
   if (!open) return null;
 
@@ -395,7 +420,7 @@ export default function UserFormDrawer({
                 <h3 className="text-sm font-bold text-slate-950">Work Mapping</h3>
                 <div className="mt-3 grid gap-3 sm:grid-cols-3">
                   <SelectField name="state" label="State" required={needsState(values.role)} value={values.state} options={stateOptions} error={errors.state} onChange={update} />
-                  <SelectField name="business" label="Business" required={needsBusiness(values.role)} value={values.business} options={businessOptions} error={errors.business} onChange={update} />
+                  <SelectField name="business" label="Business" required={needsBusiness(values.role)} value={values.business} options={resolvedBusinessOptions} error={errors.business} onChange={update} />
                   <SelectField name="role" label="Role" required value={values.role} options={roleOptions} error={errors.role} onChange={update} />
                 </div>
                 {values.role === 'MD' ? (
@@ -468,7 +493,7 @@ export default function UserFormDrawer({
                 <TextField name="email" label="Email" required type="email" value={values.email} error={errors.email} onChange={update} />
                 <TextField name="mobile" label="Mobile" required value={values.mobile} error={errors.mobile} onChange={update} />
                 <SelectField name="state" label="State" value={values.state} options={stateOptions} onChange={update} />
-                <SelectField name="business" label="Business" value={values.business} options={businessOptions} onChange={update} />
+                <SelectField name="business" label="Business" value={values.business} options={resolvedBusinessOptions} onChange={update} />
                 <SelectField name="role" label="Role" required value={values.role} options={roleOptions} error={errors.role} onChange={update} />
               </div>
             </section>
