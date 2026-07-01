@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/fo_models.dart';
@@ -966,6 +969,7 @@ class SupabaseService {
     bool endDayWithOpenSite = false,
     bool openSiteAutoClosed = false,
     String? autoClosedSiteVisitId,
+    Map<String, dynamic> endLocationMetadata = const {},
   }) async {
     final resolution = await resolveEndDayAttendance(
       user: user,
@@ -983,6 +987,7 @@ class SupabaseService {
     final existingMetadata = _jsonMap(remoteActive.metadata);
     final metadata = {
       ...existingMetadata,
+      ...endLocationMetadata,
       if (endDayWithOpenSite) 'end_day_with_open_site': true,
       if (openSiteAutoClosed) 'open_site_auto_closed': true,
       if (endDayWithOpenSite) 'payable_km_after_site_checkin_added': false,
@@ -1472,6 +1477,75 @@ class SupabaseService {
     return List<Map<String, dynamic>>.from(
       rows,
     ).map(_locationLogFromRow).toList();
+  }
+
+  static Future<LocationLog?> fetchLatestLocationLogForAttendance({
+    required FoUser user,
+    required String attendanceId,
+  }) async {
+    if (!isValidUuid(attendanceId)) return null;
+    final rows = await client
+        .from('fo_location_logs')
+        .select('*')
+        .eq('fo_user_id', user.employeeCode)
+        .eq('attendance_id', attendanceId)
+        .not('latitude', 'is', null)
+        .not('longitude', 'is', null)
+        .order('captured_at', ascending: false)
+        .order('logged_at', ascending: false)
+        .order('created_at', ascending: false)
+        .limit(1);
+    final records = List<Map<String, dynamic>>.from(rows);
+    if (records.isEmpty) return null;
+    return _locationLogFromRow(records.first);
+  }
+
+  static Future<void> triggerFoKmRecalculation({
+    required String attendanceId,
+    required String foUserId,
+    String? date,
+  }) async {
+    final baseUrl = AppConfig.backendApiUrl.trim();
+    final token = currentAccessToken;
+    if (baseUrl.isEmpty || token == null || token.trim().isEmpty) {
+      throw StateError('Backend API is not configured for KM recalculation.');
+    }
+    final base = Uri.parse(baseUrl);
+    final uri = base.replace(
+      path: _joinPath(base.path, '/api/fo/km/recalculate'),
+    );
+    final client = HttpClient();
+    try {
+      final request = await client.postUrl(uri);
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      request.headers.contentType = ContentType.json;
+      request.write(
+        jsonEncode({
+          'attendance_id': attendanceId,
+          'fo_user_id': foUserId,
+          if (date?.trim().isNotEmpty == true) 'date': date!.trim(),
+        }),
+      );
+      final response = await request.close();
+      final text = await response.transform(utf8.decoder).join();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw StateError(
+          text.trim().isEmpty
+              ? 'KM recalculation failed.'
+              : 'KM recalculation failed: $text',
+        );
+      }
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static String _joinPath(String basePath, String path) {
+    final left = basePath.endsWith('/')
+        ? basePath.substring(0, basePath.length - 1)
+        : basePath;
+    final right = path.startsWith('/') ? path : '/$path';
+    return '$left$right';
   }
 
   static Future<List<LocationLog>> fetchLocationLogsForRange({

@@ -7,6 +7,10 @@ import { createClient } from '@supabase/supabase-js';
 import { recalculateFoKm, recalculateFoKmForToday } from './foKmRecalculationService.js';
 import { cleanupStaleFoSessions } from './foStaleSessionCleanupService.js';
 import {
+  normalizeReportState,
+  sendDailyOperationsReports,
+} from './services/dailyOperationsReportService.js';
+import {
   USER_MANAGEMENT_PROFILE_SELECT,
   assertUserManagementFoundation,
   attachOperationalCounts,
@@ -521,6 +525,23 @@ function requireUserManagementPermission(request, response, next) {
     response.status(403).json({
       ok: false,
       message: `Role ${request.userRole || 'Unknown'} cannot access User Management.`,
+    });
+    return;
+  }
+  next();
+}
+
+function hasDailyReportPermission(profile) {
+  if (!profile || profile.is_active !== true) return false;
+  if (String(profile.status || '').trim().toLowerCase() !== 'active') return false;
+  return new Set(['ADMIN', 'MD', 'COO']).has(normalizePermissionRole(profile.role));
+}
+
+function requireDailyReportPermission(request, response, next) {
+  if (!hasDailyReportPermission(request.profile)) {
+    response.status(403).json({
+      ok: false,
+      message: `Role ${request.userRole || 'Unknown'} cannot send Daily Operations reports.`,
     });
     return;
   }
@@ -4520,6 +4541,66 @@ app.post('/api/fo/km/recalculate-all', async (request, response) => {
     });
   } finally {
     foKmRecalculateAllLocks.delete(lockDate);
+  }
+});
+
+app.post(
+  '/api/reports/daily-operations/send',
+  requireSupabaseJwt,
+  requireDailyReportPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      const body = request.body || {};
+      const mode = String(body.mode || 'all').trim().toLowerCase();
+      if (!['master', 'state', 'all'].includes(mode)) {
+        response.status(400).json({ ok: false, message: 'mode must be master, state, or all.' });
+        return;
+      }
+      if (mode === 'state' && !body.state) {
+        response.status(400).json({ ok: false, message: 'state is required for state report mode.' });
+        return;
+      }
+      const result = await sendDailyOperationsReports({
+        client,
+        date: body.date,
+        mode,
+        state: body.state ? normalizeReportState(body.state) : undefined,
+        to: body.to,
+        cc: body.cc,
+      });
+      response.json(result);
+    } catch (error) {
+      response.status(error.statusCode || 500).json({
+        ok: false,
+        message: error.message || 'Daily Operations report failed.',
+        code: error.code || null,
+      });
+    }
+  },
+);
+
+app.post('/api/cron/daily-operations-report', async (request, response) => {
+  try {
+    const expectedSecret = String(process.env.REPORT_CRON_SECRET || '').trim();
+    const providedSecret = String(request.headers['x-cron-secret'] || '').trim();
+    if (!expectedSecret || providedSecret !== expectedSecret) {
+      response.status(401).json({ ok: false, message: 'Invalid cron secret.' });
+      return;
+    }
+    const client = requireServiceRoleSupabase();
+    const result = await sendDailyOperationsReports({
+      client,
+      date: request.body?.date,
+      mode: 'all',
+    });
+    response.json(result);
+  } catch (error) {
+    response.status(error.statusCode || 500).json({
+      ok: false,
+      message: error.message || 'Daily Operations cron report failed.',
+      code: error.code || null,
+    });
   }
 });
 

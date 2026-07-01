@@ -30,10 +30,26 @@ function profileToUser(profile, sessionUser) {
   const email = profile?.email || sessionUser?.email || '';
   const role = normalizeAppRole(profile?.role || sessionUser?.user_metadata?.role || 'BD');
   const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
+  const authMetadata = sessionUser?.user_metadata || {};
+  const emailPrefix = email ? email.split('@')[0] : '';
+  const displayName =
+    profile?.display_name ||
+    profile?.full_name ||
+    authMetadata.full_name ||
+    authMetadata.name ||
+    emailPrefix ||
+    '';
+  const profileImageUrl =
+    metadata.profile_image_url ||
+    profile?.profile_image_url ||
+    profile?.avatar_url ||
+    authMetadata.avatar_url ||
+    '';
   const user = {
     id: profile?.auth_user_id || sessionUser?.id || profile?.id,
     profileId: profile?.id || '',
-    name: profile?.full_name || sessionUser?.user_metadata?.full_name || sessionUser?.user_metadata?.name || email,
+    name: displayName || email,
+    displayName,
     username: email,
     email,
     role,
@@ -45,7 +61,7 @@ function profileToUser(profile, sessionUser) {
     authProvider: 'supabase',
     requiresPasswordChange: profile?.requires_password_change === true,
     metadata,
-    profileImageUrl: metadata.profile_image_url || '',
+    profileImageUrl,
   };
   return {
     ...user,
