@@ -1,6 +1,5 @@
 import {
   ArrowRight,
-  Check,
   Eye,
   EyeOff,
   Globe2,
@@ -32,6 +31,48 @@ const fadeUp = {
   visible: { opacity: 1, y: 0 },
 };
 
+function initialsForName(name = '', email = '') {
+  const source = String(name || email || '').trim();
+  if (!source) return 'U';
+  const cleaned = source.includes('@') ? source.split('@')[0] : source;
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  return cleaned.slice(0, 2).toUpperCase();
+}
+
+function LoginSuccessAvatar({ user }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const metadata = user?.metadata && typeof user.metadata === 'object' ? user.metadata : {};
+  const avatarUrl =
+    user?.profileImageUrl ||
+    metadata.profile_image_url ||
+    user?.profile_image_url ||
+    user?.avatar_url ||
+    user?.user_metadata?.avatar_url ||
+    '';
+  const displayName = user?.displayName || user?.name || '';
+  const initials = initialsForName(displayName, user?.email || user?.username || '');
+
+  if (avatarUrl && !imageFailed) {
+    return (
+      <div className="mx-auto h-20 w-20 overflow-hidden rounded-full border-4 border-white bg-slate-100 shadow-[0_16px_36px_rgba(15,23,42,0.20)] ring-8 ring-qpms-50">
+        <img
+          src={avatarUrl}
+          alt=""
+          className="h-full w-full object-cover"
+          onError={() => setImageFailed(true)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto grid h-20 w-20 place-items-center rounded-full border-4 border-white bg-qpms-600 text-2xl font-black text-white shadow-[0_16px_36px_rgba(15,23,42,0.20)] ring-8 ring-qpms-50">
+      {initials}
+    </div>
+  );
+}
+
 export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [username, setUsername] = useState('');
@@ -39,6 +80,7 @@ export default function Login() {
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isWelcoming, setIsWelcoming] = useState(false);
+  const [welcomeUser, setWelcomeUser] = useState(null);
   const navigate = useNavigate();
   const { loginWithAppPassword, loginWithPassword, isDemoAuthEnabled } = useAuth();
   usePageTitle('Sign in');
@@ -58,6 +100,7 @@ export default function Login() {
           navigate('/set-password', { replace: true });
           return nextUser;
         }
+        setWelcomeUser(nextUser);
         setIsWelcoming(true);
         window.setTimeout(() => {
           navigate('/dashboard', { replace: true });
@@ -93,6 +136,7 @@ export default function Login() {
       loginWithAppPassword(normalizedUsername, password, nextUser)
         .then(() => {
           setIsSubmitting(false);
+          setWelcomeUser(nextUser);
           setIsWelcoming(true);
 
           window.setTimeout(() => {
@@ -107,7 +151,9 @@ export default function Login() {
   }
 
   const matchedWelcomeUser = isDemoAuthEnabled ? findMockUser(username, password) : null;
-  const welcomeText = matchedWelcomeUser ? `Welcome, ${matchedWelcomeUser.name}` : 'Welcome Back';
+  const activeWelcomeUser = welcomeUser || matchedWelcomeUser;
+  const resolvedWelcomeName = activeWelcomeUser?.displayName || activeWelcomeUser?.name || '';
+  const welcomeText = resolvedWelcomeName ? `Welcome Back, ${resolvedWelcomeName}` : 'Welcome Back';
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-slate-950 text-slate-950">
@@ -267,9 +313,7 @@ export default function Login() {
       {isWelcoming ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/35 px-5 backdrop-blur-sm">
           <div className="animate-[welcome-pop_260ms_ease-out] rounded-3xl border border-slate-200 bg-white px-8 py-7 text-center shadow-[0_24px_70px_rgba(15,23,42,0.22)]">
-            <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-emerald-50 text-emerald-600 ring-8 ring-emerald-50/60">
-              <Check className="h-8 w-8 animate-[check-draw_700ms_ease-out]" strokeWidth={3} />
-            </div>
+            <LoginSuccessAvatar user={activeWelcomeUser} />
             <h2 className="mt-5 text-2xl font-bold tracking-normal text-slate-950">{welcomeText}</h2>
             <p className="mt-2 text-sm font-medium text-slate-500">Opening your myQPMS workspace...</p>
           </div>

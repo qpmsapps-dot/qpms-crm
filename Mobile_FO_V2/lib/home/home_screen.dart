@@ -36,6 +36,44 @@ class _DebugGpsCounts {
   final int? syncedToday;
 }
 
+class _EndLocationResolution {
+  const _EndLocationResolution({
+    this.latitude,
+    this.longitude,
+    this.accuracy,
+    this.capturedAt,
+    required this.source,
+    this.missingReason,
+    this.warningAcknowledged = false,
+  });
+
+  final double? latitude;
+  final double? longitude;
+  final double? accuracy;
+  final DateTime? capturedAt;
+  final String source;
+  final String? missingReason;
+  final bool warningAcknowledged;
+
+  bool get hasCoordinate => latitude != null && longitude != null;
+
+  Map<String, dynamic> toMetadata() {
+    final savedAt = DateTime.now().toUtc().toIso8601String();
+    return {
+      'end_location_source': source,
+      'end_location_saved_at': savedAt,
+      'end_location_required_for_final_km': true,
+      if (accuracy != null) 'end_location_accuracy': accuracy,
+      if (capturedAt != null)
+        'end_location_captured_at': capturedAt!.toUtc().toIso8601String(),
+      if (missingReason?.trim().isNotEmpty == true)
+        'end_location_missing_reason': missingReason!.trim(),
+      if (warningAcknowledged) 'final_km_warning_acknowledged': true,
+      if (warningAcknowledged) 'final_km_warning_acknowledged_at': savedAt,
+    };
+  }
+}
+
 class _HomeScreenState extends State<HomeScreen>
     with AutomaticKeepAliveClientMixin<HomeScreen>, WidgetsBindingObserver {
   Attendance? _attendance;
@@ -851,6 +889,140 @@ class _HomeScreenState extends State<HomeScreen>
         position.accuracy <= 50;
   }
 
+  bool _isValidEndDayLog(LocationLog log, DateTime endTime) {
+    final accuracy = log.accuracy;
+    final age = endTime.difference(log.capturedAt).abs();
+    return log.employeeCode.trim() == widget.user.employeeCode.trim() &&
+        log.latitude.isFinite &&
+        log.longitude.isFinite &&
+        log.latitude >= -90 &&
+        log.latitude <= 90 &&
+        log.longitude >= -180 &&
+        log.longitude <= 180 &&
+        (accuracy == null || accuracy <= 50) &&
+        age <= const Duration(hours: 1);
+  }
+
+  Future<_EndLocationResolution?> _captureFreshEndDayLocation() async {
+    try {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'home',
+        action: 'END_DAY_FINAL_GPS_FETCH_START',
+      );
+      final currentPosition = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+      if (_isCleanEndDayPosition(currentPosition)) {
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'home',
+          action: 'END_DAY_FINAL_GPS_FETCH_SUCCESS',
+        );
+        return _EndLocationResolution(
+          latitude: currentPosition.latitude,
+          longitude: currentPosition.longitude,
+          accuracy: currentPosition.accuracy,
+          capturedAt: DateTime.now(),
+          source: 'fresh_gps',
+        );
+      }
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'home',
+        action: 'END_DAY_FINAL_GPS_FETCH_FAILED',
+        error: 'End Day GPS accuracy/coordinate rejected.',
+      );
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'home',
+        action: 'END_DAY_FINAL_GPS_FETCH_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+    return null;
+  }
+
+  Future<_EndLocationResolution?> _latestLocalEndDayLocation(
+    String attendanceId,
+    DateTime endTime,
+  ) async {
+    final logs =
+        (await LocalStore.getLocationLogs())
+            .where((log) => log.attendanceId == attendanceId)
+            .where((log) => _isValidEndDayLog(log, endTime))
+            .toList()
+          ..sort((a, b) => a.capturedAt.compareTo(b.capturedAt));
+    if (logs.isEmpty) return null;
+    final log = logs.last;
+    return _EndLocationResolution(
+      latitude: log.latitude,
+      longitude: log.longitude,
+      accuracy: log.accuracy,
+      capturedAt: log.capturedAt,
+      source: 'local_latest_log',
+    );
+  }
+
+  Future<_EndLocationResolution?> _latestRemoteEndDayLocation(
+    String attendanceId,
+    DateTime endTime,
+  ) async {
+    final log = await SupabaseService.fetchLatestLocationLogForAttendance(
+      user: widget.user,
+      attendanceId: attendanceId,
+    );
+    if (log == null || !_isValidEndDayLog(log, endTime)) return null;
+    return _EndLocationResolution(
+      latitude: log.latitude,
+      longitude: log.longitude,
+      accuracy: log.accuracy,
+      capturedAt: log.capturedAt,
+      source: 'remote_latest_log',
+    );
+  }
+
+  Future<_EndLocationResolution> _resolveEndDayLocation({
+    required Attendance attendance,
+    required DateTime endTime,
+  }) async {
+    final attendanceId = attendance.remoteId ?? attendance.id;
+    final fresh = await _captureFreshEndDayLocation();
+    if (fresh != null) return fresh;
+
+    final local = await _latestLocalEndDayLocation(attendanceId, endTime);
+    if (local != null) return local;
+
+    final remote = await _latestRemoteEndDayLocation(attendanceId, endTime);
+    if (remote != null) return remote;
+
+    while (mounted) {
+      final retry = await _confirmMissingEndDayLocation();
+      if (retry == null || retry == true) {
+        final retryFresh = await _captureFreshEndDayLocation();
+        if (retryFresh != null) return retryFresh;
+        continue;
+      }
+      return _EndLocationResolution(
+        source: 'missing',
+        missingReason:
+            'Fresh GPS, local latest GPS log, and remote latest GPS log were unavailable or not clean at End Day.',
+        warningAcknowledged: true,
+      );
+    }
+
+    return const _EndLocationResolution(
+      source: 'missing',
+      missingReason: 'End Day location confirmation dialog was unavailable.',
+      warningAcknowledged: true,
+    );
+  }
+
   Future<void> _endDay() async {
     if (_busy) return;
     final attendance = _attendance;
@@ -993,72 +1165,23 @@ class _HomeScreenState extends State<HomeScreen>
         error:
             'attendance_id=${resolvedAttendance.attendance.remoteId} end_day_with_open_site=$endDayWithOpenSite',
       );
-      Position? position;
-      try {
-        await CrashLogService.record(
-          employeeCode: widget.user.employeeCode,
-          screen: 'home',
-          action: 'END_DAY_FINAL_GPS_FETCH_START',
-        );
-        final currentPosition = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            timeLimit: Duration(seconds: 15),
-          ),
-        );
-        if (_isCleanEndDayPosition(currentPosition)) {
-          position = currentPosition;
-          await CrashLogService.record(
-            employeeCode: widget.user.employeeCode,
-            screen: 'home',
-            action: 'END_DAY_FINAL_GPS_FETCH_SUCCESS',
-          );
-        } else {
-          await CrashLogService.record(
-            employeeCode: widget.user.employeeCode,
-            screen: 'home',
-            action: 'END_DAY_FINAL_GPS_FETCH_FAILED',
-            error: 'End Day GPS accuracy/coordinate rejected.',
-          );
-        }
-      } catch (error, stackTrace) {
-        await CrashLogService.record(
-          employeeCode: widget.user.employeeCode,
-          screen: 'home',
-          action: 'END_DAY_FINAL_GPS_FETCH_FAILED',
-          error: error,
-          stackTrace: stackTrace,
-        );
-        position = null;
-      }
-      final fallbackLog = position == null
-          ? await TrackingService.latestValidLog(
-              attendance.remoteId ?? attendance.id,
-            )
-          : null;
+      final endTime = DateTime.now();
+      final endLocation = await _resolveEndDayLocation(
+        attendance: attendance,
+        endTime: endTime,
+      );
       int? battery;
       try {
         battery = await Battery().batteryLevel;
       } catch (_) {
         battery = null;
       }
-      final endLatitude = position?.latitude ?? fallbackLog?.latitude;
-      final endLongitude = position?.longitude ?? fallbackLog?.longitude;
-      final endAccuracy = position?.accuracy ?? fallbackLog?.accuracy;
-      final endSpeed = position != null
-          ? (position.speed < 0 ? 0.0 : position.speed)
-          : fallbackLog?.speed;
-      if (position != null) {
-        await TrackingService.saveRouteAnchor(
-          user: widget.user,
-          attendance: attendance,
-          position: position,
-          action: 'ROUTE_ANCHOR_END_DAY_SAVED',
-        );
-      }
+      final endLatitude = endLocation.latitude;
+      final endLongitude = endLocation.longitude;
+      final endAccuracy = endLocation.accuracy;
+      const endSpeed = 0.0;
       await TrackingService.syncQueuedLogs(force: true);
       final actualKm = await _calculateContinuedKm(attendance);
-      final endTime = DateTime.now();
       final autoCloseResult = endDayWithOpenSite
           ? await SupabaseService.autoCloseOpenSiteVisitsForEndDay(
               user: widget.user,
@@ -1089,10 +1212,14 @@ class _HomeScreenState extends State<HomeScreen>
               endDayWithOpenSite: endDayWithOpenSite,
               openSiteAutoClosed: autoCloseResult.closedCount > 0,
               autoClosedSiteVisitId: autoCloseResult.firstClosedVisitId,
+              endLocationMetadata: endLocation.toMetadata(),
             );
         attendance
           ..remoteId = completedAttendance.attendance.remoteId
-          ..endTime = completedAttendance.attendance.endTime ?? endTime;
+          ..endTime = completedAttendance.attendance.endTime ?? endTime
+          ..endLat = completedAttendance.attendance.endLat ?? endLatitude
+          ..endLng = completedAttendance.attendance.endLng ?? endLongitude
+          ..metadata = completedAttendance.attendance.metadata;
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'home',
@@ -1110,6 +1237,32 @@ class _HomeScreenState extends State<HomeScreen>
         );
         _toast('End Day failed. Please try again.');
         return;
+      }
+      var recalcPending = false;
+      if (endLocation.hasCoordinate &&
+          SupabaseService.isValidUuid(attendance.remoteId)) {
+        try {
+          await SupabaseService.triggerFoKmRecalculation(
+            attendanceId: attendance.remoteId!,
+            foUserId: widget.user.employeeCode,
+            date: attendance.attendanceDate,
+          );
+          await CrashLogService.record(
+            employeeCode: widget.user.employeeCode,
+            screen: 'home',
+            action: 'END_DAY_KM_RECALCULATION_TRIGGERED',
+            error: 'attendance_id=${attendance.remoteId}',
+          );
+        } catch (error, stackTrace) {
+          await CrashLogService.record(
+            employeeCode: widget.user.employeeCode,
+            screen: 'home',
+            action: 'END_DAY_KM_RECALCULATION_FAILED',
+            error: error,
+            stackTrace: stackTrace,
+          );
+          recalcPending = true;
+        }
       }
       var secondarySyncPending = false;
       try {
@@ -1186,7 +1339,9 @@ class _HomeScreenState extends State<HomeScreen>
         error: 'attendance_id=${attendance.remoteId ?? attendance.id}',
       );
       _toast(
-        secondarySyncPending
+        recalcPending
+            ? 'End Day saved. KM will update after recalculation.'
+            : secondarySyncPending
             ? 'End Day completed; status synchronization pending.'
             : 'Day ended successfully.',
       );
@@ -1338,6 +1493,30 @@ class _HomeScreenState extends State<HomeScreen>
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
             child: const Text('Continue & End Day'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool?> _confirmMissingEndDayLocation() async {
+    if (!mounted) return false;
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('End location not available'),
+        content: const Text(
+          'End Day GPS location could not be captured. Final return KM may not be calculated. Please move to open sky, enable location, and retry.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('End Day Without Final KM'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Retry GPS'),
           ),
         ],
       ),

@@ -253,8 +253,8 @@ function officerStatus(officer) {
   const active = isOperationallyActive(officer);
   return {
     label: operationalStatusLabel(officer?.operationalStatus),
-    tone: active ? "text-emerald-600" : "text-rose-600",
-    dot: active ? "bg-emerald-500" : "bg-rose-500",
+    tone: active ? "text-emerald-600" : "text-slate-500",
+    dot: active ? "bg-emerald-500" : "bg-slate-400",
   };
 }
 
@@ -272,12 +272,20 @@ function markerTone(state, officers) {
   const isCritical =
     state.status === "Critical" ||
     officers.some((officer) => !isOperationallyActive(officer));
-  if (isCritical) return "#ef4444";
+  if (isCritical) return "#64748b";
   return "#10b981";
 }
 
 function foMarkerColor(officer) {
-  return isOperationallyActive(officer) ? "#10b981" : "#ef4444";
+  return isOperationallyActive(officer) ? "#10b981" : "#64748b";
+}
+
+function escapeMarkerAttribute(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function foMarkerIcon(officer) {
@@ -285,14 +293,42 @@ function foMarkerIcon(officer) {
   const isActive = isOperationallyActive(officer);
   const isSelected = officer.isSelected === true;
   const rotation = Number(officer.heading || 0);
+  const imageUrl = firstNonEmptyText(
+    officer.avatarUrl,
+    officer.profileImageUrl,
+    officer.profile_image_url,
+    officer.metadata?.profile_image_url,
+  );
+  if (imageUrl) {
+    return L.divIcon({
+      className: "",
+      html: `
+        <div class="fo-map-avatar-marker ${isActive ? "fo-map-avatar-active" : "fo-map-avatar-inactive"} ${isSelected ? "fo-map-avatar-selected" : ""}" style="--marker-color:${color}; --marker-rotation:${rotation}deg;">
+          ${isActive ? '<span class="fo-bike-pulse"></span>' : ""}
+          <div class="fo-map-avatar-ring">
+            <img class="fo-map-avatar-img" src="${escapeMarkerAttribute(imageUrl)}" alt="" onerror="this.closest('.fo-map-avatar-marker').classList.add('fo-map-avatar-broken');" />
+            <span class="fo-map-avatar-fallback">
+              <span class="fo-bike-glyph">&#128757;</span>
+            </span>
+          </div>
+        </div>
+      `,
+      iconSize: [48, 48],
+      iconAnchor: [24, 24],
+      popupAnchor: [0, -20],
+    });
+  }
+  const bikeCore = `
+    <span class="fo-bike-core" style="transform: rotate(${rotation}deg);">
+      <span class="fo-bike-glyph">&#128757;</span>
+    </span>
+  `;
   return L.divIcon({
     className: "",
     html: `
       <div class="fo-bike-marker ${isSelected ? "fo-bike-marker-selected" : ""}" style="--marker-color:${color};">
         ${isActive ? '<span class="fo-bike-pulse"></span>' : ""}
-        <span class="fo-bike-core" style="transform: rotate(${rotation}deg);">
-          <span class="fo-bike-glyph">&#128757;</span>
-        </span>
+        ${bikeCore}
       </div>
     `,
     iconSize: [48, 48],
@@ -887,6 +923,12 @@ function profileByEmployeeCode(rows = []) {
   return profilesByCode;
 }
 
+function profileMetadata(profile) {
+  return profile?.metadata && typeof profile.metadata === "object" && !Array.isArray(profile.metadata)
+    ? profile.metadata
+    : {};
+}
+
 function firstNonEmptyText(...values) {
   return values
     .map((value) => String(value || "").trim())
@@ -935,6 +977,7 @@ function matchOfficerProfile({ officer = {}, attendance, visits = [], profilesBy
 function enrichOfficer({ officer, attendance, visits = [], live, profilesByCode }) {
   const activeVisit = visits.find(isSiteVisitOpen) || null;
   const profile = matchOfficerProfile({ officer, attendance, visits, profilesByCode });
+  const metadata = profileMetadata(profile);
   const employeeCode = firstNonEmptyText(
     officer.employee_code,
     officer.employeeCode,
@@ -1031,6 +1074,9 @@ function enrichOfficer({ officer, attendance, visits = [], live, profilesByCode 
     designation: profile?.designation || officer.designation || "--",
     department: profile?.department || officer.department || "--",
     business: profile?.business || officer.business || "--",
+    avatarUrl: firstNonEmptyText(metadata.profile_image_url, officer.avatarUrl, officer.profileImageUrl, officer.profile_image_url),
+    profileImageUrl: firstNonEmptyText(metadata.profile_image_url, officer.profileImageUrl, officer.profile_image_url, officer.avatarUrl),
+    profile_image_url: firstNonEmptyText(metadata.profile_image_url, officer.profile_image_url, officer.profileImageUrl, officer.avatarUrl),
     displayNameSource: profileOnly ? "profile" : displayNameSource,
     coordinates,
     locationSource,
@@ -1917,6 +1963,48 @@ function LegendItem({ color, label, helper, dashed = false, site = false }) {
   );
 }
 
+function operationsAvatarTone(officer) {
+  return isOperationallyActive(officer)
+    ? {
+        ring: "ring-emerald-500/90",
+        bg: "bg-emerald-500",
+        soft: "bg-emerald-50 text-emerald-700",
+      }
+    : {
+        ring: "ring-slate-300",
+        bg: "bg-slate-400",
+        soft: "bg-slate-100 text-slate-600",
+      };
+}
+
+function OperationsAvatar({ officer, size = "h-10 w-10", iconSize = "h-5 w-5" }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const imageUrl = firstNonEmptyText(
+    officer?.avatarUrl,
+    officer?.profileImageUrl,
+    officer?.profile_image_url,
+    officer?.metadata?.profile_image_url,
+  );
+  const showImage = Boolean(imageUrl) && !imageFailed;
+  const tone = operationsAvatarTone(officer);
+  return (
+    <span
+      className={`grid ${size} shrink-0 place-items-center overflow-hidden rounded-full text-white shadow-sm ring-2 ring-offset-2 ring-offset-white dark:ring-offset-slate-900 ${tone.ring} ${tone.bg}`}
+    >
+      {showImage ? (
+        <img
+          src={imageUrl}
+          alt=""
+          className="h-full w-full object-cover"
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        <Bike className={iconSize} />
+      )}
+    </span>
+  );
+}
+
 function OfficerDirectoryRow({ officer, selected, onSelect }) {
   const distanceToday = Number(
     officer.eligibleKm ?? officer.routeKmToday ?? 0,
@@ -1924,13 +2012,9 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
   const hasReviewWarning =
     Boolean(officer.reviewFlags?.length) || officer.foSafeKm?.reviewRequired;
   const statusStyles =
-    officer.operationalStatus === "ON_TRAVEL"
-      ? { chip: "bg-blue-50 text-blue-700", icon: "bg-blue-600" }
-      : ["ON_SITE", "ACTIVE_STATIONARY"].includes(officer.operationalStatus)
-        ? { chip: "bg-emerald-50 text-emerald-700", icon: "bg-emerald-500" }
-        : officer.operationalStatus === "ENDED"
-          ? { chip: "bg-slate-100 text-slate-600", icon: "bg-slate-500" }
-          : { chip: "bg-rose-50 text-rose-700", icon: "bg-rose-500" };
+    isOperationallyActive(officer)
+      ? { chip: "bg-emerald-50 text-emerald-700" }
+      : { chip: "bg-slate-100 text-slate-600" };
 
   return (
     <button
@@ -1943,11 +2027,7 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
       }`}
     >
       <div className="flex items-start gap-3">
-        <span
-          className={`grid h-10 w-10 shrink-0 place-items-center rounded-full text-white shadow-sm ${statusStyles.icon}`}
-        >
-          <Bike className="h-5 w-5" />
-        </span>
+        <OperationsAvatar officer={officer} />
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
@@ -2018,19 +2098,17 @@ function ExecutiveOfficerPanel({
   const hasReviewWarning =
     Boolean(officer.reviewFlags?.length) || officer.foSafeKm?.reviewRequired;
   const statusClass =
-    officer.operationalStatus === "ON_TRAVEL"
-      ? "bg-blue-50 text-blue-700"
-      : isOperationallyActive(officer)
-        ? "bg-emerald-50 text-emerald-700"
-        : officer.operationalStatus === "ENDED"
-          ? "bg-slate-100 text-slate-600"
-          : "bg-rose-50 text-rose-700";
+    isOperationallyActive(officer)
+      ? "bg-emerald-50 text-emerald-700"
+      : "bg-slate-100 text-slate-600";
 
   return (
     <div className="border-b border-slate-100 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
-          <div className="min-w-0">
+          <div className="flex min-w-0 gap-3">
+            <OperationsAvatar officer={officer} size="h-9 w-9" iconSize="h-4 w-4" />
+            <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate text-sm font-black text-slate-950 dark:text-white">
                 {officer.name}
@@ -2047,6 +2125,7 @@ function ExecutiveOfficerPanel({
             <p className="mt-1 text-[11px] font-bold text-slate-500">
               {officer.employeeCode || officer.foId || "--"}
             </p>
+            </div>
           </div>
           <button
             type="button"
@@ -2169,7 +2248,7 @@ function SelectedOfficerSummary({
   const statusText = status.label;
   const statusClass = isOperationallyActive(officer)
     ? "bg-emerald-50 text-emerald-700"
-    : "bg-rose-50 text-rose-700";
+    : "bg-slate-100 text-slate-600";
 
   return (
     <div className="border-b border-slate-100 bg-qpms-50/70 p-4 dark:border-slate-800 dark:bg-qpms-500/10">
@@ -6437,7 +6516,7 @@ function FoSupportActionPanel({
   const statusText = status.label;
   const statusClass = isOperationallyActive(officer)
     ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
-    : "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-200";
+    : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
   const accuracyLabel =
     officer.accuracy === null || officer.accuracy === undefined
       ? "--"
@@ -6485,16 +6564,19 @@ function FoSupportActionPanel({
     <div className="border-b border-slate-100 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-3 py-2.5 dark:border-slate-800">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h2 className="truncate text-sm font-black text-slate-950 dark:text-white">{officer.name}</h2>
-              <span className={`shrink-0 rounded-md px-2 py-0.5 text-[10px] font-black ${statusClass}`}>
-                {statusText}
-              </span>
+          <div className="flex min-w-0 gap-3">
+            <OperationsAvatar officer={officer} size="h-9 w-9" iconSize="h-4 w-4" />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h2 className="truncate text-sm font-black text-slate-950 dark:text-white">{officer.name}</h2>
+                <span className={`shrink-0 rounded-md px-2 py-0.5 text-[10px] font-black ${statusClass}`}>
+                  {statusText}
+                </span>
+              </div>
+              <p className="mt-0.5 truncate text-[11px] font-bold text-slate-500">
+                {officer.employeeCode || officer.foId || "--"}
+              </p>
             </div>
-            <p className="mt-0.5 truncate text-[11px] font-bold text-slate-500">
-              {officer.employeeCode || officer.foId || "--"}
-            </p>
           </div>
           {onClose ? (
             <button
@@ -6960,7 +7042,7 @@ export default function FOActivities() {
             supabase
               .from("profiles")
               .select(
-                "id, full_name, display_name, employee_code, username, mobile, email, role, department, designation, business, state, status, is_active",
+                "id, full_name, display_name, employee_code, username, mobile, email, role, department, designation, business, state, status, is_active, metadata",
               )
               .eq("is_active", true)
               .limit(5000),
@@ -8249,8 +8331,8 @@ export default function FOActivities() {
 
             <div className="absolute bottom-5 left-5 z-[520] flex max-w-[calc(100%-40px)] flex-wrap items-center gap-4 rounded-xl border border-white/80 bg-white/95 px-4 py-3 shadow-xl backdrop-blur">
               <LegendItem color="#10b981" label="Active / On Site" />
-              <LegendItem color="#2563eb" label="On Travel" />
-              <LegendItem color="#ef4444" label="Not Started / Offline" />
+              <LegendItem color="#10b981" label="On Travel" />
+              <LegendItem color="#64748b" label="Not Started / Offline" />
               <LegendItem color="#2563eb" label="Site / Office" site />
             </div>
 
@@ -8388,7 +8470,7 @@ export default function FOActivities() {
                   label="Started Day / Active"
                 />
                 <LegendItem
-                  color="#ef4444"
+                  color="#64748b"
                   label="Not Started or Ended Day"
                 />
                 <LegendItem color="#2563eb" label="Site / Office" site />
@@ -8596,8 +8678,8 @@ export default function FOActivities() {
                 ) : null}
                 <div className="absolute bottom-5 left-5 z-[520] flex max-w-[calc(100%-40px)] flex-wrap items-center gap-4 rounded-xl border border-white/80 bg-white/95 px-4 py-3 shadow-xl backdrop-blur">
                   <LegendItem color="#10b981" label="Active / On Site" />
-                  <LegendItem color="#2563eb" label="On Travel" />
-                  <LegendItem color="#ef4444" label="Not Started / Offline" />
+                  <LegendItem color="#10b981" label="On Travel" />
+                  <LegendItem color="#64748b" label="Not Started / Offline" />
                   <LegendItem color="#2563eb" label="Site / Office" site />
                 </div>
               </div>
