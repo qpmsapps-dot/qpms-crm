@@ -2926,6 +2926,27 @@ function appendSheet(workbook, name, rows, headers) {
   XLSX.utils.book_append_sheet(workbook, worksheet, name);
 }
 
+function dateInputValue(value) {
+  if (!value) return toDateInputValue(new Date());
+  if (typeof value === "string") {
+    return value.includes("T") ? toDateInputValue(new Date(value)) : value.slice(0, 10);
+  }
+  return toDateInputValue(value);
+}
+
+function dateInputsBetween(from, to) {
+  const fromDate = dateInputValue(from);
+  const toDate = dateInputValue(to);
+  const dates = [];
+  let cursor = indiaDateFromInput(fromDate);
+  const end = indiaDateFromInput(toDate);
+  while (cursor <= end) {
+    dates.push(toDateInputValue(cursor));
+    cursor = new Date(cursor.getTime() + 86400000);
+  }
+  return dates.length ? dates : [fromDate];
+}
+
 function findOfficerForFoId(officers = [], foId) {
   const normalized = normalizeFoKey(foId);
   if (!normalized) return null;
@@ -2937,16 +2958,102 @@ function findOfficerForFoId(officers = [], foId) {
   );
 }
 
-function officerForAttendanceRow(officers = [], row = {}) {
-  return findOfficerForFoId(officers, row.fo_user_id || row.employee_code);
-}
-
 function officerForVisitRow(officers = [], row = {}) {
   return findOfficerForFoId(officers, row.fo_user_id || row.employee_code);
 }
 
 function attendanceDateLabel(row) {
   return row?.attendance_date || formatDateOnly(row?.login_time);
+}
+
+function attendanceDateInput(row = {}) {
+  return firstNonEmptyText(row.attendance_date, row.login_time ? dateInputValue(row.login_time) : "");
+}
+
+function profileToExportOfficer(profile = {}) {
+  const metadata = profileMetadata(profile);
+  const employeeCode = firstNonEmptyText(profile.employee_code, profile.username, profile.id);
+  return {
+    id: normalizeFoKey(employeeCode || profile.id),
+    foId: employeeCode,
+    employeeCode,
+    employeeKey: normalizeFoKey(employeeCode),
+    profile,
+    name: firstNonEmptyText(profile.display_name, profile.full_name, employeeCode),
+    state: profile.state || "--",
+    branch: profile.state || "--",
+    phone: profile.mobile || profile.phone || "--",
+    email: profile.email || "",
+    username: profile.username || "",
+    role: profile.role || "--",
+    designation: profile.designation || "--",
+    department: profile.department || "--",
+    business: profile.business || "--",
+    avatarUrl: firstNonEmptyText(metadata.profile_image_url),
+    profileImageUrl: firstNonEmptyText(metadata.profile_image_url),
+    profile_image_url: firstNonEmptyText(metadata.profile_image_url),
+    operationalStatus: "NOT_STARTED",
+    operationalStatusLabel: operationalStatusLabel("NOT_STARTED"),
+    eligibleKm: 0,
+    routeKmToday: 0,
+    petrolAmount: 0,
+    visits: [],
+    attendances: [],
+  };
+}
+
+function officerSearchMatches(officer, searchText = "") {
+  const normalizedSearch = searchText.trim().toLowerCase();
+  if (!normalizedSearch) return true;
+  return [
+    officer.name,
+    officer.employeeCode,
+    officer.foId,
+    officer.username,
+    officer.phone,
+    officer.email,
+    officer.role,
+    officer.designation,
+    officer.department,
+    officer.state,
+    officer.business,
+    officer.operationalStatus,
+    officer.operationalStatusLabel,
+    operationalStatusLabel(officer.operationalStatus),
+    officer.assignedSite,
+    officer.branch,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .includes(normalizedSearch);
+}
+
+function exportOfficerMatchesFilters(officer, filters = {}) {
+  const stateMatches =
+    !filters.state || filters.state === "All States" || officer.state === filters.state;
+  const businessMatches =
+    !filters.business ||
+    filters.business === "All Business" ||
+    officer.business === filters.business;
+  return stateMatches && businessMatches && officerSearchMatches(officer, filters.search || "");
+}
+
+function visitsForEmployeeDate(siteVisitRows = [], employeeKey, dateInput) {
+  return siteVisitRows.filter((visit) => {
+    const visitEmployeeKey = normalizeFoKey(visit.fo_user_id || visit.employee_code);
+    return (
+      visitEmployeeKey === employeeKey &&
+      dateInputValue(visit.check_in_time) === dateInput
+    );
+  });
+}
+
+function operationalStatusForHistoricalAttendance(attendance, visits = []) {
+  if (!attendance) return "NOT_STARTED";
+  if (isAttendanceEnded(attendance)) return "ENDED";
+  if (visits.some(isSiteVisitOpen)) return "ON_SITE";
+  return "ACTIVE_STATIONARY";
 }
 
 function exportFilteredOperationsDashboardExcel({
@@ -2967,42 +3074,66 @@ function exportFilteredOperationsDashboardExcel({
   );
   const workbook = XLSX.utils.book_new();
 
-  const attendanceSummaryRows = (attendanceRows || [])
-    .filter((row) => officerIds.has(normalizeFoKey(row.fo_user_id || row.employee_code)))
-    .map((row) => {
-      const officer = officerForAttendanceRow(exportOfficers, row) || {};
-      const totalVisits = (siteVisitRows || []).filter(
-        (visit) =>
-          normalizeFoKey(visit.fo_user_id || visit.employee_code) ===
-          normalizeFoKey(row.fo_user_id || row.employee_code),
-      ).length;
-      const payableKm = payableKmFromAttendance(row);
-      return {
-        "Employee Code": officer.employeeCode || row.employee_code || row.fo_user_id || "",
+  const exportDates = dateInputsBetween(from, to);
+  const attendanceSummaryRows = [];
+  exportOfficers.forEach((officer) => {
+    const employeeKey = normalizeFoKey(officer.foId || officer.employeeCode);
+    exportDates.forEach((dateInput) => {
+      const row =
+        (attendanceRows || []).find(
+          (attendance) =>
+            normalizeFoKey(attendance.fo_user_id || attendance.employee_code) === employeeKey &&
+            attendanceDateInput(attendance) === dateInput,
+        ) || null;
+      const dateVisits = visitsForEmployeeDate(siteVisitRows, employeeKey, dateInput);
+      const operationalStatus = operationalStatusForHistoricalAttendance(row, dateVisits);
+      const exportOfficer = {
+        ...officer,
+        operationalStatus,
+        operationalStatusLabel: operationalStatusLabel(operationalStatus),
+      };
+      if (!statusFilterMatches(exportOfficer, filters?.status || "All Status")) return;
+      const payableKm = row ? payableKmFromAttendance(row) : 0;
+      const lastVisitTime = dateVisits
+        .map((visit) => siteVisitCheckoutValue(visit) || visit.check_in_time)
+        .filter(Boolean)
+        .sort()
+        .at(-1);
+      const lastLocationTime =
+        row?.last_location_time || row?.updated_at || lastVisitTime || row?.logout_time || row?.login_time;
+      attendanceSummaryRows.push({
+        "Employee Code": officer.employeeCode || row?.employee_code || row?.fo_user_id || "",
         "Employee Name":
-          officer.name || row.full_name || row.display_name || row.employee_name || "",
-        "Role / Designation": officer.designation || officer.role || row.designation || "",
-        State: officer.state || row.state || "",
-        Business: officer.business || row.business || "",
-        "Attendance Date": attendanceDateLabel(row),
-        "Start Day Time / Login Time": formatDateTime(row.login_time),
-        "End Day Time / Logout Time": formatDateTime(row.logout_time),
-        "Current Status":
-          officer.operationalStatusLabel ||
-          operationalStatusLabel(officer.operationalStatus) ||
-          row.status ||
-          "",
-        "Total Visits": totalVisits,
+          officer.name || row?.full_name || row?.display_name || row?.employee_name || "",
+        "Role / Designation": officer.designation || officer.role || row?.designation || "",
+        State: officer.state || row?.state || "",
+        Business: officer.business || row?.business || "",
+        "Attendance Date": row ? attendanceDateLabel(row) : dateInput,
+        "Start Day Time / Login Time": formatDateTime(row?.login_time),
+        "End Day Time / Logout Time": formatDateTime(row?.logout_time),
+        "Current Status": row
+          ? operationalStatusLabel(operationalStatus)
+          : "Not Started",
+        "Total Visits": dateVisits.length,
         "Payable KM": payableKm.toFixed(2),
         "Petrol Amount": calculatePetrolAmount(payableKm).toFixed(2),
-        "Last Location Time": formatDateTime(
-          officer.locationSourceTime || row.last_location_time || row.updated_at,
-        ),
-      };
+        "Last Location Time": formatDateTime(lastLocationTime),
+      });
     });
+  });
+  const filteredAttendanceSummaryRows = attendanceSummaryRows.filter(Boolean);
+  const statusFilteredOfficerIds = new Set(
+    filteredAttendanceSummaryRows
+      .map((row) => normalizeFoKey(row["Employee Code"]))
+      .filter(Boolean),
+  );
+  const detailOfficerIds =
+    filters?.status && filters.status !== "All Status"
+      ? statusFilteredOfficerIds
+      : officerIds;
 
   const siteVisitDetailRows = (siteVisitRows || [])
-    .filter((visit) => officerIds.has(normalizeFoKey(visit.fo_user_id || visit.employee_code)))
+    .filter((visit) => detailOfficerIds.has(normalizeFoKey(visit.fo_user_id || visit.employee_code)))
     .map((visit) => {
       const officer = officerForVisitRow(exportOfficers, visit) || {};
       const routeKm = Number(visit.route_km);
@@ -3024,36 +3155,68 @@ function exportFilteredOperationsDashboardExcel({
       };
     });
 
-  const userSummaryRows = exportOfficers.map((officer) => {
-    const foId = normalizeFoKey(officer.foId || officer.employeeCode);
-    const officerAttendances = (attendanceRows || []).filter(
-      (row) => normalizeFoKey(row.fo_user_id || row.employee_code) === foId,
-    );
-    const officerVisits = (siteVisitRows || []).filter(
-      (visit) => normalizeFoKey(visit.fo_user_id || visit.employee_code) === foId,
-    );
-    const payableKm = officerAttendances.reduce(
-      (sum, row) => sum + payableKmFromAttendance(row),
-      0,
-    );
-    return {
-      "Employee Code": officer.employeeCode || officer.foId || "",
-      "Employee Name": officer.name || "",
-      "Role / Designation": officer.designation || officer.role || "",
-      State: officer.state || "",
-      Business: officer.business || "",
-      "Current Status":
-        officer.operationalStatusLabel ||
-        operationalStatusLabel(officer.operationalStatus),
-      "Attendance Records": officerAttendances.length,
-      "Total Visits": officerVisits.length,
-      "Payable KM": payableKm.toFixed(2),
-      "Petrol Amount": calculatePetrolAmount(payableKm).toFixed(2),
-      "Last Location Time": formatDateTime(officer.locationSourceTime),
-    };
-  });
+  const userSummaryRows = exportOfficers
+    .filter(
+      (officer) =>
+        !filters?.status ||
+        filters.status === "All Status" ||
+        statusFilteredOfficerIds.has(normalizeFoKey(officer.foId || officer.employeeCode)),
+    )
+    .map((officer) => {
+      const foId = normalizeFoKey(officer.foId || officer.employeeCode);
+      const officerAttendances = (attendanceRows || []).filter(
+        (row) => normalizeFoKey(row.fo_user_id || row.employee_code) === foId,
+      );
+      const officerVisits = (siteVisitRows || []).filter(
+        (visit) => normalizeFoKey(visit.fo_user_id || visit.employee_code) === foId,
+      );
+      const latestAttendance =
+        officerAttendances
+          .slice()
+          .sort(
+            (a, b) =>
+              new Date(b.logout_time || b.login_time || 0) -
+              new Date(a.logout_time || a.login_time || 0),
+          )[0] || null;
+      const summaryStatus = operationalStatusForHistoricalAttendance(
+        latestAttendance,
+        latestAttendance
+          ? visitsForEmployeeDate(siteVisitRows, foId, attendanceDateInput(latestAttendance))
+          : [],
+      );
+      const payableKm = officerAttendances.reduce(
+        (sum, row) => sum + payableKmFromAttendance(row),
+        0,
+      );
+      return {
+        "Employee Code": officer.employeeCode || officer.foId || "",
+        "Employee Name": officer.name || "",
+        "Role / Designation": officer.designation || officer.role || "",
+        State: officer.state || "",
+        Business: officer.business || "",
+        "Current Status": operationalStatusLabel(summaryStatus),
+        "Attendance Records": officerAttendances.length,
+        "Total Visits": officerVisits.length,
+        "Payable KM": payableKm.toFixed(2),
+        "Petrol Amount": calculatePetrolAmount(payableKm).toFixed(2),
+        "Last Location Time": formatDateTime(
+          latestAttendance?.last_location_time ||
+            latestAttendance?.updated_at ||
+            latestAttendance?.logout_time ||
+            latestAttendance?.login_time,
+        ),
+      };
+    });
 
-  appendSheet(workbook, "Attendance Summary", attendanceSummaryRows, [
+  if (import.meta.env.DEV) {
+    console.log("EXPORT FINAL ROW COUNTS", {
+      attendanceSummaryRows: filteredAttendanceSummaryRows.length,
+      siteVisitRows: siteVisitDetailRows.length,
+      userSummaryRows: userSummaryRows.length,
+    });
+  }
+
+  appendSheet(workbook, "Attendance Summary", filteredAttendanceSummaryRows, [
     "Employee Code",
     "Employee Name",
     "Role / Designation",
@@ -3112,6 +3275,106 @@ function exportFilteredOperationsDashboardExcel({
     workbook,
     `Operations_Command_Center_${toDateInputValue(from)}_${toDateInputValue(to)}_${filterLabel || "Filtered"}.xlsx`,
   );
+}
+
+async function exportHistoricalOperationsDashboardExcel({
+  from,
+  to,
+  filters,
+}) {
+  if (!isSupabaseConfigured || !supabase) return;
+  const fromDate = dateInputValue(from);
+  const toDate = dateInputValue(to);
+  const fromIso = formatDateForDb(startOfIndiaDayFromInput(fromDate));
+  const toIso = formatDateForDb(endOfIndiaDayFromInput(toDate));
+  const state = filters?.state || "All States";
+  const business = filters?.business || "All Business";
+  const status = filters?.status || "All Status";
+  const searchText = filters?.search || "";
+
+  if (import.meta.env.DEV) {
+    console.log("EXPORT FILTERS", {
+      fromDate,
+      toDate,
+      state,
+      business,
+      status,
+      searchText,
+    });
+  }
+
+  const [profilesRes, attendanceRes, siteVisits] = await Promise.all([
+    supabase
+      .from("profiles")
+      .select(
+        "id, full_name, display_name, employee_code, username, mobile, email, role, department, designation, business, state, status, is_active, metadata",
+      )
+      .eq("is_active", true)
+      .limit(5000),
+    supabase
+      .from("fo_attendance")
+      .select("*")
+      .gte("attendance_date", fromDate)
+      .lte("attendance_date", toDate)
+      .order("attendance_date", { ascending: true })
+      .limit(20000),
+    fetchFoSiteVisitRows(fromIso, toIso),
+  ]);
+  const errors = [profilesRes, attendanceRes]
+    .map((res) => res?.error)
+    .filter(Boolean);
+  if (errors.length) throw errors[0];
+
+  const profiles = profilesRes.data || [];
+  const exportOfficers = profiles
+    .filter(
+      (profile) =>
+        isActiveProfile(profile) &&
+        isOperationsCommandEligibleRecord(profile) &&
+        !isHiddenEmployeeRecord(profile),
+    )
+    .map(profileToExportOfficer)
+    .filter((officer) => exportOfficerMatchesFilters(officer, { state, business, search: searchText }));
+  const officerKeys = new Set(
+    exportOfficers
+      .flatMap((officer) => [
+        officer.foId,
+        officer.employeeCode,
+        officer.username,
+        officer.profile?.employee_code,
+        officer.profile?.username,
+      ])
+      .map(normalizeFoKey)
+      .filter(Boolean),
+  );
+  const attendanceRows = (attendanceRes.data || []).filter((row) =>
+    recordMatchesOfficerKeys(row, officerKeys),
+  );
+  const siteVisitRows = (siteVisits || []).filter((visit) =>
+    recordMatchesOfficerKeys(visit, officerKeys),
+  );
+
+  if (import.meta.env.DEV) {
+    console.log("EXPORT FETCH COUNTS", {
+      profiles: profiles.length,
+      attendance: attendanceRows.length,
+      siteVisits: siteVisitRows.length,
+    });
+  }
+
+  exportFilteredOperationsDashboardExcel({
+    officers: exportOfficers,
+    attendanceRows,
+    siteVisitRows,
+    from: startOfIndiaDayFromInput(fromDate),
+    to: endOfIndiaDayFromInput(toDate),
+    filters: {
+      state,
+      business,
+      status,
+      search: searchText,
+    },
+  });
 }
 
 async function exportFoOperationsExcel({
@@ -4237,12 +4500,7 @@ function detailRouteAnchor(id, type, label, coordinates, title) {
 }
 
 function routePointFromAttendanceEnd(attendance) {
-  const metadata =
-    attendance?.metadata &&
-    typeof attendance.metadata === "object" &&
-    !Array.isArray(attendance.metadata)
-      ? attendance.metadata
-      : {};
+  const metadata = attendanceMetadata(attendance);
   const lat = numberOrNull(
     attendance?.end_latitude ??
       attendance?.logout_latitude ??
@@ -4273,6 +4531,44 @@ function routePointFromAttendanceEnd(attendance) {
 function attendanceEndCoordinates(attendance) {
   const point = routePointFromAttendanceEnd(attendance);
   return point ? { latitude: point[0], longitude: point[1] } : null;
+}
+
+function attendanceMetadata(attendance) {
+  return attendance?.metadata &&
+    typeof attendance.metadata === "object" &&
+    !Array.isArray(attendance.metadata)
+    ? attendance.metadata
+    : {};
+}
+
+function finalReturnLegKmFromAttendance(attendance) {
+  const metadata = attendanceMetadata(attendance);
+  return numberOrNull(
+    metadata.final_return_leg_km ??
+      metadata.finalReturnLegKm ??
+      attendance?.final_return_leg_km,
+  );
+}
+
+function isStaleAutoEndedAttendance(attendance) {
+  const metadata = attendanceMetadata(attendance);
+  return (
+    /stale\s*auto\s*ended/i.test(String(attendance?.status || "")) ||
+    metadata.stale_auto_ended === true ||
+    metadata.auto_ended === true
+  );
+}
+
+function staleAutoEndReviewNote(attendance) {
+  if (!isStaleAutoEndedAttendance(attendance)) return null;
+  const metadata = attendanceMetadata(attendance);
+  if (metadata.stale_auto_end_gps_evidence_status === "found") {
+    return "Auto-ended / Requires review - GPS evidence available";
+  }
+  if (metadata.stale_auto_end_gps_evidence_status === "not_found") {
+    return "Auto-ended / Requires review - End GPS missing";
+  }
+  return "Auto-ended / Requires review";
 }
 
 let googleMapsScriptPromise = null;
@@ -5368,6 +5664,37 @@ function FieldOfficerDetailsView({
     });
     if (lastAttendance.logout_time) {
       const endCoordinates = attendanceEndCoordinates(lastAttendance);
+      const staleAutoEndNote = staleAutoEndReviewNote(lastAttendance);
+      const finalReturnLegKm = finalReturnLegKmFromAttendance(lastAttendance);
+      const finalReturnLegDistance =
+        finalReturnLegKm === null ? "--" : numberLabel(finalReturnLegKm, " km");
+      if (import.meta.env.DEV) {
+        const finalLegMetadata = attendanceMetadata(lastAttendance);
+        console.log("FINAL LEG DEBUG", {
+          attendanceId: lastAttendance.id,
+          lastSiteName: visits.length ? visitTitle(visits.at(-1)) : null,
+          lastSiteCheckoutLat:
+            finalLegMetadata.final_return_leg_origin_lat ??
+            finalLegMetadata.final_return_leg_from?.latitude ??
+            null,
+          lastSiteCheckoutLng:
+            finalLegMetadata.final_return_leg_origin_lng ??
+            finalLegMetadata.final_return_leg_from?.longitude ??
+            null,
+          endLat:
+            finalLegMetadata.final_return_leg_destination_lat ??
+            finalLegMetadata.final_return_leg_to?.latitude ??
+            endCoordinates?.latitude ??
+            null,
+          endLng:
+            finalLegMetadata.final_return_leg_destination_lng ??
+            finalLegMetadata.final_return_leg_to?.longitude ??
+            endCoordinates?.longitude ??
+            null,
+          finalLegKm: finalReturnLegKm,
+          totalPayableKm: totalKm,
+        });
+      }
       rows.push({
         key: "end",
         index: <Square className="h-3.5 w-3.5" />,
@@ -5380,13 +5707,13 @@ function FieldOfficerDetailsView({
         checkOut: formatDateTime(lastAttendance.logout_time),
         duration: durationMinutesLabel(workingMinutes),
         travelFromPrevious: visits.length ? visitTitle(visits.at(-1)) : "--",
-        distance: "--",
+        distance: finalReturnLegDistance,
         missingKm: "--",
-        remarks: "End of day",
+        remarks: staleAutoEndNote || "End of day",
       });
     }
     return rows;
-  }, [firstAttendance, lastAttendance, visits, workingMinutes]);
+  }, [firstAttendance, lastAttendance, totalKm, visits, workingMinutes]);
 
   const selectedTravelFromPrevious = selectedVisit
     ? activeVisitIndex === 0
@@ -7038,6 +7365,7 @@ export default function FOActivities() {
   const { user } = useAuth();
   const currentRole = normalizeRoleKey(user?.rawRole || user?.role);
   const fullTechnicalAccess = ["admin", "developer", "md"].includes(currentRole);
+  const canRunBatchKmRecalculation = ["admin", "developer", "qpmsadmin", "md", "coo"].includes(currentRole);
   const canReviewCheckoutExceptions =
     canReviewCheckoutException(currentRole);
   const [stateFilter, setStateFilter] = useState("All States");
@@ -7070,6 +7398,8 @@ export default function FOActivities() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [kmRecalcBusy, setKmRecalcBusy] = useState(false);
   const [kmRecalcResult, setKmRecalcResult] = useState(null);
+  const [batchKmRecalcBusy, setBatchKmRecalcBusy] = useState(false);
+  const [dashboardExportBusy, setDashboardExportBusy] = useState(false);
   const [customFromDate, setCustomFromDate] = useState(
     toDateInputValue(new Date()),
   );
@@ -7350,6 +7680,89 @@ export default function FOActivities() {
       ),
     [statusFilter, structurallyFilteredOfficers],
   );
+
+  async function exportDashboardExcel() {
+    if (dashboardExportBusy) return;
+    setDashboardExportBusy(true);
+    try {
+      await exportHistoricalOperationsDashboardExcel({
+        from: selectedRange.from,
+        to: selectedRange.to,
+        filters: {
+          state: stateFilter,
+          business: businessFilter,
+          status: statusFilter,
+          search,
+        },
+      });
+    } catch (error) {
+      console.warn("[myQPMS FO] Historical dashboard export failed.", error);
+      window.alert("Unable to export Operations report for the selected date range. Please retry.");
+    } finally {
+      setDashboardExportBusy(false);
+    }
+  }
+
+  async function recalculateAllKmForSelectedRange() {
+    if (batchKmRecalcBusy) return;
+    try {
+      assertDemoWriteAllowed(user);
+    } catch (error) {
+      window.alert(error.message);
+      return;
+    }
+    const confirmed = window.confirm(
+      "This will recalculate payable KM for all eligible completed attendances in the selected date range. Stale auto-ended rows and rows without End Day GPS will be skipped. Continue?",
+    );
+    if (!confirmed) return;
+
+    setBatchKmRecalcBusy(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) {
+        throw new Error("Admin session expired. Please login again.");
+      }
+      const response = await fetch(`${API_BASE_URL}/api/fo/km/recalculate-batch`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          fromDate: selectedRange.fromDate,
+          toDate: selectedRange.toDate,
+          state: stateFilter,
+          business: businessFilter,
+          status: statusFilter,
+          dryRun: false,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.message || "Batch KM recalculation failed.");
+      }
+      window.alert(
+        [
+          "Recalculate All KM completed.",
+          `Scanned: ${payload.scanned ?? 0}`,
+          `Updated: ${payload.updated ?? 0}`,
+          `Skipped - Missing End GPS: ${payload.skipped_missing_end_location ?? 0}`,
+          `Skipped - Stale Auto Ended: ${payload.skipped_stale_auto_ended ?? 0}`,
+          `Skipped - No Visits: ${payload.skipped_no_visits ?? 0}`,
+          `Skipped - Missing Origin: ${payload.skipped_missing_origin ?? 0}`,
+          `Failed: ${payload.failed ?? 0}`,
+        ].join("\n"),
+      );
+      setKmRecalcResult(payload);
+      setRefreshToken((value) => value + 1);
+    } catch (error) {
+      console.warn("[myQPMS FO] Batch KM recalculation failed.", error);
+      window.alert(error.message || "Batch KM recalculation failed.");
+    } finally {
+      setBatchKmRecalcBusy(false);
+    }
+  }
 
   const stateSummaryRows = useMemo(() => {
     if (!officers.length) return [];
@@ -7945,6 +8358,10 @@ export default function FOActivities() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           fo_user_id: selectedOfficer.foId || selectedOfficer.employeeCode,
+          employee_code:
+            selectedOfficer.employeeCode ||
+            selectedOfficer.attendance?.employee_code ||
+            selectedOfficer.foId,
           attendance_id: selectedOfficer.attendance?.id,
           date: selectedRange.fromDate,
         }),
@@ -8292,25 +8709,26 @@ export default function FOActivities() {
           <div className="flex items-end">
             <button
               type="button"
-              onClick={() =>
-                exportFilteredOperationsDashboardExcel({
-                  officers: filteredOfficers,
-                  attendanceRows: visibleAttendanceKpiRows,
-                  siteVisitRows: visibleSiteVisitRows,
-                  from: selectedRange.from,
-                  to: selectedRange.to,
-                  filters: {
-                    state: stateFilter,
-                    business: businessFilter,
-                    status: statusFilter,
-                  },
-                })
-              }
+              onClick={exportDashboardExcel}
+              disabled={dashboardExportBusy}
               className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-sm font-black text-emerald-700 hover:bg-emerald-100"
             >
-              <FileSpreadsheet className="h-4 w-4" /> Export Excel
+              <FileSpreadsheet className="h-4 w-4" /> {dashboardExportBusy ? "Exporting..." : "Export Excel"}
             </button>
           </div>
+          {canRunBatchKmRecalculation ? (
+            <div className="flex items-end">
+              <button
+                type="button"
+                onClick={recalculateAllKmForSelectedRange}
+                disabled={batchKmRecalcBusy}
+                className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-amber-200 bg-amber-50 px-3 text-sm font-black text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshCw className={`h-4 w-4 ${batchKmRecalcBusy ? "animate-spin" : ""}`} />
+                {batchKmRecalcBusy ? "Recalculating..." : "Recalculate All KM"}
+              </button>
+            </div>
+          ) : null}
         </div>
       </section>
 

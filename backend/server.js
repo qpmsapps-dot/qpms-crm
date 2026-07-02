@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import express from 'express';
 import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
-import { recalculateFoKm, recalculateFoKmForToday } from './foKmRecalculationService.js';
+import { recalculateFoKm, recalculateFoKmBatch, recalculateFoKmForToday } from './foKmRecalculationService.js';
 import { cleanupStaleFoSessions } from './foStaleSessionCleanupService.js';
 import {
   normalizeReportState,
@@ -542,6 +542,25 @@ function requireDailyReportPermission(request, response, next) {
     response.status(403).json({
       ok: false,
       message: `Role ${request.userRole || 'Unknown'} cannot send Daily Operations reports.`,
+    });
+    return;
+  }
+  next();
+}
+
+function hasFoKmBatchRecalculationPermission(profile) {
+  if (!profile || profile.is_active !== true) return false;
+  if (String(profile.status || '').trim().toLowerCase() !== 'active') return false;
+  return new Set(['ADMIN', 'QPMSADMIN', 'DEVELOPER', 'MD', 'COO']).has(
+    normalizePermissionRole(profile.role),
+  );
+}
+
+function requireFoKmBatchRecalculationPermission(request, response, next) {
+  if (!hasFoKmBatchRecalculationPermission(request.profile)) {
+    response.status(403).json({
+      ok: false,
+      message: `Role ${request.userRole || 'Unknown'} cannot run batch KM recalculation.`,
     });
     return;
   }
@@ -4579,6 +4598,12 @@ app.post(
 
 app.post('/api/fo/km/recalculate', async (request, response) => {
   const payload = request.body || {};
+  console.log('KM RECALC REQUEST', {
+    attendanceId: payload.attendance_id || null,
+    foUserId: payload.fo_user_id || null,
+    employeeCode: payload.employee_code || null,
+    date: payload.date || null,
+  });
   const lockKey = foKmRecalculationLockKey(payload);
   const lockDate = normalizeFoKmRecalculationDate(payload.date);
   if (foKmRecalculateAllLocks.has(lockDate) || foKmRecalculationLocks.has(lockKey)) {
@@ -4607,9 +4632,41 @@ app.post('/api/fo/km/recalculate', async (request, response) => {
   }
 });
 
-app.post('/api/fo/km/recalculate-all', async (request, response) => {
+app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
   const payload = request.body || {};
-  const lockDate = normalizeFoKmRecalculationDate(payload.date);
+  const fromDate = normalizeFoKmRecalculationDate(payload.fromDate || payload.date);
+  const toDate = normalizeFoKmRecalculationDate(payload.toDate || payload.date || fromDate);
+  const lockDate = `${fromDate}_${toDate}`;
+  if (foKmRecalculateAllLocks.has(lockDate) || hasFoKmRecalculationForDate(fromDate)) {
+    response.status(409).json({ ok: false, message: FO_KM_RECALCULATION_RUNNING_MESSAGE });
+    return;
+  }
+  foKmRecalculateAllLocks.add(lockDate);
+  try {
+    const client = requireServiceRoleSupabase();
+    await assertServiceRoleAuthAdminAccess(client);
+    const result = await recalculateFoKmBatch(client, payload, {
+      maxGoogleDirectionsCalls: payload.max_google_directions_calls,
+    });
+    response.json({ ok: true, ...result });
+  } catch (error) {
+    const safeError = safeServiceRoleError(error, 'service_role_auth_admin_failed');
+    response.status(safeError.statusCode).json({
+      ok: false,
+      message: safeError.message,
+      ...(safeError.diagnosticReason
+        ? { diagnosticReason: safeError.diagnosticReason }
+        : {}),
+    });
+  } finally {
+    foKmRecalculateAllLocks.delete(lockDate);
+  }
+});
+
+app.post('/api/fo/km/recalculate-all', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
+  const payload = request.body || {};
+  const date = payload.date || payload.fromDate || currentIndiaDateInput();
+  const lockDate = normalizeFoKmRecalculationDate(date);
   if (foKmRecalculateAllLocks.has(lockDate) || hasFoKmRecalculationForDate(lockDate)) {
     response.status(409).json({ ok: false, message: FO_KM_RECALCULATION_RUNNING_MESSAGE });
     return;
@@ -4618,7 +4675,7 @@ app.post('/api/fo/km/recalculate-all', async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     await assertServiceRoleAuthAdminAccess(client);
-    const result = await recalculateFoKmForToday(client, payload, {
+    const result = await recalculateFoKmForToday(client, { ...payload, date }, {
       maxGoogleDirectionsCalls: payload.max_google_directions_calls,
     });
     response.json({ ok: true, ...result });
