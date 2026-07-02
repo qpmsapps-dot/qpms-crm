@@ -8,6 +8,73 @@ const MAX_SPEED_KMPH = 120;
 const DUPLICATE_WINDOW_SECONDS = 10;
 const MIN_MEANINGFUL_FINAL_RETURN_LEG_KM = 0.05;
 const DEFAULT_MAX_GOOGLE_DIRECTIONS_CALLS = 25;
+const ATTENDANCE_SELECT_COLUMNS = [
+  'id',
+  'fo_user_id',
+  'employee_code',
+  'username',
+  'display_name',
+  'attendance_date',
+  'login_time',
+  'logout_time',
+  'status',
+  'start_latitude',
+  'start_longitude',
+  'end_latitude',
+  'end_longitude',
+  'actual_km',
+  'eligible_km',
+  'total_route_km',
+  'total_approved_km',
+  'rate_per_km',
+  'petrol_amount',
+  'route_sync_status',
+  'metadata',
+].join(', ');
+const SITE_VISIT_SELECT_COLUMNS = [
+  'id',
+  'attendance_id',
+  'employee_code',
+  'full_name',
+  'store_name',
+  'site_name',
+  'client_name',
+  'check_in_time',
+  'check_out_time',
+  'checkout_time',
+  'check_in_latitude',
+  'check_in_longitude',
+  'check_out_latitude',
+  'check_out_longitude',
+  'origin_lat',
+  'origin_lng',
+  'destination_lat',
+  'destination_lng',
+  'route_km',
+  'status',
+  'visit_status',
+  'sync_status',
+  'metadata',
+].join(', ');
+const LOCATION_LOG_SELECT_COLUMNS = [
+  'id',
+  'fo_user_id',
+  'employee_code',
+  'username',
+  'attendance_id',
+  'latitude',
+  'longitude',
+  'accuracy',
+  'speed',
+  'battery_percentage',
+  'is_mocked',
+  'logged_at',
+  'captured_at',
+  'source',
+  'sync_status',
+  'metadata',
+  'created_at',
+].join(', ');
 
 function log(event, detail = {}) {
   console.log(`[${event}]`, detail);
@@ -42,7 +109,9 @@ function indiaDateKey(date = new Date()) {
 }
 
 function normalizeNumber(value) {
-  const number = Number(value);
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  const number = Number(typeof value === 'string' ? value.trim() : value);
   return Number.isFinite(number) ? number : null;
 }
 
@@ -319,33 +388,47 @@ async function calculateActualTravelKm(points, options = {}) {
   };
 }
 
-async function findAttendance(client, { attendance_id, fo_user_id, date }) {
+function isStaleAutoEndedAttendance(attendance) {
+  const metadata = safeAttendanceMetadata(attendance);
+  return (
+    String(attendance?.status || '').trim().toLowerCase() === 'stale auto ended' ||
+    metadata.auto_ended === true ||
+    String(metadata.auto_ended || '').toLowerCase() === 'true' ||
+    metadata.stale_auto_ended === true ||
+    String(metadata.stale_auto_ended || '').toLowerCase() === 'true'
+  );
+}
+
+async function findAttendance(client, { attendance_id, fo_user_id, employee_code, date }) {
   if (attendance_id) {
     const { data, error } = await client
       .from('fo_attendance')
-      .select('*')
+      .select(ATTENDANCE_SELECT_COLUMNS)
       .eq('id', attendance_id)
       .single();
     if (error) throw error;
     return data;
   }
-  if (!fo_user_id) {
-    const error = new Error('fo_user_id or attendance_id is required.');
+  const employeeKey = String(fo_user_id || employee_code || '').trim();
+  if (!employeeKey) {
+    const error = new Error('fo_user_id, employee_code, or attendance_id is required.');
     error.statusCode = 400;
     throw error;
   }
   const attendanceDate = date || indiaDateKey();
-  const { data, error } = await client
+  let query = client
     .from('fo_attendance')
-    .select('*')
-    .eq('fo_user_id', fo_user_id)
+    .select(ATTENDANCE_SELECT_COLUMNS)
     .eq('attendance_date', attendanceDate)
     .order('login_time', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+  query = fo_user_id
+    ? query.eq('fo_user_id', fo_user_id)
+    : query.eq('employee_code', employeeKey);
+  const { data, error } = await query.maybeSingle();
   if (error) throw error;
   if (!data) {
-    const missing = new Error(`No attendance found for ${fo_user_id} on ${attendanceDate}.`);
+    const missing = new Error(`No attendance found for ${employeeKey} on ${attendanceDate}.`);
     missing.statusCode = 404;
     throw missing;
   }
@@ -355,7 +438,7 @@ async function findAttendance(client, { attendance_id, fo_user_id, date }) {
 async function loadGpsLogs(client, attendance) {
   const { data: attendanceLogs, error: attendanceLogsError } = await client
     .from('fo_location_logs')
-    .select('*')
+    .select(LOCATION_LOG_SELECT_COLUMNS)
     .eq('attendance_id', attendance.id)
     .order('captured_at', { ascending: true })
     .limit(20000);
@@ -366,7 +449,7 @@ async function loadGpsLogs(client, attendance) {
   const end = attendance.logout_time || new Date().toISOString();
   const { data, error } = await client
     .from('fo_location_logs')
-    .select('*')
+    .select(LOCATION_LOG_SELECT_COLUMNS)
     .eq('fo_user_id', attendance.fo_user_id)
     .gte('captured_at', start)
     .lte('captured_at', end)
@@ -379,7 +462,7 @@ async function loadGpsLogs(client, attendance) {
 async function loadSiteVisits(client, attendance) {
   const { data, error } = await client
     .from('fo_site_visits')
-    .select('*')
+    .select(SITE_VISIT_SELECT_COLUMNS)
     .eq('attendance_id', attendance.id)
     .order('check_in_time', { ascending: true })
     .limit(500);
@@ -405,7 +488,15 @@ function visitTime(value) {
 
 function latestCheckedOutVisit(visits = []) {
   return visits
-    .filter((visit) => coordinateFrom(visit, ['check_out_latitude'], ['check_out_longitude']))
+    .filter((visit) => {
+      const status = String(visit?.status || visit?.visit_status || '').toLowerCase();
+      return Boolean(
+        visit?.check_out_time ||
+          visit?.checkout_time ||
+          status.includes('checked out') ||
+          status.includes('completed'),
+      );
+    })
     .sort((a, b) => {
       const aTime = visitTime(a.checkout_time || a.check_out_time || a.updated_at || a.check_in_time);
       const bTime = visitTime(b.checkout_time || b.check_out_time || b.updated_at || b.check_in_time);
@@ -413,94 +504,207 @@ function latestCheckedOutVisit(visits = []) {
     })[0] || null;
 }
 
+function latestCompletedVisit(visits = []) {
+  return visits
+    .filter((visit) => !isOpenVisit(visit))
+    .sort((a, b) => {
+      const aTime = visitTime(a.checkout_time || a.check_out_time || a.updated_at || a.check_in_time);
+      const bTime = visitTime(b.checkout_time || b.check_out_time || b.updated_at || b.check_in_time);
+      return (bTime?.getTime() || 0) - (aTime?.getTime() || 0);
+    })[0] || null;
+}
+
+function finalReturnOriginFromVisit(visit) {
+  if (!visit) return null;
+  const candidates = [
+    ['check_out_latitude', 'check_out_longitude', 'checkout_location'],
+    ['destination_lat', 'destination_lng', 'site_destination'],
+    ['check_in_latitude', 'check_in_longitude', 'site_checkin'],
+  ];
+  for (const [latKey, lngKey, source] of candidates) {
+    const latitude = normalizeNumber(visit?.[latKey]);
+    const longitude = normalizeNumber(visit?.[lngKey]);
+    if (isValidCoordinate(latitude, longitude)) {
+      return { latitude, longitude, source };
+    }
+  }
+  return null;
+}
+
+function safeAttendanceMetadata(attendance) {
+  return attendance?.metadata && typeof attendance.metadata === 'object' && !Array.isArray(attendance.metadata)
+    ? attendance.metadata
+    : {};
+}
+
 function attendanceEndCoordinate(attendance) {
   return coordinateFrom(
     attendance,
-    ['end_latitude', 'logout_latitude', 'end_lat', 'logout_lat'],
-    ['end_longitude', 'logout_longitude', 'end_lng', 'logout_lng'],
+    ['end_latitude'],
+    ['end_longitude'],
   );
 }
 
 function attendanceEndedWithOpenSite(attendance) {
-  const metadata = attendance?.metadata && typeof attendance.metadata === 'object' && !Array.isArray(attendance.metadata)
-    ? attendance.metadata
-    : {};
+  const metadata = safeAttendanceMetadata(attendance);
   return metadata.end_day_with_open_site === true || String(metadata.end_day_with_open_site || '').toLowerCase() === 'true';
 }
 
 async function calculateFinalReturnLegKm(attendance, visits = [], options = {}) {
-  if (attendanceEndedWithOpenSite(attendance)) {
-    const reason = 'end_day_with_open_site';
+  if (isStaleAutoEndedAttendance(attendance)) {
+    const reason = 'skipped_stale_auto_ended';
     log('FINAL_RETURN_LEG_SKIPPED', {
       attendance_id: attendance.id,
       reason,
     });
-    return { km: 0, calculated: false, reason };
+    return { km: null, calculated: false, includedInPayable: false, status: reason, reason };
+  }
+  if (!attendance?.logout_time) {
+    const reason = 'skipped_missing_logout_time';
+    log('FINAL_RETURN_LEG_SKIPPED', {
+      attendance_id: attendance.id,
+      reason,
+    });
+    return { km: null, calculated: false, includedInPayable: false, status: reason, reason };
+  }
+  if (!visits.length) {
+    const reason = 'skipped_no_visits';
+    log('FINAL_RETURN_LEG_SKIPPED', {
+      attendance_id: attendance.id,
+      reason,
+    });
+    return { km: null, calculated: false, includedInPayable: false, status: reason, reason };
+  }
+  if (attendanceEndedWithOpenSite(attendance)) {
+    const reason = 'skipped_end_day_with_open_site';
+    log('FINAL_RETURN_LEG_SKIPPED', {
+      attendance_id: attendance.id,
+      reason,
+    });
+    return { km: null, calculated: false, includedInPayable: false, status: reason, reason };
   }
   const checkedOutVisit = latestCheckedOutVisit(visits);
-  const origin = checkedOutVisit
-    ? coordinateFrom(checkedOutVisit, ['check_out_latitude'], ['check_out_longitude'])
-    : null;
+  const completedVisit = checkedOutVisit || latestCompletedVisit(visits);
+  const origin = finalReturnOriginFromVisit(completedVisit);
   const destination = attendanceEndCoordinate(attendance);
+  const lastSiteName = completedVisit?.store_name || completedVisit?.site_name || completedVisit?.client_name || null;
 
   log('FINAL_RETURN_LEG_CHECK', {
     attendance_id: attendance.id,
-    site_visit_id: checkedOutVisit?.id,
+    site_visit_id: completedVisit?.id,
+    origin_source: origin?.source || null,
     has_origin: Boolean(origin),
     has_destination: Boolean(destination),
   });
+  console.log('FINAL LEG INPUTS', {
+    attendanceId: attendance.id,
+    employeeCode: attendance.employee_code,
+    endLatitude: attendance.end_latitude,
+    endLongitude: attendance.end_longitude,
+    visitsCount: visits.length,
+    storedRouteKm: options.storedRouteKm ?? null,
+    lastVisitId: completedVisit?.id || null,
+    lastSiteName,
+    originLat: origin?.latitude ?? null,
+    originLng: origin?.longitude ?? null,
+    originSource: origin?.source ?? null,
+    destinationLat: destination?.latitude ?? null,
+    destinationLng: destination?.longitude ?? null,
+  });
 
-  if (!checkedOutVisit || !origin) {
-    const reason = 'missing_checkout_gps';
+  if (!completedVisit || !origin) {
+    const reason = completedVisit ? 'skipped_missing_origin' : 'skipped_no_checked_out_visits';
     log('FINAL_RETURN_LEG_SKIPPED', { attendance_id: attendance.id, reason });
-    return { km: 0, calculated: false, reason };
+    return { km: null, calculated: false, includedInPayable: false, status: reason, reason };
   }
   if (!destination) {
-    const reason = 'missing_end_day_gps';
-    log('FINAL_RETURN_LEG_SKIPPED', { attendance_id: attendance.id, site_visit_id: checkedOutVisit.id, reason });
-    return { km: 0, calculated: false, reason };
+    const reason = 'skipped_missing_end_location';
+    log('FINAL_RETURN_LEG_SKIPPED', { attendance_id: attendance.id, site_visit_id: completedVisit.id, reason });
+    return { km: null, calculated: false, includedInPayable: false, status: reason, reason };
   }
 
   const straightLineKm = haversineKm(origin, destination);
   if (!Number.isFinite(straightLineKm) || straightLineKm < MIN_MEANINGFUL_FINAL_RETURN_LEG_KM) {
-    const reason = 'distance_not_meaningful';
+    const reason = 'same_or_near_same_location';
     log('FINAL_RETURN_LEG_SKIPPED', {
       attendance_id: attendance.id,
-      site_visit_id: checkedOutVisit.id,
+      site_visit_id: completedVisit.id,
       reason,
       straight_line_km: Number((straightLineKm || 0).toFixed(3)),
     });
-    return { km: 0, calculated: false, reason };
+    return {
+      km: 0,
+      calculated: true,
+      reason,
+      status: 'calculated_same_location',
+      includedInPayable: true,
+      site_visit_id: completedVisit.id,
+      site_name: lastSiteName,
+      origin,
+      destination,
+      provider: 'none',
+      origin_source: origin.source,
+    };
   }
 
   const googleKm = await googleDirectionsKm(origin, destination, options);
-  if (googleKm === null) {
-    const reason = 'google_route_failed';
-    log('FINAL_RETURN_LEG_GOOGLE_FAILED', {
+  if (googleKm !== null) {
+    const km = Number(googleKm.toFixed(2));
+    log('FINAL_RETURN_LEG_GOOGLE_SUCCESS', {
       attendance_id: attendance.id,
-      site_visit_id: checkedOutVisit.id,
-      reason,
+      site_visit_id: completedVisit.id,
+      route_km: km,
       straight_line_km: Number(straightLineKm.toFixed(3)),
     });
-    return { km: 0, calculated: false, reason };
+    return {
+      km,
+      calculated: true,
+      reason: null,
+      status: 'calculated',
+      includedInPayable: true,
+      site_visit_id: completedVisit.id,
+      site_name: lastSiteName,
+      origin,
+      destination,
+      provider: 'google_directions',
+      origin_source: origin.source,
+    };
   }
 
-  const km = Number(googleKm.toFixed(2));
-  log('FINAL_RETURN_LEG_GOOGLE_SUCCESS', {
+  const fallbackKm = Number(straightLineKm.toFixed(2));
+  const reason = process.env.ENABLE_GOOGLE_DIRECTIONS === 'true'
+    ? 'google_failed_used_haversine'
+    : process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY
+      ? 'google_disabled_used_haversine'
+      : 'google_missing_key_used_haversine';
+  log('FINAL_RETURN_LEG_HAVERSINE_FALLBACK', {
     attendance_id: attendance.id,
-    site_visit_id: checkedOutVisit.id,
-    route_km: km,
+    site_visit_id: completedVisit.id,
+    route_km: fallbackKm,
+    reason,
     straight_line_km: Number(straightLineKm.toFixed(3)),
   });
-  return { km, calculated: true, reason: null, site_visit_id: checkedOutVisit.id };
+  return {
+    km: fallbackKm,
+    calculated: true,
+    reason,
+    status: 'calculated',
+    includedInPayable: true,
+    site_visit_id: completedVisit.id,
+    site_name: lastSiteName,
+    origin,
+    destination,
+    provider: 'haversine_fallback',
+    origin_source: origin.source,
+  };
 }
 
 async function calculateRouteKmFromVisitAnchors(client, attendance, visits = [], options = {}) {
   const reviewFlags = [];
   let origin = coordinateFrom(
     attendance,
-    ['start_latitude', 'start_lat', 'latitude'],
-    ['start_longitude', 'start_lng', 'longitude'],
+    ['start_latitude'],
+    ['start_longitude'],
   );
   if (!origin) reviewFlags.push('MISSING_ANCHOR_COORDINATES');
 
@@ -544,8 +748,8 @@ async function calculateRouteKmFromVisitAnchors(client, attendance, visits = [],
 
   const end = coordinateFrom(
     attendance,
-    ['end_latitude', 'end_lat'],
-    ['end_longitude', 'end_lng'],
+    ['end_latitude'],
+    ['end_longitude'],
   );
   if (origin && end && attendance.logout_time) {
     const endLegKm = await googleDirectionsKm(origin, end, options);
@@ -576,12 +780,28 @@ function confidenceFor({ usedPoints, totalPoints, segmentsRejected, segmentsReco
 
 export async function recalculateFoKm(serviceRoleClient, payload = {}, options = {}) {
   const client = requireServiceRoleClient(serviceRoleClient);
-  log('FO_KM_RECALC_STARTED', {
-    attendance_id: payload.attendance_id || null,
-    fo_user_id: payload.fo_user_id || null,
-    date: payload.date || null,
+  const attendanceId = payload.attendance_id || payload.id || null;
+  const foUserId = payload.fo_user_id || null;
+  const employeeCode = payload.employee_code || null;
+  const date = payload.date || payload.attendance_date || null;
+  console.log('KM RECALC REQUEST', {
+    attendanceId,
+    foUserId,
+    employeeCode,
+    date,
   });
-  const attendance = await findAttendance(client, payload);
+  log('FO_KM_RECALC_STARTED', {
+    attendance_id: attendanceId,
+    fo_user_id: foUserId,
+    employee_code: employeeCode,
+    date,
+  });
+  const attendance = await findAttendance(client, {
+    attendance_id: attendanceId,
+    fo_user_id: foUserId,
+    employee_code: employeeCode,
+    date,
+  });
   const rows = await loadGpsLogs(client, attendance);
   const visits = await loadSiteVisits(client, attendance);
   log('FO_KM_GPS_LOGS_LOADED', {
@@ -594,8 +814,17 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   const calculation = await calculateActualTravelKm(points, options);
   const actualTravelKm = Number(calculation.actualTravelKm.toFixed(2));
   const storedRouteKm = Number(sumStoredRouteKm(visits).toFixed(2));
-  const finalReturnLeg = await calculateFinalReturnLegKm(attendance, visits, options);
-  const finalReturnLegKm = finalReturnLeg.km;
+  const existingMetadata = safeAttendanceMetadata(attendance);
+  const finalReturnLeg = await calculateFinalReturnLegKm(attendance, visits, {
+    ...options,
+    storedRouteKm,
+  });
+  const finalReturnLegKm = Number.isFinite(finalReturnLeg.km)
+    ? Number(finalReturnLeg.km.toFixed(2))
+    : 0;
+  const finalReturnLegKmForMetadata = finalReturnLeg.calculated === true && Number.isFinite(finalReturnLeg.km)
+    ? Number(finalReturnLeg.km.toFixed(2))
+    : null;
   const reviewFlags = [];
   const visitsMissingRouteKm = visits.filter((visit) => {
     const routeKm = normalizeNumber(visit.route_km);
@@ -603,18 +832,35 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   }).length;
   if (visitsMissingRouteKm > 0) reviewFlags.push('SITE_VISIT_ROUTE_KM_MISSING');
   if (storedRouteKm <= 0 && visits.length > 0 && finalReturnLegKm <= 0) reviewFlags.push('ROUTE_KM_ZERO_WITH_VISITS');
-  if (finalReturnLeg.reason) reviewFlags.push(`FINAL_RETURN_LEG_${finalReturnLeg.reason.toUpperCase()}`);
+  if (finalReturnLeg.reason && finalReturnLegKm <= 0) {
+    reviewFlags.push(`FINAL_RETURN_LEG_${finalReturnLeg.reason.toUpperCase()}`);
+  }
   if (rows.length < 5) reviewFlags.push('LOW_GPS_LOG_COUNT');
+  const ratePerKm = normalizeNumber(attendance.rate_per_km) || RATE_PER_KM;
   const approvedKm = Number((storedRouteKm + finalReturnLegKm).toFixed(2));
-  const petrolAmount = Number((approvedKm * RATE_PER_KM).toFixed(2));
-  const routeSyncStatus = approvedKm > 0
-    ? (finalReturnLegKm > 0 ? 'site_visit_route_km_sum_plus_final_return_leg' : 'site_visit_route_km_sum')
-    : 'review_required';
+  const petrolAmount = Number((approvedKm * ratePerKm).toFixed(2));
+  let routeSyncStatus = approvedKm > 0 ? 'site_visit_route_km_sum' : 'review_required';
+  if (finalReturnLegKm > 0) {
+    routeSyncStatus = finalReturnLeg.provider === 'haversine_fallback'
+      ? 'site_visit_route_km_sum_plus_final_leg_fallback'
+      : 'site_visit_route_km_sum_plus_final_leg';
+  }
   log('FINAL_APPROVED_KM', {
     attendance_id: attendance.id,
     site_visit_route_km: storedRouteKm,
     final_return_leg_km: finalReturnLegKm,
     approved_km: approvedKm,
+  });
+  console.log('FINAL LEG RESULT', {
+    attendanceId: attendance.id,
+    storedRouteKm,
+    finalLegKm: finalReturnLegKm,
+    finalReturnLegKm,
+    provider: finalReturnLeg.provider || null,
+    reason: finalReturnLeg.reason || null,
+    approvedKm,
+    petrolAmount,
+    routeSyncStatus,
   });
 
   const attendanceUpdate = {
@@ -628,9 +874,50 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     actual_travel_updated_at: new Date().toISOString(),
     total_approved_km: approvedKm,
     petrol_amount: petrolAmount,
-    rate_per_km: RATE_PER_KM,
+    rate_per_km: ratePerKm,
     eligibility_status: reviewFlags.length ? reviewFlags.join(',') : 'Approved',
     route_sync_status: routeSyncStatus,
+    metadata: {
+      ...existingMetadata,
+      final_return_leg_km: finalReturnLegKmForMetadata,
+      final_return_leg_provider: finalReturnLeg.provider || null,
+      final_return_leg_reason: finalReturnLeg.reason || null,
+      final_return_leg_status: finalReturnLeg.status || (finalReturnLegKm > 0 ? 'calculated' : 'skipped'),
+      final_return_leg_from_site: finalReturnLeg.site_name || null,
+      final_return_leg_from_visit_id: finalReturnLeg.site_visit_id || null,
+      final_return_leg_origin_lat: finalReturnLeg.origin?.latitude ?? null,
+      final_return_leg_origin_lng: finalReturnLeg.origin?.longitude ?? null,
+      final_return_leg_origin_source: finalReturnLeg.origin_source || null,
+      final_return_leg_destination_lat: finalReturnLeg.destination?.latitude ?? null,
+      final_return_leg_destination_lng: finalReturnLeg.destination?.longitude ?? null,
+      final_return_leg_destination_source: finalReturnLeg.destination ? 'attendance_end_location' : null,
+      final_return_leg_calculated_at: new Date().toISOString(),
+      final_return_leg_included_in_payable: finalReturnLeg.includedInPayable === true,
+      site_visit_route_km_sum: storedRouteKm,
+      recalculated_total_route_km: approvedKm,
+      recalculated_petrol_amount: petrolAmount,
+      km_recalculated_at: new Date().toISOString(),
+      final_return_leg_from: finalReturnLeg.origin
+        ? {
+            latitude: finalReturnLeg.origin.latitude,
+            longitude: finalReturnLeg.origin.longitude,
+            site_visit_id: finalReturnLeg.site_visit_id || null,
+            site_name: finalReturnLeg.site_name || null,
+            source: finalReturnLeg.origin_source || null,
+          }
+        : null,
+      final_return_leg_to: finalReturnLeg.destination
+        ? {
+            latitude: finalReturnLeg.destination.latitude,
+            longitude: finalReturnLeg.destination.longitude,
+            attendance_id: attendance.id,
+          }
+        : null,
+      final_return_leg_calculated: finalReturnLeg.calculated === true,
+      final_return_leg_skip_reason: finalReturnLegKm > 0 ? null : finalReturnLeg.reason || null,
+      final_return_leg_reused_existing: false,
+      final_return_leg_updated_at: new Date().toISOString(),
+    },
     updated_at: new Date().toISOString(),
   };
   const { error: attendanceUpdateError } = await client
@@ -660,20 +947,31 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   log('FO_KM_LIVE_STATUS_UPDATED', { fo_user_id: attendance.fo_user_id, route_km_today: approvedKm });
 
   const result = {
+    ok: true,
     fo_user_id: attendance.fo_user_id,
+    employee_code: attendance.employee_code,
     attendance_id: attendance.id,
+    old_total_route_km: normalizeNumber(attendance.total_route_km),
+    old_petrol_amount: normalizeNumber(attendance.petrol_amount),
     actual_travel_km: actualTravelKm,
     approved_km: approvedKm,
+    new_total_route_km: approvedKm,
+    new_petrol_amount: petrolAmount,
     total_route_km: approvedKm,
     petrol_amount: petrolAmount,
     gps_points_total: rows.length,
     gps_points_used: points.length,
     site_visits_count: visits.length,
+    stored_route_km: storedRouteKm,
     stored_site_visit_route_km: storedRouteKm,
-    final_return_leg_km: finalReturnLegKm,
+    final_return_leg_km: finalReturnLegKmForMetadata,
+    final_return_leg_provider: finalReturnLeg.provider || null,
+    final_return_leg_status: finalReturnLeg.status || (finalReturnLegKm > 0 ? 'calculated' : 'skipped'),
+    final_return_leg_reason: finalReturnLeg.reason || null,
     final_return_leg_calculated: finalReturnLeg.calculated,
-    final_return_leg_skip_reason: finalReturnLeg.reason,
-    final_return_leg_site_visit_id: finalReturnLeg.site_visit_id,
+    final_return_leg_reused_existing: false,
+    final_return_leg_skip_reason: finalReturnLegKm > 0 ? null : finalReturnLeg.reason,
+    final_return_leg_site_visit_id: finalReturnLeg.site_visit_id || existingMetadata.final_return_leg_from?.site_visit_id || null,
     backend_route_legs_calculated: finalReturnLeg.calculated ? 1 : 0,
     site_visits_missing_route_km: visitsMissingRouteKm,
     review_flags: [...new Set(reviewFlags)],
@@ -689,41 +987,120 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     }),
     accepted_gps_km: Number(calculation.acceptedKm.toFixed(2)),
     reconstructed_gap_km: Number(calculation.reconstructedKm.toFixed(2)),
+    updated: true,
+    skipped: finalReturnLeg.includedInPayable !== true,
+    skip_reason: finalReturnLeg.includedInPayable === true ? null : finalReturnLeg.reason || null,
   };
   log('FO_KM_RECALC_COMPLETED', result);
   return result;
 }
 
-export async function recalculateFoKmForToday(serviceRoleClient, payload = {}, options = {}) {
+function normalizeDateInput(value, fallback = indiaDateKey()) {
+  const text = String(value || fallback || '').trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const error = new Error('Date must be in YYYY-MM-DD format.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return text;
+}
+
+function batchCounterKey(result = {}) {
+  const reason = String(
+    result.skip_reason ||
+      result.final_return_leg_status ||
+      result.final_return_leg_reason ||
+      '',
+  );
+  if (/stale_auto_ended/.test(reason)) return 'skipped_stale_auto_ended';
+  if (/missing_end_location|missing_end_day_gps/.test(reason)) return 'skipped_missing_end_location';
+  if (/no_visits|no_checked_out_visits/.test(reason)) return 'skipped_no_visits';
+  if (/missing_origin|missing_site_gps/.test(reason)) return 'skipped_missing_origin';
+  if (result.skipped) return 'skipped_other';
+  return null;
+}
+
+export async function recalculateFoKmBatch(serviceRoleClient, payload = {}, options = {}) {
   const client = requireServiceRoleClient(serviceRoleClient);
-  const date = payload.date || indiaDateKey();
+  const fromDate = normalizeDateInput(payload.fromDate || payload.from_date || payload.date);
+  const toDate = normalizeDateInput(payload.toDate || payload.to_date || payload.date || fromDate, fromDate);
+  if (fromDate > toDate) {
+    const error = new Error('fromDate must be before or equal to toDate.');
+    error.statusCode = 400;
+    throw error;
+  }
+
   let query = client
     .from('fo_attendance')
-    .select('*')
-    .eq('attendance_date', date)
-    .in('status', ['Active', 'Completed'])
+    .select(ATTENDANCE_SELECT_COLUMNS)
+    .gte('attendance_date', fromDate)
+    .lte('attendance_date', toDate)
+    .not('logout_time', 'is', null)
     .order('login_time', { ascending: false })
-    .limit(500);
+    .limit(Number(payload.limit || 2000));
   if (payload.fo_user_id) query = query.eq('fo_user_id', payload.fo_user_id);
+  if (payload.employee_code) query = query.eq('employee_code', payload.employee_code);
   const { data, error } = await query;
   if (error) throw error;
 
   const results = [];
+  const summary = {
+    scanned: data?.length || 0,
+    updated: 0,
+    skipped_missing_end_location: 0,
+    skipped_stale_auto_ended: 0,
+    skipped_no_visits: 0,
+    skipped_missing_origin: 0,
+    skipped_other: 0,
+    failed: 0,
+  };
+
   for (const attendance of data || []) {
     try {
-      results.push(await recalculateFoKm(client, { attendance_id: attendance.id }, options));
+      const result = await recalculateFoKm(client, { attendance_id: attendance.id }, options);
+      if (result.skipped) {
+        const key = batchCounterKey(result) || 'skipped_other';
+        summary[key] = (summary[key] || 0) + 1;
+      } else {
+        summary.updated += 1;
+      }
+      results.push({
+        attendance_id: result.attendance_id,
+        employee_code: result.employee_code,
+        status: result.skipped ? 'skipped' : 'updated',
+        old_total_route_km: result.old_total_route_km,
+        stored_route_km: result.stored_route_km,
+        final_return_leg_km: result.final_return_leg_km,
+        new_total_route_km: result.new_total_route_km,
+        old_petrol_amount: result.old_petrol_amount,
+        new_petrol_amount: result.new_petrol_amount,
+        provider: result.final_return_leg_provider,
+        reason: result.skip_reason || result.final_return_leg_reason,
+        route_sync_status: result.route_sync_status,
+      });
     } catch (error) {
+      summary.failed += 1;
       results.push({
         fo_user_id: attendance.fo_user_id,
+        employee_code: attendance.employee_code,
         attendance_id: attendance.id,
-        ok: false,
+        status: 'failed',
         message: error.message,
       });
     }
   }
   return {
-    date,
-    count: results.length,
+    fromDate,
+    toDate,
+    state: payload.state || null,
+    business: payload.business || null,
+    stateBusinessFiltering: 'not_applied_attendance_rows_do_not_store_confirmed_state_business_columns',
+    ...summary,
     results,
   };
+}
+
+export async function recalculateFoKmForToday(serviceRoleClient, payload = {}, options = {}) {
+  const date = payload.date || indiaDateKey();
+  return recalculateFoKmBatch(serviceRoleClient, { ...payload, fromDate: date, toDate: date }, options);
 }

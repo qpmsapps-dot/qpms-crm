@@ -1,6 +1,8 @@
 const STALE_VISIT_STATUS = 'Stale Auto Closed';
 const STALE_ATTENDANCE_STATUS = 'Stale Auto Ended';
 const GPS_EVIDENCE_FRESHNESS_MINUTES = 30;
+const STALE_AUTO_END_GPS_WINDOW_MINUTES = 60;
+const STALE_AUTO_END_ACCEPTABLE_ACCURACY_METERS = 100;
 
 let cleanupInFlight = false;
 
@@ -164,6 +166,108 @@ async function latestGpsEvidenceForVisit(client, attendance, visit, closeAtIso) 
   };
 }
 
+function gpsEvidenceTimestampFilter(closeAtIso) {
+  return `captured_at.lte.${closeAtIso},logged_at.lte.${closeAtIso},created_at.lte.${closeAtIso}`;
+}
+
+async function latestGpsEvidenceForAttendance(client, attendance, closeAtIso) {
+  const closeAt = new Date(closeAtIso);
+  if (Number.isNaN(closeAt.getTime())) {
+    return { status: 'not_found', reason: 'invalid_close_time' };
+  }
+
+  const lookups = [
+    ['attendance_id', attendance?.id],
+    ['fo_user_id', attendance?.fo_user_id],
+    ['employee_code', attendance?.employee_code],
+  ].filter(([, value]) => String(value || '').trim());
+
+  let bestRejected = null;
+
+  for (const [field, value] of lookups) {
+    const { data, error } = await client
+      .from('fo_location_logs')
+      .select('id, attendance_id, fo_user_id, employee_code, latitude, longitude, accuracy, captured_at, logged_at, created_at')
+      .eq(field, value)
+      .not('latitude', 'is', null)
+      .not('longitude', 'is', null)
+      .or(gpsEvidenceTimestampFilter(closeAtIso))
+      .order('captured_at', { ascending: false, nullsFirst: false })
+      .order('logged_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false, nullsFirst: false })
+      .limit(25);
+    if (error) throw error;
+
+    const candidates = (data || [])
+      .map((log) => {
+        const detectedAt = pointTime(log);
+        const latitude = normalizeNumber(log.latitude);
+        const longitude = normalizeNumber(log.longitude);
+        const accuracy = normalizeNumber(log.accuracy);
+        const minutesBeforeClose = detectedAt
+          ? Math.max(0, Math.round((closeAt.getTime() - detectedAt.getTime()) / 60000))
+          : null;
+        return {
+          log,
+          detectedAt,
+          latitude,
+          longitude,
+          accuracy,
+          minutesBeforeClose,
+          source: field,
+        };
+      })
+      .filter((candidate) =>
+        candidate.detectedAt &&
+        candidate.detectedAt.getTime() <= closeAt.getTime() &&
+        isValidCoordinate(candidate.latitude, candidate.longitude),
+      )
+      .sort((a, b) => b.detectedAt.getTime() - a.detectedAt.getTime());
+
+    const recentCandidates = candidates.filter(
+      (candidate) =>
+        Number.isFinite(candidate.minutesBeforeClose) &&
+        candidate.minutesBeforeClose <= STALE_AUTO_END_GPS_WINDOW_MINUTES,
+    );
+
+    const acceptableAccuracy = recentCandidates.find(
+      (candidate) =>
+        candidate.accuracy === null ||
+        candidate.accuracy <= STALE_AUTO_END_ACCEPTABLE_ACCURACY_METERS,
+    );
+    const selected = acceptableAccuracy || recentCandidates[0];
+    if (selected) {
+      return {
+        status: 'found',
+        reason:
+          selected.accuracy !== null &&
+          selected.accuracy > STALE_AUTO_END_ACCEPTABLE_ACCURACY_METERS
+            ? 'latest_recent_gps_accuracy_above_preferred_limit'
+            : null,
+        source: selected.source,
+        gps_log_id: selected.log.id,
+        latitude: selected.latitude,
+        longitude: selected.longitude,
+        accuracy: selected.accuracy,
+        captured_at: selected.detectedAt.toISOString(),
+        minutes_before_close: selected.minutesBeforeClose,
+      };
+    }
+
+    if (!bestRejected && candidates[0]) {
+      bestRejected = candidates[0];
+    }
+  }
+
+  return {
+    status: 'not_found',
+    reason: bestRejected
+      ? 'no_recent_gps_log_before_auto_close'
+      : 'no_valid_gps_log_before_auto_close',
+    latest_gps_log_age_minutes: bestRejected?.minutesBeforeClose ?? null,
+  };
+}
+
 function requireServiceRoleClient(serviceRoleClient) {
   if (!serviceRoleClient || typeof serviceRoleClient.from !== 'function') {
     const error = new Error('Backend service-role client is not configured.');
@@ -273,6 +377,17 @@ async function resetLiveStatusIfSafe(client, attendance, today, executedAt) {
 async function closeStaleAttendance(client, attendance, executedAt) {
   const closeAt = indiaDayEndUtcIso(attendance.attendance_date);
   if (!closeAt) return false;
+  const gpsEvidence = await latestGpsEvidenceForAttendance(client, attendance, closeAt);
+  console.log('STALE AUTO END GPS EVIDENCE', {
+    attendanceId: attendance?.id || null,
+    employeeCode: attendance?.employee_code || null,
+    closeAt,
+    evidenceStatus: gpsEvidence.status,
+    source: gpsEvidence.source || null,
+    capturedAt: gpsEvidence.captured_at || null,
+    minutesBeforeClose: gpsEvidence.minutes_before_close ?? gpsEvidence.latest_gps_log_age_minutes ?? null,
+    accuracy: gpsEvidence.accuracy ?? null,
+  });
   const metadata = mergeMetadata(attendance, {
     auto_ended: true,
     stale_auto_ended: true,
@@ -282,6 +397,18 @@ async function closeStaleAttendance(client, attendance, executedAt) {
     cleanup_reason: 'Previous-day active attendance',
     cleanup_source: 'backend_midnight_cleanup',
     cleanup_executed_at: executedAt,
+    stale_auto_end_gps_evidence_status: gpsEvidence.status,
+    stale_auto_end_gps_reason: gpsEvidence.reason || null,
+    stale_auto_end_gps_latitude: gpsEvidence.status === 'found' ? gpsEvidence.latitude : null,
+    stale_auto_end_gps_longitude: gpsEvidence.status === 'found' ? gpsEvidence.longitude : null,
+    stale_auto_end_gps_accuracy: gpsEvidence.status === 'found' ? gpsEvidence.accuracy : null,
+    stale_auto_end_gps_captured_at: gpsEvidence.status === 'found' ? gpsEvidence.captured_at : null,
+    stale_auto_end_gps_minutes_before_close:
+      gpsEvidence.status === 'found' ? gpsEvidence.minutes_before_close : null,
+    stale_auto_end_gps_source: gpsEvidence.status === 'found' ? gpsEvidence.source : null,
+    stale_auto_end_gps_log_id: gpsEvidence.status === 'found' ? gpsEvidence.gps_log_id : null,
+    stale_auto_end_final_leg_review_required: true,
+    stale_auto_end_final_leg_policy: 'review_only_not_payable',
   });
   const { data, error } = await client
     .from('fo_attendance')
@@ -323,7 +450,7 @@ export async function cleanupStaleFoSessions(serviceRoleClient, options = {}) {
   try {
     const { data: attendanceRows, error } = await client
       .from('fo_attendance')
-      .select('id, fo_user_id, attendance_date, metadata')
+      .select('id, fo_user_id, employee_code, attendance_date, metadata')
       .lt('attendance_date', today)
       .eq('status', 'Active')
       .filter('logout_time', 'is', null)
