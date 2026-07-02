@@ -29,8 +29,18 @@ function mergeMetadata(row, metadata) {
   return { ...existing, ...metadata };
 }
 
+const isStaleCleanupDebugLoggingEnabled =
+  process.env.NODE_ENV !== 'production' ||
+  process.env.FO_STALE_CLEANUP_DEBUG_LOGS === 'true';
+
+function debugLog(...args) {
+  if (isStaleCleanupDebugLoggingEnabled) {
+    console.log(...args);
+  }
+}
+
 function logCleanup(event, detail = {}) {
-  console.log('[myQPMS FO stale cleanup]', event, detail);
+  debugLog('[myQPMS FO stale cleanup]', event, detail);
 }
 
 function normalizeNumber(value) {
@@ -378,7 +388,7 @@ async function closeStaleAttendance(client, attendance, executedAt) {
   const closeAt = indiaDayEndUtcIso(attendance.attendance_date);
   if (!closeAt) return false;
   const gpsEvidence = await latestGpsEvidenceForAttendance(client, attendance, closeAt);
-  console.log('STALE AUTO END GPS EVIDENCE', {
+  debugLog('STALE AUTO END GPS EVIDENCE', {
     attendanceId: attendance?.id || null,
     employeeCode: attendance?.employee_code || null,
     closeAt,
