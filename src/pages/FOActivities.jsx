@@ -2610,6 +2610,79 @@ function MapBackgroundClose({ onClose }) {
   return null;
 }
 
+function MapEmployeePopupRow({ label, value }) {
+  return (
+    <div className="flex justify-between gap-3">
+      <span className="text-slate-500">{label}</span>
+      <strong className="max-w-[150px] text-right font-bold text-slate-800">
+        {value || "--"}
+      </strong>
+    </div>
+  );
+}
+
+function MapEmployeePopupCard({ officer }) {
+  const activeVisit = (officer.visits || []).find(isSiteVisitOpen);
+  const batteryLabel =
+    officer.battery === null || officer.battery === undefined
+      ? "--"
+      : `${officer.battery}%`;
+  const statusLabel =
+    officer.operationalStatusLabel ||
+    operationalStatusLabel(officer.operationalStatus);
+  const roleLabel = officer.designation || officer.role || "--";
+
+  return (
+    <div className="border-b border-slate-100 pb-2 text-xs last:border-b-0">
+      <div className="mb-2">
+        <p className="text-sm font-black text-slate-950">
+          {officer.name || "--"}
+        </p>
+        <p className="font-bold text-slate-500">
+          {officer.employeeCode || officer.foId || "--"}
+        </p>
+      </div>
+      <div className="space-y-1.5">
+        <MapEmployeePopupRow label="State" value={officer.state} />
+        <MapEmployeePopupRow label="Role" value={roleLabel} />
+        <MapEmployeePopupRow label="Business" value={officer.business} />
+        <MapEmployeePopupRow label="Battery" value={batteryLabel} />
+        <MapEmployeePopupRow label="Status" value={statusLabel} />
+        <MapEmployeePopupRow label="Last Seen" value={officer.lastSeen} />
+      </div>
+      <div className="mt-2 rounded-lg bg-slate-50 px-2 py-1.5">
+        <p className="text-[10px] font-black uppercase text-slate-400">
+          Active Site
+        </p>
+        {activeVisit ? (
+          <div className="mt-1 space-y-1 text-slate-600">
+            <p>
+              Site:{" "}
+              <strong className="text-slate-800">
+                {visitTitle(activeVisit)}
+              </strong>
+            </p>
+            <p>
+              Client:{" "}
+              <strong className="text-slate-800">
+                {visitClient(activeVisit)}
+              </strong>
+            </p>
+            <p>
+              Check-in:{" "}
+              <strong className="text-slate-800">
+                {formatDateTime(activeVisit.check_in_time)}
+              </strong>
+            </p>
+          </div>
+        ) : (
+          <p className="mt-1 font-bold text-slate-600">None</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function OperationsMap({
   pins,
   sitePins,
@@ -2767,73 +2840,13 @@ function OperationsMap({
           }}
         >
           <Popup>
-            <div className="min-w-[260px] space-y-2 text-slate-700">
+            <div className="min-w-[240px] space-y-2 text-slate-700">
               <p className="text-sm font-bold text-slate-950">
                 {pin.state.state}
               </p>
               {pin.officers.map((officer) => (
-                <div
-                  key={officer.id}
-                  className="border-b border-slate-100 pb-2 text-xs last:border-b-0"
-                >
-                  <p className="font-bold text-slate-900">
-                    {officer.name}{" "}
-                    <span className="font-medium text-slate-500">
-                      | {officer.assignedSite}
-                    </span>
-                  </p>
-                  <p className="text-slate-600">
-                    Battery:{" "}
-                    {officer.battery === null ? "--" : `${officer.battery}%`} |
-                    Speed:{" "}
-                    {officer.speed
-                      ? `${Number(officer.speed).toFixed(1)} m/s`
-                      : "--"}
-                  </p>
-                  <p className="text-slate-600">
-                    Status:{" "}
-                    {officer.operationalStatusLabel || operationalStatusLabel(officer.operationalStatus)}
-                  </p>
-                  <p className="text-slate-600">
-                    Last seen: {officer.lastSeen}
-                  </p>
-                  <p className="text-slate-600">
-                    Accuracy:{" "}
-                    {officer.accuracy === null || officer.accuracy === undefined
-                      ? "--"
-                      : `${Number(officer.accuracy).toFixed(1)} m`}
-                  </p>
-                  <p className="text-slate-600">
-                    Lat/Lng:{" "}
-                    {hasFiniteCoordinates(officer.coordinates)
-                      ? `${Number(officer.coordinates[0]).toFixed(5)}, ${Number(officer.coordinates[1]).toFixed(5)}`
-                      : "No Location Available"}
-                  </p>
-                  <p className="text-slate-600">
-                    Payable KM:{" "}
-                    {Number(
-                      officer.eligibleKm ?? officer.routeKmToday ?? 0,
-                    ).toFixed(1)}{" "}
-                    km
-                  </p>
-                  <p className="text-slate-600">
-                    GPS Audit KM:{" "}
-                    {Number(officer.actualTravelKm ?? officer.actualKm ?? 0).toFixed(1)} km
-                  </p>
-                </div>
+                <MapEmployeePopupCard key={officer.id} officer={officer} />
               ))}
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                <span>Active Users</span>
-                <strong>{pin.activeOfficers}</strong>
-                <span>Inactive Users</span>
-                <strong>{pin.offlineOfficers}</strong>
-                <span>Low battery</span>
-                <strong>{pin.lowBattery}</strong>
-                <span>Open tickets</span>
-                <strong>{pin.state.tickets}</strong>
-                <span>Visits today</span>
-                <strong>{pin.state.visits}</strong>
-              </div>
             </div>
           </Popup>
         </Marker>
