@@ -7,6 +7,7 @@ import {
   MapPinned,
   Settings,
   ShieldCheck,
+  Store,
   Wrench,
   Workflow,
 } from 'lucide-react';
@@ -50,6 +51,7 @@ const executiveNavGroups = [
   {
     title: 'Administration',
     items: [
+      { label: 'Store Master', to: '/store-master', icon: Store },
       { label: 'Settings', to: '/settings', icon: Settings },
     ],
   },
@@ -87,6 +89,7 @@ const adminDemoNavGroups = [
   {
     title: 'Administration',
     items: [
+      { label: 'Store Master', to: '/store-master', icon: Store },
       { label: 'Settings', to: '/settings', icon: Settings },
     ],
   },

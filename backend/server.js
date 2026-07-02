@@ -567,6 +567,169 @@ function requireFoKmBatchRecalculationPermission(request, response, next) {
   next();
 }
 
+const STORE_MASTER_SELECT = [
+  'id',
+  'store_name',
+  'client_name',
+  'store_code',
+  'state',
+  'business',
+  'latitude',
+  'longitude',
+  'gps_accuracy',
+  'created_by_employee_code',
+  'created_by_full_name',
+  'attendance_id',
+  'captured_at',
+  'status',
+  'metadata',
+  'created_at',
+  'updated_at',
+].join(', ');
+
+const STORE_MASTER_EDITABLE_FIELDS = [
+  'store_name',
+  'client_name',
+  'store_code',
+  'state',
+  'business',
+  'latitude',
+  'longitude',
+  'gps_accuracy',
+  'status',
+];
+
+function hasStoreMasterPermission(profile) {
+  if (!profile || profile.is_active !== true) return false;
+  if (String(profile.status || '').trim().toLowerCase() !== 'active') return false;
+  return new Set(['DEVELOPER', 'ADMIN', 'QPMSADMIN', 'MD', 'COO']).has(
+    normalizePermissionRole(profile.role),
+  );
+}
+
+function requireStoreMasterPermission(request, response, next) {
+  if (!hasStoreMasterPermission(request.profile)) {
+    response.status(403).json({
+      ok: false,
+      message: `Role ${request.userRole || 'Unknown'} cannot manage Store Master.`,
+    });
+    return;
+  }
+  next();
+}
+
+function storeMetadata(row) {
+  return row?.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+    ? row.metadata
+    : {};
+}
+
+function storeSiteName(row) {
+  const metadata = storeMetadata(row);
+  return textOrNull(metadata.site_name) || textOrNull(metadata.siteName) || textOrNull(row?.store_name);
+}
+
+function serializeStoreMasterRow(row, linkedSiteVisits = 0) {
+  if (!row) return null;
+  return {
+    ...row,
+    site_name: storeSiteName(row),
+    linked_site_visits: linkedSiteVisits,
+  };
+}
+
+function parseStoreNumber(value, field, { required = false, min = null, max = null } = {}) {
+  if (value === null || value === undefined || String(value).trim() === '') {
+    if (required) throw userManagementHttpError(400, `${field} is required.`);
+    return null;
+  }
+  const number = Number(String(value).trim());
+  if (!Number.isFinite(number)) throw userManagementHttpError(400, `${field} must be numeric.`);
+  if (min !== null && number < min) throw userManagementHttpError(400, `${field} must be at least ${min}.`);
+  if (max !== null && number > max) throw userManagementHttpError(400, `${field} must be at most ${max}.`);
+  return number;
+}
+
+function validateStoreStatus(value) {
+  const status = textOrNull(value) || 'Active';
+  if (/^active$/i.test(status)) return 'Active';
+  if (/^inactive$/i.test(status)) return 'Inactive';
+  throw userManagementHttpError(400, 'status must be Active or Inactive.');
+}
+
+function actorLabel(profile) {
+  return textOrNull(profile?.display_name) ||
+    textOrNull(profile?.full_name) ||
+    textOrNull(profile?.employee_code) ||
+    textOrNull(profile?.email) ||
+    'Unknown user';
+}
+
+function buildStoreMasterPayload(body = {}, existing = null, actorProfile = null) {
+  const patch = {};
+  for (const field of STORE_MASTER_EDITABLE_FIELDS) {
+    if (hasOwn(body, field)) {
+      if (field === 'latitude') {
+        patch.latitude = parseStoreNumber(body.latitude, 'latitude', { required: true, min: -90, max: 90 });
+      } else if (field === 'longitude') {
+        patch.longitude = parseStoreNumber(body.longitude, 'longitude', { required: true, min: -180, max: 180 });
+      } else if (field === 'gps_accuracy') {
+        patch.gps_accuracy = parseStoreNumber(body.gps_accuracy, 'gps_accuracy', { required: true, min: 0 });
+      } else if (field === 'status') {
+        patch.status = validateStoreStatus(body.status);
+      } else {
+        patch[field] = textOrNull(body[field]);
+      }
+    }
+  }
+
+  const requiredTextFields = ['store_name', 'store_code', 'client_name', 'business', 'state'];
+  for (const field of requiredTextFields) {
+    const value = hasOwn(patch, field) ? patch[field] : existing?.[field];
+    if (!textOrNull(value)) throw userManagementHttpError(400, `${field} is required.`);
+  }
+  const siteName = hasOwn(body, 'site_name') ? textOrNull(body.site_name) : storeSiteName(existing);
+  if (!siteName) throw userManagementHttpError(400, 'site_name is required.');
+
+  const latitude = hasOwn(patch, 'latitude') ? patch.latitude : parseStoreNumber(existing?.latitude, 'latitude');
+  const longitude = hasOwn(patch, 'longitude') ? patch.longitude : parseStoreNumber(existing?.longitude, 'longitude');
+  const gpsAccuracy = hasOwn(patch, 'gps_accuracy') ? patch.gps_accuracy : parseStoreNumber(existing?.gps_accuracy, 'gps_accuracy');
+  if (latitude === null) throw userManagementHttpError(400, 'latitude is required.');
+  if (longitude === null) throw userManagementHttpError(400, 'longitude is required.');
+  if (gpsAccuracy === null) throw userManagementHttpError(400, 'gps_accuracy is required.');
+
+  const existingMetadata = storeMetadata(existing);
+  const changedFields = {};
+  for (const [field, value] of Object.entries(patch)) {
+    if (existing && String(existing[field] ?? '') !== String(value ?? '')) {
+      changedFields[field] = existing[field] ?? null;
+    }
+  }
+  if (existing && storeSiteName(existing) !== siteName) {
+    changedFields.site_name = storeSiteName(existing);
+  }
+
+  patch.metadata = {
+    ...existingMetadata,
+    site_name: siteName,
+    last_edited_by: actorLabel(actorProfile),
+    last_edited_by_employee_code: textOrNull(actorProfile?.employee_code),
+    last_edited_at: new Date().toISOString(),
+    edit_source: 'web_store_master',
+    ...(Object.keys(changedFields).length ? { previous_values: changedFields } : {}),
+  };
+  patch.updated_at = new Date().toISOString();
+  return patch;
+}
+
+function storeMasterErrorResponse(response, error) {
+  const status = error.statusCode || error.status || 500;
+  response.status(status).json({
+    ok: false,
+    message: error.message || 'Store Master operation failed.',
+  });
+}
+
 function requireRoles(roles) {
   return (request, response, next) => {
     if (!roles.includes(request.apiUser?.role)) {
@@ -2353,6 +2516,188 @@ app.post('/api/profile/avatar', requireSupabaseJwt, async (request, response) =>
     });
   } catch (error) {
     respondUserManagementError(response, error);
+  }
+});
+
+app.get('/api/store-master', requireSupabaseJwt, requireStoreMasterPermission, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const page = Math.max(1, Number.parseInt(String(request.query.page || '1'), 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(String(request.query.limit || '10'), 10) || 10));
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
+    const search = textOrNull(request.query.search);
+    const state = textOrNull(request.query.state);
+    const business = textOrNull(request.query.business);
+    const clientName = textOrNull(request.query.client);
+    const gpsStatus = textOrNull(request.query.gpsStatus);
+
+    let query = client
+      .from('store_master')
+      .select(STORE_MASTER_SELECT, { count: 'exact' })
+      .order('updated_at', { ascending: false })
+      .range(from, to);
+    if (search) {
+      const safeSearch = search.replace(/[,%]/g, ' ').trim();
+      query = query.or(
+        `store_name.ilike.%${safeSearch}%,store_code.ilike.%${safeSearch}%,client_name.ilike.%${safeSearch}%,business.ilike.%${safeSearch}%,state.ilike.%${safeSearch}%,metadata->>site_name.ilike.%${safeSearch}%`,
+      );
+    }
+    if (state && state !== 'All States') query = query.eq('state', state);
+    if (business && business !== 'All Business') query = query.eq('business', business);
+    if (clientName && clientName !== 'All Clients') query = query.eq('client_name', clientName);
+    if (/available/i.test(gpsStatus || '')) {
+      query = query.not('latitude', 'is', null).not('longitude', 'is', null);
+    } else if (/missing/i.test(gpsStatus || '')) {
+      query = query.or('latitude.is.null,longitude.is.null');
+    }
+
+    const { data, error, count } = await query;
+    if (error) throw error;
+    const ids = (data || []).map((row) => row.id).filter(Boolean);
+    const linkedCounts = new Map();
+    if (ids.length) {
+      const { data: visits, error: visitsError } = await client
+        .from('fo_site_visits')
+        .select('id,store_id')
+        .in('store_id', ids)
+        .limit(10000);
+      if (visitsError) throw visitsError;
+      for (const visit of visits || []) {
+        linkedCounts.set(visit.store_id, (linkedCounts.get(visit.store_id) || 0) + 1);
+      }
+    }
+
+    const { data: optionRows, error: optionError } = await client
+      .from('store_master')
+      .select('state,business,client_name,status,latitude,longitude')
+      .limit(10000);
+    if (optionError) throw optionError;
+    const optionValues = (field) =>
+      Array.from(new Set((optionRows || []).map((row) => textOrNull(row[field])).filter(Boolean))).sort();
+    const states = optionValues('state');
+    const filteredTotal = count || 0;
+    const totalStores = (optionRows || []).length;
+    const activeStores = (optionRows || []).filter((row) => /^active$/i.test(String(row.status || 'Active'))).length;
+    const gpsAvailable = (optionRows || []).filter((row) => row.latitude !== null && row.longitude !== null).length;
+
+    response.json({
+      ok: true,
+      rows: (data || []).map((row) => serializeStoreMasterRow(row, linkedCounts.get(row.id) || 0)),
+      pagination: {
+        page,
+        limit,
+        total: filteredTotal,
+        from: filteredTotal ? from + 1 : 0,
+        to: Math.min(from + limit, filteredTotal),
+      },
+      filterOptions: {
+        states,
+        businesses: optionValues('business'),
+        clients: optionValues('client_name'),
+      },
+      summary: {
+        totalStores,
+        activeStores,
+        gpsAvailable,
+        gpsMissing: Math.max(0, totalStores - gpsAvailable),
+        statesCovered: states.length,
+      },
+    });
+  } catch (error) {
+    storeMasterErrorResponse(response, error);
+  }
+});
+
+app.get('/api/store-master/:id', requireSupabaseJwt, requireStoreMasterPermission, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const { data, error } = await client
+      .from('store_master')
+      .select(STORE_MASTER_SELECT)
+      .eq('id', request.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw userManagementHttpError(404, 'Store not found.');
+    const { count, error: countError } = await client
+      .from('fo_site_visits')
+      .select('id', { count: 'exact', head: true })
+      .eq('store_id', data.id);
+    if (countError) throw countError;
+    response.json({ ok: true, row: serializeStoreMasterRow(data, count || 0) });
+  } catch (error) {
+    storeMasterErrorResponse(response, error);
+  }
+});
+
+app.post('/api/store-master', requireSupabaseJwt, requireStoreMasterPermission, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const payload = buildStoreMasterPayload(request.body || {}, null, request.profile);
+    const storeCode = textOrNull(payload.store_code);
+    const { data: duplicate, error: duplicateError } = await client
+      .from('store_master')
+      .select('id')
+      .ilike('store_code', storeCode)
+      .limit(1)
+      .maybeSingle();
+    if (duplicateError) throw duplicateError;
+    if (duplicate) throw userManagementHttpError(409, 'Store Code already exists.');
+
+    const { data, error } = await client
+      .from('store_master')
+      .insert({
+        ...payload,
+        created_by_employee_code: textOrNull(request.profile?.employee_code),
+        created_by_full_name: actorLabel(request.profile),
+      })
+      .select(STORE_MASTER_SELECT)
+      .single();
+    if (error) throw error;
+    response.status(201).json({ ok: true, row: serializeStoreMasterRow(data, 0) });
+  } catch (error) {
+    storeMasterErrorResponse(response, error);
+  }
+});
+
+app.patch('/api/store-master/:id', requireSupabaseJwt, requireStoreMasterPermission, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const { data: existing, error: existingError } = await client
+      .from('store_master')
+      .select(STORE_MASTER_SELECT)
+      .eq('id', request.params.id)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (!existing) throw userManagementHttpError(404, 'Store not found.');
+    const payload = buildStoreMasterPayload(request.body || {}, existing, request.profile);
+    const nextStoreCode = textOrNull(payload.store_code);
+    if (nextStoreCode && nextStoreCode.toUpperCase() !== String(existing.store_code || '').trim().toUpperCase()) {
+      const { data: duplicate, error: duplicateError } = await client
+        .from('store_master')
+        .select('id')
+        .ilike('store_code', nextStoreCode)
+        .neq('id', existing.id)
+        .limit(1)
+        .maybeSingle();
+      if (duplicateError) throw duplicateError;
+      if (duplicate) throw userManagementHttpError(409, 'Store Code already exists.');
+    }
+    const { data, error } = await client
+      .from('store_master')
+      .update(payload)
+      .eq('id', existing.id)
+      .select(STORE_MASTER_SELECT)
+      .single();
+    if (error) throw error;
+    const { count, error: countError } = await client
+      .from('fo_site_visits')
+      .select('id', { count: 'exact', head: true })
+      .eq('store_id', data.id);
+    if (countError) throw countError;
+    response.json({ ok: true, row: serializeStoreMasterRow(data, count || 0) });
+  } catch (error) {
+    storeMasterErrorResponse(response, error);
   }
 });
 
