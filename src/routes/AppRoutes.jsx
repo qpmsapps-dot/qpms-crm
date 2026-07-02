@@ -12,6 +12,7 @@ import Sites from '../pages/Sites.jsx';
 import Tasks from '../pages/Tasks.jsx';
 import Employees from '../pages/Employees.jsx';
 import Settings from '../pages/Settings.jsx';
+import StoreMaster from '../pages/StoreMaster.jsx';
 import Tickets from '../pages/Tickets.jsx';
 import UserManagement from '../pages/settings/UserManagement.jsx';
 import { isDemoMode } from '../config/demoMode.js';
@@ -58,6 +59,7 @@ export const router = createBrowserRouter([
             ),
           },
           { path: 'reports', element: <ReportingCenterPage /> },
+          { path: 'store-master', element: <StoreMaster /> },
           { path: 'employees', element: isDemoMode ? <Navigate to="/dashboard" replace /> : <Employees /> },
           { path: 'settings', element: <Settings /> },
           { path: 'settings/user-management', element: <UserManagement /> },

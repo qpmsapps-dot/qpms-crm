@@ -31,7 +31,7 @@ export default function MainLayout() {
     return <Navigate to="/dashboard" replace />;
   }
 
-  const usesWideWorkspace = ['/fo-activities', '/dashboard', '/existing-business', '/tickets'].some((path) => location.pathname.startsWith(path));
+  const usesWideWorkspace = ['/fo-activities', '/dashboard', '/existing-business', '/tickets', '/store-master'].some((path) => location.pathname.startsWith(path));
 
   return (
     <div className={`min-h-screen bg-slate-50 transition-colors dark:bg-slate-950 ${theme === 'dark' ? 'dark' : ''}`}>

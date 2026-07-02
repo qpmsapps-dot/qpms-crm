@@ -18,10 +18,10 @@ export const roleGroups = {
   ExistingOperations: ['Existing Business Operations Team'],
   FieldOfficer: ['Field Officer', 'FO'],
   Client: ['Client', 'Client Login'],
-  Admin: ['Admin', 'DEMO_ADMIN', 'Demo Admin', 'Read Only Admin', 'Read-Only Admin'],
+  Admin: ['Admin', 'QPMS Admin', 'Developer', 'DEMO_ADMIN', 'Demo Admin', 'Read Only Admin', 'Read-Only Admin'],
 };
 
-export const protectedNavRoutes = ['/dashboard', '/crm', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/assets', '/reports', '/employees', '/settings'];
+export const protectedNavRoutes = ['/dashboard', '/crm', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/assets', '/reports', '/employees', '/store-master', '/settings'];
 
 export function normalizeAppRole(role = '') {
   const match = Object.entries(roleGroups).find(([, aliases]) => aliases.includes(role));
@@ -37,6 +37,7 @@ export function hasAnyRole(user, allowedRoles = []) {
 
 export function routeAllowedRoles(pathname = '') {
   if (pathname.startsWith('/dashboard')) return [];
+  if (pathname.startsWith('/store-master')) return ['StoreMasterAdmin'];
   if (pathname.startsWith('/settings/user-management')) {
     return ['Admin', 'Management', 'HR', 'FinanceLeadership'];
   }
@@ -56,7 +57,19 @@ export function routeAllowedRoles(pathname = '') {
   return [];
 }
 
+function normalizeRawRole(role = '') {
+  return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+export function canAccessStoreMaster(user) {
+  if (!user) return false;
+  return new Set(['DEVELOPER', 'ADMIN', 'QPMSADMIN', 'MD', 'COO']).has(
+    normalizeRawRole(user.rawRole || user.role),
+  );
+}
+
 export function canAccessRoute(user, pathname) {
+  if (pathname.startsWith('/store-master')) return canAccessStoreMaster(user);
   return hasAnyRole(user, routeAllowedRoles(pathname));
 }
 

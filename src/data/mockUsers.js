@@ -213,7 +213,7 @@ export function isFinanceLeadership(user) {
 }
 
 export function isAdmin(user) {
-  return ['Admin', 'DEMO_ADMIN'].includes(user?.role);
+  return ['Admin', 'QPMS Admin', 'Developer', 'DEMO_ADMIN'].includes(user?.role);
 }
 
 export function isExistingBusinessOperations(user) {

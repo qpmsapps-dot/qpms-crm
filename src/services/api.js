@@ -222,6 +222,37 @@ export function repairEmployeeCode(profileId, payload) {
   });
 }
 
+export function getStoreMaster(params = {}) {
+  return adminApiRequest({
+    method: 'GET',
+    url: '/api/store-master',
+    params,
+  });
+}
+
+export function getStoreMasterRecord(id) {
+  return adminApiRequest({
+    method: 'GET',
+    url: `/api/store-master/${encodeURIComponent(id)}`,
+  });
+}
+
+export function createStoreMasterRecord(payload) {
+  return adminApiRequest({
+    method: 'POST',
+    url: '/api/store-master',
+    data: payload,
+  });
+}
+
+export function updateStoreMasterRecord(id, payload) {
+  return adminApiRequest({
+    method: 'PATCH',
+    url: `/api/store-master/${encodeURIComponent(id)}`,
+    data: payload,
+  });
+}
+
 api.interceptors.request.use((config) => {
   if (!API_BASE) {
     return Promise.reject(
