@@ -76,8 +76,18 @@ const LOCATION_LOG_SELECT_COLUMNS = [
   'created_at',
 ].join(', ');
 
+const isDebugLoggingEnabled =
+  process.env.NODE_ENV !== 'production' ||
+  process.env.FO_KM_DEBUG_LOGS === 'true';
+
+function debugLog(...args) {
+  if (isDebugLoggingEnabled) {
+    console.log(...args);
+  }
+}
+
 function log(event, detail = {}) {
-  console.log(`[${event}]`, detail);
+  debugLog(`[${event}]`, detail);
 }
 
 function requireServiceRoleClient(serviceRoleClient) {
@@ -596,7 +606,7 @@ async function calculateFinalReturnLegKm(attendance, visits = [], options = {}) 
     has_origin: Boolean(origin),
     has_destination: Boolean(destination),
   });
-  console.log('FINAL LEG INPUTS', {
+  debugLog('FINAL LEG INPUTS', {
     attendanceId: attendance.id,
     employeeCode: attendance.employee_code,
     endLatitude: attendance.end_latitude,
@@ -784,7 +794,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   const foUserId = payload.fo_user_id || null;
   const employeeCode = payload.employee_code || null;
   const date = payload.date || payload.attendance_date || null;
-  console.log('KM RECALC REQUEST', {
+  debugLog('KM RECALC REQUEST', {
     attendanceId,
     foUserId,
     employeeCode,
@@ -851,7 +861,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     final_return_leg_km: finalReturnLegKm,
     approved_km: approvedKm,
   });
-  console.log('FINAL LEG RESULT', {
+  debugLog('FINAL LEG RESULT', {
     attendanceId: attendance.id,
     storedRouteKm,
     finalLegKm: finalReturnLegKm,

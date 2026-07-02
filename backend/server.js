@@ -4943,12 +4943,6 @@ app.post(
 
 app.post('/api/fo/km/recalculate', async (request, response) => {
   const payload = request.body || {};
-  console.log('KM RECALC REQUEST', {
-    attendanceId: payload.attendance_id || null,
-    foUserId: payload.fo_user_id || null,
-    employeeCode: payload.employee_code || null,
-    date: payload.date || null,
-  });
   const lockKey = foKmRecalculationLockKey(payload);
   const lockDate = normalizeFoKmRecalculationDate(payload.date);
   if (foKmRecalculateAllLocks.has(lockDate) || foKmRecalculationLocks.has(lockKey)) {
