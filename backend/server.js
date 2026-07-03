@@ -8,6 +8,7 @@ import { recalculateFoKm, recalculateFoKmBatch, recalculateFoKmForToday } from '
 import { cleanupStaleFoSessions } from './foStaleSessionCleanupService.js';
 import {
   normalizeReportState,
+  previousReportDate,
   sendDailyOperationsReports,
 } from './services/dailyOperationsReportService.js';
 import {
@@ -5133,10 +5134,12 @@ app.post('/api/cron/daily-operations-report', async (request, response) => {
       return;
     }
     const client = requireServiceRoleSupabase();
+    const reportDate = request.body?.date || previousReportDate();
     const result = await sendDailyOperationsReports({
       client,
-      date: request.body?.date,
-      mode: 'all',
+      date: reportDate,
+      mode: 'master',
+      preventDuplicate: true,
     });
     response.json(result);
   } catch (error) {
@@ -5198,6 +5201,107 @@ app.post(
 app.post('/send-lead-mom', routeSendMom('lead'));
 app.post('/send-sitevisit-mom', routeSendMom('sitevisit'));
 
+const REPORT_EMAIL_SCHEDULER_POLL_MS = 30 * 1000;
+let lastDailyReportSchedulerMinuteKey = '';
+
+function integerEnv(name, fallback, min, max) {
+  const parsed = Number.parseInt(String(process.env[name] ?? ''), 10);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) return fallback;
+  return parsed;
+}
+
+function reportEmailSchedulerConfig() {
+  return {
+    enabled: String(process.env.REPORT_EMAIL_ENABLED || 'true').trim().toLowerCase() !== 'false',
+    timezone: process.env.REPORT_EMAIL_TIMEZONE || 'Asia/Kolkata',
+    hour: integerEnv('REPORT_EMAIL_HOUR', 9, 0, 23),
+    minute: integerEnv('REPORT_EMAIL_MINUTE', 0, 0, 59),
+  };
+}
+
+function zonedClockParts(date, timezone) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(date);
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
+async function runScheduledDailyOperationsReport(reason = 'scheduler') {
+  const config = reportEmailSchedulerConfig();
+  const reportDate = previousReportDate();
+  try {
+    console.log('[myQPMS Daily Report Scheduler] run started', {
+      reason,
+      scheduledHour: config.hour,
+      scheduledMinute: config.minute,
+      timezone: config.timezone,
+      reportDate,
+      mode: 'master',
+    });
+    const client = requireServiceRoleSupabase();
+    const result = await sendDailyOperationsReports({
+      client,
+      date: reportDate,
+      mode: 'master',
+      preventDuplicate: true,
+    });
+    const masterResult = (result.results || []).find((item) => item.type === 'master') || result.results?.[0] || {};
+    console.log('[myQPMS Daily Report Scheduler] run complete', {
+      reason,
+      ok: result.ok,
+      duplicateSkipped: Boolean(result.duplicateSkipped),
+      reportDate: result.date,
+      mode: result.mode,
+      recipientsCount: (masterResult.recipients || []).length + (masterResult.cc || []).length,
+      messageId: masterResult.email?.messageId || null,
+      skipped: Boolean(masterResult.skipped),
+    });
+  } catch (error) {
+    console.error('[myQPMS Daily Report Scheduler] run failed', {
+      reason,
+      reportDate,
+      mode: 'master',
+      message: error.message,
+      code: error.code || null,
+    });
+  }
+}
+
+function startDailyOperationsReportScheduler() {
+  const config = reportEmailSchedulerConfig();
+  console.log('[myQPMS Daily Report Scheduler] started', {
+    enabled: config.enabled,
+    scheduledHour: config.hour,
+    scheduledMinute: config.minute,
+    timezone: config.timezone,
+    mode: 'master',
+  });
+  if (!config.enabled) return;
+
+  const tick = () => {
+    const currentConfig = reportEmailSchedulerConfig();
+    if (!currentConfig.enabled) return;
+    const parts = zonedClockParts(new Date(), currentConfig.timezone);
+    const currentHour = Number(parts.hour);
+    const currentMinute = Number(parts.minute);
+    if (currentHour !== currentConfig.hour || currentMinute !== currentConfig.minute) return;
+
+    const minuteKey = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${currentConfig.timezone}`;
+    if (minuteKey === lastDailyReportSchedulerMinuteKey) return;
+    lastDailyReportSchedulerMinuteKey = minuteKey;
+    runScheduledDailyOperationsReport('scheduled_time');
+  };
+
+  tick();
+  setInterval(tick, REPORT_EMAIL_SCHEDULER_POLL_MS).unref?.();
+}
+
 app.listen(port, () => {
   console.log('[myQPMS Mail API] Startup complete', {
     port,
@@ -5210,6 +5314,7 @@ app.listen(port, () => {
     serviceRoleSupabaseInitialized: Boolean(serviceRoleSupabase),
   });
   verifyMailTransporter();
+  startDailyOperationsReportScheduler();
   runFoStaleSessionCleanup('startup');
   if (Number.isFinite(FO_STALE_CLEANUP_INTERVAL_MS) && FO_STALE_CLEANUP_INTERVAL_MS > 0) {
     setInterval(() => {
