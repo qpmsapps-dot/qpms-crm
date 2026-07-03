@@ -271,6 +271,394 @@ export async function loadHierarchy(client, employeeCode) {
   return data || null;
 }
 
+function emptyHierarchyForProfile(profile) {
+  return {
+    employee_code: profile?.employee_code || null,
+    manager_employee_code: null,
+    managers_manager_employee_code: null,
+    business_head_employee_code: null,
+    gm_employee_code: null,
+    coo_employee_code: null,
+    hierarchy_level: null,
+    hierarchy_path: null,
+    is_active: false,
+    metadata: {},
+  };
+}
+
+function hierarchyGraphRecord(profile, hierarchyByEmployeeCode) {
+  const code = normalizeEmployeeCode(profile?.employee_code);
+  return {
+    id: profile.id,
+    employee_code: profile.employee_code || null,
+    full_name: profile.full_name || null,
+    display_name: profile.display_name || null,
+    username: profile.username || null,
+    email: profile.email || null,
+    mobile: profile.mobile || null,
+    state: profile.state || null,
+    role: profile.role || null,
+    designation: profile.designation || null,
+    department: profile.department || null,
+    business: profile.business || null,
+    status: profile.status || null,
+    is_active: profile.is_active === true,
+    metadata: profile.metadata || {},
+    hierarchy: hierarchyByEmployeeCode.get(code) || emptyHierarchyForProfile(profile),
+  };
+}
+
+export async function loadHierarchyGraph(client) {
+  const profiles = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await client
+      .from('profiles')
+      .select(USER_MANAGEMENT_PROFILE_SELECT)
+      .eq('is_active', true)
+      .eq('status', 'Active')
+      .order('full_name', { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    profiles.push(...(data || []));
+    if ((data || []).length < pageSize) break;
+  }
+
+  const profileEmployeeCodes = new Set(
+    profiles.map((profile) => normalizeEmployeeCode(profile.employee_code)).filter(Boolean),
+  );
+  const hierarchyByEmployeeCode = new Map();
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await client
+      .from('employee_hierarchy')
+      .select(
+        [
+          'employee_code',
+          'manager_employee_code',
+          'managers_manager_employee_code',
+          'business_head_employee_code',
+          'gm_employee_code',
+          'coo_employee_code',
+          'hierarchy_level',
+          'hierarchy_path',
+          'is_active',
+          'metadata',
+        ].join(','),
+      )
+      .eq('is_active', true)
+      .order('updated_at', { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+
+    for (const row of data || []) {
+      const code = normalizeEmployeeCode(row.employee_code);
+      if (profileEmployeeCodes.has(code) && !hierarchyByEmployeeCode.has(code)) {
+        hierarchyByEmployeeCode.set(code, {
+          employee_code: row.employee_code || null,
+          manager_employee_code: row.manager_employee_code || null,
+          managers_manager_employee_code: row.managers_manager_employee_code || null,
+          business_head_employee_code: row.business_head_employee_code || null,
+          gm_employee_code: row.gm_employee_code || null,
+          coo_employee_code: row.coo_employee_code || null,
+          hierarchy_level: row.hierarchy_level || null,
+          hierarchy_path: Array.isArray(row.hierarchy_path) ? row.hierarchy_path : null,
+          is_active: row.is_active === true,
+          metadata: row.metadata || {},
+        });
+      }
+    }
+    if ((data || []).length < pageSize) break;
+  }
+
+  return profiles.map((profile) => hierarchyGraphRecord(profile, hierarchyByEmployeeCode));
+}
+
+function userManagementValidationError(message, details = null) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  if (details) error.details = details;
+  return error;
+}
+
+function isActiveUserManagementProfile(profile) {
+  return (
+    profile?.is_active === true &&
+    String(profile.status || '').trim().toLowerCase() === 'active' &&
+    Boolean(normalizeEmployeeCode(profile.employee_code))
+  );
+}
+
+async function loadActiveUserManagementProfilesByCode(client) {
+  const profilesByCode = new Map();
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await client
+      .from('profiles')
+      .select(USER_MANAGEMENT_PROFILE_SELECT)
+      .eq('is_active', true)
+      .eq('status', 'Active')
+      .order('full_name', { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    for (const profile of data || []) {
+      if (isActiveUserManagementProfile(profile)) {
+        profilesByCode.set(normalizeEmployeeCode(profile.employee_code), profile);
+      }
+    }
+    if ((data || []).length < pageSize) break;
+  }
+  return profilesByCode;
+}
+
+async function loadActiveHierarchyRows(client) {
+  const rows = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await client
+      .from('employee_hierarchy')
+      .select('*')
+      .eq('is_active', true)
+      .order('updated_at', { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if ((data || []).length < pageSize) break;
+  }
+  return rows;
+}
+
+function normalizeHierarchyAssignments(assignments) {
+  if (!Array.isArray(assignments)) {
+    throw userManagementValidationError('assignments must be an array.');
+  }
+  const seen = new Set();
+  return assignments.map((assignment, index) => {
+    const employeeCode = normalizeEmployeeCode(assignment?.employee_code);
+    const managerEmployeeCode = normalizeEmployeeCode(assignment?.manager_employee_code) || null;
+    if (!employeeCode) {
+      throw userManagementValidationError(`assignments[${index}].employee_code is required.`);
+    }
+    if (seen.has(employeeCode)) {
+      throw userManagementValidationError(
+        `Duplicate employee_code in assignments: ${employeeCode}.`,
+      );
+    }
+    seen.add(employeeCode);
+    if (managerEmployeeCode && managerEmployeeCode === employeeCode) {
+      throw userManagementValidationError('Employee cannot report to self.', {
+        employee_code: employeeCode,
+      });
+    }
+    return { employee_code: employeeCode, manager_employee_code: managerEmployeeCode };
+  });
+}
+
+function latestActiveHierarchyRowsByCode(rows) {
+  const rowsByCode = new Map();
+  for (const row of rows || []) {
+    const code = normalizeEmployeeCode(row.employee_code);
+    if (!code) continue;
+    if (!rowsByCode.has(code)) rowsByCode.set(code, []);
+    rowsByCode.get(code).push(row);
+  }
+  return rowsByCode;
+}
+
+function currentManagerMapFromRows(rowsByCode) {
+  const managerByCode = new Map();
+  for (const [code, rows] of rowsByCode.entries()) {
+    const latest = rows[0];
+    managerByCode.set(code, normalizeEmployeeCode(latest?.manager_employee_code) || null);
+  }
+  return managerByCode;
+}
+
+function assertHierarchyAssignmentsAreValid(assignments, profilesByCode) {
+  for (const assignment of assignments) {
+    if (!profilesByCode.has(assignment.employee_code)) {
+      throw userManagementValidationError('Employee profile is not active or does not exist.', {
+        employee_code: assignment.employee_code,
+      });
+    }
+    if (
+      assignment.manager_employee_code &&
+      !profilesByCode.has(assignment.manager_employee_code)
+    ) {
+      throw userManagementValidationError('Manager profile is not active or does not exist.', {
+        employee_code: assignment.employee_code,
+        manager_employee_code: assignment.manager_employee_code,
+      });
+    }
+  }
+}
+
+function assertNoHierarchyCycles(assignments, managerByCode, traversalLimit) {
+  for (const assignment of assignments) {
+    const employeeCode = assignment.employee_code;
+    let nextCode = assignment.manager_employee_code;
+    const visited = new Set([employeeCode]);
+    let steps = 0;
+    while (nextCode) {
+      if (visited.has(nextCode)) {
+        throw userManagementValidationError('Circular hierarchy assignment is not allowed.', {
+          employee_code: employeeCode,
+          manager_employee_code: assignment.manager_employee_code,
+          circular_employee_code: nextCode,
+        });
+      }
+      visited.add(nextCode);
+      steps += 1;
+      if (steps > traversalLimit) {
+        throw userManagementValidationError('Hierarchy traversal limit exceeded.', {
+          employee_code: employeeCode,
+        });
+      }
+      nextCode = managerByCode.get(nextCode) || null;
+    }
+  }
+}
+
+function hierarchyProfileText(profile) {
+  return [profile?.role, profile?.designation]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+}
+
+function isCooProfile(profile) {
+  return /\bCOO\b|CHIEF OPERATING OFFICER/.test(hierarchyProfileText(profile));
+}
+
+function isGmProfile(profile) {
+  return /\bGM\b|GENERAL MANAGER/.test(hierarchyProfileText(profile));
+}
+
+function isBusinessHeadProfile(profile) {
+  return /BUSINESS HEAD|BRANCH HEAD|\bBH\b|\bHEAD\b|HEAD\s*-/.test(hierarchyProfileText(profile));
+}
+
+function hierarchyPathForEmployee(employeeCode, managerByCode, traversalLimit) {
+  const path = [employeeCode];
+  let nextCode = managerByCode.get(employeeCode) || null;
+  const visited = new Set(path);
+  let steps = 0;
+  while (nextCode) {
+    if (visited.has(nextCode)) break;
+    path.push(nextCode);
+    visited.add(nextCode);
+    steps += 1;
+    if (steps > traversalLimit) break;
+    nextCode = managerByCode.get(nextCode) || null;
+  }
+  return path;
+}
+
+function hierarchyPayloadForAssignment(assignment, managerByCode, profilesByCode, actorAuthUserId) {
+  const path = hierarchyPathForEmployee(
+    assignment.employee_code,
+    managerByCode,
+    profilesByCode.size + 1,
+  );
+  const ancestors = path.slice(1);
+  const ancestorProfile = (predicate) =>
+    ancestors.find((code) => predicate(profilesByCode.get(code))) || null;
+  return {
+    employee_code: assignment.employee_code,
+    manager_employee_code: assignment.manager_employee_code,
+    managers_manager_employee_code: ancestors[1] || null,
+    business_head_employee_code: ancestorProfile(isBusinessHeadProfile),
+    gm_employee_code: ancestorProfile(isGmProfile),
+    coo_employee_code: ancestorProfile(isCooProfile),
+    hierarchy_level: String(Math.max(0, path.length - 1)),
+    hierarchy_path: path,
+    is_active: true,
+    metadata: {
+      updated_by: actorAuthUserId,
+      updated_from: 'user_management_hierarchy_builder',
+    },
+    updated_by: actorAuthUserId,
+  };
+}
+
+export async function saveHierarchyAssignments(client, assignments, actorAuthUserId) {
+  const normalizedAssignments = normalizeHierarchyAssignments(assignments);
+  const profilesByCode = await loadActiveUserManagementProfilesByCode(client);
+  assertHierarchyAssignmentsAreValid(normalizedAssignments, profilesByCode);
+
+  const activeHierarchyRows = await loadActiveHierarchyRows(client);
+  const rowsByCode = latestActiveHierarchyRowsByCode(activeHierarchyRows);
+  const managerByCode = currentManagerMapFromRows(rowsByCode);
+  for (const assignment of normalizedAssignments) {
+    managerByCode.set(assignment.employee_code, assignment.manager_employee_code);
+  }
+  assertNoHierarchyCycles(normalizedAssignments, managerByCode, profilesByCode.size + 1);
+
+  let updated = 0;
+  let inserted = 0;
+  let duplicateRowsDeactivated = 0;
+
+  for (const assignment of normalizedAssignments) {
+    const payload = hierarchyPayloadForAssignment(
+      assignment,
+      managerByCode,
+      profilesByCode,
+      actorAuthUserId,
+    );
+    const existingRows = rowsByCode.get(assignment.employee_code) || [];
+    const latest = existingRows[0] || null;
+    if (latest) {
+      const { error } = await client
+        .from('employee_hierarchy')
+        .update({
+          ...payload,
+          metadata: {
+            ...(latest.metadata || {}),
+            ...payload.metadata,
+          },
+        })
+        .eq('id', latest.id);
+      if (error) throw error;
+      updated += 1;
+    } else {
+      const { error } = await client
+        .from('employee_hierarchy')
+        .insert({
+          ...payload,
+          created_by: actorAuthUserId,
+        });
+      if (error) throw error;
+      inserted += 1;
+    }
+
+    const duplicates = existingRows.slice(1);
+    for (const duplicate of duplicates) {
+      const { error } = await client
+        .from('employee_hierarchy')
+        .update({
+          is_active: false,
+          updated_by: actorAuthUserId,
+          metadata: {
+            ...(duplicate.metadata || {}),
+            duplicate_deactivated_by: actorAuthUserId,
+            duplicate_deactivated_from: 'user_management_hierarchy_builder',
+          },
+        })
+        .eq('id', duplicate.id);
+      if (error) throw error;
+      duplicateRowsDeactivated += 1;
+    }
+  }
+
+  return {
+    updated,
+    inserted,
+    duplicateRowsDeactivated,
+    affectedEmployeeCodes: normalizedAssignments.map((assignment) => assignment.employee_code),
+  };
+}
+
 export async function saveHierarchy(client, employeeCode, body, actorAuthUserId) {
   const payload = hierarchyPayloadFromBody(body, employeeCode);
   if (!payload) return null;
