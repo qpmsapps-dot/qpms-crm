@@ -21,6 +21,7 @@ import {
   hasOwn,
   hierarchyPayloadFromBody,
   loadHierarchy,
+  loadHierarchyGraph,
   loadOperationalCounts,
   loadProfileById,
   normalizeEmail,
@@ -30,6 +31,7 @@ import {
   sanitizeSupabaseDiagnosticError,
   sanitizeAuditData,
   saveHierarchy,
+  saveHierarchyAssignments,
   serviceRoleClientNotConfiguredError,
   textOrNull,
   isAuthUserNotFoundError,
@@ -3289,6 +3291,60 @@ app.post(
         ok: true,
         profile: updatedProfile,
         invite,
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.get(
+  '/api/admin/users/hierarchy',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const users = await loadHierarchyGraph(client);
+      response.json({
+        ok: true,
+        total: users.length,
+        users,
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.patch(
+  '/api/admin/users/hierarchy',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const result = await saveHierarchyAssignments(
+        client,
+        request.body?.assignments,
+        request.authUser.id,
+      );
+      await writeUserManagementAudit(client, {
+        action: 'UPDATE_USER_HIERARCHY_ASSIGNMENTS',
+        metadata: {
+          assignment_count: result.affectedEmployeeCodes.length,
+          affected_employee_codes: result.affectedEmployeeCodes,
+          duplicate_cleanup_count: result.duplicateRowsDeactivated,
+        },
+        request,
+      });
+      response.json({
+        ok: true,
+        updated: result.updated,
+        inserted: result.inserted,
+        duplicateRowsDeactivated: result.duplicateRowsDeactivated,
       });
     } catch (error) {
       respondUserManagementError(response, error);
