@@ -177,36 +177,46 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
   }
 
   Future<void> _logout() async {
+    final employeeCode = _user?.employeeCode;
     try {
-      final attendance = await LocalStore.getAttendance();
-      if (attendance?.isActive == true) {
-        await CrashLogService.record(
-          employeeCode: _user?.employeeCode,
-          screen: 'app',
-          action: 'LOGOUT_BLOCKED_ACTIVE_ATTENDANCE',
-        );
-        return;
-      }
-      await TrackingService.stop(user: _user);
-      await LocalStore.clearAll();
+      await CrashLogService.record(
+        employeeCode: employeeCode,
+        screen: 'app',
+        action: 'SESSION_REFRESH_LOGOUT_REQUESTED',
+      );
       if (SupabaseService.isReady) {
-        await SupabaseService.signOut();
+        try {
+          await SupabaseService.signOut();
+        } catch (error, stackTrace) {
+          await CrashLogService.record(
+            employeeCode: employeeCode,
+            screen: 'app',
+            action: 'SESSION_REFRESH_LOGOUT_FAILED',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
       }
+      if (employeeCode?.trim().isNotEmpty == true) {
+        await LocalStore.clearActiveVisits(employeeCode: employeeCode!.trim());
+      }
+      await LocalStore.clearUser();
+      await CrashLogService.record(
+        employeeCode: employeeCode,
+        screen: 'app',
+        action: 'SESSION_REFRESH_LOGOUT_COMPLETED',
+      );
+      if (mounted) setState(() => _user = null);
     } catch (error, stackTrace) {
       await CrashLogService.record(
-        employeeCode: _user?.employeeCode,
+        employeeCode: employeeCode,
         screen: 'app',
-        action: 'LOGOUT_FAILED',
+        action: 'SESSION_REFRESH_LOGOUT_FAILED',
         error: error,
         stackTrace: stackTrace,
       );
+      if (mounted) setState(() => _user = null);
     }
-    await CrashLogService.record(
-      employeeCode: _user?.employeeCode,
-      screen: 'app',
-      action: 'LOGOUT_SUCCESS',
-    );
-    if (mounted) setState(() => _user = null);
   }
 
   @override

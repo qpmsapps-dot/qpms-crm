@@ -60,6 +60,19 @@ function indiaDateInput(date = new Date()) {
   }).format(date ? new Date(date) : new Date());
 }
 
+export function previousReportDate(date = new Date()) {
+  const timezone = process.env.REPORT_EMAIL_TIMEZONE || 'Asia/Kolkata';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date ? new Date(date) : new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const utcMidnight = Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day));
+  return new Date(utcMidnight - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 function formatReportDate(dateInput) {
   const date = new Date(`${dateInput}T00:00:00+05:30`);
   return new Intl.DateTimeFormat('en-GB', {
@@ -485,19 +498,126 @@ async function branchHeadRecipients(client, state) {
   return { recipients: [...new Set(recipients)], source: 'profile' };
 }
 
-export async function sendDailyOperationsReports({ client, date, mode = 'all', state, to, cc } = {}) {
+const DAILY_REPORT_IDEMPOTENCY_SCOPE = 'daily_operations_report_email';
+
+function scheduledReportIdempotencyKey(dateInput, mode) {
+  return `${mode}:${dateInput}`;
+}
+
+async function reserveScheduledReportSend(client, { dateInput, mode }) {
+  const idempotencyKey = scheduledReportIdempotencyKey(dateInput, mode);
+  const row = {
+    scope: DAILY_REPORT_IDEMPOTENCY_SCOPE,
+    idempotency_key: idempotencyKey,
+    entity_type: 'daily_operations_report',
+    request_hash: idempotencyKey,
+    status: 'Started',
+  };
+  const { data, error } = await client
+    .from('idempotency_keys')
+    .insert(row)
+    .select('id, status, created_at')
+    .single();
+  if (!error) return { reserved: true, idempotencyKey, row: data };
+  if (error.code !== '23505') throw error;
+
+  const existing = await client
+    .from('idempotency_keys')
+    .select('id, status, created_at, response_payload')
+    .eq('scope', DAILY_REPORT_IDEMPOTENCY_SCOPE)
+    .eq('idempotency_key', idempotencyKey)
+    .maybeSingle();
+  if (existing.error) throw existing.error;
+  return { reserved: false, idempotencyKey, row: existing.data || null };
+}
+
+async function completeScheduledReportSend(client, reservation, payload) {
+  if (!reservation?.row?.id) return;
+  await client
+    .from('idempotency_keys')
+    .update({
+      status: 'Completed',
+      response_payload: payload,
+    })
+    .eq('id', reservation.row.id);
+}
+
+async function failScheduledReportSend(client, reservation, error) {
+  if (!reservation?.row?.id) return;
+  await client
+    .from('idempotency_keys')
+    .update({
+      status: 'Failed',
+      response_payload: {
+        ok: false,
+        message: error.message || 'Daily Operations report failed.',
+        code: error.code || null,
+      },
+    })
+    .eq('id', reservation.row.id);
+}
+
+export async function sendDailyOperationsReports({
+  client,
+  date,
+  mode = 'all',
+  state,
+  to,
+  cc,
+  preventDuplicate = false,
+} = {}) {
   if (String(process.env.REPORT_EMAIL_ENABLED || '').trim().toLowerCase() === 'false') {
     return { ok: false, message: 'Report email is disabled.', results: [] };
   }
 
   const results = [];
   const dateInput = indiaDateInput(date);
+  let reservation = null;
+  if (preventDuplicate) {
+    reservation = await reserveScheduledReportSend(client, { dateInput, mode });
+    if (!reservation.reserved) {
+      console.warn('[myQPMS Daily Report] duplicate scheduled send skipped', {
+        reportDate: dateInput,
+        mode,
+        idempotencyKey: reservation.idempotencyKey,
+        existingStatus: reservation.row?.status || null,
+        existingCreatedAt: reservation.row?.created_at || null,
+      });
+      return {
+        ok: true,
+        date: dateInput,
+        mode,
+        duplicateSkipped: true,
+        results: [{
+          type: mode,
+          state: null,
+          skipped: true,
+          message: 'Scheduled report already reserved or sent for this date and mode.',
+          recipients: [],
+          cc: [],
+          recipientSource: null,
+          filename: null,
+          sheetNames: [],
+          summary: null,
+          email: null,
+          ok: true,
+        }],
+      };
+    }
+  }
 
   async function sendMaster() {
     const report = await generateDailyOperationsReport({ client, date: dateInput, mode: 'master' });
     const recipients = normalizeRecipients(to || process.env.REPORT_MASTER_EMAIL_TO);
     const ccRecipients = normalizeRecipients(cc || process.env.REPORT_MASTER_EMAIL_CC);
     const subject = `myQPMS Daily Operations Report - All States - ${report.dateLabel}`;
+    console.log('[myQPMS Daily Report] sending email', {
+      reportDate: report.date,
+      mode: 'master',
+      recipientsCount: recipients.length + ccRecipients.length,
+      toCount: recipients.length,
+      ccCount: ccRecipients.length,
+    });
     const result = await sendEmail({
       to: recipients,
       cc: ccRecipients,
@@ -508,6 +628,14 @@ export async function sendDailyOperationsReports({ client, date, mode = 'all', s
         content: report.buffer,
         contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       }],
+    });
+    console.log('[myQPMS Daily Report] email accepted', {
+      reportDate: report.date,
+      mode: 'master',
+      recipientsCount: recipients.length + ccRecipients.length,
+      messageId: result.messageId,
+      acceptedCount: result.accepted?.length || 0,
+      rejectedCount: result.rejected?.length || 0,
     });
     return { type: 'master', state: null, recipients, cc: ccRecipients, report, email: result };
   }
@@ -559,6 +687,15 @@ export async function sendDailyOperationsReports({ client, date, mode = 'all', s
     try {
       results.push(await sendMaster());
     } catch (error) {
+      console.error('[myQPMS Daily Report] email failed', {
+        reportDate: dateInput,
+        mode: 'master',
+        message: error.message,
+        code: error.code || null,
+      });
+      if (reservation?.reserved && mode === 'master') {
+        await failScheduledReportSend(client, reservation, error);
+      }
       results.push({ type: 'master', ok: false, message: error.message, code: error.code || null });
       if (mode === 'master') throw error;
     }
@@ -577,7 +714,7 @@ export async function sendDailyOperationsReports({ client, date, mode = 'all', s
     }
   }
 
-  return {
+  const response = {
     ok: results.some((result) => result.email?.ok || result.skipped),
     date: dateInput,
     mode,
@@ -596,4 +733,8 @@ export async function sendDailyOperationsReports({ client, date, mode = 'all', s
       ok: Boolean(result.email?.ok || result.skipped),
     })),
   };
+  if (reservation?.reserved) {
+    await completeScheduledReportSend(client, reservation, response);
+  }
+  return response;
 }

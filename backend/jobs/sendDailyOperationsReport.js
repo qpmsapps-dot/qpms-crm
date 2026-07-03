@@ -1,6 +1,9 @@
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
-import { sendDailyOperationsReports } from '../services/dailyOperationsReportService.js';
+import {
+  previousReportDate,
+  sendDailyOperationsReports,
+} from '../services/dailyOperationsReportService.js';
 
 dotenv.config({ path: './.env' });
 dotenv.config({ path: './backend/.env' });
@@ -25,13 +28,15 @@ async function main() {
 
   console.log('[myQPMS Daily Report Job] started', {
     timezone: process.env.REPORT_EMAIL_TIMEZONE || 'Asia/Kolkata',
-    mode: 'all',
+    mode: 'master',
+    reportDate: process.env.REPORT_DATE || previousReportDate(),
   });
 
   const result = await sendDailyOperationsReports({
     client,
-    date: process.env.REPORT_DATE || undefined,
-    mode: 'all',
+    date: process.env.REPORT_DATE || previousReportDate(),
+    mode: 'master',
+    preventDuplicate: true,
   });
 
   for (const item of result.results || []) {
