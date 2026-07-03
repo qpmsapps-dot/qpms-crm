@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/fo_models.dart';
+import '../utils/date_utils.dart';
 import 'local_db_service.dart';
 
 class LocalStore {
@@ -212,6 +213,9 @@ class LocalStore {
         attendance!.remoteId!.trim(),
       if (attendance?.id.trim().isNotEmpty == true) attendance!.id.trim(),
     };
+    final attendanceDate = attendance == null
+        ? null
+        : _attendanceDateKey(attendance);
     for (final visit in await getVisits()) {
       if (!visit.isActive) continue;
       if (employeeCode != null &&
@@ -226,6 +230,10 @@ class LocalStore {
             !attendanceIds.contains(visitAttendanceId)) {
           continue;
         }
+      }
+      if (attendanceDate != null &&
+          indiaDateKey(visit.checkInTime) != attendanceDate) {
+        continue;
       }
       return visit;
     }
@@ -264,6 +272,12 @@ class LocalStore {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_userKey);
     await prefs.remove(_attendanceKey);
+  }
+
+  static String _attendanceDateKey(Attendance attendance) {
+    final value = attendance.attendanceDate?.trim();
+    if (value != null && value.isNotEmpty) return value;
+    return indiaDateKey(attendance.startTime);
   }
 
   static Future<List<Map<String, dynamic>>> _readList(String key) async {

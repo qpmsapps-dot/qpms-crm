@@ -62,6 +62,7 @@ class _HomeShellState extends State<HomeShell> {
           ),
           TasksScreen(
             user: widget.user,
+            onLogout: widget.onLogout,
             isSelected: _index == 1,
             key: const PageStorageKey('tasks'),
           ),

@@ -358,8 +358,11 @@ class SiteVisit {
     state: _text(json['state']),
     business: _nullableText(json['business']),
     checkInTime: _date(json['check_in_time']) ?? DateTime.now(),
-    currentLatitude: _double(json['current_latitude']),
-    currentLongitude: _double(json['current_longitude']),
+    currentLatitude:
+        _double(json['current_latitude']) ?? _double(json['check_in_latitude']),
+    currentLongitude:
+        _double(json['current_longitude']) ??
+        _double(json['check_in_longitude']),
     currentGpsAccuracy: _double(json['current_gps_accuracy']),
     checkOutTime: _date(
       json['checkout_time'] ??
@@ -371,12 +374,22 @@ class SiteVisit {
     ),
     checkOutLatitude: _double(json['check_out_latitude']),
     checkOutLongitude: _double(json['check_out_longitude']),
-    checkInAccuracy: _double(json['checkin_accuracy']),
+    checkInAccuracy:
+        _double(json['checkin_accuracy']) ??
+        _double(_map(json['metadata'])['checkin_accuracy']),
     checkOutAccuracy: _double(json['checkout_accuracy']),
-    originLatitude: _double(json['origin_lat']),
-    originLongitude: _double(json['origin_lng']),
-    destinationLatitude: _double(json['destination_lat']),
-    destinationLongitude: _double(json['destination_lng']),
+    originLatitude:
+        _double(json['origin_lat']) ??
+        _double(_map(json['metadata'])['origin_lat']),
+    originLongitude:
+        _double(json['origin_lng']) ??
+        _double(_map(json['metadata'])['origin_lng']),
+    destinationLatitude:
+        _double(json['destination_lat']) ??
+        _double(_map(json['metadata'])['destination_lat']),
+    destinationLongitude:
+        _double(json['destination_lng']) ??
+        _double(_map(json['metadata'])['destination_lng']),
     routeKm: _double(json['route_km']),
     metadata: _map(json['metadata']),
     checkOutDistanceMeters: _double(json['checkout_distance_meters']),

@@ -189,6 +189,74 @@ class SupabaseService {
     return result(isValid: true, message: null, action: 'START_DAY_AUTH_VALID');
   }
 
+  static Future<void> requireAuthenticatedSession(
+    FoUser user, {
+    required String screen,
+    required String action,
+  }) async {
+    final session = isReady ? client.auth.currentSession : null;
+    final authUser = isReady ? client.auth.currentUser : null;
+    final accessTokenExists = session?.accessToken.trim().isNotEmpty == true;
+    final expiresAt = session?.expiresAt;
+    final sessionExpired =
+        expiresAt != null &&
+        DateTime.now().millisecondsSinceEpoch >= expiresAt * 1000;
+    final profileAuthUserId = user.authUserId.trim();
+    final supabaseAuthUserId = authUser?.id.trim() ?? '';
+    final sessionUserMatchesProfile =
+        profileAuthUserId.isEmpty ||
+        (supabaseAuthUserId.isNotEmpty &&
+            profileAuthUserId == supabaseAuthUserId);
+
+    if (session == null ||
+        authUser == null ||
+        !accessTokenExists ||
+        sessionExpired ||
+        !sessionUserMatchesProfile) {
+      await CrashLogService.record(
+        employeeCode: user.employeeCode,
+        screen: screen,
+        action: action,
+        error:
+            'session_exists=${session != null} access_token_exists=$accessTokenExists session_expired=$sessionExpired profile_auth_user_id=${profileAuthUserId.isEmpty ? '--' : profileAuthUserId} supabase_auth_user_id=${supabaseAuthUserId.isEmpty ? '--' : supabaseAuthUserId} session_user_matches_profile=$sessionUserMatchesProfile',
+      );
+      throw StateError('Session expired. Please login again.');
+    }
+  }
+
+  static String writeDiagnostic({
+    required String operation,
+    required FoUser user,
+    String? attendanceId,
+    String? visitId,
+    Object? error,
+  }) {
+    final authUserId = client.auth.currentUser?.id.trim() ?? '';
+    final session = client.auth.currentSession;
+    final parts = <String>[
+      'operation=$operation',
+      'employee_code=${user.employeeCode}',
+      'profile_auth_user_id=${user.authUserId.isEmpty ? '--' : user.authUserId}',
+      'auth_user_id=${authUserId.isEmpty ? '--' : authUserId}',
+      'session_exists=${session != null}',
+      'access_token_exists=${session?.accessToken.trim().isNotEmpty == true}',
+      if (attendanceId?.trim().isNotEmpty == true)
+        'attendance_id=${attendanceId!.trim()}',
+      if (visitId?.trim().isNotEmpty == true) 'visit_id=${visitId!.trim()}',
+    ];
+    if (error is PostgrestException) {
+      parts.addAll([
+        'postgrest_code=${error.code ?? '--'}',
+        'postgrest_message=${error.message}',
+        'postgrest_details=${error.details ?? '--'}',
+        'postgrest_hint=${error.hint ?? '--'}',
+      ]);
+    } else if (error != null) {
+      parts.add('error=$error');
+    }
+    return parts.join(' ');
+  }
+
   static Future<void> initialize() async {
     if (_initialized || !AppConfig.hasSupabase) return;
     await initializeWithCredentials(
@@ -719,7 +787,9 @@ class SupabaseService {
     final rows = await client
         .from('fo_site_visits')
         .select('*')
-        .eq('fo_user_id', user.employeeCode)
+        .or(
+          'fo_user_id.eq.${user.employeeCode},employee_code.eq.${user.employeeCode}',
+        )
         .eq('attendance_id', attendanceId!)
         .filter('checkout_time', 'is', null)
         .filter('check_out_time', 'is', null)
@@ -727,6 +797,32 @@ class SupabaseService {
         .limit(1);
     final records = List<Map<String, dynamic>>.from(rows);
     if (records.isEmpty) return null;
+    return SiteVisit.fromJson(records.first);
+  }
+
+  static Future<SiteVisit> findOpenSiteVisitById({
+    required FoUser user,
+    required String siteVisitId,
+  }) async {
+    if (!isValidUuid(siteVisitId)) {
+      throw StateError('Site visit sync missing. Please reload and try again.');
+    }
+    final rows = await client
+        .from('fo_site_visits')
+        .select('*')
+        .eq('id', siteVisitId)
+        .or(
+          'fo_user_id.eq.${user.employeeCode},employee_code.eq.${user.employeeCode}',
+        )
+        .filter('checkout_time', 'is', null)
+        .filter('check_out_time', 'is', null)
+        .limit(1);
+    final records = List<Map<String, dynamic>>.from(rows);
+    if (records.isEmpty) {
+      throw StateError(
+        'No active site visit found. Please refresh and try again.',
+      );
+    }
     return SiteVisit.fromJson(records.first);
   }
 
@@ -1863,8 +1959,26 @@ class SupabaseService {
     }
   }
 
-  static Future<String?> insertVisit(SiteVisit visit) async {
+  static Future<String?> insertVisit({
+    required FoUser user,
+    required SiteVisit visit,
+  }) async {
     try {
+      await requireAuthenticatedSession(
+        user,
+        screen: 'tasks',
+        action: 'CHECKIN_AUTH_SESSION_INVALID',
+      );
+      await CrashLogService.record(
+        employeeCode: visit.employeeCode,
+        screen: 'tasks',
+        action: 'CHECKIN_AUTH_WRITE_CONTEXT',
+        error: writeDiagnostic(
+          operation: 'site_visit_insert',
+          user: user,
+          attendanceId: visit.attendanceId,
+        ),
+      );
       final payload = {
         'fo_user_id': visit.employeeCode,
         'employee_code': visit.employeeCode,
@@ -1879,42 +1993,31 @@ class SupabaseService {
         'business': visit.business,
         'local_id': visit.id,
         'check_in_time': visit.checkInTime.toUtc().toIso8601String(),
-        'checkout_time': visit.checkOutTime?.toUtc().toIso8601String(),
         'check_in_latitude': visit.currentLatitude,
         'check_in_longitude': visit.currentLongitude,
-        'check_out_latitude': visit.checkOutLatitude,
-        'check_out_longitude': visit.checkOutLongitude,
-        'current_latitude': visit.currentLatitude,
-        'current_longitude': visit.currentLongitude,
-        'current_gps_accuracy':
-            visit.currentGpsAccuracy ?? visit.checkInAccuracy,
-        'checkin_accuracy': visit.checkInAccuracy,
-        'checkout_accuracy': visit.checkOutAccuracy,
-        'origin_lat': visit.originLatitude,
-        'origin_lng': visit.originLongitude,
-        'destination_lat': visit.destinationLatitude,
-        'destination_lng': visit.destinationLongitude,
         'route_km': visit.routeKm,
-        'metadata': visit.metadata,
-        'visit_duration_minutes': visit.durationMinutes,
         'status': visit.status,
+        'visit_status': visit.status,
+        'sync_status': 'synced',
+        'metadata': {
+          ...visit.metadata,
+          if (visit.currentGpsAccuracy != null)
+            'checkin_accuracy': visit.currentGpsAccuracy,
+          if (visit.originLatitude != null) 'origin_lat': visit.originLatitude,
+          if (visit.originLongitude != null)
+            'origin_lng': visit.originLongitude,
+          if (visit.destinationLatitude != null)
+            'destination_lat': visit.destinationLatitude,
+          if (visit.destinationLongitude != null)
+            'destination_lng': visit.destinationLongitude,
+          'checkin_synced_at': DateTime.now().toUtc().toIso8601String(),
+        },
       };
-      dynamic row;
-      try {
-        row = await client
-            .from('fo_site_visits')
-            .insert(payload)
-            .select('id')
-            .maybeSingle();
-      } on PostgrestException catch (error) {
-        if (!_isMissingColumnError(error)) rethrow;
-        payload.remove('business');
-        row = await client
-            .from('fo_site_visits')
-            .insert(payload)
-            .select('id')
-            .maybeSingle();
-      }
+      final row = await client
+          .from('fo_site_visits')
+          .insert(payload)
+          .select('id')
+          .maybeSingle();
       await CrashLogService.record(
         employeeCode: visit.employeeCode,
         screen: 'tasks',
@@ -1926,18 +2029,43 @@ class SupabaseService {
         employeeCode: visit.employeeCode,
         screen: 'tasks',
         action: 'SITE_VISIT_INSERT_FAILED',
-        error: error,
+        error: writeDiagnostic(
+          operation: 'site_visit_insert',
+          user: user,
+          attendanceId: visit.attendanceId,
+          error: error,
+        ),
         stackTrace: stackTrace,
       );
       rethrow;
     }
   }
 
-  static Future<void> updateVisitCheckout(SiteVisit visit) async {
+  static Future<void> updateVisitCheckout({
+    required FoUser user,
+    required SiteVisit visit,
+  }) async {
     final id = visit.remoteId;
     if (!isValidUuid(id)) {
       throw StateError('Site visit sync missing. Please reload and try again.');
     }
+    await requireAuthenticatedSession(
+      user,
+      screen: 'tasks',
+      action: 'CHECKOUT_AUTH_SESSION_INVALID',
+    );
+    await CrashLogService.record(
+      employeeCode: visit.employeeCode,
+      screen: 'tasks',
+      action: 'CHECKOUT_AUTH_WRITE_CONTEXT',
+      error: writeDiagnostic(
+        operation: 'site_visit_checkout_update',
+        user: user,
+        attendanceId: visit.attendanceId,
+        visitId: id,
+      ),
+    );
+    await findOpenSiteVisitById(user: user, siteVisitId: id!);
     final checkoutTimestamp = visit.checkOutTime?.toUtc().toIso8601String();
     final payload = {
       'checkout_time': checkoutTimestamp,
@@ -1950,32 +2078,47 @@ class SupabaseService {
       'checkout_note': visit.checkOutNote,
       'petrol_eligible_after_checkout': visit.petrolEligibleAfterCheckout,
       'petrol_penalty_distance_meters': visit.petrolPenaltyDistanceMeters,
-      'visit_duration_minutes': visit.durationMinutes,
+      'route_km': visit.routeKm,
       'status': visit.status,
+      'visit_status': visit.status,
+      'sync_status': 'synced',
+      'metadata': {
+        ...visit.metadata,
+        if (visit.durationMinutes != null)
+          'visit_duration_minutes': visit.durationMinutes,
+        'checkout_synced_at': DateTime.now().toUtc().toIso8601String(),
+      },
       'updated_at': DateTime.now().toUtc().toIso8601String(),
     };
-    dynamic rows;
     try {
-      rows = await client
+      final rows = await client
           .from('fo_site_visits')
           .update(payload)
-          .eq('id', id!)
+          .eq('id', id)
+          .or(
+            'fo_user_id.eq.${user.employeeCode},employee_code.eq.${user.employeeCode}',
+          )
+          .filter('checkout_time', 'is', null)
+          .filter('check_out_time', 'is', null)
           .select('id');
-    } on PostgrestException catch (error) {
-      if (!_isMissingColumnError(error)) rethrow;
-      payload.remove('checkout_distance_meters');
-      payload.remove('checkout_location_status');
-      payload.remove('checkout_note');
-      payload.remove('petrol_eligible_after_checkout');
-      payload.remove('petrol_penalty_distance_meters');
-      rows = await client
-          .from('fo_site_visits')
-          .update(payload)
-          .eq('id', id!)
-          .select('id');
-    }
-    if (List<Map<String, dynamic>>.from(rows).isEmpty) {
-      throw StateError('Check Out update matched 0 site visit rows.');
+      if (List<Map<String, dynamic>>.from(rows).isEmpty) {
+        throw StateError('Check Out update matched 0 site visit rows.');
+      }
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: visit.employeeCode,
+        screen: 'tasks',
+        action: 'SITE_VISIT_CHECKOUT_UPDATE_FAILED',
+        error: writeDiagnostic(
+          operation: 'site_visit_checkout_update',
+          user: user,
+          attendanceId: visit.attendanceId,
+          visitId: id,
+          error: error,
+        ),
+        stackTrace: stackTrace,
+      );
+      rethrow;
     }
   }
 

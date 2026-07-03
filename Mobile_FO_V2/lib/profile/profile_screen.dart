@@ -78,51 +78,70 @@ class _ProfileScreenState extends State<ProfileScreen> {
     await CrashLogService.record(
       employeeCode: widget.user.employeeCode,
       screen: 'profile',
-      action: 'LOGOUT_ATTEMPT',
+      action: 'SESSION_REFRESH_LOGOUT_REQUESTED',
     );
 
     final localAttendance = await LocalStore.getAttendance();
+    final localActiveVisit = await LocalStore.activeVisit(
+      user: widget.user,
+      attendance: localAttendance,
+    );
+    final pendingGpsLogs = await LocalStore.countUnsyncedLocationLogs();
     final hasLocalActiveAttendance =
         localAttendance?.isActive == true &&
         localAttendance?.employeeCode == widget.user.employeeCode;
+    final hasLocalActiveVisit = localActiveVisit != null;
     var hasRemoteActiveAttendance = false;
 
     if (SupabaseService.isReady) {
-      final remoteAttendance = await SupabaseService.findOpenActiveAttendance(
-        widget.user,
-      );
-      hasRemoteActiveAttendance = remoteAttendance != null;
+      try {
+        final remoteAttendance = await SupabaseService.findOpenActiveAttendance(
+          widget.user,
+        );
+        hasRemoteActiveAttendance = remoteAttendance != null;
+      } catch (error, stackTrace) {
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'profile',
+          action: 'SESSION_REFRESH_LOGOUT_REMOTE_STATE_CHECK_FAILED',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
     }
 
-    if (hasLocalActiveAttendance || hasRemoteActiveAttendance) {
-      await CrashLogService.record(
-        employeeCode: widget.user.employeeCode,
-        screen: 'profile',
-        action: 'LOGOUT_BLOCKED_ACTIVE_ATTENDANCE',
-      );
+    if (hasLocalActiveAttendance ||
+        hasLocalActiveVisit ||
+        hasRemoteActiveAttendance) {
       if (!context.mounted) return;
-      await showDialog<void>(
+      final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('End Day Required'),
+          title: const Text('Active Day Detected'),
           content: const Text(
-            'Your day is still active. Please click End Day before logging out.',
+            'You have an active attendance or site visit. Logout will only refresh your login session. Your Start Day, active visit, and pending GPS logs will be kept safely. After login, tap Fix App State / Retry Checkout.',
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('OK'),
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Logout & Re-login'),
             ),
           ],
         ),
       );
-      return;
+      if (confirmed != true) return;
     }
 
     await CrashLogService.record(
       employeeCode: widget.user.employeeCode,
       screen: 'profile',
-      action: 'LOGOUT_ALLOWED_NO_ACTIVE_ATTENDANCE',
+      action: 'SESSION_REFRESH_LOGOUT_CONFIRMED',
+      error:
+          'local_active_attendance=$hasLocalActiveAttendance local_active_visit=$hasLocalActiveVisit remote_active_attendance=$hasRemoteActiveAttendance pending_gps_logs=$pendingGpsLogs',
     );
     await widget.onLogout();
   }

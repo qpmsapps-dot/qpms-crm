@@ -22,9 +22,15 @@ import '../utils/local_id.dart';
 enum _CheckoutRecoveryAction { retry, fixState }
 
 class TasksScreen extends StatefulWidget {
-  const TasksScreen({required this.user, this.isSelected = true, super.key});
+  const TasksScreen({
+    required this.user,
+    required this.onLogout,
+    this.isSelected = true,
+    super.key,
+  });
 
   final FoUser user;
+  final Future<void> Function() onLogout;
   final bool isSelected;
 
   @override
@@ -531,6 +537,11 @@ class _TasksScreenState extends State<TasksScreen>
         error: error,
         stackTrace: stackTrace,
       );
+      if (_isSessionExpiredError(error)) {
+        _toast('Session expired. Please login again.');
+        await widget.onLogout();
+        return;
+      }
       await _showErrorDialog('Check In failed', error);
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -631,6 +642,11 @@ class _TasksScreenState extends State<TasksScreen>
         error: error,
         stackTrace: stackTrace,
       );
+      if (_isSessionExpiredError(error)) {
+        _toast('Session expired. Please login again.');
+        await widget.onLogout();
+        return;
+      }
       await _showErrorDialog('Add Site failed', error);
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -720,7 +736,10 @@ class _TasksScreenState extends State<TasksScreen>
     );
     await LocalStore.saveVisit(visit);
     try {
-      visit.remoteId = await SupabaseService.insertVisit(visit);
+      visit.remoteId = await SupabaseService.insertVisit(
+        user: widget.user,
+        visit: visit,
+      );
       if (!SupabaseService.isValidUuid(visit.remoteId)) {
         throw StateError('Site visit sync failed. Check-in was not completed.');
       }
@@ -919,6 +938,11 @@ class _TasksScreenState extends State<TasksScreen>
     setState(() => _busy = true);
     try {
       if (SupabaseService.isReady) {
+        await SupabaseService.requireAuthenticatedSession(
+          widget.user,
+          screen: 'tasks',
+          action: 'CHECKOUT_AUTH_SESSION_INVALID',
+        );
         final remoteVisit =
             await SupabaseService.findActiveSiteVisitForAttendance(
               user: widget.user,
@@ -1096,7 +1120,10 @@ class _TasksScreenState extends State<TasksScreen>
         ..durationMinutes = end.difference(visit.checkInTime).inMinutes
         ..status = 'Checked Out';
       try {
-        await SupabaseService.updateVisitCheckout(visit);
+        await SupabaseService.updateVisitCheckout(
+          user: widget.user,
+          visit: visit,
+        );
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'tasks',
@@ -1133,6 +1160,11 @@ class _TasksScreenState extends State<TasksScreen>
           error: error,
           stackTrace: stackTrace,
         );
+        if (_isSessionExpiredError(error)) {
+          _toast('Session expired. Please login again.');
+          await widget.onLogout();
+          return;
+        }
         _toast(
           'Checkout sync failed. Please check internet and tap Retry Checkout.',
         );
@@ -1191,10 +1223,19 @@ class _TasksScreenState extends State<TasksScreen>
         error: error,
         stackTrace: stackTrace,
       );
+      if (_isSessionExpiredError(error)) {
+        _toast('Session expired. Please login again.');
+        await widget.onLogout();
+        return;
+      }
       _toast('Check Out failed.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  bool _isSessionExpiredError(Object error) {
+    return error.toString().contains('Session expired. Please login again.');
   }
 
   double? _checkoutDistanceMeters(SiteVisit visit, Position position) {
