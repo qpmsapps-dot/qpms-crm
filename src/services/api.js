@@ -121,6 +121,13 @@ export function getAdminUsers(params = {}) {
   });
 }
 
+export function getAdminUsersHierarchy() {
+  return adminApiRequest({
+    method: 'GET',
+    url: '/api/admin/users/hierarchy',
+  });
+}
+
 export function getAdminUser(profileId) {
   return adminApiRequest({
     method: 'GET',

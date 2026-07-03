@@ -4,6 +4,7 @@ import EmployeeCardGrid from '../../components/user-management/EmployeeCardGrid.
 import EmployeeDetailsDrawer from '../../components/user-management/EmployeeDetailsDrawer.jsx';
 import EmployeeFilters from '../../components/user-management/EmployeeFilters.jsx';
 import EmployeeTable from '../../components/user-management/EmployeeTable.jsx';
+import HierarchyBuilder from '../../components/user-management/HierarchyBuilder.jsx';
 import ImportEmployeesPanel from '../../components/user-management/ImportEmployeesPanel.jsx';
 import UserFormDrawer from '../../components/user-management/UserFormDrawer.jsx';
 import UserManagementHeader from '../../components/user-management/UserManagementHeader.jsx';
@@ -545,7 +546,9 @@ export default function UserManagement() {
         ))}
       </div>
 
-      {activeTab === 'Employees' ? renderEmployees() : placeholderText(activeTab)}
+      {activeTab === 'Employees' ? renderEmployees() : activeTab === 'Hierarchy' ? (
+        <HierarchyBuilder users={users} onMessage={showMessage} />
+      ) : placeholderText(activeTab)}
 
       {message ? (
         <div className="fixed bottom-5 right-5 z-[70] max-w-xl rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 shadow-xl">
