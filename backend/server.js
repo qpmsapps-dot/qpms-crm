@@ -5,7 +5,10 @@ import express from 'express';
 import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
 import { recalculateFoKm, recalculateFoKmBatch, recalculateFoKmForToday } from './foKmRecalculationService.js';
-import { cleanupStaleFoSessions } from './foStaleSessionCleanupService.js';
+import {
+  cleanupStaleFoSessions,
+  cleanupStaleLiveStatusReferences,
+} from './foStaleSessionCleanupService.js';
 import {
   normalizeReportState,
   previousReportDate,
@@ -4979,6 +4982,7 @@ app.post(
         .eq('fo_user_id', visit.fo_user_id)
         .eq('active_site_visit_id', visit.id);
       if (liveStatusError) throw liveStatusError;
+      const staleLiveStatusCleanup = await cleanupStaleLiveStatusReferences(client);
 
       const recalculationPayload = {
         attendance_id: visit.attendance_id,
@@ -4990,6 +4994,7 @@ app.post(
         ok: true,
         message: 'Site visit force checked out.',
         visit: updatedVisit,
+        staleLiveStatusCleanup,
         recalculation,
       });
     } catch (error) {
@@ -5163,6 +5168,10 @@ async function runFoStaleSessionCleanup(reason = 'scheduled') {
       visitsClosed: result.visitsClosed,
       attendanceClosed: result.attendanceClosed,
       liveStatusesReset: result.liveStatusesReset,
+      staleLiveStatusReferencesChecked: result.staleLiveStatusReferencesChecked,
+      staleLiveStatusReferencesFound: result.staleLiveStatusReferencesFound,
+      staleLiveStatusReferencesCleared: result.staleLiveStatusReferencesCleared,
+      staleLiveStatusAffectedFoIds: result.staleLiveStatusAffectedFoIds,
       reviewEvidenceCaptured: result.reviewEvidenceCaptured,
       skippedStaleGps: result.skippedStaleGps,
       skippedBecauseTodayAttendanceExists: result.skippedBecauseTodayAttendanceExists,
