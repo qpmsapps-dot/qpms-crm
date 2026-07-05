@@ -363,6 +363,125 @@ async function hasTodayActiveAttendance(client, foUserId, today) {
   return Boolean(data?.length);
 }
 
+const CLOSED_SITE_VISIT_STATUSES = new Set([
+  'checked out',
+  'completed',
+  'stale auto closed',
+]);
+
+function normalizeStatus(value) {
+  return String(value || '').trim().replace(/_/g, ' ').replace(/\s+/g, ' ').toLowerCase();
+}
+
+function isClosedSiteVisitReference(visit) {
+  if (!visit) return true;
+  return Boolean(
+    visit.checkout_time ||
+      visit.check_out_time ||
+      CLOSED_SITE_VISIT_STATUSES.has(normalizeStatus(visit.status)) ||
+      CLOSED_SITE_VISIT_STATUSES.has(normalizeStatus(visit.visit_status)),
+  );
+}
+
+function safeAffectedFoIds(rows) {
+  return [...new Set((rows || []).map((row) => String(row.fo_user_id || '').trim()).filter(Boolean))].slice(0, 25);
+}
+
+export async function cleanupStaleLiveStatusReferences(serviceRoleClient, options = {}) {
+  const client = requireServiceRoleClient(serviceRoleClient);
+  const today = options.today || currentIndiaDateInput();
+  const executedAt = options.executedAt || new Date().toISOString();
+  const { data: liveRows, error: liveError } = await client
+    .from('fo_live_status')
+    .select('fo_user_id, current_status, active_site_visit_id')
+    .not('active_site_visit_id', 'is', null)
+    .limit(options.limit || 1000);
+  if (liveError) throw liveError;
+
+  const activeLiveRows = liveRows || [];
+  const visitIds = [
+    ...new Set(
+      activeLiveRows
+        .map((row) => String(row.active_site_visit_id || '').trim())
+        .filter(Boolean),
+    ),
+  ];
+
+  let visitsById = new Map();
+  if (visitIds.length) {
+    const { data: visits, error: visitsError } = await client
+      .from('fo_site_visits')
+      .select('id, checkout_time, check_out_time, status, visit_status')
+      .in('id', visitIds);
+    if (visitsError) throw visitsError;
+    visitsById = new Map((visits || []).map((visit) => [String(visit.id), visit]));
+  }
+
+  const staleRows = activeLiveRows.filter((row) => {
+    const visitId = String(row.active_site_visit_id || '').trim();
+    return visitId && isClosedSiteVisitReference(visitsById.get(visitId));
+  });
+
+  let cleared = 0;
+  let endedDay = 0;
+  let activeDay = 0;
+  const affectedFoIds = [];
+
+  for (const row of staleRows) {
+    const foUserId = String(row.fo_user_id || '').trim();
+    const visitId = String(row.active_site_visit_id || '').trim();
+    if (!foUserId || !visitId) continue;
+
+    const hasActiveAttendance = await hasTodayActiveAttendance(client, foUserId, today);
+    const updatePayload = hasActiveAttendance
+      ? {
+          active_site_visit_id: null,
+          current_status: normalizeStatus(row.current_status) === 'on site visit'
+            ? 'Tracking Active'
+            : row.current_status || 'Tracking Active',
+          updated_at: executedAt,
+        }
+      : {
+          active_site_visit_id: null,
+          is_online: false,
+          is_tracking: false,
+          current_status: 'Ended Day',
+          updated_at: executedAt,
+        };
+
+    const { data: updatedRows, error: updateError } = await client
+      .from('fo_live_status')
+      .update(updatePayload)
+      .eq('fo_user_id', foUserId)
+      .eq('active_site_visit_id', visitId)
+      .select('fo_user_id');
+    if (updateError) throw updateError;
+
+    const updatedCount = updatedRows?.length || 0;
+    if (updatedCount > 0) {
+      cleared += updatedCount;
+      affectedFoIds.push(foUserId);
+      if (hasActiveAttendance) activeDay += updatedCount;
+      else endedDay += updatedCount;
+    }
+  }
+
+  const result = {
+    checked: activeLiveRows.length,
+    staleFound: staleRows.length,
+    cleared,
+    endedDay,
+    activeDay,
+    affectedFoIds: safeAffectedFoIds(affectedFoIds.map((foUserId) => ({ fo_user_id: foUserId }))),
+  };
+
+  if (result.staleFound || result.cleared) {
+    console.log('[myQPMS FO stale cleanup] stale live_status references reconciled', result);
+  }
+
+  return result;
+}
+
 async function resetLiveStatusIfSafe(client, attendance, today, executedAt) {
   const foId = String(attendance.fo_user_id || '').trim();
   if (!foId) return { reset: false, skippedTodayActive: false };
@@ -374,9 +493,8 @@ async function resetLiveStatusIfSafe(client, attendance, today, executedAt) {
     .update({
       is_online: false,
       is_tracking: false,
-      current_status: 'Offline',
+      current_status: 'Ended Day',
       active_site_visit_id: null,
-      route_km_today: 0,
       updated_at: executedAt,
     })
     .eq('fo_user_id', foId);
@@ -451,6 +569,10 @@ export async function cleanupStaleFoSessions(serviceRoleClient, options = {}) {
     visitsClosed: 0,
     attendanceClosed: 0,
     liveStatusesReset: 0,
+    staleLiveStatusReferencesChecked: 0,
+    staleLiveStatusReferencesFound: 0,
+    staleLiveStatusReferencesCleared: 0,
+    staleLiveStatusAffectedFoIds: [],
     reviewEvidenceCaptured: 0,
     skippedStaleGps: 0,
     skippedBecauseTodayAttendanceExists: 0,
@@ -489,12 +611,21 @@ export async function cleanupStaleFoSessions(serviceRoleClient, options = {}) {
         });
       }
     }
+    const staleLiveStatusResult = await cleanupStaleLiveStatusReferences(client, { today, executedAt });
+    summary.staleLiveStatusReferencesChecked = staleLiveStatusResult.checked;
+    summary.staleLiveStatusReferencesFound = staleLiveStatusResult.staleFound;
+    summary.staleLiveStatusReferencesCleared = staleLiveStatusResult.cleared;
+    summary.staleLiveStatusAffectedFoIds = staleLiveStatusResult.affectedFoIds;
     logCleanup('cleanup finished', {
       indiaDate: summary.indiaDate,
       attendanceRowsFound: summary.attendanceRowsFound,
       visitsClosed: summary.visitsClosed,
       attendanceClosed: summary.attendanceClosed,
       liveStatusesReset: summary.liveStatusesReset,
+      staleLiveStatusReferencesChecked: summary.staleLiveStatusReferencesChecked,
+      staleLiveStatusReferencesFound: summary.staleLiveStatusReferencesFound,
+      staleLiveStatusReferencesCleared: summary.staleLiveStatusReferencesCleared,
+      staleLiveStatusAffectedFoIds: summary.staleLiveStatusAffectedFoIds,
       reviewEvidenceCaptured: summary.reviewEvidenceCaptured,
       skippedStaleGps: summary.skippedStaleGps,
       skippedBecauseTodayAttendanceExists: summary.skippedBecauseTodayAttendanceExists,
