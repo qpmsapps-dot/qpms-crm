@@ -6,6 +6,43 @@ import { usePageTitle } from '../hooks/usePageTitle.js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import { completePasswordSetup } from '../services/api.js';
 
+const expiredInviteMessage = 'Invite link is expired or not opened correctly. Please request a new invite.';
+const genericPasswordError = 'Unable to create password. Please contact admin for a new invite.';
+let inviteSessionBootstrapPromise = null;
+
+function readInviteParams() {
+  if (typeof window === 'undefined') return new URLSearchParams();
+  const params = new URLSearchParams(window.location.search);
+  const hash = window.location.hash.startsWith('#')
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+  const hashParams = new URLSearchParams(hash);
+  for (const [key, value] of hashParams.entries()) {
+    if (!params.has(key)) params.set(key, value);
+  }
+  return params;
+}
+
+function cleanInviteTokensFromUrl() {
+  if (typeof window === 'undefined') return;
+  const url = `${window.location.pathname}${window.location.search && !window.location.search.includes('access_token') && !window.location.search.includes('refresh_token') && !window.location.search.includes('code=') ? window.location.search : ''}`;
+  window.history.replaceState({}, document.title, url || '/set-password');
+}
+
+function passwordSaveMessage(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  if (message.includes('session') || message.includes('jwt') || message.includes('auth session missing')) {
+    return expiredInviteMessage;
+  }
+  if (message.includes('expired') || message.includes('invalid') || message.includes('token')) {
+    return expiredInviteMessage;
+  }
+  if (message.includes('password') && (message.includes('weak') || message.includes('short') || message.includes('least'))) {
+    return 'Password must meet the minimum security requirement.';
+  }
+  return genericPasswordError;
+}
+
 export default function SetPassword() {
   usePageTitle('Set Password');
   const navigate = useNavigate();
@@ -26,19 +63,55 @@ export default function SetPassword() {
       return undefined;
     }
     let active = true;
-    supabase.auth.getSession()
-      .then(({ data, error: sessionError }) => {
+    async function establishInviteSession() {
+      const params = readInviteParams();
+      const accessToken = params.get('access_token');
+      const refreshToken = params.get('refresh_token');
+      const code = params.get('code');
+      const type = params.get('type');
+
+      if (accessToken && refreshToken) {
+        const { data, error: setSessionError } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+        if (setSessionError) throw setSessionError;
+        if (import.meta.env.DEV) {
+          console.info('[myQPMS SetPassword] Invite session established from tokens', { type });
+        }
+        cleanInviteTokensFromUrl();
+        return data.session;
+      }
+
+      if (code) {
+        const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+        if (exchangeError) throw exchangeError;
+        if (import.meta.env.DEV) {
+          console.info('[myQPMS SetPassword] Invite session established from code', { type });
+        }
+        cleanInviteTokensFromUrl();
+        return data.session;
+      }
+
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      return data.session;
+    }
+
+    inviteSessionBootstrapPromise ||= establishInviteSession();
+    inviteSessionBootstrapPromise
+      .then((session) => {
         if (!active) return;
-        if (sessionError) throw sessionError;
-        if (!data.session) {
-          setError('This invite link is invalid or expired. Please contact admin for a new invite.');
+        if (!session) {
+          setError(expiredInviteMessage);
         }
         setReady(true);
       })
       .catch((sessionError) => {
+        inviteSessionBootstrapPromise = null;
         if (!active) return;
         console.warn('[myQPMS SetPassword] Session verification failed', sessionError);
-        setError('This invite link is invalid or expired. Please contact admin for a new invite.');
+        setError(passwordSaveMessage(sessionError));
         setReady(true);
       });
     return () => {
@@ -60,6 +133,12 @@ export default function SetPassword() {
     }
     setSaving(true);
     try {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      if (!sessionData.session) {
+        setError(expiredInviteMessage);
+        return;
+      }
       const { error: updateError } = await supabase.auth.updateUser({ password });
       if (updateError) throw updateError;
       try {
@@ -74,7 +153,7 @@ export default function SetPassword() {
       window.setTimeout(() => navigate('/login', { replace: true }), 900);
     } catch (saveError) {
       console.warn('[myQPMS SetPassword] Password update failed', saveError);
-      setError('Unable to create password. Please contact admin for a new invite.');
+      setError(passwordSaveMessage(saveError));
     } finally {
       setSaving(false);
     }

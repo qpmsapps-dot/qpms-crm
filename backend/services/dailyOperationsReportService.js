@@ -29,6 +29,8 @@ const STATE_ALIASES = new Map([
   ['TELANGANA', 'TG'],
 ]);
 
+const TRAVEL_CLAIM_INCLUDED_STATUSES = ['submitted', 'pending_review', 'approved'];
+
 function roleKey(role) {
   return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
 }
@@ -179,6 +181,54 @@ async function fetchAllRows(client, table, select, buildQuery) {
   return rows;
 }
 
+async function fetchRowsByInChunks(client, table, select, column, values) {
+  const cleanValues = [...new Set((values || []).map((value) => text(value)).filter(Boolean))];
+  const rows = [];
+  const chunkSize = 200;
+  for (let index = 0; index < cleanValues.length; index += chunkSize) {
+    const chunk = cleanValues.slice(index, index + chunkSize);
+    const chunkRows = await fetchAllRows(client, table, select, (query) =>
+      query.in(column, chunk).in('status', TRAVEL_CLAIM_INCLUDED_STATUSES));
+    rows.push(...chunkRows);
+  }
+  return rows;
+}
+
+async function loadTravelClaims(client, { dateInput, attendances, startIso, endIso }) {
+  const attendanceIds = (attendances || []).map((attendance) => attendance?.id).filter(Boolean);
+  const byId = new Map();
+
+  const addRows = (rows = []) => {
+    for (const row of rows) {
+      const key = text(row.id) || `${text(row.attendance_id)}:${employeeCodeFrom(row)}:${text(row.created_at)}:${text(row.fare_amount)}`;
+      if (key) byId.set(key, row);
+    }
+  };
+
+  if (attendanceIds.length) {
+    addRows(await fetchRowsByInChunks(
+      client,
+      'fo_travel_expense_claims',
+      '*',
+      'attendance_id',
+      attendanceIds,
+    ));
+  }
+
+  addRows(await fetchAllRows(client, 'fo_travel_expense_claims', '*', (query) =>
+    query
+      .gte('created_at', startIso)
+      .lt('created_at', endIso)
+      .in('status', TRAVEL_CLAIM_INCLUDED_STATUSES)));
+
+  return [...byId.values()].filter((claim) => {
+    if (text(claim.attendance_id) && attendanceIds.includes(text(claim.attendance_id))) return true;
+    const createdAt = claim.created_at ? new Date(claim.created_at) : null;
+    if (!createdAt || Number.isNaN(createdAt.getTime())) return false;
+    return indiaDateInput(createdAt) === dateInput;
+  });
+}
+
 async function loadReportData(client, dateInput) {
   const { startIso, endIso } = startEndForDate(dateInput);
   const profiles = await fetchAllRows(client, 'profiles', '*', (query) =>
@@ -188,15 +238,19 @@ async function loadReportData(client, dateInput) {
     query.eq('attendance_date', dateInput).order('login_time', { ascending: false }));
   const visits = await fetchAllRows(client, 'fo_site_visits', '*', (query) =>
     query.gte('check_in_time', startIso).lt('check_in_time', endIso).order('check_in_time', { ascending: true }));
-  return { profiles, fieldProfiles, attendances, visits };
+  const travelClaims = await loadTravelClaims(client, { dateInput, attendances, startIso, endIso });
+  return { profiles, fieldProfiles, attendances, visits, travelClaims };
 }
 
-function buildEmployeeRows({ fieldProfiles, attendances, visits, state = null }) {
+function buildEmployeeRows({ fieldProfiles, attendances, visits, travelClaims = [], state = null }) {
   const attendanceByCode = new Map();
+  const attendanceById = new Map();
   for (const attendance of attendances) {
     const code = employeeCodeFrom(attendance).toUpperCase();
     if (!code) continue;
     if (!attendanceByCode.has(code)) attendanceByCode.set(code, attendance);
+    const attendanceId = text(attendance.id);
+    if (attendanceId) attendanceById.set(attendanceId, attendance);
   }
 
   const visitsByCode = new Map();
@@ -216,6 +270,24 @@ function buildEmployeeRows({ fieldProfiles, attendances, visits, state = null })
     }
   }
 
+  const claimsByAttendance = new Map();
+  const claimsByCode = new Map();
+  for (const claim of travelClaims) {
+    const attendanceId = text(claim.attendance_id);
+    if (attendanceId) {
+      const list = claimsByAttendance.get(attendanceId) || [];
+      list.push(claim);
+      claimsByAttendance.set(attendanceId, list);
+    }
+    const code = employeeCodeFrom(claim).toUpperCase() ||
+      employeeCodeFrom(attendanceById.get(attendanceId)).toUpperCase();
+    if (code) {
+      const list = claimsByCode.get(code) || [];
+      list.push(claim);
+      claimsByCode.set(code, list);
+    }
+  }
+
   return fieldProfiles
     .filter((profile) => !state || normalizeReportState(profile.state) === state)
     .map((profile) => {
@@ -230,6 +302,29 @@ function buildEmployeeRows({ fieldProfiles, attendances, visits, state = null })
       const visitCount = orderedVisits.length;
       const payableKm = numberValue(attendance?.eligible_km ?? attendance?.total_route_km);
       const petrolAmount = numberValue(attendance?.petrol_amount);
+      const claimMap = new Map();
+      if (attendance?.id && claimsByAttendance.has(String(attendance.id))) {
+        for (const claim of claimsByAttendance.get(String(attendance.id))) {
+          claimMap.set(text(claim.id) || `${text(claim.created_at)}:${text(claim.fare_amount)}`, claim);
+        }
+      }
+      for (const claim of claimsByCode.get(code) || []) {
+        if (!text(claim.attendance_id) || text(claim.attendance_id) === text(attendance?.id)) {
+          claimMap.set(text(claim.id) || `${text(claim.created_at)}:${text(claim.fare_amount)}`, claim);
+        }
+      }
+      const rowTravelClaims = [...claimMap.values()];
+      const travelClaimAmount = Number(rowTravelClaims
+        .reduce((sum, claim) => sum + numberValue(claim.fare_amount), 0)
+        .toFixed(2));
+      const totalTravelAmount = Number((petrolAmount + travelClaimAmount).toFixed(2));
+      const travelClaimCount = rowTravelClaims.length;
+      const travelModesClaimed = [...new Set(rowTravelClaims
+        .map((claim) => text(claim.travel_mode))
+        .filter(Boolean))]
+        .join(', ');
+      const claimsWithProof = rowTravelClaims
+        .filter((claim) => text(claim.proof_file_url)).length;
       const exceptions = [];
       if (!attendance) exceptions.push('Not Started');
       if (attendance && !attendance.logout_time) exceptions.push('Missing End Day');
@@ -240,6 +335,7 @@ function buildEmployeeRows({ fieldProfiles, attendances, visits, state = null })
         profile,
         attendance,
         visits: orderedVisits,
+        travelClaims: rowTravelClaims,
         state: normalizeReportState(profile.state),
         employeeCode: code,
         fullName: displayName(profile, code),
@@ -255,6 +351,11 @@ function buildEmployeeRows({ fieldProfiles, attendances, visits, state = null })
         lastSite: lastVisitName(orderedVisits),
         payableKm,
         petrolAmount,
+        travelClaimAmount,
+        totalTravelAmount,
+        travelClaimCount,
+        travelModesClaimed,
+        proofStatus: travelClaimCount ? `${claimsWithProof}/${travelClaimCount}` : 'No claims',
         endGpsSource: text(metadataOf(attendance).end_location_source),
         missingEndGps: missingEndGps ? 'Yes' : 'No',
         exceptionRemarks: exceptions.join(', '),
@@ -276,6 +377,9 @@ function summarizeRows(rows, reportDate, state = null) {
     siteVisits: rows.reduce((sum, row) => sum + row.siteVisitCount, 0),
     payableKm: Number(rows.reduce((sum, row) => sum + row.payableKm, 0).toFixed(2)),
     petrolAmount: Number(rows.reduce((sum, row) => sum + row.petrolAmount, 0).toFixed(2)),
+    travelClaimAmount: Number(rows.reduce((sum, row) => sum + row.travelClaimAmount, 0).toFixed(2)),
+    totalTravelAmount: Number(rows.reduce((sum, row) => sum + row.totalTravelAmount, 0).toFixed(2)),
+    travelClaimCount: rows.reduce((sum, row) => sum + row.travelClaimCount, 0),
     exceptions: rows.reduce((sum, row) => sum + row.exceptions.length, 0),
   };
 }
@@ -296,6 +400,11 @@ function employeeSheetRows(rows) {
     'Last Site': row.lastSite,
     'Payable KM': row.payableKm,
     'Petrol Amount': row.petrolAmount,
+    'Travel Claim Amount': row.travelClaimAmount,
+    'Total Travel Amount': row.totalTravelAmount,
+    'Travel Claim Count': row.travelClaimCount,
+    'Travel Modes Claimed': row.travelModesClaimed,
+    'Travel Claim Proofs': row.proofStatus,
     'End GPS Source': row.endGpsSource,
     'Missing End GPS': row.missingEndGps,
     'Exception Remarks': row.exceptionRemarks,
@@ -320,6 +429,31 @@ function siteVisitSheetRows(rows, stateFilter = null) {
         'Visit Duration': visit.visit_duration_minutes ?? '',
         'Route KM': numberValue(visit.route_km),
         'Visit Status': text(visit.visit_status || visit.status),
+      });
+    }
+  }
+  return output;
+}
+
+function travelClaimSheetRows(rows, stateFilter = null) {
+  const output = [];
+  for (const row of rows) {
+    if (stateFilter && row.state !== stateFilter) continue;
+    for (const claim of row.travelClaims || []) {
+      output.push({
+        State: row.state,
+        Business: row.business,
+        'Employee Code': row.employeeCode,
+        'Full Name': row.fullName,
+        'Attendance ID': text(claim.attendance_id),
+        'Travel Mode': text(claim.travel_mode),
+        'Fare Amount': numberValue(claim.fare_amount),
+        Status: text(claim.status),
+        Remarks: text(claim.remarks),
+        'Proof Available': text(claim.proof_file_url) ? 'Yes' : 'No',
+        'Proof File': text(claim.proof_file_url),
+        'Storage Bucket': text(claim.storage_bucket),
+        'Submitted At': claim.created_at || '',
       });
     }
   }
@@ -366,6 +500,9 @@ function buildWorkbook({ dateInput, mode, state, rows }) {
       'Total Site Visits': overall.siteVisits,
       'Payable KM': overall.payableKm,
       'Petrol Amount': overall.petrolAmount,
+      'Travel Claim Amount': overall.travelClaimAmount,
+      'Total Travel Amount': overall.totalTravelAmount,
+      'Travel Claim Count': overall.travelClaimCount,
     }]);
     const summaryStates = rows.some((row) => row.state === 'Unknown')
       ? [...REPORT_STATES, 'Unknown']
@@ -383,12 +520,16 @@ function buildWorkbook({ dateInput, mode, state, rows }) {
         'Site Visits': summary.siteVisits,
         'Payable KM': summary.payableKm,
         'Petrol Amount': summary.petrolAmount,
+        'Travel Claim Amount': summary.travelClaimAmount,
+        'Total Travel Amount': summary.totalTravelAmount,
+        'Travel Claim Count': summary.travelClaimCount,
       };
     }));
     for (const item of REPORT_STATES) {
       appendJsonSheet(workbook, item, employeeSheetRows(rows.filter((row) => row.state === item)));
     }
     appendJsonSheet(workbook, 'Site Visit Details', siteVisitSheetRows(rows));
+    appendJsonSheet(workbook, 'Travel Claim Details', travelClaimSheetRows(rows));
     appendJsonSheet(workbook, 'Exceptions', exceptionSheetRows(rows));
     return workbook;
   }
@@ -406,9 +547,13 @@ function buildWorkbook({ dateInput, mode, state, rows }) {
     'Site Visits': summary.siteVisits,
     'Payable KM': summary.payableKm,
     'Petrol Amount': summary.petrolAmount,
+    'Travel Claim Amount': summary.travelClaimAmount,
+    'Total Travel Amount': summary.totalTravelAmount,
+    'Travel Claim Count': summary.travelClaimCount,
   }]);
   appendJsonSheet(workbook, 'Employee Details', employeeSheetRows(stateRows));
   appendJsonSheet(workbook, 'Site Visit Details', siteVisitSheetRows(stateRows, state));
+  appendJsonSheet(workbook, 'Travel Claim Details', travelClaimSheetRows(stateRows, state));
   appendJsonSheet(workbook, 'Exceptions', exceptionSheetRows(stateRows, state));
   return workbook;
 }
@@ -442,6 +587,9 @@ Summary:
 - Site Visits: ${summary.siteVisits}
 - Payable KM: ${summary.payableKm}
 - Petrol Amount: ${summary.petrolAmount}
+- Travel Claim Amount: ${summary.travelClaimAmount}
+- Total Travel Amount: ${summary.totalTravelAmount}
+- Travel Claim Count: ${summary.travelClaimCount}
 - Exceptions: ${summary.exceptions}
 ${stateLine}
 Regards,

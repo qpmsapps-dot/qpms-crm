@@ -1,5 +1,52 @@
 import '../utils/mobile_roles.dart';
 
+const travelModeBike = 'bike';
+const travelModeOwnVehicle = 'own_vehicle';
+const travelModeAuto = 'auto';
+const travelModeBus = 'bus';
+const travelModeTrain = 'train';
+const travelModeOther = 'other';
+
+const payableTravelModes = {travelModeBike, travelModeOwnVehicle};
+const allTravelModes = {
+  travelModeBike,
+  travelModeOwnVehicle,
+  travelModeAuto,
+  travelModeBus,
+  travelModeTrain,
+  travelModeOther,
+};
+
+String normalizeTravelMode(String? value) {
+  final normalized = (value ?? '')
+      .trim()
+      .toLowerCase()
+      .replaceAll('-', '_')
+      .replaceAll(' ', '_');
+  return allTravelModes.contains(normalized) ? normalized : travelModeBike;
+}
+
+bool payableKmAllowedForTravelMode(String? value) =>
+    payableTravelModes.contains(normalizeTravelMode(value));
+
+String travelModeLabel(String? value) {
+  switch (normalizeTravelMode(value)) {
+    case travelModeAuto:
+      return 'Auto';
+    case travelModeBus:
+      return 'Bus';
+    case travelModeTrain:
+      return 'Train';
+    case travelModeOther:
+      return 'Others';
+    case travelModeOwnVehicle:
+      return 'Bike';
+    case travelModeBike:
+    default:
+      return 'Bike';
+  }
+}
+
 class FoUser {
   const FoUser({
     required this.authUserId,
@@ -74,8 +121,13 @@ class Attendance {
     this.eligibleKm = 0,
     this.totalRouteKm = 0,
     this.endRouteKm = 0,
+    String travelMode = travelModeBike,
+    bool? payableKmAllowed,
+    this.travelModeNote,
     this.metadata = const {},
-  });
+  }) : travelMode = normalizeTravelMode(travelMode),
+       payableKmAllowed =
+           payableKmAllowed ?? payableKmAllowedForTravelMode(travelMode);
 
   final String id;
   String? remoteId;
@@ -93,9 +145,42 @@ class Attendance {
   double eligibleKm;
   double totalRouteKm;
   double endRouteKm;
+  final String travelMode;
+  final bool payableKmAllowed;
+  String? travelModeNote;
   Map<String, dynamic> metadata;
 
   bool get isActive => endTime == null;
+
+  Attendance copyWithTravelMode({
+    required String travelMode,
+    bool? payableKmAllowed,
+    String? travelModeNote,
+    Map<String, dynamic>? metadata,
+  }) {
+    return Attendance(
+      id: id,
+      employeeCode: employeeCode,
+      startTime: startTime,
+      attendanceDate: attendanceDate,
+      remoteId: remoteId,
+      endTime: endTime,
+      startLat: startLat,
+      startLng: startLng,
+      endLat: endLat,
+      endLng: endLng,
+      batteryStart: batteryStart,
+      batteryEnd: batteryEnd,
+      actualKm: actualKm,
+      eligibleKm: eligibleKm,
+      totalRouteKm: totalRouteKm,
+      endRouteKm: endRouteKm,
+      travelMode: travelMode,
+      payableKmAllowed: payableKmAllowed,
+      travelModeNote: travelModeNote,
+      metadata: metadata ?? this.metadata,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -114,29 +199,152 @@ class Attendance {
     'eligible_km': eligibleKm,
     'total_route_km': totalRouteKm,
     'end_route_km': endRouteKm,
+    'travel_mode': travelMode,
+    'payable_km_allowed': payableKmAllowed,
+    'travel_mode_note': travelModeNote,
     'metadata': metadata,
   };
 
-  factory Attendance.fromJson(Map<String, dynamic> json) => Attendance(
-    id: _text(json['local_id'] ?? json['id']),
-    remoteId: _nullableText(json['remote_id'] ?? json['id']),
-    employeeCode: _text(json['employee_code']),
-    attendanceDate: _nullableText(json['attendance_date']),
-    startTime: _date(json['start_time']) ?? DateTime.now(),
-    endTime: _date(json['end_time']),
-    startLat: _double(json['start_lat']),
-    startLng: _double(json['start_lng']),
-    endLat: _double(json['end_lat']),
-    endLng: _double(json['end_lng']),
-    batteryStart: _int(json['battery_start']),
-    batteryEnd: _int(json['battery_end']),
-    actualKm: _double(json['actual_km']) ?? 0,
-    eligibleKm: _double(json['eligible_km']) ?? 0,
-    totalRouteKm:
-        _double(json['total_route_km']) ?? _double(json['eligible_km']) ?? 0,
-    endRouteKm: _double(json['end_route_km']) ?? 0,
-    metadata: _map(json['metadata']),
-  );
+  factory Attendance.fromJson(Map<String, dynamic> json) {
+    final metadata = _map(json['metadata']);
+    final travelMode = normalizeTravelMode(
+      _nullableText(json['travel_mode']) ??
+          _nullableText(metadata['travel_mode']),
+    );
+    return Attendance(
+      id: _text(json['local_id'] ?? json['id']),
+      remoteId: _nullableText(json['remote_id'] ?? json['id']),
+      employeeCode: _text(json['employee_code']),
+      attendanceDate: _nullableText(json['attendance_date']),
+      startTime: _date(json['start_time']) ?? DateTime.now(),
+      endTime: _date(json['end_time']),
+      startLat: _double(json['start_lat']),
+      startLng: _double(json['start_lng']),
+      endLat: _double(json['end_lat']),
+      endLng: _double(json['end_lng']),
+      batteryStart: _int(json['battery_start']),
+      batteryEnd: _int(json['battery_end']),
+      actualKm: _double(json['actual_km']) ?? 0,
+      eligibleKm: _double(json['eligible_km']) ?? 0,
+      totalRouteKm:
+          _double(json['total_route_km']) ?? _double(json['eligible_km']) ?? 0,
+      endRouteKm: _double(json['end_route_km']) ?? 0,
+      travelMode: travelMode,
+      payableKmAllowed:
+          _bool(json['payable_km_allowed']) ??
+          _bool(metadata['payable_km_allowed']) ??
+          payableKmAllowedForTravelMode(travelMode),
+      travelModeNote:
+          _nullableText(json['travel_mode_note']) ??
+          _nullableText(metadata['travel_mode_note']),
+      metadata: metadata,
+    );
+  }
+}
+
+class TravelLeg {
+  TravelLeg({
+    required this.id,
+    required this.attendanceId,
+    required this.employeeCode,
+    required this.startedAt,
+    this.remoteId,
+    this.foUserId,
+    String travelMode = travelModeBike,
+    bool? payableKmAllowed,
+    this.endedAt,
+    this.startLat,
+    this.startLng,
+    this.endLat,
+    this.endLng,
+    this.calculatedKm = 0,
+    this.payableKm = 0,
+    this.fareAmount = 0,
+    this.proofFileUrl,
+    this.remarks,
+    this.status = 'active',
+    this.createdAt,
+    this.updatedAt,
+  }) : travelMode = normalizeTravelMode(travelMode),
+       payableKmAllowed =
+           payableKmAllowed ?? payableKmAllowedForTravelMode(travelMode);
+
+  final String id;
+  String? remoteId;
+  final String attendanceId;
+  final String employeeCode;
+  final String? foUserId;
+  final String travelMode;
+  final bool payableKmAllowed;
+  final DateTime startedAt;
+  DateTime? endedAt;
+  double? startLat;
+  double? startLng;
+  double? endLat;
+  double? endLng;
+  double calculatedKm;
+  double payableKm;
+  double fareAmount;
+  String? proofFileUrl;
+  String? remarks;
+  String status;
+  DateTime? createdAt;
+  DateTime? updatedAt;
+
+  bool get isActive => status == 'active' && endedAt == null;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'remote_id': remoteId,
+    'attendance_id': attendanceId,
+    'employee_code': employeeCode,
+    'fo_user_id': foUserId,
+    'travel_mode': travelMode,
+    'payable_km_allowed': payableKmAllowed,
+    'started_at': startedAt.toIso8601String(),
+    'ended_at': endedAt?.toIso8601String(),
+    'start_lat': startLat,
+    'start_lng': startLng,
+    'end_lat': endLat,
+    'end_lng': endLng,
+    'calculated_km': calculatedKm,
+    'payable_km': payableKm,
+    'fare_amount': fareAmount,
+    'proof_file_url': proofFileUrl,
+    'remarks': remarks,
+    'status': status,
+    'created_at': createdAt?.toIso8601String(),
+    'updated_at': updatedAt?.toIso8601String(),
+  };
+
+  factory TravelLeg.fromJson(Map<String, dynamic> json) {
+    final travelMode = normalizeTravelMode(json['travel_mode']?.toString());
+    return TravelLeg(
+      id: _text(json['local_id'] ?? json['id']),
+      remoteId: _nullableText(json['remote_id'] ?? json['id']),
+      attendanceId: _text(json['attendance_id']),
+      employeeCode: _text(json['employee_code']),
+      foUserId: _nullableText(json['fo_user_id']),
+      travelMode: travelMode,
+      payableKmAllowed:
+          _bool(json['payable_km_allowed']) ??
+          payableKmAllowedForTravelMode(travelMode),
+      startedAt: _date(json['started_at']) ?? DateTime.now(),
+      endedAt: _date(json['ended_at']),
+      startLat: _double(json['start_lat']),
+      startLng: _double(json['start_lng']),
+      endLat: _double(json['end_lat']),
+      endLng: _double(json['end_lng']),
+      calculatedKm: _double(json['calculated_km']) ?? 0,
+      payableKm: _double(json['payable_km']) ?? 0,
+      fareAmount: _double(json['fare_amount']) ?? 0,
+      proofFileUrl: _nullableText(json['proof_file_url']),
+      remarks: _nullableText(json['remarks']),
+      status: _text(json['status']).isEmpty ? 'active' : _text(json['status']),
+      createdAt: _date(json['created_at']),
+      updatedAt: _date(json['updated_at']),
+    );
+  }
 }
 
 class LocationLog {
@@ -417,6 +625,15 @@ double? _double(Object? value) {
   if (value == null) return null;
   if (value is num) return value.toDouble();
   return double.tryParse(value.toString());
+}
+
+bool? _bool(Object? value) {
+  if (value == null) return null;
+  if (value is bool) return value;
+  final text = value.toString().trim().toLowerCase();
+  if (text == 'true' || text == '1' || text == 'yes') return true;
+  if (text == 'false' || text == '0' || text == 'no') return false;
+  return null;
 }
 
 Map<String, dynamic> _map(Object? value) {

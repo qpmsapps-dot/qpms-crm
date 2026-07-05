@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -105,6 +106,8 @@ class StartDayAuthValidation {
 }
 
 class SupabaseService {
+  static const travelClaimProofBucket = 'travel-claim-proofs';
+
   static const startDayAttendancePayloadKeys = <String>[
     'fo_user_id',
     'employee_code',
@@ -591,8 +594,18 @@ class SupabaseService {
             'start_latitude': attendance.startLat,
             'start_longitude': attendance.startLng,
             'start_battery_percentage': attendance.batteryStart,
+            'travel_mode': attendance.travelMode,
+            'payable_km_allowed': attendance.payableKmAllowed,
+            'travel_mode_note': attendance.travelModeNote,
             'status': 'Active',
             'local_id': attendance.id,
+            'metadata': {
+              ...attendance.metadata,
+              'travel_mode': attendance.travelMode,
+              'payable_km_allowed': attendance.payableKmAllowed,
+              if (attendance.travelModeNote?.trim().isNotEmpty == true)
+                'travel_mode_note': attendance.travelModeNote!.trim(),
+            },
           })
           .select('id')
           .maybeSingle();
@@ -613,6 +626,252 @@ class SupabaseService {
       );
       rethrow;
     }
+  }
+
+  static Future<Attendance?> updateAttendanceTravelMode({
+    required FoUser user,
+    required Attendance attendance,
+    required String travelMode,
+    required bool payableKmAllowed,
+    String? travelModeNote,
+    Map<String, dynamic> metadata = const {},
+  }) async {
+    final id = attendance.remoteId?.trim();
+    if (!isValidUuid(id)) {
+      throw StateError(
+        'Attendance sync missing. Please refresh and try again.',
+      );
+    }
+    final cleanMode = normalizeTravelMode(travelMode);
+    final cleanNote = travelModeNote?.trim();
+    final row = await client
+        .from('fo_attendance')
+        .update({
+          'travel_mode': cleanMode,
+          'payable_km_allowed': payableKmAllowed,
+          'travel_mode_note': cleanNote == null || cleanNote.isEmpty
+              ? null
+              : cleanNote,
+          'metadata': metadata,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', id!)
+        .eq('fo_user_id', user.employeeCode)
+        .select('*')
+        .maybeSingle();
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'home',
+      action: 'TRAVEL_MODE_UPDATED',
+      error:
+          'attendance_id=$id travel_mode=$cleanMode payable_km_allowed=$payableKmAllowed',
+    );
+    return row == null ? null : _attendanceFromRow(row, user);
+  }
+
+  static Future<String> uploadTravelClaimProof({
+    required FoUser user,
+    required Attendance attendance,
+    required String fileName,
+    required Uint8List bytes,
+    required String contentType,
+    required String extension,
+  }) async {
+    final attendanceId = attendance.remoteId?.trim();
+    if (!isValidUuid(attendanceId)) {
+      throw StateError(
+        'Attendance must be synced before uploading bill/ticket.',
+      );
+    }
+    if (bytes.isEmpty || bytes.length > 5 * 1024 * 1024) {
+      throw StateError('Bill/Ticket must be 5 MB or less.');
+    }
+    final safeEmployeeCode = _storagePathPart(user.employeeCode);
+    final safeAttendanceId = _storagePathPart(attendanceId!);
+    final timestamp = _storageTimestamp(DateTime.now());
+    final safeExtension = _storageExtension(extension);
+    final path =
+        '$safeEmployeeCode/$safeAttendanceId/${timestamp}_claim_proof.$safeExtension';
+    await client.storage
+        .from(travelClaimProofBucket)
+        .uploadBinary(
+          path,
+          bytes,
+          fileOptions: FileOptions(
+            contentType: contentType,
+            cacheControl: '3600',
+            upsert: false,
+            metadata: {'original_file_name': fileName},
+          ),
+        );
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'home',
+      action: 'TRAVEL_CLAIM_PROOF_UPLOADED',
+      error: 'attendance_id=$attendanceId path=$path',
+    );
+    return path;
+  }
+
+  static Future<String?> submitTravelExpenseClaim({
+    required FoUser user,
+    required Attendance attendance,
+    required double fareAmount,
+    String? travelMode,
+    String? fromLocation,
+    String? toLocation,
+    String? remarks,
+    String? proofFileUrl,
+    String? storageBucket,
+    String? siteVisitId,
+  }) async {
+    final attendanceId = attendance.remoteId?.trim();
+    if (!isValidUuid(attendanceId)) {
+      throw StateError(
+        'Attendance must be synced before submitting fare claim.',
+      );
+    }
+    final amount = fareAmount.isFinite && fareAmount > 0 ? fareAmount : 0.0;
+    final remarksText = _travelClaimRemarks(
+      fromLocation: fromLocation,
+      toLocation: toLocation,
+      remarks: remarks,
+    );
+    final claimMode = normalizeTravelMode(travelMode ?? attendance.travelMode);
+    final row = await client
+        .from('fo_travel_expense_claims')
+        .insert({
+          'attendance_id': attendanceId,
+          'site_visit_id': isValidUuid(siteVisitId) ? siteVisitId : null,
+          'fo_user_id': user.employeeCode,
+          'employee_code': user.employeeCode,
+          'travel_mode': claimMode,
+          'fare_amount': double.parse(amount.toStringAsFixed(2)),
+          'remarks': remarksText == null || remarksText.isEmpty
+              ? null
+              : remarksText,
+          'proof_file_url': proofFileUrl,
+          'storage_bucket': storageBucket,
+          'status': 'submitted',
+        })
+        .select('id')
+        .maybeSingle();
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'home',
+      action: 'TRAVEL_EXPENSE_CLAIM_SUBMITTED',
+      error: 'attendance_id=$attendanceId claim_id=${row?['id'] ?? '--'}',
+    );
+    return row?['id']?.toString();
+  }
+
+  static Future<String?> createTravelLeg({
+    required FoUser user,
+    required TravelLeg travelLeg,
+  }) async {
+    final attendanceId = travelLeg.attendanceId.trim();
+    if (!isValidUuid(attendanceId)) {
+      throw StateError('Travel leg requires a synced attendance_id.');
+    }
+    final row = await client
+        .from('fo_travel_legs')
+        .insert(_travelLegPayload(travelLeg, user))
+        .select('id')
+        .maybeSingle();
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'home',
+      action: 'TRAVEL_LEG_CREATED',
+      error:
+          'attendance_id=$attendanceId travel_leg_id=${row?['id'] ?? '--'} travel_mode=${travelLeg.travelMode}',
+    );
+    return row?['id']?.toString();
+  }
+
+  static Future<TravelLeg?> closeTravelLeg({
+    required FoUser user,
+    required String travelLegId,
+    DateTime? endedAt,
+    double? endLat,
+    double? endLng,
+    double? calculatedKm,
+    double? payableKm,
+    double? fareAmount,
+    String? remarks,
+    String status = 'completed',
+  }) async {
+    final id = travelLegId.trim();
+    if (!isValidUuid(id)) return null;
+    final payload = <String, dynamic>{
+      'ended_at': (endedAt ?? DateTime.now()).toUtc().toIso8601String(),
+      'status': status,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    };
+    if (endLat != null) payload['end_lat'] = endLat;
+    if (endLng != null) payload['end_lng'] = endLng;
+    if (calculatedKm != null) {
+      payload['calculated_km'] = double.parse(calculatedKm.toStringAsFixed(2));
+    }
+    if (payableKm != null) {
+      payload['payable_km'] = double.parse(payableKm.toStringAsFixed(2));
+    }
+    if (fareAmount != null) {
+      payload['fare_amount'] = double.parse(fareAmount.toStringAsFixed(2));
+    }
+    final remarksText = remarks?.trim();
+    if (remarksText != null) payload['remarks'] = remarksText;
+    final row = await client
+        .from('fo_travel_legs')
+        .update(payload)
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'home',
+      action: 'TRAVEL_LEG_CLOSED',
+      error: 'travel_leg_id=$id status=$status',
+    );
+    return row == null ? null : _travelLegFromRow(row);
+  }
+
+  static Future<TravelLeg?> fetchActiveTravelLeg({
+    String? attendanceId,
+    String? employeeCode,
+  }) async {
+    final cleanAttendanceId = attendanceId?.trim();
+    final cleanEmployeeCode = employeeCode?.trim();
+    if (!isValidUuid(cleanAttendanceId) &&
+        (cleanEmployeeCode == null || cleanEmployeeCode.isEmpty)) {
+      return null;
+    }
+    var query = client
+        .from('fo_travel_legs')
+        .select('*')
+        .eq('status', 'active');
+    if (isValidUuid(cleanAttendanceId)) {
+      query = query.eq('attendance_id', cleanAttendanceId!);
+    } else {
+      query = query.eq('employee_code', cleanEmployeeCode!);
+    }
+    final rows = await query.order('started_at', ascending: false).limit(1);
+    final records = List<Map<String, dynamic>>.from(rows);
+    return records.isEmpty ? null : _travelLegFromRow(records.first);
+  }
+
+  static Future<List<TravelLeg>> fetchTravelLegsForAttendance(
+    String attendanceId,
+  ) async {
+    final id = attendanceId.trim();
+    if (!isValidUuid(id)) return [];
+    final rows = await client
+        .from('fo_travel_legs')
+        .select('*')
+        .eq('attendance_id', id)
+        .order('started_at', ascending: true);
+    return List<Map<String, dynamic>>.from(
+      rows,
+    ).map(_travelLegFromRow).toList();
   }
 
   static Future<Attendance?> findActiveAttendanceForToday(FoUser user) async {
@@ -938,6 +1197,9 @@ class SupabaseService {
   static Future<Attendance> reopenAttendanceForToday({
     required FoUser user,
     required Attendance attendance,
+    String? travelMode,
+    bool? payableKmAllowed,
+    String? travelModeNote,
   }) async {
     final id = attendance.remoteId?.trim();
     if (!isValidUuid(id)) {
@@ -948,14 +1210,31 @@ class SupabaseService {
     final today = indiaDateKey(DateTime.now());
     final reopenedAt = DateTime.now().toUtc();
     final previousLogoutTime = attendance.endTime?.toUtc().toIso8601String();
+    final selectedTravelMode = normalizeTravelMode(
+      travelMode ?? attendance.travelMode,
+    );
+    final selectedPayableKmAllowed =
+        payableKmAllowed ?? payableKmAllowedForTravelMode(selectedTravelMode);
+    final selectedTravelModeNote = travelModeNote?.trim().isNotEmpty == true
+        ? travelModeNote!.trim()
+        : null;
+    final metadata = buildReopenAttendanceMetadata(
+      existingMetadata: attendance.metadata,
+      previousLogoutTime: previousLogoutTime,
+      reopenedAt: reopenedAt,
+    );
+    metadata['travel_mode'] = selectedTravelMode;
+    metadata['payable_km_allowed'] = selectedPayableKmAllowed;
+    if (selectedTravelModeNote != null) {
+      metadata['travel_mode_note'] = selectedTravelModeNote;
+    }
     final payload = <String, dynamic>{
       'status': 'Active',
       'logout_time': null,
-      'metadata': buildReopenAttendanceMetadata(
-        existingMetadata: attendance.metadata,
-        previousLogoutTime: previousLogoutTime,
-        reopenedAt: reopenedAt,
-      ),
+      'travel_mode': selectedTravelMode,
+      'payable_km_allowed': selectedPayableKmAllowed,
+      'travel_mode_note': selectedTravelModeNote,
+      'metadata': metadata,
       'updated_at': reopenedAt.toIso8601String(),
     };
     dynamic rows;
@@ -1004,6 +1283,8 @@ class SupabaseService {
     if (id == null || id.isEmpty) return;
     try {
       await _syncAttendanceRouteKmFromVisits(attendance);
+      final payableKm = _payableRouteKmForAttendance(attendance);
+      final approvedKm = _approvedKmForAttendance(attendance);
       await client
           .from('fo_attendance')
           .update({
@@ -1011,13 +1292,13 @@ class SupabaseService {
             'end_latitude': attendance.endLat,
             'end_longitude': attendance.endLng,
             'end_battery_percentage': attendance.batteryEnd,
-            'actual_km': attendance.totalRouteKm,
-            'eligible_km': attendance.eligibleKm,
+            'actual_km': payableKm,
+            'eligible_km': approvedKm,
             'total_raw_km': attendance.actualKm,
-            'total_route_km': attendance.totalRouteKm,
-            'total_approved_km': attendance.eligibleKm,
+            'total_route_km': payableKm,
+            'total_approved_km': approvedKm,
             'rate_per_km': 4,
-            'petrol_amount': attendance.eligibleKm * 4,
+            'petrol_amount': approvedKm * 4,
             'status': 'Completed',
           })
           .eq('id', id);
@@ -1081,9 +1362,13 @@ class SupabaseService {
     final id = remoteActive.remoteId!;
     final logoutTime = attendance.endTime ?? DateTime.now();
     final existingMetadata = _jsonMap(remoteActive.metadata);
+    final payableKm = _payableRouteKmForAttendance(attendance);
+    final approvedKm = _approvedKmForAttendance(attendance);
     final metadata = {
       ...existingMetadata,
       ...endLocationMetadata,
+      'travel_mode': attendance.travelMode,
+      'payable_km_allowed': attendance.payableKmAllowed,
       if (endDayWithOpenSite) 'end_day_with_open_site': true,
       if (openSiteAutoClosed) 'open_site_auto_closed': true,
       if (endDayWithOpenSite) 'payable_km_after_site_checkin_added': false,
@@ -1097,13 +1382,13 @@ class SupabaseService {
           'end_latitude': attendance.endLat,
           'end_longitude': attendance.endLng,
           'end_battery_percentage': attendance.batteryEnd,
-          'actual_km': attendance.totalRouteKm,
-          'eligible_km': attendance.eligibleKm,
+          'actual_km': payableKm,
+          'eligible_km': approvedKm,
           'total_raw_km': attendance.actualKm,
-          'total_route_km': attendance.totalRouteKm,
-          'total_approved_km': attendance.eligibleKm,
+          'total_route_km': payableKm,
+          'total_approved_km': approvedKm,
           'rate_per_km': 4,
-          'petrol_amount': attendance.eligibleKm * 4,
+          'petrol_amount': approvedKm * 4,
           'status': 'Completed',
           'metadata': metadata,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -1220,14 +1505,18 @@ class SupabaseService {
     }
     try {
       await _syncAttendanceRouteKmFromVisits(attendance);
+      final payableKm = _payableRouteKmForAttendance(attendance);
+      final approvedKm = _approvedKmForAttendance(attendance);
       final payload = {
-        'actual_km': attendance.totalRouteKm,
-        'eligible_km': attendance.eligibleKm,
+        'actual_km': payableKm,
+        'eligible_km': approvedKm,
         'total_raw_km': attendance.actualKm,
-        'total_route_km': attendance.totalRouteKm,
-        'total_approved_km': attendance.eligibleKm,
+        'total_route_km': payableKm,
+        'total_approved_km': approvedKm,
         'rate_per_km': 4,
-        'petrol_amount': attendance.eligibleKm * 4,
+        'petrol_amount': approvedKm * 4,
+        'travel_mode': attendance.travelMode,
+        'payable_km_allowed': attendance.payableKmAllowed,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       };
       await CrashLogService.record(
@@ -1282,6 +1571,20 @@ class SupabaseService {
   ) async {
     final id = attendance.remoteId?.trim();
     if (!isValidUuid(id)) return;
+    if (!attendance.payableKmAllowed) {
+      final preservedKm = _preservedPayableKm(attendance);
+      attendance
+        ..totalRouteKm = preservedKm
+        ..eligibleKm = preservedKm;
+      await CrashLogService.record(
+        employeeCode: attendance.employeeCode,
+        screen: 'tracking',
+        action: 'ROUTE_KM_NON_PAYABLE_TRAVEL_MODE',
+        error:
+            'attendance_uuid=$id travel_mode=${attendance.travelMode} payable_km_allowed=false',
+      );
+      return;
+    }
     final rows = await client
         .from('fo_site_visits')
         .select('id, route_km')
@@ -1316,6 +1619,10 @@ class SupabaseService {
   }
 
   static Attendance _attendanceFromRow(Map<String, dynamic> row, FoUser user) {
+    final metadata = _jsonMap(row['metadata']);
+    final travelMode = normalizeTravelMode(
+      row['travel_mode']?.toString() ?? metadata['travel_mode']?.toString(),
+    );
     return Attendance(
       id: row['local_id']?.toString() ?? row['id']?.toString() ?? '',
       remoteId: row['id']?.toString(),
@@ -1346,8 +1653,142 @@ class SupabaseService {
           _double(row['eligible_km']) ??
           _double(row['total_approved_km']) ??
           0,
-      metadata: _jsonMap(row['metadata']),
+      travelMode: travelMode,
+      payableKmAllowed:
+          _bool(row['payable_km_allowed']) ??
+          _bool(metadata['payable_km_allowed']) ??
+          payableKmAllowedForTravelMode(travelMode),
+      travelModeNote:
+          row['travel_mode_note']?.toString() ??
+          metadata['travel_mode_note']?.toString(),
+      metadata: metadata,
     );
+  }
+
+  static Map<String, dynamic> _travelLegPayload(
+    TravelLeg travelLeg,
+    FoUser user,
+  ) {
+    final employeeCode = travelLeg.employeeCode.trim().isNotEmpty
+        ? travelLeg.employeeCode.trim()
+        : user.employeeCode.trim();
+    return {
+      'attendance_id': _uuidOrNull(travelLeg.attendanceId),
+      'employee_code': employeeCode,
+      'fo_user_id': travelLeg.foUserId?.trim().isNotEmpty == true
+          ? travelLeg.foUserId!.trim()
+          : employeeCode,
+      'travel_mode': travelLeg.travelMode,
+      'payable_km_allowed': travelLeg.payableKmAllowed,
+      'started_at': travelLeg.startedAt.toUtc().toIso8601String(),
+      'ended_at': travelLeg.endedAt?.toUtc().toIso8601String(),
+      'start_lat': travelLeg.startLat,
+      'start_lng': travelLeg.startLng,
+      'end_lat': travelLeg.endLat,
+      'end_lng': travelLeg.endLng,
+      'calculated_km': double.parse(travelLeg.calculatedKm.toStringAsFixed(2)),
+      'payable_km': double.parse(travelLeg.payableKm.toStringAsFixed(2)),
+      'fare_amount': double.parse(travelLeg.fareAmount.toStringAsFixed(2)),
+      'proof_file_url': travelLeg.proofFileUrl,
+      'remarks': travelLeg.remarks,
+      'status': travelLeg.status,
+    };
+  }
+
+  static TravelLeg _travelLegFromRow(Map<String, dynamic> row) {
+    return TravelLeg(
+      id: row['id']?.toString() ?? '',
+      remoteId: row['id']?.toString(),
+      attendanceId: row['attendance_id']?.toString() ?? '',
+      employeeCode: row['employee_code']?.toString() ?? '',
+      foUserId: row['fo_user_id']?.toString(),
+      travelMode: row['travel_mode']?.toString() ?? travelModeBike,
+      payableKmAllowed:
+          _bool(row['payable_km_allowed']) ??
+          payableKmAllowedForTravelMode(row['travel_mode']?.toString()),
+      startedAt:
+          DateTime.tryParse(row['started_at']?.toString() ?? '')?.toLocal() ??
+          DateTime.now(),
+      endedAt: DateTime.tryParse(row['ended_at']?.toString() ?? '')?.toLocal(),
+      startLat: _double(row['start_lat']),
+      startLng: _double(row['start_lng']),
+      endLat: _double(row['end_lat']),
+      endLng: _double(row['end_lng']),
+      calculatedKm: _double(row['calculated_km']) ?? 0,
+      payableKm: _double(row['payable_km']) ?? 0,
+      fareAmount: _double(row['fare_amount']) ?? 0,
+      proofFileUrl: row['proof_file_url']?.toString(),
+      remarks: row['remarks']?.toString(),
+      status: row['status']?.toString() ?? 'active',
+      createdAt: DateTime.tryParse(
+        row['created_at']?.toString() ?? '',
+      )?.toLocal(),
+      updatedAt: DateTime.tryParse(
+        row['updated_at']?.toString() ?? '',
+      )?.toLocal(),
+    );
+  }
+
+  static double _payableRouteKmForAttendance(Attendance attendance) {
+    if (attendance.payableKmAllowed) return attendance.totalRouteKm;
+    return _preservedPayableKm(attendance);
+  }
+
+  static double _approvedKmForAttendance(Attendance attendance) {
+    if (attendance.payableKmAllowed) return attendance.eligibleKm;
+    return _preservedPayableKm(attendance);
+  }
+
+  static double _preservedPayableKm(Attendance attendance) {
+    final preserved = _double(
+      attendance.metadata['payable_km_preserved_before_mode_change'],
+    );
+    if (preserved == null || !preserved.isFinite || preserved < 0) return 0;
+    return double.parse(preserved.toStringAsFixed(2));
+  }
+
+  static String? _travelClaimRemarks({
+    String? fromLocation,
+    String? toLocation,
+    String? remarks,
+  }) {
+    final lines = <String>[];
+    final from = fromLocation?.trim();
+    final to = toLocation?.trim();
+    final note = remarks?.trim();
+    if (from?.isNotEmpty == true) lines.add('From: $from');
+    if (to?.isNotEmpty == true) lines.add('To: $to');
+    if (note?.isNotEmpty == true) lines.add('Remarks: $note');
+    return lines.isEmpty ? null : lines.join('\n');
+  }
+
+  static String _storagePathPart(String value) {
+    final clean = value
+        .trim()
+        .replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_');
+    return clean.isEmpty ? 'unknown' : clean;
+  }
+
+  static String _storageExtension(String value) {
+    final clean = value.trim().toLowerCase().replaceAll('.', '');
+    switch (clean) {
+      case 'jpeg':
+        return 'jpg';
+      case 'png':
+      case 'pdf':
+      case 'jpg':
+        return clean;
+      default:
+        return 'jpg';
+    }
+  }
+
+  static String _storageTimestamp(DateTime value) {
+    final local = value.toLocal();
+    String two(int number) => number.toString().padLeft(2, '0');
+    return '${local.year}${two(local.month)}${two(local.day)}_'
+        '${two(local.hour)}${two(local.minute)}${two(local.second)}';
   }
 
   static bool _isCompletedAttendanceRow(Map<String, dynamic> row) {
@@ -1369,6 +1810,15 @@ class SupabaseService {
     if (value == null) return null;
     if (value is num) return value.toInt();
     return int.tryParse(value.toString());
+  }
+
+  static bool? _bool(Object? value) {
+    if (value == null) return null;
+    if (value is bool) return value;
+    final text = value.toString().trim().toLowerCase();
+    if (text == 'true' || text == '1' || text == 'yes') return true;
+    if (text == 'false' || text == '0' || text == 'no') return false;
+    return null;
   }
 
   static Map<String, dynamic> _jsonMap(Object? value) {
