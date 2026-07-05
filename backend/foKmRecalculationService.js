@@ -28,6 +28,8 @@ const ATTENDANCE_SELECT_COLUMNS = [
   'total_approved_km',
   'rate_per_km',
   'petrol_amount',
+  'travel_mode',
+  'payable_km_allowed',
   'route_sync_status',
   'metadata',
 ].join(', ');
@@ -547,6 +549,29 @@ function safeAttendanceMetadata(attendance) {
     : {};
 }
 
+function normalizeTravelMode(value) {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  return ['bike', 'own_vehicle', 'auto', 'bus', 'train', 'other'].includes(normalized)
+    ? normalized
+    : 'bike';
+}
+
+function travelModeAllowsPayableKm(attendance) {
+  const metadata = safeAttendanceMetadata(attendance);
+  const travelMode = normalizeTravelMode(attendance?.travel_mode || metadata.travel_mode);
+  const explicitAllowed = attendance?.payable_km_allowed;
+  if (explicitAllowed === false || String(explicitAllowed).toLowerCase() === 'false') {
+    return { travelMode, payableKmAllowed: false };
+  }
+  return {
+    travelMode,
+    payableKmAllowed: travelMode === 'bike' || travelMode === 'own_vehicle',
+  };
+}
+
 function attendanceEndCoordinate(attendance) {
   return coordinateFrom(
     attendance,
@@ -847,18 +872,29 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   }
   if (rows.length < 5) reviewFlags.push('LOW_GPS_LOG_COUNT');
   const ratePerKm = normalizeNumber(attendance.rate_per_km) || RATE_PER_KM;
-  const approvedKm = Number((storedRouteKm + finalReturnLegKm).toFixed(2));
-  const petrolAmount = Number((approvedKm * ratePerKm).toFixed(2));
+  const travelPolicy = travelModeAllowsPayableKm(attendance);
+  const calculatedPayableKm = Number((storedRouteKm + finalReturnLegKm).toFixed(2));
+  const approvedKm = travelPolicy.payableKmAllowed ? calculatedPayableKm : 0;
+  const petrolAmount = travelPolicy.payableKmAllowed
+    ? Number((approvedKm * ratePerKm).toFixed(2))
+    : 0;
   let routeSyncStatus = approvedKm > 0 ? 'site_visit_route_km_sum' : 'review_required';
   if (finalReturnLegKm > 0) {
     routeSyncStatus = finalReturnLeg.provider === 'haversine_fallback'
       ? 'site_visit_route_km_sum_plus_final_leg_fallback'
       : 'site_visit_route_km_sum_plus_final_leg';
   }
+  if (!travelPolicy.payableKmAllowed) {
+    reviewFlags.push('NON_PAYABLE_TRAVEL_MODE');
+    routeSyncStatus = 'non_payable_travel_mode';
+  }
   log('FINAL_APPROVED_KM', {
     attendance_id: attendance.id,
     site_visit_route_km: storedRouteKm,
     final_return_leg_km: finalReturnLegKm,
+    calculated_payable_km: calculatedPayableKm,
+    travel_mode: travelPolicy.travelMode,
+    payable_km_allowed: travelPolicy.payableKmAllowed,
     approved_km: approvedKm,
   });
   debugLog('FINAL LEG RESULT', {
@@ -868,6 +904,9 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     finalReturnLegKm,
     provider: finalReturnLeg.provider || null,
     reason: finalReturnLeg.reason || null,
+    calculatedPayableKm,
+    travelMode: travelPolicy.travelMode,
+    payableKmAllowed: travelPolicy.payableKmAllowed,
     approvedKm,
     petrolAmount,
     routeSyncStatus,
@@ -884,6 +923,8 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     actual_travel_updated_at: new Date().toISOString(),
     total_approved_km: approvedKm,
     petrol_amount: petrolAmount,
+    travel_mode: travelPolicy.travelMode,
+    payable_km_allowed: travelPolicy.payableKmAllowed,
     rate_per_km: ratePerKm,
     eligibility_status: reviewFlags.length ? reviewFlags.join(',') : 'Approved',
     route_sync_status: routeSyncStatus,
@@ -902,8 +943,12 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
       final_return_leg_destination_lng: finalReturnLeg.destination?.longitude ?? null,
       final_return_leg_destination_source: finalReturnLeg.destination ? 'attendance_end_location' : null,
       final_return_leg_calculated_at: new Date().toISOString(),
-      final_return_leg_included_in_payable: finalReturnLeg.includedInPayable === true,
+      final_return_leg_included_in_payable:
+        finalReturnLeg.includedInPayable === true && travelPolicy.payableKmAllowed,
       site_visit_route_km_sum: storedRouteKm,
+      calculated_payable_km_before_travel_mode_policy: calculatedPayableKm,
+      travel_mode: travelPolicy.travelMode,
+      payable_km_allowed: travelPolicy.payableKmAllowed,
       recalculated_total_route_km: approvedKm,
       recalculated_petrol_amount: petrolAmount,
       km_recalculated_at: new Date().toISOString(),

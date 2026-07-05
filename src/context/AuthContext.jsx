@@ -25,6 +25,10 @@ function readStoredUser() {
   }
 }
 
+function isSetPasswordRoute() {
+  return typeof window !== 'undefined' && window.location.pathname === '/set-password';
+}
+
 function profileToUser(profile, sessionUser) {
   if (!profile && !sessionUser) return null;
   const email = profile?.email || sessionUser?.email || '';
@@ -150,6 +154,12 @@ export function AuthProvider({ children }) {
       .catch((error) => {
         if (!active) return;
         console.warn('[myQPMS Auth] Session restore failed', error);
+        if (isSetPasswordRoute()) {
+          setUserState(null);
+          setAuthStatus('ready');
+          setAuthError('');
+          return;
+        }
         void supabase.auth.signOut();
         setUserState(null);
         setAuthStatus(isProductionAuthMode ? 'error' : 'ready');
@@ -179,6 +189,12 @@ export function AuthProvider({ children }) {
         .catch((error) => {
           if (!active) return;
           console.warn('[myQPMS Auth] Auth state profile sync failed', error);
+          if (isSetPasswordRoute()) {
+            setUserState(null);
+            setAuthStatus('ready');
+            setAuthError('');
+            return;
+          }
           void supabase.auth.signOut();
           setUserState(null);
           setAuthStatus(isProductionAuthMode ? 'error' : 'ready');

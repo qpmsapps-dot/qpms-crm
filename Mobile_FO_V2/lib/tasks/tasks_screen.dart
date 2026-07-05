@@ -661,7 +661,8 @@ class _TasksScreenState extends State<TasksScreen>
     final origin = await _routeOriginForVisit(attendance);
     final destinationLat = store.latitude ?? position.latitude;
     final destinationLng = store.longitude ?? position.longitude;
-    final routeDistance = origin == null
+    final isPayableTravel = attendance.payableKmAllowed;
+    final routeDistance = !isPayableTravel || origin == null
         ? null
         : await RouteDistanceService.roadDistanceKm(
             employeeCode: widget.user.employeeCode,
@@ -670,7 +671,7 @@ class _TasksScreenState extends State<TasksScreen>
             destinationLat: destinationLat,
             destinationLng: destinationLng,
           );
-    final routeKm = routeDistance?.routeKm;
+    final routeKm = isPayableTravel ? routeDistance?.routeKm : 0.0;
     if (routeKm != null && origin != null) {
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
@@ -711,21 +712,35 @@ class _TasksScreenState extends State<TasksScreen>
       destinationLatitude: destinationLat,
       destinationLongitude: destinationLng,
       routeKm: routeKm,
-      metadata:
-          routeDistance?.toMetadata(
-            routeOriginSource: origin?.source ?? 'missing',
-          ) ??
-          {
-            'distance_source': 'unavailable',
-            'route_provider': 'google',
-            'route_api': 'distance_matrix',
-            'route_request_status': 'missing_origin',
-            'route_calculated_at': DateTime.now().toUtc().toIso8601String(),
-            'route_origin_source': 'missing',
-            'destination_lat': destinationLat,
-            'destination_lng': destinationLng,
-            'needs_review': true,
-          },
+      metadata: !isPayableTravel
+          ? {
+              'distance_source': 'non_payable_travel_mode',
+              'travel_mode': attendance.travelMode,
+              'payable_km_allowed': false,
+              'route_provider': 'none',
+              'route_request_status': 'skipped_non_payable_travel_mode',
+              'route_calculated_at': DateTime.now().toUtc().toIso8601String(),
+              'route_origin_source': origin?.source ?? 'missing',
+              'destination_lat': destinationLat,
+              'destination_lng': destinationLng,
+              'needs_review': false,
+            }
+          : routeDistance?.toMetadata(
+                  routeOriginSource: origin?.source ?? 'missing',
+                ) ??
+                {
+                  'distance_source': 'unavailable',
+                  'route_provider': 'google',
+                  'route_api': 'distance_matrix',
+                  'route_request_status': 'missing_origin',
+                  'route_calculated_at': DateTime.now()
+                      .toUtc()
+                      .toIso8601String(),
+                  'route_origin_source': 'missing',
+                  'destination_lat': destinationLat,
+                  'destination_lng': destinationLng,
+                  'needs_review': true,
+                },
       status: 'Checked In',
     );
     await CrashLogService.record(
@@ -754,7 +769,11 @@ class _TasksScreenState extends State<TasksScreen>
         destinationLat: destinationLat,
         destinationLng: destinationLng,
         routeKm: routeKm,
-        source: origin == null ? 'check_in_no_origin' : 'check_in',
+        source: !isPayableTravel
+            ? 'check_in_non_payable_travel_mode'
+            : origin == null
+            ? 'check_in_no_origin'
+            : 'check_in',
         calculatedAt: visit.checkInTime,
         syncStatus: routeKm == null ? 'pending' : 'synced',
       );
@@ -837,6 +856,34 @@ class _TasksScreenState extends State<TasksScreen>
     Attendance attendance,
     SiteVisit visit,
   ) async {
+    if (!attendance.payableKmAllowed) {
+      final preservedKm = _payableKmToPreserve(attendance);
+      attendance
+        ..totalRouteKm = preservedKm
+        ..eligibleKm = preservedKm;
+      await LocalStore.saveAttendance(attendance);
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tracking',
+        action: 'CONVEYANCE_KM_SKIPPED_NON_PAYABLE_TRAVEL_MODE',
+        error:
+            'attendance_id=${attendance.remoteId} travel_mode=${attendance.travelMode}',
+      );
+      if (SupabaseService.isReady) {
+        await SupabaseService.updateLiveStatus(
+          user: widget.user,
+          isTracking: false,
+          status: 'On Site Visit',
+          latitude: visit.currentLatitude,
+          longitude: visit.currentLongitude,
+          accuracy: visit.currentGpsAccuracy,
+          routeKm: 0,
+          attendanceId: attendance.remoteId,
+          activeSiteVisitId: visit.remoteId,
+        );
+      }
+      return;
+    }
     final routeKm = await _routeKmFromVisits(attendance);
     attendance
       ..totalRouteKm = routeKm
@@ -865,6 +912,7 @@ class _TasksScreenState extends State<TasksScreen>
   }
 
   Future<double> _routeKmFromVisits(Attendance attendance) async {
+    if (!attendance.payableKmAllowed) return _payableKmToPreserve(attendance);
     final attendanceId = attendance.remoteId?.trim().isNotEmpty == true
         ? attendance.remoteId!.trim()
         : attendance.id;
@@ -886,6 +934,18 @@ class _TasksScreenState extends State<TasksScreen>
       }
     }
     return total;
+  }
+
+  double _payableKmToPreserve(Attendance attendance) {
+    final existing =
+        attendance.metadata['payable_km_preserved_before_mode_change'];
+    if (existing is num && existing.isFinite && existing >= 0) {
+      return double.parse(existing.toDouble().toStringAsFixed(2));
+    }
+    final km = attendance.eligibleKm > 0
+        ? attendance.eligibleKm
+        : attendance.totalRouteKm;
+    return double.parse(km.clamp(0, double.infinity).toStringAsFixed(2));
   }
 
   Future<({double lat, double lng, String source})?> _routeOriginForVisit(

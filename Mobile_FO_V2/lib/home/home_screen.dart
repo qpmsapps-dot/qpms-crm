@@ -1,6 +1,12 @@
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:battery_plus/battery_plus.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../build_info.dart';
@@ -540,6 +546,160 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
+  Future<_TravelModeSelection?> _selectTravelMode({
+    String initialMode = travelModeBike,
+    String? initialNote,
+  }) {
+    return showDialog<_TravelModeSelection>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) =>
+          _TravelModeDialog(initialMode: initialMode, initialNote: initialNote),
+    );
+  }
+
+  Future<void> _changeTravelMode() async {
+    final current = _attendance;
+    if (_busy || current?.isActive != true) return;
+    final selection = await _selectTravelMode(
+      initialMode: current!.travelMode,
+      initialNote: current.travelModeNote,
+    );
+    if (selection == null) return;
+    final selectedMode = normalizeTravelMode(selection.travelMode);
+    if (selectedMode == current.travelMode) {
+      _toast('${travelModeLabel(selectedMode)} is already selected.');
+      return;
+    }
+    final selectedPayable = payableKmAllowedForTravelMode(selectedMode);
+    if (!selectedPayable && selection.claim == null) return;
+    final now = DateTime.now().toUtc().toIso8601String();
+    final metadata = Map<String, dynamic>.from(current.metadata);
+    metadata['travel_mode_changed_at'] = now;
+    metadata['previous_travel_mode'] = current.travelMode;
+    metadata['travel_mode'] = selectedMode;
+    metadata['payable_km_allowed'] = selectedPayable;
+    // Phase 2: replace attendance-level mode switching with travel-leg based segmented calculation.
+    metadata['phase2_travel_leg_todo'] = true;
+    if (!selectedPayable) {
+      metadata['payable_km_preserved_before_mode_change'] =
+          _payableKmToPreserve(current);
+    }
+    final updated = current.copyWithTravelMode(
+      travelMode: selectedMode,
+      payableKmAllowed: selectedPayable,
+      travelModeNote: selection.note,
+      metadata: metadata,
+    );
+    setState(() => _busy = true);
+    try {
+      if (!selectedPayable) {
+        final claimSaved = await _saveTravelExpenseClaim(
+          current,
+          selection,
+          travelMode: selectedMode,
+        );
+        if (!claimSaved) return;
+      }
+      final remote = SupabaseService.isReady
+          ? await SupabaseService.updateAttendanceTravelMode(
+              user: widget.user,
+              attendance: updated,
+              travelMode: updated.travelMode,
+              payableKmAllowed: updated.payableKmAllowed,
+              travelModeNote: updated.travelModeNote,
+              metadata: metadata,
+            )
+          : null;
+      final saved = remote ?? updated;
+      await LocalStore.saveAttendance(saved);
+      if (!mounted) return;
+      setState(() {
+        _attendance = saved;
+        _km = saved.eligibleKm > 0 ? saved.eligibleKm : saved.totalRouteKm;
+      });
+      if (saved.payableKmAllowed) {
+        _toast('Travel mode updated.');
+      } else {
+        _toast('Travel mode and claim saved.');
+      }
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'home',
+        action: 'TRAVEL_MODE_UPDATE_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      if (mounted) _toast('Travel mode update failed. Please try again.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  double _payableKmToPreserve(Attendance attendance) {
+    final existing =
+        attendance.metadata['payable_km_preserved_before_mode_change'];
+    if (existing is num && existing.isFinite && existing >= 0) {
+      return double.parse(existing.toDouble().toStringAsFixed(2));
+    }
+    final km = attendance.eligibleKm > 0
+        ? attendance.eligibleKm
+        : attendance.totalRouteKm;
+    return double.parse(km.clamp(0, double.infinity).toStringAsFixed(2));
+  }
+
+  Future<bool> _saveTravelExpenseClaim(
+    Attendance attendance,
+    _TravelModeSelection selection, {
+    String? travelMode,
+  }) async {
+    final claim = selection.claim;
+    if (claim == null) return true;
+    if (!SupabaseService.isReady ||
+        !SupabaseService.isValidUuid(attendance.remoteId)) {
+      _toast('Bill/Ticket upload requires internet.');
+      return false;
+    }
+    try {
+      final connectivity = await Connectivity().checkConnectivity();
+      if (connectivity.contains(ConnectivityResult.none)) {
+        _toast('Bill/Ticket upload requires internet.');
+        return false;
+      }
+      final proofPath = await SupabaseService.uploadTravelClaimProof(
+        user: widget.user,
+        attendance: attendance,
+        fileName: claim.proof.fileName,
+        bytes: claim.proof.bytes,
+        contentType: claim.proof.contentType,
+        extension: claim.proof.extension,
+      );
+      await SupabaseService.submitTravelExpenseClaim(
+        user: widget.user,
+        attendance: attendance,
+        travelMode: travelMode ?? selection.travelMode,
+        fromLocation: claim.fromLocation,
+        toLocation: claim.toLocation,
+        fareAmount: claim.fareAmount,
+        remarks: claim.remarks,
+        proofFileUrl: proofPath,
+        storageBucket: SupabaseService.travelClaimProofBucket,
+      );
+      return true;
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'home',
+        action: 'TRAVEL_EXPENSE_CLAIM_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _toast('Bill/Ticket upload failed. Please check internet and retry.');
+      return false;
+    }
+  }
+
   Future<void> _startDay() async {
     setState(() => _busy = true);
     try {
@@ -602,7 +762,12 @@ class _HomeScreenState extends State<HomeScreen>
             }
             return;
           }
-          await _restartCompletedAttendance(completed);
+          final travelModeSelection = await _selectTravelMode();
+          if (travelModeSelection == null) return;
+          await _restartCompletedAttendance(
+            completed,
+            travelModeSelection: travelModeSelection,
+          );
           return;
         }
       } catch (error, stackTrace) {
@@ -627,6 +792,8 @@ class _HomeScreenState extends State<HomeScreen>
         final continueStart = await _confirmBatteryAdvisory();
         if (continueStart != true) return;
       }
+      final travelModeSelection = await _selectTravelMode();
+      if (travelModeSelection == null) return;
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
@@ -647,6 +814,11 @@ class _HomeScreenState extends State<HomeScreen>
         startLat: position.latitude,
         startLng: position.longitude,
         batteryStart: battery,
+        travelMode: travelModeSelection.travelMode,
+        payableKmAllowed: payableKmAllowedForTravelMode(
+          travelModeSelection.travelMode,
+        ),
+        travelModeNote: travelModeSelection.note,
       );
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
@@ -711,6 +883,13 @@ class _HomeScreenState extends State<HomeScreen>
         error:
             'attendance_id=${attendance.remoteId ?? attendance.id} remote_id=${attendance.remoteId ?? '--'} active=${attendance.isActive}',
       );
+      if (!attendance.payableKmAllowed) {
+        final claimSaved = await _saveTravelExpenseClaim(
+          attendance,
+          travelModeSelection,
+        );
+        if (!claimSaved) return;
+      }
       await TrackingService.saveRouteAnchor(
         user: widget.user,
         attendance: attendance,
@@ -841,13 +1020,28 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  Future<void> _restartCompletedAttendance(Attendance completed) async {
+  Future<void> _restartCompletedAttendance(
+    Attendance completed, {
+    required _TravelModeSelection travelModeSelection,
+  }) async {
     final reopened = await SupabaseService.reopenAttendanceForToday(
       user: widget.user,
       attendance: completed,
+      travelMode: travelModeSelection.travelMode,
+      payableKmAllowed: payableKmAllowedForTravelMode(
+        travelModeSelection.travelMode,
+      ),
+      travelModeNote: travelModeSelection.note,
     );
     if (!SupabaseService.isValidUuid(reopened.remoteId)) {
       throw StateError('Restart Day failed. Attendance sync is missing.');
+    }
+    if (!reopened.payableKmAllowed) {
+      final claimSaved = await _saveTravelExpenseClaim(
+        reopened,
+        travelModeSelection,
+      );
+      if (!claimSaved) return;
     }
     await SupabaseService.updateLiveStatus(
       user: widget.user,
@@ -1445,6 +1639,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<double> _routeKmFromVisits(Attendance attendance) async {
+    if (!attendance.payableKmAllowed) return _payableKmToPreserve(attendance);
     final attendanceId = attendance.remoteId?.trim().isNotEmpty == true
         ? attendance.remoteId!.trim()
         : attendance.id;
@@ -1551,6 +1746,7 @@ class _HomeScreenState extends State<HomeScreen>
           const SizedBox(height: 22),
           _overviewCard(),
           const SizedBox(height: 16),
+          if (active) ...[_travelModeCard(), const SizedBox(height: 16)],
           if (_showTrackingDebug) ...[
             _trackingHealthCard(),
             const SizedBox(height: 14),
@@ -1755,6 +1951,50 @@ class _HomeScreenState extends State<HomeScreen>
                   ? 'Syncing app state...'
                   : 'Sync Now • Refresh app state from server',
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _travelModeCard() {
+    final attendance = _attendance;
+    final mode = attendance == null ? travelModeBike : attendance.travelMode;
+    return FoCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const FoSectionTitle(title: 'Travel Mode'),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: qpmsBlue.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.swap_horiz_rounded, color: qpmsBlue),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Current Travel Mode: ${travelModeLabel(mode)}',
+                  style: const TextStyle(
+                    color: foNavy,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          OutlinedButton.icon(
+            onPressed: _busy ? null : _changeTravelMode,
+            icon: const Icon(Icons.swap_horiz_rounded),
+            label: const Text('Change Travel Mode'),
           ),
         ],
       ),
@@ -2365,4 +2605,496 @@ class _TimelineRow {
   final Color color;
   final String badge;
   final Color badgeColor;
+}
+
+class _TravelModeSelection {
+  const _TravelModeSelection({required this.travelMode, this.note, this.claim});
+
+  final String travelMode;
+  final String? note;
+  final _TravelExpenseClaimDraft? claim;
+}
+
+const _maxTravelClaimProofBytes = 5 * 1024 * 1024;
+const _travelClaimImageMaxWidth = 1280.0;
+const _travelClaimImageQuality = 70;
+
+class _TravelModeDialog extends StatefulWidget {
+  const _TravelModeDialog({
+    this.initialMode = travelModeBike,
+    this.initialNote,
+  });
+
+  final String initialMode;
+  final String? initialNote;
+
+  @override
+  State<_TravelModeDialog> createState() => _TravelModeDialogState();
+}
+
+class _TravelModeDialogState extends State<_TravelModeDialog> {
+  final _picker = ImagePicker();
+  final _fromController = TextEditingController();
+  final _toController = TextEditingController();
+  final _amountController = TextEditingController();
+  final _remarksController = TextEditingController();
+  String _selectedMode = travelModeBike;
+  String? _claimError;
+  _TravelClaimProofDraft? _proof;
+
+  @override
+  void initState() {
+    super.initState();
+    final initialMode = normalizeTravelMode(widget.initialMode);
+    _selectedMode = initialMode == travelModeOwnVehicle
+        ? travelModeBike
+        : initialMode;
+    _remarksController.text = widget.initialNote?.trim() ?? '';
+  }
+
+  @override
+  void dispose() {
+    _fromController.dispose();
+    _toController.dispose();
+    _amountController.dispose();
+    _remarksController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const options = [
+      travelModeBike,
+      travelModeAuto,
+      travelModeBus,
+      travelModeTrain,
+      travelModeOther,
+    ];
+    final payable = payableKmAllowedForTravelMode(_selectedMode);
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 22, vertical: 24),
+      title: const Text('Select Travel Mode'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            DropdownButtonFormField<String>(
+              initialValue: _selectedMode,
+              decoration: const InputDecoration(
+                labelText: 'Travel Mode',
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                for (final mode in options)
+                  DropdownMenuItem(
+                    value: mode,
+                    child: Text(travelModeLabel(mode)),
+                  ),
+              ],
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() {
+                  _selectedMode = value;
+                  _claimError = null;
+                });
+              },
+            ),
+            if (!payable) ...[
+              const SizedBox(height: 18),
+              const Text(
+                'Travel Claim',
+                style: TextStyle(fontWeight: FontWeight.w900, color: foNavy),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _fromController,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'From',
+                  hintText: 'Enter from location',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _toController,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'To',
+                  hintText: 'Enter to location',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _amountController,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Amount',
+                  hintText: 'Enter amount',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _remarksController,
+                minLines: 2,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Remarks',
+                  hintText: 'Enter remarks (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'Bill/Ticket',
+                style: TextStyle(fontWeight: FontWeight.w900, color: foNavy),
+              ),
+              const SizedBox(height: 8),
+              InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: _pickProof,
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 18,
+                  ),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: foBorder),
+                    color: const Color(0xFFF8FAFF),
+                  ),
+                  child: _proof == null
+                      ? const Column(
+                          children: [
+                            Icon(Icons.cloud_upload_outlined, color: qpmsBlue),
+                            SizedBox(height: 6),
+                            Text(
+                              'Tap to upload',
+                              style: TextStyle(
+                                color: qpmsBlue,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'JPG, PNG, PDF (Max 5 MB)',
+                              style: TextStyle(
+                                color: Color(0xFF53607D),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        )
+                      : Row(
+                          children: [
+                            Icon(
+                              _proof!.isPdf
+                                  ? Icons.picture_as_pdf_rounded
+                                  : Icons.image_rounded,
+                              color: qpmsBlue,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                _proof!.fileName,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: foNavy,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Remove',
+                              onPressed: () => setState(() => _proof = null),
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                          ],
+                        ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  TextButton.icon(
+                    onPressed: _pickProof,
+                    icon: const Icon(Icons.attach_file_rounded),
+                    label: Text(_proof == null ? 'Choose file' : 'Change'),
+                  ),
+                  if (_proof != null)
+                    TextButton(
+                      onPressed: () => setState(() => _proof = null),
+                      child: const Text('Remove'),
+                    ),
+                ],
+              ),
+              if (_claimError != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _claimError!,
+                  style: const TextStyle(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _continue,
+          child: Text(payable ? 'Continue' : 'Save & Continue'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pickProof() async {
+    final source = await showModalBottomSheet<_TravelClaimProofSource>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera_rounded),
+              title: const Text('Take photo'),
+              onTap: () =>
+                  Navigator.pop(context, _TravelClaimProofSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded),
+              title: const Text('Choose image'),
+              onTap: () =>
+                  Navigator.pop(context, _TravelClaimProofSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.picture_as_pdf_rounded),
+              title: const Text('Choose PDF'),
+              onTap: () => Navigator.pop(context, _TravelClaimProofSource.pdf),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+    try {
+      switch (source) {
+        case _TravelClaimProofSource.camera:
+          final file = await _picker.pickImage(
+            source: ImageSource.camera,
+            maxWidth: _travelClaimImageMaxWidth,
+            imageQuality: _travelClaimImageQuality,
+            requestFullMetadata: false,
+          );
+          if (file != null) await _setProofFromXFile(file);
+          break;
+        case _TravelClaimProofSource.gallery:
+          final file = await _picker.pickImage(
+            source: ImageSource.gallery,
+            maxWidth: _travelClaimImageMaxWidth,
+            imageQuality: _travelClaimImageQuality,
+            requestFullMetadata: false,
+          );
+          if (file != null) await _setProofFromXFile(file);
+          break;
+        case _TravelClaimProofSource.pdf:
+          await _setProofFromPdf();
+          break;
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(
+        () => _claimError = source == _TravelClaimProofSource.pdf
+            ? 'Bill/Ticket file could not be selected.'
+            : 'Bill/Ticket image compression failed. Please try another file.',
+      );
+    }
+  }
+
+  Future<void> _setProofFromXFile(XFile file) async {
+    final size = await file.length();
+    if (!_validateProofSize(size)) return;
+    final extension = _proofExtension(file.name);
+    if (extension != 'jpg' && extension != 'jpeg' && extension != 'png') {
+      setState(() => _claimError = 'Only JPG, PNG, or PDF files are allowed.');
+      return;
+    }
+    final bytes = await file.readAsBytes();
+    if (!mounted) return;
+    setState(() {
+      _proof = _TravelClaimProofDraft(
+        fileName: _cleanProofFileName(file.name, fallbackExtension: extension),
+        bytes: bytes,
+        extension: extension,
+        contentType: _proofContentType(extension),
+      );
+      _claimError = null;
+    });
+  }
+
+  Future<void> _setProofFromPdf() async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf'],
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    if (!_validateProofSize(file.size)) return;
+    Uint8List? bytes = file.bytes;
+    if (bytes == null && file.path != null) {
+      bytes = await File(file.path!).readAsBytes();
+    }
+    if (bytes == null) {
+      setState(() => _claimError = 'Bill/Ticket file could not be selected.');
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _proof = _TravelClaimProofDraft(
+        fileName: _cleanProofFileName(file.name, fallbackExtension: 'pdf'),
+        bytes: bytes!,
+        extension: 'pdf',
+        contentType: 'application/pdf',
+      );
+      _claimError = null;
+    });
+  }
+
+  bool _validateProofSize(int size) {
+    if (size > _maxTravelClaimProofBytes) {
+      setState(() => _claimError = 'Bill/Ticket must be 5 MB or less.');
+      return false;
+    }
+    return true;
+  }
+
+  String _proofExtension(String fileName) {
+    final name = fileName.trim().toLowerCase();
+    final dot = name.lastIndexOf('.');
+    if (dot < 0 || dot == name.length - 1) return 'jpg';
+    final extension = name.substring(dot + 1);
+    return extension == 'jpeg' ? 'jpeg' : extension;
+  }
+
+  String _proofContentType(String extension) {
+    switch (extension) {
+      case 'png':
+        return 'image/png';
+      case 'pdf':
+        return 'application/pdf';
+      case 'jpg':
+      case 'jpeg':
+      default:
+        return 'image/jpeg';
+    }
+  }
+
+  String _cleanProofFileName(
+    String fileName, {
+    required String fallbackExtension,
+  }) {
+    final clean = fileName
+        .trim()
+        .replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_');
+    if (clean.isEmpty || !clean.contains('.')) {
+      return 'claim_proof.$fallbackExtension';
+    }
+    return clean;
+  }
+
+  void _continue() {
+    final payable = payableKmAllowedForTravelMode(_selectedMode);
+    if (payable) {
+      Navigator.of(
+        context,
+      ).pop(_TravelModeSelection(travelMode: _selectedMode));
+      return;
+    }
+    final from = _fromController.text.trim();
+    final to = _toController.text.trim();
+    final amount = double.tryParse(_amountController.text.trim());
+    if (from.isEmpty) {
+      setState(() => _claimError = 'From is required.');
+      return;
+    }
+    if (to.isEmpty) {
+      setState(() => _claimError = 'To is required.');
+      return;
+    }
+    if (amount == null || amount <= 0) {
+      setState(() => _claimError = 'Enter a valid amount.');
+      return;
+    }
+    final proof = _proof;
+    if (proof == null) {
+      setState(() => _claimError = 'Bill/Ticket is required.');
+      return;
+    }
+    final remarks = _remarksController.text.trim();
+    Navigator.of(context).pop(
+      _TravelModeSelection(
+        travelMode: _selectedMode,
+        note: remarks.isEmpty ? null : remarks,
+        claim: _TravelExpenseClaimDraft(
+          fromLocation: from,
+          toLocation: to,
+          fareAmount: amount,
+          remarks: remarks.isEmpty ? null : remarks,
+          proof: proof,
+        ),
+      ),
+    );
+  }
+}
+
+enum _TravelClaimProofSource { camera, gallery, pdf }
+
+class _TravelExpenseClaimDraft {
+  const _TravelExpenseClaimDraft({
+    required this.fromLocation,
+    required this.toLocation,
+    required this.fareAmount,
+    required this.remarks,
+    required this.proof,
+  });
+
+  final String fromLocation;
+  final String toLocation;
+  final double fareAmount;
+  final String? remarks;
+  final _TravelClaimProofDraft proof;
+}
+
+class _TravelClaimProofDraft {
+  const _TravelClaimProofDraft({
+    required this.fileName,
+    required this.bytes,
+    required this.extension,
+    required this.contentType,
+  });
+
+  final String fileName;
+  final Uint8List bytes;
+  final String extension;
+  final String contentType;
+
+  bool get isPdf => extension == 'pdf';
 }
