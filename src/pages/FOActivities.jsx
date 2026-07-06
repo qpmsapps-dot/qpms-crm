@@ -4263,6 +4263,54 @@ function normalizeRoleKey(role = "") {
     .replace(/\s+/g, " ");
 }
 
+const temporarySwitchAllowedRoles = new Set([
+  "admin",
+  "developer",
+  "qpmsadmin",
+  "qpms admin",
+  "qpms_admin",
+]);
+
+function resolveTemporarySwitchRole(user = {}) {
+  const metadata = user?.metadata && typeof user.metadata === "object" ? user.metadata : {};
+  const profile = user?.profile && typeof user.profile === "object" ? user.profile : {};
+  const userProfile = user?.userProfile && typeof user.userProfile === "object" ? user.userProfile : {};
+  const currentUser = user?.currentUser && typeof user.currentUser === "object" ? user.currentUser : {};
+  const authUser = user?.authUser && typeof user.authUser === "object" ? user.authUser : {};
+  const authMetadata =
+    authUser?.user_metadata && typeof authUser.user_metadata === "object"
+      ? authUser.user_metadata
+      : {};
+  const appMetadata =
+    authUser?.app_metadata && typeof authUser.app_metadata === "object"
+      ? authUser.app_metadata
+      : {};
+  const candidates = [
+    profile.role,
+    userProfile.role,
+    currentUser.role,
+    user.rawRole,
+    user.role,
+    metadata.role,
+    metadata.rawRole,
+    metadata.app_role,
+    metadata.user_role,
+    user.user_metadata?.role,
+    user.app_metadata?.role,
+    authUser.role,
+    authMetadata.role,
+    appMetadata.role,
+  ];
+  for (const value of candidates) {
+    const normalizedRole = String(value || "").trim().toLowerCase();
+    if (!normalizedRole) continue;
+    if (temporarySwitchAllowedRoles.has(normalizedRole)) return normalizedRole;
+    const roleKey = normalizeRoleKey(normalizedRole);
+    if (temporarySwitchAllowedRoles.has(roleKey)) return roleKey;
+  }
+  return String(candidates.find(Boolean) || "").trim().toLowerCase();
+}
+
 function canReviewCheckoutException(role) {
   const roleKey = normalizeRoleKey(role);
   return [
@@ -5540,7 +5588,9 @@ function FieldOfficerDetailsView({
   onBack,
   onExport,
   onRecalculateKm,
+  onTemporarySwitchKm,
   recalculatingKm = false,
+  recalculatingSwitchKm = false,
   recalculationResult = null,
   fullTechnicalAccess = false,
   canReviewCheckoutExceptions = false,
@@ -6583,6 +6633,12 @@ function FieldOfficerDetailsView({
                   <RefreshCw className={`h-4 w-4 ${recalculatingKm ? "animate-spin" : ""}`} />
                   {recalculatingKm ? "Recalculating..." : "Recalculate KM"}
                 </button>
+                {onTemporarySwitchKm ? (
+                  <button type="button" onClick={onTemporarySwitchKm} disabled={recalculatingSwitchKm} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-2 text-xs font-black text-orange-800 hover:bg-orange-100 disabled:opacity-50">
+                    <RefreshCw className={`h-4 w-4 ${recalculatingSwitchKm ? "animate-spin" : ""}`} />
+                    {recalculatingSwitchKm ? "Temporary..." : "Temporary Switch KM"}
+                  </button>
+                ) : null}
                 <button type="button" onClick={() => setRouteMapOpen((value) => !value)} className="focus-ring inline-flex items-center gap-2 rounded-lg bg-qpms-700 px-4 py-2 text-xs font-black text-white hover:bg-qpms-800">
                   <MapPinned className="h-4 w-4" /> {routeMapOpen ? "Hide Route Map" : "Show Route Map"}
                 </button>
@@ -6895,7 +6951,9 @@ function FoSupportActionPanel({
   onDetailedView,
   onClose,
   onRecalculateKm,
+  onTemporarySwitchKm,
   recalculatingKm = false,
+  recalculatingSwitchKm = false,
   recalculationResult = null,
   roadKmEstimate,
   foSafeKm,
@@ -7070,6 +7128,17 @@ function FoSupportActionPanel({
                   </button>
                 ))}
               </div>
+              {onTemporarySwitchKm ? (
+                <button
+                  type="button"
+                  onClick={onTemporarySwitchKm}
+                  disabled={busy || recalculatingKm || recalculatingSwitchKm}
+                  className="focus-ring w-full rounded-lg border border-orange-200 bg-orange-50 px-2 py-2 text-center text-[11px] font-black text-orange-800 hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Temporary Bike to non-bike switch KM recalculation"
+                >
+                  {recalculatingSwitchKm ? "Temporary Switch KM..." : "Temporary Switch KM"}
+                </button>
+              ) : null}
 
               {pendingAction ? (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
@@ -7379,6 +7448,9 @@ export default function FOActivities() {
   const currentRole = normalizeRoleKey(user?.rawRole || user?.role);
   const fullTechnicalAccess = ["admin", "developer", "md"].includes(currentRole);
   const canRunBatchKmRecalculation = ["admin", "developer", "qpmsadmin", "md", "coo"].includes(currentRole);
+  const temporarySwitchNormalizedRole = resolveTemporarySwitchRole(user);
+  const canUseTemporarySwitchKm = temporarySwitchAllowedRoles.has(temporarySwitchNormalizedRole);
+  const canRunTemporarySwitchKm = canUseTemporarySwitchKm;
   const canReviewCheckoutExceptions =
     canReviewCheckoutException(currentRole);
   const [stateFilter, setStateFilter] = useState("All States");
@@ -7411,6 +7483,7 @@ export default function FOActivities() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [kmRecalcBusy, setKmRecalcBusy] = useState(false);
   const [kmRecalcResult, setKmRecalcResult] = useState(null);
+  const [switchKmRecalcBusy, setSwitchKmRecalcBusy] = useState(false);
   const [batchKmRecalcBusy, setBatchKmRecalcBusy] = useState(false);
   const [dashboardExportBusy, setDashboardExportBusy] = useState(false);
   const [customFromDate, setCustomFromDate] = useState(
@@ -8396,6 +8469,74 @@ export default function FOActivities() {
     }
   }
 
+  async function recalculateTemporarySwitchKmForOfficer(officer = selectedOfficer) {
+    if (!officer || !canRunTemporarySwitchKm) return;
+    try {
+      assertDemoWriteAllowed(user);
+    } catch (error) {
+      const message = error.message || "Temporary Switch KM is blocked.";
+      setKmRecalcResult({ ok: false, message, confidence: "BLOCKED" });
+      setSupportMessage(message);
+      return;
+    }
+    const confirmed = window.confirm(
+      "This temporary recalculation is only for Bike ↔ Non-bike switch days. Continue?",
+    );
+    if (!confirmed) return;
+
+    const attendanceId = officer.attendance?.id || officer.attendance?.attendance_id;
+    const employeeCode =
+      officer.employeeCode ||
+      officer.attendance?.employee_code ||
+      officer.foId;
+    if (!attendanceId && !employeeCode) {
+      const message = "Temporary Switch KM needs a selected attendance or employee.";
+      setKmRecalcResult({ ok: false, message, confidence: "BLOCKED" });
+      setSupportMessage(message);
+      return;
+    }
+
+    setSwitchKmRecalcBusy(true);
+    setKmRecalcResult(null);
+    setSupportMessage("");
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) {
+        throw new Error("Admin session expired. Please login again.");
+      }
+      const response = await fetch(`${API_BASE_URL}/api/fo/km/recalculate-switch-mode`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          attendance_id: attendanceId,
+          employee_code: employeeCode,
+          date: selectedRange.fromDate,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.message || "Temporary Switch KM failed.");
+      }
+      const message = payload.manual_review_required
+        ? `Temporary Switch KM marked manual review: ${payload.manual_review_reason || "review required"}`
+        : `Temporary Switch KM completed. Payable KM: ${Number(payload.total_route_km || payload.approved_km || 0).toFixed(2)}`;
+      setKmRecalcResult({ ...payload, message });
+      setSupportMessage(message);
+      setRefreshToken((value) => value + 1);
+    } catch (error) {
+      const message = error.message || "Temporary Switch KM failed.";
+      setKmRecalcResult({ ok: false, message, confidence: "ERROR" });
+      setSupportMessage(message);
+      console.warn("[myQPMS FO] Temporary Switch KM failed.", error);
+    } finally {
+      setSwitchKmRecalcBusy(false);
+    }
+  }
+
   const pins = useMemo(() => {
     const markerOfficers = visualFilteredOfficers.filter((officer) => {
       const canShow = canShowOfficerMarker(officer);
@@ -8601,7 +8742,13 @@ export default function FOActivities() {
           })
         }
         onRecalculateKm={recalculateSelectedOfficerKm}
+        onTemporarySwitchKm={
+          canRunTemporarySwitchKm
+            ? () => recalculateTemporarySwitchKmForOfficer(selectedOfficer)
+            : null
+        }
         recalculatingKm={kmRecalcBusy}
+        recalculatingSwitchKm={switchKmRecalcBusy}
         recalculationResult={kmRecalcResult}
         fullTechnicalAccess={fullTechnicalAccess}
         canReviewCheckoutExceptions={canReviewCheckoutExceptions}
@@ -8739,6 +8886,20 @@ export default function FOActivities() {
               >
                 <RefreshCw className={`h-4 w-4 ${batchKmRecalcBusy ? "animate-spin" : ""}`} />
                 {batchKmRecalcBusy ? "Recalculating..." : "Recalculate All KM"}
+              </button>
+            </div>
+          ) : null}
+          {canUseTemporarySwitchKm ? (
+            <div className="flex items-end">
+              <button
+                type="button"
+                onClick={() => recalculateTemporarySwitchKmForOfficer(selectedOfficer)}
+                disabled={switchKmRecalcBusy}
+                className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-orange-200 bg-orange-50 px-3 text-sm font-black text-orange-800 hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-60"
+                title="Temporary Bike to non-bike switch KM recalculation"
+              >
+                <RefreshCw className={`h-4 w-4 ${switchKmRecalcBusy ? "animate-spin" : ""}`} />
+                {switchKmRecalcBusy ? "Temporary Switch KM..." : "Temporary Switch KM"}
               </button>
             </div>
           ) : null}
@@ -9063,7 +9224,13 @@ export default function FOActivities() {
                   closeSupportActions();
                 }}
                 onRecalculateKm={recalculateSelectedOfficerKm}
+                onTemporarySwitchKm={
+                  canRunTemporarySwitchKm
+                    ? () => recalculateTemporarySwitchKmForOfficer(supportOfficer || routeOfficer)
+                    : null
+                }
                 recalculatingKm={kmRecalcBusy}
+                recalculatingSwitchKm={switchKmRecalcBusy}
                 recalculationResult={kmRecalcResult}
                 foSafeKm={selectedActualTravelMetrics}
                 siteVisitCount={(supportOfficer || routeOfficer)?.visits?.length || 0}
