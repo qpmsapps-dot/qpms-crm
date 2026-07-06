@@ -8,6 +8,7 @@ const MAX_SPEED_KMPH = 120;
 const DUPLICATE_WINDOW_SECONDS = 10;
 const MIN_MEANINGFUL_FINAL_RETURN_LEG_KM = 0.05;
 const DEFAULT_MAX_GOOGLE_DIRECTIONS_CALLS = 25;
+const SWITCH_TIME_ANCHOR_MAX_GAP_MINUTES = 60;
 const ATTENDANCE_SELECT_COLUMNS = [
   'id',
   'fo_user_id',
@@ -559,6 +560,250 @@ function normalizeTravelMode(value) {
     : 'bike';
 }
 
+function isBikeTravelMode(value) {
+  const mode = normalizeTravelMode(value);
+  return mode === 'bike' || mode === 'own_vehicle';
+}
+
+function truthyMetadataFlag(value) {
+  return value === true || String(value || '').trim().toLowerCase() === 'true';
+}
+
+function parseValidDate(value) {
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
+function suspectsMultipleTravelModeSwitches(metadata = {}) {
+  const historyKeys = [
+    'travel_mode_history',
+    'travel_mode_switch_history',
+    'travel_mode_switches',
+    'mode_switch_history',
+    'mode_switches',
+  ];
+  if (historyKeys.some((key) => Array.isArray(metadata[key]) && metadata[key].length > 1)) {
+    return true;
+  }
+  const countValues = [
+    metadata.travel_mode_switch_count,
+    metadata.travel_mode_change_count,
+    metadata.mode_switch_count,
+    metadata.mode_change_count,
+  ];
+  return countValues.some((value) => Number(value) > 1);
+}
+
+function emptySwitchFallbackMetadata({ manualReviewRequired = false, reason = null } = {}) {
+  return {
+    temporary_switch_time_km_fallback: false,
+    temporary_switch_km_recalc_run: true,
+    temporary_logic_remove_after_travel_legs: true,
+    switch_time_fallback_direction: null,
+    switch_time_changed_at: null,
+    switch_time_anchor_log_id: null,
+    switch_time_anchor_captured_at: null,
+    switch_time_anchor_lat: null,
+    switch_time_anchor_lng: null,
+    switch_time_payable_window_start: null,
+    switch_time_payable_window_end: null,
+    switch_time_payable_km: null,
+    manual_review_required: manualReviewRequired,
+    manual_review_reason: reason,
+  };
+}
+
+function switchFallbackManualReview(reason, extra = {}) {
+  return {
+    applicable: false,
+    overridePayableKm: true,
+    approvedKm: 0,
+    routeSyncStatus: 'manual_review_required_switch_time_fallback',
+    reviewFlag: 'SWITCH_TIME_FALLBACK_MANUAL_REVIEW',
+    metadata: {
+      ...emptySwitchFallbackMetadata({ manualReviewRequired: true, reason }),
+      ...extra,
+    },
+  };
+}
+
+async function hasTravelLegRows(client, attendance) {
+  const { data, error } = await client
+    .from('fo_travel_legs')
+    .select('id')
+    .eq('attendance_id', attendance.id)
+    .limit(1);
+  if (error) {
+    const message = String(error.message || '').toLowerCase();
+    const missingTable =
+      error.code === 'PGRST205' ||
+      error.code === '42P01' ||
+      message.includes('fo_travel_legs') ||
+      message.includes('schema cache');
+    if (missingTable) return false;
+    throw error;
+  }
+  return Boolean(data?.length);
+}
+
+function closestPointAtOrBefore(points = [], switchTime) {
+  return [...points]
+    .filter((point) => point.capturedAt && point.capturedAt <= switchTime)
+    .sort((a, b) => b.capturedAt - a.capturedAt)[0] || null;
+}
+
+function closestPointAtOrAfter(points = [], switchTime) {
+  return [...points]
+    .filter((point) => point.capturedAt && point.capturedAt >= switchTime)
+    .sort((a, b) => a.capturedAt - b.capturedAt)[0] || null;
+}
+
+function minutesBetween(a, b) {
+  if (!a || !b) return null;
+  return Math.abs(a.getTime() - b.getTime()) / 60000;
+}
+
+function pointsInWindow(points = [], start, end) {
+  return points.filter((point) => {
+    if (!point.capturedAt) return false;
+    if (start && point.capturedAt < start) return false;
+    if (end && point.capturedAt > end) return false;
+    return true;
+  });
+}
+
+async function temporarySwitchTimeFallback(client, attendance, points, options = {}) {
+  const metadata = safeAttendanceMetadata(attendance);
+  const hasSwitchMetadata = Boolean(
+    metadata.previous_travel_mode ||
+      metadata.travel_mode_changed_at ||
+      truthyMetadataFlag(metadata.phase2_travel_leg_todo),
+  );
+  if (!hasSwitchMetadata) {
+    return options.requireSwitchTimeFallback
+      ? switchFallbackManualReview('missing_switch_mode_metadata')
+      : null;
+  }
+
+  if (await hasTravelLegRows(client, attendance)) {
+    return options.requireSwitchTimeFallback
+      ? switchFallbackManualReview('travel_legs_already_exist')
+      : null;
+  }
+
+  const rawPreviousMode = String(metadata.previous_travel_mode || '').trim();
+  const rawCurrentMode = String(attendance?.travel_mode || metadata.travel_mode || '').trim();
+  if (!rawPreviousMode || !rawCurrentMode) {
+    return switchFallbackManualReview('missing_previous_or_current_travel_mode', {});
+  }
+
+  const previousMode = normalizeTravelMode(rawPreviousMode);
+  const currentMode = normalizeTravelMode(rawCurrentMode);
+  const previousBike = isBikeTravelMode(previousMode);
+  const currentBike = isBikeTravelMode(currentMode);
+  const direction = previousBike && !currentBike
+    ? 'bike_to_non_bike'
+    : !previousBike && currentBike
+      ? 'non_bike_to_bike'
+      : null;
+
+  if (suspectsMultipleTravelModeSwitches(metadata)) {
+    return switchFallbackManualReview('multiple_switches_suspected', {
+      switch_time_fallback_direction: direction,
+    });
+  }
+  if (!direction) return null;
+
+  const switchTime = parseValidDate(metadata.travel_mode_changed_at);
+  if (!switchTime) {
+    return switchFallbackManualReview('missing_or_invalid_travel_mode_changed_at', {
+      switch_time_fallback_direction: direction,
+    });
+  }
+  if (points.length < 5) {
+    return switchFallbackManualReview('too_few_gps_logs_for_switch_time_fallback', {
+      switch_time_fallback_direction: direction,
+      switch_time_changed_at: switchTime.toISOString(),
+    });
+  }
+
+  const anchor = direction === 'bike_to_non_bike'
+    ? closestPointAtOrBefore(points, switchTime)
+    : closestPointAtOrAfter(points, switchTime);
+  if (!anchor) {
+    return switchFallbackManualReview(
+      direction === 'bike_to_non_bike'
+        ? 'missing_gps_anchor_before_switch'
+        : 'missing_gps_anchor_after_switch',
+      {
+        switch_time_fallback_direction: direction,
+        switch_time_changed_at: switchTime.toISOString(),
+      },
+    );
+  }
+
+  const anchorGapMinutes = minutesBetween(anchor.capturedAt, switchTime);
+  if (anchorGapMinutes !== null && anchorGapMinutes > SWITCH_TIME_ANCHOR_MAX_GAP_MINUTES) {
+    return switchFallbackManualReview('switch_time_anchor_gap_too_large', {
+      switch_time_fallback_direction: direction,
+      switch_time_changed_at: switchTime.toISOString(),
+      switch_time_anchor_log_id: anchor.id || null,
+      switch_time_anchor_captured_at: anchor.capturedAt.toISOString(),
+      switch_time_anchor_lat: anchor.latitude,
+      switch_time_anchor_lng: anchor.longitude,
+      switch_time_anchor_gap_minutes: Number(anchorGapMinutes.toFixed(1)),
+    });
+  }
+
+  const windowStart = direction === 'bike_to_non_bike'
+    ? parseValidDate(attendance.login_time)
+    : anchor.capturedAt;
+  const windowEnd = direction === 'bike_to_non_bike'
+    ? anchor.capturedAt
+    : parseValidDate(attendance.logout_time) || new Date();
+  const windowPoints = pointsInWindow(points, windowStart, windowEnd);
+  if (windowPoints.length < 2) {
+    return switchFallbackManualReview('too_few_gps_points_in_payable_window', {
+      switch_time_fallback_direction: direction,
+      switch_time_changed_at: switchTime.toISOString(),
+      switch_time_anchor_log_id: anchor.id || null,
+      switch_time_anchor_captured_at: anchor.capturedAt.toISOString(),
+      switch_time_anchor_lat: anchor.latitude,
+      switch_time_anchor_lng: anchor.longitude,
+      switch_time_payable_window_start: windowStart?.toISOString() || null,
+      switch_time_payable_window_end: windowEnd?.toISOString() || null,
+    });
+  }
+
+  const windowCalculation = await calculateActualTravelKm(windowPoints, options);
+  const payableKm = Number(windowCalculation.actualTravelKm.toFixed(2));
+  return {
+    applicable: true,
+    overridePayableKm: true,
+    approvedKm: payableKm,
+    routeSyncStatus: `temporary_switch_time_${direction}`,
+    reviewFlag: 'TEMPORARY_SWITCH_TIME_KM_FALLBACK',
+    metadata: {
+      temporary_switch_time_km_fallback: true,
+      temporary_switch_km_recalc_run: true,
+      temporary_logic_remove_after_travel_legs: true,
+      switch_time_fallback_direction: direction,
+      switch_time_changed_at: switchTime.toISOString(),
+      switch_time_anchor_log_id: anchor.id || null,
+      switch_time_anchor_captured_at: anchor.capturedAt.toISOString(),
+      switch_time_anchor_lat: anchor.latitude,
+      switch_time_anchor_lng: anchor.longitude,
+      switch_time_anchor_gap_minutes: anchorGapMinutes === null ? null : Number(anchorGapMinutes.toFixed(1)),
+      switch_time_payable_window_start: windowStart?.toISOString() || null,
+      switch_time_payable_window_end: windowEnd?.toISOString() || null,
+      switch_time_payable_km: payableKm,
+      switch_time_window_points_used: windowPoints.length,
+      manual_review_required: false,
+      manual_review_reason: null,
+    },
+  };
+}
+
 function travelModeAllowsPayableKm(attendance) {
   const metadata = safeAttendanceMetadata(attendance);
   const travelMode = normalizeTravelMode(attendance?.travel_mode || metadata.travel_mode);
@@ -873,20 +1118,29 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   if (rows.length < 5) reviewFlags.push('LOW_GPS_LOG_COUNT');
   const ratePerKm = normalizeNumber(attendance.rate_per_km) || RATE_PER_KM;
   const travelPolicy = travelModeAllowsPayableKm(attendance);
+  const switchFallback = options.enableSwitchTimeFallback === true
+    ? await temporarySwitchTimeFallback(client, attendance, points, options)
+    : null;
   const calculatedPayableKm = Number((storedRouteKm + finalReturnLegKm).toFixed(2));
-  const approvedKm = travelPolicy.payableKmAllowed ? calculatedPayableKm : 0;
-  const petrolAmount = travelPolicy.payableKmAllowed
-    ? Number((approvedKm * ratePerKm).toFixed(2))
-    : 0;
+  let approvedKm = travelPolicy.payableKmAllowed ? calculatedPayableKm : 0;
+  if (switchFallback?.overridePayableKm) {
+    approvedKm = switchFallback.approvedKm;
+  }
+  const petrolAmount = Number((approvedKm * ratePerKm).toFixed(2));
   let routeSyncStatus = approvedKm > 0 ? 'site_visit_route_km_sum' : 'review_required';
   if (finalReturnLegKm > 0) {
     routeSyncStatus = finalReturnLeg.provider === 'haversine_fallback'
       ? 'site_visit_route_km_sum_plus_final_leg_fallback'
       : 'site_visit_route_km_sum_plus_final_leg';
   }
-  if (!travelPolicy.payableKmAllowed) {
+  if (switchFallback?.routeSyncStatus) {
+    routeSyncStatus = switchFallback.routeSyncStatus;
+  } else if (!travelPolicy.payableKmAllowed) {
     reviewFlags.push('NON_PAYABLE_TRAVEL_MODE');
     routeSyncStatus = 'non_payable_travel_mode';
+  }
+  if (switchFallback?.metadata?.manual_review_required === true) {
+    reviewFlags.push(switchFallback.reviewFlag || 'SWITCH_TIME_FALLBACK_MANUAL_REVIEW');
   }
   log('FINAL_APPROVED_KM', {
     attendance_id: attendance.id,
@@ -895,6 +1149,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     calculated_payable_km: calculatedPayableKm,
     travel_mode: travelPolicy.travelMode,
     payable_km_allowed: travelPolicy.payableKmAllowed,
+    temporary_switch_time_km_fallback: switchFallback?.applicable === true,
     approved_km: approvedKm,
   });
   debugLog('FINAL LEG RESULT', {
@@ -912,6 +1167,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     routeSyncStatus,
   });
 
+  const switchFallbackMetadata = switchFallback?.metadata || {};
   const attendanceUpdate = {
     actual_km: approvedKm,
     total_route_km: approvedKm,
@@ -951,6 +1207,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
       payable_km_allowed: travelPolicy.payableKmAllowed,
       recalculated_total_route_km: approvedKm,
       recalculated_petrol_amount: petrolAmount,
+      ...switchFallbackMetadata,
       km_recalculated_at: new Date().toISOString(),
       final_return_leg_from: finalReturnLeg.origin
         ? {
@@ -1031,6 +1288,11 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     site_visits_missing_route_km: visitsMissingRouteKm,
     review_flags: [...new Set(reviewFlags)],
     route_sync_status: routeSyncStatus,
+    temporary_switch_time_km_fallback: switchFallback?.metadata?.temporary_switch_time_km_fallback === true,
+    switch_time_fallback_direction: switchFallback?.metadata?.switch_time_fallback_direction || null,
+    switch_time_payable_km: switchFallback?.metadata?.switch_time_payable_km ?? null,
+    manual_review_required: switchFallback?.metadata?.manual_review_required === true,
+    manual_review_reason: switchFallback?.metadata?.manual_review_reason || null,
     segments_accepted: calculation.segmentsAccepted,
     segments_reconstructed: calculation.segmentsReconstructed,
     segments_rejected: calculation.segmentsRejected,
@@ -1048,6 +1310,14 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   };
   log('FO_KM_RECALC_COMPLETED', result);
   return result;
+}
+
+export async function recalculateSwitchModeKmTemporary(serviceRoleClient, payload = {}, options = {}) {
+  return recalculateFoKm(serviceRoleClient, payload, {
+    ...options,
+    enableSwitchTimeFallback: true,
+    requireSwitchTimeFallback: true,
+  });
 }
 
 function normalizeDateInput(value, fallback = indiaDateKey()) {

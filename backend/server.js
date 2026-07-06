@@ -4,7 +4,12 @@ import dotenv from 'dotenv';
 import express from 'express';
 import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
-import { recalculateFoKm, recalculateFoKmBatch, recalculateFoKmForToday } from './foKmRecalculationService.js';
+import {
+  recalculateFoKm,
+  recalculateFoKmBatch,
+  recalculateFoKmForToday,
+  recalculateSwitchModeKmTemporary,
+} from './foKmRecalculationService.js';
 import {
   cleanupStaleFoSessions,
   cleanupStaleLiveStatusReferences,
@@ -567,6 +572,25 @@ function requireFoKmBatchRecalculationPermission(request, response, next) {
     response.status(403).json({
       ok: false,
       message: `Role ${request.userRole || 'Unknown'} cannot run batch KM recalculation.`,
+    });
+    return;
+  }
+  next();
+}
+
+function hasTemporarySwitchKmPermission(profile) {
+  if (!profile || profile.is_active !== true) return false;
+  if (String(profile.status || '').trim().toLowerCase() !== 'active') return false;
+  return new Set(['ADMIN', 'QPMSADMIN', 'DEVELOPER']).has(
+    normalizePermissionRole(profile.role),
+  );
+}
+
+function requireTemporarySwitchKmPermission(request, response, next) {
+  if (!hasTemporarySwitchKmPermission(request.profile)) {
+    response.status(403).json({
+      ok: false,
+      message: `Role ${request.userRole || 'Unknown'} cannot run temporary switch KM recalculation.`,
     });
     return;
   }
@@ -5061,6 +5085,36 @@ app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRec
     });
   } finally {
     foKmRecalculateAllLocks.delete(lockDate);
+  }
+});
+
+app.post('/api/fo/km/recalculate-switch-mode', requireSupabaseJwt, requireTemporarySwitchKmPermission, async (request, response) => {
+  const payload = request.body || {};
+  const lockKey = `switch_mode:${foKmRecalculationLockKey(payload)}`;
+  const lockDate = normalizeFoKmRecalculationDate(payload.date);
+  if (foKmRecalculateAllLocks.has(lockDate) || foKmRecalculationLocks.has(lockKey)) {
+    response.status(409).json({ ok: false, message: FO_KM_RECALCULATION_RUNNING_MESSAGE });
+    return;
+  }
+  foKmRecalculationLocks.add(lockKey);
+  try {
+    const client = requireServiceRoleSupabase();
+    await assertServiceRoleAuthAdminAccess(client);
+    const result = await recalculateSwitchModeKmTemporary(client, payload, {
+      maxGoogleDirectionsCalls: payload.max_google_directions_calls,
+    });
+    response.json({ ok: true, temporary: true, ...result });
+  } catch (error) {
+    const safeError = safeServiceRoleError(error, 'service_role_auth_admin_failed');
+    response.status(safeError.statusCode).json({
+      ok: false,
+      message: safeError.message,
+      ...(safeError.diagnosticReason
+        ? { diagnosticReason: safeError.diagnosticReason }
+        : {}),
+    });
+  } finally {
+    foKmRecalculationLocks.delete(lockKey);
   }
 });
 
