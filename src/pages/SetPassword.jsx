@@ -6,11 +6,11 @@ import { usePageTitle } from '../hooks/usePageTitle.js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import { completePasswordSetup } from '../services/api.js';
 
-const expiredInviteMessage = 'Invite link is expired or not opened correctly. Please request a new invite.';
-const genericPasswordError = 'Unable to create password. Please contact admin for a new invite.';
-let inviteSessionBootstrapPromise = null;
+const expiredLinkMessage = 'Password setup link is expired or not opened correctly. Please request a new invite or password reset.';
+const genericPasswordError = 'Unable to save password. Please try again or request a new link.';
+let passwordSessionBootstrapPromise = null;
 
-function readInviteParams() {
+function readPasswordSetupParams() {
   if (typeof window === 'undefined') return new URLSearchParams();
   const params = new URLSearchParams(window.location.search);
   const hash = window.location.hash.startsWith('#')
@@ -23,7 +23,7 @@ function readInviteParams() {
   return params;
 }
 
-function cleanInviteTokensFromUrl() {
+function cleanPasswordTokensFromUrl() {
   if (typeof window === 'undefined') return;
   const url = `${window.location.pathname}${window.location.search && !window.location.search.includes('access_token') && !window.location.search.includes('refresh_token') && !window.location.search.includes('code=') ? window.location.search : ''}`;
   window.history.replaceState({}, document.title, url || '/set-password');
@@ -32,10 +32,10 @@ function cleanInviteTokensFromUrl() {
 function passwordSaveMessage(error) {
   const message = String(error?.message || error || '').toLowerCase();
   if (message.includes('session') || message.includes('jwt') || message.includes('auth session missing')) {
-    return expiredInviteMessage;
+    return expiredLinkMessage;
   }
   if (message.includes('expired') || message.includes('invalid') || message.includes('token')) {
-    return expiredInviteMessage;
+    return expiredLinkMessage;
   }
   if (message.includes('password') && (message.includes('weak') || message.includes('short') || message.includes('least'))) {
     return 'Password must meet the minimum security requirement.';
@@ -53,22 +53,23 @@ export default function SetPassword() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [setupType, setSetupType] = useState('');
 
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
       queueMicrotask(() => {
-        setError('This invite link is invalid or expired. Please contact admin for a new invite.');
+        setError('This password setup link is invalid or expired. Please request a new link.');
         setReady(true);
       });
       return undefined;
     }
     let active = true;
-    async function establishInviteSession() {
-      const params = readInviteParams();
+    async function establishPasswordSession() {
+      const params = readPasswordSetupParams();
       const accessToken = params.get('access_token');
       const refreshToken = params.get('refresh_token');
       const code = params.get('code');
-      const type = params.get('type');
+      const type = String(params.get('type') || (code ? 'recovery' : '')).trim().toLowerCase();
 
       if (accessToken && refreshToken) {
         const { data, error: setSessionError } = await supabase.auth.setSession({
@@ -77,38 +78,39 @@ export default function SetPassword() {
         });
         if (setSessionError) throw setSessionError;
         if (import.meta.env.DEV) {
-          console.info('[myQPMS SetPassword] Invite session established from tokens', { type });
+          console.info('[myQPMS SetPassword] Session established from tokens', { type });
         }
-        cleanInviteTokensFromUrl();
-        return data.session;
+        cleanPasswordTokensFromUrl();
+        return { session: data.session, type };
       }
 
       if (code) {
         const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
         if (exchangeError) throw exchangeError;
         if (import.meta.env.DEV) {
-          console.info('[myQPMS SetPassword] Invite session established from code', { type });
+          console.info('[myQPMS SetPassword] Session established from code', { type });
         }
-        cleanInviteTokensFromUrl();
-        return data.session;
+        cleanPasswordTokensFromUrl();
+        return { session: data.session, type };
       }
 
       const { data, error: sessionError } = await supabase.auth.getSession();
       if (sessionError) throw sessionError;
-      return data.session;
+      return { session: data.session, type };
     }
 
-    inviteSessionBootstrapPromise ||= establishInviteSession();
-    inviteSessionBootstrapPromise
-      .then((session) => {
+    passwordSessionBootstrapPromise ||= establishPasswordSession();
+    passwordSessionBootstrapPromise
+      .then(({ session, type }) => {
         if (!active) return;
         if (!session) {
-          setError(expiredInviteMessage);
+          setError(expiredLinkMessage);
         }
+        setSetupType(type);
         setReady(true);
       })
       .catch((sessionError) => {
-        inviteSessionBootstrapPromise = null;
+        passwordSessionBootstrapPromise = null;
         if (!active) return;
         console.warn('[myQPMS SetPassword] Session verification failed', sessionError);
         setError(passwordSaveMessage(sessionError));
@@ -136,19 +138,19 @@ export default function SetPassword() {
       const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
       if (sessionError) throw sessionError;
       if (!sessionData.session) {
-        setError(expiredInviteMessage);
+        setError(expiredLinkMessage);
         return;
       }
       const { error: updateError } = await supabase.auth.updateUser({ password });
       if (updateError) throw updateError;
-      try {
-        await completePasswordSetup();
-      } catch (completeError) {
-        console.warn('[myQPMS SetPassword] Profile completion sync failed', completeError);
-        setError('Password was created, but profile status could not be updated. Please try again or contact admin.');
-        return;
+      if (setupType !== 'recovery') {
+        try {
+          await completePasswordSetup();
+        } catch (completeError) {
+          console.warn('[myQPMS SetPassword] Profile completion sync failed', completeError);
+        }
       }
-      setMessage('Password created successfully. Please login to continue.');
+      setMessage('Password saved successfully. Please login to continue.');
       await supabase.auth.signOut();
       window.setTimeout(() => navigate('/login', { replace: true }), 900);
     } catch (saveError) {

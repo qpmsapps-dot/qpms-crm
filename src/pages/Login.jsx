@@ -11,12 +11,13 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { motion as Motion } from 'framer-motion';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Logo from '../components/Logo.jsx';
 import { useAuth } from '../context/auth-context.js';
 import { findMockUser } from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
+import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import { isDemoReadOnlyUser } from '../utils/demoAccess.js';
 
 const socialLinks = [
@@ -30,6 +31,38 @@ const fadeUp = {
   hidden: { opacity: 0, y: 18 },
   visible: { opacity: 1, y: 0 },
 };
+
+const productionPasswordRedirectUrl = 'https://myqpms.up.railway.app/set-password';
+
+function readAuthUrlParams() {
+  if (typeof window === 'undefined') return new URLSearchParams();
+  const params = new URLSearchParams(window.location.search);
+  const hash = window.location.hash.startsWith('#')
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+  const hashParams = new URLSearchParams(hash);
+  for (const [key, value] of hashParams.entries()) {
+    if (!params.has(key)) params.set(key, value);
+  }
+  return params;
+}
+
+function hasRecoveryUrlParams() {
+  const params = readAuthUrlParams();
+  const type = String(params.get('type') || '').trim().toLowerCase();
+  const hasTokenSession = Boolean(params.get('access_token') && params.get('refresh_token'));
+  const hasCode = Boolean(params.get('code'));
+  return (type === 'recovery' && (hasTokenSession || hasCode)) || hasTokenSession;
+}
+
+function passwordRecoveryRedirectUrl() {
+  if (typeof window === 'undefined') return productionPasswordRedirectUrl;
+  const host = window.location.hostname;
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return `${window.location.origin}/set-password`;
+  }
+  return productionPasswordRedirectUrl;
+}
 
 function initialsForName(name = '', email = '') {
   const source = String(name || email || '').trim();
@@ -78,12 +111,20 @@ export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResetSending, setIsResetSending] = useState(false);
   const [isWelcoming, setIsWelcoming] = useState(false);
   const [welcomeUser, setWelcomeUser] = useState(null);
   const navigate = useNavigate();
   const { loginWithAppPassword, loginWithPassword, isDemoAuthEnabled } = useAuth();
   usePageTitle('Sign in');
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !hasRecoveryUrlParams()) return;
+    const nextUrl = `/set-password${window.location.search || ''}${window.location.hash || ''}`;
+    window.location.replace(nextUrl);
+  }, []);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -148,6 +189,37 @@ export default function Login() {
           setIsSubmitting(false);
         });
     }, 650);
+  }
+
+  async function handleForgotPassword() {
+    setError('');
+    setNotice('');
+    const email = window.prompt('Enter your registered email address for password reset:', username.trim());
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    if (!normalizedEmail) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+    if (!isSupabaseConfigured || !supabase) {
+      setError('Password reset is not configured. Please contact admin.');
+      return;
+    }
+    setIsResetSending(true);
+    try {
+      const redirectTo = passwordRecoveryRedirectUrl();
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+        redirectTo,
+      });
+      if (resetError) throw resetError;
+      setUsername(normalizedEmail);
+      setNotice('Password reset link sent. Please check your email inbox.');
+    } catch (resetError) {
+      console.warn('[myQPMS Login] Password recovery failed', resetError);
+      setError(resetError.message || 'Unable to send password reset link. Please try again.');
+    } finally {
+      setIsResetSending(false);
+    }
   }
 
   const matchedWelcomeUser = isDemoAuthEnabled ? findMockUser(username, password) : null;
@@ -249,14 +321,24 @@ export default function Login() {
                   />
                   Remember me
                 </label>
-                <button type="button" className="text-sm font-semibold text-qpms-600 transition hover:text-qpms-700">
-                  Forgot password?
+                <button
+                  type="button"
+                  onClick={handleForgotPassword}
+                  disabled={isResetSending}
+                  className="text-sm font-semibold text-qpms-600 transition hover:text-qpms-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isResetSending ? 'Sending reset...' : 'Forgot password?'}
                 </button>
               </div>
 
               {error ? (
                 <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
                   {error}
+                </p>
+              ) : null}
+              {notice ? (
+                <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
+                  {notice}
                 </p>
               ) : null}
 
