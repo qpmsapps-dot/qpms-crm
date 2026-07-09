@@ -107,6 +107,7 @@ class StartDayAuthValidation {
 
 class SupabaseService {
   static const travelClaimProofBucket = 'travel-claim-proofs';
+  static const activityUploadBucket = 'fo-activity-uploads';
 
   static const startDayAttendancePayloadKeys = <String>[
     'fo_user_id',
@@ -765,6 +766,179 @@ class SupabaseService {
     return row?['id']?.toString();
   }
 
+  static Future<String?> createActivitySubmission({
+    required FoUser user,
+    required Attendance attendance,
+    required SiteVisit visit,
+    required String activityType,
+    required String remarks,
+    double? latitude,
+    double? longitude,
+    double? accuracy,
+    String? localId,
+  }) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'tasks',
+      action: 'ACTIVITY_SUBMISSION_AUTH_SESSION_INVALID',
+    );
+    final attendanceId = attendance.remoteId?.trim();
+    final siteVisitId = visit.remoteId?.trim();
+    if (!isValidUuid(attendanceId)) {
+      throw StateError('Attendance must be synced before submitting activity.');
+    }
+    if (!isValidUuid(siteVisitId)) {
+      throw StateError('Site visit must be synced before submitting activity.');
+    }
+    final cleanRemarks = remarks.trim();
+    if (cleanRemarks.isEmpty) {
+      throw StateError('Remarks are required.');
+    }
+    final metadata = <String, dynamic>{
+      'store_name': visit.storeName,
+      'client_name': visit.clientName,
+      'state': visit.state,
+    };
+    if (visit.business != null) metadata['business'] = visit.business;
+    if (latitude != null) metadata['submission_latitude'] = latitude;
+    if (longitude != null) metadata['submission_longitude'] = longitude;
+    if (accuracy != null) metadata['submission_accuracy'] = accuracy;
+    final row = await client
+        .from('fo_activity_submissions')
+        .insert({
+          'fo_user_id': user.employeeCode,
+          'employee_code': user.employeeCode,
+          'attendance_id': attendanceId,
+          'site_visit_id': siteVisitId,
+          'store_id': _uuidOrNull(visit.storeId),
+          'store_code': visit.storeCode.trim().isEmpty ? null : visit.storeCode,
+          'activity_type': activityType,
+          'status': 'submitted',
+          'remarks': cleanRemarks,
+          'submitted_at': DateTime.now().toUtc().toIso8601String(),
+          'local_id': localId,
+          'metadata': metadata,
+        })
+        .select('id')
+        .maybeSingle();
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'tasks',
+      action: 'ACTIVITY_SUBMISSION_CREATED',
+      error: 'activity_type=$activityType submission_id=${row?['id'] ?? '--'}',
+    );
+    return row?['id']?.toString();
+  }
+
+  static Future<String> uploadActivityFile({
+    required FoUser user,
+    required Attendance attendance,
+    required String activityType,
+    required String submissionId,
+    required String fileName,
+    required Uint8List bytes,
+    required String contentType,
+    required String extension,
+  }) async {
+    final attendanceDate = attendance.attendanceDate?.trim().isNotEmpty == true
+        ? attendance.attendanceDate!.trim()
+        : indiaDateKey(attendance.startTime);
+    final safeEmployeeCode = _storagePathPart(user.employeeCode);
+    final safeActivityType = _storagePathPart(activityType);
+    final safeSubmissionId = _storagePathPart(submissionId);
+    final baseFileName = fileName.trim().replaceFirst(RegExp(r'\.[^.]+$'), '');
+    final safeFileName = _storagePathPart(
+      baseFileName.isEmpty ? 'activity_file' : baseFileName,
+    );
+    final timestamp = _storageTimestamp(DateTime.now());
+    final safeExtension = _storageExtension(extension);
+    if (bytes.isEmpty || bytes.length > 5 * 1024 * 1024) {
+      throw StateError('Inspection photo must be 5 MB or less.');
+    }
+    final path =
+        '$safeEmployeeCode/$attendanceDate/$safeActivityType/$safeSubmissionId/${timestamp}_$safeFileName.$safeExtension';
+    await client.storage
+        .from(activityUploadBucket)
+        .uploadBinary(
+          path,
+          bytes,
+          fileOptions: FileOptions(
+            contentType: contentType,
+            cacheControl: '3600',
+            upsert: false,
+            metadata: {'original_file_name': fileName},
+          ),
+        );
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'tasks',
+      action: 'ACTIVITY_FILE_UPLOADED',
+      error: 'submission_id=$submissionId path=$path',
+    );
+    return '$activityUploadBucket/$path';
+  }
+
+  static Future<void> deleteActivityFile(String fileUrl) async {
+    final path = fileUrl
+        .replaceFirst(RegExp('^$activityUploadBucket/'), '')
+        .replaceFirst(RegExp(r'^/+'), '');
+    if (path.trim().isEmpty) return;
+    await client.storage.from(activityUploadBucket).remove([path]);
+  }
+
+  static Future<String?> createActivityUpload({
+    required FoUser user,
+    required Attendance attendance,
+    required SiteVisit visit,
+    required String submissionId,
+    required String activityType,
+    required String uploadRole,
+    required String fileUrl,
+    required String fileName,
+    required String fileType,
+    required int fileSize,
+    String? localId,
+  }) async {
+    final attendanceId = attendance.remoteId?.trim();
+    final siteVisitId = visit.remoteId?.trim();
+    if (!isValidUuid(submissionId)) {
+      throw StateError('Activity submission is missing.');
+    }
+    final row = await client
+        .from('fo_activity_uploads')
+        .insert({
+          'submission_id': submissionId,
+          'fo_user_id': user.employeeCode,
+          'employee_code': user.employeeCode,
+          'attendance_id': isValidUuid(attendanceId) ? attendanceId : null,
+          'site_visit_id': isValidUuid(siteVisitId) ? siteVisitId : null,
+          'store_code': visit.storeCode.trim().isEmpty ? null : visit.storeCode,
+          'activity_type': activityType,
+          'upload_role': uploadRole,
+          'file_url': fileUrl,
+          'file_name': fileName,
+          'file_type': fileType,
+          'file_size': fileSize,
+          'storage_bucket': activityUploadBucket,
+          'uploaded_at': DateTime.now().toUtc().toIso8601String(),
+          'local_id': localId,
+          'metadata': {
+            'store_name': visit.storeName,
+            'client_name': visit.clientName,
+            'state': visit.state,
+          },
+        })
+        .select('id')
+        .maybeSingle();
+    await CrashLogService.record(
+      employeeCode: user.employeeCode,
+      screen: 'tasks',
+      action: 'ACTIVITY_UPLOAD_ROW_CREATED',
+      error: 'submission_id=$submissionId upload_id=${row?['id'] ?? '--'}',
+    );
+    return row?['id']?.toString();
+  }
+
   static Future<String?> createTravelLeg({
     required FoUser user,
     required TravelLeg travelLeg,
@@ -1016,6 +1190,23 @@ class SupabaseService {
         .eq('attendance_date', today)
         .eq('status', 'Completed')
         .order('login_time', ascending: false)
+        .limit(1);
+    final records = List<Map<String, dynamic>>.from(rows);
+    if (records.isEmpty) return null;
+    return _attendanceFromRow(records.first, user);
+  }
+
+  static Future<Attendance?> findAttendanceById({
+    required FoUser user,
+    required String attendanceId,
+  }) async {
+    final id = attendanceId.trim();
+    if (!isValidUuid(id)) return null;
+    final rows = await client
+        .from('fo_attendance')
+        .select('*')
+        .eq('id', id)
+        .eq('fo_user_id', user.employeeCode)
         .limit(1);
     final records = List<Map<String, dynamic>>.from(rows);
     if (records.isEmpty) return null;
@@ -2046,7 +2237,7 @@ class SupabaseService {
     return _locationLogFromRow(records.first);
   }
 
-  static Future<void> triggerFoKmRecalculation({
+  static Future<Map<String, dynamic>> triggerFoKmRecalculation({
     required String attendanceId,
     required String foUserId,
     String? date,
@@ -2081,6 +2272,9 @@ class SupabaseService {
               : 'KM recalculation failed: $text',
         );
       }
+      if (text.trim().isEmpty) return const {};
+      final decoded = jsonDecode(text);
+      return decoded is Map<String, dynamic> ? decoded : const {};
     } finally {
       client.close(force: true);
     }

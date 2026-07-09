@@ -1436,16 +1436,43 @@ class _HomeScreenState extends State<HomeScreen>
       if (endLocation.hasCoordinate &&
           SupabaseService.isValidUuid(attendance.remoteId)) {
         try {
-          await SupabaseService.triggerFoKmRecalculation(
+          final recalcResult = await SupabaseService.triggerFoKmRecalculation(
             attendanceId: attendance.remoteId!,
             foUserId: widget.user.employeeCode,
             date: attendance.attendanceDate,
           );
+          final refreshedAttendance = await SupabaseService.findAttendanceById(
+            user: widget.user,
+            attendanceId: attendance.remoteId!,
+          );
+          if (refreshedAttendance != null) {
+            attendance
+              ..endTime = refreshedAttendance.endTime ?? attendance.endTime
+              ..endLat = refreshedAttendance.endLat ?? attendance.endLat
+              ..endLng = refreshedAttendance.endLng ?? attendance.endLng
+              ..batteryEnd = refreshedAttendance.batteryEnd ?? battery
+              ..actualKm = refreshedAttendance.actualKm
+              ..eligibleKm = refreshedAttendance.eligibleKm
+              ..totalRouteKm = refreshedAttendance.totalRouteKm
+              ..metadata = refreshedAttendance.metadata;
+          } else {
+            final approvedKm = _numberFromRecalculation(
+              recalcResult['approved_km'] ??
+                  recalcResult['total_route_km'] ??
+                  recalcResult['new_total_route_km'],
+            );
+            if (approvedKm != null) {
+              attendance
+                ..eligibleKm = approvedKm
+                ..totalRouteKm = approvedKm;
+            }
+          }
           await CrashLogService.record(
             employeeCode: widget.user.employeeCode,
             screen: 'home',
             action: 'END_DAY_KM_RECALCULATION_TRIGGERED',
-            error: 'attendance_id=${attendance.remoteId}',
+            error:
+                'attendance_id=${attendance.remoteId} route_km=${attendance.eligibleKm}',
           );
         } catch (error, stackTrace) {
           await CrashLogService.record(
@@ -1551,6 +1578,12 @@ class _HomeScreenState extends State<HomeScreen>
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  double? _numberFromRecalculation(Object? value) {
+    if (value == null) return null;
+    if (value is num && value.isFinite) return value.toDouble();
+    return double.tryParse(value.toString());
   }
 
   Future<bool> _restoreSameDayAttendanceAfterCreateFailure() async {

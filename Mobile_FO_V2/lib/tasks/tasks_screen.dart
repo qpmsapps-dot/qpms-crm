@@ -1612,11 +1612,16 @@ class _TasksScreenState extends State<TasksScreen>
                   _activityCard(
                     width: width,
                     title: 'Inspection',
-                    subtitle: 'Coming Soon',
+                    subtitle: _activeVisit == null
+                        ? 'Check-in required'
+                        : 'Upload photos',
                     icon: Icons.content_paste_search_rounded,
-                    color: qpmsMuted,
-                    enabled: false,
-                    onTap: _showComingSoon,
+                    color: _activeVisit == null ? qpmsMuted : qpmsBlue,
+                    enabled: _activeVisit != null,
+                    disabledBadgeLabel: 'Check-In Required',
+                    onTap: _activeVisit == null
+                        ? () => _toast('Please check-in to a site first.')
+                        : () => _openActivity(_ActivityType.inspection),
                   ),
                   _activityCard(
                     width: width,
@@ -1702,6 +1707,7 @@ class _TasksScreenState extends State<TasksScreen>
     required IconData icon,
     required Color color,
     required bool enabled,
+    String disabledBadgeLabel = 'Coming Soon',
     VoidCallback? onTap,
   }) {
     return SizedBox(
@@ -1774,8 +1780,8 @@ class _TasksScreenState extends State<TasksScreen>
                         color: qpmsMuted.withValues(alpha: 0.28),
                       ),
                     ),
-                    child: const Text(
-                      'Coming Soon',
+                    child: Text(
+                      disabledBadgeLabel,
                       style: TextStyle(
                         color: qpmsMuted,
                         fontSize: 11,
@@ -1888,15 +1894,27 @@ class _TasksScreenState extends State<TasksScreen>
     );
   }
 
-  // ignore: unused_element
-  void _openActivity(_ActivityType type) {
+  void _openActivity(_ActivityType type) async {
     final visit = _activeVisit;
-    if (visit == null) return;
-    Navigator.of(context).push(
+    final attendance = _attendance ?? await LocalStore.getAttendance();
+    if (visit == null || attendance?.isActive != true) {
+      _toast('Please check-in to a site first.');
+      return;
+    }
+    if (!mounted) return;
+    final submitted = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) => _ActivityFormScreen(type: type, visit: visit),
+        builder: (_) => _ActivityFormScreen(
+          type: type,
+          visit: visit,
+          attendance: attendance!,
+          user: widget.user,
+        ),
       ),
     );
+    if (submitted == true && mounted) {
+      _toast('Inspection submitted successfully.');
+    }
   }
 
   void _showComingSoon() {
@@ -1916,10 +1934,17 @@ class _TasksScreenState extends State<TasksScreen>
 enum _ActivityType { inspection, deepCleaning, training }
 
 class _ActivityFormScreen extends StatefulWidget {
-  const _ActivityFormScreen({required this.type, required this.visit});
+  const _ActivityFormScreen({
+    required this.type,
+    required this.visit,
+    required this.attendance,
+    required this.user,
+  });
 
   final _ActivityType type;
   final SiteVisit visit;
+  final Attendance attendance;
+  final FoUser user;
 
   @override
   State<_ActivityFormScreen> createState() => _ActivityFormScreenState();
@@ -1931,6 +1956,7 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
   final List<XFile> _photos = [];
   final List<_CleaningArea> _areas = [_CleaningArea()];
   PlatformFile? _pdf;
+  bool _submitting = false;
 
   @override
   void dispose() {
@@ -2051,18 +2077,17 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
               Expanded(
                 child: FoOutlinedButton(
                   label: 'Save as Draft',
-                  onPressed: () =>
-                      _snack('Draft saved locally for this session.'),
+                  onPressed: _submitting
+                      ? null
+                      : () => _snack('Draft saved locally for this session.'),
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: FoPrimaryButton(
-                  label: 'Submit',
+                  label: _submitting ? 'Submitting...' : 'Submit',
                   icon: Icons.check_rounded,
-                  onPressed: () => _snack(
-                    'Activity submission UI is ready. Storage upload is not connected.',
-                  ),
+                  onPressed: _submitting ? null : _submitInspection,
                 ),
               ),
             ],
@@ -2070,6 +2095,161 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _submitInspection() async {
+    if (widget.type != _ActivityType.inspection) {
+      _snack('Coming Soon');
+      return;
+    }
+    final remarks = _remarks.text.trim();
+    if (remarks.isEmpty) {
+      _snack('Please enter inspection remarks.');
+      return;
+    }
+    if (_photos.isEmpty) {
+      _snack('Please add at least one inspection photo.');
+      return;
+    }
+    if (!SupabaseService.isReady) {
+      _snack(
+        'Activity submission requires internet. Please try again once online.',
+      );
+      return;
+    }
+    if (widget.attendance.isActive != true) {
+      _snack('Please Start Day before submitting activity.');
+      return;
+    }
+    if (widget.visit.isActive != true) {
+      _snack('Please check-in to a site before submitting activity.');
+      return;
+    }
+
+    setState(() => _submitting = true);
+    String? submissionId;
+    final orphanedUploadUrls = <String>[];
+    try {
+      Position? position;
+      try {
+        position = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 10),
+          ),
+        );
+      } catch (_) {
+        position = null;
+      }
+
+      submissionId = await SupabaseService.createActivitySubmission(
+        user: widget.user,
+        attendance: widget.attendance,
+        visit: widget.visit,
+        activityType: 'inspection',
+        remarks: remarks,
+        latitude: position?.latitude,
+        longitude: position?.longitude,
+        accuracy: position?.accuracy,
+        localId: newLocalId('activity-submission'),
+      );
+      if (!SupabaseService.isValidUuid(submissionId)) {
+        throw StateError('Inspection submission could not be created.');
+      }
+
+      for (var index = 0; index < _photos.length; index += 1) {
+        final photo = _photos[index];
+        final bytes = await photo.readAsBytes();
+        final extension = _fileExtension(photo.name);
+        final contentType = _imageContentType(extension);
+        final fileUrl = await SupabaseService.uploadActivityFile(
+          user: widget.user,
+          attendance: widget.attendance,
+          activityType: 'inspection',
+          submissionId: submissionId!,
+          fileName: photo.name.isEmpty
+              ? 'inspection_photo_${index + 1}'
+              : photo.name,
+          bytes: bytes,
+          contentType: contentType,
+          extension: extension,
+        );
+        orphanedUploadUrls.add(fileUrl);
+        try {
+          await SupabaseService.createActivityUpload(
+            user: widget.user,
+            attendance: widget.attendance,
+            visit: widget.visit,
+            submissionId: submissionId,
+            activityType: 'inspection',
+            uploadRole: 'inspection_photo',
+            fileUrl: fileUrl,
+            fileName: photo.name.isEmpty
+                ? 'inspection_photo_${index + 1}.$extension'
+                : photo.name,
+            fileType: contentType,
+            fileSize: bytes.length,
+            localId: newLocalId('activity-upload'),
+          );
+          orphanedUploadUrls.remove(fileUrl);
+        } catch (_) {
+          await SupabaseService.deleteActivityFile(fileUrl);
+          orphanedUploadUrls.remove(fileUrl);
+          rethrow;
+        }
+      }
+
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (error) {
+      for (final fileUrl in orphanedUploadUrls) {
+        try {
+          await SupabaseService.deleteActivityFile(fileUrl);
+        } catch (_) {
+          // Best-effort cleanup only; the user-facing error below remains the source of truth.
+        }
+      }
+      if (!mounted) return;
+      _snack(_activitySubmitErrorMessage(error));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  String _fileExtension(String fileName) {
+    final clean = fileName.trim().toLowerCase();
+    final extension = clean.contains('.') ? clean.split('.').last : 'jpg';
+    switch (extension) {
+      case 'jpeg':
+        return 'jpg';
+      case 'png':
+        return 'png';
+      case 'jpg':
+      default:
+        return 'jpg';
+    }
+  }
+
+  String _imageContentType(String extension) {
+    return extension == 'png' ? 'image/png' : 'image/jpeg';
+  }
+
+  String _activitySubmitErrorMessage(Object error) {
+    final text = error.toString();
+    final lower = text.toLowerCase();
+    if (lower.contains('socket') ||
+        lower.contains('network') ||
+        lower.contains('failed host lookup') ||
+        lower.contains('connection')) {
+      return 'Activity submission requires internet. Please try again once online.';
+    }
+    if (lower.contains('5 mb')) {
+      return 'Inspection photo must be 5 MB or less.';
+    }
+    if (lower.contains('session expired')) {
+      return 'Session expired. Please login again.';
+    }
+    return 'Inspection submission failed. Please retry.';
   }
 
   Widget _siteInfo() {

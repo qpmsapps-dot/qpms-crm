@@ -401,6 +401,20 @@ async function calculateActualTravelKm(points, options = {}) {
   };
 }
 
+function calculateRawGpsKm(points = []) {
+  let rawKm = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    const secondsGap = (current.capturedAt - previous.capturedAt) / 1000;
+    const distanceKm = haversineKm(previous, current);
+    if (secondsGap > 0 && distanceKm * 1000 >= MIN_SEGMENT_METERS) {
+      rawKm += distanceKm;
+    }
+  }
+  return rawKm;
+}
+
 function isStaleAutoEndedAttendance(attendance) {
   const metadata = safeAttendanceMetadata(attendance);
   return (
@@ -523,6 +537,10 @@ function sumStoredRouteKm(visits = []) {
 
 function isOpenVisit(visit) {
   return !visit?.checkout_time && !visit?.check_out_time;
+}
+
+function hasAnySiteCheckIn(visits = []) {
+  return visits.some((visit) => Boolean(visitTime(visit?.check_in_time)));
 }
 
 function visitTime(value) {
@@ -1498,6 +1516,223 @@ function confidenceFor({ usedPoints, totalPoints, segmentsRejected, segmentsReco
   if (usedPoints >= 25 && segmentsRejected <= Math.max(10, usedPoints * 0.15)) return 'MEDIUM';
   if (segmentsReconstructed > 0 && usedPoints >= 10) return 'MEDIUM';
   return 'LOW';
+}
+
+export async function calculateFullDayGpsNoSiteVisitKm(client, attendance, options = {}) {
+  const warnings = [];
+  const source = 'full_day_gps_no_site_visit';
+  const base = {
+    success: true,
+    dry_run: options.dryRun !== false,
+    applied: false,
+    source,
+    attendance_id: attendance?.id || null,
+    employee_code: attendance?.employee_code || attendance?.fo_user_id || null,
+    date: attendance?.attendance_date || null,
+    eligible_km: 0,
+    petrol_amount: 0,
+    gps_points_total: 0,
+    gps_points_used: 0,
+    gps_points_rejected: 0,
+    raw_gps_km: 0,
+    filtered_gps_km: 0,
+    accepted_gps_km: 0,
+    google_gap_km: null,
+    haversine_gap_km: null,
+    reconstructed_gap_km: null,
+    payable_km_formula: 'cleaned_gps_plus_reconstructed_gaps',
+    payable_km_source_detail:
+      'Full-day GPS route from Start Day to End Day, after rejecting bad GPS points and reconstructing valid gaps.',
+    whole_route_google_fallback_used: false,
+    whole_route_google_fallback_km: 0,
+    manual_review_required: false,
+    skipped_reason: null,
+    warnings,
+  };
+
+  if (!attendance?.login_time || !attendance?.logout_time) {
+    return {
+      ...base,
+      skipped_reason: !attendance?.login_time
+        ? 'skipped_missing_login_time'
+        : 'skipped_missing_logout_time',
+      warnings: [...warnings, 'Attendance must have Start Day and End Day.'],
+    };
+  }
+
+  const visits = await loadSiteVisits(client, attendance);
+  if (hasAnySiteCheckIn(visits)) {
+    return {
+      ...base,
+      skipped_reason: 'skipped_site_visits_exist',
+      warnings: [
+        ...warnings,
+        'Site visits/check-ins exist; existing site-visit KM remains payable.',
+      ],
+    };
+  }
+
+  const rows = await loadGpsLogsForWindow(
+    client,
+    attendance,
+    attendance.login_time,
+    attendance.logout_time,
+  );
+  const points = cleanGpsLogs(rows);
+  const gpsPointsTotal = rows.length;
+  const gpsPointsUsed = points.length;
+  const gpsPointsRejected = Math.max(0, gpsPointsTotal - gpsPointsUsed);
+  const validRatio = gpsPointsTotal > 0 ? gpsPointsUsed / gpsPointsTotal : 0;
+  const calculation = gpsPointsUsed >= 2
+    ? await calculateActualTravelKm(points, options)
+    : {
+        actualTravelKm: 0,
+        acceptedKm: 0,
+        reconstructedKm: 0,
+        segmentsAccepted: 0,
+        segmentsRejected: 0,
+        segmentsReconstructed: 0,
+        segmentSummary: [],
+      };
+  const rawGpsKm = Number(calculateRawGpsKm(points).toFixed(2));
+  const filteredGpsKm = Number(calculation.actualTravelKm.toFixed(2));
+  const acceptedGpsKm = Number(calculation.acceptedKm.toFixed(2));
+  const googleGapKm = Number(
+    (calculation.segmentSummary || [])
+      .filter((segment) => segment.status === 'reconstructed_google')
+      .reduce((sum, segment) => sum + Number(segment.distance_km || 0), 0)
+      .toFixed(2),
+  );
+  const haversineGapKm = Number(
+    (calculation.segmentSummary || [])
+      .filter((segment) => segment.status === 'reconstructed_haversine')
+      .reduce((sum, segment) => sum + Number(segment.distance_km || 0), 0)
+      .toFixed(2),
+  );
+  const reconstructedGapKm = Number(calculation.reconstructedKm.toFixed(2));
+  const proofValid =
+    gpsPointsTotal >= 10 &&
+    gpsPointsUsed >= 5 &&
+    validRatio >= 0.6 &&
+    filteredGpsKm > 0;
+  const manualReviewRequired = !proofValid;
+  if (gpsPointsTotal < 10) warnings.push('GPS_LOG_COUNT_BELOW_THRESHOLD');
+  if (gpsPointsUsed < 5) warnings.push('VALID_GPS_POINTS_BELOW_THRESHOLD');
+  if (gpsPointsTotal > 0 && validRatio < 0.6) warnings.push('GPS_VALID_RATIO_BELOW_THRESHOLD');
+  if (filteredGpsKm <= 0) warnings.push('FILTERED_GPS_KM_ZERO');
+
+  const ratePerKm = normalizeNumber(attendance.rate_per_km) || RATE_PER_KM;
+  const travelPolicy = travelModeAllowsPayableKm(attendance);
+  if (!travelPolicy.payableKmAllowed) warnings.push('NON_PAYABLE_TRAVEL_MODE');
+  const eligibleKm = proofValid && travelPolicy.payableKmAllowed ? filteredGpsKm : 0;
+  const petrolAmount = proofValid && travelPolicy.payableKmAllowed
+    ? Number((eligibleKm * ratePerKm).toFixed(2))
+    : 0;
+
+  return {
+    ...base,
+    eligible_km: eligibleKm,
+    petrol_amount: petrolAmount,
+    gps_points_total: gpsPointsTotal,
+    gps_points_used: gpsPointsUsed,
+    gps_points_rejected: gpsPointsRejected,
+    raw_gps_km: rawGpsKm,
+    filtered_gps_km: filteredGpsKm,
+    accepted_gps_km: acceptedGpsKm,
+    google_gap_km: googleGapKm,
+    haversine_gap_km: haversineGapKm,
+    reconstructed_gap_km: reconstructedGapKm,
+    payable_km_formula: base.payable_km_formula,
+    payable_km_source_detail: base.payable_km_source_detail,
+    whole_route_google_fallback_used: false,
+    whole_route_google_fallback_km: 0,
+    manual_review_required: manualReviewRequired,
+    warnings: [...new Set(warnings)],
+    rate_per_km: ratePerKm,
+    travel_mode: travelPolicy.travelMode,
+    payable_km_allowed: travelPolicy.payableKmAllowed,
+    valid_ratio: Number(validRatio.toFixed(3)),
+    segments_accepted: calculation.segmentsAccepted,
+    segments_reconstructed: calculation.segmentsReconstructed,
+    segments_rejected: calculation.segmentsRejected,
+  };
+}
+
+export async function recalculateFullDayGpsNoSiteVisitKm(serviceRoleClient, payload = {}, options = {}) {
+  const client = requireServiceRoleClient(serviceRoleClient);
+  const attendance = await findAttendance(client, {
+    attendance_id: payload.attendance_id || payload.id || null,
+    fo_user_id: payload.attendance_id || payload.id ? null : payload.fo_user_id || null,
+    employee_code: payload.attendance_id || payload.id ? null : payload.employee_code || null,
+    date: payload.date || payload.attendance_date || null,
+  });
+  const dryRun = payload.dry_run !== false;
+  const apply = payload.apply === true && !dryRun;
+  const result = await calculateFullDayGpsNoSiteVisitKm(client, attendance, {
+    ...options,
+    dryRun,
+  });
+
+  if (!apply || result.skipped_reason || result.manual_review_required) {
+    return {
+      ...result,
+      dry_run: dryRun,
+      applied: false,
+      petrol_amount: result.manual_review_required ? 0 : result.petrol_amount,
+    };
+  }
+
+  const existingMetadata = safeAttendanceMetadata(attendance);
+  const calculatedAt = new Date().toISOString();
+  const metadata = {
+    ...existingMetadata,
+    km_source: result.source,
+    no_site_visit_km_enabled: true,
+    manual_review_required: false,
+    payable_km_formula: result.payable_km_formula,
+    payable_km_source_detail: result.payable_km_source_detail,
+    gps_points_total: result.gps_points_total,
+    gps_points_used: result.gps_points_used,
+    gps_points_rejected: result.gps_points_rejected,
+    raw_gps_km: result.raw_gps_km,
+    accepted_gps_km: result.accepted_gps_km,
+    reconstructed_gap_km: result.reconstructed_gap_km,
+    google_gap_km: result.google_gap_km,
+    haversine_gap_km: result.haversine_gap_km,
+    filtered_gps_km: result.filtered_gps_km,
+    filtered_gps_km_note:
+      'For this endpoint, filtered_gps_km is the final cleaned/reconstructed GPS route KM used for payable calculation.',
+    whole_route_google_fallback_used: false,
+    whole_route_google_fallback_km: 0,
+    rate_per_km: result.rate_per_km,
+    petrol_amount: result.petrol_amount,
+    audit_note: 'Calculated from Start Day to End Day GPS logs because no site visits were recorded.',
+    calculated_at: calculatedAt,
+    calculated_by: options.actor || null,
+  };
+  const attendanceUpdate = {
+    actual_km: result.eligible_km,
+    total_route_km: result.eligible_km,
+    eligible_km: result.eligible_km,
+    total_approved_km: result.eligible_km,
+    petrol_amount: result.petrol_amount,
+    total_raw_km: result.raw_gps_km,
+    raw_gps_km: result.raw_gps_km,
+    filtered_gps_km: result.filtered_gps_km,
+    actual_travel_km: result.filtered_gps_km,
+    metadata,
+  };
+  const { error } = await client
+    .from('fo_attendance')
+    .update(attendanceUpdate)
+    .eq('id', attendance.id);
+  if (error) throw error;
+
+  return {
+    ...result,
+    dry_run: false,
+    applied: true,
+  };
 }
 
 export async function recalculateFoKm(serviceRoleClient, payload = {}, options = {}) {

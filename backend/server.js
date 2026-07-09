@@ -5,6 +5,7 @@ import express from 'express';
 import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
 import {
+  recalculateFullDayGpsNoSiteVisitKm,
   recalculateFoKm,
   recalculateFoKmBatch,
   recalculateFoKmForToday,
@@ -95,6 +96,8 @@ const foKmRecalculationLocks = new Set();
 const foKmRecalculateAllLocks = new Set();
 const FO_KM_RECALCULATION_RUNNING_MESSAGE = 'Recalculation already running. Please wait.';
 const FO_STALE_CLEANUP_INTERVAL_MS = Number(process.env.FO_STALE_CLEANUP_INTERVAL_MS || 30 * 60 * 1000);
+const END_DAY_KM_AUTO_RECALC_INTERVAL_MS = 5 * 60 * 1000;
+const END_DAY_KM_AUTO_RECALC_LIMIT = 50;
 
 function currentIndiaDateInput(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -591,6 +594,25 @@ function requireTemporarySwitchKmPermission(request, response, next) {
     response.status(403).json({
       ok: false,
       message: `Role ${request.userRole || 'Unknown'} cannot run temporary switch KM recalculation.`,
+    });
+    return;
+  }
+  next();
+}
+
+function hasFullDayGpsKmPermission(profile) {
+  if (!profile || profile.is_active !== true) return false;
+  if (String(profile.status || '').trim().toLowerCase() !== 'active') return false;
+  return new Set(['ADMIN', 'QPMSADMIN', 'DEVELOPER']).has(
+    normalizePermissionRole(profile.role),
+  );
+}
+
+function requireFullDayGpsKmPermission(request, response, next) {
+  if (!hasFullDayGpsKmPermission(request.profile)) {
+    response.status(403).json({
+      ok: false,
+      message: `Role ${request.userRole || 'Unknown'} cannot run full-day GPS KM recalculation.`,
     });
     return;
   }
@@ -5118,6 +5140,42 @@ app.post('/api/fo/km/recalculate-switch-mode', requireSupabaseJwt, requireTempor
   }
 });
 
+app.post('/api/fo/km/recalculate-full-day-gps', requireSupabaseJwt, requireFullDayGpsKmPermission, async (request, response) => {
+  const payload = request.body || {};
+  const lockKey = `full_day_gps:${foKmRecalculationLockKey(payload)}`;
+  const lockDate = normalizeFoKmRecalculationDate(payload.date);
+  if (foKmRecalculateAllLocks.has(lockDate) || foKmRecalculationLocks.has(lockKey)) {
+    response.status(409).json({ ok: false, message: FO_KM_RECALCULATION_RUNNING_MESSAGE });
+    return;
+  }
+  foKmRecalculationLocks.add(lockKey);
+  try {
+    const client = requireServiceRoleSupabase();
+    await assertServiceRoleAuthAdminAccess(client);
+    const actor = request.profile?.email ||
+      request.authUser?.email ||
+      request.profile?.employee_code ||
+      request.authUser?.id ||
+      null;
+    const result = await recalculateFullDayGpsNoSiteVisitKm(client, payload, {
+      actor,
+      maxGoogleDirectionsCalls: payload.max_google_directions_calls,
+    });
+    response.json({ ok: true, ...result });
+  } catch (error) {
+    const safeError = safeServiceRoleError(error, 'service_role_auth_admin_failed');
+    response.status(safeError.statusCode).json({
+      ok: false,
+      message: safeError.message,
+      ...(safeError.diagnosticReason
+        ? { diagnosticReason: safeError.diagnosticReason }
+        : {}),
+    });
+  } finally {
+    foKmRecalculationLocks.delete(lockKey);
+  }
+});
+
 app.post('/api/fo/km/recalculate-all', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
   const payload = request.body || {};
   const date = payload.date || payload.fromDate || currentIndiaDateInput();
@@ -5365,6 +5423,146 @@ function startDailyOperationsReportScheduler() {
   setInterval(tick, REPORT_EMAIL_SCHEDULER_POLL_MS).unref?.();
 }
 
+function endDayKmAutoRecalcEnabled() {
+  return String(process.env.END_DAY_KM_AUTO_RECALC_ENABLED || 'false').trim().toLowerCase() === 'true';
+}
+
+function endDayKmAutoRecalcCooldownMs() {
+  const minutes = integerEnv('END_DAY_KM_AUTO_RECALC_COOLDOWN_MINUTES', 10, 1, 1440);
+  return minutes * 60 * 1000;
+}
+
+function metadataTimestampMs(metadata = {}, keys = []) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  for (const key of keys) {
+    const value = metadata[key];
+    const timestamp = value ? new Date(value).getTime() : NaN;
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return null;
+}
+
+function attendanceNeedsEndDayKmAutoRecalc(row, now = new Date()) {
+  const metadata = row?.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+    ? row.metadata
+    : {};
+  const recalculatedAt = metadataTimestampMs(metadata, [
+    'km_recalculated_at',
+    'travel_leg_recalculated_at',
+    'actual_travel_updated_at',
+  ]);
+  if (!recalculatedAt) return true;
+  return now.getTime() - recalculatedAt >= endDayKmAutoRecalcCooldownMs();
+}
+
+async function loadEndDayKmAutoRecalcCandidates(client, date) {
+  const { data, error } = await client
+    .from('fo_attendance')
+    .select('id, fo_user_id, employee_code, attendance_date, logout_time, status, metadata')
+    .eq('attendance_date', date)
+    .not('logout_time', 'is', null)
+    .in('status', ['Completed', 'Ended', 'Ended Day', 'Closed', 'Auto Ended', 'Stale Auto Ended'])
+    .order('logout_time', { ascending: false })
+    .limit(END_DAY_KM_AUTO_RECALC_LIMIT);
+  if (error) throw error;
+  const now = new Date();
+  return (data || []).filter((row) => attendanceNeedsEndDayKmAutoRecalc(row, now));
+}
+
+async function runEndDayKmAutoRecalc(reason = 'interval') {
+  if (!endDayKmAutoRecalcEnabled()) return;
+  const date = currentIndiaDateInput();
+  const startedAt = Date.now();
+  const summary = {
+    reason,
+    date,
+    scanned: 0,
+    updated: 0,
+    skippedLocked: 0,
+    failed: 0,
+  };
+  console.log('END_DAY_KM_AUTO_RECALC_STARTED', {
+    reason,
+    date,
+    limit: END_DAY_KM_AUTO_RECALC_LIMIT,
+    cooldownMinutes: endDayKmAutoRecalcCooldownMs() / 60000,
+  });
+  try {
+    const client = requireServiceRoleSupabase();
+    const candidates = await loadEndDayKmAutoRecalcCandidates(client, date);
+    summary.scanned = candidates.length;
+    for (const attendance of candidates) {
+      const payload = {
+        attendance_id: attendance.id,
+        fo_user_id: attendance.fo_user_id || attendance.employee_code,
+        employee_code: attendance.employee_code,
+        date: attendance.attendance_date || date,
+      };
+      const lockKey = foKmRecalculationLockKey(payload);
+      const lockDate = normalizeFoKmRecalculationDate(payload.date);
+      if (foKmRecalculateAllLocks.has(lockDate) || foKmRecalculationLocks.has(lockKey)) {
+        summary.skippedLocked += 1;
+        continue;
+      }
+      foKmRecalculationLocks.add(lockKey);
+      try {
+        const result = await recalculateFoKm(client, payload, {
+          maxGoogleDirectionsCalls: Number(process.env.END_DAY_KM_AUTO_RECALC_MAX_GOOGLE_DIRECTIONS_CALLS || process.env.MAX_GOOGLE_DIRECTIONS_CALLS),
+        });
+        summary.updated += 1;
+        console.log('END_DAY_KM_AUTO_RECALC_ATTENDANCE_UPDATED', {
+          attendance_id: attendance.id,
+          fo_user_id: attendance.fo_user_id || null,
+          employee_code: attendance.employee_code || null,
+          total_route_km: result.total_route_km ?? result.new_total_route_km ?? null,
+          petrol_amount: result.petrol_amount ?? result.new_petrol_amount ?? null,
+          route_sync_status: result.route_sync_status || null,
+        });
+      } catch (error) {
+        summary.failed += 1;
+        console.error('END_DAY_KM_AUTO_RECALC_FAILED', {
+          attendance_id: attendance.id,
+          fo_user_id: attendance.fo_user_id || null,
+          employee_code: attendance.employee_code || null,
+          message: error.message,
+          code: error.code || null,
+        });
+      } finally {
+        foKmRecalculationLocks.delete(lockKey);
+      }
+    }
+  } catch (error) {
+    summary.failed += 1;
+    console.error('END_DAY_KM_AUTO_RECALC_FAILED', {
+      reason,
+      date,
+      message: error.message,
+      code: error.code || null,
+    });
+  } finally {
+    console.log('END_DAY_KM_AUTO_RECALC_COMPLETED', {
+      ...summary,
+      durationMs: Date.now() - startedAt,
+    });
+  }
+}
+
+function startEndDayKmAutoRecalcScheduler() {
+  const enabled = endDayKmAutoRecalcEnabled();
+  console.log('[myQPMS End Day KM Auto Recalc] started', {
+    enabled,
+    intervalMs: END_DAY_KM_AUTO_RECALC_INTERVAL_MS,
+    timezone: 'Asia/Kolkata',
+    cooldownMinutes: endDayKmAutoRecalcCooldownMs() / 60000,
+    limit: END_DAY_KM_AUTO_RECALC_LIMIT,
+  });
+  if (!enabled) return;
+  runEndDayKmAutoRecalc('startup');
+  setInterval(() => {
+    runEndDayKmAutoRecalc('interval');
+  }, END_DAY_KM_AUTO_RECALC_INTERVAL_MS).unref?.();
+}
+
 app.listen(port, () => {
   console.log('[myQPMS Mail API] Startup complete', {
     port,
@@ -5378,6 +5576,7 @@ app.listen(port, () => {
   });
   verifyMailTransporter();
   startDailyOperationsReportScheduler();
+  startEndDayKmAutoRecalcScheduler();
   runFoStaleSessionCleanup('startup');
   if (Number.isFinite(FO_STALE_CLEANUP_INTERVAL_MS) && FO_STALE_CLEANUP_INTERVAL_MS > 0) {
     setInterval(() => {
