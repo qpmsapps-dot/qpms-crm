@@ -2830,11 +2830,13 @@ app.get(
   requireSupabaseJwt,
   requireUserManagementPermission,
   async (request, response) => {
+    const endpointStartedAt = Date.now();
     try {
       const client = requireServiceRoleSupabase();
       await assertUserManagementFoundation(client);
       const page = parsePositiveInteger(request.query.page, 1, 100000);
       const pageSize = parsePositiveInteger(request.query.pageSize, 25, 200);
+      const includeOperationalCounts = booleanValue(request.query.includeOperationalCounts, false);
       const from = (page - 1) * pageSize;
       const to = from + pageSize - 1;
       let query = client
@@ -2879,20 +2881,39 @@ app.get(
         );
       }
 
+      const profileQueryStartedAt = Date.now();
       const { data, error, count } = await query;
+      const profileQueryMs = Date.now() - profileQueryStartedAt;
       if (error) throw error;
       const profiles = data || [];
-      const counts = await loadOperationalCounts(
-        client,
-        profiles.map((profile) => profile.employee_code),
-      );
+      let counts = null;
+      let operationalCountsMs = 0;
+      if (includeOperationalCounts) {
+        const operationalCountsStartedAt = Date.now();
+        counts = await loadOperationalCounts(
+          client,
+          profiles.map((profile) => profile.employee_code),
+        );
+        operationalCountsMs = Date.now() - operationalCountsStartedAt;
+      }
+      console.info('[UserManagement] list users timing', {
+        page,
+        pageSize,
+        includeOperationalCounts,
+        profileQueryMs,
+        operationalCountsMs,
+        totalMs: Date.now() - endpointStartedAt,
+      });
       response.json({
         ok: true,
         page,
         pageSize,
+        includeOperationalCounts,
         total: count || 0,
         totalPages: count ? Math.ceil(count / pageSize) : 0,
-        users: profiles.map((profile) => attachOperationalCounts(profile, counts)),
+        users: includeOperationalCounts
+          ? profiles.map((profile) => attachOperationalCounts(profile, counts))
+          : profiles,
       });
     } catch (error) {
       respondUserManagementError(response, error);

@@ -169,7 +169,12 @@ export default function UserManagement() {
     setLoading(true);
     setLoadError('');
     try {
-      const params = { page, pageSize, search: debouncedSearch || undefined };
+      const params = {
+        page,
+        pageSize,
+        search: debouncedSearch || undefined,
+        includeOperationalCounts: false,
+      };
       Object.entries(filters).forEach(([key, value]) => {
         if (value !== '') params[key] = value;
       });
