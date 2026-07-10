@@ -74,7 +74,7 @@ const HIDDEN_EMPLOYEE_CODES = [
 ];
 const HIDDEN_EMPLOYEE_CODE_SET = new Set(HIDDEN_EMPLOYEE_CODES);
 const FO_SITE_VISIT_SELECT =
-  "id,fo_user_id,employee_code,full_name,attendance_id,store_id,store_name,site_name,client_name,store_code,state,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,current_latitude,current_longitude,origin_lat,origin_lng,destination_lat,destination_lng,route_km,google_route_polyline,visit_duration_minutes,status,visit_status,checkout_note,metadata";
+  "id,fo_user_id,employee_code,full_name,attendance_id,store_id,store_name,site_name,client_name,store_code,state,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,checkout_distance_meters,checkout_location_status,current_latitude,current_longitude,origin_lat,origin_lng,destination_lat,destination_lng,route_km,google_route_polyline,visit_duration_minutes,status,visit_status,checkout_note,metadata";
 const FO_LIVE_STATUS_SELECT =
   "fo_user_id,latitude,longitude,last_seen_at,updated_at,route_km_today,is_online,is_tracking,current_status,display_name,username,accuracy,battery_percentage";
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:4000").replace(/\/+$/, "");
@@ -1408,6 +1408,25 @@ function logPayableKmSource(foId, source, km) {
   console.debug("FO_ROUTE_KM_TODAY_VALUE", foId, km);
 }
 
+function gpsFallbackReviewFromAttendance(attendance) {
+  const metadata = attendanceMetadata(attendance);
+  const fallbackKm = numberOrNull(
+    metadata.suggested_review_km ??
+      metadata.fallback_gps_km ??
+      attendance?.suggested_review_km ??
+      attendance?.fallback_gps_km,
+  );
+  const reviewRequired =
+    metadata.gps_fallback_review_required === true ||
+    String(metadata.gps_fallback_review_required || "").toLowerCase() === "true" ||
+    (fallbackKm !== null && fallbackKm > 0);
+  return {
+    reviewRequired,
+    fallbackKm,
+    reason: metadata.gps_fallback_review_reason || null,
+  };
+}
+
 function payableRouteKmForOfficer({ foId, live, attendance, visits = [] }) {
   const siteVisitRouteKm = sumSiteVisitRouteKm(visits);
   const liveKm = Number(live?.route_km_today);
@@ -1445,6 +1464,18 @@ function payableRouteKmForOfficer({ foId, live, attendance, visits = [] }) {
     };
   }
 
+  const gpsFallbackReview = gpsFallbackReviewFromAttendance(attendance);
+  if (visits.length > 0 && gpsFallbackReview.reviewRequired) {
+    const source = gpsFallbackReview.fallbackKm
+      ? `Needs Review (GPS fallback ${gpsFallbackReview.fallbackKm.toFixed(1)} km)`
+      : "Needs Review";
+    logPayableKmSource(foId, source, 0);
+    return {
+      km: 0,
+      source,
+    };
+  }
+
   logPayableKmSource(foId, "zero", 0);
   return {
     km: 0,
@@ -1468,6 +1499,8 @@ function reviewFlagsForOfficer({ systemKm = 0, attendance, visits = [], logs = [
         "LOW_GPS_LOG_COUNT",
         "PRE_SITE_SOURCING_REVIEW",
         "GPS_DETOUR_REVIEW_REQUIRED",
+        "GPS_FALLBACK_REVIEW_REQUIRED",
+        "TRAVEL_LEG_PAYABLE_ZERO",
       ].includes(flag)
     ) {
       flags.add(flag);
@@ -1499,6 +1532,10 @@ function reviewFlagsForOfficer({ systemKm = 0, attendance, visits = [], logs = [
     String(attendance?.route_sync_status || "").toLowerCase() === "review_required"
   ) {
     flags.add("GOOGLE_ROUTE_FAILED");
+  }
+  const gpsFallbackReview = gpsFallbackReviewFromAttendance(attendance);
+  if (visits.length > 0 && Number(systemKm) <= 0 && gpsFallbackReview.reviewRequired) {
+    flags.add("GPS_FALLBACK_REVIEW_REQUIRED");
   }
   return [...flags];
 }
@@ -2308,6 +2345,7 @@ function SelectedOfficerSummary({
   const claimKm = routeKm;
   const hasClaimKm = Number.isFinite(claimKm);
   const reviewFlags = officer.reviewFlags || [];
+  const gpsFallbackReview = gpsFallbackReviewFromAttendance(officer.attendance);
   const workingMinutes = attendanceWorkingMinutes(officer.attendance || {});
   const roadKmLabel = roadKmEstimate
     ? `${Number(roadKmEstimate.roadKm || 0).toFixed(1)} km reference only${
@@ -2393,6 +2431,12 @@ function SelectedOfficerSummary({
           <p className="mt-1 text-sm font-black text-slate-950 dark:text-white">
             {routeKm.toFixed(1)} km
           </p>
+          {routeKm <= 0 && gpsFallbackReview.reviewRequired ? (
+            <p className="mt-1 text-[11px] font-bold text-amber-700">
+              Needs Review
+              {gpsFallbackReview.fallbackKm ? `: ${gpsFallbackReview.fallbackKm.toFixed(1)} km GPS evidence` : ""}
+            </p>
+          ) : null}
         </div>
         <span className="rounded-xl bg-emerald-50 p-2 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
           <Route className="h-4 w-4" />
@@ -4318,6 +4362,8 @@ function canReviewCheckoutException(role) {
   return [
     "admin",
     "developer",
+    "qpms admin",
+    "qpmsadmin",
     "operations manager",
     "operation manager",
     "om",
@@ -4327,6 +4373,11 @@ function canReviewCheckoutException(role) {
     "gm",
     "management",
   ].includes(roleKey);
+}
+
+function canApproveCheckoutMissingKm(role) {
+  const roleKey = normalizeRoleKey(role);
+  return ["admin", "developer", "qpms admin", "qpmsadmin"].includes(roleKey);
 }
 
 function checkoutReviewStatus(visit) {
@@ -4371,7 +4422,21 @@ function missingCheckoutEvidence(visit) {
   const approvedKm = numberOrNull(
     metadata.approved_missing_km ??
       metadata.approved_missing_checkout_km ??
+      metadata.approved_missing_checkout_adjustment_km ??
       visit?.approved_missing_km,
+  );
+  const suggestedKm = numberOrNull(
+    metadata.suggested_missing_checkout_km ??
+      metadata.suggested_missing_checkout_haversine_km,
+  );
+  const suggestedAmount = numberOrNull(
+    metadata.suggested_missing_checkout_amount ??
+      (suggestedKm === null ? null : suggestedKm * RATE_PER_KM),
+  );
+  const approvedAmount = numberOrNull(
+    metadata.approved_missing_checkout_amount ??
+      metadata.approved_missing_checkout_adjustment_amount ??
+      (approvedKm === null ? null : approvedKm * RATE_PER_KM),
   );
   const gpsEvidence =
     metadata.latest_gps_evidence &&
@@ -4391,6 +4456,11 @@ function missingCheckoutEvidence(visit) {
   return {
     detectedKm,
     approvedKm: approvedKm ?? 0,
+    approvedAmount: approvedAmount ?? 0,
+    suggestedKm,
+    suggestedAmount,
+    suggestedSource: metadata.suggested_missing_checkout_source || null,
+    googleError: metadata.suggested_missing_checkout_google_error || null,
     evidenceStatus,
     detectedAt,
     gpsEvidence,
@@ -4400,6 +4470,7 @@ function missingCheckoutEvidence(visit) {
 
 function missingCheckoutKmLabel(visit) {
   const evidence = missingCheckoutEvidence(visit);
+  if (evidence.suggestedKm !== null) return `${evidence.suggestedKm.toFixed(1)} km`;
   if (evidence.hasDetectedKm) return `${evidence.detectedKm.toFixed(1)} km`;
   return "--";
 }
@@ -5591,11 +5662,14 @@ function FieldOfficerDetailsView({
   onExport,
   onRecalculateKm,
   onTemporarySwitchKm,
+  onCheckoutReviewAction,
+  checkoutReviewBusyVisitId = null,
   recalculatingKm = false,
   recalculatingSwitchKm = false,
   recalculationResult = null,
   fullTechnicalAccess = false,
   canReviewCheckoutExceptions = false,
+  canApproveCheckoutMissingKmReviews = false,
 }) {
   const [selectedVisitIndex, setSelectedVisitIndex] = useState(0);
   const [photoFilter, setPhotoFilter] = useState("All");
@@ -5675,12 +5749,14 @@ function FieldOfficerDetailsView({
     lastAttendance.end_battery_percentage ?? lastAttendance.battery_end;
   const reviewFlags = officer?.reviewFlags || [];
   const attendanceMeta = attendanceMetadata(attendance);
+  const gpsFallbackReview = gpsFallbackReviewFromAttendance(attendance);
   const travelLegs = Array.isArray(attendanceMeta.travel_legs)
     ? attendanceMeta.travel_legs
     : [];
   const firstPreSiteLeg =
     travelLegs.find((leg) => leg?.type === "start_to_first_checkin") || null;
   const payableKmSourceReason =
+    gpsFallbackReview.reason ||
     firstPreSiteLeg?.payable_km_source_reason ||
     attendanceMeta.payable_km_source_detail ||
     attendanceMeta.selected_km_source ||
@@ -5834,6 +5910,13 @@ function FieldOfficerDetailsView({
       message:
         "Approval saving requires backend support. This is currently a UI preview only.",
     });
+  };
+  const handleCheckoutReviewAction = (visit, action) => {
+    if (typeof onCheckoutReviewAction === "function") {
+      onCheckoutReviewAction(visit, action);
+      return;
+    }
+    showCheckoutReviewPreview(visit, action);
   };
   const tabs = [
     ["overview", "Overview"],
@@ -6106,7 +6189,7 @@ function FieldOfficerDetailsView({
         <DetailSummaryCard icon={PlayCircle} label="Start Day" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
         <DetailSummaryCard icon={Square} label="End Day" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
         <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Visited" tone="purple" />
-        <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint="Approved route" tone="green" />
+        <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "Needs Review" : "Approved route"} tone={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "amber" : "green"} />
         {fullTechnicalAccess ? <DetailSummaryCard icon={Navigation2} label="GPS Audit KM" value={Number.isFinite(gpsAuditKm) ? `${gpsAuditKm.toFixed(1)} km` : "--"} hint="Supporting evidence" tone="blue" /> : null}
         {fullTechnicalAccess ? <DetailSummaryCard icon={CircleGauge} label="Delta" value={Number.isFinite(kmDelta) ? `${kmDelta.toFixed(1)} km` : "--"} hint={Number.isFinite(differencePercent) ? `${differencePercent.toFixed(1)}%` : "--"} tone={Math.abs(kmDelta || 0) > 2 ? "amber" : "green"} /> : null}
         <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`@ ${formatInr(ratePerKm)} / km`} tone="amber" />
@@ -6277,7 +6360,7 @@ function FieldOfficerDetailsView({
                               <p className="text-[10px] font-semibold text-amber-700">
                                 Operation Manager / Branch Head review required
                               </p>
-                              {canReviewCheckoutExceptions ? (
+                              {canApproveCheckoutMissingKmReviews ? (
                                 <div
                                   className="flex flex-wrap gap-1"
                                   onClick={(event) => event.stopPropagation()}
@@ -6290,15 +6373,15 @@ function FieldOfficerDetailsView({
                                     <button
                                       key={action}
                                       type="button"
+                                      disabled={checkoutReviewBusyVisitId === row.visit?.id}
                                       onClick={() =>
-                                        showCheckoutReviewPreview(
-                                          row.visit,
-                                          action,
-                                        )
+                                        action === "Ask Clarification"
+                                          ? showCheckoutReviewPreview(row.visit, action)
+                                          : handleCheckoutReviewAction(row.visit, action)
                                       }
-                                      className="focus-ring rounded-md border border-slate-200 bg-white px-2 py-1 text-[9px] font-black text-slate-700 hover:border-qpms-300 hover:bg-qpms-50"
+                                      className="focus-ring rounded-md border border-slate-200 bg-white px-2 py-1 text-[9px] font-black text-slate-700 hover:border-qpms-300 hover:bg-qpms-50 disabled:opacity-50"
                                     >
-                                      {label}
+                                      {checkoutReviewBusyVisitId === row.visit?.id ? "Saving..." : label}
                                     </button>
                                   ))}
                                 </div>
@@ -6368,7 +6451,9 @@ function FieldOfficerDetailsView({
                 ["Travel from Previous", selectedTravelFromPrevious],
                 ["Route KM", numberLabel(selectedVisit?.route_km, " km")],
                 ["Missing KM Detected", selectedCheckoutException?.requiresReview ? missingCheckoutKmLabel(selectedVisit) : "--"],
+                ["Suggested Amount", selectedCheckoutException?.requiresReview && missingCheckoutEvidence(selectedVisit).suggestedAmount !== null ? formatInr(missingCheckoutEvidence(selectedVisit).suggestedAmount) : "--"],
                 ["Approved Missing KM", `${missingCheckoutEvidence(selectedVisit).approvedKm.toFixed(1)} km`],
+                ["Approved Amount", `${formatInr(missingCheckoutEvidence(selectedVisit).approvedAmount)}`],
                 ["GPS Evidence", selectedCheckoutException?.requiresReview ? missingCheckoutEvidenceLabel(selectedVisit) : "--"],
                 ["Route Source", visitRouteSourceLabel(selectedVisit)],
                 ["Remarks", visitRemarks(selectedVisit)],
@@ -6413,6 +6498,8 @@ function FieldOfficerDetailsView({
                   ["Check-in Time", formatDateTime(selectedVisit?.check_in_time)],
                   ["Check-out Time", formatDateTime(siteVisitCheckoutValue(selectedVisit))],
                   ["Route KM", numberLabel(selectedVisit?.route_km, " km")],
+                  ["Suggested KM", missingCheckoutEvidence(selectedVisit).suggestedKm === null ? "--" : `${missingCheckoutEvidence(selectedVisit).suggestedKm.toFixed(1)} km`],
+                  ["Suggested Amount", missingCheckoutEvidence(selectedVisit).suggestedAmount === null ? "--" : formatInr(missingCheckoutEvidence(selectedVisit).suggestedAmount)],
                   ["Payable KM Impact", Number(selectedVisit?.route_km) > 0 ? `${Number(selectedVisit.route_km).toFixed(1)} km route contribution` : "--"],
                   ["Review Status", selectedCheckoutReviewStatus?.label || "Pending Review"],
                 ].map(([label, value]) => (
@@ -6422,19 +6509,22 @@ function FieldOfficerDetailsView({
                   </div>
                 ))}
               </div>
-              {canReviewCheckoutExceptions ? (
+              {canApproveCheckoutMissingKmReviews ? (
                 <div className="mt-4">
                   <div className="flex flex-wrap gap-2">
                     {["Approve", "Reject", "Ask Clarification"].map((action) => (
                       <button
                         key={action}
                         type="button"
+                        disabled={checkoutReviewBusyVisitId === selectedVisit?.id}
                         onClick={() =>
-                          showCheckoutReviewPreview(selectedVisit, action)
+                          action === "Ask Clarification"
+                            ? showCheckoutReviewPreview(selectedVisit, action)
+                            : handleCheckoutReviewAction(selectedVisit, action)
                         }
-                        className="focus-ring rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-black text-amber-800 hover:bg-amber-100"
+                        className="focus-ring rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-black text-amber-800 hover:bg-amber-100 disabled:opacity-50"
                       >
-                        {action}
+                        {checkoutReviewBusyVisitId === selectedVisit?.id ? "Saving..." : action}
                       </button>
                     ))}
                   </div>
@@ -6696,6 +6786,7 @@ function FieldOfficerDetailsView({
                 ["Google Direct Route KM", googleDirectRouteKm === null ? "--" : `${googleDirectRouteKm.toFixed(1)} km`],
                 ["Pre-site Raw GPS KM", preSiteRawGpsKm === null ? "--" : `${preSiteRawGpsKm.toFixed(1)} km`],
                 ["Pre-site Filtered GPS KM", preSiteFilteredGpsKm === null ? "--" : `${preSiteFilteredGpsKm.toFixed(1)} km`],
+                ["Suggested Review KM", gpsFallbackReview.fallbackKm === null ? "--" : `${gpsFallbackReview.fallbackKm.toFixed(1)} km`],
                 ["Payable Source Reason", payableKmSourceReason],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-xl border border-slate-200 p-4 text-sm">
@@ -7498,6 +7589,8 @@ export default function FOActivities() {
   const canRunTemporarySwitchKm = canUseTemporarySwitchKm;
   const canReviewCheckoutExceptions =
     canReviewCheckoutException(currentRole);
+  const canApproveCheckoutMissingKmReviews =
+    canApproveCheckoutMissingKm(currentRole);
   const [stateFilter, setStateFilter] = useState("All States");
   const [statusFilter, setStatusFilter] = useState("All Status");
   const [businessFilter, setBusinessFilter] = useState("All Business");
@@ -7512,6 +7605,7 @@ export default function FOActivities() {
   const [supportPendingAction, setSupportPendingAction] = useState(null);
   const [supportRemarks, setSupportRemarks] = useState("");
   const [supportMessage, setSupportMessage] = useState("");
+  const [checkoutReviewBusyVisitId, setCheckoutReviewBusyVisitId] = useState(null);
   const [liveOfficers, setLiveOfficers] = useState([]);
   const [attendanceKpiRows, setAttendanceKpiRows] = useState([]);
   const [siteVisitRows, setSiteVisitRows] = useState([]);
@@ -8582,6 +8676,93 @@ export default function FOActivities() {
     }
   }
 
+  async function submitCheckoutMissingKmReview(visit, action) {
+    if (!visit?.id || !canApproveCheckoutMissingKmReviews) return;
+    try {
+      assertDemoWriteAllowed(user);
+    } catch (error) {
+      window.alert(error.message);
+      return;
+    }
+
+    const normalizedAction = String(action || "").toLowerCase();
+    const evidence = missingCheckoutEvidence(visit);
+    let approvedKm = null;
+    let remarks = "";
+    let adminOverride = false;
+
+    if (normalizedAction === "approve") {
+      const defaultKm =
+        evidence.suggestedKm !== null
+          ? evidence.suggestedKm.toFixed(2)
+          : evidence.detectedKm !== null
+            ? evidence.detectedKm.toFixed(2)
+            : "";
+      const input = window.prompt("Approve missing checkout KM", defaultKm);
+      if (input === null) return;
+      approvedKm = Number(input);
+      if (!Number.isFinite(approvedKm) || approvedKm < 0) {
+        window.alert("Approved KM must be a number greater than or equal to 0.");
+        return;
+      }
+      if (
+        evidence.suggestedKm !== null &&
+        approvedKm > evidence.suggestedKm + 2
+      ) {
+        adminOverride = window.confirm(
+          "Approved KM is more than 2 km above suggested KM. Continue as Admin override?",
+        );
+        if (!adminOverride) return;
+      }
+      remarks = window.prompt("Approval remarks (optional)", "") || "";
+    } else if (normalizedAction === "reject") {
+      remarks = window.prompt("Rejection reason is required", "") || "";
+      if (!remarks.trim()) {
+        window.alert("Rejection reason is required.");
+        return;
+      }
+    } else {
+      return;
+    }
+
+    setCheckoutReviewBusyVisitId(visit.id);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) {
+        throw new Error("Admin session expired. Please login again.");
+      }
+      const response = await fetch(
+        `${API_BASE_URL}/api/fo/site-visits/${visit.id}/checkout-missing-km-review`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
+            action: normalizedAction,
+            approved_km: approvedKm,
+            remarks,
+            review_source: "fo_activities_dashboard",
+            admin_override: adminOverride,
+          }),
+        },
+      );
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.message || "Checkout review update failed.");
+      }
+      window.alert(payload.message || "Checkout review updated.");
+      setRefreshToken((value) => value + 1);
+    } catch (error) {
+      console.warn("[myQPMS FO] Checkout missing KM review failed.", error);
+      window.alert(error.message || "Checkout review update failed.");
+    } finally {
+      setCheckoutReviewBusyVisitId(null);
+    }
+  }
+
   const pins = useMemo(() => {
     const markerOfficers = visualFilteredOfficers.filter((officer) => {
       const canShow = canShowOfficerMarker(officer);
@@ -8797,6 +8978,9 @@ export default function FOActivities() {
         recalculationResult={kmRecalcResult}
         fullTechnicalAccess={fullTechnicalAccess}
         canReviewCheckoutExceptions={canReviewCheckoutExceptions}
+        canApproveCheckoutMissingKmReviews={canApproveCheckoutMissingKmReviews}
+        onCheckoutReviewAction={submitCheckoutMissingKmReview}
+        checkoutReviewBusyVisitId={checkoutReviewBusyVisitId}
       />
     );
   }

@@ -11,6 +11,8 @@ const DEFAULT_MAX_GOOGLE_DIRECTIONS_CALLS = 25;
 const SWITCH_TIME_ANCHOR_MAX_GAP_MINUTES = 60;
 const PRE_SITE_DETOUR_MIN_EXTRA_KM = 2;
 const PRE_SITE_DETOUR_RATIO = 1.35;
+const DELAYED_CHECKOUT_WARNING_THRESHOLD_METERS = 100;
+const DELAYED_CHECKOUT_REVIEW_THRESHOLD_METERS = 1000;
 const ATTENDANCE_SELECT_COLUMNS = [
   'id',
   'fo_user_id',
@@ -39,6 +41,7 @@ const ATTENDANCE_SELECT_COLUMNS = [
 const SITE_VISIT_SELECT_COLUMNS = [
   'id',
   'attendance_id',
+  'store_id',
   'employee_code',
   'full_name',
   'store_name',
@@ -51,6 +54,9 @@ const SITE_VISIT_SELECT_COLUMNS = [
   'check_in_longitude',
   'check_out_latitude',
   'check_out_longitude',
+  'checkout_distance_meters',
+  'checkout_location_status',
+  'checkout_note',
   'origin_lat',
   'origin_lng',
   'destination_lat',
@@ -599,6 +605,217 @@ function safeAttendanceMetadata(attendance) {
   return attendance?.metadata && typeof attendance.metadata === 'object' && !Array.isArray(attendance.metadata)
     ? attendance.metadata
     : {};
+}
+
+function safeVisitMetadata(visit) {
+  return visit?.metadata && typeof visit.metadata === 'object' && !Array.isArray(visit.metadata)
+    ? visit.metadata
+    : {};
+}
+
+function delayedCheckoutReviewStatus(metadata = {}) {
+  return String(metadata.checkout_review_status || '').trim().toLowerCase();
+}
+
+function coordinateWithSource(row, candidates = []) {
+  for (const [latKey, lngKey, source] of candidates) {
+    const latitude = normalizeNumber(row?.[latKey]);
+    const longitude = normalizeNumber(row?.[lngKey]);
+    if (isValidCoordinate(latitude, longitude)) return { latitude, longitude, source };
+  }
+  return null;
+}
+
+async function loadStoreCoordinate(client, visit) {
+  const storeId = String(visit?.store_id || '').trim();
+  if (!storeId) return null;
+  const { data, error } = await client
+    .from('store_master')
+    .select('id, latitude, longitude')
+    .eq('id', storeId)
+    .maybeSingle();
+  if (error) throw error;
+  const latitude = normalizeNumber(data?.latitude);
+  const longitude = normalizeNumber(data?.longitude);
+  return isValidCoordinate(latitude, longitude)
+    ? { latitude, longitude, source: 'store_master' }
+    : null;
+}
+
+function delayedCheckoutDestination(visit) {
+  return coordinateWithSource(visit, [
+    ['check_out_latitude', 'check_out_longitude', 'checkout_location'],
+  ]);
+}
+
+async function delayedCheckoutOrigin(client, visit) {
+  const visitOrigin = coordinateWithSource(visit, [
+    ['check_in_latitude', 'check_in_longitude', 'site_checkin'],
+    ['destination_lat', 'destination_lng', 'site_destination'],
+  ]);
+  if (visitOrigin) return visitOrigin;
+  return loadStoreCoordinate(client, visit);
+}
+
+function checkoutDistanceMetersForReview(visit, origin, destination) {
+  const metadata = safeVisitMetadata(visit);
+  const mobileDistance = normalizeNumber(
+    visit?.checkout_distance_meters ??
+      metadata.checkout_distance_meters ??
+      metadata.checkout_distance_from_site_meters ??
+      metadata.distance_from_site_meters ??
+      metadata.checkout_distance,
+  );
+  if (Number.isFinite(mobileDistance) && mobileDistance >= 0) {
+    return { meters: mobileDistance, source: 'mobile' };
+  }
+  if (origin && destination) {
+    return {
+      meters: Number((haversineKm(origin, destination) * 1000).toFixed(1)),
+      source: 'backend_haversine',
+    };
+  }
+  return { meters: null, source: null };
+}
+
+function delayedCheckoutAuditAlreadyFinal(metadata = {}) {
+  const status = delayedCheckoutReviewStatus(metadata);
+  return status === 'approved' || status === 'rejected';
+}
+
+export async function auditDelayedCheckoutMissingKmForVisit(client, visit, options = {}) {
+  const metadata = safeVisitMetadata(visit);
+  if (!visit?.id) {
+    return { audited: false, updated: false, reason: 'missing_visit_id' };
+  }
+  if (!visit?.checkout_time && !visit?.check_out_time) {
+    return { audited: false, updated: false, reason: 'visit_not_checked_out' };
+  }
+  if (delayedCheckoutAuditAlreadyFinal(metadata) && options.force !== true) {
+    return {
+      audited: true,
+      updated: false,
+      reason: `review_already_${delayedCheckoutReviewStatus(metadata)}`,
+    };
+  }
+
+  const origin = await delayedCheckoutOrigin(client, visit);
+  const destination = delayedCheckoutDestination(visit);
+  if (!origin || !destination) {
+    return {
+      audited: false,
+      updated: false,
+      reason: !origin ? 'missing_origin_coordinate' : 'missing_checkout_coordinate',
+    };
+  }
+
+  const distance = checkoutDistanceMetersForReview(visit, origin, destination);
+  if (!Number.isFinite(distance.meters)) {
+    return { audited: false, updated: false, reason: 'missing_checkout_distance' };
+  }
+
+  const reviewRequired = distance.meters > DELAYED_CHECKOUT_REVIEW_THRESHOLD_METERS;
+  const warningOnly =
+    !reviewRequired && distance.meters > DELAYED_CHECKOUT_WARNING_THRESHOLD_METERS;
+  if (!reviewRequired && !warningOnly && options.writeNormalAudit !== true) {
+    return {
+      audited: true,
+      updated: false,
+      review_required: false,
+      checkout_distance_meters: distance.meters,
+      reason: 'checkout_distance_within_threshold',
+    };
+  }
+
+  const nowIso = new Date().toISOString();
+  const metadataUpdate = {
+    ...metadata,
+    checkout_distance_meters: distance.meters,
+    checkout_distance_source: distance.source,
+    checkout_distance_audited_at: nowIso,
+    checkout_distance_warning: warningOnly,
+    checkout_review_reason: reviewRequired
+      ? 'checkout_more_than_1000m_from_site_or_checkin'
+      : 'checkout_100m_to_1000m_from_site_or_checkin',
+  };
+
+  let suggestedKm = null;
+  let suggestedSource = null;
+  let googleError = null;
+  if (reviewRequired) {
+    metadataUpdate.requires_checkout_review = true;
+    metadataUpdate.checkout_exception_type =
+      metadata.checkout_exception_type || 'delayed_far_checkout';
+    metadataUpdate.checkout_review_status =
+      delayedCheckoutReviewStatus(metadata) || 'pending';
+    metadataUpdate.checkout_review_created_at =
+      metadata.checkout_review_created_at || nowIso;
+
+    const googleKm = await googleDirectionsKm(origin, destination, options);
+    if (googleKm !== null) {
+      suggestedKm = Number(googleKm.toFixed(2));
+      suggestedSource = 'google_directions';
+      metadataUpdate.suggested_missing_checkout_km = suggestedKm;
+      metadataUpdate.suggested_missing_checkout_amount = Number((suggestedKm * RATE_PER_KM).toFixed(2));
+      metadataUpdate.suggested_missing_checkout_source = suggestedSource;
+      metadataUpdate.suggested_missing_checkout_calculated_at = nowIso;
+      metadataUpdate.suggested_missing_checkout_google_error = null;
+    } else {
+      const haversineKmValue = Number((distance.meters / 1000).toFixed(2));
+      suggestedKm = haversineKmValue;
+      suggestedSource = 'haversine_fallback_review_only';
+      googleError = process.env.ENABLE_GOOGLE_DIRECTIONS === 'true'
+        ? 'google_directions_unavailable'
+        : 'google_directions_disabled';
+      metadataUpdate.suggested_missing_checkout_haversine_km = haversineKmValue;
+      metadataUpdate.suggested_missing_checkout_source = suggestedSource;
+      metadataUpdate.suggested_missing_checkout_google_error = googleError;
+    }
+    metadataUpdate.suggested_missing_checkout_origin = {
+      latitude: origin.latitude,
+      longitude: origin.longitude,
+      source: origin.source,
+    };
+    metadataUpdate.suggested_missing_checkout_destination = {
+      latitude: destination.latitude,
+      longitude: destination.longitude,
+      source: destination.source,
+    };
+  }
+
+  const { error } = await client
+    .from('fo_site_visits')
+    .update({
+      metadata: metadataUpdate,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', visit.id);
+  if (error) throw error;
+
+  log('DELAYED_CHECKOUT_REVIEW_AUDITED', {
+    visit_id: visit.id,
+    employee_code: visit.employee_code || visit.fo_user_id || null,
+    attendance_id: visit.attendance_id || null,
+    checkout_distance_meters: distance.meters,
+    checkout_distance_source: distance.source,
+    suggested_missing_checkout_km: reviewRequired ? suggestedKm : null,
+    suggested_missing_checkout_amount: reviewRequired && suggestedKm !== null
+      ? Number((suggestedKm * RATE_PER_KM).toFixed(2))
+      : null,
+    review_required: reviewRequired,
+    failure_reason: googleError,
+  });
+
+  return {
+    audited: true,
+    updated: true,
+    review_required: reviewRequired,
+    warning_only: warningOnly,
+    checkout_distance_meters: distance.meters,
+    suggested_missing_checkout_km: reviewRequired ? suggestedKm : null,
+    suggested_missing_checkout_source: reviewRequired ? suggestedSource : null,
+    suggested_missing_checkout_google_error: googleError,
+  };
 }
 
 function normalizeTravelMode(value) {
@@ -1428,6 +1645,33 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
   const ratePerKm = normalizeNumber(attendance.rate_per_km) || RATE_PER_KM;
   const candidateLegs = buildCompletedTravelLegs(attendance, visits);
   const legAudit = [];
+  const delayedCheckoutAudits = [];
+
+  for (const visit of visits) {
+    try {
+      const audit = await auditDelayedCheckoutMissingKmForVisit(client, visit, options);
+      if (audit.audited || audit.updated) {
+        delayedCheckoutAudits.push({
+          visit_id: visit.id,
+          ...audit,
+        });
+      }
+    } catch (error) {
+      delayedCheckoutAudits.push({
+        visit_id: visit.id,
+        audited: false,
+        updated: false,
+        reason: 'delayed_checkout_audit_failed',
+        message: error.message,
+      });
+      log('DELAYED_CHECKOUT_REVIEW_AUDIT_FAILED', {
+        visit_id: visit.id,
+        employee_code: attendance.employee_code || attendance.fo_user_id || null,
+        attendance_id: attendance.id,
+        message: error.message,
+      });
+    }
+  }
 
   for (const leg of candidateLegs) {
     if (!leg.fromTime || !leg.toTime || leg.toTime <= leg.fromTime) {
@@ -1509,6 +1753,9 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
   if (!travelPolicy.payableKmAllowed) reviewFlags.push('NON_PAYABLE_TRAVEL_MODE');
   if (legAudit.some((leg) => leg.status === 'skipped')) reviewFlags.push('INCOMPLETE_TRAVEL_LEGS_SKIPPED');
   if (calculatedSources.has('HAVERSINE_ROUTE_FALLBACK')) reviewFlags.push('GOOGLE_ROUTE_FAILED_USED_HAVERSINE');
+  if (delayedCheckoutAudits.some((audit) => audit.review_required === true)) {
+    reviewFlags.push('DELAYED_CHECKOUT_REVIEW_REQUIRED');
+  }
   for (const leg of legAudit) {
     for (const flag of leg.review_flags || []) reviewFlags.push(flag);
   }
@@ -1543,6 +1790,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       travel_leg_gps_log_count: gpsLogCountTotal,
       travel_leg_valid_points: validPointsTotal,
       travel_leg_rejected_points: rejectedPointsTotal,
+      delayed_checkout_audits: delayedCheckoutAudits,
       recalculated_total_route_km: totalKm,
       recalculated_petrol_amount: petrolAmount,
       travel_mode: travelPolicy.travelMode,
@@ -1587,6 +1835,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
     petrol_amount: petrolAmount,
     selected_km_source: selectedKmSource,
     travel_legs: legAudit,
+    delayed_checkout_audits: delayedCheckoutAudits,
     gps_log_count: gpsLogCountTotal,
     valid_points: validPointsTotal,
     rejected_points: rejectedPointsTotal,
@@ -1601,6 +1850,54 @@ function confidenceFor({ usedPoints, totalPoints, segmentsRejected, segmentsReco
   if (usedPoints >= 25 && segmentsRejected <= Math.max(10, usedPoints * 0.15)) return 'MEDIUM';
   if (segmentsReconstructed > 0 && usedPoints >= 10) return 'MEDIUM';
   return 'LOW';
+}
+
+function buildGpsFallbackReviewCandidate({
+  approvedKm,
+  actualTravelKm,
+  filteredGpsKm,
+  validPoints,
+  siteVisitsCount,
+  travelPolicy,
+  routeSyncStatus,
+  reviewFlags = [],
+}) {
+  const gpsAuditKm = Number(actualTravelKm);
+  const fallbackGpsKm = Number.isFinite(gpsAuditKm) && gpsAuditKm > 0
+    ? gpsAuditKm
+    : Number(filteredGpsKm);
+  const shouldSuggest =
+    Number(approvedKm || 0) <= 0 &&
+    Number.isFinite(fallbackGpsKm) &&
+    fallbackGpsKm > 0 &&
+    Number(validPoints || 0) > 0 &&
+    Number(siteVisitsCount || 0) > 0;
+
+  if (!shouldSuggest) {
+    return {
+      applicable: false,
+      fallback_gps_km: null,
+      suggested_review_km: null,
+      reason: null,
+      flags: [],
+    };
+  }
+
+  const reason = travelPolicy?.payableKmAllowed === false
+    ? 'payable_km_blocked_by_travel_mode_policy'
+    : 'route_payable_zero_with_positive_gps_evidence';
+  return {
+    applicable: true,
+    fallback_gps_km: Number(fallbackGpsKm.toFixed(2)),
+    suggested_review_km: Number(fallbackGpsKm.toFixed(2)),
+    reason,
+    flags: [
+      'GPS_FALLBACK_REVIEW_REQUIRED',
+      ...(travelPolicy?.payableKmAllowed === false ? ['NON_PAYABLE_TRAVEL_MODE'] : []),
+      ...(routeSyncStatus === 'travel_leg_based_zero' ? ['TRAVEL_LEG_PAYABLE_ZERO'] : []),
+      ...reviewFlags,
+    ],
+  };
 }
 
 export async function calculateFullDayGpsNoSiteVisitKm(client, attendance, options = {}) {
@@ -1901,8 +2198,24 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   if (switchFallback?.metadata?.manual_review_required === true) {
     reviewFlags.push(switchFallback.reviewFlag || 'SWITCH_TIME_FALLBACK_MANUAL_REVIEW');
   }
+  const filteredGpsKm = Number(calculation.acceptedKm.toFixed(2));
+  const gpsFallbackReview = buildGpsFallbackReviewCandidate({
+    approvedKm,
+    actualTravelKm,
+    filteredGpsKm,
+    validPoints: points.length,
+    siteVisitsCount: visits.length,
+    travelPolicy,
+    routeSyncStatus,
+    reviewFlags,
+  });
+  if (gpsFallbackReview.applicable) {
+    reviewFlags.push('GPS_FALLBACK_REVIEW_REQUIRED');
+  }
   log('FINAL_APPROVED_KM', {
     attendance_id: attendance.id,
+    employee_code: attendance.employee_code || null,
+    date: attendance.attendance_date || date || null,
     site_visit_route_km: storedRouteKm,
     final_return_leg_km: finalReturnLegKm,
     calculated_payable_km: calculatedPayableKm,
@@ -1910,6 +2223,16 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     payable_km_allowed: travelPolicy.payableKmAllowed,
     temporary_switch_time_km_fallback: switchFallback?.applicable === true,
     approved_km: approvedKm,
+    route_source: routeSyncStatus,
+    gps_audit_km: actualTravelKm,
+    filtered_gps_km: filteredGpsKm,
+    valid_points: points.length,
+    flags: [...new Set(reviewFlags)],
+    failure_reason:
+      gpsFallbackReview.reason ||
+      finalReturnLeg.reason ||
+      legRecalculation.review_flags?.join(',') ||
+      null,
   });
   debugLog('FINAL LEG RESULT', {
     attendanceId: attendance.id,
@@ -1933,7 +2256,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     eligible_km: approvedKm,
     total_raw_km: actualTravelKm,
     raw_gps_km: actualTravelKm,
-    filtered_gps_km: Number(calculation.acceptedKm.toFixed(2)),
+    filtered_gps_km: filteredGpsKm,
     actual_travel_km: actualTravelKm,
     actual_travel_updated_at: new Date().toISOString(),
     total_approved_km: approvedKm,
@@ -1971,6 +2294,11 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
       travel_leg_gps_log_count: legRecalculation.gps_log_count || 0,
       travel_leg_valid_points: legRecalculation.valid_points || 0,
       travel_leg_rejected_points: legRecalculation.rejected_points || 0,
+      gps_fallback_review_required: gpsFallbackReview.applicable,
+      fallback_gps_km: gpsFallbackReview.fallback_gps_km,
+      suggested_review_km: gpsFallbackReview.suggested_review_km,
+      gps_fallback_review_reason: gpsFallbackReview.reason,
+      gps_fallback_review_flags: [...new Set(gpsFallbackReview.flags)],
       travel_mode: travelPolicy.travelMode,
       payable_km_allowed: travelPolicy.payableKmAllowed,
       recalculated_total_route_km: approvedKm,
@@ -2062,6 +2390,10 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     site_visits_missing_route_km: visitsMissingRouteKm,
     review_flags: [...new Set(reviewFlags)],
     route_sync_status: routeSyncStatus,
+    gps_fallback_review_required: gpsFallbackReview.applicable,
+    fallback_gps_km: gpsFallbackReview.fallback_gps_km,
+    suggested_review_km: gpsFallbackReview.suggested_review_km,
+    gps_fallback_review_reason: gpsFallbackReview.reason,
     temporary_switch_time_km_fallback: switchFallback?.metadata?.temporary_switch_time_km_fallback === true,
     switch_time_fallback_direction: switchFallback?.metadata?.switch_time_fallback_direction || null,
     switch_time_payable_km: switchFallback?.metadata?.switch_time_payable_km ?? null,
@@ -2082,6 +2414,22 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     skipped: finalReturnLeg.includedInPayable !== true,
     skip_reason: finalReturnLeg.includedInPayable === true ? null : finalReturnLeg.reason || null,
   };
+  log('FO_KM_RECALC_SUMMARY', {
+    attendance_id: attendance.id,
+    employee_code: attendance.employee_code || null,
+    date: attendance.attendance_date || date || null,
+    route_source: routeSyncStatus,
+    gps_audit_km: actualTravelKm,
+    filtered_gps_km: filteredGpsKm,
+    payable_km: approvedKm,
+    flags: result.review_flags,
+    failure_reason:
+      gpsFallbackReview.reason ||
+      finalReturnLeg.reason ||
+      legRecalculation.review_flags?.join(',') ||
+      null,
+    suggested_review_km: gpsFallbackReview.suggested_review_km,
+  });
   log('FO_KM_RECALC_COMPLETED', result);
   return result;
 }

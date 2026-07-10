@@ -5,6 +5,7 @@ import express from 'express';
 import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
 import {
+  auditDelayedCheckoutMissingKmForVisit,
   recalculateFullDayGpsNoSiteVisitKm,
   recalculateFoKm,
   recalculateFoKmBatch,
@@ -95,6 +96,13 @@ const apiSessions = new Map();
 const foKmRecalculationLocks = new Set();
 const foKmRecalculateAllLocks = new Set();
 const FO_KM_RECALCULATION_RUNNING_MESSAGE = 'Recalculation already running. Please wait.';
+const configuredFoKmRecalculationLockTtlMs = Number(process.env.FO_KM_RECALCULATION_LOCK_TTL_MS);
+const FO_KM_RECALCULATION_LOCK_TTL_MS =
+  Number.isFinite(configuredFoKmRecalculationLockTtlMs) && configuredFoKmRecalculationLockTtlMs > 0
+    ? configuredFoKmRecalculationLockTtlMs
+    : 15 * 60 * 1000;
+const foKmRecalculationLockStartedAt = new Map();
+const foKmRecalculateAllLockStartedAt = new Map();
 const FO_STALE_CLEANUP_INTERVAL_MS = Number(process.env.FO_STALE_CLEANUP_INTERVAL_MS || 30 * 60 * 1000);
 const END_DAY_KM_AUTO_RECALC_INTERVAL_MS = 5 * 60 * 1000;
 const END_DAY_KM_AUTO_RECALC_LIMIT = 50;
@@ -159,11 +167,54 @@ function foKmRecalculationLockKey(payload = {}) {
 }
 
 function hasFoKmRecalculationForDate(date) {
+  pruneStaleFoKmRecalculationLocks();
   const suffix = `|${date}`;
   for (const key of foKmRecalculationLocks) {
     if (key.endsWith(suffix)) return true;
   }
   return false;
+}
+
+function pruneStaleLockSet(lockSet, startedAtMap, label) {
+  const now = Date.now();
+  for (const key of lockSet) {
+    const startedAt = startedAtMap.get(key);
+    if (Number.isFinite(startedAt) && now - startedAt > FO_KM_RECALCULATION_LOCK_TTL_MS) {
+      lockSet.delete(key);
+      startedAtMap.delete(key);
+      console.warn('FO_KM_RECALCULATION_STALE_LOCK_CLEARED', {
+        label,
+        key,
+        ageMs: now - startedAt,
+        ttlMs: FO_KM_RECALCULATION_LOCK_TTL_MS,
+      });
+    }
+  }
+}
+
+function pruneStaleFoKmRecalculationLocks() {
+  pruneStaleLockSet(foKmRecalculationLocks, foKmRecalculationLockStartedAt, 'single');
+  pruneStaleLockSet(foKmRecalculateAllLocks, foKmRecalculateAllLockStartedAt, 'batch');
+}
+
+function addFoKmRecalculationLock(lockKey) {
+  foKmRecalculationLocks.add(lockKey);
+  foKmRecalculationLockStartedAt.set(lockKey, Date.now());
+}
+
+function releaseFoKmRecalculationLock(lockKey) {
+  foKmRecalculationLocks.delete(lockKey);
+  foKmRecalculationLockStartedAt.delete(lockKey);
+}
+
+function addFoKmRecalculateAllLock(lockKey) {
+  foKmRecalculateAllLocks.add(lockKey);
+  foKmRecalculateAllLockStartedAt.set(lockKey, Date.now());
+}
+
+function releaseFoKmRecalculateAllLock(lockKey) {
+  foKmRecalculateAllLocks.delete(lockKey);
+  foKmRecalculateAllLockStartedAt.delete(lockKey);
 }
 
 function normalizeSupabaseUrl(url) {
@@ -613,6 +664,25 @@ function requireFullDayGpsKmPermission(request, response, next) {
     response.status(403).json({
       ok: false,
       message: `Role ${request.userRole || 'Unknown'} cannot run full-day GPS KM recalculation.`,
+    });
+    return;
+  }
+  next();
+}
+
+function hasCheckoutMissingKmReviewPermission(profile) {
+  if (!profile || profile.is_active !== true) return false;
+  if (String(profile.status || '').trim().toLowerCase() !== 'active') return false;
+  return new Set(['ADMIN', 'QPMSADMIN', 'DEVELOPER']).has(
+    normalizePermissionRole(profile.role),
+  );
+}
+
+function requireCheckoutMissingKmReviewPermission(request, response, next) {
+  if (!hasCheckoutMissingKmReviewPermission(request.profile)) {
+    response.status(403).json({
+      ok: false,
+      message: `Role ${request.userRole || 'Unknown'} cannot approve delayed checkout KM.`,
     });
     return;
   }
@@ -5022,6 +5092,22 @@ app.post(
         .select('*')
         .single();
       if (updateError) throw updateError;
+      let delayedCheckoutAudit = null;
+      try {
+        delayedCheckoutAudit = await auditDelayedCheckoutMissingKmForVisit(client, updatedVisit);
+      } catch (auditError) {
+        delayedCheckoutAudit = {
+          audited: false,
+          updated: false,
+          reason: 'delayed_checkout_audit_failed',
+          message: auditError.message,
+        };
+        console.warn('DELAYED_CHECKOUT_REVIEW_AUDIT_FAILED', {
+          visit_id: visit.id,
+          employee_code: visit.employee_code || visit.fo_user_id || null,
+          message: auditError.message,
+        });
+      }
 
       const { data: liveStatus, error: liveStatusFetchError } = await client
         .from('fo_live_status')
@@ -5061,8 +5147,202 @@ app.post(
         ok: true,
         message: 'Site visit force checked out.',
         visit: updatedVisit,
+        delayedCheckoutAudit,
         staleLiveStatusCleanup,
         recalculation,
+      });
+    } catch (error) {
+      response.status(error.statusCode || 500).json({ ok: false, message: error.message });
+    }
+  },
+);
+
+function metadataObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function metadataBoolean(value) {
+  return value === true || String(value || '').trim().toLowerCase() === 'true';
+}
+
+function metadataNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+app.post(
+  '/api/fo/site-visits/:visitId/checkout-missing-km-review',
+  requireSupabaseJwt,
+  requireCheckoutMissingKmReviewPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertServiceRoleAuthAdminAccess(client);
+      const visitId = String(request.params.visitId || '').trim();
+      const action = String(request.body?.action || '').trim().toLowerCase();
+      const remarks = String(request.body?.remarks || '').trim();
+      const reviewSource = String(request.body?.review_source || 'dashboard').trim() || 'dashboard';
+      const adminOverride = request.body?.admin_override === true;
+      if (!visitId) {
+        response.status(400).json({ ok: false, message: 'visitId is required.' });
+        return;
+      }
+      if (!['approve', 'reject'].includes(action)) {
+        response.status(400).json({ ok: false, message: 'action must be approve or reject.' });
+        return;
+      }
+
+      const { data: visit, error: visitError } = await client
+        .from('fo_site_visits')
+        .select('*')
+        .eq('id', visitId)
+        .single();
+      if (visitError) throw visitError;
+      if (!visit) {
+        response.status(404).json({ ok: false, message: 'Site visit not found.' });
+        return;
+      }
+
+      let metadata = metadataObject(visit.metadata);
+      if (!metadataBoolean(metadata.requires_checkout_review)) {
+        const audit = await auditDelayedCheckoutMissingKmForVisit(client, visit);
+        const { data: refreshedVisit, error: refreshedError } = await client
+          .from('fo_site_visits')
+          .select('*')
+          .eq('id', visitId)
+          .single();
+        if (refreshedError) throw refreshedError;
+        metadata = metadataObject(refreshedVisit?.metadata);
+        if (!metadataBoolean(metadata.requires_checkout_review)) {
+          response.status(409).json({
+            ok: false,
+            message: 'This site visit does not require delayed checkout KM review.',
+            audit,
+          });
+          return;
+        }
+      }
+      const exceptionType = String(metadata.checkout_exception_type || '').trim().toLowerCase();
+      const hasDelayedCheckoutSuggestion =
+        metadataNumber(metadata.suggested_missing_checkout_km) !== null ||
+        metadataNumber(metadata.suggested_missing_checkout_haversine_km) !== null;
+      if (exceptionType && exceptionType !== 'delayed_far_checkout' && !hasDelayedCheckoutSuggestion) {
+        response.status(409).json({
+          ok: false,
+          message: 'This endpoint only handles delayed far checkout missing KM reviews.',
+        });
+        return;
+      }
+
+      const currentStatus = String(metadata.checkout_review_status || 'pending').trim().toLowerCase();
+      if (currentStatus && currentStatus !== 'pending' && !adminOverride) {
+        response.status(409).json({
+          ok: false,
+          message: `Checkout review is already ${currentStatus}. Use admin_override to change it.`,
+        });
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      const actorEmail = request.profile?.email || request.authUser?.email || null;
+      const actorEmployeeCode = request.profile?.employee_code || request.employeeCode || null;
+      const actorRole = request.profile?.role || request.userRole || null;
+      const suggestedKm = metadataNumber(
+        metadata.suggested_missing_checkout_km ??
+          metadata.suggested_missing_checkout_haversine_km,
+      );
+      const toleranceKm = 2;
+      const nextMetadata = {
+        ...metadata,
+        checkout_review_last_action: action,
+        checkout_review_last_action_at: nowIso,
+        checkout_review_last_source: reviewSource,
+        checkout_review_last_actor_role: actorRole,
+        checkout_review_admin_override: adminOverride,
+      };
+
+      let approvedKm = 0;
+      if (action === 'approve') {
+        approvedKm = metadataNumber(request.body?.approved_km);
+        if (approvedKm === null || approvedKm < 0) {
+          response.status(400).json({ ok: false, message: 'approved_km must be a number greater than or equal to 0.' });
+          return;
+        }
+        if (suggestedKm !== null && approvedKm > suggestedKm + toleranceKm && !adminOverride) {
+          response.status(400).json({
+            ok: false,
+            message: `approved_km cannot exceed suggested KM by more than ${toleranceKm} km without admin_override.`,
+          });
+          return;
+        }
+        if (suggestedKm === null && approvedKm > 0 && !adminOverride) {
+          response.status(400).json({
+            ok: false,
+            message: 'admin_override is required when approving KM without a suggested KM.',
+          });
+          return;
+        }
+        nextMetadata.checkout_review_status = 'approved';
+        nextMetadata.approved_missing_checkout_km = Number(approvedKm.toFixed(2));
+        nextMetadata.approved_missing_checkout_amount = Number((approvedKm * 4).toFixed(2));
+        nextMetadata.approved_missing_checkout_adjustment_km = Number(approvedKm.toFixed(2));
+        nextMetadata.approved_missing_checkout_adjustment_amount = Number((approvedKm * 4).toFixed(2));
+        nextMetadata.checkout_review_approved_by = actorEmail;
+        nextMetadata.checkout_review_approved_by_employee_code = actorEmployeeCode;
+        nextMetadata.checkout_review_approval_role = actorRole;
+        nextMetadata.checkout_review_approved_at = nowIso;
+        nextMetadata.checkout_review_approval_remarks = remarks || null;
+        nextMetadata.checkout_review_final_source = 'admin_approved';
+      } else {
+        if (!remarks) {
+          response.status(400).json({ ok: false, message: 'remarks are required when rejecting delayed checkout KM.' });
+          return;
+        }
+        nextMetadata.checkout_review_status = 'rejected';
+        nextMetadata.checkout_review_rejected_by = actorEmail;
+        nextMetadata.checkout_review_rejected_by_employee_code = actorEmployeeCode;
+        nextMetadata.checkout_review_rejection_role = actorRole;
+        nextMetadata.checkout_review_rejected_at = nowIso;
+        nextMetadata.checkout_review_rejection_reason = remarks;
+        nextMetadata.approved_missing_checkout_km = 0;
+        nextMetadata.approved_missing_checkout_amount = 0;
+        nextMetadata.approved_missing_checkout_adjustment_km = 0;
+        nextMetadata.approved_missing_checkout_adjustment_amount = 0;
+      }
+
+      const { data: updatedVisit, error: updateError } = await client
+        .from('fo_site_visits')
+        .update({
+          metadata: nextMetadata,
+          updated_at: nowIso,
+        })
+        .eq('id', visitId)
+        .select('*')
+        .single();
+      if (updateError) throw updateError;
+
+      console.log('DELAYED_CHECKOUT_REVIEW_DECISION', {
+        visit_id: visitId,
+        employee_code: visit.employee_code || visit.fo_user_id || null,
+        attendance_id: visit.attendance_id || null,
+        checkout_distance_meters: metadataNumber(nextMetadata.checkout_distance_meters),
+        suggested_missing_checkout_km: suggestedKm,
+        suggested_missing_checkout_amount: metadataNumber(nextMetadata.suggested_missing_checkout_amount),
+        action,
+        approved_km: action === 'approve' ? approvedKm : 0,
+        approver_employee_code: actorEmployeeCode,
+        approver_role: actorRole,
+        admin_override: adminOverride,
+      });
+
+      response.json({
+        ok: true,
+        message: action === 'approve'
+          ? 'Delayed checkout missing KM approved for metadata review.'
+          : 'Delayed checkout missing KM rejected.',
+        visit: updatedVisit,
+        payable_application: 'not_connected_no_attendance_totals_changed',
       });
     } catch (error) {
       response.status(error.statusCode || 500).json({ ok: false, message: error.message });
@@ -5074,11 +5354,12 @@ app.post('/api/fo/km/recalculate', async (request, response) => {
   const payload = request.body || {};
   const lockKey = foKmRecalculationLockKey(payload);
   const lockDate = normalizeFoKmRecalculationDate(payload.date);
+  pruneStaleFoKmRecalculationLocks();
   if (foKmRecalculateAllLocks.has(lockDate) || foKmRecalculationLocks.has(lockKey)) {
     response.status(409).json({ ok: false, message: FO_KM_RECALCULATION_RUNNING_MESSAGE });
     return;
   }
-  foKmRecalculationLocks.add(lockKey);
+  addFoKmRecalculationLock(lockKey);
   try {
     const client = requireServiceRoleSupabase();
     await assertServiceRoleAuthAdminAccess(client);
@@ -5096,7 +5377,7 @@ app.post('/api/fo/km/recalculate', async (request, response) => {
         : {}),
     });
   } finally {
-    foKmRecalculationLocks.delete(lockKey);
+    releaseFoKmRecalculationLock(lockKey);
   }
 });
 
@@ -5105,11 +5386,12 @@ app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRec
   const fromDate = normalizeFoKmRecalculationDate(payload.fromDate || payload.date);
   const toDate = normalizeFoKmRecalculationDate(payload.toDate || payload.date || fromDate);
   const lockDate = `${fromDate}_${toDate}`;
+  pruneStaleFoKmRecalculationLocks();
   if (foKmRecalculateAllLocks.has(lockDate) || hasFoKmRecalculationForDate(fromDate)) {
     response.status(409).json({ ok: false, message: FO_KM_RECALCULATION_RUNNING_MESSAGE });
     return;
   }
-  foKmRecalculateAllLocks.add(lockDate);
+  addFoKmRecalculateAllLock(lockDate);
   try {
     const client = requireServiceRoleSupabase();
     await assertServiceRoleAuthAdminAccess(client);
@@ -5127,7 +5409,7 @@ app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRec
         : {}),
     });
   } finally {
-    foKmRecalculateAllLocks.delete(lockDate);
+    releaseFoKmRecalculateAllLock(lockDate);
   }
 });
 
@@ -5135,11 +5417,12 @@ app.post('/api/fo/km/recalculate-switch-mode', requireSupabaseJwt, requireTempor
   const payload = request.body || {};
   const lockKey = `switch_mode:${foKmRecalculationLockKey(payload)}`;
   const lockDate = normalizeFoKmRecalculationDate(payload.date);
+  pruneStaleFoKmRecalculationLocks();
   if (foKmRecalculateAllLocks.has(lockDate) || foKmRecalculationLocks.has(lockKey)) {
     response.status(409).json({ ok: false, message: FO_KM_RECALCULATION_RUNNING_MESSAGE });
     return;
   }
-  foKmRecalculationLocks.add(lockKey);
+  addFoKmRecalculationLock(lockKey);
   try {
     const client = requireServiceRoleSupabase();
     await assertServiceRoleAuthAdminAccess(client);
@@ -5157,7 +5440,7 @@ app.post('/api/fo/km/recalculate-switch-mode', requireSupabaseJwt, requireTempor
         : {}),
     });
   } finally {
-    foKmRecalculationLocks.delete(lockKey);
+    releaseFoKmRecalculationLock(lockKey);
   }
 });
 
@@ -5165,11 +5448,12 @@ app.post('/api/fo/km/recalculate-full-day-gps', requireSupabaseJwt, requireFullD
   const payload = request.body || {};
   const lockKey = `full_day_gps:${foKmRecalculationLockKey(payload)}`;
   const lockDate = normalizeFoKmRecalculationDate(payload.date);
+  pruneStaleFoKmRecalculationLocks();
   if (foKmRecalculateAllLocks.has(lockDate) || foKmRecalculationLocks.has(lockKey)) {
     response.status(409).json({ ok: false, message: FO_KM_RECALCULATION_RUNNING_MESSAGE });
     return;
   }
-  foKmRecalculationLocks.add(lockKey);
+  addFoKmRecalculationLock(lockKey);
   try {
     const client = requireServiceRoleSupabase();
     await assertServiceRoleAuthAdminAccess(client);
@@ -5193,7 +5477,7 @@ app.post('/api/fo/km/recalculate-full-day-gps', requireSupabaseJwt, requireFullD
         : {}),
     });
   } finally {
-    foKmRecalculationLocks.delete(lockKey);
+    releaseFoKmRecalculationLock(lockKey);
   }
 });
 
@@ -5201,11 +5485,12 @@ app.post('/api/fo/km/recalculate-all', requireSupabaseJwt, requireFoKmBatchRecal
   const payload = request.body || {};
   const date = payload.date || payload.fromDate || currentIndiaDateInput();
   const lockDate = normalizeFoKmRecalculationDate(date);
+  pruneStaleFoKmRecalculationLocks();
   if (foKmRecalculateAllLocks.has(lockDate) || hasFoKmRecalculationForDate(lockDate)) {
     response.status(409).json({ ok: false, message: FO_KM_RECALCULATION_RUNNING_MESSAGE });
     return;
   }
-  foKmRecalculateAllLocks.add(lockDate);
+  addFoKmRecalculateAllLock(lockDate);
   try {
     const client = requireServiceRoleSupabase();
     await assertServiceRoleAuthAdminAccess(client);
@@ -5223,7 +5508,7 @@ app.post('/api/fo/km/recalculate-all', requireSupabaseJwt, requireFoKmBatchRecal
         : {}),
     });
   } finally {
-    foKmRecalculateAllLocks.delete(lockDate);
+    releaseFoKmRecalculateAllLock(lockDate);
   }
 });
 
@@ -5521,11 +5806,12 @@ async function runEndDayKmAutoRecalc(reason = 'interval') {
       };
       const lockKey = foKmRecalculationLockKey(payload);
       const lockDate = normalizeFoKmRecalculationDate(payload.date);
+      pruneStaleFoKmRecalculationLocks();
       if (foKmRecalculateAllLocks.has(lockDate) || foKmRecalculationLocks.has(lockKey)) {
         summary.skippedLocked += 1;
         continue;
       }
-      foKmRecalculationLocks.add(lockKey);
+      addFoKmRecalculationLock(lockKey);
       try {
         const result = await recalculateFoKm(client, payload, {
           maxGoogleDirectionsCalls: Number(process.env.END_DAY_KM_AUTO_RECALC_MAX_GOOGLE_DIRECTIONS_CALLS || process.env.MAX_GOOGLE_DIRECTIONS_CALLS),
@@ -5549,7 +5835,7 @@ async function runEndDayKmAutoRecalc(reason = 'interval') {
           code: error.code || null,
         });
       } finally {
-        foKmRecalculationLocks.delete(lockKey);
+        releaseFoKmRecalculationLock(lockKey);
       }
     }
   } catch (error) {
