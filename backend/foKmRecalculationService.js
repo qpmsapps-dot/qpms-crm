@@ -9,6 +9,8 @@ const DUPLICATE_WINDOW_SECONDS = 10;
 const MIN_MEANINGFUL_FINAL_RETURN_LEG_KM = 0.05;
 const DEFAULT_MAX_GOOGLE_DIRECTIONS_CALLS = 25;
 const SWITCH_TIME_ANCHOR_MAX_GAP_MINUTES = 60;
+const PRE_SITE_DETOUR_MIN_EXTRA_KM = 2;
+const PRE_SITE_DETOUR_RATIO = 1.35;
 const ATTENDANCE_SELECT_COLUMNS = [
   'id',
   'fo_user_id',
@@ -1225,6 +1227,7 @@ export async function calculateTravelLegKm({
   toLng,
   employeeCode,
   attendanceId,
+  legType = null,
   options = {},
 }) {
   const legStart = parseValidDate(fromTime);
@@ -1261,31 +1264,19 @@ export async function calculateTravelLegKm({
         segmentSummary: [],
       };
   const gpsBasedKm = Number(gpsCalculation.actualTravelKm.toFixed(2));
+  const rawGpsKm = Number(calculateRawGpsKm(cleanedPoints).toFixed(2));
   const gpsLogCount = gpsRows.length;
   const validPoints = cleanedPoints.length;
   const rejectedPoints = Math.max(0, gpsLogCount - validPoints);
   const validRatio = gpsLogCount > 0 ? validPoints / gpsLogCount : 0;
-  const gpsUsable =
+  const sufficientGpsProof =
     gpsLogCount >= 10 &&
     validPoints >= 5 &&
+    validRatio >= 0.6;
+  const gpsUsable =
+    sufficientGpsProof &&
     gpsBasedKm > 0 &&
     validRatio >= 0.6;
-  if (gpsUsable) {
-    return {
-      ...fallbackBase,
-      legKm: gpsBasedKm,
-      legSource: 'GPS_BASED',
-      gpsLogCount,
-      validPoints,
-      rejectedPoints,
-      fallbackReason: null,
-      acceptedGpsKm: Number(gpsCalculation.acceptedKm.toFixed(2)),
-      reconstructedGapKm: Number(gpsCalculation.reconstructedKm.toFixed(2)),
-      segmentsAccepted: gpsCalculation.segmentsAccepted,
-      segmentsReconstructed: gpsCalculation.segmentsReconstructed,
-      segmentsRejected: gpsCalculation.segmentsRejected,
-    };
-  }
 
   const from = {
     latitude: normalizeNumber(fromLat),
@@ -1295,7 +1286,79 @@ export async function calculateTravelLegKm({
     latitude: normalizeNumber(toLat),
     longitude: normalizeNumber(toLng),
   };
-  if (!isValidCoordinate(from.latitude, from.longitude) || !isValidCoordinate(to.latitude, to.longitude)) {
+  const hasRouteAnchors = isValidCoordinate(from.latitude, from.longitude) && isValidCoordinate(to.latitude, to.longitude);
+  const isPreSiteFirstLeg = legType === 'start_to_first_checkin';
+  let googleDirectKm = null;
+  if (isPreSiteFirstLeg && hasRouteAnchors) {
+    const directKm = await googleDirectionsKm(from, to, options);
+    googleDirectKm = directKm === null ? null : Number(directKm.toFixed(2));
+  }
+
+  const rawGpsMuchHigherThanFiltered =
+    isPreSiteFirstLeg &&
+    sufficientGpsProof &&
+    rawGpsKm > 0 &&
+    rawGpsKm >= gpsBasedKm + PRE_SITE_DETOUR_MIN_EXTRA_KM &&
+    (gpsBasedKm <= 0 || rawGpsKm / Math.max(gpsBasedKm, 0.01) >= PRE_SITE_DETOUR_RATIO);
+  const gpsMuchHigherThanGoogle =
+    isPreSiteFirstLeg &&
+    sufficientGpsProof &&
+    googleDirectKm !== null &&
+    Math.max(rawGpsKm, gpsBasedKm) >= googleDirectKm + PRE_SITE_DETOUR_MIN_EXTRA_KM &&
+    Math.max(rawGpsKm, gpsBasedKm) / Math.max(googleDirectKm, 0.01) >= PRE_SITE_DETOUR_RATIO;
+
+  if (rawGpsMuchHigherThanFiltered) {
+    return {
+      ...fallbackBase,
+      legKm: rawGpsKm,
+      legSource: 'PRE_SITE_GPS_SOURCING',
+      gpsLogCount,
+      validPoints,
+      rejectedPoints,
+      fallbackReason: null,
+      rawGpsKm,
+      filteredGpsKm: gpsBasedKm,
+      acceptedGpsKm: Number(gpsCalculation.acceptedKm.toFixed(2)),
+      reconstructedGapKm: Number(gpsCalculation.reconstructedKm.toFixed(2)),
+      googleDirectRouteKm: googleDirectKm,
+      payableKmSourceReason: 'pre_site_sourcing_raw_gps_used_because_filtered_gps_was_much_lower',
+      reviewFlags: [
+        'PRE_SITE_SOURCING_REVIEW',
+        ...(gpsMuchHigherThanGoogle ? ['GPS_DETOUR_REVIEW_REQUIRED'] : []),
+      ],
+      segmentsAccepted: gpsCalculation.segmentsAccepted,
+      segmentsReconstructed: gpsCalculation.segmentsReconstructed,
+      segmentsRejected: gpsCalculation.segmentsRejected,
+    };
+  }
+
+  if (gpsUsable) {
+    return {
+      ...fallbackBase,
+      legKm: gpsBasedKm,
+      legSource: 'GPS_BASED',
+      gpsLogCount,
+      validPoints,
+      rejectedPoints,
+      fallbackReason: null,
+      rawGpsKm,
+      filteredGpsKm: gpsBasedKm,
+      acceptedGpsKm: Number(gpsCalculation.acceptedKm.toFixed(2)),
+      reconstructedGapKm: Number(gpsCalculation.reconstructedKm.toFixed(2)),
+      googleDirectRouteKm: googleDirectKm,
+      payableKmSourceReason: gpsMuchHigherThanGoogle
+        ? 'pre_site_gps_used_and_google_direct_route_kept_for_review'
+        : 'gps_cleaned_reconstructed_route_used',
+      reviewFlags: gpsMuchHigherThanGoogle
+        ? ['PRE_SITE_SOURCING_REVIEW', 'GPS_DETOUR_REVIEW_REQUIRED']
+        : [],
+      segmentsAccepted: gpsCalculation.segmentsAccepted,
+      segmentsReconstructed: gpsCalculation.segmentsReconstructed,
+      segmentsRejected: gpsCalculation.segmentsRejected,
+    };
+  }
+
+  if (!hasRouteAnchors) {
     return {
       ...fallbackBase,
       legKm: 0,
@@ -1304,10 +1367,12 @@ export async function calculateTravelLegKm({
       validPoints,
       rejectedPoints,
       fallbackReason: 'gps_unusable_and_missing_route_anchors',
+      rawGpsKm,
+      filteredGpsKm: gpsBasedKm,
     };
   }
 
-  const googleKm = await googleDirectionsKm(from, to, options);
+  const googleKm = googleDirectKm !== null ? googleDirectKm : await googleDirectionsKm(from, to, options);
   if (googleKm !== null) {
     return {
       ...fallbackBase,
@@ -1316,6 +1381,13 @@ export async function calculateTravelLegKm({
       gpsLogCount,
       validPoints,
       rejectedPoints,
+      rawGpsKm,
+      filteredGpsKm: gpsBasedKm,
+      googleDirectRouteKm: Number(googleKm.toFixed(2)),
+      payableKmSourceReason: 'google_route_used_because_gps_proof_did_not_pass_thresholds',
+      reviewFlags: isPreSiteFirstLeg && sufficientGpsProof
+        ? ['PRE_SITE_SOURCING_REVIEW']
+        : [],
       fallbackReason: validPoints < 5
         ? 'gps_valid_points_below_threshold'
         : gpsLogCount < 10
@@ -1334,6 +1406,10 @@ export async function calculateTravelLegKm({
     gpsLogCount,
     validPoints,
     rejectedPoints,
+    rawGpsKm,
+    filteredGpsKm: gpsBasedKm,
+    googleDirectRouteKm: googleDirectKm,
+    payableKmSourceReason: 'haversine_used_because_google_route_unavailable',
     fallbackReason: 'google_route_unavailable',
   };
 }
@@ -1373,6 +1449,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       toLng: leg.to.longitude,
       employeeCode: attendance.employee_code || attendance.fo_user_id,
       attendanceId: attendance.id,
+      legType: leg.type,
       options,
     });
     legAudit.push({
@@ -1396,8 +1473,13 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       gps_log_count: result.gpsLogCount,
       valid_points: result.validPoints,
       rejected_points: result.rejectedPoints,
+      raw_gps_km: result.rawGpsKm ?? null,
+      filtered_gps_km: result.filteredGpsKm ?? null,
+      google_direct_route_km: result.googleDirectRouteKm ?? null,
       accepted_gps_km: result.acceptedGpsKm ?? null,
       reconstructed_gap_km: result.reconstructedGapKm ?? null,
+      payable_km_source_reason: result.payableKmSourceReason || null,
+      review_flags: result.reviewFlags || [],
     });
   }
 
@@ -1416,7 +1498,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
   );
   const selectedKmSource = calculatedSources.size > 1
     ? 'MIXED_LEG_BASED'
-    : calculatedSources.has('GPS_BASED')
+    : calculatedSources.has('GPS_BASED') || calculatedSources.has('PRE_SITE_GPS_SOURCING')
       ? 'GPS_BASED'
       : calculatedSources.has('GOOGLE_ROUTE_FALLBACK')
         ? 'GOOGLE_ROUTE_FALLBACK'
@@ -1427,6 +1509,9 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
   if (!travelPolicy.payableKmAllowed) reviewFlags.push('NON_PAYABLE_TRAVEL_MODE');
   if (legAudit.some((leg) => leg.status === 'skipped')) reviewFlags.push('INCOMPLETE_TRAVEL_LEGS_SKIPPED');
   if (calculatedSources.has('HAVERSINE_ROUTE_FALLBACK')) reviewFlags.push('GOOGLE_ROUTE_FAILED_USED_HAVERSINE');
+  for (const leg of legAudit) {
+    for (const flag of leg.review_flags || []) reviewFlags.push(flag);
+  }
   const routeSyncStatus = totalKm > 0
     ? 'travel_leg_based'
     : travelPolicy.payableKmAllowed

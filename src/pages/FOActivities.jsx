@@ -1466,6 +1466,8 @@ function reviewFlagsForOfficer({ systemKm = 0, attendance, visits = [], logs = [
         "MISSING_ANCHOR_COORDINATES",
         "OPEN_SITE_VISIT",
         "LOW_GPS_LOG_COUNT",
+        "PRE_SITE_SOURCING_REVIEW",
+        "GPS_DETOUR_REVIEW_REQUIRED",
       ].includes(flag)
     ) {
       flags.add(flag);
@@ -5672,6 +5674,23 @@ function FieldOfficerDetailsView({
   const endBattery =
     lastAttendance.end_battery_percentage ?? lastAttendance.battery_end;
   const reviewFlags = officer?.reviewFlags || [];
+  const attendanceMeta = attendanceMetadata(attendance);
+  const travelLegs = Array.isArray(attendanceMeta.travel_legs)
+    ? attendanceMeta.travel_legs
+    : [];
+  const firstPreSiteLeg =
+    travelLegs.find((leg) => leg?.type === "start_to_first_checkin") || null;
+  const payableKmSourceReason =
+    firstPreSiteLeg?.payable_km_source_reason ||
+    attendanceMeta.payable_km_source_detail ||
+    attendanceMeta.selected_km_source ||
+    officer?.routeKmSource ||
+    "--";
+  const googleDirectRouteKm = numberOrNull(
+    firstPreSiteLeg?.google_direct_route_km,
+  );
+  const preSiteRawGpsKm = numberOrNull(firstPreSiteLeg?.raw_gps_km);
+  const preSiteFilteredGpsKm = numberOrNull(firstPreSiteLeg?.filtered_gps_km);
   const checkoutExceptions = useMemo(
     () =>
       visits
@@ -6672,6 +6691,19 @@ function FieldOfficerDetailsView({
                 <p className="mt-1 text-slate-600">{reviewFlags.length ? reviewFlags.join(", ") : "No review flags"}</p>
               </div>
             </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                ["Google Direct Route KM", googleDirectRouteKm === null ? "--" : `${googleDirectRouteKm.toFixed(1)} km`],
+                ["Pre-site Raw GPS KM", preSiteRawGpsKm === null ? "--" : `${preSiteRawGpsKm.toFixed(1)} km`],
+                ["Pre-site Filtered GPS KM", preSiteFilteredGpsKm === null ? "--" : `${preSiteFilteredGpsKm.toFixed(1)} km`],
+                ["Payable Source Reason", payableKmSourceReason],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl border border-slate-200 p-4 text-sm">
+                  <strong className="text-slate-900">{label}</strong>
+                  <p className="mt-1 break-words text-slate-600">{displayValue(value)}</p>
+                </div>
+              ))}
+            </div>
             {routeMapOpen ? <div className="mt-4"><GoogleRouteMap officer={officer} routeLogs={routeLogs} fromDate={fromDate} toDate={toDate} /></div> : null}
           </section>
         </div>
@@ -6772,6 +6804,19 @@ function FieldOfficerDetailsView({
                     @ ₹4 / km
                   </p>
                 </div>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 rounded-lg border border-slate-200 p-3 text-xs md:grid-cols-4">
+                {[
+                  ["Google Direct Route KM", googleDirectRouteKm === null ? "--" : `${googleDirectRouteKm.toFixed(1)} km`],
+                  ["Raw GPS KM", `${Number(gpsMetrics.rawGpsKm || 0).toFixed(1)} km`],
+                  ["Filtered GPS KM", `${Number(gpsMetrics.filteredGpsKm || 0).toFixed(1)} km`],
+                  ["Payable Source", payableKmSourceReason],
+                ].map(([label, value]) => (
+                  <div key={label}>
+                    <p className="font-bold text-slate-400">{label}</p>
+                    <p className="mt-1 break-words font-black text-slate-800">{displayValue(value)}</p>
+                  </div>
+                ))}
               </div>
             </section>
 
