@@ -484,6 +484,53 @@ function isOperationsCommandEligibleRecord(record = {}) {
   return OPERATIONS_COMMAND_ALLOWED_ROLES.has(roleKey);
 }
 
+const SELF_ADMIN_OPERATIONS_ROLES = new Set([
+  "admin",
+  "developer",
+  "qpms admin",
+  "qpmsadmin",
+]);
+
+function operationsSelfIdentity(user = {}) {
+  const metadata = user?.metadata && typeof user.metadata === "object" ? user.metadata : {};
+  const profile = user?.profile && typeof user.profile === "object" ? user.profile : {};
+  return {
+    roleKey: normalizeRoleKey(user?.rawRole || user?.role || metadata.role || profile.role),
+    email: String(user?.email || user?.username || metadata.email || profile.email || "").trim().toLowerCase(),
+    employeeCode: normalizeFoKey(
+      firstNonEmptyText(
+        user?.employee_code,
+        user?.employeeCode,
+        profile.employee_code,
+        metadata.employee_code,
+      ),
+    ),
+  };
+}
+
+function isSelfAdminOperationsProfile(profile = {}, user = {}) {
+  const identity = operationsSelfIdentity(user);
+  if (!SELF_ADMIN_OPERATIONS_ROLES.has(identity.roleKey)) return false;
+  const profileRoleKey = normalizeRoleKey(profile?.role || profile?.rawRole);
+  if (!SELF_ADMIN_OPERATIONS_ROLES.has(profileRoleKey)) return false;
+  const profileEmail = String(profile?.email || profile?.username || "").trim().toLowerCase();
+  const profileCode = normalizeFoKey(profile?.employee_code || profile?.employeeCode || profile?.username);
+  const specificQpmsAdminMatch =
+    (identity.email === "qpmsapps@gmail.com" || identity.employeeCode === "QPMSADMIN") &&
+    (profileEmail === "qpmsapps@gmail.com" || profileCode === "QPMSADMIN");
+  return Boolean(
+    specificQpmsAdminMatch ||
+      (identity.email && profileEmail === identity.email) ||
+      (identity.employeeCode && profileCode === identity.employeeCode),
+  );
+}
+
+function isOperationsCommandVisibleRecord(record = {}, user = {}) {
+  const profile = record?.profile || record;
+  return isOperationsCommandEligibleRecord(record) ||
+    isSelfAdminOperationsProfile(profile, user);
+}
+
 function recordMatchesOfficerKeys(record, officerKeys) {
   if (!officerKeys?.size) return false;
   return [
@@ -1403,6 +1450,39 @@ function payableKmFromAttendance(row) {
   return value || 0;
 }
 
+function approvedMissingCheckoutAdjustmentKmFromVisit(visit) {
+  const metadata =
+    visit?.metadata &&
+    typeof visit.metadata === "object" &&
+    !Array.isArray(visit.metadata)
+      ? visit.metadata
+      : {};
+  const reviewStatus = String(metadata.checkout_review_status || "").trim().toLowerCase();
+  if (reviewStatus !== "approved") return 0;
+  const approvedKm = numberOrNull(
+    metadata.approved_missing_checkout_km ??
+      metadata.approved_missing_checkout_adjustment_km ??
+      metadata.approved_missing_km ??
+      metadata.approved_missing_checkout ??
+      visit?.approved_missing_checkout_km ??
+      visit?.approved_missing_km,
+  );
+  return approvedKm !== null && approvedKm > 0 ? approvedKm : 0;
+}
+
+function approvedMissingCheckoutAdjustmentKm(visits = []) {
+  const seenVisitKeys = new Set();
+  return visits.reduce((sum, visit, index) => {
+    const visitKey = String(
+      visit?.id ||
+        `${visit?.employee_code || visit?.fo_user_id || "visit"}:${visit?.check_in_time || index}:${visit?.check_out_time || ""}`,
+    );
+    if (seenVisitKeys.has(visitKey)) return sum;
+    seenVisitKeys.add(visitKey);
+    return sum + approvedMissingCheckoutAdjustmentKmFromVisit(visit);
+  }, 0);
+}
+
 function logPayableKmSource(foId, source, km) {
   console.debug("FO_PAYABLE_KM_SOURCE_SELECTED", foId, source, km);
   console.debug("FO_ROUTE_KM_TODAY_VALUE", foId, km);
@@ -1573,7 +1653,11 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
     attendance: record,
     visits: foVisits,
   });
-  const payableKm = payableRouteKm.km;
+  const basePayableKm = payableRouteKm.km;
+  const missingCheckoutAdjustmentKm =
+    approvedMissingCheckoutAdjustmentKm(foVisits);
+  const payableKm =
+    basePayableKm + missingCheckoutAdjustmentKm;
   const foSafeKm = actualTravelKmFromAttendanceOrLogs(record, foLogs, foVisits);
   const actualKm = Number(foSafeKm.actualTravelKm ?? record.actual_km ?? record.total_raw_km ?? 0);
   const eligibleKm = payableKm;
@@ -1623,6 +1707,9 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
     speed: gpsPoint?.speed ?? null,
     accuracy: gpsPoint?.accuracy ?? null,
     actualKm,
+    basePayableKm,
+    approvedMissingCheckoutAdjustmentKm: missingCheckoutAdjustmentKm,
+    finalPayableKm: payableKm,
     rawGpsKm: Number(foSafeKm.rawGpsKm || 0),
     filteredGpsKm: Number(foSafeKm.filteredGpsKm || 0),
     actualTravelKm: Number(foSafeKm.actualTravelKm || actualKm || 0),
@@ -1655,9 +1742,9 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
   });
 }
 
-function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statusDate }) {
+function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statusDate, currentUser }) {
   const activeProfiles = profiles.filter(
-    (profile) => isActiveProfile(profile) && isOperationsCommandEligibleRecord(profile),
+    (profile) => isActiveProfile(profile) && isOperationsCommandVisibleRecord(profile, currentUser),
   );
   const uniqueProfilesByCode = new Map();
   activeProfiles.forEach((profile) => {
@@ -1756,24 +1843,37 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
       (sum, row) => sum + payableKmFromAttendance(row),
       0,
     );
+    const rangeApprovedMissingKm = approvedMissingCheckoutAdjustmentKm(
+      visitsByFo.get(foId) || [],
+    );
+    const rangeFinalPayableKm = rangePayableKm + rangeApprovedMissingKm;
     return {
       ...officer,
       attendances: rangeAttendances,
-      eligibleKm: rangeAttendances.length
+      basePayableKm: rangeAttendances.length
         ? rangePayableKm
+        : officer.basePayableKm,
+      approvedMissingCheckoutAdjustmentKm: rangeAttendances.length
+        ? rangeApprovedMissingKm
+        : officer.approvedMissingCheckoutAdjustmentKm,
+      finalPayableKm: rangeAttendances.length
+        ? rangeFinalPayableKm
+        : officer.finalPayableKm,
+      eligibleKm: rangeAttendances.length
+        ? rangeFinalPayableKm
         : officer.eligibleKm,
       routeKmToday: rangeAttendances.length
-        ? rangePayableKm
+        ? rangeFinalPayableKm
         : officer.routeKmToday,
       petrolAmount: rangeAttendances.length
-        ? calculatePetrolAmount(rangePayableKm)
+        ? calculatePetrolAmount(rangeFinalPayableKm)
         : calculatePetrolAmount(officer.eligibleKm ?? officer.routeKmToday),
     };
   });
   const mergeDiagnostics = {
     activeProfilesCount: activeProfiles.length,
     operationsExcludedProfilesCount: profiles.filter(
-      (profile) => isActiveProfile(profile) && !isOperationsCommandEligibleRecord(profile),
+      (profile) => isActiveProfile(profile) && !isOperationsCommandVisibleRecord(profile, currentUser),
     ).length,
     activityDerivedOfficerCount: matchedActivityIds.size,
     finalMergedOfficerCount: officers.length,
@@ -1910,12 +2010,12 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
   return enrichedOfficer;
 }
 
-function mergeRealtimeOfficer(officers, liveRow, profileRows) {
+function mergeRealtimeOfficer(officers, liveRow, profileRows, currentUser) {
   const profilesByCode = profileByEmployeeCode(profileRows);
   const liveFoId = normalizeFoKey(liveRow?.fo_user_id);
   const profile = profilesByCode.get(liveFoId);
   if (!profile) return officers;
-  if (!isOperationsCommandEligibleRecord(profile)) return officers;
+  if (!isOperationsCommandVisibleRecord(profile, currentUser)) return officers;
   const foId = normalizeFoKey(
     profile?.employee_code || profile?.username || profile?.id,
   );
@@ -3152,7 +3252,9 @@ function exportFilteredOperationsDashboardExcel({
         operationalStatusLabel: operationalStatusLabel(operationalStatus),
       };
       if (!statusFilterMatches(exportOfficer, filters?.status || "All Status")) return;
-      const payableKm = row ? payableKmFromAttendance(row) : 0;
+      const basePayableKm = row ? payableKmFromAttendance(row) : 0;
+      const approvedMissingKm = approvedMissingCheckoutAdjustmentKm(dateVisits);
+      const finalPayableKm = basePayableKm + approvedMissingKm;
       const lastVisitTime = dateVisits
         .map((visit) => siteVisitCheckoutValue(visit) || visit.check_in_time)
         .filter(Boolean)
@@ -3174,8 +3276,10 @@ function exportFilteredOperationsDashboardExcel({
           ? operationalStatusLabel(operationalStatus)
           : "Not Started",
         "Total Visits": dateVisits.length,
-        "Payable KM": payableKm.toFixed(2),
-        "Petrol Amount": calculatePetrolAmount(payableKm).toFixed(2),
+        "Base Payable KM": basePayableKm.toFixed(2),
+        "Approved Missing KM Adjustment": approvedMissingKm.toFixed(2),
+        "Final Payable KM": finalPayableKm.toFixed(2),
+        "Petrol Amount": calculatePetrolAmount(finalPayableKm).toFixed(2),
         "Last Location Time": formatDateTime(lastLocationTime),
       });
     });
@@ -3196,6 +3300,14 @@ function exportFilteredOperationsDashboardExcel({
     .map((visit) => {
       const officer = officerForVisitRow(exportOfficers, visit) || {};
       const routeKm = Number(visit.route_km);
+      const missingEvidence = missingCheckoutEvidence(visit);
+      const finalPayableKm =
+        (Number.isFinite(routeKm) && routeKm > 0 ? routeKm : 0) +
+        missingEvidence.approvedKm;
+      const reviewStatus = checkoutReviewStatus(visit);
+      const metadata = visit?.metadata && typeof visit.metadata === "object" && !Array.isArray(visit.metadata)
+        ? visit.metadata
+        : {};
       return {
         "Employee Code": officer.employeeCode || visit.employee_code || visit.fo_user_id || "",
         "Employee Name":
@@ -3210,6 +3322,14 @@ function exportFilteredOperationsDashboardExcel({
         "Visit Status": siteVisitStatus(visit),
         "Visit Duration": siteVisitDuration(visit),
         "Route KM / Payable KM": Number.isFinite(routeKm) ? routeKm.toFixed(2) : "",
+        "Missing KM Detected": missingCheckoutKmLabel(visit),
+        "Approved Missing KM": missingEvidence.approvedKm.toFixed(2),
+        "Final Payable KM": finalPayableKm.toFixed(2),
+        "Checkout Review Status": reviewStatus.label,
+        "Approval Remarks / Approved By": [
+          metadata.checkout_review_approval_remarks,
+          metadata.checkout_review_approved_by_employee_code,
+        ].filter(Boolean).join(" / "),
         "Checkout Note": visit.checkout_note || visit.check_out_note || "",
       };
     });
@@ -3243,10 +3363,12 @@ function exportFilteredOperationsDashboardExcel({
           ? visitsForEmployeeDate(siteVisitRows, foId, attendanceDateInput(latestAttendance))
           : [],
       );
-      const payableKm = officerAttendances.reduce(
+      const basePayableKm = officerAttendances.reduce(
         (sum, row) => sum + payableKmFromAttendance(row),
         0,
       );
+      const approvedMissingKm = approvedMissingCheckoutAdjustmentKm(officerVisits);
+      const finalPayableKm = basePayableKm + approvedMissingKm;
       return {
         "Employee Code": officer.employeeCode || officer.foId || "",
         "Employee Name": officer.name || "",
@@ -3256,8 +3378,10 @@ function exportFilteredOperationsDashboardExcel({
         "Current Status": operationalStatusLabel(summaryStatus),
         "Attendance Records": officerAttendances.length,
         "Total Visits": officerVisits.length,
-        "Payable KM": payableKm.toFixed(2),
-        "Petrol Amount": calculatePetrolAmount(payableKm).toFixed(2),
+        "Base Payable KM": basePayableKm.toFixed(2),
+        "Approved Missing KM Adjustment": approvedMissingKm.toFixed(2),
+        "Final Payable KM": finalPayableKm.toFixed(2),
+        "Petrol Amount": calculatePetrolAmount(finalPayableKm).toFixed(2),
         "Last Location Time": formatDateTime(
           latestAttendance?.last_location_time ||
             latestAttendance?.updated_at ||
@@ -3286,7 +3410,9 @@ function exportFilteredOperationsDashboardExcel({
     "End Day Time / Logout Time",
     "Current Status",
     "Total Visits",
-    "Payable KM",
+    "Base Payable KM",
+    "Approved Missing KM Adjustment",
+    "Final Payable KM",
     "Petrol Amount",
     "Last Location Time",
   ]);
@@ -3303,6 +3429,11 @@ function exportFilteredOperationsDashboardExcel({
     "Visit Status",
     "Visit Duration",
     "Route KM / Payable KM",
+    "Missing KM Detected",
+    "Approved Missing KM",
+    "Final Payable KM",
+    "Checkout Review Status",
+    "Approval Remarks / Approved By",
     "Checkout Note",
   ]);
   if (userSummaryRows.length) {
@@ -3315,7 +3446,9 @@ function exportFilteredOperationsDashboardExcel({
       "Current Status",
       "Attendance Records",
       "Total Visits",
-      "Payable KM",
+      "Base Payable KM",
+      "Approved Missing KM Adjustment",
+      "Final Payable KM",
       "Petrol Amount",
       "Last Location Time",
     ]);
@@ -3340,6 +3473,7 @@ async function exportHistoricalOperationsDashboardExcel({
   from,
   to,
   filters,
+  currentUser,
 }) {
   if (!isSupabaseConfigured || !supabase) return;
   const fromDate = dateInputValue(from);
@@ -3389,7 +3523,7 @@ async function exportHistoricalOperationsDashboardExcel({
     .filter(
       (profile) =>
         isActiveProfile(profile) &&
-        isOperationsCommandEligibleRecord(profile) &&
+        isOperationsCommandVisibleRecord(profile, currentUser) &&
         !isHiddenEmployeeRecord(profile),
     )
     .map(profileToExportOfficer)
@@ -3672,6 +3806,18 @@ async function exportFoOperationsExcel({
         "Distance From Previous Site KM": distanceFromPrevious.toFixed(3),
         "Running KM After Visit": runningVisitKm.toFixed(3),
         "Distance From Start KM": distanceFromStart.toFixed(3),
+        "Missing KM Detected": missingCheckoutKmLabel(visit),
+        "Approved Missing KM": missingCheckoutEvidence(visit).approvedKm.toFixed(2),
+        "Final Payable KM": (
+          (Number.isFinite(Number(visit.route_km)) && Number(visit.route_km) > 0
+            ? Number(visit.route_km)
+            : 0) + missingCheckoutEvidence(visit).approvedKm
+        ).toFixed(2),
+        "Checkout Review Status": checkoutReviewStatus(visit).label,
+        "Approval Remarks / Approved By": [
+          visit?.metadata?.checkout_review_approval_remarks,
+          visit?.metadata?.checkout_review_approved_by_employee_code,
+        ].filter(Boolean).join(" / "),
         "Remarks / Status": visit.status || visit.visit_status || "",
       });
       previousPoint = checkoutPoint || checkInPoint || previousPoint;
@@ -3739,7 +3885,9 @@ async function exportFoOperationsExcel({
       attendance,
       visits,
     }).km;
-    const eligibleKm = payableRouteKm;
+    const basePayableKm = payableRouteKm;
+    const approvedMissingKm = approvedMissingCheckoutAdjustmentKm(visits);
+    const eligibleKm = basePayableKm + approvedMissingKm;
     const petrolAmount = eligibleKm * RATE_PER_KM;
     if (Math.abs(payableRouteKm - calculatedKm) > 2 && calculatedKm > 0) {
       exceptionRows.push({
@@ -3762,7 +3910,9 @@ async function exportFoOperationsExcel({
       "Raw GPS KM": safeKm.rawGpsKm.toFixed(2),
       "Filtered GPS KM": safeKm.filteredGpsKm.toFixed(2),
       "Actual Travel KM": safeKm.actualTravelKm.toFixed(2),
-      "Route KM": eligibleKm.toFixed(2),
+      "Base Payable KM": basePayableKm.toFixed(2),
+      "Approved Missing KM Adjustment": approvedMissingKm.toFixed(2),
+      "Final Payable KM": eligibleKm.toFixed(2),
       "Route vs Actual KM": (eligibleKm - safeKm.actualTravelKm).toFixed(2),
       "Claim KM": eligibleKm.toFixed(2),
       "Rate Per KM": RATE_PER_KM,
@@ -3809,7 +3959,9 @@ async function exportFoOperationsExcel({
     "Raw GPS KM",
     "Filtered GPS KM",
     "Actual Travel KM",
-    "Route KM",
+    "Base Payable KM",
+    "Approved Missing KM Adjustment",
+    "Final Payable KM",
     "Route vs Actual KM",
     "Claim KM",
     "Rate Per KM",
@@ -3850,6 +4002,11 @@ async function exportFoOperationsExcel({
     "Distance From Previous Site KM",
     "Running KM After Visit",
     "Distance From Start KM",
+    "Missing KM Detected",
+    "Approved Missing KM",
+    "Final Payable KM",
+    "Checkout Review Status",
+    "Approval Remarks / Approved By",
     "Remarks / Status",
   ]);
   appendSheet(workbook, "Route Points", routePointRows, [
@@ -5716,7 +5873,17 @@ function FieldOfficerDetailsView({
     (sum, row) => sum + Number(attendanceWorkingMinutes(row) || 0),
     0,
   );
-  const totalKm = Number(officer?.eligibleKm ?? officer?.routeKmToday);
+  const storedPayableKm = Number(officer?.eligibleKm ?? officer?.routeKmToday);
+  const approvedMissingCheckoutKm = Number(
+    officer?.approvedMissingCheckoutAdjustmentKm ??
+      approvedMissingCheckoutAdjustmentKm(visits),
+  );
+  const basePayableKm = Number.isFinite(Number(officer?.basePayableKm))
+    ? Number(officer.basePayableKm)
+    : Number.isFinite(storedPayableKm)
+      ? Math.max(0, storedPayableKm - (Number.isFinite(approvedMissingCheckoutKm) ? approvedMissingCheckoutKm : 0))
+      : 0;
+  const totalKm = basePayableKm + (Number.isFinite(approvedMissingCheckoutKm) ? approvedMissingCheckoutKm : 0);
   const gpsMetrics = useMemo(
     () =>
       actualTravelKmFromAttendanceOrLogs(
@@ -6021,8 +6188,8 @@ function FieldOfficerDetailsView({
           <DetailSummaryCard icon={PlayCircle} label="Start Day" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
           <DetailSummaryCard icon={Square} label="End Day" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
           <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Selected range" tone="purple" />
-          <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint="Approved route" tone="green" />
-          <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`@ ${formatInr(ratePerKm)} / km`} tone="amber" />
+          <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint="Includes approved missing checkout adjustments" tone="green" />
+          <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`Final @ ${formatInr(ratePerKm)} / km`} tone="amber" />
           <DetailSummaryCard icon={ShieldCheck} label="Status" value={displayValue(lastAttendance.status || status.label)} hint={attendances.length > 1 ? `${attendances.length} attendance days` : "--"} tone={isLive ? "green" : "blue"} />
         </div>
 
@@ -6084,7 +6251,9 @@ function FieldOfficerDetailsView({
               <div className="mt-4 space-y-3 text-sm font-semibold">
                 <div className="flex justify-between"><span className="text-slate-500">Attendance days</span><strong>{attendances.length || "--"}</strong></div>
                 <div className="flex justify-between"><span className="text-slate-500">Site visits</span><strong>{visits.length}</strong></div>
-                <div className="flex justify-between"><span className="text-slate-500">Payable KM</span><strong className="text-emerald-600">{Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"}</strong></div>
+                <div className="flex justify-between"><span className="text-slate-500">Base Payable KM</span><strong>{basePayableKm.toFixed(1)} km</strong></div>
+                <div className="flex justify-between"><span className="text-slate-500">Approved Missing KM</span><strong>{approvedMissingCheckoutKm.toFixed(1)} km</strong></div>
+                <div className="flex justify-between"><span className="text-slate-500">Final Payable KM</span><strong className="text-emerald-600">{Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"}</strong></div>
                 <div className="flex justify-between border-t border-slate-100 pt-3"><span className="text-slate-600">Petrol Amount</span><strong className="text-lg">{moneyLabel(petrolAmount)}</strong></div>
               </div>
             </section>
@@ -6189,10 +6358,10 @@ function FieldOfficerDetailsView({
         <DetailSummaryCard icon={PlayCircle} label="Start Day" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
         <DetailSummaryCard icon={Square} label="End Day" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
         <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Visited" tone="purple" />
-        <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "Needs Review" : "Approved route"} tone={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "amber" : "green"} />
+        <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "Needs Review" : "Includes approved missing checkout adjustments"} tone={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "amber" : "green"} />
         {fullTechnicalAccess ? <DetailSummaryCard icon={Navigation2} label="GPS Audit KM" value={Number.isFinite(gpsAuditKm) ? `${gpsAuditKm.toFixed(1)} km` : "--"} hint="Supporting evidence" tone="blue" /> : null}
         {fullTechnicalAccess ? <DetailSummaryCard icon={CircleGauge} label="Delta" value={Number.isFinite(kmDelta) ? `${kmDelta.toFixed(1)} km` : "--"} hint={Number.isFinite(differencePercent) ? `${differencePercent.toFixed(1)}%` : "--"} tone={Math.abs(kmDelta || 0) > 2 ? "amber" : "green"} /> : null}
-        <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`@ ${formatInr(ratePerKm)} / km`} tone="amber" />
+        <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`Final @ ${formatInr(ratePerKm)} / km`} tone="amber" />
         <DetailSummaryCard icon={ShieldCheck} label="Status" value={displayValue(lastAttendance.status || status.label)} hint={isLive ? "Active" : "--"} tone={isLive ? "green" : "red"} />
       </div>
 
@@ -6271,7 +6440,9 @@ function FieldOfficerDetailsView({
                 ["Last Site", visits.length ? visitTitle(visits.at(-1)) : "--"],
                 ["Checkout Exceptions", checkoutExceptions.length],
                 ["Open / Missing Checkout", checkoutExceptions.filter((item) => item.exception.type === "missing").length],
-                ["Total Payable KM", Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"],
+                ["Base Payable KM", `${basePayableKm.toFixed(1)} km`],
+                ["Approved Missing KM Adjustment", `${approvedMissingCheckoutKm.toFixed(1)} km`],
+                ["Final Payable KM", Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"],
                 ["Petrol Amount", moneyLabel(petrolAmount)],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-xl bg-slate-50 p-3">
@@ -6595,7 +6766,9 @@ function FieldOfficerDetailsView({
         <section className="fo-screen-only rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             {[
-              ["Payable KM", Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--", "text-emerald-600"],
+              ["Base Payable KM", `${basePayableKm.toFixed(1)} km`, "text-slate-800"],
+              ["Approved Missing KM Adjustment", `${approvedMissingCheckoutKm.toFixed(1)} km`, "text-emerald-600"],
+              ["Final Payable KM", Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--", "text-emerald-600"],
               ...(fullTechnicalAccess
                 ? [
                     ["GPS Audit KM", Number.isFinite(gpsAuditKm) ? `${gpsAuditKm.toFixed(1)} km` : "--", "text-blue-600"],
@@ -6875,13 +7048,13 @@ function FieldOfficerDetailsView({
               <div className="grid grid-cols-2 gap-4">
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
                   <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">
-                    Payable KM
+                    Final Payable KM
                   </p>
                   <p className="mt-2 text-2xl font-black text-emerald-900">
                     {Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"}
                   </p>
                   <p className="mt-1 text-xs font-semibold text-emerald-700">
-                    Approved route KM
+                    Includes approved missing checkout adjustments
                   </p>
                 </div>
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
@@ -6898,6 +7071,10 @@ function FieldOfficerDetailsView({
               </div>
               <div className="mt-4 grid grid-cols-2 gap-3 rounded-lg border border-slate-200 p-3 text-xs md:grid-cols-4">
                 {[
+                  ["Base Payable KM", `${basePayableKm.toFixed(1)} km`],
+                  ["Approved Missing KM Adjustment", `${approvedMissingCheckoutKm.toFixed(1)} km`],
+                  ["Final Payable KM", Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"],
+                  ["Petrol Amount @ ₹4/km", moneyLabel(petrolAmount)],
                   ["Google Direct Route KM", googleDirectRouteKm === null ? "--" : `${googleDirectRouteKm.toFixed(1)} km`],
                   ["Raw GPS KM", `${Number(gpsMetrics.rawGpsKm || 0).toFixed(1)} km`],
                   ["Filtered GPS KM", `${Number(gpsMetrics.filteredGpsKm || 0).toFixed(1)} km`],
@@ -6916,7 +7093,7 @@ function FieldOfficerDetailsView({
               <table className="mt-2 w-full border-collapse text-left text-xs">
                 <thead>
                   <tr className="bg-slate-100">
-                    {["#", "Site / Client", "Check-in", "Check-out", "Duration", "Route KM", "Remarks"].map((heading) => (
+                    {["#", "Site / Client", "Check-in", "Check-out", "Duration", "Route KM", "Missing KM Detected", "Approved Missing KM", "Final Payable KM", "Review Status / Remarks"].map((heading) => (
                       <th key={heading} className="border border-slate-200 px-2 py-2">
                         {heading}
                       </th>
@@ -6924,52 +7101,64 @@ function FieldOfficerDetailsView({
                   </tr>
                 </thead>
                 <tbody>
-                  {visits.map((visit, index) => (
-                    <tr key={visit.id || index}>
-                      <td className="border border-slate-200 px-2 py-2">{index + 1}</td>
-                      <td className="border border-slate-200 px-2 py-2">
-                        {visitTitle(visit)} / {visitClient(visit)}
-                        <br />
-                        <span className="text-[10px] text-slate-500">
-                          Location:{" "}
-                          {formatVisitCoordinates(
-                            visitCheckInCoordinates(visit),
-                          )}
-                        </span>
-                      </td>
-                      <td className="border border-slate-200 px-2 py-2">
-                        {formatDateTime(visit.check_in_time)}
-                      </td>
-                      <td className="border border-slate-200 px-2 py-2">
-                        {formatDateTime(siteVisitCheckoutValue(visit))}
-                      </td>
-                      <td className="border border-slate-200 px-2 py-2">
-                        {durationMinutesLabel(visitMinutes(visit))}
-                      </td>
-                      <td className="border border-slate-200 px-2 py-2">
-                        {numberLabel(visit.route_km, " km")}
-                      </td>
-                      <td className="border border-slate-200 px-2 py-2">
-                        {checkoutExceptionForVisit(visit).label}:{" "}
-                        {visitRemarks(visit)}
-                        {checkoutExceptionForVisit(visit).requiresReview ? (
-                          <>
-                            <br />
-                            Missing KM: {missingCheckoutKmLabel(visit)}
-                            <br />
-                            Review status: {checkoutReviewStatus(visit).label}
-                            <br />
-                            {missingCheckoutEvidenceLabel(visit)}
-                            <br />
-                            Requires Operation Manager / Branch Head review
-                          </>
-                        ) : null}
-                      </td>
-                    </tr>
-                  ))}
+                  {visits.map((visit, index) => {
+                    const evidence = missingCheckoutEvidence(visit);
+                    const routeKm = Number(visit.route_km);
+                    const finalVisitPayableKm =
+                      (Number.isFinite(routeKm) && routeKm > 0 ? routeKm : 0) +
+                      evidence.approvedKm;
+                    const exception = checkoutExceptionForVisit(visit);
+                    return (
+                      <tr key={visit.id || index}>
+                        <td className="border border-slate-200 px-2 py-2">{index + 1}</td>
+                        <td className="border border-slate-200 px-2 py-2">
+                          {visitTitle(visit)} / {visitClient(visit)}
+                          <br />
+                          <span className="text-[10px] text-slate-500">
+                            Location:{" "}
+                            {formatVisitCoordinates(
+                              visitCheckInCoordinates(visit),
+                            )}
+                          </span>
+                        </td>
+                        <td className="border border-slate-200 px-2 py-2">
+                          {formatDateTime(visit.check_in_time)}
+                        </td>
+                        <td className="border border-slate-200 px-2 py-2">
+                          {formatDateTime(siteVisitCheckoutValue(visit))}
+                        </td>
+                        <td className="border border-slate-200 px-2 py-2">
+                          {durationMinutesLabel(visitMinutes(visit))}
+                        </td>
+                        <td className="border border-slate-200 px-2 py-2">
+                          {numberLabel(visit.route_km, " km")}
+                        </td>
+                        <td className="border border-slate-200 px-2 py-2">
+                          {exception.requiresReview ? missingCheckoutKmLabel(visit) : "--"}
+                        </td>
+                        <td className="border border-slate-200 px-2 py-2">
+                          {evidence.approvedKm.toFixed(1)} km
+                        </td>
+                        <td className="border border-slate-200 px-2 py-2">
+                          {finalVisitPayableKm > 0 ? `${finalVisitPayableKm.toFixed(1)} km` : "--"}
+                        </td>
+                        <td className="border border-slate-200 px-2 py-2">
+                          {exception.label}: {visitRemarks(visit)}
+                          {exception.requiresReview ? (
+                            <>
+                              <br />
+                              Review status: {checkoutReviewStatus(visit).label}
+                              <br />
+                              {missingCheckoutEvidenceLabel(visit)}
+                            </>
+                          ) : null}
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {!visits.length ? (
                     <tr>
-                      <td colSpan={7} className="border border-slate-200 px-2 py-5 text-center">
+                      <td colSpan={10} className="border border-slate-200 px-2 py-5 text-center">
                         No site visits available.
                       </td>
                     </tr>
@@ -7714,6 +7903,7 @@ export default function FOActivities() {
           profiles: profileRows,
           logs: logsRes.data || [],
           statusDate: toDateInputValue(new Date()),
+          currentUser: user,
         });
         console.debug("FO_ATTENDANCE_LOADED", attendanceRes.data?.length || 0);
         console.debug("FO_SITE_VISITS_LOADED", siteVisits.length);
@@ -7738,7 +7928,7 @@ export default function FOActivities() {
     return () => {
       cancelled = true;
     };
-  }, [refreshToken, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate]);
+  }, [refreshToken, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate, user]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -7757,7 +7947,7 @@ export default function FOActivities() {
         (payload) => {
           console.debug("FO_REALTIME_UPDATE", payload.new?.fo_user_id);
           setLiveOfficers((officers) =>
-            mergeRealtimeOfficer(officers, payload.new, profileRowsRef.current),
+            mergeRealtimeOfficer(officers, payload.new, profileRowsRef.current, user),
           );
         },
       )
@@ -7767,7 +7957,7 @@ export default function FOActivities() {
         (payload) => {
           console.debug("FO_REALTIME_UPDATE", payload.new?.fo_user_id);
           setLiveOfficers((officers) =>
-            mergeRealtimeOfficer(officers, payload.new, profileRowsRef.current),
+            mergeRealtimeOfficer(officers, payload.new, profileRowsRef.current, user),
           );
         },
       )
@@ -7782,7 +7972,7 @@ export default function FOActivities() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) return undefined;
@@ -7807,9 +7997,9 @@ export default function FOActivities() {
       liveOfficers.filter(
         (officer) =>
           !isHiddenEmployeeRecord(officer) &&
-          isOperationsCommandEligibleRecord(officer),
+          isOperationsCommandVisibleRecord(officer, user),
       ),
-    [liveOfficers],
+    [liveOfficers, user],
   );
   const operationalOfficerKeys = useMemo(() => {
     const keys = new Set();
@@ -7913,6 +8103,7 @@ export default function FOActivities() {
       await exportHistoricalOperationsDashboardExcel({
         from: selectedRange.from,
         to: selectedRange.to,
+        currentUser: user,
         filters: {
           state: stateFilter,
           business: businessFilter,
@@ -8923,10 +9114,34 @@ export default function FOActivities() {
     (officer) => officer.operationalStatus === "ON_SITE",
   ).length;
   const payableKpi = visibleAttendanceKpiRows.reduce(
-    (summary, row) => ({
-      payableKm: summary.payableKm + payableKmFromAttendance(row),
-    }),
-    { payableKm: 0 },
+    (summary, row) => {
+      const employeeKey = normalizeFoKey(row.fo_user_id || row.employee_code);
+      const dateInput = attendanceDateInput(row);
+      const rowVisits = visitsForEmployeeDate(visibleSiteVisitRows, employeeKey, dateInput);
+      const baseKm = payableKmFromAttendance(row);
+      const adjustmentKm = rowVisits.reduce((sum, visit) => {
+        const visitKey = String(
+          visit?.id ||
+            `${employeeKey}:${visit?.check_in_time || ""}:${visit?.check_out_time || ""}`,
+        );
+        if (summary.approvedAdjustmentVisitKeys.has(visitKey)) return sum;
+        summary.approvedAdjustmentVisitKeys.add(visitKey);
+        return sum + approvedMissingCheckoutAdjustmentKmFromVisit(visit);
+      }, 0);
+      return {
+        basePayableKm: summary.basePayableKm + baseKm,
+        approvedMissingCheckoutAdjustmentKm:
+          summary.approvedMissingCheckoutAdjustmentKm + adjustmentKm,
+        payableKm: summary.payableKm + baseKm + adjustmentKm,
+        approvedAdjustmentVisitKeys: summary.approvedAdjustmentVisitKeys,
+      };
+    },
+    {
+      basePayableKm: 0,
+      approvedMissingCheckoutAdjustmentKm: 0,
+      payableKm: 0,
+      approvedAdjustmentVisitKeys: new Set(),
+    },
   );
   const liveRouteKm = payableKpi.payableKm;
   const liveActualTravelKm = filteredOfficers.reduce(
@@ -9176,12 +9391,14 @@ export default function FOActivities() {
           value={distanceTravelled}
           icon={Route}
           tone="green"
+          hint="Adjusted"
         />
         <FleetKpi
           label="Petrol Amount"
           value={formatInr(totalPetrolAmount)}
           icon={CircleGauge}
           tone="amber"
+          hint="Adjusted"
         />
       </div>
 

@@ -5397,6 +5397,7 @@ app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRec
     await assertServiceRoleAuthAdminAccess(client);
     const result = await recalculateFoKmBatch(client, payload, {
       maxGoogleDirectionsCalls: payload.max_google_directions_calls,
+      skipDelayedCheckoutGoogle: true,
     });
     response.json({ ok: true, ...result });
   } catch (error) {
@@ -5496,6 +5497,7 @@ app.post('/api/fo/km/recalculate-all', requireSupabaseJwt, requireFoKmBatchRecal
     await assertServiceRoleAuthAdminAccess(client);
     const result = await recalculateFoKmForToday(client, { ...payload, date }, {
       maxGoogleDirectionsCalls: payload.max_google_directions_calls,
+      skipDelayedCheckoutGoogle: true,
     });
     response.json({ ok: true, ...result });
   } catch (error) {

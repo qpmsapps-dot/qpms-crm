@@ -751,7 +751,12 @@ export async function auditDelayedCheckoutMissingKmForVisit(client, visit, optio
     metadataUpdate.checkout_review_created_at =
       metadata.checkout_review_created_at || nowIso;
 
-    const googleKm = await googleDirectionsKm(origin, destination, options);
+    const skipGoogleDirections =
+      options.skipDelayedCheckoutGoogle === true ||
+      options.skipDelayedCheckoutGoogleDirections === true;
+    const googleKm = skipGoogleDirections
+      ? null
+      : await googleDirectionsKm(origin, destination, options);
     if (googleKm !== null) {
       suggestedKm = Number(googleKm.toFixed(2));
       suggestedSource = 'google_directions';
@@ -764,7 +769,9 @@ export async function auditDelayedCheckoutMissingKmForVisit(client, visit, optio
       const haversineKmValue = Number((distance.meters / 1000).toFixed(2));
       suggestedKm = haversineKmValue;
       suggestedSource = 'haversine_fallback_review_only';
-      googleError = process.env.ENABLE_GOOGLE_DIRECTIONS === 'true'
+      googleError = skipGoogleDirections
+        ? 'google_directions_skipped_for_batch_recalculation'
+        : process.env.ENABLE_GOOGLE_DIRECTIONS === 'true'
         ? 'google_directions_unavailable'
         : 'google_directions_disabled';
       metadataUpdate.suggested_missing_checkout_haversine_km = haversineKmValue;
