@@ -2185,6 +2185,30 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   if (rows.length < 5) reviewFlags.push('LOW_GPS_LOG_COUNT');
   const ratePerKm = normalizeNumber(attendance.rate_per_km) || RATE_PER_KM;
   const travelPolicy = travelModeAllowsPayableKm(attendance);
+  let fullDayGpsSourcing = null;
+  if (visits.length === 0) {
+    try {
+      fullDayGpsSourcing = await calculateFullDayGpsNoSiteVisitKm(client, attendance, {
+        ...options,
+        maxGoogleDirectionsCalls: options.skipDelayedCheckoutGoogle === true
+          ? 0
+          : options.maxGoogleDirectionsCalls,
+      });
+    } catch (error) {
+      fullDayGpsSourcing = {
+        success: false,
+        skipped_reason: 'full_day_gps_sourcing_calculation_failed',
+        warnings: ['FULL_DAY_GPS_SOURCING_CALCULATION_FAILED'],
+        message: error.message,
+      };
+      log('FULL_DAY_GPS_SOURCING_CALCULATION_FAILED', {
+        attendance_id: attendance.id,
+        employee_code: attendance.employee_code || attendance.fo_user_id || null,
+        attendance_date: attendance.attendance_date || date || null,
+        message: error.message,
+      });
+    }
+  }
   const switchFallback = options.enableSwitchTimeFallback === true
     ? await temporarySwitchTimeFallback(client, attendance, points, options)
     : null;
@@ -2193,7 +2217,6 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   if (switchFallback?.overridePayableKm) {
     approvedKm = switchFallback.approvedKm;
   }
-  const petrolAmount = Number((approvedKm * ratePerKm).toFixed(2));
   let routeSyncStatus = legRecalculation.route_sync_status || (approvedKm > 0 ? 'travel_leg_based' : 'travel_leg_based_zero');
   if (switchFallback?.routeSyncStatus) {
     routeSyncStatus = switchFallback.routeSyncStatus;
@@ -2201,11 +2224,39 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     reviewFlags.push('NON_PAYABLE_TRAVEL_MODE');
     routeSyncStatus = 'non_payable_travel_mode';
   }
+  if (
+    visits.length === 0 &&
+    switchFallback?.overridePayableKm !== true &&
+    travelPolicy.payableKmAllowed &&
+    Number(fullDayGpsSourcing?.eligible_km || 0) > 0
+  ) {
+    approvedKm = Number(Number(fullDayGpsSourcing.eligible_km).toFixed(2));
+    routeSyncStatus = 'full_day_gps_sourcing';
+    reviewFlags.push('FULL_DAY_NO_CHECKIN_GPS_PAYABLE');
+    if (Number(fullDayGpsSourcing.gps_points_total || 0) < 10) {
+      reviewFlags.push('LOW_GPS_LOG_COUNT');
+    }
+  } else if (visits.length === 0 && fullDayGpsSourcing?.warnings?.length) {
+    for (const warning of fullDayGpsSourcing.warnings) reviewFlags.push(warning);
+  }
   for (const flag of legRecalculation.review_flags || []) reviewFlags.push(flag);
   if (switchFallback?.metadata?.manual_review_required === true) {
     reviewFlags.push(switchFallback.reviewFlag || 'SWITCH_TIME_FALLBACK_MANUAL_REVIEW');
   }
+  const petrolAmount = Number((approvedKm * ratePerKm).toFixed(2));
   const filteredGpsKm = Number(calculation.acceptedKm.toFixed(2));
+  const preSiteSourcingLeg = (legRecalculation.travel_legs || []).find((leg) => (
+    leg.type === 'start_to_first_checkin' &&
+    leg.status === 'calculated' &&
+    (
+      leg.source === 'PRE_SITE_GPS_SOURCING' ||
+      (
+        leg.source === 'GPS_BASED' &&
+        (leg.review_flags || []).some((flag) => String(flag).includes('PRE_SITE_SOURCING'))
+      )
+    )
+  ));
+  const preSiteSourcingGpsUsed = Boolean(preSiteSourcingLeg);
   const gpsFallbackReview = buildGpsFallbackReviewCandidate({
     approvedKm,
     actualTravelKm,
@@ -2233,7 +2284,9 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     route_source: routeSyncStatus,
     gps_audit_km: actualTravelKm,
     filtered_gps_km: filteredGpsKm,
+    accepted_gps_km: Number(calculation.acceptedKm.toFixed(2)),
     valid_points: points.length,
+    site_visit_count: visits.length,
     flags: [...new Set(reviewFlags)],
     failure_reason:
       gpsFallbackReview.reason ||
@@ -2291,7 +2344,46 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
       final_return_leg_included_in_payable:
         finalReturnLeg.includedInPayable === true && travelPolicy.payableKmAllowed,
       site_visit_route_km_sum: storedRouteKm,
+      site_visit_count: visits.length,
       calculated_payable_km_before_travel_mode_policy: calculatedPayableKm,
+      payable_km_source: routeSyncStatus,
+      payable_km_source_reason: routeSyncStatus === 'full_day_gps_sourcing'
+        ? 'Full-day GPS movement accepted for sourcing / manpower follow-up without site check-ins'
+        : preSiteSourcingGpsUsed
+          ? 'GPS trail shows valid sourcing movement before first check-in'
+          : legRecalculation.selected_km_source || routeSyncStatus,
+      full_day_gps_sourcing_used: routeSyncStatus === 'full_day_gps_sourcing',
+      full_day_gps_sourcing_km: routeSyncStatus === 'full_day_gps_sourcing' ? approvedKm : null,
+      full_day_no_checkin_gps_payable: routeSyncStatus === 'full_day_gps_sourcing',
+      full_day_gps_sourcing_result: fullDayGpsSourcing ? {
+        skipped_reason: fullDayGpsSourcing.skipped_reason || null,
+        manual_review_required: fullDayGpsSourcing.manual_review_required === true,
+        gps_log_count: fullDayGpsSourcing.gps_points_total || 0,
+        valid_gps_log_count: fullDayGpsSourcing.gps_points_used || 0,
+        rejected_gps_log_count: fullDayGpsSourcing.gps_points_rejected || 0,
+        raw_gps_km: fullDayGpsSourcing.raw_gps_km || 0,
+        filtered_gps_km: fullDayGpsSourcing.filtered_gps_km || 0,
+        accepted_gps_km: fullDayGpsSourcing.accepted_gps_km || 0,
+        payable_km: fullDayGpsSourcing.eligible_km || 0,
+        warnings: fullDayGpsSourcing.warnings || [],
+      } : null,
+      sourcing_gps_review_required:
+        routeSyncStatus === 'full_day_gps_sourcing' &&
+        (fullDayGpsSourcing?.warnings || []).length > 0,
+      sourcing_gps_review_reason:
+        routeSyncStatus === 'full_day_gps_sourcing' && (fullDayGpsSourcing?.warnings || []).length > 0
+          ? (fullDayGpsSourcing.warnings || []).join(',')
+          : null,
+      accepted_gps_km: Number(calculation.acceptedKm.toFixed(2)),
+      rejected_gps_km: Number(Math.max(0, actualTravelKm - Number(calculation.acceptedKm || 0)).toFixed(2)),
+      gps_log_count: rows.length,
+      valid_gps_log_count: points.length,
+      pre_site_sourcing_gps_used: preSiteSourcingGpsUsed,
+      pre_site_sourcing_gps_km: preSiteSourcingGpsUsed ? Number(preSiteSourcingLeg.km || 0) : null,
+      pre_site_direct_route_km: preSiteSourcingGpsUsed ? preSiteSourcingLeg.google_direct_route_km ?? null : null,
+      pre_site_sourcing_reason: preSiteSourcingGpsUsed
+        ? 'GPS trail shows valid sourcing movement before first check-in'
+        : null,
       travel_legs: legRecalculation.travel_legs || [],
       travel_leg_recalculation_enabled: true,
       travel_leg_recalculated_at: new Date().toISOString(),
@@ -2428,7 +2520,14 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     route_source: routeSyncStatus,
     gps_audit_km: actualTravelKm,
     filtered_gps_km: filteredGpsKm,
+    accepted_gps_km: Number(calculation.acceptedKm.toFixed(2)),
     payable_km: approvedKm,
+    site_visit_count: visits.length,
+    source: routeSyncStatus === 'full_day_gps_sourcing'
+      ? 'full_day_gps_sourcing'
+      : preSiteSourcingGpsUsed
+        ? 'pre_site_sourcing_gps'
+        : routeSyncStatus,
     flags: result.review_flags,
     failure_reason:
       gpsFallbackReview.reason ||
