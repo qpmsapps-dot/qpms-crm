@@ -208,11 +208,6 @@ function rawFirstValueFor(row, labels) {
   return '';
 }
 
-function headerFor(row, label) {
-  const target = normalizeHeader(label);
-  return Object.keys(row).find((item) => normalizeHeader(item) === target) || '';
-}
-
 function groupedStateFor(state) {
   const normalized = normalizeLooseKey(state);
   return groupedStates.find((group) => stateGroups[group].some((alias) => normalizeLooseKey(alias) === normalized)) || '';
@@ -718,6 +713,7 @@ function newestTicketDate(tickets) {
 }
 
 function formatDateTime(value) {
+  if (!value) return '—';
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
   return date.toLocaleString('en-IN', {
@@ -961,10 +957,10 @@ function MisHeader({ viewMode, onViewModeChange, onImport, canSwitchView, canImp
 
 function StatePerformanceOverview({ data, monthOptions, selectedMonth, onSelectedMonthChange, performanceData }) {
   const latestText = selectedMonth === 'all'
-    ? 'Showing all available imported data'
+    ? 'Showing all imported tickets'
     : performanceData.latestDate
-      ? `Showing data till ${displayDate(performanceData.latestDate.toISOString())}`
-      : `Showing data from Created At for ${monthLabelFromKey(selectedMonth)}`;
+      ? `Showing tickets for ${monthLabelFromKey(selectedMonth)}`
+      : `Showing tickets for ${monthLabelFromKey(selectedMonth)}`;
   return (
     <ManagementCard className="p-4">
       <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -1319,21 +1315,32 @@ function StageProgress({ tickets, selectedState, onSelectedStateChange }) {
 }
 
 function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, canImport, onImport, isLoading, activeImportBatch }) {
-  const data = useMemo(() => buildManagementData(tickets), [tickets]);
   const [stageProgressState, setStageProgressState] = useState('');
   const monthOptions = useMemo(() => buildMonthOptions(tickets), [tickets]);
   const [performanceMonth, setPerformanceMonth] = useState('all');
   const safePerformanceMonth = monthOptions.some((option) => option.value === performanceMonth) ? performanceMonth : 'all';
+  const scopedManagementTickets = useMemo(
+    () => (
+      safePerformanceMonth === 'all'
+        ? tickets
+        : tickets.filter((ticket) => monthKeyFromDate(ticket.createdAt) === safePerformanceMonth)
+    ),
+    [tickets, safePerformanceMonth],
+  );
+  const data = useMemo(() => buildManagementData(scopedManagementTickets), [scopedManagementTickets]);
   const statePerformanceData = useMemo(
     () => buildStatePerformanceData(tickets, safePerformanceMonth),
     [tickets, safePerformanceMonth],
   );
+  const monthScopeLabel = safePerformanceMonth === 'all'
+    ? 'Imported South Zone dump'
+    : `Filtered by ${monthLabelFromKey(safePerformanceMonth)}`;
   const kpis = [
-    { label: 'Total Faults', value: formatNumber(data.totalFaults), trend: 'Imported session data', icon: FolderOpen, tone: 'blue' },
-    { label: 'Pending Tickets', value: formatNumber(data.pendingTickets), trend: 'Open tickets in current dump', icon: Clock3, tone: 'orange' },
-    { label: 'Critical Tickets', value: formatNumber(data.criticalTickets), trend: 'Ageing risk from current dump', icon: AlertTriangle, tone: 'red' },
-    { label: 'Avg Ageing', value: `${data.averageAgeing.toFixed(1)} Days`, trend: 'Calculated from imported rows', icon: CalendarDays, tone: 'purple' },
-    { label: 'Completed This Week', value: formatNumber(data.completedThisWeek), trend: 'Estimated from current session only', icon: CheckCircle2, tone: 'green' },
+    { label: 'Total Faults', value: formatNumber(data.totalFaults), trend: monthScopeLabel, icon: FolderOpen, tone: 'blue' },
+    { label: 'Pending Tickets', value: formatNumber(data.pendingTickets), trend: safePerformanceMonth === 'all' ? 'Open tickets in full dump' : monthScopeLabel, icon: Clock3, tone: 'orange' },
+    { label: 'Critical Tickets', value: formatNumber(data.criticalTickets), trend: safePerformanceMonth === 'all' ? 'Ageing risk from full dump' : monthScopeLabel, icon: AlertTriangle, tone: 'red' },
+    { label: 'Avg Ageing', value: `${data.averageAgeing.toFixed(1)} Days`, trend: safePerformanceMonth === 'all' ? 'Calculated from imported rows' : monthScopeLabel, icon: CalendarDays, tone: 'purple' },
+    { label: 'Completed This Week', value: formatNumber(data.completedThisWeek), trend: safePerformanceMonth === 'all' ? 'Estimated from current dump' : monthScopeLabel, icon: CheckCircle2, tone: 'green' },
     { label: 'South Performance Score', value: `${data.performanceScore}%`, trend: 'Calculated from open vs total', icon: Star, tone: 'blue' },
   ];
 
@@ -1497,22 +1504,6 @@ export default function FaultTracker() {
       }
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       const parsed = parseTicketRows(rows);
-      const firstRow = rows[0] || {};
-      const detectedCreatedAtHeader = headerFor(firstRow, 'Created At');
-      const generatedMonthOptions = buildMonthOptions(parsed);
-      console.log('Fault Tracker import headers', Object.keys(firstRow));
-      console.log('Fault Tracker mapped numeric ageing header', headerFor(firstRow, 'Ageing'));
-      console.log('Fault Tracker mapped ageing bucket header', headerFor(firstRow, 'Ageing(Days)'));
-      console.log('Detected Created At header:', detectedCreatedAtHeader);
-      console.log('First Created At values:', rows.slice(0, 5).map((row) => valueFor(row, 'Created At')));
-      console.log('Parsed dates:', parsed.slice(0, 5).map((ticket) => createdDateKey(ticket.createdAt)));
-      console.log('Month options:', generatedMonthOptions.map((option) => option.label).join(', '));
-      console.log('Fault Tracker first parsed rows', parsed.slice(0, 5).map((ticket) => ({
-        'Ticket Number': ticket.ticketNumber,
-        Ageing: ticket.ageingDays,
-        'Ageing(Days)': ticket.ageingBucket,
-        'Created At': ticket.createdAt,
-      })));
       const result = await faultTrackerApiRequest({
         method: 'POST',
         url: '/api/fault-tracker/import',

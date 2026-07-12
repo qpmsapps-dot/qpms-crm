@@ -2839,46 +2839,58 @@ app.get('/api/fault-tracker/tickets', requireSupabaseJwt, requireFaultTrackerAcc
       }
     }
 
-    let query = client
-      .from('fault_tracker_tickets')
-      .select('*')
-      .eq('import_batch_id', importBatchId)
-      .eq('is_active', true)
-      .order('created_at_source', { ascending: false, nullsFirst: false });
+    const buildTicketQuery = () => {
+      let query = client
+        .from('fault_tracker_tickets')
+        .select('*')
+        .eq('import_batch_id', importBatchId)
+        .eq('is_active', true)
+        .order('created_at_source', { ascending: false, nullsFirst: false });
 
-    if (roleCanReadAll) {
-      const state = faultTrackerStateCode(request.query.state);
-      if (state) query = query.eq('state_code', state);
-    } else {
-      query = query.eq('state_code', mappedState);
-    }
+      if (roleCanReadAll) {
+        const state = faultTrackerStateCode(request.query.state);
+        if (state) query = query.eq('state_code', state);
+      } else {
+        query = query.eq('state_code', mappedState);
+      }
 
-    const stage = faultTrackerText(request.query.stage);
-    if (stage) query = query.eq('stage', stage);
-    const ageingBucket = faultTrackerText(request.query.ageing_bucket);
-    if (ageingBucket) query = query.eq('ageing_bucket', ageingBucket);
-    const category = faultTrackerText(request.query.category);
-    if (category) query = query.eq('category_group', category);
-    const supervisor = faultTrackerText(request.query.supervisor);
-    if (supervisor) query = query.eq('supervisor_name', supervisor);
-    const month = faultTrackerText(request.query.month);
-    if (month && /^\d{4}-\d{2}$/.test(month)) {
-      query = query
-        .gte('created_at_source', `${month}-01T00:00:00.000Z`)
-        .lt('created_at_source', new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 1)).toISOString());
-    }
-    const search = faultTrackerText(request.query.search);
-    if (search) {
-      const safeSearch = search.replace(/[%(),]/g, ' ');
-      query = query.or(`ticket_no.ilike.%${safeSearch}%,store_code.ilike.%${safeSearch}%,store_name.ilike.%${safeSearch}%,supervisor_name.ilike.%${safeSearch}%,remarks.ilike.%${safeSearch}%`);
-    }
+      const stage = faultTrackerText(request.query.stage);
+      if (stage) query = query.eq('stage', stage);
+      const ageingBucket = faultTrackerText(request.query.ageing_bucket);
+      if (ageingBucket) query = query.eq('ageing_bucket', ageingBucket);
+      const category = faultTrackerText(request.query.category);
+      if (category) query = query.eq('category_group', category);
+      const supervisor = faultTrackerText(request.query.supervisor);
+      if (supervisor) query = query.eq('supervisor_name', supervisor);
+      const month = faultTrackerText(request.query.month);
+      if (month && /^\d{4}-\d{2}$/.test(month)) {
+        query = query
+          .gte('created_at_source', `${month}-01T00:00:00.000Z`)
+          .lt('created_at_source', new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 1)).toISOString());
+      }
+      const search = faultTrackerText(request.query.search);
+      if (search) {
+        const safeSearch = search.replace(/[%(),]/g, ' ');
+        query = query.or(`ticket_no.ilike.%${safeSearch}%,store_code.ilike.%${safeSearch}%,store_name.ilike.%${safeSearch}%,supervisor_name.ilike.%${safeSearch}%,remarks.ilike.%${safeSearch}%`);
+      }
+      return query;
+    };
 
-    const { data: tickets, error: ticketsError } = await query.limit(10000);
-    if (ticketsError) {
-      logFaultTrackerDbError('GET /api/fault-tracker/tickets', 'fault_tracker_tickets', 'select_tickets', ticketsError, {
-        import_batch_id: importBatchId,
-      });
-      throw ticketsError;
+    const tickets = [];
+    const pageSize = 1000;
+    for (let from = 0; from < 50000; from += pageSize) {
+      const to = from + pageSize - 1;
+      const { data: pageTickets, error: ticketsError } = await buildTicketQuery().range(from, to);
+      if (ticketsError) {
+        logFaultTrackerDbError('GET /api/fault-tracker/tickets', 'fault_tracker_tickets', 'select_tickets', ticketsError, {
+          import_batch_id: importBatchId,
+          range_from: from,
+          range_to: to,
+        });
+        throw ticketsError;
+      }
+      tickets.push(...(pageTickets || []));
+      if (!pageTickets || pageTickets.length < pageSize) break;
     }
     const { data: importBatches, error: importBatchError } = await client
       .from('fault_tracker_import_batches')
