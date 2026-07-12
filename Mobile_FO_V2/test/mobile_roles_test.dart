@@ -56,6 +56,13 @@ void main() {
       'Manager',
       'Branch Head',
       'GM',
+      'General Manager',
+      'Admin',
+      'QPMS Admin',
+      'Developer',
+      'Dev',
+      'IT Admin',
+      'Management IT Admin',
     ]) {
       expect(isMobileLoginRole(role), isTrue, reason: role);
     }
@@ -64,6 +71,16 @@ void main() {
   test('mobile login role matching is case and whitespace insensitive', () {
     expect(isMobileLoginRole(' field_officer '), isTrue);
     expect(isMobileLoginRole('operations   manager'), isTrue);
+    expect(isMobileLoginRole('qpms_admin'), isTrue);
+    expect(isMobileLoginRole('management it admin'), isTrue);
+  });
+
+  test('canonicalizes mobile admin and developer aliases', () {
+    expect(canonicalMobileRole('QPMS Admin'), 'Admin');
+    expect(canonicalMobileRole('Dev'), 'Developer');
+    expect(canonicalMobileRole('IT Admin'), 'Developer');
+    expect(canonicalMobileRole('Management IT Admin'), 'Developer');
+    expect(canonicalMobileRole('General Manager'), 'GM');
   });
 
   test('debug panels are visible only for admin and support roles', () {

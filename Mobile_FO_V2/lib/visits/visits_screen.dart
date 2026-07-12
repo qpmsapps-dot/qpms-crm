@@ -1,10 +1,16 @@
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../models/fo_models.dart';
 import '../services/crash_log_service.dart';
 import '../services/local_store.dart';
 import '../services/supabase_service.dart';
+import '../tasks/tasks_screen.dart';
 import '../theme/app_theme.dart';
 import '../ui/fo_ui.dart';
 import '../utils/date_utils.dart';
@@ -281,140 +287,73 @@ class _VisitsScreenState extends State<VisitsScreen>
   Widget _recentVisitCard(SiteVisit visit) {
     final activity = _activityForVisit(visit);
     final routeKm = visit.routeKm ?? _distances[visit.id]?.segmentKm ?? 0;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: foBorder),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x0B0A43D1),
-            blurRadius: 14,
-            offset: Offset(0, 7),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          FoIconCircle(icon: activity.icon, color: activity.color, size: 62),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return InkWell(
+      onTap: () => _openVisitDetail(visit, routeKm),
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: foBorder),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x0B0A43D1),
+              blurRadius: 14,
+              offset: Offset(0, 7),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            FoIconCircle(icon: activity.icon, color: activity.color, size: 62),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    visit.storeName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: foNavy,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  Text(
+                    '${visit.state} - ${visit.clientName}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF53607D),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  FoStatusBadge(label: activity.label, color: activity.color),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
+                FoStatusBadge(
+                  label: visit.isActive ? 'Checked In' : 'Checked Out',
+                  color: visit.isActive ? qpmsBlue : foGreen,
+                ),
+                const SizedBox(height: 10),
                 Text(
-                  visit.storeName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  formatTime(visit.checkOutTime ?? visit.checkInTime),
                   style: const TextStyle(
                     color: foNavy,
-                    fontSize: 20,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
-                Text(
-                  '${visit.state} - ${visit.clientName}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF53607D),
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                FoStatusBadge(label: activity.label, color: activity.color),
-              ],
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              FoStatusBadge(
-                label: visit.isActive ? 'Checked In' : 'Checked Out',
-                color: visit.isActive ? qpmsBlue : foGreen,
-              ),
-              const SizedBox(height: 10),
-              Text(
-                formatTime(visit.checkOutTime ?? visit.checkInTime),
-                style: const TextStyle(
-                  color: foNavy,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              Text(
-                _dateLabel(visit.checkInTime),
-                style: const TextStyle(
-                  color: Color(0xFF53607D),
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              Text(
-                '${routeKm.toStringAsFixed(1)} km',
-                style: const TextStyle(
-                  color: Color(0xFF53607D),
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(width: 6),
-          const Icon(Icons.chevron_right_rounded, color: foNavy),
-        ],
-      ),
-    );
-  }
-
-  Widget _historyRow(SiteVisit visit) {
-    final activity = _activityForVisit(visit);
-    final routeKm = visit.routeKm ?? _distances[visit.id]?.runningKm ?? 0;
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 13),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: foBorder)),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 84,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
                 Text(
                   _dateLabel(visit.checkInTime),
-                  style: const TextStyle(
-                    color: foNavy,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                Text(
-                  formatTime(visit.checkInTime),
-                  style: const TextStyle(
-                    color: Color(0xFF53607D),
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  visit.storeName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: foNavy,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                Text(
-                  visit.state,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Color(0xFF53607D),
                     fontWeight: FontWeight.w700,
@@ -424,24 +363,303 @@ class _VisitsScreenState extends State<VisitsScreen>
                   '${routeKm.toStringAsFixed(1)} km',
                   style: const TextStyle(
                     color: Color(0xFF53607D),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
               ],
             ),
+            const SizedBox(width: 6),
+            const Icon(Icons.chevron_right_rounded, color: foNavy),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _historyRow(SiteVisit visit) {
+    final activity = _activityForVisit(visit);
+    final routeKm = visit.routeKm ?? _distances[visit.id]?.runningKm ?? 0;
+    return InkWell(
+      onTap: () => _openVisitDetail(visit, routeKm),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 13),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: foBorder)),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 84,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _dateLabel(visit.checkInTime),
+                    style: const TextStyle(
+                      color: foNavy,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  Text(
+                    formatTime(visit.checkInTime),
+                    style: const TextStyle(
+                      color: Color(0xFF53607D),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    visit.storeName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: foNavy,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  Text(
+                    visit.state,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF53607D),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    '${routeKm.toStringAsFixed(1)} km',
+                    style: const TextStyle(
+                      color: Color(0xFF53607D),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            FoStatusBadge(label: activity.label, color: activity.color),
+            const SizedBox(width: 8),
+            FoStatusBadge(
+              label: visit.isActive ? 'Checked In' : 'Checked Out',
+              color: visit.isActive ? qpmsBlue : foGreen,
+              showDot: true,
+            ),
+            const Icon(Icons.chevron_right_rounded, color: foNavy),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openVisitDetail(SiteVisit visit, double routeKm) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                visit.storeName,
+                style: const TextStyle(
+                  color: foNavy,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '${visit.state} - ${visit.clientName}',
+                style: const TextStyle(
+                  color: Color(0xFF53607D),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FoStatusBadge(
+                    label: visit.isActive ? 'Checked In' : 'Checked Out',
+                    color: visit.isActive ? qpmsBlue : foGreen,
+                  ),
+                  FoStatusBadge(
+                    label: '${routeKm.toStringAsFixed(1)} km',
+                    color: qpmsBlue,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _visitInfoLine('Check-in', formatTime(visit.checkInTime)),
+              _visitInfoLine(
+                'Check-out',
+                visit.checkOutTime == null
+                    ? '--'
+                    : formatTime(visit.checkOutTime!),
+              ),
+              const SizedBox(height: 16),
+              _visitAction(
+                icon: Icons.content_paste_search_rounded,
+                label: 'Upload Inspection Images',
+                onTap: () => _openActivityFromVisit(
+                  context,
+                  visit,
+                  FoActivityType.inspection,
+                ),
+              ),
+              _visitAction(
+                icon: Icons.cleaning_services_rounded,
+                label: 'Add Deep Cleaning Images',
+                onTap: () => _openActivityFromVisit(
+                  context,
+                  visit,
+                  FoActivityType.deepCleaning,
+                ),
+              ),
+              _visitAction(
+                icon: Icons.co_present_rounded,
+                label: 'Add Training Proof',
+                onTap: () => _openActivityFromVisit(
+                  context,
+                  visit,
+                  FoActivityType.training,
+                ),
+              ),
+              _visitAction(
+                icon: Icons.local_parking_rounded,
+                label: 'Add Parking Claim',
+                onTap: () => _openParkingClaim(context, visit),
+              ),
+            ],
           ),
-          FoStatusBadge(label: activity.label, color: activity.color),
-          const SizedBox(width: 8),
-          FoStatusBadge(
-            label: visit.isActive ? 'Checked In' : 'Checked Out',
-            color: visit.isActive ? qpmsBlue : foGreen,
-            showDot: true,
+        ),
+      ),
+    );
+    if (mounted) _load();
+  }
+
+  Widget _visitInfoLine(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 92,
+            child: Text(label, style: const TextStyle(color: qpmsMuted)),
           ),
-          const Icon(Icons.chevron_right_rounded, color: foNavy),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                color: foNavy,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  Widget _visitAction({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(icon, color: qpmsBlue),
+      title: Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+      trailing: const Icon(Icons.chevron_right_rounded),
+      onTap: onTap,
+    );
+  }
+
+  Future<Attendance?> _attendanceForVisit(SiteVisit visit) async {
+    final attendance = await LocalStore.getAttendance();
+    final visitAttendanceId = visit.attendanceId?.trim();
+    if (attendance != null &&
+        (attendance.remoteId == visitAttendanceId ||
+            attendance.id == visitAttendanceId)) {
+      return attendance;
+    }
+    if (!SupabaseService.isValidUuid(visitAttendanceId)) return null;
+    return Attendance(
+      id: visitAttendanceId!,
+      remoteId: visitAttendanceId,
+      employeeCode: widget.user.employeeCode,
+      startTime: visit.checkInTime,
+      attendanceDate: indiaDateKey(visit.checkInTime),
+      endTime: visit.checkOutTime,
+    );
+  }
+
+  Future<void> _openActivityFromVisit(
+    BuildContext sheetContext,
+    SiteVisit visit,
+    FoActivityType type,
+  ) async {
+    final attendance = await _attendanceForVisit(visit);
+    if (!mounted || !sheetContext.mounted) return;
+    if (attendance == null) {
+      _toast('Attendance sync missing for this visit.');
+      return;
+    }
+    Navigator.of(sheetContext).pop();
+    final submitted = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ActivityFormScreen(
+          type: type,
+          visit: visit,
+          attendance: attendance,
+          user: widget.user,
+          requireActiveVisit: false,
+        ),
+      ),
+    );
+    if (submitted == true && mounted) {
+      _toast('Activity saved for selected visit.');
+    }
+  }
+
+  Future<void> _openParkingClaim(
+    BuildContext sheetContext,
+    SiteVisit visit,
+  ) async {
+    final attendance = await _attendanceForVisit(visit);
+    if (!mounted || !sheetContext.mounted) return;
+    if (attendance == null) {
+      _toast('Attendance sync missing for this visit.');
+      return;
+    }
+    Navigator.of(sheetContext).pop();
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => _ParkingClaimDialog(
+        user: widget.user,
+        attendance: attendance,
+        visit: visit,
+      ),
+    );
+    if (saved == true && mounted) {
+      _toast('Parking claim submitted for this site.');
+    }
+  }
+
+  void _toast(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   List<SiteVisit> _filteredVisits() {
@@ -737,6 +955,350 @@ class _OptionSheet<T> extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ParkingClaimDialog extends StatefulWidget {
+  const _ParkingClaimDialog({
+    required this.user,
+    required this.attendance,
+    required this.visit,
+  });
+
+  final FoUser user;
+  final Attendance attendance;
+  final SiteVisit visit;
+
+  @override
+  State<_ParkingClaimDialog> createState() => _ParkingClaimDialogState();
+}
+
+class _ParkingClaimDialogState extends State<_ParkingClaimDialog> {
+  static const _maxProofBytes = 5 * 1024 * 1024;
+  final _picker = ImagePicker();
+  final _amount = TextEditingController();
+  final _remarks = TextEditingController();
+  _ParkingProof? _proof;
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _amount.dispose();
+    _remarks.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      title: const Text('Parking Claim'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.visit.storeName,
+              style: const TextStyle(
+                color: foNavy,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _amount,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(
+                labelText: 'Amount',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _remarks,
+              minLines: 2,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Remarks',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 14),
+            InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: _pickProof,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: foBorder),
+                  color: foSoftBlue,
+                ),
+                child: _proof == null
+                    ? const Column(
+                        children: [
+                          Icon(Icons.upload_file_outlined, color: qpmsBlue),
+                          SizedBox(height: 6),
+                          Text(
+                            'Upload parking ticket',
+                            style: TextStyle(
+                              color: qpmsBlue,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            'JPG, PNG, PDF (Max 5 MB)',
+                            style: TextStyle(
+                              color: Color(0xFF53607D),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Row(
+                        children: [
+                          Icon(
+                            _proof!.extension == 'pdf'
+                                ? Icons.picture_as_pdf_rounded
+                                : Icons.image_rounded,
+                            color: qpmsBlue,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _proof!.fileName,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: foNavy,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => setState(() => _proof = null),
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                        ],
+                      ),
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _error!,
+                style: const TextStyle(
+                  color: Colors.redAccent,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: Text(_saving ? 'Saving...' : 'Submit'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pickProof() async {
+    final source = await showModalBottomSheet<_ParkingProofSource>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera_rounded),
+              title: const Text('Take photo'),
+              onTap: () => Navigator.pop(context, _ParkingProofSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded),
+              title: const Text('Choose image'),
+              onTap: () => Navigator.pop(context, _ParkingProofSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.picture_as_pdf_rounded),
+              title: const Text('Choose PDF'),
+              onTap: () => Navigator.pop(context, _ParkingProofSource.pdf),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+    try {
+      switch (source) {
+        case _ParkingProofSource.camera:
+          final file = await _picker.pickImage(
+            source: ImageSource.camera,
+            maxWidth: 1280,
+            imageQuality: 70,
+            requestFullMetadata: false,
+          );
+          if (file != null) await _setImageProof(file);
+          break;
+        case _ParkingProofSource.gallery:
+          final file = await _picker.pickImage(
+            source: ImageSource.gallery,
+            maxWidth: 1280,
+            imageQuality: 70,
+            requestFullMetadata: false,
+          );
+          if (file != null) await _setImageProof(file);
+          break;
+        case _ParkingProofSource.pdf:
+          await _setPdfProof();
+          break;
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'Ticket file could not be selected.');
+      }
+    }
+  }
+
+  Future<void> _setImageProof(XFile file) async {
+    final bytes = await file.readAsBytes();
+    if (!_validateSize(bytes.length)) return;
+    final extension = _extension(file.name, fallback: 'jpg');
+    if (extension != 'jpg' && extension != 'jpeg' && extension != 'png') {
+      setState(() => _error = 'Only JPG, PNG, or PDF files are allowed.');
+      return;
+    }
+    setState(() {
+      _proof = _ParkingProof(
+        fileName: file.name.isEmpty ? 'parking_ticket.$extension' : file.name,
+        bytes: bytes,
+        extension: extension == 'jpeg' ? 'jpg' : extension,
+        contentType: extension == 'png' ? 'image/png' : 'image/jpeg',
+      );
+      _error = null;
+    });
+  }
+
+  Future<void> _setPdfProof() async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf'],
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    final bytes =
+        file.bytes ??
+        (file.path == null ? null : await File(file.path!).readAsBytes());
+    if (bytes == null) {
+      setState(() => _error = 'Ticket file could not be selected.');
+      return;
+    }
+    if (!_validateSize(bytes.length)) return;
+    setState(() {
+      _proof = _ParkingProof(
+        fileName: file.name.isEmpty ? 'parking_ticket.pdf' : file.name,
+        bytes: bytes,
+        extension: 'pdf',
+        contentType: 'application/pdf',
+      );
+      _error = null;
+    });
+  }
+
+  bool _validateSize(int size) {
+    if (size <= _maxProofBytes) return true;
+    setState(() => _error = 'Ticket file must be 5 MB or less.');
+    return false;
+  }
+
+  String _extension(String fileName, {required String fallback}) {
+    final lower = fileName.trim().toLowerCase();
+    final dot = lower.lastIndexOf('.');
+    return dot < 0 || dot == lower.length - 1
+        ? fallback
+        : lower.substring(dot + 1);
+  }
+
+  Future<void> _save() async {
+    final amount = double.tryParse(_amount.text.trim());
+    final proof = _proof;
+    if (amount == null || amount <= 0) {
+      setState(() => _error = 'Enter a valid amount.');
+      return;
+    }
+    if (proof == null) {
+      setState(() => _error = 'Parking ticket proof is required.');
+      return;
+    }
+    if (!SupabaseService.isReady ||
+        !SupabaseService.isValidUuid(widget.visit.remoteId)) {
+      setState(() => _error = 'Internet and synced visit are required.');
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final proofPath = await SupabaseService.uploadTravelClaimProof(
+        user: widget.user,
+        attendance: widget.attendance,
+        fileName: proof.fileName,
+        bytes: proof.bytes,
+        contentType: proof.contentType,
+        extension: proof.extension,
+      );
+      final remarksText = _remarks.text.trim();
+      await SupabaseService.submitTravelExpenseClaim(
+        user: widget.user,
+        attendance: widget.attendance,
+        travelMode: travelModeOther,
+        fromLocation: widget.visit.storeName,
+        toLocation: widget.visit.storeName,
+        fareAmount: amount,
+        remarks: remarksText.isEmpty
+            ? 'Parking Claim'
+            : 'Parking Claim - $remarksText',
+        proofFileUrl: proofPath,
+        storageBucket: SupabaseService.travelClaimProofBucket,
+        siteVisitId: widget.visit.remoteId,
+      );
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = 'Parking claim failed. Please check internet and retry.';
+        });
+      }
+    }
+  }
+}
+
+enum _ParkingProofSource { camera, gallery, pdf }
+
+class _ParkingProof {
+  const _ParkingProof({
+    required this.fileName,
+    required this.bytes,
+    required this.extension,
+    required this.contentType,
+  });
+
+  final String fileName;
+  final Uint8List bytes;
+  final String extension;
+  final String contentType;
 }
 
 class _ActivityBadge {

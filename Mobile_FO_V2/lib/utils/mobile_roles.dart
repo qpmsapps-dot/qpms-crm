@@ -12,6 +12,12 @@ const mobileRegistrationRoles = <String>{
 const mobileLoginRoles = <String>{
   ...mobileRegistrationRoles,
   'Manager',
+  'General Manager',
+  'QPMS Admin',
+  'Developer',
+  'Dev',
+  'IT Admin',
+  'Management IT Admin',
   // Preserve profiles created before registration standardized on FO.
   'Field Officer',
 };
@@ -31,7 +37,13 @@ String canonicalMobileRole(String role) {
     'BRANCHHEAD': 'Branch Head',
     'BH': 'Branch Head',
     'GM': 'GM',
+    'GENERALMANAGER': 'GM',
     'ADMIN': 'Admin',
+    'QPMSADMIN': 'Admin',
+    'DEVELOPER': 'Developer',
+    'DEV': 'Developer',
+    'ITADMIN': 'Developer',
+    'MANAGEMENTITADMIN': 'Developer',
     'BDEXECUTIVE': 'BD Executive',
     'BUSINESSDEVELOPMENTEXECUTIVE': 'BD Executive',
     'BDHEAD': 'BD Head',

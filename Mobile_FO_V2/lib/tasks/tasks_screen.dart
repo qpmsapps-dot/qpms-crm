@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -1621,25 +1622,35 @@ class _TasksScreenState extends State<TasksScreen>
                     disabledBadgeLabel: 'Check-In Required',
                     onTap: _activeVisit == null
                         ? () => _toast('Please check-in to a site first.')
-                        : () => _openActivity(_ActivityType.inspection),
+                        : () => _openActivity(FoActivityType.inspection),
                   ),
                   _activityCard(
                     width: width,
                     title: 'Deep Cleaning',
-                    subtitle: 'Coming Soon',
+                    subtitle: _activeVisit == null
+                        ? 'Check-in required'
+                        : 'Add cleaning details',
                     icon: Icons.cleaning_services_rounded,
-                    color: qpmsMuted,
-                    enabled: false,
-                    onTap: _showComingSoon,
+                    color: _activeVisit == null ? qpmsMuted : foGreen,
+                    enabled: _activeVisit != null,
+                    disabledBadgeLabel: 'Check-In Required',
+                    onTap: _activeVisit == null
+                        ? () => _toast('Please check-in to a site first.')
+                        : () => _openActivity(FoActivityType.deepCleaning),
                   ),
                   _activityCard(
                     width: width,
                     title: 'Training',
-                    subtitle: 'Coming Soon',
+                    subtitle: _activeVisit == null
+                        ? 'Check-in required'
+                        : 'Add training proof',
                     icon: Icons.co_present_rounded,
-                    color: qpmsMuted,
-                    enabled: false,
-                    onTap: _showComingSoon,
+                    color: _activeVisit == null ? qpmsMuted : foPurple,
+                    enabled: _activeVisit != null,
+                    disabledBadgeLabel: 'Check-In Required',
+                    onTap: _activeVisit == null
+                        ? () => _toast('Please check-in to a site first.')
+                        : () => _openActivity(FoActivityType.training),
                   ),
                   _activityCard(
                     width: width,
@@ -1894,7 +1905,7 @@ class _TasksScreenState extends State<TasksScreen>
     );
   }
 
-  void _openActivity(_ActivityType type) async {
+  void _openActivity(FoActivityType type) async {
     final visit = _activeVisit;
     final attendance = _attendance ?? await LocalStore.getAttendance();
     if (visit == null || attendance?.isActive != true) {
@@ -1904,7 +1915,7 @@ class _TasksScreenState extends State<TasksScreen>
     if (!mounted) return;
     final submitted = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) => _ActivityFormScreen(
+        builder: (_) => ActivityFormScreen(
           type: type,
           visit: visit,
           attendance: attendance!,
@@ -1913,7 +1924,7 @@ class _TasksScreenState extends State<TasksScreen>
       ),
     );
     if (submitted == true && mounted) {
-      _toast('Inspection submitted successfully.');
+      _toast('Activity submitted successfully.');
     }
   }
 
@@ -1931,26 +1942,29 @@ class _TasksScreenState extends State<TasksScreen>
   bool get wantKeepAlive => true;
 }
 
-enum _ActivityType { inspection, deepCleaning, training }
+enum FoActivityType { inspection, deepCleaning, training }
 
-class _ActivityFormScreen extends StatefulWidget {
-  const _ActivityFormScreen({
+class ActivityFormScreen extends StatefulWidget {
+  const ActivityFormScreen({
     required this.type,
     required this.visit,
     required this.attendance,
     required this.user,
+    this.requireActiveVisit = true,
+    super.key,
   });
 
-  final _ActivityType type;
+  final FoActivityType type;
   final SiteVisit visit;
   final Attendance attendance;
   final FoUser user;
+  final bool requireActiveVisit;
 
   @override
-  State<_ActivityFormScreen> createState() => _ActivityFormScreenState();
+  State<ActivityFormScreen> createState() => _ActivityFormScreenState();
 }
 
-class _ActivityFormScreenState extends State<_ActivityFormScreen> {
+class _ActivityFormScreenState extends State<ActivityFormScreen> {
   final _picker = ImagePicker();
   final _remarks = TextEditingController();
   final List<XFile> _photos = [];
@@ -1966,21 +1980,21 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
 
   _ActivitySpec get _spec {
     switch (widget.type) {
-      case _ActivityType.inspection:
+      case FoActivityType.inspection:
         return const _ActivitySpec(
           title: 'Inspection',
           subtitle: 'Record site inspection details',
           icon: Icons.content_paste_search_rounded,
           color: qpmsBlue,
         );
-      case _ActivityType.deepCleaning:
+      case FoActivityType.deepCleaning:
         return const _ActivitySpec(
           title: 'Deep Cleaning',
           subtitle: 'Record before & after cleaning photos',
           icon: Icons.cleaning_services_rounded,
           color: foGreen,
         );
-      case _ActivityType.training:
+      case FoActivityType.training:
         return const _ActivitySpec(
           title: 'Training',
           subtitle: 'Record training details & upload documents',
@@ -2066,11 +2080,11 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
           const SizedBox(height: 18),
           _siteInfo(),
           const SizedBox(height: 14),
-          if (widget.type == _ActivityType.inspection) _inspectionBody(),
-          if (widget.type == _ActivityType.deepCleaning) _cleaningBody(),
-          if (widget.type == _ActivityType.training) _trainingBody(),
+          if (widget.type == FoActivityType.inspection) _inspectionBody(),
+          if (widget.type == FoActivityType.deepCleaning) _cleaningBody(),
+          if (widget.type == FoActivityType.training) _trainingBody(),
           const SizedBox(height: 14),
-          _remarksCard(optional: widget.type == _ActivityType.training),
+          _remarksCard(optional: true),
           const SizedBox(height: 20),
           Row(
             children: [
@@ -2087,7 +2101,7 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
                 child: FoPrimaryButton(
                   label: _submitting ? 'Submitting...' : 'Submit',
                   icon: Icons.check_rounded,
-                  onPressed: _submitting ? null : _submitInspection,
+                  onPressed: _submitting ? null : _submitActivity,
                 ),
               ),
             ],
@@ -2097,31 +2111,23 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
     );
   }
 
-  Future<void> _submitInspection() async {
-    if (widget.type != _ActivityType.inspection) {
-      _snack('Coming Soon');
-      return;
-    }
+  Future<void> _submitActivity() async {
     final remarks = _remarks.text.trim();
-    if (remarks.isEmpty) {
-      _snack('Please enter inspection remarks.');
-      return;
-    }
-    if (_photos.isEmpty) {
-      _snack('Please add at least one inspection photo.');
-      return;
-    }
     if (!SupabaseService.isReady) {
       _snack(
         'Activity submission requires internet. Please try again once online.',
       );
       return;
     }
-    if (widget.attendance.isActive != true) {
+    if (!SupabaseService.isValidUuid(widget.attendance.remoteId)) {
       _snack('Please Start Day before submitting activity.');
       return;
     }
-    if (widget.visit.isActive != true) {
+    if (!SupabaseService.isValidUuid(widget.visit.remoteId)) {
+      _snack('Site visit sync missing. Please refresh and try again.');
+      return;
+    }
+    if (widget.requireActiveVisit && widget.visit.isActive != true) {
       _snack('Please check-in to a site before submitting activity.');
       return;
     }
@@ -2130,6 +2136,9 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
     String? submissionId;
     final orphanedUploadUrls = <String>[];
     try {
+      final activityType = _activityTypeValue(widget.type);
+      final uploadItems = await _activityUploadItems();
+      final pendingImages = uploadItems.isEmpty;
       Position? position;
       try {
         position = await Geolocator.getCurrentPosition(
@@ -2142,37 +2151,63 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
         position = null;
       }
 
-      submissionId = await SupabaseService.createActivitySubmission(
+      final existing = await SupabaseService.findActivitySubmission(
         user: widget.user,
-        attendance: widget.attendance,
         visit: widget.visit,
-        activityType: 'inspection',
-        remarks: remarks,
-        latitude: position?.latitude,
-        longitude: position?.longitude,
-        accuracy: position?.accuracy,
-        localId: newLocalId('activity-submission'),
+        activityType: activityType,
       );
+      submissionId = existing?['id']?.toString();
+      final metadata = Map<String, dynamic>.from(
+        existing?['metadata'] is Map ? existing!['metadata'] as Map : const {},
+      );
+      metadata['store_name'] = widget.visit.storeName;
+      metadata['client_name'] = widget.visit.clientName;
+      metadata['state'] = widget.visit.state;
+      metadata['activity_date'] = indiaDateKey(widget.visit.checkInTime);
+      metadata['pending_images'] = pendingImages;
+      metadata['last_mobile_activity_submit_at'] = DateTime.now()
+          .toUtc()
+          .toIso8601String();
+
       if (!SupabaseService.isValidUuid(submissionId)) {
-        throw StateError('Inspection submission could not be created.');
+        submissionId = await SupabaseService.createActivitySubmission(
+          user: widget.user,
+          attendance: widget.attendance,
+          visit: widget.visit,
+          activityType: activityType,
+          remarks: remarks.isEmpty
+              ? '${_spec.title} submitted; images/proofs pending.'
+              : remarks,
+          latitude: position?.latitude,
+          longitude: position?.longitude,
+          accuracy: position?.accuracy,
+          pendingImages: pendingImages,
+          metadata: metadata,
+          localId: newLocalId('activity-submission'),
+        );
+      } else {
+        await SupabaseService.updateActivitySubmissionMetadata(
+          submissionId: submissionId!,
+          metadata: metadata,
+          remarks: remarks,
+          status: 'submitted',
+        );
+      }
+      if (!SupabaseService.isValidUuid(submissionId)) {
+        throw StateError('Activity submission could not be created.');
       }
 
-      for (var index = 0; index < _photos.length; index += 1) {
-        final photo = _photos[index];
-        final bytes = await photo.readAsBytes();
-        final extension = _fileExtension(photo.name);
-        final contentType = _imageContentType(extension);
+      for (var index = 0; index < uploadItems.length; index += 1) {
+        final item = uploadItems[index];
         final fileUrl = await SupabaseService.uploadActivityFile(
           user: widget.user,
           attendance: widget.attendance,
-          activityType: 'inspection',
+          activityType: activityType,
           submissionId: submissionId!,
-          fileName: photo.name.isEmpty
-              ? 'inspection_photo_${index + 1}'
-              : photo.name,
-          bytes: bytes,
-          contentType: contentType,
-          extension: extension,
+          fileName: item.fileName,
+          bytes: item.bytes,
+          contentType: item.contentType,
+          extension: item.extension,
         );
         orphanedUploadUrls.add(fileUrl);
         try {
@@ -2181,14 +2216,12 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
             attendance: widget.attendance,
             visit: widget.visit,
             submissionId: submissionId,
-            activityType: 'inspection',
-            uploadRole: 'inspection_photo',
+            activityType: activityType,
+            uploadRole: item.uploadRole,
             fileUrl: fileUrl,
-            fileName: photo.name.isEmpty
-                ? 'inspection_photo_${index + 1}.$extension'
-                : photo.name,
-            fileType: contentType,
-            fileSize: bytes.length,
+            fileName: item.fileName,
+            fileType: item.contentType,
+            fileSize: item.bytes.length,
             localId: newLocalId('activity-upload'),
           );
           orphanedUploadUrls.remove(fileUrl);
@@ -2197,6 +2230,18 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
           orphanedUploadUrls.remove(fileUrl);
           rethrow;
         }
+      }
+      if (uploadItems.isNotEmpty) {
+        metadata['pending_images'] = false;
+        metadata['last_activity_upload_at'] = DateTime.now()
+            .toUtc()
+            .toIso8601String();
+        await SupabaseService.updateActivitySubmissionMetadata(
+          submissionId: submissionId!,
+          metadata: metadata,
+          remarks: remarks,
+          status: 'submitted',
+        );
       }
 
       if (!mounted) return;
@@ -2234,6 +2279,105 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
     return extension == 'png' ? 'image/png' : 'image/jpeg';
   }
 
+  String _activityTypeValue(FoActivityType type) {
+    switch (type) {
+      case FoActivityType.inspection:
+        return 'inspection';
+      case FoActivityType.deepCleaning:
+        return 'deep_cleaning';
+      case FoActivityType.training:
+        return 'training';
+    }
+  }
+
+  Future<List<_ActivityUploadItem>> _activityUploadItems() async {
+    final items = <_ActivityUploadItem>[];
+    if (widget.type == FoActivityType.deepCleaning) {
+      for (var index = 0; index < _areas.length; index += 1) {
+        final area = _areas[index];
+        if (area.before != null) {
+          items.add(
+            await _uploadItemFromXFile(
+              area.before!,
+              uploadRole: 'deep_cleaning_before',
+              fallbackName: 'area_${index + 1}_before',
+            ),
+          );
+        }
+        if (area.after != null) {
+          items.add(
+            await _uploadItemFromXFile(
+              area.after!,
+              uploadRole: 'deep_cleaning_after',
+              fallbackName: 'area_${index + 1}_after',
+            ),
+          );
+        }
+      }
+      return items;
+    }
+    final uploadRole = widget.type == FoActivityType.training
+        ? 'training_photo'
+        : 'inspection_photo';
+    for (var index = 0; index < _photos.length; index += 1) {
+      items.add(
+        await _uploadItemFromXFile(
+          _photos[index],
+          uploadRole: uploadRole,
+          fallbackName: '${_activityTypeValue(widget.type)}_${index + 1}',
+        ),
+      );
+    }
+    if (widget.type == FoActivityType.training && _pdf != null) {
+      items.add(
+        await _uploadItemFromPlatformFile(
+          _pdf!,
+          uploadRole: 'training_document',
+          fallbackName: 'training_document',
+        ),
+      );
+    }
+    return items;
+  }
+
+  Future<_ActivityUploadItem> _uploadItemFromXFile(
+    XFile file, {
+    required String uploadRole,
+    required String fallbackName,
+  }) async {
+    final bytes = await file.readAsBytes();
+    final extension = _fileExtension(file.name);
+    return _ActivityUploadItem(
+      uploadRole: uploadRole,
+      fileName: file.name.isEmpty ? '$fallbackName.$extension' : file.name,
+      bytes: bytes,
+      extension: extension,
+      contentType: _imageContentType(extension),
+    );
+  }
+
+  Future<_ActivityUploadItem> _uploadItemFromPlatformFile(
+    PlatformFile file, {
+    required String uploadRole,
+    required String fallbackName,
+  }) async {
+    final extension = file.extension?.toLowerCase() == 'pdf' ? 'pdf' : 'pdf';
+    final filePath = file.path;
+    final bytes =
+        file.bytes ??
+        (filePath == null ? null : await File(filePath).readAsBytes());
+    if (bytes == null) {
+      throw StateError('Training document could not be selected.');
+    }
+    return _ActivityUploadItem(
+      uploadRole: uploadRole,
+      fileName: file.name.isEmpty ? '$fallbackName.$extension' : file.name,
+      bytes: bytes,
+      extension: extension,
+      contentType: 'application/pdf',
+    );
+  }
+
   String _activitySubmitErrorMessage(Object error) {
     final text = error.toString();
     final lower = text.toLowerCase();
@@ -2249,7 +2393,7 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
     if (lower.contains('session expired')) {
       return 'Session expired. Please login again.';
     }
-    return 'Inspection submission failed. Please retry.';
+    return 'Activity submission failed. Please retry.';
   }
 
   Widget _siteInfo() {
@@ -2293,7 +2437,10 @@ class _ActivityFormScreenState extends State<_ActivityFormScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  const FoStatusBadge(label: 'Checked In', color: foGreen),
+                  FoStatusBadge(
+                    label: widget.visit.isActive ? 'Checked In' : 'Checked Out',
+                    color: widget.visit.isActive ? qpmsBlue : foGreen,
+                  ),
                   const SizedBox(height: 6),
                   Text(
                     formatTime(widget.visit.checkInTime),
@@ -2724,6 +2871,22 @@ class _ActivitySpec {
 class _CleaningArea {
   XFile? before;
   XFile? after;
+}
+
+class _ActivityUploadItem {
+  const _ActivityUploadItem({
+    required this.uploadRole,
+    required this.fileName,
+    required this.bytes,
+    required this.extension,
+    required this.contentType,
+  });
+
+  final String uploadRole;
+  final String fileName;
+  final Uint8List bytes;
+  final String extension;
+  final String contentType;
 }
 
 class _StoreSearchDialog extends StatefulWidget {

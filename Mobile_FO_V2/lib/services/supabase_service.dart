@@ -775,6 +775,8 @@ class SupabaseService {
     double? latitude,
     double? longitude,
     double? accuracy,
+    bool pendingImages = false,
+    Map<String, dynamic> metadata = const {},
     String? localId,
   }) async {
     await requireAuthenticatedSession(
@@ -791,18 +793,21 @@ class SupabaseService {
       throw StateError('Site visit must be synced before submitting activity.');
     }
     final cleanRemarks = remarks.trim();
-    if (cleanRemarks.isEmpty) {
-      throw StateError('Remarks are required.');
-    }
-    final metadata = <String, dynamic>{
+    final activityDate = indiaDateKey(visit.checkInTime);
+    final submissionMetadata = <String, dynamic>{
       'store_name': visit.storeName,
       'client_name': visit.clientName,
       'state': visit.state,
+      'activity_date': activityDate,
+      'pending_images': pendingImages,
+      ...metadata,
     };
-    if (visit.business != null) metadata['business'] = visit.business;
-    if (latitude != null) metadata['submission_latitude'] = latitude;
-    if (longitude != null) metadata['submission_longitude'] = longitude;
-    if (accuracy != null) metadata['submission_accuracy'] = accuracy;
+    if (visit.business != null) submissionMetadata['business'] = visit.business;
+    if (latitude != null) submissionMetadata['submission_latitude'] = latitude;
+    if (longitude != null) {
+      submissionMetadata['submission_longitude'] = longitude;
+    }
+    if (accuracy != null) submissionMetadata['submission_accuracy'] = accuracy;
     final row = await client
         .from('fo_activity_submissions')
         .insert({
@@ -814,10 +819,10 @@ class SupabaseService {
           'store_code': visit.storeCode.trim().isEmpty ? null : visit.storeCode,
           'activity_type': activityType,
           'status': 'submitted',
-          'remarks': cleanRemarks,
+          'remarks': cleanRemarks.isEmpty ? null : cleanRemarks,
           'submitted_at': DateTime.now().toUtc().toIso8601String(),
           'local_id': localId,
-          'metadata': metadata,
+          'metadata': submissionMetadata,
         })
         .select('id')
         .maybeSingle();
@@ -828,6 +833,117 @@ class SupabaseService {
       error: 'activity_type=$activityType submission_id=${row?['id'] ?? '--'}',
     );
     return row?['id']?.toString();
+  }
+
+  static Future<Map<String, dynamic>?> findActivitySubmission({
+    required FoUser user,
+    required SiteVisit visit,
+    required String activityType,
+  }) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'tasks',
+      action: 'ACTIVITY_SUBMISSION_LOOKUP_AUTH_SESSION_INVALID',
+    );
+    final siteVisitId = visit.remoteId?.trim();
+    if (!isValidUuid(siteVisitId)) return null;
+    final rows = await client
+        .from('fo_activity_submissions')
+        .select('*')
+        .eq('site_visit_id', siteVisitId!)
+        .eq('activity_type', activityType)
+        .or(
+          'fo_user_id.eq.${user.employeeCode},employee_code.eq.${user.employeeCode}',
+        )
+        .order('submitted_at', ascending: false)
+        .limit(1);
+    final list = List<Map<String, dynamic>>.from(rows);
+    return list.isEmpty ? null : list.first;
+  }
+
+  static Future<void> updateActivitySubmissionMetadata({
+    required String submissionId,
+    required Map<String, dynamic> metadata,
+    String? remarks,
+    String? status,
+  }) async {
+    if (!isValidUuid(submissionId)) return;
+    final payload = <String, dynamic>{
+      'metadata': metadata,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    };
+    if (remarks != null && remarks.trim().isNotEmpty) {
+      payload['remarks'] = remarks.trim();
+    }
+    if (status != null && status.trim().isNotEmpty) {
+      payload['status'] = status.trim();
+    }
+    await client
+        .from('fo_activity_submissions')
+        .update(payload)
+        .eq('id', submissionId);
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchActivityUploadsForSubmission(
+    String submissionId,
+  ) async {
+    if (!isValidUuid(submissionId)) return const [];
+    final rows = await client
+        .from('fo_activity_uploads')
+        .select('*')
+        .eq('submission_id', submissionId)
+        .limit(100);
+    return List<Map<String, dynamic>>.from(rows);
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchPendingActivityImageReminders({
+    required FoUser user,
+    required DateTime day,
+  }) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'home',
+      action: 'ACTIVITY_IMAGE_REMINDER_AUTH_SESSION_INVALID',
+    );
+    final from = DateTime(day.year, day.month, day.day).toUtc();
+    final to = DateTime(day.year, day.month, day.day, 23, 59, 59, 999).toUtc();
+    final submissionsRows = await client
+        .from('fo_activity_submissions')
+        .select('*')
+        .or(
+          'fo_user_id.eq.${user.employeeCode},employee_code.eq.${user.employeeCode}',
+        )
+        .inFilter('activity_type', ['inspection', 'deep_cleaning', 'training'])
+        .gte('submitted_at', from.toIso8601String())
+        .lte('submitted_at', to.toIso8601String())
+        .order('submitted_at', ascending: false)
+        .limit(100);
+    final submissions = List<Map<String, dynamic>>.from(submissionsRows);
+    if (submissions.isEmpty) return const [];
+    final submissionIds = submissions
+        .map((row) => row['id']?.toString())
+        .where((id) => isValidUuid(id))
+        .cast<String>()
+        .toList();
+    final uploadsRows = submissionIds.isEmpty
+        ? const []
+        : await client
+              .from('fo_activity_uploads')
+              .select('submission_id')
+              .inFilter('submission_id', submissionIds)
+              .limit(500);
+    final uploadedSubmissionIds = List<Map<String, dynamic>>.from(uploadsRows)
+        .map((row) => row['submission_id']?.toString())
+        .whereType<String>()
+        .toSet();
+    return submissions.where((submission) {
+      final metadata = _jsonMap(submission['metadata']);
+      final pending = metadata['pending_images'] == true;
+      final hasUpload = uploadedSubmissionIds.contains(
+        submission['id']?.toString(),
+      );
+      return pending || !hasUpload;
+    }).toList();
   }
 
   static Future<String> uploadActivityFile({

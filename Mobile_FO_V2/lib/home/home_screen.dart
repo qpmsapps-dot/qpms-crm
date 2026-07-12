@@ -922,6 +922,7 @@ class _HomeScreenState extends State<HomeScreen>
         action: 'BACKGROUND_TRACKING_STARTED',
       );
       _toast('Attendance marked present. Tracking active.');
+      await _showPendingActivityUploadReminder();
     } catch (error, stackTrace) {
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
@@ -939,6 +940,89 @@ class _HomeScreenState extends State<HomeScreen>
   bool _shouldShowBatteryAdvisory() {
     final status = PermissionService.batteryOptimizationStatus.toLowerCase();
     return status == 'unknown' || status == 'restricted';
+  }
+
+  Future<void> _showPendingActivityUploadReminder() async {
+    if (!SupabaseService.isReady) return;
+    try {
+      final yesterday = DateTime.now().subtract(const Duration(days: 1));
+      final pending = await SupabaseService.fetchPendingActivityImageReminders(
+        user: widget.user,
+        day: yesterday,
+      );
+      if (!mounted || pending.isEmpty) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text("Yesterday's activity images/proofs are pending."),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Please upload them from Site Visit / Recent Visits.',
+                ),
+                const SizedBox(height: 12),
+                for (final submission in pending.take(8))
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      '${_activityReminderStoreName(submission)} - ${_activityReminderType(submission)}',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                if (pending.length > 8)
+                  Text('+${pending.length - 8} more pending activity item(s)'),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Later'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _toast('Open Site Visit > Recent Visits to upload proofs.');
+              },
+              child: const Text('Upload Now'),
+            ),
+          ],
+        ),
+      );
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'home',
+        action: 'ACTIVITY_IMAGE_REMINDER_FAILED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+  }
+
+  String _activityReminderStoreName(Map<String, dynamic> submission) {
+    final metadata = submission['metadata'];
+    if (metadata is Map && metadata['store_name'] != null) {
+      return metadata['store_name'].toString();
+    }
+    return submission['store_code']?.toString() ?? 'Selected store';
+  }
+
+  String _activityReminderType(Map<String, dynamic> submission) {
+    final type = submission['activity_type']?.toString() ?? '';
+    switch (type) {
+      case 'deep_cleaning':
+        return 'Deep Cleaning';
+      case 'training':
+        return 'Training';
+      case 'inspection':
+      default:
+        return 'Inspection';
+    }
   }
 
   Future<bool?> _confirmBatteryAdvisory() async {
