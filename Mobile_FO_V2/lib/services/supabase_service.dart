@@ -778,6 +778,7 @@ class SupabaseService {
     bool pendingImages = false,
     Map<String, dynamic> metadata = const {},
     String? localId,
+    String status = 'submitted',
   }) async {
     await requireAuthenticatedSession(
       user,
@@ -818,7 +819,7 @@ class SupabaseService {
           'store_id': _uuidOrNull(visit.storeId),
           'store_code': visit.storeCode.trim().isEmpty ? null : visit.storeCode,
           'activity_type': activityType,
-          'status': 'submitted',
+          'status': status.trim().isEmpty ? 'submitted' : status.trim(),
           'remarks': cleanRemarks.isEmpty ? null : cleanRemarks,
           'submitted_at': DateTime.now().toUtc().toIso8601String(),
           'local_id': localId,
@@ -894,6 +895,22 @@ class SupabaseService {
         .eq('submission_id', submissionId)
         .limit(100);
     return List<Map<String, dynamic>>.from(rows);
+  }
+
+  static Future<String?> signedActivityUploadUrl(String fileUrl) async {
+    final clean = fileUrl.trim();
+    if (clean.isEmpty) return null;
+    if (clean.startsWith('http://') || clean.startsWith('https://')) {
+      return clean;
+    }
+    final path = clean
+        .replaceFirst(RegExp('^$activityUploadBucket/'), '')
+        .replaceFirst(RegExp(r'^/+'), '');
+    if (path.isEmpty) return null;
+    final result = await client.storage
+        .from(activityUploadBucket)
+        .createSignedUrl(path, 60 * 60);
+    return result;
   }
 
   static Future<List<Map<String, dynamic>>> fetchPendingActivityImageReminders({
@@ -1014,6 +1031,7 @@ class SupabaseService {
     required String fileType,
     required int fileSize,
     String? localId,
+    Map<String, dynamic> metadata = const {},
   }) async {
     final attendanceId = attendance.remoteId?.trim();
     final siteVisitId = visit.remoteId?.trim();
@@ -1042,6 +1060,7 @@ class SupabaseService {
             'store_name': visit.storeName,
             'client_name': visit.clientName,
             'state': visit.state,
+            ...metadata,
           },
         })
         .select('id')

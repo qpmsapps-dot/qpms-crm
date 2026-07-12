@@ -1967,14 +1967,72 @@ class ActivityFormScreen extends StatefulWidget {
 class _ActivityFormScreenState extends State<ActivityFormScreen> {
   final _picker = ImagePicker();
   final _remarks = TextEditingController();
+  final _hkEmpId = TextEditingController();
+  final _hkName = TextEditingController();
   final List<XFile> _photos = [];
   final List<_CleaningArea> _areas = [_CleaningArea()];
+  final List<_TrainingStaff> _hkStaff = [];
+  final Map<String, List<XFile>> _trainingPhotos = {};
+  final Map<String, List<_ExistingActivityUpload>> _existingTrainingUploads =
+      {};
   PlatformFile? _pdf;
   bool _submitting = false;
+  bool _loadingExistingTraining = false;
+  bool _draftSaved = false;
+  bool _existingTrainingDocument = false;
+
+  static const List<_TrainingCategory> _trainingCategories = [
+    _TrainingCategory(
+      key: 'fo_briefing',
+      label: 'FO Briefing',
+      icon: Icons.record_voice_over_rounded,
+      color: Color(0xFF10B981),
+    ),
+    _TrainingCategory(
+      key: 'glass_cleaning',
+      label: 'Glass Cleaning',
+      icon: Icons.cleaning_services_rounded,
+      color: Color(0xFF3B82F6),
+    ),
+    _TrainingCategory(
+      key: 'floor_cleaning_mop',
+      label: 'Floor Cleaning with Mop',
+      icon: Icons.cleaning_services_rounded,
+      color: foPurple,
+    ),
+    _TrainingCategory(
+      key: 'floor_cleaning_ec_mop',
+      label: 'Floor Cleaning with EC Mop',
+      icon: Icons.cleaning_services_rounded,
+      color: Color(0xFFF97316),
+    ),
+    _TrainingCategory(
+      key: 'toilet_cleaning',
+      label: 'Toilet Cleaning',
+      icon: Icons.wc_rounded,
+      color: Color(0xFFEC4899),
+    ),
+    _TrainingCategory(
+      key: 'cobweb_cleaning',
+      label: 'Cobweb Cleaning',
+      icon: Icons.cyclone_rounded,
+      color: Color(0xFF0891B2),
+    ),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.type == FoActivityType.training) {
+      _loadExistingTraining();
+    }
+  }
 
   @override
   void dispose() {
     _remarks.dispose();
+    _hkEmpId.dispose();
+    _hkName.dispose();
     super.dispose();
   }
 
@@ -1997,7 +2055,7 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
       case FoActivityType.training:
         return const _ActivitySpec(
           title: 'Training',
-          subtitle: 'Record training details & upload documents',
+          subtitle: 'Complete training tasks and upload proofs',
           icon: Icons.co_present_rounded,
           color: foPurple,
         );
@@ -2036,6 +2094,147 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
     );
     if (result == null || result.files.isEmpty || !mounted) return;
     setState(() => _pdf = result.files.first);
+  }
+
+  Future<void> _pickTrainingCategoryPhoto(_TrainingCategory category) async {
+    final files = await _picker.pickMultiImage(imageQuality: 80);
+    if (files.isEmpty || !mounted) return;
+    setState(() {
+      final rows = _trainingPhotos.putIfAbsent(category.key, () => []);
+      rows.addAll(files);
+    });
+  }
+
+  Future<void> _loadExistingTraining() async {
+    if (!SupabaseService.isReady) return;
+    setState(() => _loadingExistingTraining = true);
+    try {
+      final existing = await SupabaseService.findActivitySubmission(
+        user: widget.user,
+        visit: widget.visit,
+        activityType: 'training',
+      );
+      if (!mounted) return;
+      _existingTrainingUploads.clear();
+      _existingTrainingDocument = false;
+      _hkStaff.clear();
+
+      final metadata = existing?['metadata'];
+      if (metadata is Map) {
+        final rows = metadata['hk_staff_attended'];
+        if (rows is List) {
+          for (final row in rows) {
+            if (row is! Map) continue;
+            final empId = row['emp_id']?.toString().trim() ?? '';
+            final name = row['name']?.toString().trim() ?? '';
+            if (empId.isEmpty && name.isEmpty) continue;
+            _hkStaff.add(_TrainingStaff(empId: empId, name: name));
+          }
+        }
+      }
+
+      final submissionId = existing?['id']?.toString();
+      if (SupabaseService.isValidUuid(submissionId)) {
+        final uploads = await SupabaseService.fetchActivityUploadsForSubmission(
+          submissionId!,
+        );
+        for (final upload in uploads) {
+          final uploadMetadata = upload['metadata'];
+          final metadataMap = uploadMetadata is Map ? uploadMetadata : const {};
+          final role = upload['upload_role']?.toString() ?? '';
+          final isDocument =
+              role == 'training_document' ||
+              metadataMap['training_document'] == true;
+          if (isDocument) {
+            _existingTrainingDocument = true;
+          }
+          final categoryKey = isDocument
+              ? 'training_document'
+              : (metadataMap['training_category']
+                            ?.toString()
+                            .trim()
+                            .isNotEmpty ==
+                        true
+                    ? metadataMap['training_category'].toString().trim()
+                    : 'training_photo');
+          final fileUrl = upload['file_url']?.toString() ?? '';
+          final signedUrl = fileUrl.isEmpty
+              ? null
+              : await SupabaseService.signedActivityUploadUrl(fileUrl);
+          final row = _ExistingActivityUpload(
+            id: upload['id']?.toString() ?? fileUrl,
+            fileUrl: fileUrl,
+            fileName: upload['file_name']?.toString() ?? 'Training upload',
+            fileType: upload['file_type']?.toString() ?? '',
+            signedUrl: signedUrl,
+          );
+          _existingTrainingUploads.putIfAbsent(categoryKey, () => []).add(row);
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _draftSaved = existing?['status']?.toString().toLowerCase() == 'draft';
+      });
+    } catch (_) {
+      if (mounted) {
+        _snack('Unable to load existing training draft right now.');
+      }
+    } finally {
+      if (mounted) setState(() => _loadingExistingTraining = false);
+    }
+  }
+
+  int get _trainingCompletedCategoryCount {
+    var count = 0;
+    for (final category in _trainingCategories) {
+      final localCount = _trainingPhotos[category.key]?.length ?? 0;
+      final existingCount = _existingTrainingUploads[category.key]?.length ?? 0;
+      if (localCount + existingCount > 0) count += 1;
+    }
+    return count;
+  }
+
+  int get _trainingDocumentCount =>
+      (_pdf == null ? 0 : 1) + (_existingTrainingDocument ? 1 : 0);
+
+  bool get _hasExistingTrainingEvidence =>
+      _trainingCompletedCategoryCount > 0 || _trainingDocumentCount > 0;
+
+  Map<String, dynamic> _trainingMetadata({required bool pendingImages}) {
+    final completedCategories = _trainingCategories
+        .where(
+          (category) =>
+              (_trainingPhotos[category.key]?.isNotEmpty == true) ||
+              (_existingTrainingUploads[category.key]?.isNotEmpty == true),
+        )
+        .map((category) => category.key)
+        .toList();
+    return {
+      'hk_staff_attended': _hkStaff.map((row) => row.toJson()).toList(),
+      'training_categories_total': _trainingCategories.length,
+      'training_categories_completed': completedCategories,
+      'training_categories_completed_count': completedCategories.length,
+      'training_document_uploaded': _trainingDocumentCount > 0,
+      'pending_images': pendingImages,
+      'training_pending_category_keys': _trainingCategories
+          .where((category) => !completedCategories.contains(category.key))
+          .map((category) => category.key)
+          .toList(),
+    };
+  }
+
+  void _addHkStaff() {
+    final empId = _hkEmpId.text.trim();
+    final name = _hkName.text.trim();
+    if (empId.isEmpty && name.isEmpty) {
+      _snack('Enter HK staff ID or name to add.');
+      return;
+    }
+    setState(() {
+      _hkStaff.add(_TrainingStaff(empId: empId, name: name));
+      _hkEmpId.clear();
+      _hkName.clear();
+    });
   }
 
   @override
@@ -2083,23 +2282,37 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
           if (widget.type == FoActivityType.inspection) _inspectionBody(),
           if (widget.type == FoActivityType.deepCleaning) _cleaningBody(),
           if (widget.type == FoActivityType.training) _trainingBody(),
-          const SizedBox(height: 14),
-          _remarksCard(optional: true),
+          if (widget.type != FoActivityType.training) ...[
+            const SizedBox(height: 14),
+            _remarksCard(optional: true),
+          ],
           const SizedBox(height: 20),
+          if (widget.type == FoActivityType.training) ...[
+            _trainingSubmitNote(),
+            const SizedBox(height: 14),
+          ],
           Row(
             children: [
               Expanded(
                 child: FoOutlinedButton(
-                  label: 'Save as Draft',
+                  label: widget.type == FoActivityType.training
+                      ? 'Save Draft'
+                      : 'Save as Draft',
                   onPressed: _submitting
                       ? null
+                      : widget.type == FoActivityType.training
+                      ? _saveTrainingDraft
                       : () => _snack('Draft saved locally for this session.'),
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: FoPrimaryButton(
-                  label: _submitting ? 'Submitting...' : 'Submit',
+                  label: _submitting
+                      ? 'Submitting...'
+                      : widget.type == FoActivityType.training
+                      ? 'Submit Training'
+                      : 'Submit',
                   icon: Icons.check_rounded,
                   onPressed: _submitting ? null : _submitActivity,
                 ),
@@ -2112,6 +2325,26 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
   }
 
   Future<void> _submitActivity() async {
+    await _persistActivity(
+      targetStatus: 'submitted',
+      requireTrainingEvidence: widget.type == FoActivityType.training,
+      popOnSuccess: true,
+    );
+  }
+
+  Future<void> _saveTrainingDraft() async {
+    await _persistActivity(
+      targetStatus: 'draft',
+      requireTrainingEvidence: false,
+      popOnSuccess: false,
+    );
+  }
+
+  Future<void> _persistActivity({
+    required String targetStatus,
+    required bool requireTrainingEvidence,
+    required bool popOnSuccess,
+  }) async {
     final remarks = _remarks.text.trim();
     if (!SupabaseService.isReady) {
       _snack(
@@ -2138,7 +2371,21 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
     try {
       final activityType = _activityTypeValue(widget.type);
       final uploadItems = await _activityUploadItems();
-      final pendingImages = uploadItems.isEmpty;
+      final hasExistingTrainingEvidence = widget.type == FoActivityType.training
+          ? _hasExistingTrainingEvidence
+          : false;
+      if (requireTrainingEvidence &&
+          widget.type == FoActivityType.training &&
+          uploadItems.isEmpty &&
+          !hasExistingTrainingEvidence) {
+        _snack(
+          'Please upload at least one training photo or document before submitting.',
+        );
+        return;
+      }
+      final pendingImages = widget.type == FoActivityType.training
+          ? _trainingCompletedCategoryCount == 0
+          : uploadItems.isEmpty;
       Position? position;
       try {
         position = await Geolocator.getCurrentPosition(
@@ -2160,11 +2407,22 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
       final metadata = Map<String, dynamic>.from(
         existing?['metadata'] is Map ? existing!['metadata'] as Map : const {},
       );
+      final existingStatus = existing?['status']
+          ?.toString()
+          .trim()
+          .toLowerCase();
+      final statusToSave =
+          targetStatus == 'draft' && existingStatus == 'submitted'
+          ? 'submitted'
+          : targetStatus;
       metadata['store_name'] = widget.visit.storeName;
       metadata['client_name'] = widget.visit.clientName;
       metadata['state'] = widget.visit.state;
       metadata['activity_date'] = indiaDateKey(widget.visit.checkInTime);
       metadata['pending_images'] = pendingImages;
+      if (widget.type == FoActivityType.training) {
+        metadata.addAll(_trainingMetadata(pendingImages: pendingImages));
+      }
       metadata['last_mobile_activity_submit_at'] = DateTime.now()
           .toUtc()
           .toIso8601String();
@@ -2175,7 +2433,9 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
           attendance: widget.attendance,
           visit: widget.visit,
           activityType: activityType,
-          remarks: remarks.isEmpty
+          remarks: widget.type == FoActivityType.training
+              ? ''
+              : remarks.isEmpty
               ? '${_spec.title} submitted; images/proofs pending.'
               : remarks,
           latitude: position?.latitude,
@@ -2184,13 +2444,14 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
           pendingImages: pendingImages,
           metadata: metadata,
           localId: newLocalId('activity-submission'),
+          status: statusToSave,
         );
       } else {
         await SupabaseService.updateActivitySubmissionMetadata(
           submissionId: submissionId!,
           metadata: metadata,
-          remarks: remarks,
-          status: 'submitted',
+          remarks: widget.type == FoActivityType.training ? null : remarks,
+          status: statusToSave,
         );
       }
       if (!SupabaseService.isValidUuid(submissionId)) {
@@ -2223,6 +2484,7 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
             fileType: item.contentType,
             fileSize: item.bytes.length,
             localId: newLocalId('activity-upload'),
+            metadata: item.metadata,
           );
           orphanedUploadUrls.remove(fileUrl);
         } catch (_) {
@@ -2232,20 +2494,42 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
         }
       }
       if (uploadItems.isNotEmpty) {
-        metadata['pending_images'] = false;
+        metadata['pending_images'] = widget.type == FoActivityType.training
+            ? _trainingCompletedCategoryCount == 0
+            : false;
         metadata['last_activity_upload_at'] = DateTime.now()
             .toUtc()
             .toIso8601String();
+        if (widget.type == FoActivityType.training) {
+          metadata.addAll(
+            _trainingMetadata(
+              pendingImages: metadata['pending_images'] == true,
+            ),
+          );
+        }
         await SupabaseService.updateActivitySubmissionMetadata(
           submissionId: submissionId!,
           metadata: metadata,
-          remarks: remarks,
-          status: 'submitted',
+          remarks: widget.type == FoActivityType.training ? null : remarks,
+          status: statusToSave,
         );
       }
 
       if (!mounted) return;
-      Navigator.of(context).pop(true);
+      if (widget.type == FoActivityType.training) {
+        await _loadExistingTraining();
+        if (!mounted) return;
+        setState(() {
+          _draftSaved = statusToSave == 'draft';
+          _trainingPhotos.clear();
+          _pdf = null;
+        });
+      }
+      if (popOnSuccess) {
+        Navigator.of(context).pop(true);
+      } else {
+        _snack('Training draft saved.');
+      }
     } catch (error) {
       for (final fileUrl in orphanedUploadUrls) {
         try {
@@ -2316,6 +2600,40 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
       }
       return items;
     }
+    if (widget.type == FoActivityType.training) {
+      for (final category in _trainingCategories) {
+        final files = _trainingPhotos[category.key] ?? const <XFile>[];
+        for (var index = 0; index < files.length; index += 1) {
+          items.add(
+            await _uploadItemFromXFile(
+              files[index],
+              uploadRole: 'training_photo',
+              fallbackName: '${category.key}_${index + 1}',
+              metadata: {
+                'training_category': category.key,
+                'training_category_label': category.label,
+                'training_photo': true,
+              },
+            ),
+          );
+        }
+      }
+      if (_pdf != null) {
+        items.add(
+          await _uploadItemFromPlatformFile(
+            _pdf!,
+            uploadRole: 'training_document',
+            fallbackName: 'training_document',
+            metadata: {
+              'training_document': true,
+              'training_category': 'training_document',
+              'training_category_label': 'Training Document',
+            },
+          ),
+        );
+      }
+      return items;
+    }
     final uploadRole = widget.type == FoActivityType.training
         ? 'training_photo'
         : 'inspection_photo';
@@ -2344,6 +2662,7 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
     XFile file, {
     required String uploadRole,
     required String fallbackName,
+    Map<String, dynamic> metadata = const {},
   }) async {
     final bytes = await file.readAsBytes();
     final extension = _fileExtension(file.name);
@@ -2353,6 +2672,7 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
       bytes: bytes,
       extension: extension,
       contentType: _imageContentType(extension),
+      metadata: metadata,
     );
   }
 
@@ -2360,6 +2680,7 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
     PlatformFile file, {
     required String uploadRole,
     required String fallbackName,
+    Map<String, dynamic> metadata = const {},
   }) async {
     final extension = file.extension?.toLowerCase() == 'pdf' ? 'pdf' : 'pdf';
     final filePath = file.path;
@@ -2375,6 +2696,7 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
       bytes: bytes,
       extension: extension,
       contentType: 'application/pdf',
+      metadata: metadata,
     );
   }
 
@@ -2510,29 +2832,79 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
   }
 
   Widget _trainingBody() {
+    final completed = _trainingCompletedCategoryCount;
+    final progress = completed / _trainingCategories.length;
     return Column(
       children: [
+        _hkStaffCard(),
+        const SizedBox(height: 14),
         FoCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const FoSectionTitle(
-                title: 'Training Photos',
-                subtitle: 'Upload photos from the training session',
-              ),
-              const SizedBox(height: 16),
-              _photoGrid(
-                _photos,
-                onRemove: (index) {
-                  setState(() => _photos.removeAt(index));
-                },
-              ),
-              const SizedBox(height: 12),
-              _uploadBox(
-                title: 'Add More Photos',
-                subtitle: 'Tap to upload',
-                icon: Icons.camera_alt_outlined,
-                onTap: _addPhotos,
+              Row(
+                children: [
+                  Container(
+                    width: 54,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      color: foPurple.withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.trending_up_rounded,
+                      color: foPurple,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Text(
+                              'Training Progress',
+                              style: TextStyle(
+                                color: foNavy,
+                                fontSize: 17,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '$completed of ${_trainingCategories.length} completed',
+                              style: const TextStyle(
+                                color: qpmsBlue,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(99),
+                          child: LinearProgressIndicator(
+                            value: progress,
+                            minHeight: 8,
+                            color: foPurple,
+                            backgroundColor: const Color(0xFFE8ECF7),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'You can save as draft and upload pending photos later.',
+                          style: TextStyle(
+                            color: Color(0xFF53607D),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_draftSaved)
+                    const FoStatusBadge(label: 'Draft Saved', color: qpmsBlue),
+                ],
               ),
             ],
           ),
@@ -2543,22 +2915,388 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const FoSectionTitle(
-                title: 'Training Document (PDF)',
-                subtitle: 'Upload training attendance sheet or material',
+                title: 'Required Training Activities',
+                subtitle:
+                    'Upload photos for the activities completed during this training.',
               ),
               const SizedBox(height: 14),
-              if (_pdf != null) _pdfCard(),
-              if (_pdf != null) const SizedBox(height: 12),
-              _uploadBox(
-                title: 'Upload PDF',
-                subtitle: 'Tap to upload',
-                icon: Icons.upload_file_outlined,
-                onTap: _pickPdf,
-              ),
+              if (_loadingExistingTraining)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: LinearProgressIndicator(minHeight: 3),
+                ),
+              for (final category in _trainingCategories)
+                _trainingCategoryRow(category),
             ],
           ),
         ),
+        const SizedBox(height: 14),
+        _trainingDocumentCard(),
       ],
+    );
+  }
+
+  Widget _hkStaffCard() {
+    return FoCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const FoSectionTitle(
+            title: 'HK Staff Attended',
+            subtitle: 'Add the housekeeping staff who attended this training',
+          ),
+          const SizedBox(height: 14),
+          for (var index = 0; index < _hkStaff.length; index += 1)
+            _hkStaffRow(index, _hkStaff[index]),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _hkEmpId,
+                  decoration: const InputDecoration(
+                    labelText: 'HK Scrum ID / Emp ID',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: _hkName,
+                  decoration: const InputDecoration(labelText: 'HK Name'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: _addHkStaff,
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('+ Add Another Staff'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: qpmsBlue,
+              side: BorderSide(
+                color: qpmsBlue.withValues(alpha: 0.45),
+                style: BorderStyle.solid,
+              ),
+              minimumSize: const Size.fromHeight(50),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _hkStaffRow(int index, _TrainingStaff staff) {
+    final initials = (staff.name.isNotEmpty ? staff.name : staff.empId)
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .take(2)
+        .map((part) => part[0].toUpperCase())
+        .join();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: foBorder),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            backgroundColor: foPurple.withValues(alpha: 0.12),
+            child: Text(
+              initials.isEmpty ? 'HK' : initials,
+              style: const TextStyle(
+                color: foPurple,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(
+                  child: _compactTrainingField(
+                    'HK Scrum ID / Emp ID',
+                    staff.empId.isEmpty ? '--' : staff.empId,
+                  ),
+                ),
+                Container(width: 1, height: 36, color: foBorder),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _compactTrainingField(
+                    'HK Name',
+                    staff.name.isEmpty ? '--' : staff.name,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: () => setState(() => _hkStaff.removeAt(index)),
+            icon: const Icon(Icons.delete_outline_rounded, color: qpmsMuted),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _compactTrainingField(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Color(0xFF53607D),
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: foNavy, fontWeight: FontWeight.w900),
+        ),
+      ],
+    );
+  }
+
+  Widget _trainingCategoryRow(_TrainingCategory category) {
+    final local = _trainingPhotos[category.key] ?? const <XFile>[];
+    final existing = _existingTrainingUploads[category.key] ?? const [];
+    final total = local.length + existing.length;
+    final hasPhoto = total > 0;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        border: Border.all(color: foBorder),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: category.color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(category.icon, color: category.color, size: 21),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              category.label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: foNavy,
+                fontSize: 14,
+                height: 1.16,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _trainingPreview(category, local, existing),
+          const SizedBox(width: 6),
+          Tooltip(
+            message: 'Upload photos',
+            child: Semantics(
+              button: true,
+              label: 'Upload photos for ${category.label}',
+              child: InkWell(
+                onTap: () => _pickTrainingCategoryPhoto(category),
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: qpmsBlue),
+                  ),
+                  child: const Icon(
+                    Icons.cloud_upload_outlined,
+                    size: 20,
+                    color: qpmsBlue,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          _trainingStatusIndicator(total: total, hasPhoto: hasPhoto),
+        ],
+      ),
+    );
+  }
+
+  Widget _trainingPreview(
+    _TrainingCategory category,
+    List<XFile> local,
+    List<_ExistingActivityUpload> existing,
+  ) {
+    _ExistingActivityUpload? existingImage;
+    for (final row in existing) {
+      if (row.isImage) {
+        existingImage = row;
+        break;
+      }
+    }
+    Widget child;
+    if (local.isNotEmpty) {
+      child = Image.file(File(local.first.path), fit: BoxFit.cover);
+    } else if (existingImage?.signedUrl != null) {
+      child = Image.network(existingImage!.signedUrl!, fit: BoxFit.cover);
+    } else {
+      child = Text(
+        local.isEmpty && existing.isEmpty ? '--' : '${existing.length}',
+        style: const TextStyle(
+          color: Color(0xFF53607D),
+          fontWeight: FontWeight.w900,
+        ),
+      );
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 48,
+        height: 42,
+        color: foSoftBlue,
+        alignment: Alignment.center,
+        child: child,
+      ),
+    );
+  }
+
+  Widget _trainingStatusIndicator({
+    required int total,
+    required bool hasPhoto,
+  }) {
+    if (!hasPhoto) {
+      return const SizedBox(
+        width: 34,
+        child: Text(
+          'No\nphoto',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Color(0xFF8A94AD),
+            fontSize: 9,
+            height: 1.05,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      );
+    }
+    return Container(
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        color: foGreen.withValues(alpha: 0.12),
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: Text(
+          '$total',
+          style: const TextStyle(
+            color: foGreen,
+            fontSize: 13,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _trainingDocumentCard() {
+    return FoCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 54,
+                height: 54,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFF2D2D).withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.picture_as_pdf_rounded,
+                  color: Color(0xFFFF2D2D),
+                ),
+              ),
+              const SizedBox(width: 14),
+              const Expanded(
+                child: FoSectionTitle(
+                  title: 'Training Document (PDF)',
+                  subtitle: 'Attendance sheet or training material',
+                ),
+              ),
+              SizedBox(
+                width: 156,
+                child: OutlinedButton.icon(
+                  onPressed: _pickPdf,
+                  icon: const Icon(Icons.upload_file_outlined),
+                  label: const Text('Upload PDF'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: qpmsBlue,
+                    side: const BorderSide(color: qpmsBlue),
+                    minimumSize: const Size.fromHeight(48),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    textStyle: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (_pdf != null || _existingTrainingDocument) ...[
+            const SizedBox(height: 12),
+            if (_pdf != null) _pdfCard(),
+            if (_existingTrainingDocument && _pdf == null)
+              const FoStatusBadge(label: 'PDF Uploaded', color: qpmsBlue),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _trainingSubmitNote() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: foSoftBlue,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: qpmsBlue.withValues(alpha: 0.18)),
+      ),
+      child: const Row(
+        children: [
+          Icon(Icons.info_rounded, color: qpmsBlue),
+          SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Save Draft anytime. Submit Training will be enabled when training evidence is ready.',
+              style: TextStyle(color: foNavy, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -2880,6 +3618,7 @@ class _ActivityUploadItem {
     required this.bytes,
     required this.extension,
     required this.contentType,
+    this.metadata = const {},
   });
 
   final String uploadRole;
@@ -2887,6 +3626,48 @@ class _ActivityUploadItem {
   final Uint8List bytes;
   final String extension;
   final String contentType;
+  final Map<String, dynamic> metadata;
+}
+
+class _TrainingCategory {
+  const _TrainingCategory({
+    required this.key,
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+
+  final String key;
+  final String label;
+  final IconData icon;
+  final Color color;
+}
+
+class _TrainingStaff {
+  const _TrainingStaff({required this.empId, required this.name});
+
+  final String empId;
+  final String name;
+
+  Map<String, dynamic> toJson() => {'emp_id': empId, 'name': name};
+}
+
+class _ExistingActivityUpload {
+  const _ExistingActivityUpload({
+    required this.id,
+    required this.fileUrl,
+    required this.fileName,
+    required this.fileType,
+    this.signedUrl,
+  });
+
+  final String id;
+  final String fileUrl;
+  final String fileName;
+  final String fileType;
+  final String? signedUrl;
+
+  bool get isImage => fileType.toLowerCase().startsWith('image/');
 }
 
 class _StoreSearchDialog extends StatefulWidget {
