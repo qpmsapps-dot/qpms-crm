@@ -4881,11 +4881,6 @@ function activityCardInsight(activityGroup, uploads = [], record = {}) {
   };
 }
 
-function isFoStyleOperationsRole(role) {
-  const roleKey = normalizeRoleKey(role);
-  return ["fo", "field officer", "kam"].includes(roleKey);
-}
-
 function generatedUserRole(user = {}) {
   return firstNonEmptyText(
     user?.rawRole,
@@ -4910,6 +4905,19 @@ function canUseWebActivityUpload(user = {}) {
     "om",
     "branch head",
     "bh",
+  ].includes(roleKey);
+}
+
+function hasTechnicalKmAccess(user = {}) {
+  const roleKey = normalizeRoleKey(generatedUserRole(user));
+  return [
+    "admin",
+    "developer",
+    "qpms admin",
+    "qpmsadmin",
+    "it admin",
+    "management it admin",
+    "md",
   ].includes(roleKey);
 }
 
@@ -6326,8 +6334,6 @@ function FieldOfficerDetailsView({
       : selectedEmployeeActivityUploads;
     return filteredActivityUploads(siteScopedUploads, photoFilter);
   }, [photoFilter, selectedEmployeeActivityUploads, selectedVisit]);
-  const employeeRole = officer?.designation || officer?.role || officer?.profile?.role || "";
-  const isFoStyleOfficer = isFoStyleOperationsRole(employeeRole);
   const webUploadEnabled = canUseWebActivityUpload(generatedByUser);
   const activityUploadsBySubmissionId = useMemo(() => {
     const map = new Map();
@@ -7025,14 +7031,15 @@ function FieldOfficerDetailsView({
     }
     showCheckoutReviewPreview(visit, action);
   };
+  const canViewRouteGpsEvidence = fullTechnicalAccess;
   const tabs = useMemo(() => [
     ["overview", "Overview"],
     ["visits", "Visits"],
     ["activity", "Activity Photos"],
     ["km", "KM & Petrol"],
-    ...(fullTechnicalAccess && isFoStyleOfficer ? [["route", "Route / GPS Evidence"]] : []),
+    ...(canViewRouteGpsEvidence ? [["route", "Route / GPS Evidence"]] : []),
     ["report", "Report"],
-  ], [fullTechnicalAccess, isFoStyleOfficer]);
+  ], [canViewRouteGpsEvidence]);
   const activeDetailTab = tabs.some(([id]) => id === activeTab)
     ? activeTab
     : "overview";
@@ -9468,8 +9475,8 @@ function useAnimatedOfficerMarkers(officers, selectedOfficerId, selectedRouteLog
 export default function FOActivities() {
   usePageTitle("FO Activities");
   const { user } = useAuth();
-  const currentRole = normalizeRoleKey(user?.rawRole || user?.role);
-  const fullTechnicalAccess = ["admin", "developer", "md"].includes(currentRole);
+  const currentRole = normalizeRoleKey(generatedUserRole(user));
+  const fullTechnicalAccess = hasTechnicalKmAccess(user);
   const canRunBatchKmRecalculation = ["admin", "developer", "qpmsadmin", "md", "coo"].includes(currentRole);
   const temporarySwitchNormalizedRole = resolveTemporarySwitchRole(user);
   const canUseTemporarySwitchKm = temporarySwitchAllowedRoles.has(temporarySwitchNormalizedRole);
