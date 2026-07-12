@@ -552,17 +552,16 @@ async function faultTrackerApiRequest(config) {
   if (!isSupabaseConfigured || !supabase) {
     throw new Error('Supabase Auth is not configured.');
   }
-  let { data, error } = await supabase.auth.getSession();
-  if (error) throw error;
-  let accessToken = String(data.session?.access_token || '').trim();
-  if (!accessToken) {
-    const refreshed = await supabase.auth.refreshSession();
-    if (refreshed.error) throw refreshed.error;
-    data = refreshed.data;
-    accessToken = String(data.session?.access_token || '').trim();
-  }
-  if (!accessToken || accessToken === 'undefined' || accessToken === 'null') {
-    throw new Error('Your login session has expired. Please refresh or login again.');
+  async function readAccessToken({ forceRefresh = false } = {}) {
+    const sessionResult = forceRefresh
+      ? await supabase.auth.refreshSession()
+      : await supabase.auth.getSession();
+    if (sessionResult.error) throw sessionResult.error;
+    const accessToken = String(sessionResult.data.session?.access_token || '').trim();
+    if (!accessToken || accessToken === 'undefined' || accessToken === 'null') {
+      throw new Error('Your login session has expired. Please refresh or login again.');
+    }
+    return accessToken;
   }
 
   const params = config.params && typeof config.params === 'object'
@@ -573,8 +572,8 @@ async function faultTrackerApiRequest(config) {
     ).toString()
     : '';
   const url = `${API_BASE_URL}${config.url}${params ? `?${params}` : ''}`;
-  try {
-    const response = await fetch(url, {
+  async function sendRequest(accessToken) {
+    return fetch(url, {
       method: String(config.method || 'GET').toUpperCase(),
       headers: {
         'Content-Type': 'application/json',
@@ -583,7 +582,15 @@ async function faultTrackerApiRequest(config) {
       },
       body: config.data === undefined ? undefined : JSON.stringify(config.data),
     });
-    const payload = await response.json().catch(() => ({}));
+  }
+
+  try {
+    let response = await sendRequest(await readAccessToken());
+    let payload = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      response = await sendRequest(await readAccessToken({ forceRefresh: true }));
+      payload = await response.json().catch(() => ({}));
+    }
     if (!response.ok) {
       if (payload?.code === 'state_mapping_missing') {
         throw new Error(payload.message || 'State mapping not configured for your profile. Please contact Admin.');

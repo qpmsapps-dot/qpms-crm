@@ -423,8 +423,18 @@ function requireApiAuth(request, response, next) {
 }
 
 async function requireSupabaseJwt(request, response, next) {
+  const authorizationHeader = String(request.headers.authorization || '').trim();
   const accessToken = getBearerToken(request);
   const isFaultTrackerRequest = String(request.path || '').startsWith('/api/fault-tracker');
+  if (isFaultTrackerRequest) {
+    const [authorizationScheme = ''] = authorizationHeader.split(/\s+/, 1);
+    console.log('[Fault Tracker] auth header diagnostic', {
+      path: request.path,
+      hasAuthorizationHeader: Boolean(authorizationHeader),
+      authorizationScheme: authorizationScheme || 'missing',
+      tokenLength: accessToken ? accessToken.length : 0,
+    });
+  }
   if (!accessToken) {
     response.status(401).json({ ok: false, message: 'Supabase Bearer token required.' });
     return;
