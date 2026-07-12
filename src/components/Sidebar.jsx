@@ -1,6 +1,7 @@
 import {
   BarChart3,
   ClipboardCheck,
+  ClipboardList,
   FileText,
   Home,
   ListChecks,
@@ -44,6 +45,7 @@ const executiveNavGroups = [
       { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
       { label: 'Operations', to: '/fo-activities', icon: MapPinned },
       { label: 'Tickets', to: '/tickets', icon: FileText },
+      { label: 'Fault Tracker', to: '/fault-tracker', icon: ClipboardList },
       { label: 'Asset Management', to: '/assets', icon: Wrench },
       { label: 'Reports', to: '/reports', icon: BarChart3 },
     ],
@@ -82,6 +84,7 @@ const adminDemoNavGroups = [
       { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
       { label: 'Operations', to: '/fo-activities', icon: MapPinned },
       { label: 'Tickets', to: '/tickets', icon: FileText },
+      { label: 'Fault Tracker', to: '/fault-tracker', icon: ClipboardList },
       { label: 'Asset Management', to: '/assets', icon: Wrench },
       { label: 'Reports', to: '/reports', icon: BarChart3 },
     ],
@@ -127,6 +130,7 @@ const operationsNavGroups = [
       { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
       { label: 'Operations', to: '/fo-activities', icon: MapPinned },
       { label: 'Tickets', to: '/tickets', icon: FileText },
+      { label: 'Fault Tracker', to: '/fault-tracker', icon: ClipboardList },
       { label: 'Asset Management', to: '/assets', icon: Wrench },
       { label: 'Reports', to: '/reports', icon: BarChart3 },
       { label: 'Settings', to: '/settings', icon: Settings },
@@ -148,7 +152,7 @@ export default function Sidebar({ isOpen, onClose }) {
   const location = useLocation();
   const currentTarget = `${location.pathname}${location.search}`;
   const executiveViewer = isManagement(user) || isFinanceLeadership(user);
-  const navGroups = isAdmin(user)
+  const baseNavGroups = isAdmin(user)
     ? adminDemoNavGroups
     : executiveViewer
     ? executiveNavGroups
@@ -157,6 +161,16 @@ export default function Sidebar({ isOpen, onClose }) {
       : isExistingBusinessOperations(user)
         ? operationsNavGroups
         : businessNavGroups;
+  const canSeeFaultTracker = canAccessNavRoute(user, '/fault-tracker');
+  const navGroups = canSeeFaultTracker && !baseNavGroups.some((group) => group.items.some((item) => item.to === '/fault-tracker'))
+    ? [
+      ...baseNavGroups,
+      {
+        title: 'Operations',
+        items: [{ label: 'Fault Tracker', to: '/fault-tracker', icon: ClipboardList }],
+      },
+    ]
+    : baseNavGroups;
   const visibleNavGroups = navGroups.map((group) => ({
     ...group,
     items: group.items.filter((item) => {

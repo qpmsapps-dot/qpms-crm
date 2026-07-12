@@ -21,7 +21,7 @@ export const roleGroups = {
   Admin: ['Admin', 'QPMS Admin', 'Developer', 'DEMO_ADMIN', 'Demo Admin', 'Read Only Admin', 'Read-Only Admin'],
 };
 
-export const protectedNavRoutes = ['/dashboard', '/crm', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/assets', '/reports', '/employees', '/store-master', '/settings'];
+export const protectedNavRoutes = ['/dashboard', '/crm', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/fault-tracker', '/assets', '/reports', '/employees', '/store-master', '/settings'];
 
 export function normalizeAppRole(role = '') {
   const match = Object.entries(roleGroups).find(([, aliases]) => aliases.includes(role));
@@ -50,6 +50,7 @@ export function routeAllowedRoles(pathname = '') {
   if (pathname.startsWith('/tasks')) return ['Admin', 'Management', 'FinanceLeadership', 'Operations', 'Coordinator', 'HR', 'Commercial', 'Finance'];
   if (pathname.startsWith('/existing-business')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
   if (pathname.startsWith('/fo-activities')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'FieldOfficer'];
+  if (pathname.startsWith('/fault-tracker')) return ['FaultTracker'];
   if (pathname.startsWith('/assets')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
   if (pathname.startsWith('/employees')) return ['Admin', 'Management'];
   if (pathname.startsWith('/reports')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
@@ -61,6 +62,24 @@ function normalizeRawRole(role = '') {
   return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
 }
 
+export function canAccessFaultTracker(user) {
+  if (!user) return false;
+  return new Set([
+    'ADMIN',
+    'QPMSADMIN',
+    'DEVELOPER',
+    'COO',
+    'IFMSSOUTHHEAD',
+    'SOUTHHEAD',
+    'OPERATIONMANAGER',
+    'OPERATIONSMANAGER',
+    'OPSMANAGER',
+    'BRANCHHEAD',
+    'PROJECTCOORDINATOR',
+    'MIS',
+  ]).has(normalizeRawRole(user.rawRole || user.role));
+}
+
 export function canAccessStoreMaster(user) {
   if (!user) return false;
   return new Set(['DEVELOPER', 'ADMIN', 'QPMSADMIN', 'MD', 'COO']).has(
@@ -70,6 +89,7 @@ export function canAccessStoreMaster(user) {
 
 export function canAccessRoute(user, pathname) {
   if (pathname.startsWith('/store-master')) return canAccessStoreMaster(user);
+  if (pathname.startsWith('/fault-tracker')) return canAccessFaultTracker(user);
   return hasAnyRole(user, routeAllowedRoles(pathname));
 }
 

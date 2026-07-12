@@ -2515,6 +2515,444 @@ app.post('/api/auth/login', (request, response) => {
   });
 });
 
+function faultTrackerKey(value) {
+  return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+function faultTrackerRoleKey(profile) {
+  return faultTrackerKey(profile?.role);
+}
+
+const FAULT_TRACKER_MANAGE_ROLE_KEYS = new Set([
+  'ADMIN',
+  'QPMSADMIN',
+  'DEVELOPER',
+  'DEV',
+  'ITADMIN',
+  'MANAGEMENTITADMIN',
+]);
+
+const FAULT_TRACKER_READ_ALL_ROLE_KEYS = new Set([
+  ...FAULT_TRACKER_MANAGE_ROLE_KEYS,
+  'COO',
+  'IFMSSOUTHHEAD',
+  'SOUTHHEAD',
+  'OPERATIONMANAGER',
+  'OPERATIONSMANAGER',
+  'OPSMANAGER',
+  'BRANCHHEAD',
+]);
+
+const FAULT_TRACKER_STATE_RESTRICTED_ROLE_KEYS = new Set(['PROJECTCOORDINATOR', 'MIS']);
+
+function faultTrackerCanAccess(profile) {
+  const roleKey = faultTrackerRoleKey(profile);
+  return FAULT_TRACKER_READ_ALL_ROLE_KEYS.has(roleKey) || FAULT_TRACKER_STATE_RESTRICTED_ROLE_KEYS.has(roleKey);
+}
+
+function faultTrackerCanManage(profile) {
+  return FAULT_TRACKER_MANAGE_ROLE_KEYS.has(faultTrackerRoleKey(profile));
+}
+
+function faultTrackerCanReadAll(profile) {
+  return FAULT_TRACKER_READ_ALL_ROLE_KEYS.has(faultTrackerRoleKey(profile));
+}
+
+function faultTrackerStateCode(value) {
+  const key = faultTrackerKey(value);
+  const stateMap = {
+    TN: 'TN',
+    TAMILNADU: 'TN',
+    ROTN: 'TN',
+    KL: 'KL',
+    KERALA: 'KL',
+    KERALA1: 'KL',
+    KERALA2: 'KL',
+    KA: 'KN',
+    KN: 'KN',
+    KARNATAKA: 'KN',
+    KARNATAKA1: 'KN',
+    KARNATAKA2: 'KN',
+    KARNATAKA3: 'KN',
+    TG: 'TG',
+    TELANGANA: 'TG',
+    TELANGANA1: 'TG',
+    TELANGANA2: 'TG',
+    AP1: 'AP1',
+    ANDHRAPRADESH1: 'AP1',
+    AP2: 'AP2',
+    ANDHRAPRADESH2: 'AP2',
+  };
+  return stateMap[key] || '';
+}
+
+function faultTrackerCategoryGroup(value) {
+  const key = faultTrackerKey(value);
+  if (['HK', 'HOUSEKEEPING', 'HOUSEKEEP'].includes(key)) return 'HK';
+  if (['PC', 'PESTCONTROL', 'PEST'].includes(key)) return 'PC';
+  return key ? 'OTHER' : null;
+}
+
+function faultTrackerStageGroup(value) {
+  const key = faultTrackerKey(value);
+  if (!key) return null;
+  if (key.includes('CLOSED') || key.includes('SETOFF')) return 'Closed';
+  if (key.includes('COMPLETED') || key.includes('DOCUMENTSRECEIVED') || key.includes('JMSCREATED') || key.includes('INVOICERAISED')) return 'Completed';
+  if (key.includes('VERIFY') || key.includes('VERIFICATION')) return 'Need Verification';
+  if (key.includes('MATERIAL')) return 'Material Pending';
+  if (key.includes('VENDOR')) return 'Vendor Pending';
+  if (key.includes('CLIENT')) return 'Client Pending';
+  if (key.includes('WORKINPROGRESS') || key.includes('INPROGRESS')) return 'In Progress';
+  return 'Pending';
+}
+
+function faultTrackerTimestamp(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function faultTrackerInteger(value) {
+  const parsed = Number.parseInt(String(value ?? '').replace(/,/g, '').trim(), 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function faultTrackerText(value) {
+  const text = String(value ?? '').trim();
+  return text || null;
+}
+
+function faultTrackerTicketPayload(ticket, importBatchId) {
+  const stateCode = faultTrackerStateCode(ticket.state_code || ticket.stateCode || ticket.groupedState || ticket.state_label || ticket.state);
+  const category = faultTrackerText(ticket.category);
+  const stage = faultTrackerText(ticket.stage || ticket.ifmsStage || ticket.status);
+  const ticketNo = faultTrackerText(ticket.ticket_no || ticket.ticketNo || ticket.ticketNumber);
+  const metadata = ticket.metadata && typeof ticket.metadata === 'object' ? ticket.metadata : {};
+  if (!ticketNo) return null;
+  return {
+    import_batch_id: importBatchId,
+    ticket_no: ticketNo,
+    created_at_source: faultTrackerTimestamp(ticket.created_at_source || ticket.createdAt),
+    updated_at_source: faultTrackerTimestamp(ticket.updated_at_source || ticket.updatedAt),
+    store_code: faultTrackerText(ticket.store_code || ticket.storeCode || ticket.storeId),
+    store_name: faultTrackerText(ticket.store_name || ticket.storeName),
+    city: faultTrackerText(ticket.city),
+    state_code: stateCode || null,
+    state_label: faultTrackerText(ticket.state_label || ticket.state || ticket.groupedState),
+    category,
+    category_group: faultTrackerText(ticket.category_group || ticket.categoryGroup) || faultTrackerCategoryGroup(category),
+    stage,
+    stage_group: faultTrackerText(ticket.stage_group || ticket.stageGroup) || faultTrackerStageGroup(stage),
+    ageing_days: faultTrackerInteger(ticket.ageing_days ?? ticket.ageingDays),
+    ageing_bucket: faultTrackerText(ticket.ageing_bucket || ticket.ageingBucket),
+    supervisor_name: faultTrackerText(ticket.supervisor_name || ticket.supervisorName || ticket.supName),
+    supervisor_employee_code: faultTrackerText(ticket.supervisor_employee_code || ticket.supervisorEmployeeCode),
+    supervisor_mobile: faultTrackerText(ticket.supervisor_mobile || ticket.supervisorMobile),
+    supervisor_email: faultTrackerText(ticket.supervisor_email || ticket.supervisorEmail),
+    vendor_name: faultTrackerText(ticket.vendor_name || ticket.vendorName || ticket.actualVendor || ticket.serviceVendor),
+    vendor_code: faultTrackerText(ticket.vendor_code || ticket.vendorCode),
+    remarks: faultTrackerText(ticket.remarks),
+    raw_row: ticket.raw_row || ticket.rawRow || ticket,
+    metadata: {
+      ...metadata,
+      subCategory: faultTrackerText(ticket.subCategory) || metadata.subCategory || null,
+      issueType: faultTrackerText(ticket.issueType) || metadata.issueType || null,
+      issueTitle: faultTrackerText(ticket.issueTitle) || metadata.issueTitle || null,
+      lastUpdatedBy: faultTrackerText(ticket.lastUpdatedBy) || metadata.lastUpdatedBy || null,
+    },
+    is_active: ticket.is_active !== false,
+  };
+}
+
+function faultTrackerHttpError(statusCode, code, message, details = null) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  if (details) error.details = details;
+  return error;
+}
+
+async function cleanupFaultTrackerImportBatch(client, importBatchId) {
+  if (!importBatchId) return;
+  const { error } = await client
+    .from('fault_tracker_import_batches')
+    .delete()
+    .eq('id', importBatchId);
+  if (error) throw error;
+}
+
+function requireFaultTrackerAccess(request, response, next) {
+  if (!faultTrackerCanAccess(request.profile)) {
+    response.status(403).json({ ok: false, message: 'Your profile cannot access Fault Tracker.' });
+    return;
+  }
+  next();
+}
+
+function requireFaultTrackerManage(request, response, next) {
+  if (!faultTrackerCanManage(request.profile)) {
+    response.status(403).json({ ok: false, message: 'Only Admin / Developer can import Fault Tracker dumps.' });
+    return;
+  }
+  next();
+}
+
+function respondFaultTrackerError(response, error) {
+  const safeError = safeServiceRoleError(error, 'fault_tracker_database_access_failed');
+  const payload = {
+    ok: false,
+    message: error?.message || safeError.message || 'Fault Tracker request failed.',
+    code: error?.code || safeError.code || 'fault_tracker_request_failed',
+    diagnosticReason: safeError.diagnosticReason,
+  };
+  if (error?.details) payload.details = error.details;
+  response.status(error?.statusCode || safeError.statusCode || 500).json(payload);
+}
+
+app.get('/api/fault-tracker/imports', requireSupabaseJwt, requireFaultTrackerAccess, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const { data, error } = await client
+      .from('fault_tracker_import_batches')
+      .select('*')
+      .order('imported_at', { ascending: false })
+      .limit(Math.min(50, Math.max(1, Number.parseInt(request.query.limit || '20', 10) || 20)));
+    if (error) throw error;
+    response.json({ ok: true, imports: data || [] });
+  } catch (error) {
+    respondFaultTrackerError(response, error);
+  }
+});
+
+app.get('/api/fault-tracker/tickets', requireSupabaseJwt, requireFaultTrackerAccess, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const roleCanReadAll = faultTrackerCanReadAll(request.profile);
+    const mappedState = faultTrackerStateCode(request.profile?.state);
+    if (!roleCanReadAll && !mappedState) {
+      response.status(403).json({
+        ok: false,
+        code: 'state_mapping_missing',
+        message: 'State mapping not configured for your profile. Please contact Admin.',
+      });
+      return;
+    }
+
+    let importBatchId = faultTrackerText(request.query.import_batch_id);
+    if (!importBatchId || request.query.latest === 'true') {
+      const { data: latestBatch, error: batchError } = await client
+        .from('fault_tracker_import_batches')
+        .select('*')
+        .order('imported_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (batchError) throw batchError;
+      importBatchId = latestBatch?.id || null;
+      if (!importBatchId) {
+        response.json({ ok: true, import_batch: null, tickets: [] });
+        return;
+      }
+    }
+
+    let query = client
+      .from('fault_tracker_tickets')
+      .select('*')
+      .eq('import_batch_id', importBatchId)
+      .eq('is_active', true)
+      .order('created_at_source', { ascending: false, nullsFirst: false });
+
+    if (roleCanReadAll) {
+      const state = faultTrackerStateCode(request.query.state);
+      if (state) query = query.eq('state_code', state);
+    } else {
+      query = query.eq('state_code', mappedState);
+    }
+
+    const stage = faultTrackerText(request.query.stage);
+    if (stage) query = query.eq('stage', stage);
+    const ageingBucket = faultTrackerText(request.query.ageing_bucket);
+    if (ageingBucket) query = query.eq('ageing_bucket', ageingBucket);
+    const category = faultTrackerText(request.query.category);
+    if (category) query = query.eq('category_group', category);
+    const supervisor = faultTrackerText(request.query.supervisor);
+    if (supervisor) query = query.eq('supervisor_name', supervisor);
+    const month = faultTrackerText(request.query.month);
+    if (month && /^\d{4}-\d{2}$/.test(month)) {
+      query = query
+        .gte('created_at_source', `${month}-01T00:00:00.000Z`)
+        .lt('created_at_source', new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 1)).toISOString());
+    }
+    const search = faultTrackerText(request.query.search);
+    if (search) {
+      const safeSearch = search.replace(/[%(),]/g, ' ');
+      query = query.or(`ticket_no.ilike.%${safeSearch}%,store_code.ilike.%${safeSearch}%,store_name.ilike.%${safeSearch}%,supervisor_name.ilike.%${safeSearch}%,remarks.ilike.%${safeSearch}%`);
+    }
+
+    const { data: tickets, error: ticketsError } = await query.limit(10000);
+    if (ticketsError) throw ticketsError;
+    const { data: importBatch } = await client
+      .from('fault_tracker_import_batches')
+      .select('*')
+      .eq('id', importBatchId)
+      .maybeSingle();
+    response.json({ ok: true, import_batch: importBatch || null, tickets: tickets || [] });
+  } catch (error) {
+    respondFaultTrackerError(response, error);
+  }
+});
+
+app.post('/api/fault-tracker/import', requireSupabaseJwt, requireFaultTrackerManage, async (request, response) => {
+  let createdBatchId = null;
+  try {
+    const client = requireServiceRoleSupabase();
+    if (!request.body || typeof request.body !== 'object') {
+      throw faultTrackerHttpError(400, 'invalid_import_payload', 'Request body is required.');
+    }
+    if (!Array.isArray(request.body.tickets)) {
+      throw faultTrackerHttpError(400, 'invalid_import_payload', 'tickets must be an array.');
+    }
+    const tickets = request.body.tickets;
+    if (!tickets.length) {
+      throw faultTrackerHttpError(400, 'invalid_import_payload', 'tickets must contain at least one row.');
+    }
+    if (tickets.length > 20000) {
+      throw faultTrackerHttpError(400, 'invalid_import_payload', 'A single import can contain at most 20,000 tickets.');
+    }
+
+    const validationBatchId = '00000000-0000-0000-0000-000000000000';
+    const rowsByTicketNo = new Map();
+    let invalidRowCount = 0;
+    for (const ticket of tickets) {
+      const row = faultTrackerTicketPayload(ticket, validationBatchId);
+      if (!row?.ticket_no) {
+        invalidRowCount += 1;
+        continue;
+      }
+      rowsByTicketNo.set(row.ticket_no, row);
+    }
+    const validatedRows = Array.from(rowsByTicketNo.values());
+    if (!validatedRows.length) {
+      throw faultTrackerHttpError(400, 'no_valid_tickets', 'No valid ticket rows were found. ticket_no is required.');
+    }
+
+    const { data: batch, error: batchError } = await client
+      .from('fault_tracker_import_batches')
+      .insert({
+        uploaded_by_auth_user_id: request.authUser?.id || null,
+        uploaded_by_employee_code: request.employeeCode,
+        uploaded_by_name: request.profile?.full_name || request.profile?.display_name || request.profile?.email || null,
+        uploaded_by_role: request.profile?.role || null,
+        source_name: 'Reliance Retail IFMS',
+        original_file_name: faultTrackerText(request.body?.file_name),
+        sheet_name: faultTrackerText(request.body?.sheet_name) || 'Pending Tickets',
+        ticket_count: validatedRows.length,
+        metadata: {
+          ...(request.body?.metadata && typeof request.body.metadata === 'object' ? request.body.metadata : {}),
+          submitted_rows: tickets.length,
+          valid_rows: validatedRows.length,
+          invalid_rows_skipped: invalidRowCount,
+          duplicate_ticket_rows_collapsed: tickets.length - invalidRowCount - validatedRows.length,
+        },
+      })
+      .select('*')
+      .single();
+    if (batchError) throw batchError;
+    createdBatchId = batch.id;
+
+    const rows = validatedRows.map((row) => ({
+      ...row,
+      import_batch_id: batch.id,
+    }));
+
+    let insertedCount = 0;
+    try {
+      for (let index = 0; index < rows.length; index += 500) {
+        const chunk = rows.slice(index, index + 500);
+        const { error } = await client
+          .from('fault_tracker_tickets')
+          .insert(chunk);
+        if (error) {
+          throw faultTrackerHttpError(500, 'ticket_insert_failed', 'Fault Tracker ticket insert failed.', {
+            chunk_start: index,
+            chunk_size: chunk.length,
+            database_code: error.code || null,
+            database_message: error.message || null,
+          });
+        }
+        insertedCount += chunk.length;
+      }
+
+      if (insertedCount !== rows.length) {
+        throw faultTrackerHttpError(500, 'ticket_insert_failed', 'Fault Tracker import inserted fewer tickets than expected.', {
+          expected: rows.length,
+          inserted: insertedCount,
+        });
+      }
+
+      const { data: updatedBatch, error: updateError } = await client
+        .from('fault_tracker_import_batches')
+        .update({ ticket_count: insertedCount })
+        .eq('id', batch.id)
+        .select('*')
+        .single();
+      if (updateError) {
+        throw faultTrackerHttpError(500, 'ticket_insert_failed', 'Fault Tracker import finalization failed.', {
+          database_code: updateError.code || null,
+          database_message: updateError.message || null,
+        });
+      }
+
+      console.log('[Fault Tracker] import completed', {
+        import_batch_id: batch.id,
+        ticket_count: insertedCount,
+        submitted_rows: tickets.length,
+        invalid_rows_skipped: invalidRowCount,
+        duplicate_ticket_rows_collapsed: tickets.length - invalidRowCount - rows.length,
+        uploaded_by_employee_code: request.employeeCode,
+        uploaded_by_role: request.profile?.role || null,
+        file_name: request.body?.file_name || null,
+      });
+
+      response.json({
+        ok: true,
+        import_batch_id: batch.id,
+        import_batch: updatedBatch,
+        ticket_count: insertedCount,
+        imported_at: updatedBatch.imported_at,
+        message: `${insertedCount} Fault Tracker tickets imported successfully.`,
+      });
+    } catch (importError) {
+      try {
+        await cleanupFaultTrackerImportBatch(client, batch.id);
+        createdBatchId = null;
+      } catch (cleanupError) {
+        console.error('[Fault Tracker] import cleanup failed', {
+          import_batch_id: batch.id,
+          message: cleanupError.message,
+          code: cleanupError.code || null,
+        });
+        throw faultTrackerHttpError(500, 'import_cleanup_failed', 'Fault Tracker import failed and cleanup also failed. Please contact Admin.', {
+          import_batch_id: batch.id,
+          original_code: importError.code || null,
+          original_message: importError.message || null,
+          cleanup_code: cleanupError.code || null,
+          cleanup_message: cleanupError.message || null,
+        });
+      }
+      throw importError;
+    }
+  } catch (error) {
+    if (createdBatchId) {
+      console.error('[Fault Tracker] import failed after batch creation without cleanup', {
+        import_batch_id: createdBatchId,
+        message: error.message,
+        code: error.code || null,
+      });
+    }
+    respondFaultTrackerError(response, error);
+  }
+});
+
 app.get('/api/profile/me', requireSupabaseJwt, (request, response) => {
   response.json({
     ok: true,
