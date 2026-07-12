@@ -424,6 +424,7 @@ function requireApiAuth(request, response, next) {
 
 async function requireSupabaseJwt(request, response, next) {
   const accessToken = getBearerToken(request);
+  const isFaultTrackerRequest = String(request.path || '').startsWith('/api/fault-tracker');
   if (!accessToken) {
     response.status(401).json({ ok: false, message: 'Supabase Bearer token required.' });
     return;
@@ -440,6 +441,13 @@ async function requireSupabaseJwt(request, response, next) {
   try {
     const { data: authData, error: authError } = await supabaseAnon.auth.getUser(accessToken);
     if (authError || !authData?.user) {
+      if (isFaultTrackerRequest) {
+        console.warn('[Fault Tracker] auth token verification failed', {
+          path: request.path,
+          code: authError?.code || null,
+          message: authError?.message || null,
+        });
+      }
       response.status(401).json({ ok: false, message: 'Invalid or expired Supabase access token.' });
       return;
     }
@@ -448,13 +456,29 @@ async function requireSupabaseJwt(request, response, next) {
     // user's profile with the backend service role so admin authorization does
     // not depend on frontend-facing profiles RLS.
     const adminClient = requireServiceRoleSupabase();
-    await assertServiceRoleAuthAdminAccess(adminClient);
+    if (!isFaultTrackerRequest) {
+      await assertServiceRoleAuthAdminAccess(adminClient);
+    } else {
+      console.log('[Fault Tracker] auth token verified; resolving profile with service-role database access', {
+        path: request.path,
+        auth_user_id: authData.user.id,
+      });
+    }
     const { data: profile, error: profileError } = await adminClient
       .from('profiles')
       .select('*')
       .eq('auth_user_id', authData.user.id)
       .maybeSingle();
     if (profileError) {
+      if (isFaultTrackerRequest) {
+        console.error('[Fault Tracker] service-role profile lookup failed', {
+          path: request.path,
+          auth_user_id: authData.user.id,
+          code: profileError.code || null,
+          message: profileError.message || null,
+          details: profileError.details || null,
+        });
+      }
       const configurationError = new Error(
         'Backend service-role profile lookup failed.',
       );
@@ -464,6 +488,12 @@ async function requireSupabaseJwt(request, response, next) {
       throw configurationError;
     }
     if (!profile) {
+      if (isFaultTrackerRequest) {
+        console.warn('[Fault Tracker] authenticated profile not found', {
+          path: request.path,
+          auth_user_id: authData.user.id,
+        });
+      }
       response.status(403).json({ ok: false, message: 'Authenticated user profile was not found.' });
       return;
     }
@@ -2699,6 +2729,13 @@ function requireFaultTrackerManage(request, response, next) {
 
 function respondFaultTrackerError(response, error) {
   const safeError = safeServiceRoleError(error, 'fault_tracker_database_access_failed');
+  console.error('[Fault Tracker] request failed', {
+    message: error?.message || safeError.message || null,
+    code: error?.code || safeError.code || null,
+    statusCode: error?.statusCode || safeError.statusCode || null,
+    diagnosticReason: safeError.diagnosticReason || null,
+    details: error?.details || null,
+  });
   const payload = {
     ok: false,
     message: error?.message || safeError.message || 'Fault Tracker request failed.',
@@ -2712,6 +2749,12 @@ function respondFaultTrackerError(response, error) {
 app.get('/api/fault-tracker/imports', requireSupabaseJwt, requireFaultTrackerAccess, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
+    console.log('[Fault Tracker] imports list route hit', {
+      auth_user_id: request.authUser?.id || null,
+      employee_code: request.employeeCode || null,
+      role: request.profile?.role || null,
+      state: request.profile?.state || null,
+    });
     const { data, error } = await client
       .from('fault_tracker_import_batches')
       .select('*')
@@ -2729,6 +2772,19 @@ app.get('/api/fault-tracker/tickets', requireSupabaseJwt, requireFaultTrackerAcc
     const client = requireServiceRoleSupabase();
     const roleCanReadAll = faultTrackerCanReadAll(request.profile);
     const mappedState = faultTrackerStateCode(request.profile?.state);
+    console.log('[Fault Tracker] tickets route hit', {
+      auth_user_id: request.authUser?.id || null,
+      employee_code: request.employeeCode || null,
+      role: request.profile?.role || null,
+      state: request.profile?.state || null,
+      roleCanReadAll,
+      mappedState: mappedState || null,
+      query: {
+        latest: request.query.latest || null,
+        import_batch_id: request.query.import_batch_id || null,
+        state: request.query.state || null,
+      },
+    });
     if (!roleCanReadAll && !mappedState) {
       response.status(403).json({
         ok: false,
@@ -2740,13 +2796,20 @@ app.get('/api/fault-tracker/tickets', requireSupabaseJwt, requireFaultTrackerAcc
 
     let importBatchId = faultTrackerText(request.query.import_batch_id);
     if (!importBatchId || request.query.latest === 'true') {
-      const { data: latestBatch, error: batchError } = await client
+      const { data: latestBatches, error: batchError } = await client
         .from('fault_tracker_import_batches')
         .select('*')
         .order('imported_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (batchError) throw batchError;
+        .limit(1);
+      if (batchError) {
+        console.error('[Fault Tracker] latest batch query failed', {
+          code: batchError.code || null,
+          message: batchError.message || null,
+          details: batchError.details || null,
+        });
+        throw batchError;
+      }
+      const latestBatch = Array.isArray(latestBatches) ? latestBatches[0] : null;
       importBatchId = latestBatch?.id || null;
       if (!importBatchId) {
         response.json({ ok: true, import_batch: null, tickets: [] });
@@ -2789,12 +2852,30 @@ app.get('/api/fault-tracker/tickets', requireSupabaseJwt, requireFaultTrackerAcc
     }
 
     const { data: tickets, error: ticketsError } = await query.limit(10000);
-    if (ticketsError) throw ticketsError;
-    const { data: importBatch } = await client
+    if (ticketsError) {
+      console.error('[Fault Tracker] tickets query failed', {
+        import_batch_id: importBatchId,
+        code: ticketsError.code || null,
+        message: ticketsError.message || null,
+        details: ticketsError.details || null,
+      });
+      throw ticketsError;
+    }
+    const { data: importBatches, error: importBatchError } = await client
       .from('fault_tracker_import_batches')
       .select('*')
       .eq('id', importBatchId)
-      .maybeSingle();
+      .limit(1);
+    if (importBatchError) {
+      console.error('[Fault Tracker] import batch lookup failed', {
+        import_batch_id: importBatchId,
+        code: importBatchError.code || null,
+        message: importBatchError.message || null,
+        details: importBatchError.details || null,
+      });
+      throw importBatchError;
+    }
+    const importBatch = Array.isArray(importBatches) ? importBatches[0] : null;
     response.json({ ok: true, import_batch: importBatch || null, tickets: tickets || [] });
   } catch (error) {
     respondFaultTrackerError(response, error);
@@ -2805,6 +2886,14 @@ app.post('/api/fault-tracker/import', requireSupabaseJwt, requireFaultTrackerMan
   let createdBatchId = null;
   try {
     const client = requireServiceRoleSupabase();
+    console.log('[Fault Tracker] import route hit', {
+      auth_user_id: request.authUser?.id || null,
+      employee_code: request.employeeCode || null,
+      role: request.profile?.role || null,
+      state: request.profile?.state || null,
+      submitted_rows: Array.isArray(request.body?.tickets) ? request.body.tickets.length : null,
+      file_name: request.body?.file_name || null,
+    });
     if (!request.body || typeof request.body !== 'object') {
       throw faultTrackerHttpError(400, 'invalid_import_payload', 'Request body is required.');
     }
