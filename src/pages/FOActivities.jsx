@@ -5,6 +5,7 @@ import {
   Building2,
   CalendarDays,
   CircleGauge,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   ClipboardList,
@@ -12,14 +13,18 @@ import {
   Download,
   Eye,
   Filter,
+  FilePlus,
   FileSpreadsheet,
   Fuel,
   Image,
+  Info,
   LocateFixed,
   MapPin,
   MapPinned,
   Maximize2,
+  MessageSquare,
   Minimize2,
+  MoreVertical,
   Navigation2,
   Phone,
   PlayCircle,
@@ -30,9 +35,11 @@ import {
   ShieldAlert,
   ShieldCheck,
   Square,
+  UploadCloud,
   User,
   UserRoundCheck,
   X,
+  XCircle,
 } from "lucide-react";
 import L from "leaflet";
 import {
@@ -83,7 +90,15 @@ const MARKER_ANIMATION_MIN_MS = 15000;
 const MARKER_ANIMATION_MAX_MS = 180000;
 const MARKER_ANIMATION_DEFAULT_MS = 45000;
 const MARKER_ANIMATION_RECENT_THRESHOLD_MS = 10 * 60 * 1000;
-const ACTIVITY_PHOTO_TABS = ["All", "Inspection", "Training", "Deep Cleaning", "Documents", "Others"];
+const ACTIVITY_PHOTO_TABS = ["All", "Inspection", "Training", "Deep Cleaning"];
+const TRAINING_UPLOAD_CATEGORIES = [
+  ["fo_briefing", "FO Briefing"],
+  ["glass_cleaning", "Glass Cleaning"],
+  ["floor_cleaning_mop", "Floor Cleaning with Mop"],
+  ["floor_cleaning_ec_mop", "Floor Cleaning with EC Mop"],
+  ["toilet_cleaning", "Toilet Cleaning"],
+  ["cobweb_cleaning", "Cobweb Cleaning"],
+];
 const SNAP_TO_ROADS_MAX_POINTS_PER_REQUEST = 100;
 const SNAP_TO_ROADS_MAX_INPUT_POINTS = 500;
 const ROUTE_MAP_SEGMENT_MAX_GAP_SECONDS = 10 * 60;
@@ -4703,6 +4718,274 @@ function filteredActivityUploads(uploads = [], filter = "All") {
   return uploads.filter((upload) => upload.activityGroup === filter);
 }
 
+function objectMetadata(row) {
+  return row?.metadata &&
+    typeof row.metadata === "object" &&
+    !Array.isArray(row.metadata)
+    ? row.metadata
+    : {};
+}
+
+function activityTypeLabel(value) {
+  return normalizeActivityGroup(value || "Others");
+}
+
+function activityStatusFromRecord(record = {}) {
+  const metadata = objectMetadata(record);
+  const rawStatus =
+    record.review_status ||
+    record.status ||
+    metadata.review_status ||
+    metadata.checkout_review_status ||
+    metadata.activity_review_status ||
+    "";
+  const normalized = String(rawStatus || "").trim().toLowerCase();
+  if (metadata.pending_images === true || normalized.includes("missing")) {
+    return { label: "Missing More Uploads", tone: "rose" };
+  }
+  if (normalized.includes("approve")) return { label: "Approved", tone: "green" };
+  if (normalized.includes("reject")) return { label: "Rejected", tone: "rose" };
+  return { label: "Pending Review", tone: "amber" };
+}
+
+function activityModalTypeFromFilter(filter) {
+  if (filter === "Inspection") return "inspection";
+  if (filter === "Training") return "training";
+  if (filter === "Deep Cleaning") return "deepCleaning";
+  return "select";
+}
+
+function activityModalLabel(type) {
+  if (type === "inspection") return "Inspection";
+  if (type === "training") return "Training";
+  if (type === "deepCleaning") return "Deep Cleaning";
+  return "Activity";
+}
+
+function activityUploadMetadata(upload = {}) {
+  return objectMetadata(upload);
+}
+
+function isActivityDocument(upload = {}) {
+  const metadata = activityUploadMetadata(upload);
+  const role = String(upload.upload_role || "").toLowerCase();
+  const type = String(upload.file_type || "").toLowerCase();
+  const name = String(upload.file_name || upload.file_url || "").toLowerCase();
+  return (
+    metadata.training_document === true ||
+    metadata.supporting_document === true ||
+    role.includes("document") ||
+    role.includes("pdf") ||
+    type.includes("pdf") ||
+    /\.pdf($|\?)/i.test(name)
+  );
+}
+
+function deepCleaningUploadStage(upload = {}) {
+  const metadata = activityUploadMetadata(upload);
+  const role = String(upload.upload_role || "").toLowerCase();
+  const stage = String(
+    metadata.deep_cleaning_stage ||
+      metadata.cleaning_stage ||
+      metadata.photo_stage ||
+      "",
+  ).toLowerCase();
+  if (stage.includes("before") || role.includes("before")) return "before";
+  if (stage.includes("after") || role.includes("after")) return "after";
+  if (isActivityDocument(upload)) return "document";
+  return "other";
+}
+
+function trainingUploadCategory(upload = {}) {
+  const metadata = activityUploadMetadata(upload);
+  if (isActivityDocument(upload)) return "document";
+  return String(metadata.training_category || "training_photo").trim() || "training_photo";
+}
+
+function trainingUploadCategoryLabel(upload = {}) {
+  const metadata = activityUploadMetadata(upload);
+  return String(metadata.training_category_label || "Training Photo").trim();
+}
+
+function activityCardInsight(activityGroup, uploads = [], record = {}) {
+  const recordMetadata = objectMetadata(record);
+  if (activityGroup === "Deep Cleaning") {
+    const before = uploads.filter((upload) => deepCleaningUploadStage(upload) === "before");
+    const after = uploads.filter((upload) => deepCleaningUploadStage(upload) === "after");
+    const documents = uploads.filter((upload) => deepCleaningUploadStage(upload) === "document");
+    const missingAfter = before.length > 0 && after.length === 0;
+    return {
+      before,
+      after,
+      documents,
+      beforeCount: before.length,
+      afterCount: after.length,
+      documentCount: documents.length,
+      statusOverride: missingAfter
+        ? { label: "Pending After Images", tone: "rose" }
+        : null,
+      summary: [
+        before.length ? `${before.length} Before` : null,
+        after.length ? `${after.length} After` : null,
+        documents.length ? "Document" : null,
+      ].filter(Boolean),
+    };
+  }
+  if (activityGroup === "Training") {
+    const documents = uploads.filter(isActivityDocument);
+    const categories = new Map();
+    uploads
+      .filter((upload) => !isActivityDocument(upload))
+      .forEach((upload) => {
+        const key = trainingUploadCategory(upload);
+        const label = trainingUploadCategoryLabel(upload);
+        if (!categories.has(key)) {
+          categories.set(key, { key, label, uploads: [] });
+        }
+        categories.get(key).uploads.push(upload);
+      });
+    const hkStaff = Array.isArray(recordMetadata.hk_staff_attended)
+      ? recordMetadata.hk_staff_attended
+      : [];
+    const completedFromMetadata = Array.isArray(recordMetadata.training_categories_completed)
+      ? recordMetadata.training_categories_completed.length
+      : Number(recordMetadata.training_categories_completed_count);
+    const completedCount = Number.isFinite(completedFromMetadata)
+      ? completedFromMetadata
+      : categories.size;
+    return {
+      documents,
+      documentCount: documents.length,
+      trainingCategories: Array.from(categories.values()),
+      trainingCategoryCount: completedCount,
+      hkStaff,
+      hkStaffCount: hkStaff.length,
+      summary: [
+        `${completedCount || 0} Categories`,
+        hkStaff.length ? `${hkStaff.length} HK Staff` : null,
+        documents.length ? "Document" : null,
+      ].filter(Boolean),
+    };
+  }
+  const documents = uploads.filter(isActivityDocument);
+  const photos = uploads.filter((upload) => !isActivityDocument(upload));
+  return {
+    documents,
+    documentCount: documents.length,
+    photos,
+    photoCount: photos.length,
+    summary: [
+      photos.length ? `${photos.length} Photos` : null,
+      documents.length ? "Document" : null,
+    ].filter(Boolean),
+  };
+}
+
+function isFoStyleOperationsRole(role) {
+  const roleKey = normalizeRoleKey(role);
+  return ["fo", "field officer", "kam"].includes(roleKey);
+}
+
+function generatedUserRole(user = {}) {
+  return firstNonEmptyText(
+    user?.rawRole,
+    user?.role,
+    user?.profile?.role,
+    user?.userProfile?.role,
+    user?.currentUser?.role,
+    user?.metadata?.role,
+    user?.authUser?.user_metadata?.role,
+  );
+}
+
+function canUseWebActivityUpload(user = {}) {
+  const roleKey = normalizeRoleKey(generatedUserRole(user));
+  return [
+    "admin",
+    "qpms admin",
+    "qpmsadmin",
+    "developer",
+    "operations manager",
+    "operation manager",
+    "om",
+    "branch head",
+    "bh",
+  ].includes(roleKey);
+}
+
+function uploadedByMetadata(user = {}) {
+  return {
+    uploaded_from: "web",
+    uploaded_by_employee_code: firstNonEmptyText(
+      user?.employee_code,
+      user?.employeeCode,
+      user?.profile?.employee_code,
+      user?.userProfile?.employee_code,
+      user?.currentUser?.employee_code,
+      user?.email,
+    ),
+    uploaded_by_name: firstNonEmptyText(
+      user?.full_name,
+      user?.display_name,
+      user?.name,
+      user?.profile?.full_name,
+      user?.userProfile?.full_name,
+      user?.email,
+    ),
+    uploaded_by_role: generatedUserRole(user),
+  };
+}
+
+function selectedEmployeeCodeForActivity(officer = {}) {
+  return firstNonEmptyText(
+    officer.employeeCode,
+    officer.foId,
+    officer.employee_code,
+    officer.fo_user_id,
+    officer.profile?.employee_code,
+    officer.profile?.username,
+  );
+}
+
+function activityDbTypeForModal(type) {
+  if (type === "inspection") return "inspection";
+  if (type === "training") return "training";
+  if (type === "deepCleaning") return "deep_cleaning";
+  return "";
+}
+
+function storageSafePart(value, fallback = "file") {
+  const clean = String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return clean || fallback;
+}
+
+function fileExtensionFromName(name = "", type = "") {
+  const ext = String(name).split(".").pop();
+  if (ext && ext !== name) return storageSafePart(ext.toLowerCase(), "bin");
+  if (String(type).includes("pdf")) return "pdf";
+  if (String(type).includes("png")) return "png";
+  if (String(type).includes("jpeg") || String(type).includes("jpg")) return "jpg";
+  return "bin";
+}
+
+function activityUploadRole(type, kind, categoryKey = "") {
+  if (type === "inspection") {
+    return kind === "document" ? "inspection_document" : "inspection_photo";
+  }
+  if (type === "training") {
+    return kind === "document" ? "training_document" : `training_${categoryKey || "photo"}`;
+  }
+  if (type === "deepCleaning") {
+    if (kind === "before") return "deep_cleaning_before";
+    if (kind === "after") return "deep_cleaning_after";
+    return "deep_cleaning_document";
+  }
+  return "activity_upload";
+}
+
 async function signedActivityUploadUrl(upload) {
   const fileUrl = upload?.file_url;
   if (!fileUrl) return null;
@@ -5802,6 +6085,76 @@ function DetailSummaryCard({ icon, label, value, hint, tone = "blue" }) {
   );
 }
 
+function UploadModalFileSection({
+  title,
+  subtitle = "JPG, PNG, PDF",
+  accept,
+  files = [],
+  onFiles,
+  compact = false,
+}) {
+  return (
+    <section className={`rounded-xl border border-slate-200 ${compact ? "p-3" : "p-4"}`}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-black text-slate-950">{title}</h3>
+          <p className="mt-1 text-xs font-semibold text-slate-500">{subtitle}</p>
+        </div>
+        <label className="focus-within:ring-2 focus-within:ring-qpms-100 inline-flex cursor-pointer items-center gap-2 rounded-lg border border-qpms-200 px-3 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50">
+          <UploadCloud className="h-4 w-4" />
+          Upload
+          <input
+            type="file"
+            multiple
+            accept={accept}
+            className="sr-only"
+            onChange={(event) => {
+              onFiles(event.target.files);
+              event.target.value = "";
+            }}
+          />
+        </label>
+      </div>
+      <div className="mt-3 flex gap-2 overflow-x-auto">
+        {files.map((file, index) => {
+          const isImage = /^image\//i.test(file.type || "");
+          const previewUrl = isImage ? URL.createObjectURL(file) : null;
+          return (
+            <div
+              key={`${file.name}-${file.size}-${index}`}
+              className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50 text-slate-400"
+              title={file.name}
+            >
+              {previewUrl ? (
+                <img src={previewUrl} alt={file.name} className="h-full w-full object-cover" />
+              ) : (
+                <FilePlus className="h-6 w-6" />
+              )}
+            </div>
+          );
+        })}
+        <label className="grid h-16 w-16 shrink-0 cursor-pointer place-items-center rounded-lg border border-dashed border-blue-200 bg-blue-50/40 text-blue-600 hover:bg-blue-50">
+          <PlusIcon />
+          <input
+            type="file"
+            multiple
+            accept={accept}
+            className="sr-only"
+            onChange={(event) => {
+              onFiles(event.target.files);
+              event.target.value = "";
+            }}
+          />
+        </label>
+      </div>
+    </section>
+  );
+}
+
+function PlusIcon() {
+  return <span className="text-2xl font-black leading-none">+</span>;
+}
+
 function FieldOfficerDetailsView({
   officer,
   generatedByUser,
@@ -5827,11 +6180,32 @@ function FieldOfficerDetailsView({
   fullTechnicalAccess = false,
   canReviewCheckoutExceptions = false,
   canApproveCheckoutMissingKmReviews = false,
+  onActivityUploadSaved,
 }) {
   const [selectedVisitIndex, setSelectedVisitIndex] = useState(0);
   const [photoFilter, setPhotoFilter] = useState("All");
+  const [photoSearch, setPhotoSearch] = useState("");
+  const [selectedActivityCardId, setSelectedActivityCardId] = useState(null);
+  const [activityReviewRemarks, setActivityReviewRemarks] = useState("");
+  const [uploadInfoVisible, setUploadInfoVisible] = useState(true);
+  const [activityUploadModal, setActivityUploadModal] = useState(null);
+  const [activityUploadSaving, setActivityUploadSaving] = useState(false);
+  const [activityUploadError, setActivityUploadError] = useState("");
+  const [activityUploadDraft, setActivityUploadDraft] = useState({
+    visitId: "",
+    inspectionPhotos: [],
+    inspectionDocuments: [],
+    hkStaff: [],
+    hkEmpId: "",
+    hkName: "",
+    trainingPhotos: {},
+    trainingDocuments: [],
+    deepBefore: [],
+    deepAfter: [],
+    deepDocuments: [],
+  });
   const [routeMapOpen, setRouteMapOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState("visits");
+  const [activeTab, setActiveTab] = useState("activity");
   const [drillDownOpen, setDrillDownOpen] = useState(true);
   const [checkoutReviewPreview, setCheckoutReviewPreview] = useState(null);
   const visits = useMemo(() => sortedOfficerVisits(officer), [officer]);
@@ -5857,16 +6231,582 @@ function FieldOfficerDetailsView({
     ? Math.min(selectedVisitIndex, visits.length - 1)
     : 0;
   const selectedVisit = visits[activeVisitIndex] || null;
+  const selectedEmployeeKeys = useMemo(() => {
+    const keys = [
+      officer?.employeeCode,
+      officer?.foId,
+      officer?.employee_code,
+      officer?.fo_user_id,
+      officer?.profile?.employee_code,
+      officer?.profile?.username,
+      attendance?.employee_code,
+      attendance?.fo_user_id,
+      ...visits.flatMap((visit) => [visit?.employee_code, visit?.fo_user_id]),
+    ]
+      .map(normalizeFoKey)
+      .filter(Boolean);
+    return new Set(keys);
+  }, [attendance, officer, visits]);
+  const selectedAttendanceIds = useMemo(
+    () =>
+      new Set(
+        attendances
+          .map((row) => String(row?.id || ""))
+          .filter(Boolean),
+      ),
+    [attendances],
+  );
+  const selectedVisitIds = useMemo(
+    () =>
+      new Set(
+        visits
+          .map((visit) => String(visit?.id || ""))
+          .filter(Boolean),
+      ),
+    [visits],
+  );
+  const rowMatchesSelectedEmployee = useMemo(
+    () => (row) => {
+      if (!row) return false;
+      const rowEmployeeKeys = [
+        row.employee_code,
+        row.fo_user_id,
+        row.username,
+        row.submission?.employee_code,
+        row.submission?.fo_user_id,
+      ]
+        .map(normalizeFoKey)
+        .filter(Boolean);
+      if (rowEmployeeKeys.some((key) => selectedEmployeeKeys.has(key))) {
+        return true;
+      }
+      const attendanceId = row.attendance_id || row.submission?.attendance_id;
+      if (attendanceId && selectedAttendanceIds.has(String(attendanceId))) {
+        return true;
+      }
+      const siteVisitId = row.site_visit_id || row.submission?.site_visit_id;
+      if (siteVisitId && selectedVisitIds.has(String(siteVisitId))) {
+        return true;
+      }
+      return false;
+    },
+    [selectedAttendanceIds, selectedEmployeeKeys, selectedVisitIds],
+  );
+  const selectedEmployeeActivitySubmissions = useMemo(
+    () => activitySubmissions.filter(rowMatchesSelectedEmployee),
+    [activitySubmissions, rowMatchesSelectedEmployee],
+  );
+  const selectedEmployeeActivitySubmissionIds = useMemo(
+    () =>
+      new Set(
+        selectedEmployeeActivitySubmissions
+          .map((submission) => String(submission?.id || ""))
+          .filter(Boolean),
+      ),
+    [selectedEmployeeActivitySubmissions],
+  );
+  const selectedEmployeeActivityUploads = useMemo(
+    () =>
+      activityUploads.filter((upload) => {
+        if (rowMatchesSelectedEmployee(upload)) return true;
+        return (
+          upload?.submission_id &&
+          selectedEmployeeActivitySubmissionIds.has(String(upload.submission_id))
+        );
+      }),
+    [activityUploads, rowMatchesSelectedEmployee, selectedEmployeeActivitySubmissionIds],
+  );
   const visibleActivityUploads = useMemo(() => {
     const selectedVisitId = selectedVisit?.id ? String(selectedVisit.id) : null;
     const siteScopedUploads = selectedVisitId
-      ? activityUploads.filter((upload) => {
+      ? selectedEmployeeActivityUploads.filter((upload) => {
           const uploadVisitId = upload.site_visit_id || upload.submission?.site_visit_id;
-          return !uploadVisitId || String(uploadVisitId) === selectedVisitId;
+          return uploadVisitId && String(uploadVisitId) === selectedVisitId;
         })
-      : activityUploads;
+      : selectedEmployeeActivityUploads;
     return filteredActivityUploads(siteScopedUploads, photoFilter);
-  }, [activityUploads, photoFilter, selectedVisit]);
+  }, [photoFilter, selectedEmployeeActivityUploads, selectedVisit]);
+  const employeeRole = officer?.designation || officer?.role || officer?.profile?.role || "";
+  const isFoStyleOfficer = isFoStyleOperationsRole(employeeRole);
+  const webUploadEnabled = canUseWebActivityUpload(generatedByUser);
+  const activityUploadsBySubmissionId = useMemo(() => {
+    const map = new Map();
+    selectedEmployeeActivityUploads.forEach((upload) => {
+      const key = upload.submission_id ? String(upload.submission_id) : "";
+      if (!key) return;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(upload);
+    });
+    return map;
+  }, [selectedEmployeeActivityUploads]);
+  const activityCards = useMemo(() => {
+    const cards = [];
+    const submissionIdsWithCards = new Set();
+    selectedEmployeeActivitySubmissions.forEach((submission) => {
+      const uploadsForSubmission = activityUploadsBySubmissionId.get(String(submission.id)) || [];
+      const metadata = objectMetadata(submission);
+      const activityGroup = activityTypeLabel(submission.activity_type || metadata.activity_type);
+      const primaryUpload = uploadsForSubmission[0] || null;
+      const pendingImages =
+        metadata.pending_images === true ||
+        metadata.pending_images === "true" ||
+        uploadsForSubmission.length === 0;
+      const status = pendingImages
+        ? { label: "Missing More Uploads", tone: "rose" }
+        : activityStatusFromRecord(submission);
+      const insight = activityCardInsight(activityGroup, uploadsForSubmission, submission);
+      cards.push({
+        id: `submission-${submission.id}`,
+        kind: uploadsForSubmission.length ? "upload" : "missing",
+        activityGroup,
+        title: firstNonEmptyText(
+          submission.store_name,
+          submission.site_name,
+          submission.store_code,
+          "Activity submission",
+        ),
+        siteCode: firstNonEmptyText(submission.store_code, metadata.store_code, "--"),
+        uploadedBy: firstNonEmptyText(submission.full_name, submission.employee_code, submission.fo_user_id, officer?.name),
+        uploadedAt: submission.submitted_at || submission.created_at,
+        visitDateTime: submission.submitted_at || submission.created_at,
+        remarks: firstNonEmptyText(submission.remarks, metadata.remarks, "--"),
+        status: insight.statusOverride || status,
+        uploads: uploadsForSubmission,
+        thumbnail: primaryUpload?.displayUrl || null,
+        fileCount: uploadsForSubmission.length,
+        record: submission,
+        insight,
+      });
+      submissionIdsWithCards.add(String(submission.id));
+    });
+    selectedEmployeeActivityUploads.forEach((upload) => {
+      if (upload.submission_id && submissionIdsWithCards.has(String(upload.submission_id))) return;
+      const metadata = objectMetadata(upload);
+      const activityGroup = activityTypeLabel(upload.activity_type || upload.upload_role || metadata.activity_type);
+      const insight = activityCardInsight(activityGroup, [upload], upload);
+      cards.push({
+        id: `upload-${upload.id || upload.local_id || upload.file_url}`,
+        kind: "upload",
+        activityGroup,
+        title: firstNonEmptyText(
+          upload.store_name,
+          upload.site_name,
+          upload.submission?.store_name,
+          upload.submission?.site_name,
+          upload.store_code,
+          "Uploaded activity",
+        ),
+        siteCode: firstNonEmptyText(upload.store_code, upload.submission?.store_code, metadata.store_code, "--"),
+        uploadedBy: firstNonEmptyText(upload.uploaded_by_name, upload.full_name, upload.employee_code, upload.fo_user_id, officer?.name),
+        uploadedAt: activityUploadTime(upload),
+        visitDateTime: upload.submission?.submitted_at || upload.uploaded_at || upload.created_at,
+        remarks: firstNonEmptyText(upload.remarks, upload.submission?.remarks, metadata.remarks, "--"),
+        status: insight.statusOverride || activityStatusFromRecord(upload),
+        uploads: [upload],
+        thumbnail: upload.displayUrl || null,
+        fileCount: 1,
+        record: upload,
+        insight,
+      });
+    });
+    return cards.sort(
+      (a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime(),
+    );
+  }, [selectedEmployeeActivitySubmissions, selectedEmployeeActivityUploads, activityUploadsBySubmissionId, officer?.name]);
+  const filteredActivityCards = useMemo(() => {
+    const search = photoSearch.trim().toLowerCase();
+    return activityCards.filter((card) => {
+      if (photoFilter !== "All" && card.activityGroup !== photoFilter) return false;
+      if (!search) return true;
+      return [
+        card.activityGroup,
+        card.title,
+        card.siteCode,
+        card.uploadedBy,
+        card.remarks,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(search);
+    });
+  }, [activityCards, photoFilter, photoSearch]);
+  const pendingUploadCount = activityCards.filter((card) => card.status.tone === "rose").length;
+  const uploadedActivityCount = activityCards.filter((card) => card.fileCount > 0).length;
+  const selectedActivityCard =
+    filteredActivityCards.find((card) => card.id === selectedActivityCardId) ||
+    filteredActivityCards[0] ||
+    null;
+  const activityVisitOptions = visits.map((visit, index) => ({
+    id: String(visit.id || index),
+    visit,
+    label: `${visitTitle(visit)} • ${formatDateTime(visit.check_in_time)}`,
+  }));
+  const openActivityUploadFlow = () => {
+    if (!webUploadEnabled) {
+      return;
+    }
+    const modalType = activityModalTypeFromFilter(photoFilter);
+    setActivityUploadError("");
+    setActivityUploadModal(modalType);
+    setActivityUploadDraft((draft) => ({
+      ...draft,
+      visitId: draft.visitId || activityVisitOptions[0]?.id || "",
+    }));
+  };
+  const openActivityUploadModal = (type) => {
+    setActivityUploadError("");
+    setActivityUploadModal(type);
+    setActivityUploadDraft((draft) => ({
+      ...draft,
+      visitId: draft.visitId || activityVisitOptions[0]?.id || "",
+    }));
+  };
+  const closeActivityUploadModal = () => {
+    if (activityUploadSaving) return;
+    setActivityUploadError("");
+    setActivityUploadModal(null);
+  };
+  const updateActivityDraftFiles = (key, files) => {
+    setActivityUploadDraft((draft) => ({
+      ...draft,
+      [key]: [...(draft[key] || []), ...Array.from(files || [])],
+    }));
+  };
+  const updateTrainingCategoryFiles = (categoryKey, files) => {
+    setActivityUploadDraft((draft) => ({
+      ...draft,
+      trainingPhotos: {
+        ...draft.trainingPhotos,
+        [categoryKey]: [
+          ...(draft.trainingPhotos[categoryKey] || []),
+          ...Array.from(files || []),
+        ],
+      },
+    }));
+  };
+  const addActivityDraftHkStaff = () => {
+    const empId = activityUploadDraft.hkEmpId.trim();
+    const name = activityUploadDraft.hkName.trim();
+    if (!empId && !name) return;
+    setActivityUploadDraft((draft) => ({
+      ...draft,
+      hkStaff: [...draft.hkStaff, { emp_id: empId, name }],
+      hkEmpId: "",
+      hkName: "",
+    }));
+  };
+  const activityUploadFileItems = () => {
+    if (activityUploadModal === "inspection") {
+      return [
+        ...activityUploadDraft.inspectionPhotos.map((file) => ({
+          file,
+          kind: "photo",
+          metadata: { inspection_photo: true },
+        })),
+        ...activityUploadDraft.inspectionDocuments.map((file) => ({
+          file,
+          kind: "document",
+          metadata: {
+            inspection_document: true,
+            document_source_type: file.type?.startsWith("image/") ? "image" : "pdf",
+          },
+        })),
+      ];
+    }
+    if (activityUploadModal === "training") {
+      const categoryFiles = TRAINING_UPLOAD_CATEGORIES.flatMap(([key, label]) =>
+        (activityUploadDraft.trainingPhotos[key] || []).map((file) => ({
+          file,
+          kind: "photo",
+          categoryKey: key,
+          metadata: {
+            training_category: key,
+            training_category_label: label,
+            training_photo: true,
+          },
+        })),
+      );
+      return [
+        ...categoryFiles,
+        ...activityUploadDraft.trainingDocuments.map((file) => ({
+          file,
+          kind: "document",
+          metadata: {
+            training_document: true,
+            document_source_type: file.type?.startsWith("image/") ? "image" : "pdf",
+          },
+        })),
+      ];
+    }
+    if (activityUploadModal === "deepCleaning") {
+      return [
+        ...activityUploadDraft.deepBefore.map((file) => ({
+          file,
+          kind: "before",
+          metadata: {
+            deep_cleaning_stage: "before",
+            before_image: true,
+          },
+        })),
+        ...activityUploadDraft.deepAfter.map((file) => ({
+          file,
+          kind: "after",
+          metadata: {
+            deep_cleaning_stage: "after",
+            after_image: true,
+          },
+        })),
+        ...activityUploadDraft.deepDocuments.map((file) => ({
+          file,
+          kind: "document",
+          metadata: {
+            supporting_document: true,
+            deep_cleaning_document: true,
+            document_source_type: file.type?.startsWith("image/") ? "image" : "pdf",
+          },
+        })),
+      ];
+    }
+    return [];
+  };
+  const resetActivityUploadDraft = () => {
+    setActivityUploadDraft({
+      visitId: "",
+      inspectionPhotos: [],
+      inspectionDocuments: [],
+      hkStaff: [],
+      hkEmpId: "",
+      hkName: "",
+      trainingPhotos: {},
+      trainingDocuments: [],
+      deepBefore: [],
+      deepAfter: [],
+      deepDocuments: [],
+    });
+  };
+  const selectedActivityVisitContext = () => {
+    const option = activityVisitOptions.find((item) => item.id === activityUploadDraft.visitId);
+    const visit = option?.visit || visits[0] || null;
+    const attendanceForVisit =
+      attendances.find((row) => String(row?.id || "") === String(visit?.attendance_id || "")) ||
+      attendance ||
+      firstAttendance ||
+      null;
+    return { visit, attendance: attendanceForVisit };
+  };
+  const buildSubmissionMetadata = ({ status, fileItems, visit, activityType }) => {
+    const uploader = uploadedByMetadata(generatedByUser);
+    const base = {
+      ...uploader,
+      store_name: visit?.store_name || visit?.site_name || visitTitle(visit),
+      client_name: visit?.client_name || visit?.clientName || visitClient(visit),
+      state: visit?.state || officer?.state || null,
+      activity_date: toDateInputValue(new Date(visit?.check_in_time || fromDate || new Date())),
+      pending_images: fileItems.length === 0,
+      web_upload_status: status,
+      web_uploaded_at: new Date().toISOString(),
+    };
+    if (activityType === "training") {
+      const completed = TRAINING_UPLOAD_CATEGORIES
+        .filter(([key]) => (activityUploadDraft.trainingPhotos[key] || []).length > 0)
+        .map(([key]) => key);
+      return {
+        ...base,
+        hk_staff_attended: activityUploadDraft.hkStaff,
+        training_categories_total: TRAINING_UPLOAD_CATEGORIES.length,
+        training_categories_completed: completed,
+        training_categories_completed_count: completed.length,
+        training_document_uploaded: activityUploadDraft.trainingDocuments.length > 0,
+      };
+    }
+    if (activityType === "deep_cleaning") {
+      return {
+        ...base,
+        deep_cleaning_before_count: activityUploadDraft.deepBefore.length,
+        deep_cleaning_after_count: activityUploadDraft.deepAfter.length,
+        deep_cleaning_document_uploaded: activityUploadDraft.deepDocuments.length > 0,
+      };
+    }
+    return {
+      ...base,
+      inspection_photo_count: activityUploadDraft.inspectionPhotos.length,
+      inspection_document_uploaded: activityUploadDraft.inspectionDocuments.length > 0,
+    };
+  };
+  const saveActivityUploadDraft = async (action) => {
+    if (!webUploadEnabled) {
+      setActivityUploadError("You do not have permission to upload activity files.");
+      return;
+    }
+    if (!isSupabaseConfigured || !supabase) {
+      setActivityUploadError("Upload failed because Supabase is not configured.");
+      return;
+    }
+    const activityType = activityDbTypeForModal(activityUploadModal);
+    if (!activityType) {
+      setActivityUploadError("Please select an activity type.");
+      return;
+    }
+    const { visit, attendance: selectedAttendance } = selectedActivityVisitContext();
+    if (!visit?.id) {
+      setActivityUploadError("Please select a site visit before uploading.");
+      return;
+    }
+    const employeeCode = selectedEmployeeCodeForActivity(officer);
+    if (!employeeCode) {
+      setActivityUploadError("Selected employee code is missing.");
+      return;
+    }
+    const fileItems = activityUploadFileItems();
+    if (action === "submit" && activityType === "training" && fileItems.length === 0) {
+      setActivityUploadError("Please upload at least one training photo or document before submitting.");
+      return;
+    }
+    const unsupported = fileItems.find(({ file }) => {
+      const type = String(file.type || "").toLowerCase();
+      return !type.startsWith("image/") && type !== "application/pdf";
+    });
+    if (unsupported) {
+      setActivityUploadError("Unsupported file type. Please upload JPG, PNG, or PDF.");
+      return;
+    }
+    const tooLarge = fileItems.find(({ file }) => file.size > 10 * 1024 * 1024);
+    if (tooLarge) {
+      setActivityUploadError("File too large. Please upload files up to 10MB each.");
+      return;
+    }
+
+    setActivityUploadSaving(true);
+    setActivityUploadError("");
+    const uploadedStoragePaths = [];
+    try {
+      const status = action === "draft" ? "draft" : "submitted";
+      const existingRes = await supabase
+        .from("fo_activity_submissions")
+        .select("*")
+        .eq("site_visit_id", visit.id)
+        .eq("activity_type", activityType)
+        .or(`fo_user_id.eq.${employeeCode},employee_code.eq.${employeeCode}`)
+        .order("submitted_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (existingRes.error) throw existingRes.error;
+
+      const existingMetadata = objectMetadata(existingRes.data);
+      const metadata = {
+        ...existingMetadata,
+        ...buildSubmissionMetadata({ status, fileItems, visit, activityType }),
+      };
+      const submissionPayload = {
+        fo_user_id: employeeCode,
+        employee_code: employeeCode,
+        attendance_id: selectedAttendance?.id || visit.attendance_id || null,
+        site_visit_id: visit.id,
+        store_id: visit.store_id || null,
+        store_code: visit.store_code || null,
+        activity_type: activityType,
+        status,
+        remarks: null,
+        submitted_at: existingRes.data?.submitted_at || new Date().toISOString(),
+        metadata,
+        updated_at: new Date().toISOString(),
+      };
+
+      let submissionId = existingRes.data?.id;
+      if (submissionId) {
+        const updateRes = await supabase
+          .from("fo_activity_submissions")
+          .update(submissionPayload)
+          .eq("id", submissionId)
+          .select("id")
+          .maybeSingle();
+        if (updateRes.error) throw updateRes.error;
+      } else {
+        const insertRes = await supabase
+          .from("fo_activity_submissions")
+          .insert({ ...submissionPayload, local_id: `web-${crypto.randomUUID()}` })
+          .select("id")
+          .maybeSingle();
+        if (insertRes.error) throw insertRes.error;
+        submissionId = insertRes.data?.id;
+      }
+      if (!submissionId) throw new Error("Activity submission could not be saved.");
+
+      for (const item of fileItems) {
+        const { file, kind, categoryKey, metadata: fileMetadata } = item;
+        const extension = fileExtensionFromName(file.name, file.type);
+        const attendanceDate = toDateInputValue(new Date(selectedAttendance?.login_time || visit.check_in_time || fromDate || new Date()));
+        const path = [
+          storageSafePart(employeeCode),
+          attendanceDate,
+          storageSafePart(activityType),
+          storageSafePart(submissionId),
+          `${storageSafePart(crypto.randomUUID())}_${storageSafePart(file.name.replace(/\.[^.]+$/, ""), "activity")}.${extension}`,
+        ].join("/");
+        const uploadRes = await supabase.storage
+          .from("fo-activity-uploads")
+          .upload(path, file, {
+            contentType: file.type || "application/octet-stream",
+            cacheControl: "3600",
+            upsert: false,
+          });
+        if (uploadRes.error) throw uploadRes.error;
+        uploadedStoragePaths.push(path);
+        const fileUrl = `fo-activity-uploads/${path}`;
+        const uploadRole = activityUploadRole(activityUploadModal, kind, categoryKey);
+        const uploadMetadata = {
+          ...uploadedByMetadata(generatedByUser),
+          store_name: visit.store_name || visit.site_name || visitTitle(visit),
+          client_name: visit.client_name || visitClient(visit),
+          state: visit.state || officer?.state || null,
+          upload_role: uploadRole,
+          ...fileMetadata,
+        };
+        const uploadRowRes = await supabase
+          .from("fo_activity_uploads")
+          .insert({
+            submission_id: submissionId,
+            fo_user_id: employeeCode,
+            employee_code: employeeCode,
+            attendance_id: selectedAttendance?.id || visit.attendance_id || null,
+            site_visit_id: visit.id,
+            store_code: visit.store_code || null,
+            activity_type: activityType,
+            upload_role: uploadRole,
+            file_url: fileUrl,
+            file_name: file.name,
+            file_type: file.type || "application/octet-stream",
+            file_size: file.size,
+            storage_bucket: "fo-activity-uploads",
+            uploaded_at: new Date().toISOString(),
+            local_id: `web-upload-${crypto.randomUUID()}`,
+            metadata: uploadMetadata,
+          });
+        if (uploadRowRes.error) throw uploadRowRes.error;
+      }
+
+      if (typeof onActivityUploadSaved === "function") {
+        onActivityUploadSaved();
+      }
+      resetActivityUploadDraft();
+      closeActivityUploadModal();
+    } catch (error) {
+      console.warn("[myQPMS FO] Web activity upload failed.", error);
+      await Promise.allSettled(
+        uploadedStoragePaths.map((path) =>
+          supabase.storage.from("fo-activity-uploads").remove([path]),
+        ),
+      );
+      const message = String(error?.message || error || "");
+      if (/permission|policy|rls|denied/i.test(message)) {
+        setActivityUploadError("Storage or database permission denied for this upload.");
+      } else {
+        setActivityUploadError(message || "Upload failed. Please try again.");
+      }
+    } finally {
+      setActivityUploadSaving(false);
+    }
+  };
   const status = officerStatus(officer);
   const isLive = isOperationallyActive(officer);
   const workingMinutes = attendances.reduce(
@@ -6085,13 +7025,17 @@ function FieldOfficerDetailsView({
     }
     showCheckoutReviewPreview(visit, action);
   };
-  const tabs = [
+  const tabs = useMemo(() => [
     ["overview", "Overview"],
     ["visits", "Visits"],
+    ["activity", "Activity Photos"],
     ["km", "KM & Petrol"],
-    ...(fullTechnicalAccess ? [["route", "Route / GPS Evidence"]] : []),
+    ...(fullTechnicalAccess && isFoStyleOfficer ? [["route", "Route / GPS Evidence"]] : []),
     ["report", "Report"],
-  ];
+  ], [fullTechnicalAccess, isFoStyleOfficer]);
+  const activeDetailTab = tabs.some(([id]) => id === activeTab)
+    ? activeTab
+    : "overview";
   const printReport = () => {
     const previousTitle = document.title;
     const reportTitle = buildFieldActivityReportFilename(
@@ -6281,6 +7225,105 @@ function FieldOfficerDetailsView({
   return (
     <div className="fo-activity-detail min-h-screen space-y-4 bg-slate-50/70 p-1 sm:p-2">
       <header className="fo-screen-only rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
+        <button
+          type="button"
+          onClick={onBack}
+          className="focus-ring inline-flex items-center gap-2 rounded-lg px-1 py-1 text-sm font-black text-slate-700 hover:text-qpms-700"
+        >
+          <ChevronLeft className="h-4 w-4" />
+          Back to Employees
+        </button>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-4">
+            <button
+              type="button"
+              onClick={onBack}
+              className="focus-ring grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full border border-slate-200 bg-gradient-to-br from-qpms-100 to-blue-50 text-lg font-black text-qpms-700 shadow-sm"
+              aria-label="Back to employees"
+            >
+              {String(officer?.name || officer?.employeeCode || "U").trim().slice(0, 1).toUpperCase()}
+            </button>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="break-words text-xl font-black text-slate-950 sm:text-2xl">
+                  {officer?.name || "--"}
+                </h1>
+                <span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${isLive ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                  {isLive ? "Active" : displayValue(status.label)}
+                </span>
+              </div>
+              <p className="mt-1 text-sm font-semibold text-slate-500">
+                {displayValue(officer?.designation || officer?.role)} <span className="px-1">•</span>
+                {displayValue(officer?.state)} <span className="px-1">•</span>
+                Employee ID: {displayValue(officer?.employeeCode || officer?.foId)}
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <CalendarDays className="h-4 w-4 text-slate-500" />
+              <label>
+                <span className="sr-only">From Date</span>
+                <input
+                  type="date"
+                  value={draftFromDate}
+                  onChange={(event) => onDraftFromDate(event.target.value)}
+                  className="w-[124px] border-0 bg-transparent p-0 text-xs font-bold text-slate-700 outline-none"
+                />
+              </label>
+              <span className="text-xs font-semibold text-slate-400">–</span>
+              <label>
+                <span className="sr-only">To Date</span>
+                <input
+                  type="date"
+                  value={draftToDate}
+                  onChange={(event) => onDraftToDate(event.target.value)}
+                  className="w-[124px] border-0 bg-transparent p-0 text-xs font-bold text-slate-700 outline-none"
+                />
+              </label>
+            </div>
+            <button
+              type="button"
+              onClick={onApplyDate}
+              className="focus-ring rounded-xl bg-qpms-700 px-4 py-2.5 text-xs font-black text-white shadow-sm hover:bg-qpms-800"
+            >
+              Apply
+            </button>
+            <button
+              type="button"
+              onClick={openPrintReport}
+              className="focus-ring inline-flex items-center gap-2 rounded-xl border border-qpms-200 bg-white px-3 py-2.5 text-xs font-black text-qpms-700 shadow-sm hover:bg-qpms-50"
+            >
+              <Download className="h-4 w-4" /> Export PDF
+            </button>
+            <button
+              type="button"
+              onClick={onExport}
+              className="focus-ring inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2.5 text-xs font-black text-white shadow-sm hover:bg-emerald-700"
+            >
+              <FileSpreadsheet className="h-4 w-4" /> Export Excel
+            </button>
+            <button
+              type="button"
+              className="focus-ring grid h-10 w-10 place-items-center rounded-xl border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-50"
+              aria-label="More actions"
+            >
+              <MoreVertical className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </header>
+      <div className="fo-screen-only grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <DetailSummaryCard icon={PlayCircle} label="Start Day" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
+        <DetailSummaryCard icon={Square} label="End Day" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
+        <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Visited" tone="purple" />
+        <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "Needs Review" : "Includes approved missing checkout adjustments"} tone={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "amber" : "green"} />
+        <DetailSummaryCard icon={Navigation2} label="GPS Audit KM" value={Number.isFinite(gpsAuditKm) ? `${gpsAuditKm.toFixed(1)} km` : "--"} hint="Supporting evidence" tone="blue" />
+        <DetailSummaryCard icon={CircleGauge} label="Delta" value={Number.isFinite(kmDelta) ? `${kmDelta.toFixed(1)} km` : "--"} hint={Number.isFinite(differencePercent) ? `${differencePercent.toFixed(1)}%` : "--"} tone={Math.abs(kmDelta || 0) > 2 ? "amber" : "green"} />
+        <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`Final @ ${formatInr(ratePerKm)} / km`} tone="amber" />
+        <DetailSummaryCard icon={ShieldCheck} label="Status" value={displayValue(lastAttendance.status || status.label)} hint={isLive ? "Active" : "--"} tone={isLive ? "green" : "red"} />
+      </div>
+      <header className="fo-screen-only hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex min-w-0 items-start gap-3">
             <button
@@ -6354,7 +7397,7 @@ function FieldOfficerDetailsView({
         </div>
       </header>
 
-      <div className="fo-screen-only grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-3 shadow-sm sm:grid-cols-2 xl:grid-cols-4">
+      <div className="fo-screen-only hidden grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-3 shadow-sm sm:grid-cols-2 xl:grid-cols-4">
         <DetailSummaryCard icon={PlayCircle} label="Start Day" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
         <DetailSummaryCard icon={Square} label="End Day" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
         <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Visited" tone="purple" />
@@ -6372,7 +7415,7 @@ function FieldOfficerDetailsView({
             type="button"
             onClick={() => setActiveTab(id)}
             className={`focus-ring min-w-max border-b-2 px-5 py-3 text-sm font-bold ${
-              activeTab === id
+              activeDetailTab === id
                 ? "border-qpms-600 text-qpms-700"
                 : "border-transparent text-slate-500 hover:text-slate-800"
             }`}
@@ -6382,7 +7425,7 @@ function FieldOfficerDetailsView({
         ))}
       </nav>
 
-      {activeTab === "overview" ? (
+      {activeDetailTab === "overview" ? (
         <div className="fo-screen-only grid gap-4 xl:grid-cols-2">
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="text-base font-black text-slate-950">Employee & Attendance</h2>
@@ -6459,7 +7502,7 @@ function FieldOfficerDetailsView({
         </div>
       ) : null}
 
-      {activeTab === "visits" ? (
+      {activeDetailTab === "visits" ? (
         <div className="fo-screen-only min-w-0 space-y-4">
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="text-base font-black text-slate-950">
@@ -6725,7 +7768,7 @@ function FieldOfficerDetailsView({
             </section>
           ) : null}
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <section className="hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="text-base font-black text-slate-950">Activity Photos <span className="text-sm text-slate-500">({visibleActivityUploads.length})</span></h2>
             <div className="mt-3 flex max-w-full flex-wrap gap-2">
               {ACTIVITY_PHOTO_TABS.map((tab) => (
@@ -6762,7 +7805,662 @@ function FieldOfficerDetailsView({
         </div>
       ) : null}
 
-      {activeTab === "km" ? (
+      {activeDetailTab === "activity" ? (
+        <section className="fo-screen-only overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
+          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 p-4">
+            <div>
+              <h2 className="text-lg font-black text-slate-950">Activity Photos & Uploads</h2>
+              <p className="mt-1 text-xs font-semibold text-slate-500">
+                View, upload and manage activity photos, documents and other files.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {uploadInfoVisible ? (
+                <div className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700">
+                  <Info className="h-4 w-4" />
+                  Web upload available for OM / BH / Admin
+                  <button
+                    type="button"
+                    onClick={() => setUploadInfoVisible(false)}
+                    className="focus-ring grid h-5 w-5 place-items-center rounded-full hover:bg-blue-100"
+                    aria-label="Hide upload information"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="grid min-h-[620px] lg:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="min-w-0 space-y-4 p-4">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Uploaded Activities</p>
+                  <p className="mt-2 text-2xl font-black text-slate-950">{uploadedActivityCount || 0}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Employee-specific uploads</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Pending Uploads</p>
+                  <p className={`mt-2 text-2xl font-black ${pendingUploadCount ? "text-amber-700" : "text-slate-950"}`}>{pendingUploadCount || 0}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Missing files or proof</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Latest Activity Type</p>
+                  <p className="mt-2 truncate text-lg font-black text-slate-950">{activityCards[0]?.activityGroup || "--"}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">{formatDateTime(activityCards[0]?.uploadedAt)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Review Status</p>
+                  <p className="mt-2 truncate text-lg font-black text-slate-950">{selectedActivityCard?.status?.label || "--"}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Selected card</p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex max-w-full flex-wrap gap-2">
+                  {ACTIVITY_PHOTO_TABS.map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setPhotoFilter(tab)}
+                      className={`focus-ring rounded-lg border px-3 py-2 text-xs font-black ${
+                        photoFilter === tab
+                          ? "border-qpms-700 bg-qpms-700 text-white shadow-sm"
+                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                      }`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="search"
+                      value={photoSearch}
+                      onChange={(event) => setPhotoSearch(event.target.value)}
+                      placeholder="Search activities, sites, remarks..."
+                      className="h-10 w-full min-w-[260px] rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-xs font-semibold text-slate-700 outline-none focus:border-qpms-400"
+                    />
+                  </label>
+                  <div className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700">
+                    <CalendarDays className="h-4 w-4 text-slate-500" />
+                    {formatDateOnly(fromDate)} – {formatDateOnly(toDate)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {filteredActivityCards.map((card) => {
+                  const statusClass =
+                    card.status.tone === "green"
+                      ? "bg-emerald-50 text-emerald-700"
+                      : card.status.tone === "rose"
+                        ? "bg-rose-50 text-rose-700"
+                        : "bg-amber-50 text-amber-700";
+                  const typeClass =
+                    card.activityGroup === "Inspection"
+                      ? "bg-blue-50 text-blue-700"
+                      : card.activityGroup === "Deep Cleaning"
+                        ? "bg-emerald-50 text-emerald-700"
+                        : card.activityGroup === "Training"
+                          ? "bg-violet-50 text-violet-700"
+                          : "bg-slate-100 text-slate-700";
+                  return (
+                    <button
+                      key={card.id}
+                      type="button"
+                      onClick={() => setSelectedActivityCardId(card.id)}
+                      className={`focus-ring overflow-hidden rounded-xl border bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                        selectedActivityCard?.id === card.id ? "border-qpms-600 ring-2 ring-qpms-100" : "border-slate-200"
+                      }`}
+                    >
+                      <div className="relative h-32 bg-slate-100">
+                        {card.thumbnail && activityUploadIsImage(card.uploads[0]) ? (
+                          <img src={card.thumbnail} alt={card.title} className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="grid h-full place-items-center bg-gradient-to-br from-slate-50 to-blue-50 text-slate-300">
+                            {card.activityGroup === "Documents" ? <FilePlus className="h-10 w-10" /> : <Image className="h-10 w-10" />}
+                          </div>
+                        )}
+                        <span className="absolute left-3 top-3 rounded-md bg-slate-950/80 px-2 py-1 text-[10px] font-black text-white">
+                          {card.fileCount || 0} {card.fileCount === 1 ? "File" : "Files"}
+                        </span>
+                      </div>
+                      <div className="space-y-2 p-3">
+                        <span className={`inline-flex rounded-md px-2 py-1 text-[10px] font-black ${typeClass}`}>
+                          {card.activityGroup}
+                        </span>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-black text-slate-950">{card.title}</p>
+                            <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">
+                              {card.uploadedBy} • {formatDateTime(card.uploadedAt)}
+                            </p>
+                            {card.insight?.summary?.length ? (
+                              <p className="mt-1 truncate text-[11px] font-black text-qpms-700">
+                                {card.insight.summary.join(" • ")}
+                              </p>
+                            ) : null}
+                          </div>
+                          <MoreVertical className="h-4 w-4 shrink-0 text-slate-400" />
+                        </div>
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-black ${statusClass}`}>
+                          {card.status.label}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  disabled={!webUploadEnabled}
+                  onClick={openActivityUploadFlow}
+                  className="focus-ring grid min-h-[236px] place-items-center rounded-xl border-2 border-dashed border-blue-200 bg-blue-50/30 p-5 text-center text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
+                >
+                  <span>
+                    <UploadCloud className="mx-auto h-10 w-10" />
+                    <span className="mt-3 block text-sm font-black">Drag & drop files here or click to browse</span>
+                    <span className="mt-1 block text-xs font-semibold">
+                      {webUploadEnabled
+                        ? "Inspection, Training, Deep Cleaning • JPG, PNG, PDF"
+                        : "Read-only view. Upload is available for OM / BH / Admin."}
+                    </span>
+                  </span>
+                </button>
+              </div>
+              {!filteredActivityCards.length ? (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center">
+                  <Image className="mx-auto h-12 w-12 text-slate-300" />
+                  <p className="mt-3 text-sm font-black text-slate-700">No activity uploads found for this employee in the selected date range.</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    {activityCards.length ? "Try All or clear the search text." : "Uploads will appear here after this employee submits activity photos or documents."}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+
+            <aside className="border-t border-slate-200 bg-slate-50/70 p-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-auto lg:border-l lg:border-t-0">
+              {selectedActivityCard ? (
+                <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="overflow-hidden rounded-xl bg-slate-100">
+                    {selectedActivityCard.thumbnail && activityUploadIsImage(selectedActivityCard.uploads[0]) ? (
+                      <img src={selectedActivityCard.thumbnail} alt={selectedActivityCard.title} className="h-44 w-full object-cover" />
+                    ) : (
+                      <div className="grid h-44 place-items-center text-slate-300">
+                        {selectedActivityCard.activityGroup === "Documents" ? <FilePlus className="h-12 w-12" /> : <Image className="h-12 w-12" />}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${
+                      selectedActivityCard.status.tone === "green"
+                        ? "bg-emerald-50 text-emerald-700"
+                        : selectedActivityCard.status.tone === "rose"
+                          ? "bg-rose-50 text-rose-700"
+                          : "bg-amber-50 text-amber-700"
+                    }`}>
+                      {selectedActivityCard.status.label}
+                    </span>
+                    <span className="rounded-full bg-blue-50 px-2.5 py-1 text-[10px] font-black text-blue-700">
+                      {selectedActivityCard.activityGroup}
+                    </span>
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-slate-950">{selectedActivityCard.title}</h3>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                      {formatDateTime(selectedActivityCard.uploadedAt)}
+                    </p>
+                  </div>
+                  <div className="grid gap-3 text-xs">
+                    {[
+                      ["Activity Type", selectedActivityCard.activityGroup],
+                      ["Site / Store", selectedActivityCard.title],
+                      ["Site Code", selectedActivityCard.siteCode],
+                      ["Uploaded By", selectedActivityCard.uploadedBy],
+                      ["Visit Date & Time", formatDateTime(selectedActivityCard.visitDateTime)],
+                      ["Remarks", selectedActivityCard.remarks],
+                    ].map(([label, value]) => (
+                      <div key={label}>
+                        <p className="font-bold uppercase tracking-wide text-slate-400">{label}</p>
+                        <p className="mt-1 break-words font-semibold text-slate-700">{displayValue(value)}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {selectedActivityCard.activityGroup === "Deep Cleaning" ? (
+                    <div className="space-y-3">
+                      {[
+                        ["Before Images", selectedActivityCard.insight.before],
+                        ["After Images", selectedActivityCard.insight.after],
+                        ["Supporting Document", selectedActivityCard.insight.documents],
+                      ].map(([label, uploads]) => (
+                        <div key={label}>
+                          <p className="text-xs font-black text-slate-900">
+                            {label} ({uploads.length})
+                          </p>
+                          <div className="mt-2 flex gap-2 overflow-x-auto">
+                            {uploads.map((upload) => (
+                              <a
+                                key={upload.id || upload.file_url}
+                                href={upload.displayUrl || upload.file_url || undefined}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50 text-slate-300"
+                              >
+                                {activityUploadIsImage(upload) && upload.displayUrl ? (
+                                  <img src={upload.displayUrl} alt={activityUploadName(upload)} className="h-full w-full object-cover" />
+                                ) : (
+                                  <FilePlus className="h-6 w-6" />
+                                )}
+                              </a>
+                            ))}
+                            {!uploads.length ? (
+                              <span className="grid h-16 w-16 place-items-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-[10px] font-bold text-slate-400">
+                                None
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : selectedActivityCard.activityGroup === "Training" ? (
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-xs font-black text-slate-900">
+                          HK Staff Attended ({selectedActivityCard.insight.hkStaffCount || 0})
+                        </p>
+                        <div className="mt-2 space-y-1">
+                          {selectedActivityCard.insight.hkStaff?.length ? (
+                            selectedActivityCard.insight.hkStaff.map((staff, index) => (
+                              <div key={`${staff.emp_id || staff.name || "staff"}-${index}`} className="rounded-lg bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
+                                {displayValue(staff.emp_id || staff.empId)} • {displayValue(staff.name)}
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-xs font-semibold text-slate-500">No HK staff captured.</p>
+                          )}
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-xs font-black text-slate-900">Training Categories</p>
+                        <div className="mt-2 space-y-2">
+                          {selectedActivityCard.insight.trainingCategories?.length ? (
+                            selectedActivityCard.insight.trainingCategories.map((category) => (
+                              <div key={category.key} className="rounded-lg border border-slate-200 p-2">
+                                <p className="text-[11px] font-black text-slate-700">{category.label}</p>
+                                <div className="mt-2 flex gap-2 overflow-x-auto">
+                                  {category.uploads.map((upload) => (
+                                    <a
+                                      key={upload.id || upload.file_url}
+                                      href={upload.displayUrl || upload.file_url || undefined}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50 text-slate-300"
+                                    >
+                                      {activityUploadIsImage(upload) && upload.displayUrl ? (
+                                        <img src={upload.displayUrl} alt={activityUploadName(upload)} className="h-full w-full object-cover" />
+                                      ) : (
+                                        <Image className="h-5 w-5" />
+                                      )}
+                                    </a>
+                                  ))}
+                                </div>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-xs font-semibold text-slate-500">No category photos captured.</p>
+                          )}
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-xs font-black text-slate-900">
+                          Supporting Document ({selectedActivityCard.insight.documentCount || 0})
+                        </p>
+                        <div className="mt-2 flex gap-2">
+                          {(selectedActivityCard.insight.documents || []).map((upload) => (
+                            <a
+                              key={upload.id || upload.file_url}
+                              href={upload.displayUrl || upload.file_url || undefined}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-qpms-700"
+                            >
+                              <FilePlus className="h-4 w-4" /> {activityUploadName(upload)}
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-xs font-black text-slate-900">
+                          Photos ({selectedActivityCard.insight.photoCount ?? selectedActivityCard.fileCount})
+                        </p>
+                        <div className="mt-2 flex gap-2 overflow-x-auto">
+                          {(selectedActivityCard.insight.photos || selectedActivityCard.uploads).slice(0, 6).map((upload) => (
+                            <a
+                              key={upload.id || upload.file_url}
+                              href={upload.displayUrl || upload.file_url || undefined}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50 text-slate-300"
+                            >
+                              {activityUploadIsImage(upload) && upload.displayUrl ? (
+                                <img src={upload.displayUrl} alt={activityUploadName(upload)} className="h-full w-full object-cover" />
+                              ) : (
+                                <Image className="h-6 w-6" />
+                              )}
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-xs font-black text-slate-900">
+                          Supporting Document ({selectedActivityCard.insight.documentCount || 0})
+                        </p>
+                        <div className="mt-2 flex gap-2">
+                          {(selectedActivityCard.insight.documents || []).map((upload) => (
+                            <a
+                              key={upload.id || upload.file_url}
+                              href={upload.displayUrl || upload.file_url || undefined}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-qpms-700"
+                            >
+                              <FilePlus className="h-4 w-4" /> {activityUploadName(upload)}
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <div className="border-t border-slate-100 pt-4">
+                    <p className="text-xs font-black text-slate-900">Review Actions</p>
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        className="focus-ring inline-flex items-center justify-center gap-1 rounded-lg border border-emerald-200 px-2 py-2 text-[10px] font-black text-emerald-700 hover:bg-emerald-50"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Approve
+                      </button>
+                      <button
+                        type="button"
+                        className="focus-ring inline-flex items-center justify-center gap-1 rounded-lg border border-rose-200 px-2 py-2 text-[10px] font-black text-rose-700 hover:bg-rose-50"
+                      >
+                        <XCircle className="h-3.5 w-3.5" /> Reject
+                      </button>
+                      <button
+                        type="button"
+                        className="focus-ring inline-flex items-center justify-center gap-1 rounded-lg border border-blue-200 px-2 py-2 text-[10px] font-black text-blue-700 hover:bg-blue-50"
+                      >
+                        <MessageSquare className="h-3.5 w-3.5" /> Ask Clarification
+                      </button>
+                    </div>
+                    <textarea
+                      value={activityReviewRemarks}
+                      onChange={(event) => setActivityReviewRemarks(event.target.value)}
+                      placeholder="Add remarks (optional)..."
+                      className="mt-3 min-h-20 w-full rounded-xl border border-slate-200 p-3 text-xs font-semibold outline-none focus:border-qpms-400"
+                    />
+                    <button
+                      type="button"
+                      className="focus-ring mt-2 w-full rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-black text-white hover:bg-slate-800"
+                    >
+                      Submit
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid min-h-[360px] place-items-center rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center">
+                  <div>
+                    <Image className="mx-auto h-12 w-12 text-slate-300" />
+                    <p className="mt-3 text-sm font-black text-slate-700">Select an activity upload</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Details and review actions appear here.</p>
+                  </div>
+                </div>
+              )}
+            </aside>
+          </div>
+        </section>
+      ) : null}
+
+      {activityUploadModal ? (
+        <div className="fo-screen-only fixed inset-0 z-[70] grid place-items-center bg-slate-950/45 p-4">
+          <div className="max-h-[92vh] w-full max-w-3xl overflow-auto rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-5">
+              <div>
+                <h2 className="text-lg font-black text-slate-950">
+                  {activityUploadModal === "select"
+                    ? "Select Activity Type"
+                    : `Upload ${activityModalLabel(activityUploadModal)}`}
+                </h2>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {displayValue(officer?.employeeCode || officer?.foId)} • {formatDateOnly(fromDate)} – {formatDateOnly(toDate)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeActivityUploadModal}
+                className="focus-ring grid h-9 w-9 place-items-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50"
+                aria-label="Close upload modal"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {activityUploadModal === "select" ? (
+              <div className="grid gap-3 p-5 sm:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={() => openActivityUploadModal("inspection")}
+                  className="focus-ring rounded-2xl border border-slate-200 p-4 text-left shadow-sm hover:border-qpms-300 hover:bg-qpms-50"
+                >
+                  <Image className="h-7 w-7 text-qpms-700" />
+                  <p className="mt-3 text-sm font-black text-slate-950">Inspection</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Upload inspection photos and optional document</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openActivityUploadModal("training")}
+                  className="focus-ring rounded-2xl border border-slate-200 p-4 text-left shadow-sm hover:border-qpms-300 hover:bg-qpms-50"
+                >
+                  <UserRoundCheck className="h-7 w-7 text-qpms-700" />
+                  <p className="mt-3 text-sm font-black text-slate-950">Training</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Capture HK staff, category photos and document</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openActivityUploadModal("deepCleaning")}
+                  className="focus-ring rounded-2xl border border-slate-200 p-4 text-left shadow-sm hover:border-qpms-300 hover:bg-qpms-50"
+                >
+                  <ClipboardList className="h-7 w-7 text-qpms-700" />
+                  <p className="mt-3 text-sm font-black text-slate-950">Deep Cleaning</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Upload before, after and supporting document</p>
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4 p-5">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Activity Type</p>
+                    <p className="mt-1 text-sm font-black text-slate-900">{activityModalLabel(activityUploadModal)}</p>
+                  </div>
+                  <label className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Site / Visit</span>
+                    <select
+                      value={activityUploadDraft.visitId}
+                      onChange={(event) =>
+                        setActivityUploadDraft((draft) => ({
+                          ...draft,
+                          visitId: event.target.value,
+                        }))
+                      }
+                      className="mt-1 w-full bg-transparent text-sm font-black text-slate-900 outline-none"
+                    >
+                      {activityVisitOptions.map((option) => (
+                        <option key={option.id} value={option.id}>{option.label}</option>
+                      ))}
+                      {!activityVisitOptions.length ? <option value="">No visit available</option> : null}
+                    </select>
+                  </label>
+                </div>
+
+                {activityUploadModal === "inspection" ? (
+                  <div className="grid gap-4">
+                    <UploadModalFileSection
+                      title="Inspection Photos"
+                      accept="image/png,image/jpeg"
+                      files={activityUploadDraft.inspectionPhotos}
+                      onFiles={(files) => updateActivityDraftFiles("inspectionPhotos", files)}
+                    />
+                    <UploadModalFileSection
+                      title="Supporting Document"
+                      subtitle="Optional PDF or image"
+                      accept="application/pdf,image/png,image/jpeg"
+                      files={activityUploadDraft.inspectionDocuments}
+                      onFiles={(files) => updateActivityDraftFiles("inspectionDocuments", files)}
+                    />
+                  </div>
+                ) : null}
+
+                {activityUploadModal === "training" ? (
+                  <div className="grid gap-4">
+                    <section className="rounded-xl border border-slate-200 p-4">
+                      <h3 className="text-sm font-black text-slate-950">HK Staff Attended</h3>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                        <input
+                          value={activityUploadDraft.hkEmpId}
+                          onChange={(event) =>
+                            setActivityUploadDraft((draft) => ({ ...draft, hkEmpId: event.target.value }))
+                          }
+                          placeholder="HK Scrum ID / Emp ID"
+                          className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold outline-none focus:border-qpms-400"
+                        />
+                        <input
+                          value={activityUploadDraft.hkName}
+                          onChange={(event) =>
+                            setActivityUploadDraft((draft) => ({ ...draft, hkName: event.target.value }))
+                          }
+                          placeholder="HK Name"
+                          className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold outline-none focus:border-qpms-400"
+                        />
+                        <button
+                          type="button"
+                          onClick={addActivityDraftHkStaff}
+                          className="focus-ring rounded-lg border border-qpms-200 px-3 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50"
+                        >
+                          Add Another Staff
+                        </button>
+                      </div>
+                      {activityUploadDraft.hkStaff.length ? (
+                        <div className="mt-3 grid gap-2">
+                          {activityUploadDraft.hkStaff.map((staff, index) => (
+                            <div key={`${staff.emp_id}-${staff.name}-${index}`} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
+                              <span>{displayValue(staff.emp_id)} • {displayValue(staff.name)}</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setActivityUploadDraft((draft) => ({
+                                    ...draft,
+                                    hkStaff: draft.hkStaff.filter((_, itemIndex) => itemIndex !== index),
+                                  }))
+                                }
+                                className="text-slate-400 hover:text-rose-600"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </section>
+                    <section className="rounded-xl border border-slate-200 p-4">
+                      <h3 className="text-sm font-black text-slate-950">Training Category Uploads</h3>
+                      <div className="mt-3 grid gap-3">
+                        {TRAINING_UPLOAD_CATEGORIES.map(([key, label]) => (
+                          <UploadModalFileSection
+                            key={key}
+                            compact
+                            title={label}
+                            accept="image/png,image/jpeg"
+                            files={activityUploadDraft.trainingPhotos[key] || []}
+                            onFiles={(files) => updateTrainingCategoryFiles(key, files)}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                    <UploadModalFileSection
+                      title="Supporting Document"
+                      subtitle="PDF or image"
+                      accept="application/pdf,image/png,image/jpeg"
+                      files={activityUploadDraft.trainingDocuments}
+                      onFiles={(files) => updateActivityDraftFiles("trainingDocuments", files)}
+                    />
+                  </div>
+                ) : null}
+
+                {activityUploadModal === "deepCleaning" ? (
+                  <div className="grid gap-4">
+                    <UploadModalFileSection
+                      title="Before Images"
+                      accept="image/png,image/jpeg"
+                      files={activityUploadDraft.deepBefore}
+                      onFiles={(files) => updateActivityDraftFiles("deepBefore", files)}
+                    />
+                    <UploadModalFileSection
+                      title="After Images"
+                      accept="image/png,image/jpeg"
+                      files={activityUploadDraft.deepAfter}
+                      onFiles={(files) => updateActivityDraftFiles("deepAfter", files)}
+                    />
+                    <UploadModalFileSection
+                      title="Supporting Document"
+                      subtitle="PDF or image accepted"
+                      accept="application/pdf,image/png,image/jpeg"
+                      files={activityUploadDraft.deepDocuments}
+                      onFiles={(files) => updateActivityDraftFiles("deepDocuments", files)}
+                    />
+                    <p className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-xs font-semibold text-blue-800">
+                      If an image is uploaded as a document, it will remain available as an image until web PDF conversion is connected.
+                    </p>
+                  </div>
+                ) : null}
+
+                {activityUploadError ? (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700">
+                    {activityUploadError}
+                  </div>
+                ) : null}
+
+                <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4">
+                  <button
+                    type="button"
+                    disabled={activityUploadSaving}
+                    onClick={() => saveActivityUploadDraft("draft")}
+                    className="focus-ring rounded-xl border border-qpms-200 px-4 py-2.5 text-xs font-black text-qpms-700 hover:bg-qpms-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {activityUploadSaving ? "Saving..." : "Save Draft"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={activityUploadSaving}
+                    onClick={() => saveActivityUploadDraft("submit")}
+                    className="focus-ring rounded-xl bg-qpms-700 px-4 py-2.5 text-xs font-black text-white hover:bg-qpms-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    {activityUploadSaving ? "Uploading..." : "Submit"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {activeDetailTab === "km" ? (
         <section className="fo-screen-only rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             {[
@@ -6902,7 +8600,7 @@ function FieldOfficerDetailsView({
         </section>
       ) : null}
 
-      {activeTab === "route" ? (
+      {activeDetailTab === "route" ? (
         <div className="fo-screen-only space-y-4">
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -6973,7 +8671,7 @@ function FieldOfficerDetailsView({
         </div>
       ) : null}
 
-      {activeTab === "report" ? (
+      {activeDetailTab === "report" ? (
         <div className="fo-report-shell rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="fo-screen-only mb-4 flex items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50 p-3">
             <p className="text-xs font-semibold text-blue-800">This layout is optimized for print and PDF. Use Export PDF to generate a shareable report.</p>
@@ -7803,6 +9501,7 @@ export default function FOActivities() {
   const [mainMapRouteMessage, setMainMapRouteMessage] = useState(null);
   const [selectedActivitySubmissions, setSelectedActivitySubmissions] = useState([]);
   const [selectedActivityUploads, setSelectedActivityUploads] = useState([]);
+  const [selectedActivityReloadToken, setSelectedActivityReloadToken] = useState(0);
   const [showSiteMarkers, setShowSiteMarkers] = useState(true);
   const [showRouteTrail, setShowRouteTrail] = useState(true);
   const [mapTheme, setMapTheme] = useState("light");
@@ -8388,9 +10087,15 @@ export default function FOActivities() {
       const siteVisitIds = new Set(
         (selectedOfficer.visits || []).map((visit) => String(visit.id || "")).filter(Boolean),
       );
+      const siteVisitIdList = Array.from(siteVisitIds);
 
       try {
-        const [submissionsRes, uploadsRes] = await Promise.all([
+        const [
+          submissionsRes,
+          uploadsRes,
+          visitSubmissionsRes,
+          visitUploadsRes,
+        ] = await Promise.all([
           supabase
             .from("fo_activity_submissions")
             .select("*")
@@ -8407,16 +10112,53 @@ export default function FOActivities() {
             .lte("uploaded_at", toIso)
             .order("uploaded_at", { ascending: false })
             .limit(1000),
+          siteVisitIdList.length
+            ? supabase
+                .from("fo_activity_submissions")
+                .select("*")
+                .or(`fo_user_id.eq.${selectedFoId},employee_code.eq.${selectedFoId}`)
+                .in("site_visit_id", siteVisitIdList)
+                .order("submitted_at", { ascending: false })
+                .limit(1000)
+            : Promise.resolve({ data: [], error: null }),
+          siteVisitIdList.length
+            ? supabase
+                .from("fo_activity_uploads")
+                .select("*")
+                .or(`fo_user_id.eq.${selectedFoId},employee_code.eq.${selectedFoId}`)
+                .in("site_visit_id", siteVisitIdList)
+                .order("uploaded_at", { ascending: false })
+                .limit(1000)
+            : Promise.resolve({ data: [], error: null }),
         ]);
         if (submissionsRes.error) throw submissionsRes.error;
         if (uploadsRes.error) throw uploadsRes.error;
+        if (visitSubmissionsRes.error) throw visitSubmissionsRes.error;
+        if (visitUploadsRes.error) throw visitUploadsRes.error;
         if (cancelled) return;
 
-        const submissions = (submissionsRes.data || []).filter((submission) =>
+        const submissionRows = [
+          ...(submissionsRes.data || []),
+          ...(visitSubmissionsRes.data || []),
+        ];
+        const submissionsByUniqueId = new Map();
+        submissionRows.forEach((row, index) => {
+          submissionsByUniqueId.set(String(row.id || row.local_id || index), row);
+        });
+        const uploadRows = [
+          ...(uploadsRes.data || []),
+          ...(visitUploadsRes.data || []),
+        ];
+        const uploadsByUniqueId = new Map();
+        uploadRows.forEach((row, index) => {
+          uploadsByUniqueId.set(String(row.id || row.local_id || row.file_url || index), row);
+        });
+
+        const submissions = Array.from(submissionsByUniqueId.values()).filter((submission) =>
           uploadMatchesSelectedContext(submission, { attendanceId, siteVisitIds }),
         );
         const submissionsById = new Map(submissions.map((submission) => [String(submission.id), submission]));
-        const uploads = (uploadsRes.data || []).filter((upload) => {
+        const uploads = Array.from(uploadsByUniqueId.values()).filter((upload) => {
           if (upload.submission_id && submissionsById.has(String(upload.submission_id))) return true;
           return uploadMatchesSelectedContext(upload, { attendanceId, siteVisitIds });
         });
@@ -8447,7 +10189,7 @@ export default function FOActivities() {
     return () => {
       cancelled = true;
     };
-  }, [selectedOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate]);
+  }, [selectedActivityReloadToken, selectedOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate]);
 
   async function loadSupportContext(officer) {
     if (!officer || !isSupabaseConfigured || !supabase) {
@@ -9196,6 +10938,9 @@ export default function FOActivities() {
         canApproveCheckoutMissingKmReviews={canApproveCheckoutMissingKmReviews}
         onCheckoutReviewAction={submitCheckoutMissingKmReview}
         checkoutReviewBusyVisitId={checkoutReviewBusyVisitId}
+        onActivityUploadSaved={() =>
+          setSelectedActivityReloadToken((value) => value + 1)
+        }
       />
     );
   }
