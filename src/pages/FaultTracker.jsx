@@ -34,7 +34,8 @@ import * as XLSX from 'xlsx';
 import { useAuth } from '../context/auth-context.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
-import { api } from '../services/api.js';
+
+const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:4000').replace(/\/+$/, '');
 
 const stateGroups = {
   TN: ['tn', 'tamil nadu', 'rotn'],
@@ -551,21 +552,56 @@ async function faultTrackerApiRequest(config) {
   if (!isSupabaseConfigured || !supabase) {
     throw new Error('Supabase Auth is not configured.');
   }
-  const { data, error } = await supabase.auth.getSession();
+  let { data, error } = await supabase.auth.getSession();
   if (error) throw error;
-  const accessToken = data.session?.access_token;
-  if (!accessToken) throw new Error('An active Supabase session is required.');
+  let accessToken = String(data.session?.access_token || '').trim();
+  if (!accessToken) {
+    const refreshed = await supabase.auth.refreshSession();
+    if (refreshed.error) throw refreshed.error;
+    data = refreshed.data;
+    accessToken = String(data.session?.access_token || '').trim();
+  }
+  if (!accessToken || accessToken === 'undefined' || accessToken === 'null') {
+    throw new Error('Your login session has expired. Please refresh or login again.');
+  }
+
+  const params = config.params && typeof config.params === 'object'
+    ? new URLSearchParams(
+      Object.entries(config.params)
+        .filter(([, value]) => value !== undefined && value !== null && value !== '')
+        .map(([key, value]) => [key, String(value)]),
+    ).toString()
+    : '';
+  const url = `${API_BASE_URL}${config.url}${params ? `?${params}` : ''}`;
   try {
-    const response = await api.request({
-      ...config,
+    const response = await fetch(url, {
+      method: String(config.method || 'GET').toUpperCase(),
       headers: {
+        'Content-Type': 'application/json',
         ...(config.headers || {}),
         Authorization: `Bearer ${accessToken}`,
       },
+      body: config.data === undefined ? undefined : JSON.stringify(config.data),
     });
-    return response.data;
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (payload?.code === 'state_mapping_missing') {
+        throw new Error(payload.message || 'State mapping not configured for your profile. Please contact Admin.');
+      }
+      if (response.status === 401) {
+        throw new Error(payload?.message || 'Your login session has expired. Please refresh or login again.');
+      }
+      if (response.status === 403) {
+        throw new Error(payload?.message || 'Your profile does not have Fault Tracker permission.');
+      }
+      if (response.status === 503) {
+        throw new Error(payload?.message || 'Fault Tracker service is temporarily unavailable. Please try again after backend deploy completes.');
+      }
+      throw new Error(payload?.message || 'Fault Tracker request failed.');
+    }
+    return payload;
   } catch (requestError) {
-    throw new Error(requestError.response?.data?.message || requestError.message || 'Fault Tracker request failed.');
+    throw new Error(requestError.message || 'Fault Tracker request failed.');
   }
 }
 
