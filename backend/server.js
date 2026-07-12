@@ -2721,6 +2721,19 @@ async function cleanupFaultTrackerImportBatch(client, importBatchId) {
   if (error) throw error;
 }
 
+function logFaultTrackerDbError(endpoint, table, action, error, extra = {}) {
+  console.error('[Fault Tracker] database query failed', {
+    endpoint,
+    table,
+    action,
+    usingServiceRoleClient: true,
+    code: error?.code || null,
+    message: error?.message || null,
+    details: error?.details || null,
+    ...extra,
+  });
+}
+
 function requireFaultTrackerAccess(request, response, next) {
   if (!faultTrackerCanAccess(request.profile)) {
     response.status(403).json({ ok: false, message: 'Your profile cannot access Fault Tracker.' });
@@ -2770,7 +2783,10 @@ app.get('/api/fault-tracker/imports', requireSupabaseJwt, requireFaultTrackerAcc
       .select('*')
       .order('imported_at', { ascending: false })
       .limit(Math.min(50, Math.max(1, Number.parseInt(request.query.limit || '20', 10) || 20)));
-    if (error) throw error;
+    if (error) {
+      logFaultTrackerDbError('GET /api/fault-tracker/imports', 'fault_tracker_import_batches', 'select_imports', error);
+      throw error;
+    }
     response.json({ ok: true, imports: data || [] });
   } catch (error) {
     respondFaultTrackerError(response, error);
@@ -2812,11 +2828,7 @@ app.get('/api/fault-tracker/tickets', requireSupabaseJwt, requireFaultTrackerAcc
         .order('imported_at', { ascending: false })
         .limit(1);
       if (batchError) {
-        console.error('[Fault Tracker] latest batch query failed', {
-          code: batchError.code || null,
-          message: batchError.message || null,
-          details: batchError.details || null,
-        });
+        logFaultTrackerDbError('GET /api/fault-tracker/tickets', 'fault_tracker_import_batches', 'select_latest_batch', batchError);
         throw batchError;
       }
       const latestBatch = Array.isArray(latestBatches) ? latestBatches[0] : null;
@@ -2863,11 +2875,8 @@ app.get('/api/fault-tracker/tickets', requireSupabaseJwt, requireFaultTrackerAcc
 
     const { data: tickets, error: ticketsError } = await query.limit(10000);
     if (ticketsError) {
-      console.error('[Fault Tracker] tickets query failed', {
+      logFaultTrackerDbError('GET /api/fault-tracker/tickets', 'fault_tracker_tickets', 'select_tickets', ticketsError, {
         import_batch_id: importBatchId,
-        code: ticketsError.code || null,
-        message: ticketsError.message || null,
-        details: ticketsError.details || null,
       });
       throw ticketsError;
     }
@@ -2877,11 +2886,8 @@ app.get('/api/fault-tracker/tickets', requireSupabaseJwt, requireFaultTrackerAcc
       .eq('id', importBatchId)
       .limit(1);
     if (importBatchError) {
-      console.error('[Fault Tracker] import batch lookup failed', {
+      logFaultTrackerDbError('GET /api/fault-tracker/tickets', 'fault_tracker_import_batches', 'select_import_batch', importBatchError, {
         import_batch_id: importBatchId,
-        code: importBatchError.code || null,
-        message: importBatchError.message || null,
-        details: importBatchError.details || null,
       });
       throw importBatchError;
     }
@@ -2955,7 +2961,10 @@ app.post('/api/fault-tracker/import', requireSupabaseJwt, requireFaultTrackerMan
       })
       .select('*')
       .single();
-    if (batchError) throw batchError;
+    if (batchError) {
+      logFaultTrackerDbError('POST /api/fault-tracker/import', 'fault_tracker_import_batches', 'insert_import_batch', batchError);
+      throw batchError;
+    }
     createdBatchId = batch.id;
 
     const rows = validatedRows.map((row) => ({
@@ -2971,6 +2980,10 @@ app.post('/api/fault-tracker/import', requireSupabaseJwt, requireFaultTrackerMan
           .from('fault_tracker_tickets')
           .insert(chunk);
         if (error) {
+          logFaultTrackerDbError('POST /api/fault-tracker/import', 'fault_tracker_tickets', 'insert_ticket_chunk', error, {
+            chunk_start: index,
+            chunk_size: chunk.length,
+          });
           throw faultTrackerHttpError(500, 'ticket_insert_failed', 'Fault Tracker ticket insert failed.', {
             chunk_start: index,
             chunk_size: chunk.length,
@@ -2995,6 +3008,9 @@ app.post('/api/fault-tracker/import', requireSupabaseJwt, requireFaultTrackerMan
         .select('*')
         .single();
       if (updateError) {
+        logFaultTrackerDbError('POST /api/fault-tracker/import', 'fault_tracker_import_batches', 'update_ticket_count', updateError, {
+          import_batch_id: batch.id,
+        });
         throw faultTrackerHttpError(500, 'ticket_insert_failed', 'Fault Tracker import finalization failed.', {
           database_code: updateError.code || null,
           database_message: updateError.message || null,
@@ -3025,10 +3041,8 @@ app.post('/api/fault-tracker/import', requireSupabaseJwt, requireFaultTrackerMan
         await cleanupFaultTrackerImportBatch(client, batch.id);
         createdBatchId = null;
       } catch (cleanupError) {
-        console.error('[Fault Tracker] import cleanup failed', {
+        logFaultTrackerDbError('POST /api/fault-tracker/import', 'fault_tracker_import_batches', 'delete_failed_import_batch', cleanupError, {
           import_batch_id: batch.id,
-          message: cleanupError.message,
-          code: cleanupError.code || null,
         });
         throw faultTrackerHttpError(500, 'import_cleanup_failed', 'Fault Tracker import failed and cleanup also failed. Please contact Admin.', {
           import_batch_id: batch.id,
