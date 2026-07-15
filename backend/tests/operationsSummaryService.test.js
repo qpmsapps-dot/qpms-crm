@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildOperationsSummary,
   canAccessOperationsSummary,
   normalizeOperationsSummaryFilters,
   operationsSummaryAllowedEmployeeCodes,
@@ -92,4 +93,75 @@ test('empty result returns zero totals', () => {
   assert.equal(result.payable_km, 0);
   assert.equal(result.petrol_amount, 0);
   assert.equal(result.matching_employee_count, 0);
+});
+
+test('live status resolves profile id to employee code using current_status', () => {
+  const result = summarizeOperationsRows({
+    actor,
+    profiles: [
+      { id: 'profile-kl1', employee_code: 'KL1', role: 'FO', state: 'KL', business: 'HDFC', status: 'active', is_active: true },
+    ],
+    hierarchyRows: [],
+    liveRows: [
+      { fo_user_id: 'profile-kl1', current_status: 'On Travel', is_tracking: true, active_site_visit_id: null },
+    ],
+    attendances: [
+      { employee_code: 'KL1', attendance_date: '2026-07-14', status: 'Active', total_approved_km: 20, petrol_amount: 80 },
+    ],
+    filters: {
+      date_from: '2026-07-14', date_to: '2026-07-14', state: 'KL', business: null, status: 'ON_TRAVEL',
+    },
+  });
+  assert.equal(result.matching_attendance_count, 1);
+  assert.equal(result.payable_km, 20);
+});
+
+test('live status query uses fo_user_id and never selects missing employee_code or status columns', async () => {
+  const selections = new Map();
+  const inFilters = new Map();
+  const rowsByTable = {
+    profiles: [
+      { id: 'profile-kl1', employee_code: 'KL1', role: 'FO', state: 'KL', business: 'HDFC', status: 'active', is_active: true },
+    ],
+    employee_hierarchy: [],
+    fo_attendance: [],
+    fo_live_status: [],
+  };
+  const client = {
+    from(table) {
+      const queryBuilder = {
+        select(columns) {
+          selections.set(table, columns);
+          return queryBuilder;
+        },
+        eq() { return queryBuilder; },
+        gte() { return queryBuilder; },
+        lte() { return queryBuilder; },
+        in(column, values) {
+          inFilters.set(table, { column, values });
+          return queryBuilder;
+        },
+        async range() {
+          return { data: rowsByTable[table] || [], error: null };
+        },
+      };
+      return queryBuilder;
+    },
+  };
+
+  const result = await buildOperationsSummary(client, actor, {
+    date_from: '2026-07-14', date_to: '2026-07-14', state: 'All States', business: 'All Business', status: 'All Status',
+  }, '2026-07-14');
+
+  const liveSelection = selections.get('fo_live_status');
+  assert.equal(liveSelection, 'fo_user_id,current_status,is_tracking,active_site_visit_id');
+  assert.doesNotMatch(liveSelection, /(^|,)employee_code(,|$)/);
+  assert.doesNotMatch(liveSelection, /(^|,)status(,|$)/);
+  assert.deepEqual(inFilters.get('fo_live_status'), {
+    column: 'fo_user_id',
+    values: ['profile-kl1', 'KL1'],
+  });
+  assert.equal(result.payable_km, 0);
+  assert.equal(result.petrol_amount, 0);
+  assert.equal(result.matching_attendance_count, 0);
 });

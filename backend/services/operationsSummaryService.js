@@ -184,8 +184,9 @@ export function storedAttendancePetrolAmount(row = {}, payableKm = storedAttenda
   return Math.max(0, payableKm * (Number.isFinite(rate) ? rate : 4));
 }
 
-function liveStatusKey(row = {}) {
-  return employeeKey(row);
+function liveStatusKey(row = {}, employeeCodeByProfileId = new Map()) {
+  const foUserId = text(row.fo_user_id);
+  return employeeCodeByProfileId.get(foUserId) || foUserId.toUpperCase();
 }
 
 function statusMatches(row, requestedStatus, liveByEmployee) {
@@ -196,8 +197,8 @@ function statusMatches(row, requestedStatus, liveByEmployee) {
   if (requested === 'ACTIVE') return attendanceActive;
   if (requested === 'ENDED' || requested === 'OFFLINE') return !attendanceActive;
   const live = liveByEmployee.get(employeeKey(row)) || {};
-  const hasSite = Boolean(live.active_site_visit_id) || comparable(live.status).includes('site');
-  const tracking = live.is_tracking === true || comparable(live.status).includes('travel');
+  const hasSite = Boolean(live.active_site_visit_id) || comparable(live.current_status).includes('site');
+  const tracking = live.is_tracking === true || comparable(live.current_status).includes('travel');
   if (requested === 'ONSITE') return attendanceActive && hasSite;
   if (requested === 'ONTRAVEL') return attendanceActive && !hasSite && tracking;
   if (requested === 'ACTIVESTATIONARY') return attendanceActive && !hasSite && !tracking;
@@ -214,7 +215,14 @@ export function summarizeOperationsRows({
 }) {
   const allowedCodes = operationsSummaryAllowedEmployeeCodes(actor, profiles, hierarchyRows);
   const profilesByCode = new Map(profiles.map((profile) => [employeeKey(profile), profile]));
-  const liveByEmployee = new Map(liveRows.map((row) => [liveStatusKey(row), row]));
+  const employeeCodeByProfileId = new Map(
+    profiles
+      .map((profile) => [text(profile.id), employeeKey(profile)])
+      .filter(([profileId, employeeCode]) => profileId && employeeCode),
+  );
+  const liveByEmployee = new Map(
+    liveRows.map((row) => [liveStatusKey(row, employeeCodeByProfileId), row]),
+  );
   const matchingEmployeeCodes = new Set();
   let payableKm = 0;
   let petrolAmount = 0;
@@ -262,6 +270,20 @@ async function fetchPaged(queryFactory, pageSize = 1000) {
   return rows;
 }
 
+async function fetchAuthorizedLiveStatusRows(client, identifiers, chunkSize = 200) {
+  const uniqueIdentifiers = [...new Set(identifiers.map(text).filter(Boolean))];
+  if (!uniqueIdentifiers.length) return [];
+  const rows = [];
+  for (let index = 0; index < uniqueIdentifiers.length; index += chunkSize) {
+    const chunk = uniqueIdentifiers.slice(index, index + chunkSize);
+    rows.push(...await fetchPaged(() => client
+      .from('fo_live_status')
+      .select('fo_user_id,current_status,is_tracking,active_site_visit_id')
+      .in('fo_user_id', chunk)));
+  }
+  return rows;
+}
+
 export async function buildOperationsSummary(client, actor, query, today) {
   if (!canAccessOperationsSummary(actor)) {
     const error = new Error('Your role cannot access Operations summary totals.');
@@ -269,7 +291,7 @@ export async function buildOperationsSummary(client, actor, query, today) {
     throw error;
   }
   const filters = normalizeOperationsSummaryFilters(query, today);
-  const [profiles, hierarchyRows, attendances, liveRows] = await Promise.all([
+  const [profiles, hierarchyRows, attendances] = await Promise.all([
     fetchPaged(() => client.from('profiles').select('*').eq('is_active', true)),
     fetchPaged(() => client.from('employee_hierarchy').select('*').eq('is_active', true)),
     fetchPaged(() => client
@@ -277,7 +299,15 @@ export async function buildOperationsSummary(client, actor, query, today) {
       .select('id,fo_user_id,employee_code,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,petrol_amount,rate_per_km')
       .gte('attendance_date', filters.date_from)
       .lte('attendance_date', filters.date_to)),
-    fetchPaged(() => client.from('fo_live_status').select('fo_user_id,employee_code,status,is_tracking,active_site_visit_id')),
   ]);
+  const allowedCodes = operationsSummaryAllowedEmployeeCodes(actor, profiles, hierarchyRows);
+  const authorizedLiveIdentifiers = profiles.flatMap((profile) => {
+    const code = employeeKey(profile);
+    if (!code || !allowedCodes.has(code)) return [];
+    // Current rows reference profiles.id. Include employee_code as a read-only
+    // compatibility key for older live rows that predate the profile-id link.
+    return [profile.id, code];
+  });
+  const liveRows = await fetchAuthorizedLiveStatusRows(client, authorizedLiveIdentifiers);
   return summarizeOperationsRows({ attendances, profiles, hierarchyRows, liveRows, actor, filters });
 }
