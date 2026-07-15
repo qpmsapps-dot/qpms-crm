@@ -34,7 +34,6 @@ void main() {
       'department': 'Operations',
       'designation': 'Key Account Manager',
     });
-
     expect(user.role, 'KAM');
   });
 
@@ -44,7 +43,6 @@ void main() {
       'employee_code': 'QPMS002',
       'full_name': 'Legacy User',
     });
-
     expect(user.role, 'FO');
   });
 
@@ -76,7 +74,7 @@ void main() {
   });
 
   test('canonicalizes mobile admin and developer aliases', () {
-    expect(canonicalMobileRole('QPMS Admin'), 'Admin');
+    expect(canonicalMobileRole('QPMS Admin'), 'QPMS Admin');
     expect(canonicalMobileRole('Dev'), 'Developer');
     expect(canonicalMobileRole('IT Admin'), 'Developer');
     expect(canonicalMobileRole('Management IT Admin'), 'Developer');
@@ -95,7 +93,6 @@ void main() {
     ]) {
       expect(isMobileDebugVisible(role: role), isTrue, reason: role);
     }
-
     for (final role in <String>[
       'FO',
       'KAM',
@@ -105,5 +102,51 @@ void main() {
     ]) {
       expect(isMobileDebugVisible(role: role), isFalse, reason: role);
     }
+  });
+
+  test('canonical BD and management roles remain distinct', () {
+    expect(canonicalMobileRole('bd executive'), 'BD Executive');
+    expect(
+      canonicalMobileRole('BUSINESS_DEVELOPMENT_EXECUTIVE'),
+      'BD Executive',
+    );
+    expect(canonicalMobileRole('bd-head'), 'BD Head');
+    expect(canonicalMobileRole('Business Development Head'), 'BD Head');
+    expect(canonicalMobileRole('Business Head'), 'Business Head');
+    expect(canonicalMobileRole('branch_head'), 'Branch Head');
+    expect(canonicalMobileRole('Admin'), 'Admin');
+    expect(canonicalMobileRole('QPMS Admin'), 'QPMS Admin');
+    expect(canonicalMobileRole('dev'), 'Developer');
+  });
+
+  test('dedicated and optional BD module access is safe', () {
+    expect(isBusinessDevelopmentRole('BD Executive'), isTrue);
+    expect(isBusinessDevelopmentRole('BD Head'), isTrue);
+    for (final role in [
+      'Business Head',
+      'Branch Head',
+      'Admin',
+      'QPMS Admin',
+      'Developer',
+    ]) {
+      expect(canAccessBusinessDevelopmentModule(role), isTrue, reason: role);
+      expect(isBusinessDevelopmentRole(role), isFalse, reason: role);
+    }
+    expect(canAccessBusinessDevelopmentModule('FO'), isFalse);
+  });
+
+  test('lead creation is restricted to approved mobile roles', () {
+    for (final role in [
+      'BD Executive',
+      'BD Head',
+      'Admin',
+      'QPMS Admin',
+      'Developer',
+    ]) {
+      expect(canCreateBusinessDevelopmentLead(role), isTrue, reason: role);
+    }
+    expect(canCreateBusinessDevelopmentLead('Business Head'), isFalse);
+    expect(canCreateBusinessDevelopmentLead('Branch Head'), isFalse);
+    expect(canCreateBusinessDevelopmentLead('FO'), isFalse);
   });
 }

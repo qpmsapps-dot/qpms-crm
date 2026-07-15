@@ -6,9 +6,15 @@ import 'config_service.dart';
 import 'supabase_service.dart';
 
 class BdLeadApiException implements Exception {
-  const BdLeadApiException(this.message);
+  const BdLeadApiException(
+    this.message, {
+    this.code = '',
+    this.duplicates = const [],
+  });
 
   final String message;
+  final String code;
+  final List<Map<String, dynamic>> duplicates;
 
   @override
   String toString() => message;
@@ -29,7 +35,11 @@ class BdLeadService {
       if (priority?.trim().isNotEmpty == true) 'priority': priority!.trim(),
       if (scope?.trim().isNotEmpty == true) 'scope': scope!.trim(),
     };
-    final json = await _request('GET', '/api/mobile/leads', query: query);
+    final json = await _request(
+      'GET',
+      '/api/lead-management/leads',
+      query: query,
+    );
     final rows = json['leads'] is List ? json['leads'] as List : const [];
     return rows
         .whereType<Map>()
@@ -38,7 +48,7 @@ class BdLeadService {
   }
 
   static Future<BdLead> fetchLead(String leadId) async {
-    final json = await _request('GET', '/api/mobile/leads/$leadId');
+    final json = await _request('GET', '/api/lead-management/leads/$leadId');
     final lead = json['lead'];
     if (lead is! Map) {
       throw const BdLeadApiException('Lead details were not available.');
@@ -46,11 +56,21 @@ class BdLeadService {
     return BdLead.fromJson(Map<String, dynamic>.from(lead));
   }
 
-  static Future<BdLead> createLead(CreateBdLeadRequest request) async {
+  static Future<BdLead> createLead(
+    CreateBdLeadRequest request, {
+    bool duplicateOverride = false,
+    String duplicateOverrideReason = '',
+  }) async {
     final json = await _request(
       'POST',
-      '/api/mobile/leads',
-      body: request.toJson(),
+      '/api/lead-management/leads',
+      body: {
+        ...request.toJson(),
+        'source_context': 'mobile_bd_lead_creation',
+        'duplicate_override': duplicateOverride,
+        'duplicate_override_reason': duplicateOverrideReason,
+      },
+      headers: {'Idempotency-Key': request.idempotencyKey},
     );
     final lead = json['lead'];
     if (lead is! Map) {
@@ -63,7 +83,7 @@ class BdLeadService {
     String leadId,
     Map<String, dynamic> patch,
   ) async {
-    await _request('PATCH', '/api/mobile/leads/$leadId', body: patch);
+    await _request('PATCH', '/api/lead-management/leads/$leadId', body: patch);
   }
 
   static Future<void> addFollowUp(
@@ -99,6 +119,7 @@ class BdLeadService {
     String path, {
     Map<String, String> query = const {},
     Map<String, dynamic>? body,
+    Map<String, String> headers = const {},
   }) async {
     final baseUrl = AppConfig.backendApiUrl.trim();
     if (baseUrl.isEmpty) {
@@ -123,6 +144,7 @@ class BdLeadService {
       final request = await client.openUrl(method, uri);
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      headers.forEach(request.headers.set);
       if (body != null) {
         request.headers.contentType = ContentType.json;
         request.write(jsonEncode(body));
@@ -138,6 +160,13 @@ class BdLeadService {
             response.statusCode,
             decoded['message']?.toString() ?? '',
           ),
+          code: decoded['code']?.toString() ?? '',
+          duplicates: decoded['duplicates'] is List
+              ? (decoded['duplicates'] as List)
+                    .whereType<Map>()
+                    .map((row) => Map<String, dynamic>.from(row))
+                    .toList()
+              : const [],
         );
       }
       return decoded;

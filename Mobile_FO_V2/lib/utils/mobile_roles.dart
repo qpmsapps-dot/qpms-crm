@@ -18,6 +18,7 @@ const mobileLoginRoles = <String>{
   'Dev',
   'IT Admin',
   'Management IT Admin',
+  'Business Head',
   // Preserve profiles created before registration standardized on FO.
   'Field Officer',
 };
@@ -39,7 +40,7 @@ String canonicalMobileRole(String role) {
     'GM': 'GM',
     'GENERALMANAGER': 'GM',
     'ADMIN': 'Admin',
-    'QPMSADMIN': 'Admin',
+    'QPMSADMIN': 'QPMS Admin',
     'DEVELOPER': 'Developer',
     'DEV': 'Developer',
     'ITADMIN': 'Developer',
@@ -48,6 +49,7 @@ String canonicalMobileRole(String role) {
     'BUSINESSDEVELOPMENTEXECUTIVE': 'BD Executive',
     'BDHEAD': 'BD Head',
     'BUSINESSDEVELOPMENTHEAD': 'BD Head',
+    'BUSINESSHEAD': 'Business Head',
     'MANAGER': 'Manager',
   };
   final canonical = canonicalByNormalized[normalizedRole];
@@ -130,6 +132,37 @@ bool isBusinessDevelopmentRole(String role) {
   try {
     final canonicalRole = canonicalMobileRole(role);
     return canonicalRole == 'BD Executive' || canonicalRole == 'BD Head';
+  } catch (_) {
+    return false;
+  }
+}
+
+bool canAccessBusinessDevelopmentModule(String role) {
+  try {
+    final canonicalRole = canonicalMobileRole(role);
+    return const {
+      'BD Executive',
+      'BD Head',
+      'Business Head',
+      'Branch Head',
+      'Admin',
+      'QPMS Admin',
+      'Developer',
+    }.contains(canonicalRole);
+  } catch (_) {
+    return false;
+  }
+}
+
+bool canCreateBusinessDevelopmentLead(String role) {
+  try {
+    return const {
+      'BD Executive',
+      'BD Head',
+      'Admin',
+      'QPMS Admin',
+      'Developer',
+    }.contains(canonicalMobileRole(role));
   } catch (_) {
     return false;
   }

@@ -13,6 +13,7 @@ class BdDashboardScreen extends StatelessWidget {
     required this.error,
     required this.onRefresh,
     required this.onAddLead,
+    required this.canCreateLead,
     required this.onOpenLead,
     super.key,
   });
@@ -23,6 +24,7 @@ class BdDashboardScreen extends StatelessWidget {
   final String? error;
   final Future<void> Function() onRefresh;
   final VoidCallback onAddLead;
+  final bool canCreateLead;
   final ValueChanged<BdLead> onOpenLead;
 
   @override
@@ -93,12 +95,14 @@ class BdDashboardScreen extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 16),
-        FoPrimaryButton(
-          label: 'Add New Lead',
-          icon: Icons.add_rounded,
-          onPressed: onAddLead,
-        ),
-        const SizedBox(height: 18),
+        if (canCreateLead) ...[
+          FoPrimaryButton(
+            label: 'Add New Lead',
+            icon: Icons.add_rounded,
+            onPressed: onAddLead,
+          ),
+          const SizedBox(height: 18),
+        ],
         FoCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

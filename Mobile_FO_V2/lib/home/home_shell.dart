@@ -50,29 +50,31 @@ class _HomeShellState extends State<HomeShell> {
     if (isBusinessDevelopmentRole(widget.user.role)) {
       return BdShell(user: widget.user, onLogout: widget.onLogout);
     }
+    final showBdModule = canAccessBusinessDevelopmentModule(widget.user.role);
+    final pages = <Widget>[
+      HomeScreen(
+        user: widget.user,
+        onLogout: widget.onLogout,
+        key: const PageStorageKey('home'),
+      ),
+      TasksScreen(
+        user: widget.user,
+        onLogout: widget.onLogout,
+        isSelected: _index == 1,
+        key: const PageStorageKey('tasks'),
+      ),
+      VisitsScreen(user: widget.user, key: const PageStorageKey('visits')),
+      ProfileScreen(
+        user: widget.user,
+        onLogout: widget.onLogout,
+        key: const PageStorageKey('profile'),
+      ),
+    ];
     return Scaffold(
       body: PageView(
         controller: _pageController,
         onPageChanged: (value) => setState(() => _index = value),
-        children: [
-          HomeScreen(
-            user: widget.user,
-            onLogout: widget.onLogout,
-            key: const PageStorageKey('home'),
-          ),
-          TasksScreen(
-            user: widget.user,
-            onLogout: widget.onLogout,
-            isSelected: _index == 1,
-            key: const PageStorageKey('tasks'),
-          ),
-          VisitsScreen(user: widget.user, key: const PageStorageKey('visits')),
-          ProfileScreen(
-            user: widget.user,
-            onLogout: widget.onLogout,
-            key: const PageStorageKey('profile'),
-          ),
-        ],
+        children: pages,
       ),
       bottomNavigationBar: SafeArea(
         minimum: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -105,6 +107,7 @@ class _HomeShellState extends State<HomeShell> {
                 Icons.location_on_rounded,
                 'Site Visit',
               ),
+              if (showBdModule) _bdModuleItem(),
               _navItem(3, Icons.person_outline, Icons.person, 'Profile'),
             ],
           ),
@@ -149,6 +152,47 @@ class _HomeShellState extends State<HomeShell> {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: selected ? qpmsBlue : const Color(0xFF66708D),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _bdModuleItem() {
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) =>
+                BdShell(user: widget.user, onLogout: widget.onLogout),
+          ),
+        ),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(vertical: 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 54,
+                height: 38,
+                child: Icon(
+                  Icons.business_center_outlined,
+                  color: Color(0xFF66708D),
+                ),
+              ),
+              SizedBox(height: 4),
+              Text(
+                'BD Leads',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Color(0xFF66708D),
                   fontSize: 12,
                   fontWeight: FontWeight.w900,
                 ),

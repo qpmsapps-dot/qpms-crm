@@ -143,6 +143,7 @@ class CreateBdLeadRequest {
     required this.contactNumber,
     required this.leadSource,
     required this.leadPriority,
+    required this.idempotencyKey,
     this.industryType = '',
     this.contactPersonDesignation = '',
     this.emailId = '',
@@ -161,6 +162,7 @@ class CreateBdLeadRequest {
   final String emailId;
   final String leadSource;
   final String leadPriority;
+  final String idempotencyKey;
   final List<String> serviceScope;
   final String remarks;
 

@@ -8,7 +8,7 @@ import 'bd_lead_options.dart';
 class AddLeadScreen extends StatefulWidget {
   const AddLeadScreen({required this.onCreated, super.key});
 
-  final ValueChanged<BdLead> onCreated;
+  final Future<void> Function(BdLead) onCreated;
 
   @override
   State<AddLeadScreen> createState() => _AddLeadScreenState();
@@ -30,6 +30,7 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
   final Set<String> _serviceScope = {};
   bool _saving = false;
   String? _error;
+  String _submissionKey = _newSubmissionKey();
 
   @override
   void dispose() {
@@ -55,29 +56,41 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
       _error = null;
     });
     try {
-      final lead = await BdLeadService.createLead(
-        CreateBdLeadRequest(
-          clientName: _clientName.text.trim(),
-          industryType: _industry,
-          siteLocation: _siteLocation.text.trim(),
-          state: _state,
-          city: _city.text.trim(),
-          contactPersonName: _contactName.text.trim(),
-          contactPersonDesignation: _contactDesignation.text.trim(),
-          contactNumber: _contactPhone.text.trim(),
-          emailId: _contactEmail.text.trim(),
-          leadSource: _source,
-          leadPriority: _priority,
-          serviceScope: _serviceScope.toList(),
-          remarks: _remarks.text.trim(),
-        ),
+      final request = CreateBdLeadRequest(
+        clientName: _clientName.text.trim(),
+        industryType: _industry,
+        siteLocation: _siteLocation.text.trim(),
+        state: _state,
+        city: _city.text.trim(),
+        contactPersonName: _contactName.text.trim(),
+        contactPersonDesignation: _contactDesignation.text.trim(),
+        contactNumber: _contactPhone.text.trim(),
+        emailId: _contactEmail.text.trim(),
+        leadSource: _source,
+        leadPriority: _priority,
+        serviceScope: _serviceScope.toList(),
+        remarks: _remarks.text.trim(),
+        idempotencyKey: _submissionKey,
       );
+      BdLead lead;
+      try {
+        lead = await BdLeadService.createLead(request);
+      } on BdLeadApiException catch (error) {
+        if (error.code != 'possible_duplicate_lead' || !mounted) rethrow;
+        final reason = await _confirmDuplicate(error.duplicates);
+        if (reason == null) return;
+        lead = await BdLeadService.createLead(
+          request,
+          duplicateOverride: true,
+          duplicateOverrideReason: reason,
+        );
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Lead created successfully.')),
       );
       _clearForm();
-      widget.onCreated(lead);
+      await widget.onCreated(lead);
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error.toString());
@@ -94,10 +107,24 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
     if (_state.trim().isEmpty) return 'State is required.';
     if (_city.text.trim().isEmpty) return 'City is required.';
     if (_priority.trim().isEmpty) return 'Lead Priority is required.';
-    if (_contactName.text.trim().isEmpty &&
-        _contactPhone.text.trim().isEmpty &&
+    if (_contactName.text.trim().isEmpty) return 'Contact name is required.';
+    if (_contactPhone.text.trim().isEmpty &&
         _contactEmail.text.trim().isEmpty) {
-      return 'Enter contact name, phone, or email.';
+      return 'Enter a contact phone or email.';
+    }
+    final email = _contactEmail.text.trim();
+    if (email.isNotEmpty &&
+        !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email)) {
+      return 'Enter a valid contact email.';
+    }
+    final phone = _contactPhone.text.trim();
+    if (phone.isNotEmpty) {
+      final digits = phone.replaceAll(RegExp(r'\D'), '');
+      if (!RegExp(r'^[+()\-\s0-9]+$').hasMatch(phone) ||
+          digits.length < 7 ||
+          digits.length > 15) {
+        return 'Enter a valid contact phone number.';
+      }
     }
     return null;
   }
@@ -112,6 +139,7 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
     _contactEmail.clear();
     _remarks.clear();
     _serviceScope.clear();
+    _submissionKey = _newSubmissionKey();
     setState(() {
       _industry = bdIndustryOptions.first;
       _state = bdStateOptions.first;
@@ -119,6 +147,63 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
       _priority = 'Medium';
     });
   }
+
+  Future<String?> _confirmDuplicate(
+    List<Map<String, dynamic>> duplicates,
+  ) async {
+    final reason = TextEditingController();
+    final matches = duplicates
+        .map(
+          (lead) => lead['restricted'] == true
+              ? (lead['message']?.toString() ??
+                    'A matching lead exists outside your visibility scope.')
+              : '${lead['lead_code'] ?? lead['id']}: ${lead['client_name']} - ${lead['site_location']}',
+        )
+        .join('\n');
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Possible duplicate lead'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(matches),
+            const SizedBox(height: 12),
+            const Text('Continue only if this is a separate lead or site.'),
+            TextField(
+              controller: reason,
+              decoration: const InputDecoration(labelText: 'Reason *'),
+              maxLines: 2,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Create Separate Lead'),
+          ),
+        ],
+      ),
+    );
+    final value = reason.text.trim();
+    reason.dispose();
+    if (confirmed != true) return null;
+    if (value.isEmpty) {
+      if (mounted) {
+        setState(() => _error = 'Reason is required to override a duplicate.');
+      }
+      return null;
+    }
+    return value;
+  }
+
+  static String _newSubmissionKey() =>
+      'mobile-${DateTime.now().microsecondsSinceEpoch}';
 
   @override
   Widget build(BuildContext context) {

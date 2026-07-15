@@ -6,6 +6,7 @@ import '../profile/profile_screen.dart';
 import '../services/bd_lead_service.dart';
 import '../theme/app_theme.dart';
 import '../ui/fo_ui.dart';
+import '../utils/mobile_roles.dart';
 import 'add_lead_screen.dart';
 import 'bd_dashboard_screen.dart';
 import 'lead_details_screen.dart';
@@ -59,14 +60,16 @@ class _BdShellState extends State<BdShell> {
     );
   }
 
-  void _onLeadCreated(BdLead lead) {
-    _loadLeads();
+  Future<void> _onLeadCreated(BdLead lead) async {
+    await _loadLeads();
+    if (!mounted) return;
     setState(() => _index = 1);
     _openLead(lead);
   }
 
   @override
   Widget build(BuildContext context) {
+    final canCreate = canCreateBusinessDevelopmentLead(widget.user.role);
     final pages = [
       BdDashboardScreen(
         user: widget.user,
@@ -75,6 +78,7 @@ class _BdShellState extends State<BdShell> {
         error: _error,
         onRefresh: _loadLeads,
         onAddLead: () => setState(() => _index = 2),
+        canCreateLead: canCreate,
         onOpenLead: _openLead,
       ),
       LeadsListScreen(
@@ -84,7 +88,7 @@ class _BdShellState extends State<BdShell> {
         onRefresh: _loadLeads,
         onOpenLead: _openLead,
       ),
-      AddLeadScreen(onCreated: _onLeadCreated),
+      if (canCreate) AddLeadScreen(onCreated: _onLeadCreated),
       ProfileScreen(user: widget.user, onLogout: widget.onLogout),
     ];
     return Scaffold(
@@ -109,8 +113,9 @@ class _BdShellState extends State<BdShell> {
             children: [
               _navItem(0, Icons.dashboard_outlined, 'Dashboard'),
               _navItem(1, Icons.business_center_outlined, 'Leads'),
-              _navItem(2, Icons.add_circle_outline_rounded, 'Add Lead'),
-              _navItem(3, Icons.person_outline, 'Profile'),
+              if (canCreate)
+                _navItem(2, Icons.add_circle_outline_rounded, 'Add Lead'),
+              _navItem(canCreate ? 3 : 2, Icons.person_outline, 'Profile'),
             ],
           ),
         ),
