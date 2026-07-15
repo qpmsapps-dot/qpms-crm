@@ -1,4 +1,9 @@
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
+import {
+  createLeadManagementLead,
+  getLeadManagementLeads,
+  updateLeadManagementLead,
+} from './api.js';
 
 const appMode = String(import.meta.env.VITE_APP_MODE || 'demo').toLowerCase();
 const isProductionMode = appMode === 'production';
@@ -502,35 +507,28 @@ function dbSiteMomToApp(row) {
 
 export async function fetchWorkflowData() {
   assertConfigured();
-  console.info('[myQPMS Supabase] Fetching leads directly from leads table');
+  console.info('[myQPMS Lead Management] Fetching authorized leads through backend');
 
-  const leadsResponse = await supabase.from('leads').select('*').order('created_at', { ascending: false });
-
-  if (leadsResponse.error) {
-    console.error('[myQPMS Supabase] Leads fetch failed', leadsResponse.error);
-    throw leadsResponse.error;
-  }
+  const leadApiResponse = await getLeadManagementLeads();
+  const leadsResponse = {
+    data: (leadApiResponse.leads || []).map((lead) => ({
+      ...lead,
+      lead_contacts: lead.contacts || [],
+      activity_logs: lead.activity_logs || [],
+    })),
+    error: null,
+  };
 
   const leadIds = (leadsResponse.data || []).map((lead) => lead.id);
   let contactsByLeadId = {};
   let momByLeadId = {};
 
   if (leadIds.length) {
-    const [contactsResponse, momResponse] = await Promise.all([
-      supabase.from('lead_contacts').select('*').in('lead_id', leadIds),
-      supabase.from('lead_mom').select('*').in('lead_id', leadIds),
-    ]);
-    if (contactsResponse.error) {
-      console.warn('[myQPMS Supabase] lead_contacts fetch skipped/failed', contactsResponse.error);
-    } else {
-      contactsByLeadId = (contactsResponse.data || []).reduce((grouped, contact) => {
-        grouped[contact.lead_id] = [...(grouped[contact.lead_id] || []), contact];
-        return grouped;
-      }, {});
-      console.info('[myQPMS Supabase] lead_contacts fetch success', {
-        contacts: contactsResponse.data?.length || 0,
-      });
-    }
+    contactsByLeadId = (leadsResponse.data || []).reduce((grouped, lead) => {
+      grouped[lead.id] = lead.lead_contacts || [];
+      return grouped;
+    }, {});
+    const momResponse = await supabase.from('lead_mom').select('*').in('lead_id', leadIds);
 
     if (momResponse.error) {
       console.warn('[myQPMS Supabase] lead_mom fetch skipped/failed', momResponse.error);
@@ -953,114 +951,30 @@ async function generateProposalRecordDirect({ visit, proposal, actor }) {
 export async function createLeadRemote(lead) {
   assertConfigured();
   const { contacts = [] } = lead;
-  const primaryContact = contacts.find((contact) => contact.isPrimary) || contacts[0] || {};
   const basePayload = appLeadToDbLead(lead);
   const payload = {
     ...basePayload,
-    contact_person_name: primaryContact.name || null,
-    contact_person_designation: primaryContact.designation || null,
-    contact_number: primaryContact.phone || null,
-    email_id: primaryContact.email || null,
+    contacts,
+    source_context: 'web_lead_management',
+    duplicate_override: lead.duplicateOverride === true,
+    duplicate_override_reason: lead.duplicateOverrideReason || '',
   };
-  console.info('[myQPMS Supabase] Creating lead payload', {
+  console.info('[myQPMS Lead Management] Creating authorized lead', {
     client_name: payload.client_name,
     assigned_bd_email: payload.assigned_bd_email,
     lead_stage: payload.lead_stage,
-    contact_person_name: payload.contact_person_name,
     contactCount: contacts.length,
   });
-
-  let { data, error } = await supabase.from('leads').insert(payload).select('*').single();
-  if (error && String(error.message || '').toLowerCase().includes('schema cache')) {
-    console.warn('[myQPMS Supabase] Direct contact columns not available on leads; retrying lead insert without direct contact fields', error);
-    const retryPayload = { ...basePayload };
-    if (String(error.message || '').includes('service_scope')) delete retryPayload.service_scope;
-    const retry = await supabase.from('leads').insert(retryPayload).select('*').single();
-    data = retry.data;
-    error = retry.error;
-  }
-  if (error) {
-    console.error('[myQPMS Supabase] Lead insert failed', error);
-    throw error;
-  }
-
-  console.info('[myQPMS Supabase] Lead insert success', {
-    id: data.id,
-    client_name: data.client_name,
-  });
-
-  if (contacts.length) {
-    const dedupedContacts = contacts.reduce((items, contact) => {
-      const key = String(contact.id || contact.email || contact.phone || '').trim().toLowerCase();
-      const fallbackKey = `${String(contact.name || '').trim().toLowerCase()}|${String(contact.designation || '').trim().toLowerCase()}`;
-      const matchKey = key || fallbackKey;
-      if (matchKey && items.some((item) => item.__matchKey === matchKey)) return items;
-      return [...items, { ...contact, __matchKey: matchKey }];
-    }, []);
-    const { error: contactsError } = await supabase.from('lead_contacts').insert(
-      dedupedContacts.map((contact, index) => ({
-        lead_id: data.id,
-        contact_person_name: contact.name,
-        contact_person_designation: contact.designation,
-        contact_number: contact.phone,
-        email_id: contact.email,
-        is_primary: index === Math.max(dedupedContacts.findIndex((item) => item.isPrimary), 0),
-      })),
-    );
-    if (contactsError) {
-      console.error('[myQPMS Supabase] Lead contacts insert failed', contactsError);
-      if (!['42P01', 'PGRST205'].includes(contactsError.code)) {
-        throw contactsError;
-      }
-      console.warn('[myQPMS Supabase] Lead was inserted, but lead_contacts appears unavailable. Primary contact must be stored directly in leads for this project.');
-      return data.id;
-    }
-    console.info('[myQPMS Supabase] Lead contacts insert success', {
-      leadId: data.id,
-      contactCount: contacts.length,
-    });
-  }
-
-  await logActivity({ leadId: data.id, type: 'Lead Created', message: 'Lead Created', createdBy: lead.created_by_name });
-  return data.id;
+  const result = await createLeadManagementLead(payload, String(lead.id));
+  return result.leadId || result.lead?.id;
 }
 
 export async function updateLeadRemote(leadId, lead) {
   assertConfigured();
-  const payload = appLeadToDbLead(lead);
-  let { error } = await supabase.from('leads').update(payload).eq('id', leadId);
-  if (error && String(error.message || '').includes('service_scope')) {
-    const retryPayload = { ...payload };
-    delete retryPayload.service_scope;
-    const retry = await supabase.from('leads').update(retryPayload).eq('id', leadId);
-    error = retry.error;
-  }
-  if (error) throw error;
-
-  if (lead.contacts) {
-    const dedupedContacts = lead.contacts.reduce((items, contact) => {
-      const key = String(contact.id || contact.email || contact.phone || '').trim().toLowerCase();
-      const fallbackKey = `${String(contact.name || '').trim().toLowerCase()}|${String(contact.designation || '').trim().toLowerCase()}`;
-      const matchKey = key || fallbackKey;
-      if (matchKey && items.some((item) => item.__matchKey === matchKey)) return items;
-      return [...items, { ...contact, __matchKey: matchKey }];
-    }, []);
-    console.info('[myQPMS Supabase] Upserting lead contacts', { leadId, contactCount: dedupedContacts.length });
-    await supabase.from('lead_contacts').delete().eq('lead_id', leadId);
-    const { error: contactsError } = await supabase.from('lead_contacts').insert(
-      dedupedContacts.map((contact, index) => ({
-        lead_id: leadId,
-        contact_person_name: contact.name,
-        contact_person_designation: contact.designation,
-        contact_number: contact.phone,
-        email_id: contact.email,
-        is_primary: index === Math.max(dedupedContacts.findIndex((item) => item.isPrimary), 0),
-      })),
-    );
-    if (contactsError) throw contactsError;
-  }
-
-  await logActivity({ leadId, type: 'Lead Updated', message: 'Lead Updated', createdBy: lead.created_by_name });
+  await updateLeadManagementLead(leadId, {
+    ...appLeadToDbLead(lead),
+    contacts: lead.contacts || [],
+  });
 }
 
 export async function deleteLeadRemote(leadId, createdBy) {

@@ -6,9 +6,10 @@ import StatusBadge from '../components/StatusBadge.jsx';
 import Toast from '../components/Toast.jsx';
 import { useWorkflow } from '../context/workflow-context.js';
 import { useAuth } from '../context/auth-context.js';
-import { bdExecutives, canManageLeads, canViewBdTeam, isFinanceLeadership, isManagement } from '../data/mockUsers.js';
+import { canManageLeads, canViewBdTeam, isFinanceLeadership, isManagement } from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { sendLeadMomEmail } from '../services/mailService.js';
+import { getLeadManagementAssignees } from '../services/api.js';
 
 function formatContactSummary(lead) {
   const contacts = normalizeContacts(lead.contacts, lead);
@@ -30,6 +31,7 @@ const initialLeadForm = {
   priority: '',
   serviceScope: [],
   remarks: '',
+  assigned_bd_email: '',
 };
 
 const initialMomDraft = {
@@ -53,7 +55,6 @@ const sourceOptions = ['LinkedIn', 'Website', 'Campaign', 'Referral', 'Direct Vi
 const stateOptions = ['Tamil Nadu', 'Kerala', 'Karnataka', 'Telangana', 'Andhra Pradesh - 1', 'Andhra Pradesh - 2'];
 const priorityOptions = ['High', 'Medium', 'Low'];
 const statusOptions = ['Active', 'Pending', 'Escalated', 'Completed'];
-const executiveOptions = ['Unassigned', ...bdExecutives.map((user) => user.name)];
 const serviceScopeOptions = ['Hard Services MEP', 'Soft Services Housekeeping', 'Security Services', 'Waste Management', 'Landscaping Irrigation', 'Pest Control', 'Helpdesk CAFM', 'Energy Management', 'Sustainability ESG', 'Other Services'];
 const schedulingValidationMessage = 'Please provide either Site Visit Schedule Date & Time or Next Follow-up Date before sending the Minutes of Meeting.';
 
@@ -414,6 +415,9 @@ export default function CRM() {
   const { leads, siteVisits, addLead, updateLead, deleteLead, saveLeadMomDraft, sendLeadMom, workflowError } = useWorkflow();
   const { user } = useAuth();
   const canEditLeads = canManageLeads(user);
+  const canCreateLeads = canEditLeads && !['Business Head', 'Branch Head'].includes(user?.role);
+  const canDeleteLeads = Boolean(user?.metadata?.lead_delete_enabled)
+    && ['Admin', 'QPMS Admin', 'Developer'].includes(user?.role);
   const canMonitorLeads = canEditLeads || isFinanceLeadership(user);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [leadForm, setLeadForm] = useState(initialLeadForm);
@@ -429,6 +433,13 @@ export default function CRM() {
   const [pendingAction, setPendingAction] = useState('');
   const [highlightedLeadId, setHighlightedLeadId] = useState(null);
   const [leadQueueFilter, setLeadQueueFilter] = useState('active');
+  const [leadSearch, setLeadSearch] = useState('');
+  const [stateFilter, setStateFilter] = useState('');
+  const [assigneeFilter, setAssigneeFilter] = useState('');
+  const [priorityFilter, setPriorityFilter] = useState('');
+  const [stageFilter, setStageFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [liveAssignees, setLiveAssignees] = useState([]);
   const momSectionRef = useRef(null);
   const momFirstFieldRef = useRef(null);
   usePageTitle('Lead Management');
@@ -440,10 +451,29 @@ export default function CRM() {
 
   const visibleLeads = useMemo(() => {
     const isConverted = (lead) => ['Converted', 'Converted to Assessment'].includes(lead.status) || ['Converted', 'Site Visit Scheduled'].includes(lead.stage);
-    if (leadQueueFilter === 'converted') return roleVisibleLeads.filter(isConverted);
-    if (leadQueueFilter === 'archived') return roleVisibleLeads.filter((lead) => ['Archived', 'Lost'].includes(lead.status) || lead.stage === 'Lost');
-    return roleVisibleLeads.filter((lead) => !isConverted(lead) && !['Archived', 'Lost'].includes(lead.status) && lead.stage !== 'Lost');
-  }, [leadQueueFilter, roleVisibleLeads]);
+    let rows = leadQueueFilter === 'converted'
+      ? roleVisibleLeads.filter(isConverted)
+      : leadQueueFilter === 'archived'
+        ? roleVisibleLeads.filter((lead) => ['Archived', 'Lost'].includes(lead.status) || lead.stage === 'Lost')
+        : roleVisibleLeads.filter((lead) => !isConverted(lead) && !['Archived', 'Lost'].includes(lead.status) && lead.stage !== 'Lost');
+    const query = leadSearch.trim().toLowerCase();
+    if (query) {
+      rows = rows.filter((lead) => [
+        lead.leadId,
+        lead.company,
+        lead.city,
+        lead.state,
+        lead.executive,
+        ...normalizeContacts(lead.contacts, lead).flatMap((contact) => [contact.name, contact.phone]),
+      ].join(' ').toLowerCase().includes(query));
+    }
+    if (stateFilter) rows = rows.filter((lead) => lead.state === stateFilter);
+    if (assigneeFilter) rows = rows.filter((lead) => lead.assigned_bd_email === assigneeFilter);
+    if (priorityFilter) rows = rows.filter((lead) => lead.priority === priorityFilter);
+    if (stageFilter) rows = rows.filter((lead) => lead.stage === stageFilter);
+    if (statusFilter) rows = rows.filter((lead) => lead.status === statusFilter);
+    return rows;
+  }, [assigneeFilter, leadQueueFilter, leadSearch, priorityFilter, roleVisibleLeads, stageFilter, stateFilter, statusFilter]);
 
   const selectedLead = visibleLeads.find((lead) => lead.id === selectedLeadId);
   const selectedLeadVisit = siteVisits.find((visit) => String(visit.leadId) === String(selectedLeadId));
@@ -465,7 +495,7 @@ export default function CRM() {
             <button type="button" onClick={(event) => { event.stopPropagation(); openLeadDrawer(row); }} className="focus-ring rounded-lg border border-slate-200 p-2 text-slate-500 transition hover:text-qpms-700 dark:border-slate-800 dark:text-slate-300" aria-label={`Open ${row.company}`}>
               <Eye className="h-4 w-4" />
             </button>
-            {canEditLeads ? (
+            {canDeleteLeads ? (
               <button type="button" onClick={(event) => { event.stopPropagation(); setLeadPendingDelete(row); }} className="focus-ring rounded-lg border border-rose-200 p-2 text-rose-600 transition hover:bg-rose-50 dark:border-rose-500/30 dark:hover:bg-rose-500/10" aria-label={`Delete ${row.company}`}>
                 <Trash2 className="h-4 w-4" />
               </button>
@@ -474,7 +504,7 @@ export default function CRM() {
         ),
       },
     ],
-    [canEditLeads],
+    [canDeleteLeads],
   );
 
   const stats = useMemo(
@@ -486,6 +516,19 @@ export default function CRM() {
     ],
     [roleVisibleLeads, visibleLeads],
   );
+
+  useEffect(() => {
+    if (!canEditLeads) return undefined;
+    let active = true;
+    getLeadManagementAssignees()
+      .then((result) => {
+        if (active) setLiveAssignees(result.assignees || []);
+      })
+      .catch((error) => {
+        if (active) console.warn('[myQPMS Lead Management] Unable to load BD assignees', error.message);
+      });
+    return () => { active = false; };
+  }, [canEditLeads]);
 
   useEffect(() => {
     if (!isFormOpen && !selectedLead && !leadPendingDelete) return undefined;
@@ -560,6 +603,7 @@ export default function CRM() {
     normalizeContacts(leadForm.contacts).forEach((contact) => {
       if (!contact.name.trim()) errors[`${contact.id}.name`] = 'Contact name is required';
       if (!contact.phone.trim()) errors[`${contact.id}.phone`] = 'Contact number is required';
+      if (contact.phone && (!/^[+()\-\s0-9]+$/.test(contact.phone) || contact.phone.replace(/\D/g, '').length < 7 || contact.phone.replace(/\D/g, '').length > 15)) errors[`${contact.id}.phone`] = 'Enter a valid phone number';
       if (contact.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) errors[`${contact.id}.email`] = 'Enter a valid email';
     });
 
@@ -592,9 +636,25 @@ export default function CRM() {
       showToast('Please fix the highlighted lead fields', 'warning');
       return;
     }
+    const submissionKey = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `web-${Date.now()}`;
     try {
       setPendingAction('createLead');
-      const createdLead = await addLead({ ...leadForm, contacts, serviceScope: normalizeServiceScope(leadForm.serviceScope) }, user);
+      const baseSubmission = { ...leadForm, contacts, serviceScope: normalizeServiceScope(leadForm.serviceScope), idempotencyKey: submissionKey };
+      let createdLead;
+      try {
+        createdLead = await addLead(baseSubmission, user);
+      } catch (error) {
+        const detail = error?.response?.data;
+        if (detail?.code !== 'possible_duplicate_lead') throw error;
+        const matches = (detail.duplicates || []).map((lead) => lead.restricted
+          ? lead.message
+          : `${lead.lead_code || lead.id}: ${lead.client_name} - ${lead.site_location}`).join('\n');
+        const confirmed = window.confirm(`Possible duplicate lead found:\n\n${matches}\n\nCreate this as a separate lead?`);
+        if (!confirmed) return;
+        const reason = window.prompt('Reason this is a separate lead/site:')?.trim();
+        if (!reason) throw new Error('Duplicate override reason is required.');
+        createdLead = await addLead({ ...baseSubmission, duplicateOverride: true, duplicateOverrideReason: reason }, user);
+      }
       showToast('Lead created successfully', 'success');
       closeLeadForm();
       setHighlightedLeadId(createdLead.id);
@@ -605,10 +665,17 @@ export default function CRM() {
     }
   }
 
-  function saveLeadChanges() {
-    updateLead(selectedLeadId, draftLead);
-    setIsEditingLead(false);
-    showToast('Lead updated successfully', 'success');
+  async function saveLeadChanges() {
+    try {
+      setPendingAction('updateLead');
+      await updateLead(selectedLeadId, draftLead);
+      setIsEditingLead(false);
+      showToast('Lead updated successfully', 'success');
+    } catch (error) {
+      showToast(`Lead update failed: ${error.message}`, 'error');
+    } finally {
+      setPendingAction('');
+    }
   }
 
   function openMomEditor() {
@@ -698,7 +765,7 @@ export default function CRM() {
     <div className="space-y-7">
       <PageHeader
         title="Lead Management"
-        actions={canEditLeads ? (
+        actions={canCreateLeads ? (
           <button
             type="button"
             onClick={() => setIsFormOpen(true)}
@@ -731,6 +798,21 @@ export default function CRM() {
             </button>
           ))}
         </div>
+      </section>
+
+      <section className="enterprise-card-compact grid gap-3 p-4 md:grid-cols-3 xl:grid-cols-6">
+        <input aria-label="Search leads" value={leadSearch} onChange={(event) => setLeadSearch(event.target.value)} placeholder="Search client, city, contact..." className="rounded-xl border border-slate-200 px-3 py-2 text-sm xl:col-span-2 dark:border-slate-700 dark:bg-slate-950" />
+        <select aria-label="Filter by state" value={stateFilter} onChange={(event) => setStateFilter(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+          <option value="">All states</option>
+          {[...new Set(roleVisibleLeads.map((lead) => lead.state).filter(Boolean))].sort().map((state) => <option key={state}>{state}</option>)}
+        </select>
+        <select aria-label="Filter by assigned BD" value={assigneeFilter} onChange={(event) => setAssigneeFilter(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+          <option value="">All assignees</option>
+          {liveAssignees.map((assignee) => <option key={assignee.id} value={assignee.email}>{assignee.name}</option>)}
+        </select>
+        <select aria-label="Filter by priority" value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"><option value="">All priorities</option>{priorityOptions.map((value) => <option key={value}>{value}</option>)}</select>
+        <select aria-label="Filter by stage" value={stageFilter} onChange={(event) => setStageFilter(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"><option value="">All stages</option>{[...new Set(roleVisibleLeads.map((lead) => lead.stage).filter(Boolean))].sort().map((value) => <option key={value}>{value}</option>)}</select>
+        <select aria-label="Filter by status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"><option value="">All statuses</option>{[...new Set(roleVisibleLeads.map((lead) => lead.status).filter(Boolean))].sort().map((value) => <option key={value}>{value}</option>)}</select>
       </section>
 
       <section className="grid gap-3 md:grid-cols-4">
@@ -783,6 +865,7 @@ export default function CRM() {
               <FormSection title="Lead Information">
                 <SelectField label="Lead Source" value={leadForm.source} onChange={(value) => updateLeadForm('source', value)} options={sourceOptions} required error={leadFormErrors.source} />
                 <SelectField label="Lead Priority" value={leadForm.priority} onChange={(value) => updateLeadForm('priority', value)} options={priorityOptions} required error={leadFormErrors.priority} />
+                {user?.role !== 'BD Executive' ? <SelectField label="Assign BD Executive" value={leadForm.assigned_bd_email} onChange={(value) => updateLeadForm('assigned_bd_email', value)} options={['', ...liveAssignees.map((assignee) => assignee.email)]} /> : null}
                 <div className="md:col-span-2">
                   <TextField label="Remarks" value={leadForm.remarks} onChange={(value) => updateLeadForm('remarks', value)} multiline />
                 </div>
@@ -868,8 +951,9 @@ export default function CRM() {
               <FormSection title="Lead Information">
                 <SelectField label="Lead Source" value={draftLead.source} onChange={(value) => updateDraftLead('source', value)} options={sourceOptions} disabled={!isEditingLead} />
                 <SelectField label="Lead Priority" value={draftLead.priority} onChange={(value) => updateDraftLead('priority', value)} options={priorityOptions} disabled={!isEditingLead} />
-                <SelectField label="Assigned BD Executive" value={draftLead.executive} onChange={(value) => updateDraftLead('executive', value)} options={executiveOptions} disabled={!isEditingLead} />
+                <SelectField label="Assigned BD Executive" value={draftLead.assigned_bd_email || ''} onChange={(value) => updateDraftLead('assigned_bd_email', value)} options={['', ...liveAssignees.map((assignee) => assignee.email)]} disabled={!isEditingLead || user?.role === 'BD Executive'} />
                 <SelectField label="Status" value={draftLead.status} onChange={(value) => updateDraftLead('status', value)} options={statusOptions} disabled={!isEditingLead} />
+                <TextField label="Created By" value={draftLead.created_by_name || '--'} onChange={() => {}} disabled />
                 <div className="md:col-span-2">
                   <TextField label="Remarks" value={draftLead.remarks} onChange={(value) => updateDraftLead('remarks', value)} multiline disabled={!isEditingLead} />
                 </div>

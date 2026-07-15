@@ -229,11 +229,11 @@ export function isApprovalReviewer(user) {
 }
 
 export function canManageLeads(user) {
-  return ['BD Head', 'BD Executive'].includes(user?.role) || isManagement(user);
+  return ['BD Head', 'BD Executive', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer'].includes(user?.role) || isManagement(user);
 }
 
 export function canViewBdTeam(user) {
-  return user?.role === 'BD Head' || isManagement(user) || isFinanceLeadership(user);
+  return ['BD Head', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer'].includes(user?.role) || isManagement(user) || isFinanceLeadership(user);
 }
 
 export function findMockUser(email, password) {

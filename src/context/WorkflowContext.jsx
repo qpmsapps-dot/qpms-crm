@@ -136,6 +136,10 @@ function normalizeLead(lead) {
   const contacts = normalizeContacts(lead.contacts, lead);
   const primaryContact = contacts.find((contact) => contact.isPrimary) || contacts[0];
   const ownerFields = ownerFieldsForExecutive(lead.executive || lead.assigned_bd_executive);
+  const hasAssignedName = Object.prototype.hasOwnProperty.call(lead, 'assigned_bd_executive');
+  const hasAssignedEmail = Object.prototype.hasOwnProperty.call(lead, 'assigned_bd_email');
+  const hasCreatorId = Object.prototype.hasOwnProperty.call(lead, 'created_by_user_id');
+  const hasCreatorName = Object.prototype.hasOwnProperty.call(lead, 'created_by_name');
 
   return {
     ...defaultLeadDetails,
@@ -143,10 +147,10 @@ function normalizeLead(lead) {
     ...ownerFields,
     ...lead,
     executive: lead.executive || ownerFields.executive,
-    assigned_bd_executive: lead.assigned_bd_executive || ownerFields.assigned_bd_executive,
-    assigned_bd_email: lead.assigned_bd_email || ownerFields.assigned_bd_email,
-    created_by_user_id: lead.created_by_user_id || ownerFields.created_by_user_id,
-    created_by_name: lead.created_by_name || ownerFields.created_by_name,
+    assigned_bd_executive: hasAssignedName ? lead.assigned_bd_executive || '' : ownerFields.assigned_bd_executive,
+    assigned_bd_email: hasAssignedEmail ? lead.assigned_bd_email || '' : ownerFields.assigned_bd_email,
+    created_by_user_id: hasCreatorId ? lead.created_by_user_id || '' : ownerFields.created_by_user_id,
+    created_by_name: hasCreatorName ? lead.created_by_name || '' : ownerFields.created_by_name,
     contacts,
     contact: primaryContact?.name || '',
     designation: primaryContact?.designation || '',
@@ -373,20 +377,20 @@ export function WorkflowProvider({ children }) {
   }, [siteVisits]);
 
   async function addLead(lead, user) {
-    const selectedExecutive = user?.role === 'BD Executive' ? user.name : lead.executive || lead.assigned_bd_executive || bdExecutives[0]?.name;
-    const ownerFields = user?.role === 'BD Executive'
-      ? {
-          executive: user.name,
-          assigned_bd_executive: user.name,
-          assigned_bd_email: user.email,
-          created_by_user_id: user.id,
-          created_by_name: user.name,
-        }
-      : ownerFieldsForExecutive(selectedExecutive);
+    const selfAssigned = user?.role === 'BD Executive';
+    const ownerFields = {
+      executive: selfAssigned ? user.name : lead.executive || lead.assigned_bd_executive || 'Unassigned',
+      assigned_bd_executive: selfAssigned ? user.name : lead.assigned_bd_executive || lead.executive || '',
+      assigned_bd_email: selfAssigned ? user.email : lead.assigned_bd_email || '',
+      created_by_user_id: user?.id || '',
+      created_by_name: user?.name || user?.email || '',
+    };
+    const submissionId = lead.idempotencyKey
+      || (isRemoteWorkflowEnabled() && typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now());
     const nextLead = normalizeLead({
       ...lead,
       ...ownerFields,
-      id: isRemoteWorkflowEnabled() && typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now(),
+      id: submissionId,
       leadId: `LD-${Date.now().toString().slice(-5)}`,
       stage: 'New Lead',
       status: 'Active',
@@ -440,34 +444,39 @@ export function WorkflowProvider({ children }) {
     }
   }
 
-  function updateLead(leadId, updater) {
-    setLeads((current) =>
-      current.map((lead) => {
-        if (lead.id !== leadId) return lead;
-        const patch = typeof updater === 'function' ? updater(lead) : updater;
-        const nextLead = normalizeLead({ ...lead, ...patch });
-        if (isRemoteWorkflowEnabled()) {
-          updateLeadRemote(leadId, nextLead).catch((error) => {
-            console.warn('Lead Supabase update failed:', error.message);
-            setBackendStatus('fallback');
-          });
-        }
-        return nextLead;
-      }),
-    );
+  async function updateLead(leadId, updater) {
+    const previousLead = leads.find((lead) => lead.id === leadId);
+    if (!previousLead) throw new Error('Lead not found.');
+    const patch = typeof updater === 'function' ? updater(previousLead) : updater;
+    const nextLead = normalizeLead({ ...previousLead, ...patch });
+    setLeads((current) => current.map((lead) => (lead.id === leadId ? nextLead : lead)));
+    if (!isRemoteWorkflowEnabled()) return nextLead;
+
+    setBackendStatus('saving');
+    setWorkflowError('');
+    try {
+      await updateLeadRemote(leadId, nextLead);
+      await refreshWorkflowData();
+      return nextLead;
+    } catch (error) {
+      setLeads((current) => current.map((lead) => (lead.id === leadId ? previousLead : lead)));
+      setBackendStatus('error');
+      setWorkflowError(`Lead update failed: ${error.message}`);
+      throw error;
+    }
   }
 
   function addLeadActivity(leadId, message) {
-    updateLead(leadId, (lead) => ({
+    void updateLead(leadId, (lead) => ({
       activity: [message, ...(lead.activity || [])].slice(0, 8),
-    }));
+    })).catch((error) => console.warn('Lead activity update failed:', error.message));
   }
 
   function saveLeadMomDraft(leadId, mom) {
-    updateLead(leadId, (lead) => ({
+    void updateLead(leadId, (lead) => ({
       mom: { ...mom, sent: Boolean(mom.sent) },
       activity: ['Lead MOM draft saved', ...(lead.activity || [])].slice(0, 8),
-    }));
+    })).catch((error) => console.warn('Lead MOM summary update failed:', error.message));
     if (isRemoteWorkflowEnabled()) {
       saveLeadMomRemote(leadId, mom, 'Draft').catch((error) => {
         console.warn('Lead MOM Supabase save failed:', error.message);

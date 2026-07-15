@@ -22,6 +22,21 @@ import {
   sendDailyOperationsReports,
 } from './services/dailyOperationsReportService.js';
 import {
+  canAccessLeadModule,
+  canCreateLead,
+  canEditLead,
+  canViewLead,
+  findDuplicateLeads,
+  isActiveLeadProfile,
+  leadActor,
+  leadResponse,
+  loadLeadRelations,
+  normalizeLeadPayload,
+  normalizeLeadRole,
+  resolveAssignee,
+  validateLeadPayload,
+} from './services/leadManagementService.js';
+import {
   USER_MANAGEMENT_PROFILE_SELECT,
   assertUserManagementFoundation,
   attachOperationalCounts,
@@ -2350,13 +2365,9 @@ async function sendMomEmail(payload, type) {
       code: error.code,
       command: error.command,
     });
-    return {
-      ok: true,
-      simulated: true,
-      message: 'MOM email simulated successfully. SMTP failed but demo flow continued.',
-      smtpError: error.message,
-      calendarInviteSent: false,
-    };
+    error.statusCode = 502;
+    error.code = error.code || 'smtp_delivery_failed';
+    throw error;
   }
 
   return { messageId: info.messageId, accepted: info.accepted, rejected: info.rejected, calendarInviteSent: Boolean(calendarInvite) };
@@ -2435,30 +2446,20 @@ function routeSendMom(type) {
     try {
       if (type === 'lead') {
         console.log('[myQPMS Mail API] /send-lead-mom hit', {
-          to: request.body?.to || request.body?.toEmail || request.body?.to_email || '',
-          subject: request.body?.subject || '',
+          leadId: request.body?.leadId || request.body?.lead_id || '',
         });
       }
 
       const result = await sendMomEmail(request.body, type);
       response.json({ ok: true, ...result });
     } catch (error) {
-      if (!error.statusCode) {
-        console.error('[myQPMS Mail API] MOM email simulated after delivery failure', {
-          type,
-          message: error.message,
-          code: error.code,
-          command: error.command,
-        });
-        response.json({
-          ok: true,
-          simulated: true,
-          message: 'MOM email simulated successfully. SMTP failed but demo flow continued.',
-          smtpError: error.message,
-        });
-        return;
-      }
-      response.status(error.statusCode || 500).json({ ok: false, message: error.message || 'Email failed' });
+      response.status(error.statusCode || 500).json({
+        ok: false,
+        code: error.code || 'email_failed',
+        message: error.statusCode === 400
+          ? error.message
+          : 'Email delivery failed. Please try again later.',
+      });
     }
   };
 }
@@ -2557,6 +2558,27 @@ app.post('/api/auth/login', (request, response) => {
 
 function faultTrackerKey(value) {
   return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+async function requireVisibleLeadForMom(request, response, next) {
+  try {
+    const leadId = String(request.body?.leadId || request.body?.lead_id || '').trim();
+    if (!leadId) {
+      response.status(400).json({ ok: false, code: 'lead_id_required', message: 'A lead reference is required.' });
+      return;
+    }
+    const client = requireServiceRoleSupabase();
+    const result = await client.from('leads').select('*').eq('id', leadId).maybeSingle();
+    if (result.error) throw result.error;
+    if (!result.data || !canViewLead(request.leadActor, result.data)) {
+      response.status(403).json({ ok: false, code: 'lead_access_denied', message: 'You cannot access this lead.' });
+      return;
+    }
+    request.authorizedLead = result.data;
+    next();
+  } catch (error) {
+    safeLeadError(response, error);
+  }
 }
 
 function faultTrackerRoleKey(profile) {
@@ -4783,6 +4805,301 @@ app.post(
   },
 );
 
+function requireLeadManagementAccess(request, response, next) {
+  if (!isActiveLeadProfile(request.profile)) {
+    response.status(403).json({ ok: false, code: 'inactive_profile', message: 'Your active employee profile is required.' });
+    return;
+  }
+  const actor = leadActor(request.profile, request.authUser);
+  if (!canAccessLeadModule(actor)) {
+    response.status(403).json({ ok: false, code: 'lead_access_denied', message: 'Your role cannot access Lead Management.' });
+    return;
+  }
+  request.leadActor = actor;
+  next();
+}
+
+function safeLeadError(response, error) {
+  const status = Number(error?.statusCode || error?.status || 500);
+  const clientMessage = status >= 500
+    ? 'Lead Management is temporarily unavailable. Please try again.'
+    : error.message || 'Lead request failed.';
+  if (status >= 500) {
+    console.error('[myQPMS Lead Management] request failed', sanitizeSupabaseDiagnosticError(error));
+  }
+  response.status(status).json({ ok: false, code: error?.code || 'lead_request_failed', message: clientMessage });
+}
+
+function leadMatchesApiFilters(lead, contacts, query) {
+  const text = String(query.search || '').trim().toLowerCase();
+  const equals = (value, filter) => !String(filter || '').trim()
+    || String(value || '').trim().toLowerCase() === String(filter).trim().toLowerCase();
+  if (!equals(lead.state, query.state)) return false;
+  if (!equals(lead.assigned_bd_email, query.assigned_bd_email || query.assignee)) return false;
+  if (!equals(lead.lead_priority, query.priority)) return false;
+  if (!equals(lead.lead_stage, query.stage)) return false;
+  if (!equals(lead.status, query.status)) return false;
+  if (!text) return true;
+  const haystack = [
+    lead.lead_code,
+    lead.client_name,
+    lead.city,
+    lead.state,
+    lead.assigned_bd_executive,
+    ...contacts.flatMap((contact) => [contact.contact_person_name, contact.contact_number]),
+  ].join(' ').toLowerCase();
+  return haystack.includes(text);
+}
+
+async function listLeadManagement(request, response) {
+  try {
+    const client = requireServiceRoleSupabase();
+    const result = await client.from('leads').select('*').order('created_at', { ascending: false }).limit(1000);
+    if (result.error) throw result.error;
+    const visible = (result.data || []).filter((lead) => canViewLead(request.leadActor, lead));
+    const relations = await loadLeadRelations(client, visible.map((lead) => lead.id));
+    const filtered = visible.filter((lead) => leadMatchesApiFilters(lead, relations.contacts[lead.id] || [], request.query));
+    response.json({
+      ok: true,
+      count: filtered.length,
+      role: request.leadActor.role,
+      scope: request.leadActor.role === 'BD Executive' ? 'own' : request.leadActor.role === 'Branch Head' ? 'state' : request.leadActor.role === 'Business Head' ? 'business' : 'all',
+      leads: filtered.map((lead) => leadResponse(lead, relations)),
+    });
+  } catch (error) {
+    safeLeadError(response, error);
+  }
+}
+
+async function getLeadManagement(request, response) {
+  try {
+    const client = requireServiceRoleSupabase();
+    const result = await client.from('leads').select('*').eq('id', request.params.leadId).maybeSingle();
+    if (result.error) throw result.error;
+    if (!result.data) {
+      response.status(404).json({ ok: false, code: 'lead_not_found', message: 'Lead not found.' });
+      return;
+    }
+    if (!canViewLead(request.leadActor, result.data)) {
+      response.status(403).json({ ok: false, code: 'lead_access_denied', message: 'You cannot access this lead.' });
+      return;
+    }
+    const relations = await loadLeadRelations(client, [result.data.id]);
+    response.json({ ok: true, lead: leadResponse(result.data, relations) });
+  } catch (error) {
+    safeLeadError(response, error);
+  }
+}
+
+async function createLeadManagement(request, response) {
+  try {
+    const actor = request.leadActor;
+    if (!canCreateLead(actor)) {
+      response.status(403).json({ ok: false, code: 'lead_create_denied', message: 'Your role cannot create leads.' });
+      return;
+    }
+    const idempotencyKey = String(request.headers['idempotency-key'] || request.body?.idempotency_key || request.body?.idempotencyKey || '').trim();
+    if (!idempotencyKey || idempotencyKey.length > 160) {
+      response.status(400).json({ ok: false, code: 'invalid_idempotency_key', message: 'A valid submission key is required.' });
+      return;
+    }
+    const lead = normalizeLeadPayload(request.body);
+    const errors = validateLeadPayload(lead);
+    if (errors.length) {
+      response.status(400).json({ ok: false, code: 'lead_validation_failed', message: errors.join(' '), errors });
+      return;
+    }
+    const client = requireServiceRoleSupabase();
+    const replayResult = await client
+      .from('leads')
+      .select('*')
+      .eq('created_by_user_id', actor.authUserId)
+      .eq('idempotency_key', idempotencyKey)
+      .maybeSingle();
+    if (replayResult.error) throw replayResult.error;
+    if (replayResult.data) {
+      const relations = await loadLeadRelations(client, [replayResult.data.id]);
+      response.status(200).json({
+        ok: true,
+        idempotent_replay: true,
+        leadId: replayResult.data.id,
+        lead: leadResponse(replayResult.data, relations),
+      });
+      return;
+    }
+    const assignee = await resolveAssignee(client, actor, lead.assigned_bd_email);
+    const duplicates = await findDuplicateLeads(client, actor, lead);
+    if (duplicates.length && !lead.duplicate_override) {
+      response.status(409).json({
+        ok: false,
+        code: 'possible_duplicate_lead',
+        message: 'A matching lead already exists for this client, site, and contact.',
+        duplicates,
+      });
+      return;
+    }
+    if (duplicates.length && !lead.duplicate_override_reason) {
+      response.status(400).json({ ok: false, code: 'duplicate_override_reason_required', message: 'Explain why this is a separate lead before continuing.' });
+      return;
+    }
+
+    const rpcLead = {
+      ...lead,
+      business: String(request.body?.business || assignee?.business || actor.business || '').trim(),
+      branch: String(request.body?.branch || assignee?.branch || '').trim(),
+      assigned_bd_executive: assignee?.name || null,
+      assigned_bd_email: assignee?.email || null,
+      source: String(request.body?.source_context || request.body?.sourceContext || 'authenticated_backend'),
+      metadata: {
+        created_via: String(request.body?.source_context || request.body?.sourceContext || 'authenticated_backend'),
+        creator_role: actor.role,
+        creator_employee_code: actor.employeeCode || null,
+        duplicate_override: Boolean(duplicates.length && lead.duplicate_override),
+        duplicate_override_reason: lead.duplicate_override_reason || null,
+        duplicate_match_ids: duplicates.map((item) => item.id).filter(Boolean),
+        duplicate_restricted_match: duplicates.some((item) => item.restricted === true),
+      },
+    };
+    const rpc = await client.rpc('rpc_create_bd_lead_atomic', {
+      p_lead: rpcLead,
+      p_contacts: lead.contacts,
+      p_actor: { auth_user_id: actor.authUserId, profile_id: actor.profileId, name: actor.name, email: actor.email, role: actor.role },
+      p_idempotency_key: idempotencyKey,
+    });
+    if (rpc.error) throw rpc.error;
+    const created = rpc.data?.lead || {};
+    const createdContacts = rpc.data?.contacts || [];
+    response.status(rpc.data?.idempotent_replay ? 200 : 201).json({
+      ok: true,
+      idempotent_replay: Boolean(rpc.data?.idempotent_replay),
+      leadId: created.id,
+      lead: {
+        ...created,
+        contacts: createdContacts,
+        primary_contact: createdContacts.find((contact) => contact.is_primary) || createdContacts[0] || null,
+        activity_logs: [],
+      },
+    });
+  } catch (error) {
+    if (error?.code === '23505') {
+      error.statusCode = 409;
+      error.code = 'duplicate_submission';
+      error.message = 'This lead submission was already processed.';
+    }
+    safeLeadError(response, error);
+  }
+}
+
+async function updateLeadManagement(request, response) {
+  try {
+    const client = requireServiceRoleSupabase();
+    const existingResult = await client.from('leads').select('*').eq('id', request.params.leadId).maybeSingle();
+    if (existingResult.error) throw existingResult.error;
+    const existing = existingResult.data;
+    if (!existing) {
+      response.status(404).json({ ok: false, code: 'lead_not_found', message: 'Lead not found.' });
+      return;
+    }
+    if (!canEditLead(request.leadActor, existing)) {
+      response.status(403).json({ ok: false, code: 'lead_update_denied', message: 'You cannot edit this lead.' });
+      return;
+    }
+    const existingRelations = await loadLeadRelations(client, [existing.id]);
+    const existingContacts = (existingRelations.contacts[existing.id] || []).map((contact) => ({
+      name: contact.contact_person_name,
+      designation: contact.contact_person_designation,
+      phone: contact.contact_number,
+      email: contact.email_id,
+      isPrimary: contact.is_primary,
+    }));
+    const merged = normalizeLeadPayload({
+      ...existing,
+      ...request.body,
+      contacts: Array.isArray(request.body?.contacts) ? request.body.contacts : existingContacts,
+    });
+    const errors = validateLeadPayload(merged, { creating: false });
+    if (errors.length) {
+      response.status(400).json({ ok: false, code: 'lead_validation_failed', message: errors.join(' '), errors });
+      return;
+    }
+    const requestedAssignee = Object.prototype.hasOwnProperty.call(request.body || {}, 'assigned_bd_email')
+      || Object.prototype.hasOwnProperty.call(request.body || {}, 'assignedBdEmail');
+    const assignee = requestedAssignee
+      ? await resolveAssignee(client, request.leadActor, merged.assigned_bd_email)
+      : null;
+    const patch = {
+      client_name: merged.client_name,
+      company_name: merged.client_name,
+      industry_type: merged.industry_type,
+      lead_source: merged.lead_source,
+      site_location: merged.site_location,
+      state: merged.state,
+      city: merged.city,
+      lead_priority: merged.lead_priority,
+      service_scope: merged.service_scope,
+      remarks: merged.remarks || null,
+      lead_stage: merged.lead_stage,
+      status: merged.status,
+      normalized_client_name: merged.client_name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(),
+      normalized_site_location: merged.site_location.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(),
+      updated_at: new Date().toISOString(),
+      ...(requestedAssignee ? { assigned_bd_executive: assignee?.name || null, assigned_bd_email: assignee?.email || null } : {}),
+    };
+    const updateResult = await client.rpc('rpc_update_bd_lead_atomic', {
+      p_lead_id: existing.id,
+      p_lead: patch,
+      p_contacts: merged.contacts,
+      p_actor: {
+        auth_user_id: request.leadActor.authUserId,
+        name: request.leadActor.name,
+        role: request.leadActor.role,
+      },
+    });
+    if (updateResult.error) throw updateResult.error;
+    const relations = await loadLeadRelations(client, [existing.id]);
+    response.json({ ok: true, lead: leadResponse(updateResult.data?.lead || existing, relations) });
+  } catch (error) {
+    safeLeadError(response, error);
+  }
+}
+
+async function listLeadAssignees(request, response) {
+  try {
+    const client = requireServiceRoleSupabase();
+    const result = await client.from('profiles').select('id,auth_user_id,full_name,display_name,employee_code,email,role,status,is_active,business,branch,state').eq('is_active', true);
+    if (result.error) throw result.error;
+    const assignees = (result.data || [])
+      .filter((profile) => normalizeLeadRole(profile.role) === 'BD Executive' && isActiveLeadProfile(profile))
+      .map((profile) => ({
+        id: profile.id,
+        auth_user_id: profile.auth_user_id,
+        name: profile.full_name || profile.display_name || profile.employee_code || profile.email,
+        email: String(profile.email || '').toLowerCase(),
+        employee_code: profile.employee_code,
+        business: profile.business,
+        branch: profile.branch,
+        state: profile.state,
+      }));
+    response.json({ ok: true, assignees });
+  } catch (error) {
+    safeLeadError(response, error);
+  }
+}
+
+app.get('/api/lead-management/leads', requireSupabaseJwt, requireLeadManagementAccess, listLeadManagement);
+app.get('/api/lead-management/leads/:leadId', requireSupabaseJwt, requireLeadManagementAccess, getLeadManagement);
+app.post('/api/lead-management/leads', requireSupabaseJwt, requireLeadManagementAccess, createLeadManagement);
+app.patch('/api/lead-management/leads/:leadId', requireSupabaseJwt, requireLeadManagementAccess, updateLeadManagement);
+app.get('/api/lead-management/assignees', requireSupabaseJwt, requireLeadManagementAccess, listLeadAssignees);
+
+// Backward-compatible mobile aliases use the same production authorization and
+// persistence handlers. The legacy declarations below are therefore unreachable
+// for these exact paths and can be removed after older app versions are retired.
+app.get('/api/mobile/leads', requireSupabaseJwt, requireLeadManagementAccess, listLeadManagement);
+app.get('/api/mobile/leads/:leadId', requireSupabaseJwt, requireLeadManagementAccess, getLeadManagement);
+app.post('/api/mobile/leads', requireSupabaseJwt, requireLeadManagementAccess, createLeadManagement);
+app.patch('/api/mobile/leads/:leadId', requireSupabaseJwt, requireLeadManagementAccess, updateLeadManagement);
+
 app.get('/api/mobile/leads', requireSupabaseJwt, requireMobileLeadAccess, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
@@ -6190,7 +6507,7 @@ app.post(
   },
 );
 
-app.post('/send-lead-mom', routeSendMom('lead'));
+app.post('/send-lead-mom', requireSupabaseJwt, requireLeadManagementAccess, requireVisibleLeadForMom, routeSendMom('lead'));
 app.post('/send-sitevisit-mom', routeSendMom('sitevisit'));
 
 const REPORT_EMAIL_SCHEDULER_POLL_MS = 30 * 1000;

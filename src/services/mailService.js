@@ -1,4 +1,4 @@
-import { api } from './api.js';
+import { api, sendAuthenticatedLeadMom } from './api.js';
 
 const mailRoutes = {
   leadMom: '/send-lead-mom',
@@ -31,8 +31,9 @@ function throwMailError(error, route) {
 
 export async function sendLeadMomEmail(mom, lead) {
   try {
-    const response = await api.post(mailRoutes.leadMom, {
+    return await sendAuthenticatedLeadMom({
       ...mom,
+      leadId: lead?.id,
       clientName: lead?.company,
       company: lead?.company,
       primaryContact: lead?.contact,
@@ -42,7 +43,6 @@ export async function sendLeadMomEmail(mom, lead) {
       assignedBdExecutive: lead?.assigned_bd_executive || lead?.executive,
       assignedBdEmail: lead?.assigned_bd_email,
     });
-    return response.data;
   } catch (error) {
     throwMailError(error, mailRoutes.leadMom);
   }

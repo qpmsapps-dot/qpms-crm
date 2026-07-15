@@ -1,5 +1,6 @@
+const viteEnv = import.meta.env || {};
 const explicitDemoAuthFlag = String(
-  import.meta.env.VITE_ENABLE_DEMO_AUTH ?? import.meta.env.VITE_DEMO_MODE ?? '',
+  viteEnv.VITE_ENABLE_DEMO_AUTH ?? viteEnv.VITE_DEMO_MODE ?? '',
 ).trim().toLowerCase();
 
 export const isDemoAuthEnabled = explicitDemoAuthFlag === 'true';
@@ -23,9 +24,35 @@ export const roleGroups = {
 
 export const protectedNavRoutes = ['/dashboard', '/crm', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/fault-tracker', '/assets', '/reports', '/employees', '/store-master', '/settings'];
 
+function normalizedRoleKey(role = '') {
+  return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+export function normalizeCanonicalRole(role = '') {
+  const aliases = {
+    BDEXECUTIVE: 'BD Executive',
+    BUSINESSDEVELOPMENTEXECUTIVE: 'BD Executive',
+    BDHEAD: 'BD Head',
+    BUSINESSDEVELOPMENTHEAD: 'BD Head',
+    BUSINESSHEAD: 'Business Head',
+    BRANCHHEAD: 'Branch Head',
+    BH: 'Branch Head',
+    ADMIN: 'Admin',
+    QPMSADMIN: 'QPMS Admin',
+    DEVELOPER: 'Developer',
+    DEV: 'Developer',
+    ITADMIN: 'Developer',
+    MANAGEMENTITADMIN: 'Developer',
+    COO: 'COO',
+    MD: 'MD',
+  };
+  return aliases[normalizedRoleKey(role)] || String(role || '').trim();
+}
+
 export function normalizeAppRole(role = '') {
-  const match = Object.entries(roleGroups).find(([, aliases]) => aliases.includes(role));
-  return match?.[0] || role || 'BD';
+  const canonical = normalizeCanonicalRole(role);
+  const match = Object.entries(roleGroups).find(([, aliases]) => aliases.includes(canonical));
+  return match?.[0] || canonical || 'BD';
 }
 
 export function hasAnyRole(user, allowedRoles = []) {
@@ -90,6 +117,7 @@ export function canAccessStoreMaster(user) {
 export function canAccessRoute(user, pathname) {
   if (pathname.startsWith('/store-master')) return canAccessStoreMaster(user);
   if (pathname.startsWith('/fault-tracker')) return canAccessFaultTracker(user);
+  if (pathname.startsWith('/crm') && ['Business Head', 'Branch Head'].includes(normalizeCanonicalRole(user?.rawRole || user?.role))) return true;
   return hasAnyRole(user, routeAllowedRoles(pathname));
 }
 

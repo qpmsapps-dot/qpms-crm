@@ -260,6 +260,53 @@ export function updateStoreMasterRecord(id, payload) {
   });
 }
 
+export function getLeadManagementLeads(params = {}) {
+  return adminApiRequest({
+    method: 'GET',
+    url: '/api/lead-management/leads',
+    params,
+  });
+}
+
+export function getLeadManagementLead(leadId) {
+  return adminApiRequest({
+    method: 'GET',
+    url: `/api/lead-management/leads/${encodeURIComponent(leadId)}`,
+  });
+}
+
+export function createLeadManagementLead(payload, idempotencyKey) {
+  return adminApiRequest({
+    method: 'POST',
+    url: '/api/lead-management/leads',
+    data: payload,
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+}
+
+export function updateLeadManagementLead(leadId, payload) {
+  return adminApiRequest({
+    method: 'PATCH',
+    url: `/api/lead-management/leads/${encodeURIComponent(leadId)}`,
+    data: payload,
+  });
+}
+
+export function sendAuthenticatedLeadMom(payload) {
+  return adminApiRequest({
+    method: 'POST',
+    url: '/send-lead-mom',
+    data: payload,
+  });
+}
+
+export function getLeadManagementAssignees() {
+  return adminApiRequest({
+    method: 'GET',
+    url: '/api/lead-management/assignees',
+  });
+}
+
 api.interceptors.request.use((config) => {
   if (!API_BASE) {
     return Promise.reject(

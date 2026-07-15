@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import { api, clearBackendToken, readBackendToken, setBackendToken } from '../services/api.js';
-import { normalizeAppRole } from '../utils/authRoles.js';
+import { normalizeCanonicalRole } from '../utils/authRoles.js';
 import {
   createDemoReadOnlyUser,
   isDemoReadOnlyCredentials,
@@ -32,7 +32,7 @@ function isSetPasswordRoute() {
 function profileToUser(profile, sessionUser) {
   if (!profile && !sessionUser) return null;
   const email = profile?.email || sessionUser?.email || '';
-  const role = normalizeAppRole(profile?.role || sessionUser?.user_metadata?.role || 'BD');
+  const role = normalizeCanonicalRole(profile?.role || sessionUser?.user_metadata?.role || 'BD Executive');
   const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
   const authMetadata = sessionUser?.user_metadata || {};
   const emailPrefix = email ? email.split('@')[0] : '';
