@@ -108,6 +108,8 @@ const KM_RECALC_COOLDOWN_MS = 60 * 1000;
 const KM_RECALC_RUNNING_MESSAGE = "Recalculation already running. Please wait.";
 const MOVEMENT_FRESHNESS_MS = 5 * 60 * 1000;
 const MOVEMENT_SPEED_THRESHOLD_MPS = 1;
+const ENABLE_OPERATIONS_MAP_COORDINATE_WARNINGS =
+  import.meta.env.DEV && import.meta.env.VITE_FO_COORDINATE_WARNINGS === "true";
 const ACTIVE_OPERATIONAL_STATUSES = new Set([
   "ON_SITE",
   "ON_TRAVEL",
@@ -588,11 +590,11 @@ function isValidGpsLog(log) {
 }
 
 function locationTimestampMs(log) {
-  return new Date(log?.captured_at || log?.recorded_at || log?.logged_at || log?.created_at || log?.last_seen_at || 0).getTime();
+  return new Date(log?.captured_at || log?.logged_at || log?.created_at || log?.last_seen_at || 0).getTime();
 }
 
 function routePointTime(log) {
-  return new Date(log?.captured_at || log?.recorded_at || log?.logged_at || log?.created_at || 0);
+  return new Date(log?.captured_at || log?.logged_at || log?.created_at || 0);
 }
 
 function distanceKmBetween(a, b) {
@@ -907,6 +909,7 @@ function isValidLatLng(lat, lng) {
 }
 
 function warnSkippedInvalidCoordinate({ employeeCode, source, lat, lng }) {
+  if (!ENABLE_OPERATIONS_MAP_COORDINATE_WARNINGS) return;
   console.warn("[Operations Map] skipped invalid coordinate", {
     employeeCode: employeeCode || "--",
     source: source || "unknown",
@@ -1462,7 +1465,25 @@ function payableKmFromAttendance(row) {
   const value = candidates
     .map((item) => Number(item))
     .find((item) => Number.isFinite(item));
-  return value || 0;
+  const storedPayableKm = value || 0;
+  const metadata = attendanceMetadata(row);
+  const adjustmentIncluded =
+    metadata.approved_adjustment_included_in_payable === true ||
+    String(metadata.approved_adjustment_included_in_payable || "").toLowerCase() === "true";
+  const includedAdjustmentKm = adjustmentIncluded
+    ? numberOrNull(metadata.approved_adjustment_km) || 0
+    : 0;
+  return Math.max(0, storedPayableKm - includedAdjustmentKm);
+}
+
+function includedApprovedAdjustmentKmFromAttendance(row) {
+  const metadata = attendanceMetadata(row);
+  const adjustmentIncluded =
+    metadata.approved_adjustment_included_in_payable === true ||
+    String(metadata.approved_adjustment_included_in_payable || "").toLowerCase() === "true";
+  if (!adjustmentIncluded) return null;
+  const adjustmentKm = numberOrNull(metadata.approved_adjustment_km);
+  return adjustmentKm !== null && adjustmentKm > 0 ? adjustmentKm : 0;
 }
 
 function approvedMissingCheckoutAdjustmentKmFromVisit(visit) {
@@ -1668,9 +1689,13 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
     attendance: record,
     visits: foVisits,
   });
-  const basePayableKm = payableRouteKm.km;
-  const missingCheckoutAdjustmentKm =
-    approvedMissingCheckoutAdjustmentKm(foVisits);
+  const includedAdjustmentKm = includedApprovedAdjustmentKmFromAttendance(record);
+  const basePayableKm = includedAdjustmentKm === null
+    ? payableRouteKm.km
+    : Math.max(0, payableRouteKm.km - includedAdjustmentKm);
+  const missingCheckoutAdjustmentKm = includedAdjustmentKm === null
+    ? approvedMissingCheckoutAdjustmentKm(foVisits)
+    : includedAdjustmentKm;
   const payableKm =
     basePayableKm + missingCheckoutAdjustmentKm;
   const foSafeKm = actualTravelKmFromAttendanceOrLogs(record, foLogs, foVisits);
@@ -4238,7 +4263,7 @@ function freshSpeedIndicatesMovement(speed, timestamp) {
 
 function latestLogWithFreshSpeed(logs = []) {
   return [...logs]
-    .filter((log) => freshSpeedIndicatesMovement(log?.speed, log?.captured_at || log?.logged_at || log?.recorded_at || log?.created_at))
+    .filter((log) => freshSpeedIndicatesMovement(log?.speed, log?.captured_at || log?.logged_at || log?.created_at))
     .sort((a, b) => routePointTime(b) - routePointTime(a))[0] || null;
 }
 
@@ -5288,12 +5313,17 @@ function isValidGpsTrailLog(log) {
   );
 }
 
-async function fetchLocationLogsByAttendanceId(attendanceId) {
-  const { data, error } = await supabase
+async function fetchLocationLogsByAttendanceId(attendanceId, { fromIso = null, toIso = null } = {}) {
+  let query = supabase
     .from("fo_location_logs")
     .select("*")
     .eq("attendance_id", attendanceId)
+    .order("captured_at", { ascending: true })
     .limit(10000);
+  if (fromIso && toIso) {
+    query = query.gte("captured_at", fromIso).lte("captured_at", toIso);
+  }
+  const { data, error } = await query;
   if (error) throw error;
   return data || [];
 }
@@ -5336,7 +5366,7 @@ function gpsTrailFromLogs(logs = [], stats = createRouteMapCoordinateStats()) {
     const point = normalizeRouteMapCoordinate(
       [Number(log.latitude), Number(log.longitude)],
       stats,
-      `gps_log_${log.id || log.captured_at || log.recorded_at || log.created_at || normalizedPoints.length}`,
+      `gps_log_${log.id || log.captured_at || log.logged_at || log.created_at || normalizedPoints.length}`,
     );
     if (!point) return;
     const previous = normalizedPoints.at(-1);
@@ -5347,7 +5377,7 @@ function gpsTrailFromLogs(logs = [], stats = createRouteMapCoordinateStats()) {
     normalizedPoints.push({
       point,
       timestampMs: routePointTime(log).getTime(),
-      source: log.id || log.captured_at || log.recorded_at || log.created_at || normalizedPoints.length,
+      source: log.id || log.captured_at || log.logged_at || log.created_at || normalizedPoints.length,
     });
   });
   const segments = [];
@@ -6189,6 +6219,7 @@ function FieldOfficerDetailsView({
   canReviewCheckoutExceptions = false,
   canApproveCheckoutMissingKmReviews = false,
   onActivityUploadSaved,
+  onRouteGpsEvidenceActive,
 }) {
   const [selectedVisitIndex, setSelectedVisitIndex] = useState(0);
   const [photoFilter, setPhotoFilter] = useState("All");
@@ -6870,6 +6901,8 @@ function FieldOfficerDetailsView({
     travelLegs.find((leg) => leg?.type === "start_to_first_checkin") || null;
   const payableKmSourceReason =
     gpsFallbackReview.reason ||
+    attendanceMeta.selected_km_source_reason ||
+    attendanceMeta.payable_km_source_reason ||
     firstPreSiteLeg?.payable_km_source_reason ||
     attendanceMeta.payable_km_source_detail ||
     attendanceMeta.selected_km_source ||
@@ -7043,6 +7076,10 @@ function FieldOfficerDetailsView({
   const activeDetailTab = tabs.some(([id]) => id === activeTab)
     ? activeTab
     : "overview";
+  useEffect(() => {
+    onRouteGpsEvidenceActive?.(activeDetailTab === "route" || routeMapOpen ? officer?.id || null : null);
+    return () => onRouteGpsEvidenceActive?.(null);
+  }, [activeDetailTab, officer?.id, onRouteGpsEvidenceActive, routeMapOpen]);
   const printReport = () => {
     const previousTitle = document.title;
     const reportTitle = buildFieldActivityReportFilename(
@@ -9504,6 +9541,7 @@ export default function FOActivities() {
   const [attendanceKpiRows, setAttendanceKpiRows] = useState([]);
   const [siteVisitRows, setSiteVisitRows] = useState([]);
   const [selectedRouteLogs, setSelectedRouteLogs] = useState([]);
+  const [selectedRouteEvidenceOfficerId, setSelectedRouteEvidenceOfficerId] = useState(null);
   const [mainMapRouteLines, setMainMapRouteLines] = useState([]);
   const [mainMapRouteMessage, setMainMapRouteMessage] = useState(null);
   const [selectedActivitySubmissions, setSelectedActivitySubmissions] = useState([]);
@@ -9547,7 +9585,7 @@ export default function FOActivities() {
       try {
         const fromIso = formatDateForDb(selectedRange.from);
         const toIso = formatDateForDb(selectedRange.to);
-        const [attendanceRes, siteVisits, liveStatusRows, profilesRes, logsRes] =
+        const [attendanceRes, siteVisits, liveStatusRows, profilesRes] =
           await Promise.all([
             supabase
               .from("fo_attendance")
@@ -9565,31 +9603,23 @@ export default function FOActivities() {
               )
               .eq("is_active", true)
               .limit(5000),
-            supabase
-              .from("fo_location_logs")
-              .select("*")
-              .gte("captured_at", fromIso)
-              .lte("captured_at", toIso)
-              .order("captured_at", { ascending: true })
-              .limit(20000),
           ]);
+        const errors = [attendanceRes, profilesRes]
+          .map((res) => res?.error)
+          .filter(Boolean);
         console.debug("FO_SUPABASE_QUERY_RESULTS", {
           attendanceCount: attendanceRes.data?.length || 0,
           attendanceError: attendanceRes.error || null,
           liveStatusCount: liveStatusRows.length,
           profilesCount: profilesRes.data?.length || 0,
           profilesError: profilesRes.error || null,
-          locationLogsCount: logsRes.data?.length || 0,
-          locationLogsError: logsRes.error || null,
         });
-        console.warn("FO_SUPABASE_ERRORS", {
-          attendance: attendanceRes.error || null,
-          profiles: profilesRes.error || null,
-          locationLogs: logsRes.error || null,
-        });
-        const errors = [attendanceRes, profilesRes, logsRes]
-          .map((res) => res?.error)
-          .filter(Boolean);
+        if (errors.length) {
+          console.warn("FO_SUPABASE_ERRORS", {
+            attendance: attendanceRes.error || null,
+            profiles: profilesRes.error || null,
+          });
+        }
         if (errors.length) {
           throw errors[0];
         }
@@ -9607,7 +9637,7 @@ export default function FOActivities() {
           visits: siteVisits,
           liveStatus: liveStatusRows,
           profiles: profileRows,
-          logs: logsRes.data || [],
+          logs: [],
           statusDate: toDateInputValue(new Date()),
           currentUser: user,
         });
@@ -9967,6 +9997,9 @@ export default function FOActivities() {
     officers.find((officer) => officer.id === mapRouteOfficerId) ||
     null;
   const routeOfficer = selectedOfficer || mapRouteOfficer;
+  const shouldLoadRouteLogs = Boolean(
+    mapRouteOfficer || (selectedOfficer && selectedRouteEvidenceOfficerId === selectedOfficer.id),
+  );
   const supportOfficer =
     filteredOfficers.find((officer) => officer.id === supportOfficerId) ||
     officers.find((officer) => officer.id === supportOfficerId) ||
@@ -9997,7 +10030,7 @@ export default function FOActivities() {
   useEffect(() => {
     let cancelled = false;
     async function loadSelectedRouteLogs() {
-      if (!routeOfficer || !isSupabaseConfigured || !supabase) {
+      if (!shouldLoadRouteLogs || !routeOfficer || !isSupabaseConfigured || !supabase) {
         setSelectedRouteLogs([]);
         return;
       }
@@ -10009,13 +10042,13 @@ export default function FOActivities() {
           ? routeOfficer.attendance?.id || null
           : null;
       const fetchedRows = [];
-      const timeColumns = ["captured_at", "recorded_at", "created_at", "logged_at"];
+      const timeColumns = ["captured_at", "logged_at", "created_at"];
       let source = "employee_code_date";
 
       try {
         if (attendanceId) {
           try {
-            fetchedRows.push(...(await fetchLocationLogsByAttendanceId(attendanceId)));
+            fetchedRows.push(...(await fetchLocationLogsByAttendanceId(attendanceId, { fromIso, toIso })));
           } catch (attendanceError) {
             console.warn("[myQPMS FO] Attendance GPS lookup failed; using employee/date fallback.", attendanceError);
           }
@@ -10032,7 +10065,12 @@ export default function FOActivities() {
                 toIso,
               });
               fetchedRows.push(...rows);
+              if (fetchedRows.length) {
+                source = `${idColumn}_${timeColumn}`;
+                break;
+              }
             }
+            if (fetchedRows.length) break;
           }
         }
       } catch (error) {
@@ -10047,7 +10085,7 @@ export default function FOActivities() {
       fetchedRows.forEach((row, index) => {
         routeRowsById.set(
           row.id ||
-            `${row.captured_at || row.recorded_at || row.logged_at || row.created_at || index}-${row.latitude}-${row.longitude}`,
+            `${row.captured_at || row.logged_at || row.created_at || index}-${row.latitude}-${row.longitude}`,
           row,
         );
       });
@@ -10069,7 +10107,7 @@ export default function FOActivities() {
     return () => {
       cancelled = true;
     };
-  }, [routeOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate]);
+  }, [routeOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate, shouldLoadRouteLogs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -10948,6 +10986,7 @@ export default function FOActivities() {
         onActivityUploadSaved={() =>
           setSelectedActivityReloadToken((value) => value + 1)
         }
+        onRouteGpsEvidenceActive={setSelectedRouteEvidenceOfficerId}
       />
     );
   }

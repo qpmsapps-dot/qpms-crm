@@ -8,6 +8,11 @@ const MAX_SPEED_KMPH = 120;
 const DUPLICATE_WINDOW_SECONDS = 10;
 const MIN_MEANINGFUL_FINAL_RETURN_LEG_KM = 0.05;
 const DEFAULT_MAX_GOOGLE_DIRECTIONS_CALLS = 25;
+// Conservative review defaults. They can be overridden per call or through
+// environment configuration without changing the payable source rule.
+const DEFAULT_FINAL_RETURN_MISMATCH_MIN_ROUTE_KM = 5;
+const DEFAULT_FINAL_RETURN_MISMATCH_MAX_GPS_RATIO = 0.25;
+const DEFAULT_FINAL_RETURN_MISMATCH_MIN_DIFFERENCE_KM = 5;
 const SWITCH_TIME_ANCHOR_MAX_GAP_MINUTES = 60;
 const PRE_SITE_DETOUR_MIN_EXTRA_KM = 2;
 const PRE_SITE_DETOUR_RATIO = 1.35;
@@ -541,6 +546,252 @@ function sumStoredRouteKm(visits = []) {
     const routeKm = normalizeNumber(visit.route_km);
     return Number.isFinite(routeKm) && routeKm > 0 ? sum + routeKm : sum;
   }, 0);
+}
+
+function completedSiteVisit(visit) {
+  const status = String(visit?.status || visit?.visit_status || '').trim().toLowerCase();
+  return Boolean(
+    visit?.check_out_time ||
+      visit?.checkout_time ||
+      status.includes('checked out') ||
+      status.includes('completed') ||
+      status.includes('closed'),
+  );
+}
+
+function approvedMissingCheckoutKm(visits = []) {
+  const seen = new Set();
+  return visits.reduce((sum, visit, index) => {
+    const key = String(
+      visit?.id ||
+        `${visit?.employee_code || visit?.fo_user_id || 'visit'}:${visit?.check_in_time || index}:${visit?.check_out_time || visit?.checkout_time || ''}`,
+    );
+    if (seen.has(key)) return sum;
+    seen.add(key);
+    const metadata = safeVisitMetadata(visit);
+    if (delayedCheckoutReviewStatus(metadata) !== 'approved') return sum;
+    const km = normalizeNumber(
+      metadata.approved_missing_checkout_km ??
+        metadata.approved_missing_checkout_adjustment_km ??
+        metadata.approved_missing_km ??
+        metadata.approved_missing_checkout ??
+        visit?.approved_missing_checkout_km ??
+        visit?.approved_missing_km,
+    );
+    return Number.isFinite(km) && km > 0 ? sum + km : sum;
+  }, 0);
+}
+
+function finalReturnMismatchConfig(options = {}) {
+  const positiveOrDefault = (value, fallback) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? number : fallback;
+  };
+  return {
+    minRouteKm: positiveOrDefault(
+      options.finalReturnMismatchMinRouteKm ?? process.env.FINAL_RETURN_MISMATCH_MIN_ROUTE_KM,
+      DEFAULT_FINAL_RETURN_MISMATCH_MIN_ROUTE_KM,
+    ),
+    maxGpsRatio: positiveOrDefault(
+      options.finalReturnMismatchMaxGpsRatio ?? process.env.FINAL_RETURN_MISMATCH_MAX_GPS_RATIO,
+      DEFAULT_FINAL_RETURN_MISMATCH_MAX_GPS_RATIO,
+    ),
+    minDifferenceKm: positiveOrDefault(
+      options.finalReturnMismatchMinDifferenceKm ?? process.env.FINAL_RETURN_MISMATCH_MIN_DIFFERENCE_KM,
+      DEFAULT_FINAL_RETURN_MISMATCH_MIN_DIFFERENCE_KM,
+    ),
+  };
+}
+
+function gpsLegPassesExistingQualityChecks(leg) {
+  const gpsLogCount = Number(leg?.gps_log_count || 0);
+  const validPoints = Number(leg?.valid_points || 0);
+  const validRatio = gpsLogCount > 0 ? validPoints / gpsLogCount : 0;
+  const km = normalizeNumber(leg?.km);
+  return (
+    leg?.status === 'calculated' &&
+    ['GPS_BASED', 'PRE_SITE_GPS_SOURCING'].includes(String(leg?.source || '')) &&
+    Number.isFinite(km) &&
+    km > 0 &&
+    gpsLogCount >= 10 &&
+    validPoints >= 5 &&
+    validRatio >= 0.6
+  );
+}
+
+/**
+ * Pure, read-only canonical payable calculation for completed route-based days.
+ * GPS travel legs remain evidence; they are used for the final leg only when the
+ * supported route calculation failed and the existing GPS quality gates pass.
+ */
+export function calculateCanonicalRoutePayableKm({
+  attendance = {},
+  visits = [],
+  finalReturnLeg = {},
+  gpsTravelLegs = [],
+  ratePerKm = RATE_PER_KM,
+  options = {},
+} = {}) {
+  const travelPolicy = travelModeAllowsPayableKm(attendance);
+  const completedVisits = visits.filter(completedSiteVisit);
+  const siteVisitRouteKm = Number(sumStoredRouteKm(completedVisits).toFixed(2));
+  const approvedAdjustmentKm = Number(approvedMissingCheckoutKm(completedVisits).toFixed(2));
+  const gpsTravelLegTotal = Number(gpsTravelLegs.reduce((sum, leg) => (
+    leg?.status === 'calculated' && Number.isFinite(Number(leg?.km))
+      ? sum + Number(leg.km)
+      : sum
+  ), 0).toFixed(2));
+  const finalGpsLeg = gpsTravelLegs.find((leg) => leg?.type === 'last_checkout_to_end_day') || null;
+  const finalGpsAuditKm = normalizeNumber(finalGpsLeg?.km);
+  const routeFinalKm = finalReturnLeg?.calculated === true && Number.isFinite(normalizeNumber(finalReturnLeg?.km))
+    ? Number(normalizeNumber(finalReturnLeg.km).toFixed(2))
+    : null;
+  const attendanceStatus = String(attendance?.status || '').trim().toLowerCase();
+  const attendanceCompleted = Boolean(
+    attendance?.logout_time && /completed|ended|closed/.test(attendanceStatus),
+  );
+  const routeBasedSelected = Boolean(
+    attendanceCompleted &&
+      completedVisits.length > 0 &&
+      siteVisitRouteKm > 0 &&
+      travelPolicy.payableKmAllowed &&
+      travelPolicy.travelMode === 'bike',
+  );
+
+  let finalReturnPayableKm = 0;
+  let finalReturnPayableSource = 'none';
+  let finalReturnFallbackReason = finalReturnLeg?.reason || null;
+  if (routeBasedSelected && routeFinalKm !== null) {
+    finalReturnPayableKm = routeFinalKm;
+    finalReturnPayableSource = finalReturnLeg?.provider || 'route_calculation';
+  } else if (routeBasedSelected && gpsLegPassesExistingQualityChecks(finalGpsLeg)) {
+    finalReturnPayableKm = Number(finalGpsAuditKm.toFixed(2));
+    finalReturnPayableSource = 'gps_quality_checked_fallback';
+    finalReturnFallbackReason = finalReturnLeg?.reason || 'route_final_calculation_unavailable';
+  } else if (routeBasedSelected && routeFinalKm === null) {
+    finalReturnFallbackReason = finalReturnLeg?.reason || 'no_valid_final_return_route_or_gps_fallback';
+  }
+
+  const mismatch = finalReturnMismatchConfig(options);
+  const finalDifferenceKm = routeFinalKm !== null && Number.isFinite(finalGpsAuditKm)
+    ? Number((routeFinalKm - finalGpsAuditKm).toFixed(2))
+    : null;
+  const finalGpsRatio = routeFinalKm > 0 && Number.isFinite(finalGpsAuditKm)
+    ? Number((finalGpsAuditKm / routeFinalKm).toFixed(4))
+    : null;
+  const suspiciousFinalReturn = Boolean(
+    routeFinalKm !== null &&
+      routeFinalKm >= mismatch.minRouteKm &&
+      Number.isFinite(finalGpsAuditKm) &&
+      finalGpsRatio < mismatch.maxGpsRatio &&
+      finalDifferenceKm >= mismatch.minDifferenceKm,
+  );
+
+  const payableBeforeAdjustmentKm = routeBasedSelected
+    ? Number((siteVisitRouteKm + finalReturnPayableKm).toFixed(2))
+    : 0;
+  const calculatedPayableKm = routeBasedSelected
+    ? Number((payableBeforeAdjustmentKm + approvedAdjustmentKm).toFixed(2))
+    : 0;
+  const petrolAmount = Number((calculatedPayableKm * Number(ratePerKm || RATE_PER_KM)).toFixed(2));
+  const finalReturnIncluded = routeBasedSelected && (
+    finalReturnPayableKm > 0 ||
+    (routeFinalKm === 0 && finalReturnLeg?.calculated === true)
+  );
+  const auditTravelLegs = gpsTravelLegs.map((leg) => ({
+    ...leg,
+    payable: finalReturnPayableSource === 'gps_quality_checked_fallback' && leg === finalGpsLeg,
+    payable_status:
+      finalReturnPayableSource === 'gps_quality_checked_fallback' && leg === finalGpsLeg
+        ? 'payable_final_gps_fallback'
+        : routeBasedSelected
+          ? 'audit_only_route_based_formula_selected'
+          : leg?.payable_status || null,
+  }));
+
+  return {
+    routeBasedSelected,
+    travelMode: travelPolicy.travelMode,
+    payableKmAllowed: travelPolicy.payableKmAllowed,
+    siteVisitRouteKm,
+    finalReturnPayableKm,
+    finalReturnPayableSource,
+    finalReturnIncluded,
+    finalReturnFallbackReason,
+    finalReturnGoogleKm: finalReturnLeg?.provider === 'google_directions' ? routeFinalKm : null,
+    finalReturnRouteEstimateKm: routeFinalKm,
+    finalReturnGpsAuditKm: Number.isFinite(finalGpsAuditKm) ? Number(finalGpsAuditKm.toFixed(2)) : null,
+    finalReturnSourceComparison: {
+      route_km: routeFinalKm,
+      gps_km: Number.isFinite(finalGpsAuditKm) ? Number(finalGpsAuditKm.toFixed(2)) : null,
+      difference_km: finalDifferenceKm,
+      gps_to_route_ratio: finalGpsRatio,
+      suspicious: suspiciousFinalReturn,
+      thresholds: {
+        minimum_route_km: mismatch.minRouteKm,
+        maximum_gps_ratio: mismatch.maxGpsRatio,
+        minimum_difference_km: mismatch.minDifferenceKm,
+      },
+    },
+    approvedAdjustmentKm,
+    payableBeforeAdjustmentKm,
+    calculatedPayableKm,
+    petrolAmount,
+    gpsTravelLegTotal,
+    auditTravelLegs,
+    reviewFlags: [
+      ...(suspiciousFinalReturn ? ['FINAL_RETURN_GPS_ROUTE_MISMATCH_REVIEW'] : []),
+      ...(routeBasedSelected && routeFinalKm === null && finalReturnPayableSource === 'none'
+        ? ['FINAL_RETURN_ROUTE_AND_GPS_UNAVAILABLE_REVIEW']
+        : []),
+    ],
+    payableKmSource: routeBasedSelected ? 'route_based_completed_site_day' : null,
+    payableKmFormula: routeBasedSelected
+      ? 'sum(valid_completed_site_visit_route_km) + final_return_leg_km + approved_missing_checkout_adjustment_km'
+      : null,
+    selectedKmSourceReason: routeBasedSelected
+      ? 'Valid site route KM and final return route are canonical; GPS travel legs retained as audit evidence.'
+      : 'Canonical route formula not selected; preserve existing travel-mode/no-site fallback behavior.',
+  };
+}
+
+export function calculateFoKmHistoricalImpact({
+  attendance = {},
+  visits = [],
+  finalReturnLeg = {},
+  gpsTravelLegs = [],
+  ratePerKm,
+  options = {},
+} = {}) {
+  const corrected = calculateCanonicalRoutePayableKm({
+    attendance,
+    visits,
+    finalReturnLeg,
+    gpsTravelLegs,
+    ratePerKm: ratePerKm ?? attendance?.rate_per_km ?? RATE_PER_KM,
+    options,
+  });
+  const currentStoredPayableKm = normalizeNumber(
+    attendance?.eligible_km ?? attendance?.total_route_km ?? attendance?.total_approved_km,
+  ) || 0;
+  return {
+    dry_run: true,
+    attendance_id: attendance?.id || null,
+    current_stored_payable_km: Number(currentStoredPayableKm.toFixed(2)),
+    corrected_route_based_payable_km: corrected.routeBasedSelected
+      ? corrected.calculatedPayableKm
+      : Number(currentStoredPayableKm.toFixed(2)),
+    difference_km: corrected.routeBasedSelected
+      ? Number((corrected.calculatedPayableKm - currentStoredPayableKm).toFixed(2))
+      : 0,
+    corrected_petrol_amount: corrected.routeBasedSelected
+      ? corrected.petrolAmount
+      : Number((currentStoredPayableKm * Number(ratePerKm ?? attendance?.rate_per_km ?? RATE_PER_KM)).toFixed(2)),
+    affected_reason: corrected.routeBasedSelected && Math.abs(corrected.calculatedPayableKm - currentStoredPayableKm) >= 0.01
+      ? 'stored_payable_differs_from_canonical_route_based_formula'
+      : null,
+    calculation: corrected,
+  };
 }
 
 function isOpenVisit(visit) {
@@ -2212,13 +2463,26 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   const switchFallback = options.enableSwitchTimeFallback === true
     ? await temporarySwitchTimeFallback(client, attendance, points, options)
     : null;
-  const calculatedPayableKm = Number((legRecalculation.total_route_km || 0).toFixed(2));
+  const canonicalRouteCalculation = calculateCanonicalRoutePayableKm({
+    attendance,
+    visits,
+    finalReturnLeg,
+    gpsTravelLegs: legRecalculation.travel_legs || [],
+    ratePerKm,
+    options,
+  });
+  for (const flag of canonicalRouteCalculation.reviewFlags) reviewFlags.push(flag);
+  const calculatedPayableKm = canonicalRouteCalculation.routeBasedSelected
+    ? canonicalRouteCalculation.calculatedPayableKm
+    : Number((legRecalculation.total_route_km || 0).toFixed(2));
   let approvedKm = calculatedPayableKm;
-  if (switchFallback?.overridePayableKm) {
+  if (!canonicalRouteCalculation.routeBasedSelected && switchFallback?.overridePayableKm) {
     approvedKm = switchFallback.approvedKm;
   }
-  let routeSyncStatus = legRecalculation.route_sync_status || (approvedKm > 0 ? 'travel_leg_based' : 'travel_leg_based_zero');
-  if (switchFallback?.routeSyncStatus) {
+  let routeSyncStatus = canonicalRouteCalculation.routeBasedSelected
+    ? 'route_based_completed_site_day'
+    : legRecalculation.route_sync_status || (approvedKm > 0 ? 'travel_leg_based' : 'travel_leg_based_zero');
+  if (!canonicalRouteCalculation.routeBasedSelected && switchFallback?.routeSyncStatus) {
     routeSyncStatus = switchFallback.routeSyncStatus;
   } else if (!travelPolicy.payableKmAllowed) {
     reviewFlags.push('NON_PAYABLE_TRAVEL_MODE');
@@ -2276,6 +2540,9 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     date: attendance.attendance_date || date || null,
     site_visit_route_km: storedRouteKm,
     final_return_leg_km: finalReturnLegKm,
+    final_return_payable_km: canonicalRouteCalculation.routeBasedSelected
+      ? canonicalRouteCalculation.finalReturnPayableKm
+      : finalReturnLegKm,
     calculated_payable_km: calculatedPayableKm,
     travel_mode: travelPolicy.travelMode,
     payable_km_allowed: travelPolicy.payableKmAllowed,
@@ -2310,6 +2577,15 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   });
 
   const switchFallbackMetadata = switchFallback?.metadata || {};
+  const payableFinalReturnKm = canonicalRouteCalculation.routeBasedSelected
+    ? canonicalRouteCalculation.finalReturnPayableKm
+    : finalReturnLegKmForMetadata;
+  const payableFinalReturnProvider = canonicalRouteCalculation.routeBasedSelected
+    ? canonicalRouteCalculation.finalReturnPayableSource
+    : finalReturnLeg.provider || null;
+  const payableTravelLegAudit = canonicalRouteCalculation.routeBasedSelected
+    ? canonicalRouteCalculation.auditTravelLegs
+    : legRecalculation.travel_legs || [];
   const attendanceUpdate = {
     actual_km: approvedKm,
     total_route_km: approvedKm,
@@ -2328,10 +2604,18 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     route_sync_status: routeSyncStatus,
     metadata: {
       ...existingMetadata,
-      final_return_leg_km: finalReturnLegKmForMetadata,
-      final_return_leg_provider: finalReturnLeg.provider || null,
-      final_return_leg_reason: finalReturnLeg.reason || null,
-      final_return_leg_status: finalReturnLeg.status || (finalReturnLegKm > 0 ? 'calculated' : 'skipped'),
+      final_return_leg_km: payableFinalReturnKm,
+      final_return_leg_provider: payableFinalReturnProvider,
+      final_return_leg_reason: canonicalRouteCalculation.routeBasedSelected
+        ? canonicalRouteCalculation.finalReturnFallbackReason
+        : finalReturnLeg.reason || null,
+      final_return_leg_status: canonicalRouteCalculation.routeBasedSelected
+        ? canonicalRouteCalculation.finalReturnIncluded
+          ? canonicalRouteCalculation.finalReturnPayableSource === 'gps_quality_checked_fallback'
+            ? 'calculated_gps_fallback'
+            : 'calculated'
+          : 'skipped'
+        : finalReturnLeg.status || (finalReturnLegKm > 0 ? 'calculated' : 'skipped'),
       final_return_leg_from_site: finalReturnLeg.site_name || null,
       final_return_leg_from_visit_id: finalReturnLeg.site_visit_id || null,
       final_return_leg_origin_lat: finalReturnLeg.origin?.latitude ?? null,
@@ -2342,12 +2626,41 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
       final_return_leg_destination_source: finalReturnLeg.destination ? 'attendance_end_location' : null,
       final_return_leg_calculated_at: new Date().toISOString(),
       final_return_leg_included_in_payable:
-        finalReturnLeg.includedInPayable === true && travelPolicy.payableKmAllowed,
-      site_visit_route_km_sum: storedRouteKm,
+        canonicalRouteCalculation.routeBasedSelected
+          ? canonicalRouteCalculation.finalReturnIncluded
+          : finalReturnLeg.includedInPayable === true && travelPolicy.payableKmAllowed,
+      final_return_google_km: canonicalRouteCalculation.finalReturnGoogleKm,
+      final_return_gps_audit_km: canonicalRouteCalculation.finalReturnGpsAuditKm,
+      final_return_source_comparison: canonicalRouteCalculation.finalReturnSourceComparison,
+      final_return_fallback_reason: canonicalRouteCalculation.finalReturnFallbackReason,
+      site_visit_route_km_sum: canonicalRouteCalculation.routeBasedSelected
+        ? canonicalRouteCalculation.siteVisitRouteKm
+        : storedRouteKm,
       site_visit_count: visits.length,
       calculated_payable_km_before_travel_mode_policy: calculatedPayableKm,
+      calculated_payable_km: approvedKm,
+      payable_km_formula: canonicalRouteCalculation.payableKmFormula || (
+        routeSyncStatus === 'full_day_gps_sourcing'
+          ? fullDayGpsSourcing?.payable_km_formula || 'cleaned_gps_plus_reconstructed_gaps'
+          : existingMetadata.payable_km_formula || null
+      ),
+      gps_audit_km: actualTravelKm,
+      gps_travel_leg_total: canonicalRouteCalculation.gpsTravelLegTotal,
+      approved_adjustment_km: canonicalRouteCalculation.routeBasedSelected
+        ? canonicalRouteCalculation.approvedAdjustmentKm
+        : 0,
+      approved_adjustment_included_in_payable: canonicalRouteCalculation.routeBasedSelected,
       payable_km_source: routeSyncStatus,
-      payable_km_source_reason: routeSyncStatus === 'full_day_gps_sourcing'
+      selected_km_source_reason: canonicalRouteCalculation.routeBasedSelected
+        ? canonicalRouteCalculation.selectedKmSourceReason
+        : routeSyncStatus === 'full_day_gps_sourcing'
+          ? 'Full-day GPS movement accepted for sourcing / manpower follow-up without site check-ins'
+          : preSiteSourcingGpsUsed
+            ? 'GPS trail shows valid sourcing movement before first check-in'
+            : legRecalculation.selected_km_source || routeSyncStatus,
+      payable_km_source_reason: canonicalRouteCalculation.routeBasedSelected
+        ? canonicalRouteCalculation.selectedKmSourceReason
+        : routeSyncStatus === 'full_day_gps_sourcing'
         ? 'Full-day GPS movement accepted for sourcing / manpower follow-up without site check-ins'
         : preSiteSourcingGpsUsed
           ? 'GPS trail shows valid sourcing movement before first check-in'
@@ -2384,12 +2697,21 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
       pre_site_sourcing_reason: preSiteSourcingGpsUsed
         ? 'GPS trail shows valid sourcing movement before first check-in'
         : null,
-      travel_legs: legRecalculation.travel_legs || [],
+      travel_legs: payableTravelLegAudit,
       travel_leg_recalculation_enabled: true,
       travel_leg_recalculated_at: new Date().toISOString(),
       travel_leg_selected_km_source: legRecalculation.selected_km_source || null,
       selected_km_source: legRecalculation.selected_km_source || null,
-      travel_leg_payable_km: approvedKm,
+      travel_leg_payable_km: canonicalRouteCalculation.routeBasedSelected
+        ? canonicalRouteCalculation.finalReturnPayableSource === 'gps_quality_checked_fallback'
+          ? canonicalRouteCalculation.finalReturnPayableKm
+          : 0
+        : approvedKm,
+      travel_leg_payable_role: canonicalRouteCalculation.routeBasedSelected
+        ? canonicalRouteCalculation.finalReturnPayableSource === 'gps_quality_checked_fallback'
+          ? 'final_leg_fallback_only'
+          : 'audit_only_non_payable'
+        : 'payable',
       travel_leg_gps_log_count: legRecalculation.gps_log_count || 0,
       travel_leg_valid_points: legRecalculation.valid_points || 0,
       travel_leg_rejected_points: legRecalculation.rejected_points || 0,
@@ -2420,8 +2742,16 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
             attendance_id: attendance.id,
           }
         : null,
-      final_return_leg_calculated: finalReturnLeg.calculated === true,
-      final_return_leg_skip_reason: finalReturnLegKm > 0 ? null : finalReturnLeg.reason || null,
+      final_return_leg_calculated: canonicalRouteCalculation.routeBasedSelected
+        ? canonicalRouteCalculation.finalReturnIncluded
+        : finalReturnLeg.calculated === true,
+      final_return_leg_skip_reason: canonicalRouteCalculation.routeBasedSelected
+        ? canonicalRouteCalculation.finalReturnIncluded
+          ? null
+          : canonicalRouteCalculation.finalReturnFallbackReason
+        : finalReturnLegKm > 0
+          ? null
+          : finalReturnLeg.reason || null,
       final_return_leg_reused_existing: false,
       final_return_leg_updated_at: new Date().toISOString(),
     },
@@ -2471,13 +2801,29 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     site_visits_count: visits.length,
     stored_route_km: storedRouteKm,
     stored_site_visit_route_km: storedRouteKm,
-    final_return_leg_km: finalReturnLegKmForMetadata,
-    final_return_leg_provider: finalReturnLeg.provider || null,
-    final_return_leg_status: finalReturnLeg.status || (finalReturnLegKm > 0 ? 'calculated' : 'skipped'),
-    final_return_leg_reason: finalReturnLeg.reason || null,
-    final_return_leg_calculated: finalReturnLeg.calculated,
+    final_return_leg_km: payableFinalReturnKm,
+    final_return_leg_provider: payableFinalReturnProvider,
+    final_return_leg_status: canonicalRouteCalculation.routeBasedSelected
+      ? canonicalRouteCalculation.finalReturnIncluded
+        ? canonicalRouteCalculation.finalReturnPayableSource === 'gps_quality_checked_fallback'
+          ? 'calculated_gps_fallback'
+          : 'calculated'
+        : 'skipped'
+      : finalReturnLeg.status || (finalReturnLegKm > 0 ? 'calculated' : 'skipped'),
+    final_return_leg_reason: canonicalRouteCalculation.routeBasedSelected
+      ? canonicalRouteCalculation.finalReturnFallbackReason
+      : finalReturnLeg.reason || null,
+    final_return_leg_calculated: canonicalRouteCalculation.routeBasedSelected
+      ? canonicalRouteCalculation.finalReturnIncluded
+      : finalReturnLeg.calculated,
     final_return_leg_reused_existing: false,
-    final_return_leg_skip_reason: finalReturnLegKm > 0 ? null : finalReturnLeg.reason,
+    final_return_leg_skip_reason: canonicalRouteCalculation.routeBasedSelected
+      ? canonicalRouteCalculation.finalReturnIncluded
+        ? null
+        : canonicalRouteCalculation.finalReturnFallbackReason
+      : finalReturnLegKm > 0
+        ? null
+        : finalReturnLeg.reason,
     final_return_leg_site_visit_id: finalReturnLeg.site_visit_id || existingMetadata.final_return_leg_from?.site_visit_id || null,
     backend_route_legs_calculated: finalReturnLeg.calculated ? 1 : 0,
     travel_leg_selected_km_source: legRecalculation.selected_km_source || null,
@@ -2489,6 +2835,17 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     site_visits_missing_route_km: visitsMissingRouteKm,
     review_flags: [...new Set(reviewFlags)],
     route_sync_status: routeSyncStatus,
+    payable_km_source: routeSyncStatus,
+    payable_km_formula: canonicalRouteCalculation.payableKmFormula,
+    site_visit_route_km_sum: canonicalRouteCalculation.routeBasedSelected
+      ? canonicalRouteCalculation.siteVisitRouteKm
+      : storedRouteKm,
+    gps_audit_km: actualTravelKm,
+    gps_travel_leg_total: canonicalRouteCalculation.gpsTravelLegTotal,
+    approved_adjustment_km: canonicalRouteCalculation.routeBasedSelected
+      ? canonicalRouteCalculation.approvedAdjustmentKm
+      : 0,
+    calculated_payable_km: approvedKm,
     gps_fallback_review_required: gpsFallbackReview.applicable,
     fallback_gps_km: gpsFallbackReview.fallback_gps_km,
     suggested_review_km: gpsFallbackReview.suggested_review_km,
@@ -2510,8 +2867,16 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     accepted_gps_km: Number(calculation.acceptedKm.toFixed(2)),
     reconstructed_gap_km: Number(calculation.reconstructedKm.toFixed(2)),
     updated: true,
-    skipped: finalReturnLeg.includedInPayable !== true,
-    skip_reason: finalReturnLeg.includedInPayable === true ? null : finalReturnLeg.reason || null,
+    skipped: canonicalRouteCalculation.routeBasedSelected
+      ? !canonicalRouteCalculation.finalReturnIncluded
+      : finalReturnLeg.includedInPayable !== true,
+    skip_reason: canonicalRouteCalculation.routeBasedSelected
+      ? canonicalRouteCalculation.finalReturnIncluded
+        ? null
+        : canonicalRouteCalculation.finalReturnFallbackReason
+      : finalReturnLeg.includedInPayable === true
+        ? null
+        : finalReturnLeg.reason || null,
   };
   log('FO_KM_RECALC_SUMMARY', {
     attendance_id: attendance.id,
