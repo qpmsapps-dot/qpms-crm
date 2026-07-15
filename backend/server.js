@@ -21,6 +21,7 @@ import {
   previousReportDate,
   sendDailyOperationsReports,
 } from './services/dailyOperationsReportService.js';
+import { buildOperationsSummary } from './services/operationsSummaryService.js';
 import {
   canAccessLeadModule,
   canCreateLead,
@@ -6229,6 +6230,30 @@ app.post(
     }
   },
 );
+
+app.get('/api/fo/operations/summary', requireSupabaseJwt, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const summary = await buildOperationsSummary(
+      client,
+      request.profile,
+      request.query || {},
+      currentIndiaDateInput(),
+    );
+    response.json({ ok: true, ...summary });
+  } catch (error) {
+    const status = Number(error?.statusCode || 500);
+    if (status >= 500) {
+      console.error('[myQPMS Operations Summary] request failed', sanitizeSupabaseDiagnosticError(error));
+    }
+    response.status(status).json({
+      ok: false,
+      message: status >= 500
+        ? 'Operations summary is temporarily unavailable. Please retry.'
+        : error.message,
+    });
+  }
+});
 
 app.post('/api/fo/km/recalculate', async (request, response) => {
   const payload = request.body || {};

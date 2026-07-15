@@ -59,6 +59,14 @@ import { usePageTitle } from "../hooks/usePageTitle.js";
 import { isSupabaseConfigured, supabase } from "../lib/supabase.js";
 import { api } from "../services/api.js";
 import { assertDemoWriteAllowed } from "../utils/demoAccess.js";
+import {
+  EMPTY_OPERATIONS_SUMMARY,
+  activityPreviewFileKind,
+  nextPreviewIndex,
+  operationsSummaryQuery,
+  previewMenuState,
+  shouldAcceptSummaryResponse,
+} from "../utils/operationsDashboard.js";
 
 const SOUTH_INDIA_CENTER = [13.0827, 80.2707];
 const INDIA_TIME_ZONE = "Asia/Kolkata";
@@ -2118,7 +2126,7 @@ function MetricTile({ label, value, icon, tone = "blue", compact = false }) {
   );
 }
 
-function FleetKpi({ label, value, icon, tone = "blue", hint }) {
+function FleetKpi({ label, value, icon, tone = "blue", hint, loading = false, error = false }) {
   const Icon = icon;
   const tones = {
     blue: "bg-blue-50 text-blue-700",
@@ -2138,7 +2146,7 @@ function FleetKpi({ label, value, icon, tone = "blue", hint }) {
           </p>
           <div className="mt-2 flex items-end gap-2">
             <p className="break-words text-2xl font-black leading-none tracking-normal text-slate-950 dark:text-white">
-              {value}
+              {loading ? <span className="inline-block h-6 w-20 animate-pulse rounded bg-slate-200" aria-label={`${label} loading`} /> : value}
             </p>
             {hint ? (
               <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
@@ -2146,6 +2154,9 @@ function FleetKpi({ label, value, icon, tone = "blue", hint }) {
               </span>
             ) : null}
           </div>
+          {error ? (
+            <p className="mt-2 text-[10px] font-bold text-rose-600">Unable to load filtered total</p>
+          ) : null}
         </div>
         <span
           className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl ${tones[tone] || tones.blue}`}
@@ -6225,6 +6236,14 @@ function FieldOfficerDetailsView({
   const [photoFilter, setPhotoFilter] = useState("All");
   const [photoSearch, setPhotoSearch] = useState("");
   const [selectedActivityCardId, setSelectedActivityCardId] = useState(null);
+  const [activityMenuCardId, setActivityMenuCardId] = useState(null);
+  const [activityPreviewCard, setActivityPreviewCard] = useState(null);
+  const [activityPreviewFiles, setActivityPreviewFiles] = useState([]);
+  const [activityPreviewIndex, setActivityPreviewIndex] = useState(0);
+  const [activityPreviewLoading, setActivityPreviewLoading] = useState(false);
+  const [activityPreviewError, setActivityPreviewError] = useState("");
+  const [activityPreviewImageFailed, setActivityPreviewImageFailed] = useState(false);
+  const [activityPreviewImageLoading, setActivityPreviewImageLoading] = useState(false);
   const [activityReviewRemarks, setActivityReviewRemarks] = useState("");
   const [uploadInfoVisible, setUploadInfoVisible] = useState(true);
   const [activityUploadModal, setActivityUploadModal] = useState(null);
@@ -6247,6 +6266,8 @@ function FieldOfficerDetailsView({
   const [activeTab, setActiveTab] = useState("activity");
   const [drillDownOpen, setDrillDownOpen] = useState(true);
   const [checkoutReviewPreview, setCheckoutReviewPreview] = useState(null);
+  const activityMenuRef = useRef(null);
+  const activityPreviewRequestRef = useRef(0);
   const visits = useMemo(() => sortedOfficerVisits(officer), [officer]);
   const attendances = useMemo(
     () =>
@@ -6473,6 +6494,87 @@ function FieldOfficerDetailsView({
     filteredActivityCards.find((card) => card.id === selectedActivityCardId) ||
     filteredActivityCards[0] ||
     null;
+
+  useEffect(() => {
+    function handlePointerDown(event) {
+      if (activityMenuCardId && !activityMenuRef.current?.contains(event.target)) {
+        setActivityMenuCardId(null);
+      }
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [activityMenuCardId]);
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (activityPreviewCard) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          activityPreviewRequestRef.current += 1;
+          setActivityPreviewCard(null);
+          setActivityPreviewFiles([]);
+          setActivityPreviewError("");
+          return;
+        }
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          setActivityPreviewImageFailed(false);
+          setActivityPreviewImageLoading(true);
+          setActivityPreviewIndex((index) => nextPreviewIndex(index, activityPreviewFiles.length, 1));
+        }
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          setActivityPreviewImageFailed(false);
+          setActivityPreviewImageLoading(true);
+          setActivityPreviewIndex((index) => nextPreviewIndex(index, activityPreviewFiles.length, -1));
+        }
+        return;
+      }
+      if (event.key === "Escape" && activityMenuCardId) setActivityMenuCardId(null);
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [activityMenuCardId, activityPreviewCard, activityPreviewFiles.length]);
+
+  async function openActivityPreview(card, initialIndex = 0) {
+    if (!card?.uploads?.length) return;
+    const requestId = activityPreviewRequestRef.current + 1;
+    activityPreviewRequestRef.current = requestId;
+    setActivityMenuCardId(null);
+    setActivityPreviewCard(card);
+    setActivityPreviewFiles([]);
+    setActivityPreviewIndex(Math.max(0, Math.min(initialIndex, card.uploads.length - 1)));
+    setActivityPreviewLoading(true);
+    setActivityPreviewImageLoading(true);
+    setActivityPreviewError("");
+    try {
+      const files = await Promise.all(
+        card.uploads.map(async (upload) => ({
+          ...upload,
+          displayUrl: upload.displayUrl || await signedActivityUploadUrl(upload),
+        })),
+      );
+      if (activityPreviewRequestRef.current !== requestId) return;
+      setActivityPreviewFiles(files);
+      if (!files.some((file) => file.displayUrl)) {
+        setActivityPreviewError("No authorized preview URL is available for these files.");
+      }
+    } catch (error) {
+      if (activityPreviewRequestRef.current !== requestId) return;
+      setActivityPreviewError(error.message || "Unable to load activity preview.");
+    } finally {
+      if (activityPreviewRequestRef.current === requestId) setActivityPreviewLoading(false);
+    }
+  }
+
+  function closeActivityPreview() {
+    activityPreviewRequestRef.current += 1;
+    setActivityPreviewCard(null);
+    setActivityPreviewFiles([]);
+    setActivityPreviewError("");
+  }
+  const activeActivityPreviewFile = activityPreviewFiles[activityPreviewIndex] || null;
+  const activeActivityPreviewKind = activityPreviewFileKind(activeActivityPreviewFile || {});
   const activityVisitOptions = visits.map((visit, index) => ({
     id: String(visit.id || index),
     visit,
@@ -7823,7 +7925,7 @@ function FieldOfficerDetailsView({
               {visibleActivityUploads.length ? (
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                   {visibleActivityUploads.map((upload) => (
-                    <a key={upload.id || upload.local_id || upload.file_url} href={upload.displayUrl || upload.file_url || undefined} target="_blank" rel="noreferrer" className="grid grid-cols-[56px_1fr] gap-3 rounded-lg border border-slate-100 bg-white p-2 hover:border-qpms-200">
+                    <a key={upload.id || upload.local_id || upload.file_url} href={upload.displayUrl || undefined} target="_blank" rel="noreferrer" className="grid grid-cols-[56px_1fr] gap-3 rounded-lg border border-slate-100 bg-white p-2 hover:border-qpms-200">
                       <span className="grid h-14 w-14 place-items-center overflow-hidden rounded-md bg-slate-50 text-slate-300">
                         {activityUploadIsImage(upload) && upload.displayUrl ? <img src={upload.displayUrl} alt={activityUploadName(upload)} className="h-full w-full object-cover" /> : <Image className="h-7 w-7" />}
                       </span>
@@ -7953,15 +8055,22 @@ function FieldOfficerDetailsView({
                           ? "bg-violet-50 text-violet-700"
                           : "bg-slate-100 text-slate-700";
                   return (
-                    <button
+                    <article
                       key={card.id}
-                      type="button"
                       onClick={() => setSelectedActivityCardId(card.id)}
-                      className={`focus-ring overflow-hidden rounded-xl border bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedActivityCardId(card.id);
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      className={`focus-ring relative rounded-xl border bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
                         selectedActivityCard?.id === card.id ? "border-qpms-600 ring-2 ring-qpms-100" : "border-slate-200"
                       }`}
                     >
-                      <div className="relative h-32 bg-slate-100">
+                      <div className="relative h-32 overflow-hidden rounded-t-xl bg-slate-100">
                         {card.thumbnail && activityUploadIsImage(card.uploads[0]) ? (
                           <img src={card.thumbnail} alt={card.title} className="h-full w-full object-cover" />
                         ) : (
@@ -7989,13 +8098,56 @@ function FieldOfficerDetailsView({
                               </p>
                             ) : null}
                           </div>
-                          <MoreVertical className="h-4 w-4 shrink-0 text-slate-400" />
+                          <div className="relative shrink-0" ref={activityMenuCardId === card.id ? activityMenuRef : null}>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setActivityMenuCardId((current) => previewMenuState(current, card.id));
+                              }}
+                              className="focus-ring grid h-8 w-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                              aria-label={`Open actions for ${card.title}`}
+                              aria-haspopup="menu"
+                              aria-expanded={activityMenuCardId === card.id}
+                            >
+                              <MoreVertical className="h-4 w-4" />
+                            </button>
+                            {activityMenuCardId === card.id ? (
+                              <div
+                                role="menu"
+                                className="absolute right-0 top-9 z-50 min-w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-xl"
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  disabled={!card.uploads.length}
+                                  onClick={() => openActivityPreview(card)}
+                                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                >
+                                  <Eye className="h-4 w-4" /> Preview
+                                </button>
+                                {card.thumbnail ? (
+                                  <a
+                                    role="menuitem"
+                                    href={card.thumbnail}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    download={activityUploadName(card.uploads[0])}
+                                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                                  >
+                                    <Download className="h-4 w-4" /> Download
+                                  </a>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
                         <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-black ${statusClass}`}>
                           {card.status.label}
                         </span>
                       </div>
-                    </button>
+                    </article>
                   );
                 })}
 
@@ -8089,7 +8241,7 @@ function FieldOfficerDetailsView({
                             {uploads.map((upload) => (
                               <a
                                 key={upload.id || upload.file_url}
-                                href={upload.displayUrl || upload.file_url || undefined}
+                                href={upload.displayUrl || undefined}
                                 target="_blank"
                                 rel="noreferrer"
                                 className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50 text-slate-300"
@@ -8139,7 +8291,7 @@ function FieldOfficerDetailsView({
                                   {category.uploads.map((upload) => (
                                     <a
                                       key={upload.id || upload.file_url}
-                                      href={upload.displayUrl || upload.file_url || undefined}
+                                      href={upload.displayUrl || undefined}
                                       target="_blank"
                                       rel="noreferrer"
                                       className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50 text-slate-300"
@@ -8167,7 +8319,7 @@ function FieldOfficerDetailsView({
                           {(selectedActivityCard.insight.documents || []).map((upload) => (
                             <a
                               key={upload.id || upload.file_url}
-                              href={upload.displayUrl || upload.file_url || undefined}
+                              href={upload.displayUrl || undefined}
                               target="_blank"
                               rel="noreferrer"
                               className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-qpms-700"
@@ -8188,7 +8340,7 @@ function FieldOfficerDetailsView({
                           {(selectedActivityCard.insight.photos || selectedActivityCard.uploads).slice(0, 6).map((upload) => (
                             <a
                               key={upload.id || upload.file_url}
-                              href={upload.displayUrl || upload.file_url || undefined}
+                              href={upload.displayUrl || undefined}
                               target="_blank"
                               rel="noreferrer"
                               className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50 text-slate-300"
@@ -8210,7 +8362,7 @@ function FieldOfficerDetailsView({
                           {(selectedActivityCard.insight.documents || []).map((upload) => (
                             <a
                               key={upload.id || upload.file_url}
-                              href={upload.displayUrl || upload.file_url || undefined}
+                              href={upload.displayUrl || undefined}
                               target="_blank"
                               rel="noreferrer"
                               className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-qpms-700"
@@ -8270,6 +8422,191 @@ function FieldOfficerDetailsView({
             </aside>
           </div>
         </section>
+      ) : null}
+
+      {activityPreviewCard ? (
+        <div
+          className="fo-screen-only fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/75 p-3 sm:p-5"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Preview ${activityPreviewCard.activityGroup} activity files`}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeActivityPreview();
+          }}
+        >
+          <div className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <header className="flex items-start justify-between gap-4 border-b border-slate-200 px-4 py-3 sm:px-5">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="truncate text-base font-black text-slate-950">
+                    {activityPreviewCard.activityGroup}
+                  </h2>
+                  <span className="rounded-md bg-qpms-50 px-2 py-1 text-[10px] font-black text-qpms-700">
+                    {activityPreviewFiles.length
+                      ? `${activityPreviewIndex + 1} of ${activityPreviewFiles.length}`
+                      : `${activityPreviewCard.fileCount || 0} files`}
+                  </span>
+                </div>
+                <p className="mt-1 truncate text-xs font-semibold text-slate-600">
+                  {activityPreviewCard.title} / {activityPreviewCard.siteCode}
+                </p>
+                <p className="mt-1 text-[11px] font-semibold text-slate-500">
+                  Uploaded by {activityPreviewCard.uploadedBy} • {formatDateTime(activityPreviewCard.uploadedAt)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeActivityPreview}
+                className="focus-ring grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                aria-label="Close activity preview"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </header>
+
+            <div className="relative flex min-h-0 flex-1 items-center justify-center bg-slate-950 p-3 sm:p-5">
+              {activityPreviewLoading ? (
+                <div className="grid min-h-[48vh] place-items-center text-center text-white">
+                  <div>
+                    <RefreshCw className="mx-auto h-8 w-8 animate-spin" />
+                    <p className="mt-3 text-sm font-bold">Loading authorized preview…</p>
+                  </div>
+                </div>
+              ) : activityPreviewError && !activeActivityPreviewFile ? (
+                <div className="max-w-md rounded-xl border border-rose-400/40 bg-rose-950/50 p-5 text-center text-sm font-bold text-rose-100">
+                  {activityPreviewError}
+                </div>
+              ) : activeActivityPreviewFile ? (
+                <>
+                  {activeActivityPreviewKind === "image" ? (
+                    <div className="relative grid min-h-[48vh] w-full place-items-center">
+                      {activityPreviewImageLoading && !activityPreviewImageFailed ? (
+                        <RefreshCw className="absolute h-8 w-8 animate-spin text-white" aria-label="Loading image" />
+                      ) : null}
+                      {!activeActivityPreviewFile.displayUrl || activityPreviewImageFailed ? (
+                        <div className="rounded-xl border border-slate-700 bg-slate-900 p-6 text-center text-slate-200">
+                          <Image className="mx-auto h-12 w-12 text-slate-500" />
+                          <p className="mt-3 text-sm font-black">Image preview could not be loaded.</p>
+                          <p className="mt-1 break-all text-xs text-slate-400">{activityUploadName(activeActivityPreviewFile)}</p>
+                        </div>
+                      ) : (
+                        <img
+                          key={activeActivityPreviewFile.id || activeActivityPreviewFile.file_url}
+                          src={activeActivityPreviewFile.displayUrl}
+                          alt={activityUploadName(activeActivityPreviewFile)}
+                          className={`max-h-[65vh] max-w-full object-contain ${activityPreviewImageLoading ? "opacity-0" : "opacity-100"}`}
+                          onLoad={() => setActivityPreviewImageLoading(false)}
+                          onError={() => {
+                            setActivityPreviewImageLoading(false);
+                            setActivityPreviewImageFailed(true);
+                          }}
+                        />
+                      )}
+                    </div>
+                  ) : activeActivityPreviewKind === "pdf" && activeActivityPreviewFile.displayUrl ? (
+                    <iframe
+                      src={activeActivityPreviewFile.displayUrl}
+                      title={activityUploadName(activeActivityPreviewFile)}
+                      className="h-[65vh] w-full rounded-lg bg-white"
+                    />
+                  ) : (
+                    <div className="max-w-lg rounded-xl border border-slate-700 bg-slate-900 p-6 text-center text-slate-100">
+                      <FilePlus className="mx-auto h-12 w-12 text-slate-400" />
+                      <p className="mt-3 break-all text-sm font-black">{activityUploadName(activeActivityPreviewFile)}</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-400">
+                        {activeActivityPreviewFile.file_type || "Document preview is not supported in the browser."}
+                      </p>
+                      {activeActivityPreviewFile.displayUrl ? (
+                        <div className="mt-4 flex justify-center gap-2">
+                          <a
+                            href={activeActivityPreviewFile.displayUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="focus-ring rounded-lg bg-white px-4 py-2 text-xs font-black text-slate-900"
+                          >
+                            Open
+                          </a>
+                          <a
+                            href={activeActivityPreviewFile.displayUrl}
+                            download={activityUploadName(activeActivityPreviewFile)}
+                            className="focus-ring rounded-lg border border-slate-600 px-4 py-2 text-xs font-black text-white"
+                          >
+                            Download
+                          </a>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={activityPreviewIndex <= 0}
+                    onClick={() => {
+                      setActivityPreviewImageFailed(false);
+                      setActivityPreviewImageLoading(true);
+                      setActivityPreviewIndex((index) => nextPreviewIndex(index, activityPreviewFiles.length, -1));
+                    }}
+                    className="focus-ring absolute left-3 grid h-10 w-10 place-items-center rounded-full bg-white/90 text-slate-900 shadow disabled:cursor-not-allowed disabled:opacity-30 sm:left-5"
+                    aria-label="Previous activity file"
+                  >
+                    <ChevronLeft className="h-5 w-5" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={activityPreviewIndex >= activityPreviewFiles.length - 1}
+                    onClick={() => {
+                      setActivityPreviewImageFailed(false);
+                      setActivityPreviewImageLoading(true);
+                      setActivityPreviewIndex((index) => nextPreviewIndex(index, activityPreviewFiles.length, 1));
+                    }}
+                    className="focus-ring absolute right-3 grid h-10 w-10 place-items-center rounded-full bg-white/90 text-slate-900 shadow disabled:cursor-not-allowed disabled:opacity-30 sm:right-5"
+                    aria-label="Next activity file"
+                  >
+                    <ChevronRight className="h-5 w-5" />
+                  </button>
+                </>
+              ) : null}
+            </div>
+
+            <footer className="border-t border-slate-200 bg-white px-4 py-3 sm:px-5">
+              <p className="text-xs font-semibold text-slate-600">
+                <span className="font-black text-slate-900">Remarks:</span> {activityPreviewCard.remarks || "--"}
+              </p>
+              {activityPreviewFiles.length > 1 ? (
+                <div className="mt-3 flex gap-2 overflow-x-auto pb-1" aria-label="Activity file thumbnails">
+                  {activityPreviewFiles.map((file, index) => {
+                    const kind = activityPreviewFileKind(file);
+                    const nearCurrent = Math.abs(index - activityPreviewIndex) <= 2;
+                    return (
+                      <button
+                        key={file.id || `${file.file_url}-${index}`}
+                        type="button"
+                        onClick={() => {
+                          setActivityPreviewImageFailed(false);
+                          setActivityPreviewImageLoading(true);
+                          setActivityPreviewIndex(index);
+                        }}
+                        className={`focus-ring grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-lg border-2 bg-slate-100 ${
+                          index === activityPreviewIndex ? "border-qpms-600" : "border-transparent"
+                        }`}
+                        aria-label={`Preview file ${index + 1}`}
+                        aria-current={index === activityPreviewIndex ? "true" : undefined}
+                      >
+                        {kind === "image" && nearCurrent && file.displayUrl ? (
+                          <img src={file.displayUrl} alt="" loading="lazy" className="h-full w-full object-cover" />
+                        ) : kind === "pdf" ? (
+                          <span className="text-[10px] font-black text-rose-700">PDF</span>
+                        ) : (
+                          <FilePlus className="h-5 w-5 text-slate-500" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </footer>
+          </div>
+        </div>
       ) : null}
 
       {activityUploadModal ? (
@@ -9525,6 +9862,9 @@ export default function FOActivities() {
   const [stateFilter, setStateFilter] = useState("All States");
   const [statusFilter, setStatusFilter] = useState("All Status");
   const [businessFilter, setBusinessFilter] = useState("All Business");
+  const [draftStateFilter, setDraftStateFilter] = useState("All States");
+  const [draftStatusFilter, setDraftStatusFilter] = useState("All Status");
+  const [draftBusinessFilter, setDraftBusinessFilter] = useState("All Business");
   const [search, setSearch] = useState("");
   const [expandedMap, setExpandedMap] = useState(false);
   const [selectedOfficerId, setSelectedOfficerId] = useState(null);
@@ -9564,12 +9904,19 @@ export default function FOActivities() {
   const [customToDate, setCustomToDate] = useState(
     toDateInputValue(new Date()),
   );
+  const [draftFromDate, setDraftFromDate] = useState(customFromDate);
+  const [draftToDate, setDraftToDate] = useState(customToDate);
+  const [filteredSummary, setFilteredSummary] = useState(EMPTY_OPERATIONS_SUMMARY);
+  const [filteredSummaryLoading, setFilteredSummaryLoading] = useState(false);
+  const [filteredSummaryError, setFilteredSummaryError] = useState("");
+  const [summaryRefreshToken, setSummaryRefreshToken] = useState(0);
   const [detailDraftFromDate, setDetailDraftFromDate] = useState(customFromDate);
   const [detailDraftToDate, setDetailDraftToDate] = useState(customToDate);
   const profileRowsRef = useRef([]);
   const mainRouteFitKeyRef = useRef(null);
   const kmRecalcCooldownRef = useRef(new Map());
   const kmRecalcInFlightRef = useRef(new Set());
+  const summaryRequestSequenceRef = useRef(0);
 
   const selectedRange = useMemo(
     () => dateRangeForPreset("custom", customFromDate, customToDate),
@@ -9737,6 +10084,59 @@ export default function FOActivities() {
       ),
     [liveOfficers, user],
   );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const requestSequence = summaryRequestSequenceRef.current + 1;
+    summaryRequestSequenceRef.current = requestSequence;
+
+    async function loadFilteredSummary() {
+      setFilteredSummaryLoading(true);
+      setFilteredSummaryError("");
+      setFilteredSummary(EMPTY_OPERATIONS_SUMMARY);
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = sessionData?.session?.access_token;
+        if (!accessToken) throw new Error("An active session is required.");
+        const query = operationsSummaryQuery({
+          dateFrom: selectedRange.fromDate,
+          dateTo: selectedRange.toDate,
+          state: stateFilter,
+          business: businessFilter,
+          status: statusFilter,
+        });
+        const response = await fetch(`${API_BASE_URL}/api/fo/operations/summary?${query}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          signal: controller.signal,
+        });
+        const payload = await response.json();
+        if (!response.ok || payload.ok === false) {
+          throw new Error(payload.message || "Filtered summary failed.");
+        }
+        if (!shouldAcceptSummaryResponse(requestSequence, summaryRequestSequenceRef.current)) return;
+        setFilteredSummary({
+          payable_km: Number(payload.payable_km) || 0,
+          petrol_amount: Number(payload.petrol_amount) || 0,
+          matching_attendance_count: Number(payload.matching_attendance_count) || 0,
+          matching_employee_count: Number(payload.matching_employee_count) || 0,
+          applied_filters: payload.applied_filters || null,
+        });
+      } catch (error) {
+        if (error.name === "AbortError") return;
+        if (!shouldAcceptSummaryResponse(requestSequence, summaryRequestSequenceRef.current)) return;
+        console.warn("[myQPMS FO] Filtered summary failed.", error);
+        setFilteredSummary(EMPTY_OPERATIONS_SUMMARY);
+        setFilteredSummaryError(error.message || "Filtered summary failed.");
+      } finally {
+        if (shouldAcceptSummaryResponse(requestSequence, summaryRequestSequenceRef.current)) {
+          setFilteredSummaryLoading(false);
+        }
+      }
+    }
+
+    if (isSupabaseConfigured && supabase) loadFilteredSummary();
+    return () => controller.abort();
+  }, [businessFilter, selectedRange.fromDate, selectedRange.toDate, stateFilter, statusFilter, summaryRefreshToken]);
   const operationalOfficerKeys = useMemo(() => {
     const keys = new Set();
     officers.forEach((officer) => {
@@ -9832,6 +10232,34 @@ export default function FOActivities() {
     [statusFilter, structurallyFilteredOfficers],
   );
 
+  function applyDashboardFilters() {
+    if (!draftFromDate || !draftToDate || draftFromDate > draftToDate) {
+      window.alert("Select a valid From Date and To Date.");
+      return;
+    }
+    setCustomFromDate(draftFromDate);
+    setCustomToDate(draftToDate);
+    setStateFilter(draftStateFilter);
+    setBusinessFilter(draftBusinessFilter);
+    setStatusFilter(draftStatusFilter);
+    setSummaryRefreshToken((value) => value + 1);
+  }
+
+  function resetDashboardFilters() {
+    const today = toDateInputValue(new Date());
+    setDraftFromDate(today);
+    setDraftToDate(today);
+    setDraftStateFilter("All States");
+    setDraftBusinessFilter("All Business");
+    setDraftStatusFilter("All Status");
+    setCustomFromDate(today);
+    setCustomToDate(today);
+    setStateFilter("All States");
+    setBusinessFilter("All Business");
+    setStatusFilter("All Status");
+    setSummaryRefreshToken((value) => value + 1);
+  }
+
   async function exportDashboardExcel() {
     if (dashboardExportBusy) return;
     setDashboardExportBusy(true);
@@ -9908,6 +10336,7 @@ export default function FOActivities() {
       );
       setKmRecalcResult(payload);
       setRefreshToken((value) => value + 1);
+      setSummaryRefreshToken((value) => value + 1);
     } catch (error) {
       console.warn("[myQPMS FO] Batch KM recalculation failed.", error);
       window.alert(error.message || "Batch KM recalculation failed.");
@@ -10207,15 +10636,26 @@ export default function FOActivities() {
           if (upload.submission_id && submissionsById.has(String(upload.submission_id))) return true;
           return uploadMatchesSelectedContext(upload, { attendanceId, siteVisitIds });
         });
+        const coverUploadIds = new Set();
+        const coveredGroups = new Set();
+        uploads.forEach((upload, index) => {
+          const groupKey = upload.submission_id
+            ? `submission:${upload.submission_id}`
+            : `upload:${upload.id || upload.local_id || upload.file_url || index}`;
+          if (coveredGroups.has(groupKey)) return;
+          coveredGroups.add(groupKey);
+          coverUploadIds.add(String(upload.id || upload.local_id || upload.file_url || index));
+        });
         const hydratedUploads = await Promise.all(
-          uploads.map(async (upload) => {
+          uploads.map(async (upload, index) => {
             const submission = upload.submission_id ? submissionsById.get(String(upload.submission_id)) : null;
             const activityType = upload.activity_type || submission?.activity_type || upload.upload_role;
+            const uploadKey = String(upload.id || upload.local_id || upload.file_url || index);
             return {
               ...upload,
               submission,
               activityGroup: normalizeActivityGroup(activityType, upload.upload_role),
-              displayUrl: await signedActivityUploadUrl(upload),
+              displayUrl: coverUploadIds.has(uploadKey) ? await signedActivityUploadUrl(upload) : null,
             };
           }),
         );
@@ -10575,6 +11015,7 @@ export default function FOActivities() {
       }
       setKmRecalcResult(payload);
       setRefreshToken((value) => value + 1);
+      setSummaryRefreshToken((value) => value + 1);
     } catch (error) {
       setKmRecalcResult({ ok: false, message: error.message, confidence: "ERROR" });
       console.warn("[myQPMS FO] KM recalculation failed.", error);
@@ -10644,6 +11085,7 @@ export default function FOActivities() {
       setKmRecalcResult({ ...payload, message });
       setSupportMessage(message);
       setRefreshToken((value) => value + 1);
+      setSummaryRefreshToken((value) => value + 1);
     } catch (error) {
       const message = error.message || "Temporary Switch KM failed.";
       setKmRecalcResult({ ok: false, message, confidence: "ERROR" });
@@ -10900,43 +11342,13 @@ export default function FOActivities() {
   const onSiteOfficers = kpiOfficers.filter(
     (officer) => officer.operationalStatus === "ON_SITE",
   ).length;
-  const payableKpi = visibleAttendanceKpiRows.reduce(
-    (summary, row) => {
-      const employeeKey = normalizeFoKey(row.fo_user_id || row.employee_code);
-      const dateInput = attendanceDateInput(row);
-      const rowVisits = visitsForEmployeeDate(visibleSiteVisitRows, employeeKey, dateInput);
-      const baseKm = payableKmFromAttendance(row);
-      const adjustmentKm = rowVisits.reduce((sum, visit) => {
-        const visitKey = String(
-          visit?.id ||
-            `${employeeKey}:${visit?.check_in_time || ""}:${visit?.check_out_time || ""}`,
-        );
-        if (summary.approvedAdjustmentVisitKeys.has(visitKey)) return sum;
-        summary.approvedAdjustmentVisitKeys.add(visitKey);
-        return sum + approvedMissingCheckoutAdjustmentKmFromVisit(visit);
-      }, 0);
-      return {
-        basePayableKm: summary.basePayableKm + baseKm,
-        approvedMissingCheckoutAdjustmentKm:
-          summary.approvedMissingCheckoutAdjustmentKm + adjustmentKm,
-        payableKm: summary.payableKm + baseKm + adjustmentKm,
-        approvedAdjustmentVisitKeys: summary.approvedAdjustmentVisitKeys,
-      };
-    },
-    {
-      basePayableKm: 0,
-      approvedMissingCheckoutAdjustmentKm: 0,
-      payableKm: 0,
-      approvedAdjustmentVisitKeys: new Set(),
-    },
-  );
-  const liveRouteKm = payableKpi.payableKm;
+  const liveRouteKm = Number(filteredSummary.payable_km) || 0;
   const liveActualTravelKm = filteredOfficers.reduce(
     (sum, officer) =>
       sum + Number(officer.actualTravelKm ?? officer.actualKm ?? 0),
     0,
   );
-  const totalPetrolAmount = calculatePetrolAmount(liveRouteKm);
+  const totalPetrolAmount = Number(filteredSummary.petrol_amount) || 0;
   const distanceTravelled = `${liveRouteKm.toFixed(1)} km`;
   const actualTravelled = `${liveActualTravelKm.toFixed(1)} km`;
   const routeVsActual = `${(liveRouteKm - liveActualTravelKm).toFixed(1)} km`;
@@ -11000,7 +11412,10 @@ export default function FOActivities() {
         <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => setRefreshToken((value) => value + 1)}
+              onClick={() => {
+                setRefreshToken((value) => value + 1);
+                setSummaryRefreshToken((value) => value + 1);
+              }}
               className="focus-ring grid h-10 w-10 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:text-qpms-700"
               aria-label="Refresh operations data"
             >
@@ -11014,15 +11429,15 @@ export default function FOActivities() {
       </div>
 
       <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-[0_10px_28px_rgba(15,23,42,0.05)] dark:border-slate-800 dark:bg-slate-900">
-        <div className="grid items-end gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto]">
+        <div className="grid items-end gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto_auto]">
           <label>
             <span className="text-[11px] font-bold uppercase text-slate-500">
               From Date
             </span>
             <input
               type="date"
-              value={customFromDate}
-              onChange={(event) => setCustomFromDate(event.target.value)}
+              value={draftFromDate}
+              onChange={(event) => setDraftFromDate(event.target.value)}
               className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             />
           </label>
@@ -11032,8 +11447,8 @@ export default function FOActivities() {
             </span>
             <input
               type="date"
-              value={customToDate}
-              onChange={(event) => setCustomToDate(event.target.value)}
+              value={draftToDate}
+              onChange={(event) => setDraftToDate(event.target.value)}
               className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             />
           </label>
@@ -11042,8 +11457,8 @@ export default function FOActivities() {
               State
             </span>
             <select
-              value={stateFilter}
-              onChange={(event) => setStateFilter(event.target.value)}
+              value={draftStateFilter}
+              onChange={(event) => setDraftStateFilter(event.target.value)}
               className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             >
               <option>All States</option>
@@ -11057,8 +11472,8 @@ export default function FOActivities() {
               Business
             </span>
             <select
-              value={businessFilter}
-              onChange={(event) => setBusinessFilter(event.target.value)}
+              value={draftBusinessFilter}
+              onChange={(event) => setDraftBusinessFilter(event.target.value)}
               className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             >
               <option>All Business</option>
@@ -11072,8 +11487,8 @@ export default function FOActivities() {
               Status
             </span>
             <select
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
+              value={draftStatusFilter}
+              onChange={(event) => setDraftStatusFilter(event.target.value)}
               className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             >
               <option>All Status</option>
@@ -11089,13 +11504,16 @@ export default function FOActivities() {
           <div className="flex items-end">
             <button
               type="button"
-              onClick={() => {
-                setCustomFromDate(toDateInputValue(new Date()));
-                setCustomToDate(toDateInputValue(new Date()));
-                setStateFilter("All States");
-                setBusinessFilter("All Business");
-                setStatusFilter("All Status");
-              }}
+              onClick={applyDashboardFilters}
+              className="focus-ring h-10 w-full rounded-xl bg-qpms-700 px-4 text-sm font-black text-white hover:bg-qpms-800"
+            >
+              Apply
+            </button>
+          </div>
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={resetDashboardFilters}
               className="focus-ring h-10 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-black text-slate-600 hover:bg-slate-100"
             >
               Reset
@@ -11182,14 +11600,18 @@ export default function FOActivities() {
           value={distanceTravelled}
           icon={Route}
           tone="green"
-          hint="Adjusted"
+          hint={filteredSummaryLoading ? null : "Filtered"}
+          loading={filteredSummaryLoading}
+          error={Boolean(filteredSummaryError)}
         />
         <FleetKpi
           label="Petrol Amount"
           value={formatInr(totalPetrolAmount)}
           icon={CircleGauge}
           tone="amber"
-          hint="Adjusted"
+          hint={filteredSummaryLoading ? null : "Filtered"}
+          loading={filteredSummaryLoading}
+          error={Boolean(filteredSummaryError)}
         />
       </div>
 
@@ -11270,8 +11692,8 @@ export default function FOActivities() {
                 <label>
                   <span className="sr-only">Region</span>
                   <select
-                    value={stateFilter}
-                    onChange={(event) => setStateFilter(event.target.value)}
+                    value={draftStateFilter}
+                    onChange={(event) => setDraftStateFilter(event.target.value)}
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 outline-none focus:border-qpms-400"
                   >
                     <option>All States</option>
@@ -11286,8 +11708,8 @@ export default function FOActivities() {
                 <label>
                   <span className="sr-only">Status</span>
                   <select
-                    value={statusFilter}
-                    onChange={(event) => setStatusFilter(event.target.value)}
+                    value={draftStatusFilter}
+                    onChange={(event) => setDraftStatusFilter(event.target.value)}
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 outline-none focus:border-qpms-400"
                   >
                     <option>All Status</option>
