@@ -27,7 +27,7 @@ class _LocationsScreenState extends State<LocationsScreen> {
         .where((site) => site.name.toLowerCase().contains(query))
         .toList();
     return Scaffold(
-      appBar: AppBar(title: const Text('Sites / Locations')),
+      appBar: AppBar(title: const Text('Blocks / Locations')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
@@ -37,7 +37,7 @@ class _LocationsScreenState extends State<LocationsScreen> {
               onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(
                 prefixIcon: Icon(Icons.search_rounded),
-                hintText: 'Search Site / Location',
+                hintText: 'Search block or location',
               ),
             ),
             const SizedBox(height: 14),
@@ -91,7 +91,7 @@ class AboutScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'QPMS Client Ticketing App',
+                    'QPMS Client Ticketing',
                     style: TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w900,
@@ -100,12 +100,12 @@ class AboutScreen extends StatelessWidget {
                   ),
                   SizedBox(height: 10),
                   Text(
-                    'A frontend-only mobile demo for raising, tracking, and collaborating on facility-management service requests.',
+                    'A clean mobile experience for raising and tracking hospital housekeeping complaints.',
                     style: TextStyle(fontWeight: FontWeight.w700, height: 1.4),
                   ),
                   SizedBox(height: 12),
                   Text(
-                    'This demo uses local mock data only and works fully offline.',
+                    'Raise. Track. Resolve.',
                     style: TextStyle(
                       color: AppColors.muted,
                       fontWeight: FontWeight.w700,

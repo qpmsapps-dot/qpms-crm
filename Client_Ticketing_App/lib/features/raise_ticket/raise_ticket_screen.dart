@@ -1,18 +1,14 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/routes.dart';
-import '../../core/constants/app_assets.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/widgets/app_card.dart';
-import '../../core/widgets/app_drawer.dart';
 import '../../data/mock_data.dart';
 import '../../models/ticket.dart';
-import '../../state/notification_controller.dart';
 import '../../state/ticket_controller.dart';
 
 class RaiseTicketScreen extends StatefulWidget {
@@ -23,377 +19,250 @@ class RaiseTicketScreen extends StatefulWidget {
 }
 
 class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
-  final _draft = DraftTicket();
-  final _title = TextEditingController(
-    text: 'Lights Flickering in Main Corridor',
-  );
-  final _description = TextEditingController(
-    text:
-        'Lights in the main corridor are flickering continuously and require urgent inspection.',
-  );
-  final _search = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+  final _description = TextEditingController();
   final _picker = ImagePicker();
-  final _pickedImages = <XFile>[];
-  int _step = 0;
+  final _photos = <XFile>[];
+  final _draft = ComplaintDraft();
   bool _submitting = false;
-  String? _error;
-
-  final _categories = const [
-    ('Electrical', Icons.flash_on_rounded),
-    ('Plumbing', Icons.plumbing_rounded),
-    ('Housekeeping', Icons.cleaning_services_rounded),
-    ('Training', Icons.co_present_rounded),
-    ('Civil / Carpentry', Icons.handyman_rounded),
-    ('IT / Network', Icons.desktop_windows_rounded),
-    ('Security', Icons.security_rounded),
-    ('HVAC', Icons.ac_unit_rounded),
-    ('Other', Icons.more_horiz_rounded),
-  ];
 
   @override
   void dispose() {
-    _title.dispose();
     _description.dispose();
-    _search.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      drawer: const QpmsDrawer(),
-      appBar: AppBar(
-        title: Text('Raise New Ticket - Step ${_step + 1}'),
-        leading: _step == 0
-            ? Builder(
-                builder: (context) => IconButton(
-                  icon: const Icon(Icons.menu_rounded),
-                  onPressed: () => Scaffold.of(context).openDrawer(),
-                ),
-              )
-            : IconButton(
-                icon: const Icon(Icons.arrow_back_rounded),
-                onPressed: _back,
-              ),
-      ),
-      body: SafeArea(
-        child: Stack(
-          children: [
-            Positioned(
-              right: -30,
-              bottom: 8,
-              child: Opacity(
-                opacity: 0.1,
-                child: SvgPicture.asset(AppAssets.workerCorner, width: 170),
-              ),
-            ),
-            ListView(
-              padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
-              children: [
-                _StepHeader(step: _step),
-                const SizedBox(height: 18),
-                if (_step == 0) _categoryStep(),
-                if (_step == 1) _locationStep(),
-                if (_step == 2) _reviewStep(),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _categoryStep() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Select Category',
-          style: TextStyle(
-            fontWeight: FontWeight.w900,
-            color: AppColors.deepBlue,
-          ),
-        ),
-        const SizedBox(height: 12),
-        GridView.count(
-          crossAxisCount: 3,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          children: [
-            for (final item in _categories)
-              _CategoryTile(
-                label: item.$1,
-                icon: item.$2,
-                selected: _draft.category == item.$1,
-                onTap: () => setState(() => _draft.category = item.$1),
-              ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        TextField(
-          controller: _title,
-          decoration: const InputDecoration(
-            labelText: 'Issue Title *',
-            hintText: 'Enter a short title of the issue',
-          ),
-          onChanged: (_) => setState(() {}),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _description,
-          minLines: 4,
-          maxLines: 5,
-          maxLength: 250,
-          decoration: const InputDecoration(
-            labelText: 'Description *',
-            hintText: 'Provide more details about the issue',
-          ),
-          onChanged: (_) => setState(() {}),
-        ),
-        if (_error != null) _ErrorText(_error!),
-        const SizedBox(height: 8),
-        ElevatedButton(
-          onPressed: _canGoStep1 ? _nextFromStep1 : null,
-          child: const Text('Next'),
-        ),
-      ],
-    );
-  }
-
-  Widget _locationStep() {
-    final query = _search.text.trim().toLowerCase();
-    final sites = demoSites
-        .where((site) => site.name.toLowerCase().contains(query))
+    final controller = context.watch<TicketController>();
+    final blockValues = controller.blocks.isEmpty
+        ? demoBlocks
+        : controller.blocks.map((row) => '${row['block_name']}').toList();
+    final selectedBlock = blockValues.contains(_draft.block)
+        ? _draft.block
+        : blockValues.first;
+    final matchingBlocks = controller.blocks
+        .where((row) => row['block_name'] == selectedBlock)
         .toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Select Site / Location',
-          style: TextStyle(
-            fontWeight: FontWeight.w900,
-            color: AppColors.deepBlue,
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _search,
-          onChanged: (_) => setState(() {}),
-          decoration: const InputDecoration(
-            prefixIcon: Icon(Icons.search_rounded),
-            hintText: 'Search Site / Location',
-          ),
-        ),
-        const SizedBox(height: 12),
-        for (final site in sites)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: AppCard(
-              padding: EdgeInsets.zero,
-              onTap: () => setState(() => _draft.site = site.name),
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Row(
+    final blockId = matchingBlocks.isEmpty ? null : matchingBlocks.first['id'];
+    final locationValues = controller.locations.isEmpty
+        ? demoLocations
+        : controller.locations
+              .where((row) => blockId == null || row['block_id'] == blockId)
+              .map((row) => '${row['location_name']}')
+              .toList();
+    final floorValues = controller.locations.isEmpty
+        ? demoFloors
+        : controller.locations
+              .where((row) => blockId == null || row['block_id'] == blockId)
+              .map((row) => '${row['floor_name']}')
+              .toSet()
+              .toList();
+    final categoryValues = controller.categories.isEmpty
+        ? housekeepingCategories
+        : controller.categories
+              .map((row) => '${row['category_name']}')
+              .toList();
+    return Scaffold(
+      appBar: AppBar(title: const Text('Raise Complaint')),
+      body: SafeArea(
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(18, 6, 18, 28),
+            children: [
+              const _IntroCard(),
+              const SizedBox(height: 16),
+              AppCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(
-                      _draft.site == site.name
-                          ? Icons.radio_button_checked_rounded
-                          : Icons.radio_button_unchecked_rounded,
-                      color: AppColors.royalBlue,
+                    const _SectionTitle('Complaint location'),
+                    const SizedBox(height: 14),
+                    _SelectField(
+                      label: 'Block',
+                      value: selectedBlock,
+                      values: blockValues,
+                      icon: Icons.apartment_rounded,
+                      onChanged: (value) => setState(() {
+                        _draft.block = value;
+                        final selected = controller.blocks
+                            .where((row) => row['block_name'] == value)
+                            .toList();
+                        final nextBlockId = selected.isEmpty
+                            ? null
+                            : selected.first['id'];
+                        final available = controller.locations
+                            .where((row) => row['block_id'] == nextBlockId)
+                            .toList();
+                        if (available.isNotEmpty) {
+                          _draft.floor = '${available.first['floor_name']}';
+                          _draft.location =
+                              '${available.first['location_name']}';
+                        }
+                      }),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        site.name,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w900,
-                          color: AppColors.deepBlue,
+                    const SizedBox(height: 12),
+                    _SelectField(
+                      label: 'Floor',
+                      value: _draft.floor,
+                      values: floorValues,
+                      icon: Icons.layers_rounded,
+                      onChanged: (value) =>
+                          setState(() => _draft.floor = value),
+                    ),
+                    const SizedBox(height: 12),
+                    _SelectField(
+                      label: 'Department / Location',
+                      value: _draft.location,
+                      values: locationValues,
+                      icon: Icons.location_on_rounded,
+                      onChanged: (value) =>
+                          setState(() => _draft.location = value),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              AppCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const _SectionTitle('Complaint details'),
+                    const SizedBox(height: 14),
+                    _SelectField(
+                      label: 'Category',
+                      value: _draft.category,
+                      values: categoryValues,
+                      icon: Icons.cleaning_services_rounded,
+                      onChanged: (value) =>
+                          setState(() => _draft.category = value),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Priority',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.muted,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SegmentedButton<TicketPriority>(
+                      segments: TicketPriority.values
+                          .map(
+                            (priority) => ButtonSegment(
+                              value: priority,
+                              label: Text(priorityLabel(priority)),
+                            ),
+                          )
+                          .toList(),
+                      selected: {_draft.priority},
+                      onSelectionChanged: (values) =>
+                          setState(() => _draft.priority = values.first),
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _description,
+                      minLines: 4,
+                      maxLines: 6,
+                      maxLength: 300,
+                      decoration: const InputDecoration(
+                        labelText: 'Description *',
+                        hintText:
+                            'Example: Bathroom not cleaned properly near nurse station',
+                        alignLabelWithHint: true,
+                      ),
+                      validator: (value) =>
+                          value == null || value.trim().isEmpty
+                          ? 'Please describe the housekeeping complaint.'
+                          : null,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              AppCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Expanded(child: _SectionTitle('Photo (optional)')),
+                        Text(
+                          'Up to 3',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.muted,
+                          ),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        for (final photo in _photos)
+                          _PhotoThumb(
+                            photo: photo,
+                            onRemove: () =>
+                                setState(() => _photos.remove(photo)),
+                          ),
+                        if (_photos.length < 3)
+                          _AddPhotoButton(onTap: _choosePhoto),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Add a clear photo without including patient records or personal information.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        height: 1.35,
+                        color: AppColors.muted,
                       ),
                     ),
                   ],
                 ),
               ),
-            ),
-          ),
-        if (_error != null) _ErrorText(_error!),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _back,
-                child: const Text('Back'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: ElevatedButton(
-                onPressed: _draft.site.isNotEmpty ? _nextFromStep2 : null,
-                child: const Text('Next'),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _reviewStep() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Review & Submit',
-          style: TextStyle(
-            fontWeight: FontWeight.w900,
-            color: AppColors.deepBlue,
-          ),
-        ),
-        const SizedBox(height: 12),
-        AppCard(
-          child: Column(
-            children: [
-              _ReviewRow('Category', _draft.category),
-              _ReviewRow('Site / Location', _draft.site),
-              _ReviewRow('Issue Title', _title.text),
-              _ReviewRow('Description', _description.text),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          'Priority',
-          style: TextStyle(
-            fontWeight: FontWeight.w900,
-            color: AppColors.deepBlue,
-          ),
-        ),
-        const SizedBox(height: 8),
-        SegmentedButton<TicketPriority>(
-          segments: TicketPriority.values
-              .map(
-                (priority) => ButtonSegment(
-                  value: priority,
-                  label: Text(priorityLabel(priority)),
-                  icon: Icon(_priorityIcon(priority)),
-                ),
-              )
-              .toList(),
-          selected: {_draft.priority},
-          onSelectionChanged: (value) =>
-              setState(() => _draft.priority = value.first),
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          'Upload Photos',
-          style: TextStyle(
-            fontWeight: FontWeight.w900,
-            color: AppColors.deepBlue,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            for (final image in _pickedImages)
-              _PickedThumb(
-                image: image,
-                onRemove: () => setState(() => _pickedImages.remove(image)),
-              ),
-            _MockThumb(AppAssets.photoPanel),
-            _MockThumb(AppAssets.photoLight),
-            _AddPhotoButton(onTap: _pickPhoto),
-          ],
-        ),
-        if (_error != null) _ErrorText(_error!),
-        const SizedBox(height: 18),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _submitting ? null : _back,
-                child: const Text('Back'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: ElevatedButton(
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
                 onPressed: _submitting ? null : _submit,
-                child: _submitting
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
+                icon: _submitting
+                    ? const SizedBox.square(
+                        dimension: 18,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
                           color: Colors.white,
                         ),
                       )
-                    : const Text('Submit Ticket'),
+                    : const Icon(Icons.send_rounded),
+                label: Text(
+                  _submitting ? 'Submitting complaint…' : 'Submit Complaint',
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ],
+      ),
     );
   }
 
-  bool get _canGoStep1 =>
-      _draft.category.isNotEmpty &&
-      _title.text.trim().isNotEmpty &&
-      _description.text.trim().isNotEmpty;
-
-  void _nextFromStep1() {
-    if (!_canGoStep1) {
-      setState(() => _error = 'Please select category, title and description.');
-      return;
-    }
-    _draft
-      ..title = _title.text
-      ..description = _description.text;
-    setState(() {
-      _error = null;
-      _step = 1;
-    });
-  }
-
-  void _nextFromStep2() {
-    if (_draft.site.isEmpty) {
-      setState(() => _error = 'Please select a site / location.');
-      return;
-    }
-    setState(() {
-      _error = null;
-      _step = 2;
-    });
-  }
-
-  void _back() {
-    if (_step == 0) {
-      Navigator.pop(context);
-    } else {
-      setState(() => _step -= 1);
-    }
-  }
-
-  Future<void> _pickPhoto() async {
+  Future<void> _choosePhoto() async {
     final source = await showModalBottomSheet<ImageSource>(
       context: context,
       builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+        child: Wrap(
           children: [
             ListTile(
               leading: const Icon(Icons.photo_library_rounded),
-              title: const Text('Choose from Gallery'),
+              title: const Text('Choose from gallery'),
               onTap: () => Navigator.pop(context, ImageSource.gallery),
             ),
             ListTile(
-              leading: const Icon(Icons.photo_camera_rounded),
-              title: const Text('Use Camera'),
+              leading: const Icon(Icons.camera_alt_rounded),
+              title: const Text('Take a photo'),
               onTap: () => Navigator.pop(context, ImageSource.camera),
             ),
           ],
@@ -402,14 +271,18 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
     );
     if (source == null) return;
     try {
-      final photo = await _picker.pickImage(source: source, imageQuality: 75);
-      if (photo != null) setState(() => _pickedImages.add(photo));
+      final image = await _picker.pickImage(
+        source: source,
+        imageQuality: 75,
+        maxWidth: 1600,
+      );
+      if (image != null && mounted) setState(() => _photos.add(image));
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Photo permission unavailable. Demo photos remain available.',
+            'Photo access is unavailable. You can submit without a photo.',
           ),
         ),
       );
@@ -417,286 +290,191 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
   }
 
   Future<void> _submit() async {
-    _draft
-      ..title = _title.text
-      ..description = _description.text
-      ..photos = const [
-        AppAssets.photoPanel,
-        AppAssets.photoLight,
-        AppAssets.photoWiring,
-      ];
-    if (!context.read<TicketController>().isDraftValid(_draft)) {
-      setState(() => _error = 'Please complete all required ticket details.');
-      return;
-    }
+    if (!_formKey.currentState!.validate()) return;
     setState(() => _submitting = true);
-    await Future<void>.delayed(const Duration(milliseconds: 650));
+    await Future<void>.delayed(const Duration(milliseconds: 450));
     if (!mounted) return;
-    final ticket = context.read<TicketController>().submitDraft(_draft);
-    context.read<NotificationController>().addTicketRaisedNotification(
-      ticket.number,
-    );
-    setState(() => _submitting = false);
-    _showSuccess(ticket.number);
-  }
-
-  IconData _priorityIcon(TicketPriority priority) {
-    return switch (priority) {
-      TicketPriority.low => Icons.check_circle_rounded,
-      TicketPriority.medium => Icons.error_rounded,
-      TicketPriority.high => Icons.priority_high_rounded,
-    };
-  }
-
-  Future<void> _showSuccess(String ticketNumber) async {
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('Ticket Raised Successfully'),
-        content: Text('Ticket Number: $ticketNumber'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.pushReplacementNamed(
-                context,
-                AppRoutes.ticketDetails,
-                arguments: ticketNumber,
-              );
-            },
-            child: const Text('View Ticket'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.pushNamedAndRemoveUntil(
-                context,
-                AppRoutes.dashboard,
-                (_) => false,
-              );
-            },
-            child: const Text('Back to Dashboard'),
-          ),
-        ],
-      ),
-    );
+    _draft
+      ..description = _description.text
+      ..photoPaths = _photos.map((photo) => photo.path).toList();
+    try {
+      final ticket = await context.read<TicketController>().submitComplaint(
+        _draft,
+      );
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(
+        context,
+        AppRoutes.ticketSubmitted,
+        arguments: ticket.number,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
   }
 }
 
-class _StepHeader extends StatelessWidget {
-  const _StepHeader({required this.step});
-  final int step;
-
+class _IntroCard extends StatelessWidget {
+  const _IntroCard();
   @override
-  Widget build(BuildContext context) {
-    final labels = ['Category', 'Location', 'Review'];
-    return Row(
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: AppColors.paleBlue,
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: const Color(0xFFBFDBFE)),
+    ),
+    child: const Row(
       children: [
-        for (var i = 0; i < labels.length; i++) ...[
-          Expanded(
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 14,
-                  backgroundColor: step == i
-                      ? AppColors.royalBlue
-                      : AppColors.paleBlue,
-                  child: Text(
-                    '${i + 1}',
-                    style: TextStyle(
-                      color: step == i ? Colors.white : AppColors.royalBlue,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 5),
-                Flexible(
-                  child: Text(
-                    labels[i],
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w900,
-                      color: step == i ? AppColors.royalBlue : AppColors.muted,
-                    ),
-                  ),
-                ),
-              ],
-            ),
+        CircleAvatar(
+          backgroundColor: Colors.white,
+          child: Icon(
+            Icons.cleaning_services_rounded,
+            color: AppColors.royalBlue,
           ),
-          if (i < labels.length - 1) const SizedBox(width: 6),
-        ],
+        ),
+        SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Housekeeping support',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.deepBlue,
+                ),
+              ),
+              SizedBox(height: 3),
+              Text(
+                'Share the exact location so our team can respond quickly.',
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.35,
+                  color: AppColors.muted,
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
-    );
-  }
+    ),
+  );
 }
 
-class _CategoryTile extends StatelessWidget {
-  const _CategoryTile({
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.text);
+  final String text;
+  @override
+  Widget build(BuildContext context) => Text(
+    text,
+    style: const TextStyle(
+      fontSize: 15,
+      fontWeight: FontWeight.w900,
+      color: AppColors.deepBlue,
+    ),
+  );
+}
+
+class _SelectField extends StatelessWidget {
+  const _SelectField({
     required this.label,
+    required this.value,
+    required this.values,
     required this.icon,
-    required this.selected,
-    required this.onTap,
+    required this.onChanged,
   });
   final String label;
-  final IconData icon;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return AppCard(
-      onTap: onTap,
-      padding: const EdgeInsets.all(8),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            icon,
-            color: selected ? AppColors.royalBlue : AppColors.purple,
-            size: 28,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ReviewRow extends StatelessWidget {
-  const _ReviewRow(this.label, this.value);
-  final String label;
   final String value;
-
+  final List<String> values;
+  final IconData icon;
+  final ValueChanged<String> onChanged;
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 108,
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: AppColors.muted,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: const TextStyle(
-                fontWeight: FontWeight.w900,
-                color: AppColors.deepBlue,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MockThumb extends StatelessWidget {
-  const _MockThumb(this.asset);
-  final String asset;
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: SvgPicture.asset(asset, width: 70, height: 62, fit: BoxFit.cover),
-    );
-  }
-}
-
-class _PickedThumb extends StatelessWidget {
-  const _PickedThumb({required this.image, required this.onRemove});
-  final XFile image;
-  final VoidCallback onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: Image.file(
-            File(image.path),
-            width: 70,
-            height: 62,
-            fit: BoxFit.cover,
-          ),
-        ),
-        Positioned(
-          right: 2,
-          top: 2,
-          child: InkWell(
-            onTap: onRemove,
-            child: const CircleAvatar(
-              radius: 10,
-              backgroundColor: AppColors.red,
-              child: Icon(Icons.close, size: 14, color: Colors.white),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => DropdownButtonFormField<String>(
+    initialValue: values.contains(value) ? value : values.first,
+    decoration: InputDecoration(labelText: label, prefixIcon: Icon(icon)),
+    items: values
+        .map((item) => DropdownMenuItem(value: item, child: Text(item)))
+        .toList(),
+    onChanged: (next) {
+      if (next != null) onChanged(next);
+    },
+  );
 }
 
 class _AddPhotoButton extends StatelessWidget {
   const _AddPhotoButton({required this.onTap});
   final VoidCallback onTap;
-
   @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        width: 70,
-        height: 62,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.line),
-        ),
-        child: const Icon(
-          Icons.add_rounded,
-          color: AppColors.royalBlue,
-          size: 32,
-        ),
+  Widget build(BuildContext context) => InkWell(
+    onTap: onTap,
+    borderRadius: BorderRadius.circular(14),
+    child: Container(
+      width: 86,
+      height: 86,
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.line),
+        borderRadius: BorderRadius.circular(14),
+        color: AppColors.paleBlue,
       ),
-    );
-  }
+      child: const Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.add_a_photo_rounded, color: AppColors.royalBlue),
+          SizedBox(height: 5),
+          Text(
+            'Add photo',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              color: AppColors.deepBlue,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
-class _ErrorText extends StatelessWidget {
-  const _ErrorText(this.text);
-  final String text;
-
+class _PhotoThumb extends StatelessWidget {
+  const _PhotoThumb({required this.photo, required this.onRemove});
+  final XFile photo;
+  final VoidCallback onRemove;
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: AppColors.red,
-          fontWeight: FontWeight.w800,
+  Widget build(BuildContext context) => Stack(
+    clipBehavior: Clip.none,
+    children: [
+      ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Image.file(
+          File(photo.path),
+          width: 86,
+          height: 86,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => Container(
+            width: 86,
+            height: 86,
+            color: AppColors.paleBlue,
+            child: const Icon(Icons.broken_image_outlined),
+          ),
         ),
       ),
-    );
-  }
+      Positioned(
+        right: -6,
+        top: -6,
+        child: IconButton.filled(
+          onPressed: onRemove,
+          icon: const Icon(Icons.close, size: 14),
+          style: IconButton.styleFrom(
+            backgroundColor: AppColors.red,
+            minimumSize: const Size(26, 26),
+            padding: EdgeInsets.zero,
+          ),
+        ),
+      ),
+    ],
+  );
 }

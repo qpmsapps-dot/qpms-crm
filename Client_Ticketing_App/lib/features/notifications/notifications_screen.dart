@@ -105,6 +105,7 @@ class _NotificationIcon extends StatelessWidget {
       'comment' => (Icons.chat_bubble_rounded, AppColors.purple),
       'done' => (Icons.verified_rounded, AppColors.green),
       'closed' => (Icons.check_circle_rounded, AppColors.green),
+      'alert' => (Icons.priority_high_rounded, AppColors.orange),
       _ => (Icons.confirmation_number_rounded, AppColors.orange),
     };
     return CircleAvatar(

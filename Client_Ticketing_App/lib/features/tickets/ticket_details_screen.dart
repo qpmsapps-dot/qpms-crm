@@ -1,50 +1,58 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 
+import '../../app/routes.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/widgets/app_card.dart';
 import '../../core/widgets/chips.dart';
-import '../../data/mock_data.dart';
+import '../../models/ticket.dart';
+import '../../models/ticket_update.dart';
 import '../../state/ticket_controller.dart';
 
 class TicketDetailsScreen extends StatefulWidget {
   const TicketDetailsScreen({required this.ticketNumber, super.key});
-
   final String ticketNumber;
 
   @override
   State<TicketDetailsScreen> createState() => _TicketDetailsScreenState();
 }
 
-class _TicketDetailsScreenState extends State<TicketDetailsScreen>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tabController;
-  final _comment = TextEditingController();
-
+class _TicketDetailsScreenState extends State<TicketDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    _comment.dispose();
-    super.dispose();
+    context.read<TicketController>().loadDetail(widget.ticketNumber);
   }
 
   @override
   Widget build(BuildContext context) {
-    final controller = context.watch<TicketController>();
-    final ticket = controller.ticketByNumber(widget.ticketNumber);
-    final comments = controller.commentsFor(widget.ticketNumber);
+    final ticket = context.watch<TicketController>().ticketByNumber(
+      widget.ticketNumber,
+    );
     return Scaffold(
-      appBar: AppBar(title: const Text('Ticket Details')),
+      appBar: AppBar(title: const Text('Track Ticket')),
+      bottomNavigationBar: ticket.status == TicketStatus.awaitingConfirmation
+          ? SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 10, 18, 16),
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.pushNamed(
+                    context,
+                    AppRoutes.feedback,
+                    arguments: ticket.number,
+                  ),
+                  icon: const Icon(Icons.verified_rounded),
+                  label: const Text('Confirm Completed Work'),
+                ),
+              ),
+            )
+          : null,
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+          padding: const EdgeInsets.fromLTRB(18, 6, 18, 26),
           children: [
             AppCard(
               child: Column(
@@ -54,423 +62,518 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Expanded(
-                        child: Text(
-                          ticket.number,
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.deepBlue,
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              ticket.number,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w900,
+                                color: AppColors.deepBlue,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              formatTicketDateTime(ticket.raisedAt),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.muted,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      StatusChip(ticket.status),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    ticket.title,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
                       PriorityChip(ticket.priority),
-                      _InfoPill(Icons.category_rounded, ticket.category),
-                      _InfoPill(Icons.location_on_rounded, ticket.site),
                     ],
                   ),
                   const SizedBox(height: 14),
-                  _InfoLine('Raised date', ticket.raisedDate),
-                  _InfoLine('Description', ticket.description),
-                  const SizedBox(height: 10),
-                  const Text(
-                    'Photos',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.deepBlue,
-                    ),
+                  StatusChip(ticket.status),
+                  const SizedBox(height: 14),
+                  _InfoLine(
+                    Icons.location_on_rounded,
+                    'Location',
+                    ticket.fullLocation,
                   ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 10,
-                    children: ticket.photoAssets
-                        .map(
-                          (asset) => ClipRRect(
-                            borderRadius: BorderRadius.circular(12),
-                            child: SvgPicture.asset(
-                              asset,
-                              width: 82,
-                              height: 64,
-                              fit: BoxFit.cover,
-                            ),
-                          ),
-                        )
-                        .toList(),
+                  _InfoLine(
+                    Icons.cleaning_services_rounded,
+                    'Category',
+                    ticket.category,
+                  ),
+                  _InfoLine(
+                    Icons.description_rounded,
+                    'Complaint',
+                    ticket.description,
                   ),
                 ],
               ),
             ),
+            if (ticket.complaintPhotoAssets.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              _PhotoSection(
+                title: 'Complaint photo',
+                assets: ticket.complaintPhotoAssets,
+              ),
+            ],
             const SizedBox(height: 14),
-            AppCard(
-              child: Row(
-                children: [
-                  const CircleAvatar(
-                    radius: 24,
-                    backgroundColor: AppColors.paleBlue,
-                    child: Icon(
-                      Icons.engineering_rounded,
-                      color: AppColors.royalBlue,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          ticket.assignedTechnician,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.deepBlue,
-                          ),
-                        ),
-                        const Text(
-                          'Technician',
-                          style: TextStyle(
-                            color: AppColors.muted,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: _communicationDialog,
-                    icon: const Icon(
-                      Icons.call_rounded,
-                      color: AppColors.royalBlue,
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: _communicationDialog,
-                    icon: const Icon(
-                      Icons.chat_rounded,
-                      color: AppColors.purple,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            _AssignmentCard(ticket: ticket),
             const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _openCommentSheet,
-                    child: const Text('Add Comment'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _communicationDialog,
-                    child: const Text('Call / Chat'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: const Color(0xFFE2E8F0)),
-              ),
-              child: Column(
-                children: [
-                  TabBar(
-                    controller: _tabController,
-                    labelColor: AppColors.royalBlue,
-                    unselectedLabelColor: AppColors.muted,
-                    tabs: const [
-                      Tab(text: 'Updates'),
-                      Tab(text: 'Comments'),
-                    ],
-                  ),
-                  SizedBox(
-                    height: 390,
-                    child: TabBarView(
-                      controller: _tabController,
-                      children: [
-                        _UpdatesTimeline(),
-                        _CommentsPane(
-                          comments: comments,
-                          controller: _comment,
-                          onSend: () {
-                            context.read<TicketController>().addComment(
-                              widget.ticketNumber,
-                              _comment.text,
-                            );
-                            _comment.clear();
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _communicationDialog() {
-    showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        content: const Text(
-          'Technician communication will be enabled in the production version.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _openCommentSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(
-          left: 18,
-          right: 18,
-          top: 18,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 18,
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _comment,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  hintText: 'Type a comment...',
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            IconButton(
-              onPressed: () {
-                context.read<TicketController>().addComment(
-                  widget.ticketNumber,
-                  _comment.text,
-                );
-                _comment.clear();
-                Navigator.pop(context);
-              },
-              icon: const Icon(Icons.send_rounded, color: AppColors.royalBlue),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _UpdatesTimeline extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return ListView.builder(
-      padding: const EdgeInsets.all(14),
-      itemCount: demoUpdates.length,
-      itemBuilder: (context, index) {
-        final update = demoUpdates[index];
-        final color = [
-          AppColors.royalBlue,
-          AppColors.purple,
-          AppColors.orange,
-          AppColors.orange,
-          AppColors.green,
-        ][index];
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Column(
-              children: [
-                CircleAvatar(
-                  radius: 14,
-                  backgroundColor: color.withValues(alpha: 0.15),
-                  child: Icon(Icons.check_rounded, size: 16, color: color),
-                ),
-                if (index < demoUpdates.length - 1)
-                  Container(
-                    width: 2,
-                    height: 46,
-                    color: color.withValues(alpha: 0.18),
-                  ),
-              ],
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: 18),
+            _ProgressCard(ticket: ticket),
+            const SizedBox(height: 14),
+            _UpdatesCard(updates: ticket.updates),
+            if (ticket.resolutionNotes.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              AppCard(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      update.title,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w900,
-                        color: color,
-                      ),
+                    const _CardTitle(
+                      icon: Icons.task_alt_rounded,
+                      title: 'Resolution notes',
                     ),
+                    const SizedBox(height: 10),
                     Text(
-                      update.body,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    Text(
-                      update.dateTime,
+                      ticket.resolutionNotes,
                       style: const TextStyle(
-                        color: AppColors.muted,
-                        fontSize: 12,
+                        height: 1.45,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.ink,
                       ),
                     ),
                   ],
                 ),
               ),
-            ),
+            ],
+            if (ticket.completionPhotoAssets.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              _PhotoSection(
+                title: 'Completion photo',
+                assets: ticket.completionPhotoAssets,
+              ),
+            ],
+            if (ticket.status == TicketStatus.closed &&
+                ticket.feedbackRating != null) ...[
+              const SizedBox(height: 14),
+              AppCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const _CardTitle(
+                      icon: Icons.star_rounded,
+                      title: 'Your feedback',
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: List.generate(
+                        5,
+                        (index) => Icon(
+                          index < ticket.feedbackRating!
+                              ? Icons.star_rounded
+                              : Icons.star_border_rounded,
+                          color: const Color(0xFFF59E0B),
+                        ),
+                      ),
+                    ),
+                    if (ticket.feedbackComment.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(ticket.feedbackComment),
+                    ],
+                  ],
+                ),
+              ),
+            ],
           ],
-        );
-      },
+        ),
+      ),
     );
   }
 }
 
-class _CommentsPane extends StatelessWidget {
-  const _CommentsPane({
-    required this.comments,
-    required this.controller,
-    required this.onSend,
-  });
-  final List<String> comments;
-  final TextEditingController controller;
-  final VoidCallback onSend;
-
+class _AssignmentCard extends StatelessWidget {
+  const _AssignmentCard({required this.ticket});
+  final Ticket ticket;
   @override
-  Widget build(BuildContext context) {
-    return Column(
+  Widget build(BuildContext context) => AppCard(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.all(14),
-            children: comments
-                .map(
-                  (comment) => Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppColors.purple.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Text(
-                      comment,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
+        const _CardTitle(icon: Icons.badge_rounded, title: 'Assignment & SLA'),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            const CircleAvatar(
+              backgroundColor: AppColors.paleBlue,
+              child: Icon(Icons.person_rounded, color: AppColors.royalBlue),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    ticket.assignedPerson,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.ink,
                     ),
                   ),
-                )
-                .toList(),
-          ),
+                  Text(
+                    ticket.assignedRole,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
-        Padding(
-          padding: const EdgeInsets.all(12),
+        const SizedBox(height: 12),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(11),
+          decoration: BoxDecoration(
+            color: AppColors.paleBlue,
+            borderRadius: BorderRadius.circular(12),
+          ),
           child: Row(
             children: [
-              Expanded(
-                child: TextField(
-                  controller: controller,
-                  decoration: const InputDecoration(
-                    hintText: 'Type a comment...',
-                  ),
-                ),
+              const Icon(
+                Icons.timer_outlined,
+                size: 18,
+                color: AppColors.royalBlue,
               ),
-              IconButton(
-                onPressed: onSend,
-                icon: const Icon(
-                  Icons.send_rounded,
-                  color: AppColors.royalBlue,
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  ticket.slaLabel,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.deepBlue,
+                  ),
                 ),
               ),
             ],
           ),
         ),
       ],
-    );
-  }
+    ),
+  );
 }
 
-class _InfoPill extends StatelessWidget {
-  const _InfoPill(this.icon, this.text);
-  final IconData icon;
-  final String text;
+class _ProgressCard extends StatelessWidget {
+  const _ProgressCard({required this.ticket});
+  final Ticket ticket;
+  static const steps = [
+    ('Open', TicketStatus.open),
+    ('Assigned to Supervisor', TicketStatus.assigned),
+    ('In Progress', TicketStatus.inProgress),
+    ('Escalated to Operations Executive', TicketStatus.escalatedOperations),
+    ('Escalated to Facility Manager', TicketStatus.escalatedFacilityManager),
+    ('Resolved – Awaiting Confirmation', TicketStatus.awaitingConfirmation),
+    ('Closed', TicketStatus.closed),
+  ];
+
+  int get activeIndex => steps.indexWhere((step) => step.$2 == ticket.status);
 
   @override
+  Widget build(BuildContext context) => AppCard(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _CardTitle(icon: Icons.route_rounded, title: 'Ticket progress'),
+        const SizedBox(height: 14),
+        for (var index = 0; index < steps.length; index++)
+          _ProgressStep(
+            label: steps[index].$1,
+            complete:
+                index < activeIndex || ticket.status == TicketStatus.closed,
+            active: index == activeIndex,
+            last: index == steps.length - 1,
+          ),
+      ],
+    ),
+  );
+}
+
+class _ProgressStep extends StatelessWidget {
+  const _ProgressStep({
+    required this.label,
+    required this.complete,
+    required this.active,
+    required this.last,
+  });
+  final String label;
+  final bool complete;
+  final bool active;
+  final bool last;
+  @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: AppColors.paleBlue,
-        borderRadius: BorderRadius.circular(999),
-      ),
+    final color = complete
+        ? AppColors.green
+        : active
+        ? AppColors.royalBlue
+        : AppColors.line;
+    return IntrinsicHeight(
       child: Row(
-        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(icon, size: 15, color: AppColors.royalBlue),
-          const SizedBox(width: 5),
-          Text(
-            text,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+          SizedBox(
+            width: 26,
+            child: Column(
+              children: [
+                Container(
+                  width: 20,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: complete ? AppColors.green : Colors.white,
+                    border: Border.all(color: color, width: 2),
+                  ),
+                  child: complete
+                      ? const Icon(Icons.check, size: 13, color: Colors.white)
+                      : active
+                      ? const Center(
+                          child: CircleAvatar(
+                            radius: 3,
+                            backgroundColor: AppColors.royalBlue,
+                          ),
+                        )
+                      : null,
+                ),
+                if (!last)
+                  Expanded(
+                    child: Container(
+                      width: 2,
+                      color: complete
+                          ? const Color(0xFF86EFAC)
+                          : AppColors.line,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 18),
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: active || complete
+                      ? FontWeight.w900
+                      : FontWeight.w600,
+                  color: active
+                      ? AppColors.royalBlue
+                      : complete
+                      ? AppColors.ink
+                      : AppColors.muted,
+                ),
+              ),
+            ),
           ),
         ],
       ),
     );
   }
+}
+
+class _UpdatesCard extends StatelessWidget {
+  const _UpdatesCard({required this.updates});
+  final List<TicketUpdate> updates;
+  @override
+  Widget build(BuildContext context) => AppCard(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _CardTitle(icon: Icons.update_rounded, title: 'Status updates'),
+        const SizedBox(height: 12),
+        for (final update in updates.reversed)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CircleAvatar(
+                  radius: 15,
+                  backgroundColor: update.isEscalation
+                      ? const Color(0xFFFFEDD5)
+                      : AppColors.paleBlue,
+                  child: Icon(
+                    update.isEscalation
+                        ? Icons.priority_high_rounded
+                        : Icons.check_rounded,
+                    size: 16,
+                    color: update.isEscalation
+                        ? AppColors.orange
+                        : AppColors.royalBlue,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        update.title,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.ink,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        update.body,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          height: 1.35,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        formatTicketDateTime(update.dateTime),
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+class _PhotoSection extends StatelessWidget {
+  const _PhotoSection({required this.title, required this.assets});
+  final String title;
+  final List<String> assets;
+  @override
+  Widget build(BuildContext context) => AppCard(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _CardTitle(icon: Icons.photo_rounded, title: title),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 180,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: assets.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            itemBuilder: (_, index) => ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: _TicketImage(path: assets[index]),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _TicketImage extends StatelessWidget {
+  const _TicketImage({required this.path});
+  final String path;
+  @override
+  Widget build(BuildContext context) {
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      return Image.network(
+        path,
+        width: 280,
+        height: 180,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => _imageError(),
+      );
+    }
+    if (path.endsWith('.svg')) {
+      return SvgPicture.asset(path, width: 280, height: 180, fit: BoxFit.cover);
+    }
+    return Image.file(
+      File(path),
+      width: 280,
+      height: 180,
+      fit: BoxFit.cover,
+      errorBuilder: (_, _, _) => _imageError(),
+    );
+  }
+
+  Widget _imageError() => Container(
+    width: 280,
+    height: 180,
+    color: AppColors.paleBlue,
+    child: const Center(
+      child: Icon(Icons.broken_image_outlined, color: AppColors.muted),
+    ),
+  );
+}
+
+class _CardTitle extends StatelessWidget {
+  const _CardTitle({required this.icon, required this.title});
+  final IconData icon;
+  final String title;
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Icon(icon, size: 19, color: AppColors.royalBlue),
+      const SizedBox(width: 8),
+      Text(
+        title,
+        style: const TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w900,
+          color: AppColors.deepBlue,
+        ),
+      ),
+    ],
+  );
 }
 
 class _InfoLine extends StatelessWidget {
-  const _InfoLine(this.label, this.value);
+  const _InfoLine(this.icon, this.label, this.value);
+  final IconData icon;
   final String label;
   final String value;
-
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: AppColors.royalBlue),
+        const SizedBox(width: 9),
+        SizedBox(
+          width: 72,
+          child: Text(
             label,
             style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
               color: AppColors.muted,
-              fontWeight: FontWeight.w800,
             ),
           ),
-          const SizedBox(height: 2),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w800)),
-        ],
-      ),
-    );
-  }
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: AppColors.ink,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }

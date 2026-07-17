@@ -3,13 +3,21 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/mock_data.dart';
 import '../models/notification_item.dart';
+import '../services/app_config.dart';
+import '../services/hospital_ticket_api.dart';
 
 class NotificationController extends ChangeNotifier {
-  NotificationController({this.preferences}) {
-    resetMockData();
+  NotificationController({this.preferences, bool? demoMode})
+    : demoMode = demoMode ?? ClientAppConfig.demoMode {
+    if (this.demoMode) {
+      resetMockData();
+    } else {
+      _items = [];
+    }
   }
 
   final SharedPreferences? preferences;
+  final bool demoMode;
   late List<NotificationItem> _items;
 
   List<NotificationItem> get items => List.unmodifiable(_items);
@@ -31,6 +39,17 @@ class NotificationController extends ChangeNotifier {
   }
 
   Future<void> markAllRead() async {
+    if (!demoMode) {
+      for (final item in _items.where((row) => !row.isRead)) {
+        await HospitalTicketApi.request(
+          'POST',
+          '/api/hospital-tickets/notifications/${item.id}/read',
+        );
+        item.isRead = true;
+      }
+      notifyListeners();
+      return;
+    }
     for (final item in _items) {
       item.isRead = true;
     }
@@ -44,6 +63,32 @@ class NotificationController extends ChangeNotifier {
 
   void resetMockData() {
     _items = initialNotifications();
+    notifyListeners();
+  }
+
+  Future<void> load() async {
+    if (demoMode) return;
+    final response = await HospitalTicketApi.request(
+      'GET',
+      '/api/hospital-tickets/notifications',
+    );
+    final rows = response['notifications'] is List
+        ? response['notifications'] as List
+        : const [];
+    _items = rows.whereType<Map>().map((row) {
+      final created = DateTime.tryParse('${row['created_at'] ?? ''}');
+      return NotificationItem(
+        id: '${row['id'] ?? ''}',
+        title: '${row['title'] ?? 'Ticket update'}',
+        body: '${row['body'] ?? ''}',
+        time: created?.toLocal().toString() ?? '',
+        iconKey: '${row['notification_type'] ?? 'ticket'}',
+        ticketNumber: row['ticket'] is Map
+            ? '${(row['ticket'] as Map)['ticket_no'] ?? ''}'
+            : null,
+        isRead: row['read_at'] != null,
+      );
+    }).toList();
     notifyListeners();
   }
 }

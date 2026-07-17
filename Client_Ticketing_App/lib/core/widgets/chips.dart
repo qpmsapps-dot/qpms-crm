@@ -11,11 +11,17 @@ class StatusChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = switch (status) {
       TicketStatus.open => AppColors.royalBlue,
+      TicketStatus.assigned => AppColors.purple,
+      TicketStatus.accepted => AppColors.orange,
       TicketStatus.inProgress => AppColors.orange,
-      TicketStatus.onHold => AppColors.purple,
+      TicketStatus.escalatedOperations => AppColors.orange,
+      TicketStatus.escalatedFacilityManager => AppColors.red,
+      TicketStatus.awaitingConfirmation => AppColors.green,
+      TicketStatus.reopened => AppColors.red,
       TicketStatus.closed => AppColors.green,
+      TicketStatus.cancelled => AppColors.muted,
     };
-    return _LabelChip(label: statusLabel(status), color: color);
+    return _LabelChip(label: shortStatusLabel(status), color: color);
   }
 }
 

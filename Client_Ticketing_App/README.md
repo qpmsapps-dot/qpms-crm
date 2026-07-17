@@ -1,11 +1,13 @@
-# QPMS Client Ticketing App
+# QPMS Client Ticketing
 
-Frontend-only Flutter Android demo for the QPMS client ticketing flow.
+Frontend-only Flutter Android demo for QPMS hospital housekeeping complaints.
+
+Brand line: **Raise. Track. Resolve.**
 
 This app uses local mock data only. It does not connect to Supabase, Firebase,
 REST APIs, Google APIs, SMTP, push notifications, or any production service.
 
-Demo login:
+Prototype login:
 
 - User ID: `admin`
 - Password: `admin`

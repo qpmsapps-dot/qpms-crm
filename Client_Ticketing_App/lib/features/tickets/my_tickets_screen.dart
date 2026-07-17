@@ -10,13 +10,12 @@ import '../../state/ticket_controller.dart';
 
 class MyTicketsScreen extends StatefulWidget {
   const MyTicketsScreen({super.key});
-
   @override
   State<MyTicketsScreen> createState() => _MyTicketsScreenState();
 }
 
 class _MyTicketsScreenState extends State<MyTicketsScreen> {
-  TicketStatus? _filter;
+  TicketListFilter _filter = TicketListFilter.open;
   final _search = TextEditingController();
 
   @override
@@ -27,17 +26,8 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final tickets = context
-        .watch<TicketController>()
-        .filterByStatus(_filter)
-        .where((ticket) {
-          final q = _search.text.toLowerCase();
-          return q.isEmpty ||
-              '${ticket.number} ${ticket.title} ${ticket.site}'
-                  .toLowerCase()
-                  .contains(q);
-        })
-        .toList();
+    final controller = context.watch<TicketController>();
+    final tickets = controller.filterTickets(_filter, query: _search.text);
     return Scaffold(
       drawer: const QpmsDrawer(),
       appBar: AppBar(
@@ -49,65 +39,65 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
           ),
         ),
       ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => Navigator.pushNamed(context, AppRoutes.raiseTicket),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Raise Complaint'),
+      ),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+        child: Column(
           children: [
-            TextField(
-              controller: _search,
-              onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search_rounded),
-                hintText: 'Search tickets',
-              ),
-            ),
-            const SizedBox(height: 12),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  _FilterChip(
-                    label: 'All',
-                    selected: _filter == null,
-                    onTap: () => setState(() => _filter = null),
-                  ),
-                  _FilterChip(
-                    label: 'Open',
-                    selected: _filter == TicketStatus.open,
-                    onTap: () => setState(() => _filter = TicketStatus.open),
-                  ),
-                  _FilterChip(
-                    label: 'In Progress',
-                    selected: _filter == TicketStatus.inProgress,
-                    onTap: () =>
-                        setState(() => _filter = TicketStatus.inProgress),
-                  ),
-                  _FilterChip(
-                    label: 'On Hold',
-                    selected: _filter == TicketStatus.onHold,
-                    onTap: () => setState(() => _filter = TicketStatus.onHold),
-                  ),
-                  _FilterChip(
-                    label: 'Closed',
-                    selected: _filter == TicketStatus.closed,
-                    onTap: () => setState(() => _filter = TicketStatus.closed),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            for (final ticket in tickets)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: TicketCard(
-                  ticket: ticket,
-                  onTap: () => Navigator.pushNamed(
-                    context,
-                    AppRoutes.ticketDetails,
-                    arguments: ticket.number,
-                  ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 6, 18, 12),
+              child: TextField(
+                controller: _search,
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search_rounded),
+                  hintText: 'Search Ticket ID or location',
                 ),
               ),
+            ),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              child: Row(
+                children: TicketListFilter.values.map((filter) {
+                  final label = switch (filter) {
+                    TicketListFilter.open => 'Open',
+                    TicketListFilter.inProgress => 'In Progress',
+                    TicketListFilter.resolved => 'Resolved',
+                    TicketListFilter.closed => 'Closed',
+                  };
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      label: Text(label),
+                      selected: _filter == filter,
+                      onSelected: (_) => setState(() => _filter = filter),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: tickets.isEmpty
+                  ? const _EmptyTickets()
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(18, 4, 18, 100),
+                      itemCount: tickets.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) => TicketCard(
+                        ticket: tickets[index],
+                        onTap: () => Navigator.pushNamed(
+                          context,
+                          AppRoutes.ticketDetails,
+                          arguments: tickets[index].number,
+                        ),
+                      ),
+                    ),
+            ),
           ],
         ),
       ),
@@ -115,30 +105,41 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
   }
 }
 
-class _FilterChip extends StatelessWidget {
-  const _FilterChip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
+class _EmptyTickets extends StatelessWidget {
+  const _EmptyTickets();
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: ChoiceChip(
-        label: Text(label),
-        selected: selected,
-        onSelected: (_) => onTap(),
-        selectedColor: AppColors.royalBlue.withValues(alpha: 0.12),
-        labelStyle: TextStyle(
-          color: selected ? AppColors.royalBlue : AppColors.muted,
-          fontWeight: FontWeight.w900,
-        ),
+  Widget build(BuildContext context) => const Center(
+    child: Padding(
+      padding: EdgeInsets.all(32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircleAvatar(
+            radius: 30,
+            backgroundColor: AppColors.paleBlue,
+            child: Icon(
+              Icons.task_alt_rounded,
+              color: AppColors.royalBlue,
+              size: 30,
+            ),
+          ),
+          SizedBox(height: 14),
+          Text(
+            'No tickets here',
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w900,
+              color: AppColors.deepBlue,
+            ),
+          ),
+          SizedBox(height: 5),
+          Text(
+            'Try another status or search term.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.muted),
+          ),
+        ],
       ),
-    );
-  }
+    ),
+  );
 }

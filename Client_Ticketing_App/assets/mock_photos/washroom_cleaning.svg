@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 400">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#eaf4ff"/><stop offset="1" stop-color="#dcfce7"/></linearGradient></defs>
+  <rect width="640" height="400" rx="28" fill="url(#bg)"/>
+  <rect x="70" y="60" width="500" height="275" rx="20" fill="#fff" stroke="#bfdbfe" stroke-width="8"/>
+  <rect x="105" y="95" width="195" height="150" rx="14" fill="#eff6ff"/>
+  <path d="M120 260h400" stroke="#93c5fd" stroke-width="12" stroke-linecap="round"/>
+  <path d="M360 95h145v110H360z" fill="#dbeafe"/>
+  <circle cx="432" cy="150" r="34" fill="#fff" stroke="#60a5fa" stroke-width="8"/>
+  <path d="M210 290l24-82m-64 82 24-82m-40 42h96" stroke="#16a34a" stroke-width="12" stroke-linecap="round"/>
+  <text x="320" y="375" text-anchor="middle" font-family="Arial" font-size="28" font-weight="700" fill="#062a8f">Washroom Cleaning</text>
+</svg>

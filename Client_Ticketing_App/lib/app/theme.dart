@@ -6,7 +6,7 @@ ThemeData buildQpmsTheme() {
   final scheme = ColorScheme.fromSeed(
     seedColor: AppColors.royalBlue,
     primary: AppColors.royalBlue,
-    secondary: AppColors.purple,
+    secondary: AppColors.green,
     surface: Colors.white,
   );
   return ThemeData(
@@ -47,6 +47,16 @@ ThemeData buildQpmsTheme() {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         textStyle: const TextStyle(fontWeight: FontWeight.w800),
       ),
+    ),
+    floatingActionButtonTheme: const FloatingActionButtonThemeData(
+      backgroundColor: AppColors.royalBlue,
+      foregroundColor: Colors.white,
+    ),
+    chipTheme: ChipThemeData(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+      selectedColor: AppColors.paleBlue,
+      side: const BorderSide(color: AppColors.line),
+      labelStyle: const TextStyle(fontWeight: FontWeight.w800),
     ),
   );
 }

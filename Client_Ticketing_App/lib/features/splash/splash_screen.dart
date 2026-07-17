@@ -5,6 +5,8 @@ import '../../app/routes.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/widgets/logo_mark.dart';
 import '../../state/auth_controller.dart';
+import '../../state/ticket_controller.dart';
+import '../../state/notification_controller.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -24,9 +26,16 @@ class _SplashScreenState extends State<SplashScreen>
       vsync: this,
       duration: const Duration(milliseconds: 900),
     )..forward();
-    Future<void>.delayed(const Duration(milliseconds: 1300), () {
+    Future<void>.delayed(const Duration(milliseconds: 1300), () async {
       if (!mounted) return;
       final auth = context.read<AuthController>();
+      final tickets = context.read<TicketController>();
+      final notifications = context.read<NotificationController>();
+      if (auth.isAuthenticated) {
+        await tickets.load();
+        await notifications.load();
+        if (!mounted) return;
+      }
       Navigator.pushReplacementNamed(
         context,
         auth.isAuthenticated ? AppRoutes.dashboard : AppRoutes.login,
@@ -67,7 +76,7 @@ class _SplashScreenState extends State<SplashScreen>
                   ),
                   SizedBox(height: 4),
                   Text(
-                    'Client Ticketing App',
+                    'Client Ticketing',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w800,
@@ -76,7 +85,7 @@ class _SplashScreenState extends State<SplashScreen>
                   ),
                   SizedBox(height: 22),
                   Text(
-                    'Smart Requests.\nFaster Solutions.\nBetter Experiences.',
+                    'Raise. Track. Resolve.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 22,

@@ -4,6 +4,11 @@ import dotenv from 'dotenv';
 import express from 'express';
 import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
+import { createHospitalTicketRouter } from './routes/hospitalTicketRoutes.js';
+import {
+  runHospitalSlaWorker,
+  startHospitalSlaScheduler,
+} from './services/hospitalTicketSlaService.js';
 import {
   auditDelayedCheckoutMissingKmForVisit,
   recalculateFullDayGpsNoSiteVisitKm,
@@ -269,6 +274,57 @@ const supabaseConfigStatus = {
   serviceRoleKeyLength: String(supabaseServiceRoleKey || '').length,
   serviceRoleClientConfigured: Boolean(serviceRoleSupabase),
 };
+
+app.post(
+  '/api/hospital-tickets/admin/run-sla',
+  requireSupabaseJwt,
+  async (request, response) => {
+    const role = String(request.profile?.role || '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '');
+    if (!['ADMIN', 'QPMSADMIN', 'DEVELOPER', 'DEV'].includes(role)) {
+      response.status(403).json({
+        ok: false,
+        code: 'sla_admin_denied',
+        message: 'Admin or Developer permission is required.',
+      });
+      return;
+    }
+    try {
+      const allowTestTime = String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
+      const requestedTime = allowTestTime && request.body?.now
+        ? new Date(request.body.now)
+        : new Date();
+      if (Number.isNaN(requestedTime.getTime())) {
+        response.status(400).json({ ok: false, message: 'Invalid SLA test time.' });
+        return;
+      }
+      response.json({
+        ok: true,
+        result: await runHospitalSlaWorker(serviceRoleSupabase, {
+          now: requestedTime,
+        }),
+      });
+    } catch (error) {
+      response.status(500).json({
+        ok: false,
+        code: 'hospital_sla_run_failed',
+        message: 'Hospital SLA processing failed.',
+      });
+    }
+  },
+);
+
+app.use(
+  '/api/hospital-tickets',
+  createHospitalTicketRouter({
+    anonClient: supabaseAnon,
+    serviceClient: serviceRoleSupabase,
+    environment: process.env,
+  }),
+);
+
+startHospitalSlaScheduler(serviceRoleSupabase, process.env);
 
 try {
   const parsedSupabaseUrl = new URL(supabaseUrl);

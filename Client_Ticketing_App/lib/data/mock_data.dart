@@ -4,155 +4,248 @@ import '../models/notification_item.dart';
 import '../models/ticket.dart';
 import '../models/ticket_update.dart';
 
-const featuredTicketNumber = 'TKT-2026-001';
+const demoBlocks = ['Block A', 'Block B', 'Block C', 'Main Building'];
+const demoFloors = [
+  'Ground Floor',
+  '1st Floor',
+  '2nd Floor',
+  '3rd Floor',
+  '4th Floor',
+];
+const demoLocations = [
+  'OPD Waiting Area',
+  'Nurse Station',
+  'ICU Washroom',
+  'Staff Washroom',
+  'General Ward',
+  'Emergency Corridor',
+];
+const housekeepingCategories = [
+  'Housekeeping',
+  'Washroom Cleaning',
+  'General Cleaning',
+  'Consumables',
+  'Odor Issue',
+  'Wet Area',
+];
 
 final demoSites = <ClientSite>[
-  const ClientSite('Rajiv Gandhi Government Hospital, Chennai'),
-  const ClientSite('Chennai Corporate Office'),
-  const ClientSite('Bengaluru Retail Site'),
-  const ClientSite('Hyderabad Hospital Site'),
-  const ClientSite('Cochin Airport Facility'),
+  for (final block in demoBlocks) ClientSite(block),
 ];
 
-Ticket featuredTicket() => Ticket(
-  number: featuredTicketNumber,
-  category: 'Electrical',
-  title: 'Lights Flickering in Main Corridor',
-  site: 'Rajiv Gandhi Government Hospital, Chennai',
-  description:
-      'Lights in the main corridor are flickering continuously and require urgent inspection.',
-  priority: TicketPriority.high,
-  raisedBy: 'Client User',
-  assignedTechnician: 'Ravi Kumar',
-  raisedDate: '17 June 2026, 09:15 AM',
-  status: TicketStatus.inProgress,
-  photoAssets: const [
-    AppAssets.photoPanel,
-    AppAssets.photoLight,
-    AppAssets.photoWiring,
-  ],
-);
-
-List<Ticket> initialTickets() => [
-  featuredTicket(),
-  Ticket(
-    number: 'TKT-2026-002',
-    category: 'HVAC',
-    title: 'AC Not Cooling - 3rd Floor',
-    site: 'Chennai Corporate Office',
-    description: 'The third-floor meeting room AC is running but not cooling.',
-    priority: TicketPriority.medium,
-    raisedBy: 'Client User',
-    assignedTechnician: 'Unassigned',
-    raisedDate: '17 June 2026, 10:05 AM',
-    status: TicketStatus.open,
-  ),
-  Ticket(
-    number: 'TKT-2026-003',
-    category: 'Plumbing',
-    title: 'Plumbing Leakage - Washroom',
-    site: 'Bengaluru Retail Site',
-    description: 'Water leakage noticed below the wash basin.',
-    priority: TicketPriority.low,
-    raisedBy: 'Client User',
-    assignedTechnician: 'Suresh Mani',
-    raisedDate: '17 June 2026, 08:45 AM',
-    status: TicketStatus.closed,
-  ),
-  Ticket(
-    number: 'TKT-2026-004',
-    category: 'Electrical',
-    title: 'Generator Maintenance',
-    site: 'Hyderabad Hospital Site',
-    description: 'Scheduled generator inspection needs approval.',
-    priority: TicketPriority.medium,
-    raisedBy: 'Client User',
-    assignedTechnician: 'Ravi Kumar',
-    raisedDate: '17 June 2026, 08:30 AM',
-    status: TicketStatus.onHold,
-  ),
-];
-
-final demoUpdates = <TicketUpdate>[
-  const TicketUpdate(
-    title: 'Ticket Raised',
-    body: 'Client User raised this request',
-    dateTime: '17 Jun 2026, 09:15 AM',
-  ),
-  const TicketUpdate(
-    title: 'Assigned to Ravi Kumar',
-    body: 'Ravi Kumar has been assigned',
-    dateTime: '17 Jun 2026, 09:20 AM',
-  ),
-  const TicketUpdate(
-    title: 'Work Started',
-    body: 'Work has been started',
-    dateTime: '17 Jun 2026, 10:15 AM',
-  ),
-  const TicketUpdate(
-    title: 'Replacement electrical component required',
-    body: 'Premium switch and connector are required',
-    dateTime: '17 Jun 2026, 11:30 AM',
-  ),
-  const TicketUpdate(
-    title: 'Issue Resolved',
-    body: 'Issue has been resolved',
-    dateTime: '17 Jun 2026, 02:15 PM',
-  ),
-];
-
-List<String> initialComments() => [
-  'Please prioritize this corridor because it is used by visitors.',
-  'Ravi Kumar: Inspection started. I will update after checking the wiring.',
-];
+List<Ticket> initialTickets() {
+  final now = DateTime.now();
+  return [
+    Ticket(
+      number: 'QPMS-HK-2026-0005',
+      block: 'Block A',
+      floor: '3rd Floor',
+      location: 'Staff Washroom',
+      category: 'Odor Issue',
+      description: 'Bad smell in 3rd floor washroom.',
+      priority: TicketPriority.high,
+      raisedBy: 'Hospital User',
+      raisedAt: now.subtract(const Duration(minutes: 48)),
+      status: TicketStatus.escalatedOperations,
+      assignedPerson: 'Anand S.',
+      assignedRole: 'Operations Executive',
+      slaLabel: 'Supervisor SLA breached • Operations response due in 12 min',
+      complaintPhotoAssets: const [AppAssets.washroom],
+      updates: [
+        TicketUpdate(
+          title: 'Complaint raised',
+          body: 'Housekeeping complaint logged.',
+          dateTime: now.subtract(const Duration(minutes: 48)),
+        ),
+        TicketUpdate(
+          title: 'Assigned to Housekeeping Supervisor',
+          body: 'Supervisor SLA started: 20 minutes.',
+          dateTime: now.subtract(const Duration(minutes: 46)),
+        ),
+        TicketUpdate(
+          title: 'Escalated to Operations Executive',
+          body: 'Supervisor SLA exceeded.',
+          dateTime: now.subtract(const Duration(minutes: 26)),
+          isEscalation: true,
+        ),
+      ],
+    ),
+    Ticket(
+      number: 'QPMS-HK-2026-0004',
+      block: 'Block B',
+      floor: 'Ground Floor',
+      location: 'OPD Waiting Area',
+      category: 'Housekeeping',
+      description: 'Dustbin not cleared in OPD waiting area.',
+      priority: TicketPriority.medium,
+      raisedBy: 'Hospital User',
+      raisedAt: now.subtract(const Duration(hours: 2, minutes: 12)),
+      status: TicketStatus.inProgress,
+      assignedPerson: 'Meena R.',
+      assignedRole: 'Housekeeping Supervisor',
+      slaLabel: 'Work in progress • Update expected in 8 min',
+      complaintPhotoAssets: const [AppAssets.consumables],
+      updates: [
+        TicketUpdate(
+          title: 'Complaint raised',
+          body: 'Complaint logged from OPD.',
+          dateTime: now.subtract(const Duration(hours: 2, minutes: 12)),
+        ),
+        TicketUpdate(
+          title: 'Assigned to Housekeeping Supervisor',
+          body: 'Meena R. acknowledged the complaint.',
+          dateTime: now.subtract(const Duration(hours: 2, minutes: 10)),
+        ),
+        TicketUpdate(
+          title: 'In Progress',
+          body: 'Housekeeping team dispatched.',
+          dateTime: now.subtract(const Duration(minutes: 12)),
+        ),
+      ],
+    ),
+    Ticket(
+      number: 'QPMS-HK-2026-0003',
+      block: 'Main Building',
+      floor: '2nd Floor',
+      location: 'Nurse Station',
+      category: 'Washroom Cleaning',
+      description: 'Bathroom not cleaned properly near nurse station.',
+      priority: TicketPriority.high,
+      raisedBy: 'Hospital User',
+      raisedAt: now.subtract(const Duration(hours: 4, minutes: 20)),
+      status: TicketStatus.awaitingConfirmation,
+      assignedPerson: 'Rajesh K.',
+      assignedRole: 'Housekeeping Supervisor',
+      slaLabel: 'Resolved • Waiting for your confirmation',
+      complaintPhotoAssets: const [AppAssets.washroom],
+      completionPhotoAssets: const [AppAssets.washroom],
+      resolutionNotes:
+          'Washroom deep-cleaned, floor dried and consumables replenished.',
+      updates: [
+        TicketUpdate(
+          title: 'Complaint raised',
+          body: 'Cleaning complaint logged.',
+          dateTime: now.subtract(const Duration(hours: 4, minutes: 20)),
+        ),
+        TicketUpdate(
+          title: 'Assigned to Housekeeping Supervisor',
+          body: 'Rajesh K. assigned.',
+          dateTime: now.subtract(const Duration(hours: 4, minutes: 18)),
+        ),
+        TicketUpdate(
+          title: 'In Progress',
+          body: 'Deep cleaning started.',
+          dateTime: now.subtract(const Duration(hours: 4)),
+        ),
+        TicketUpdate(
+          title: 'Resolved – Awaiting Confirmation',
+          body: 'Please verify the completed work.',
+          dateTime: now.subtract(const Duration(minutes: 35)),
+        ),
+      ],
+    ),
+    Ticket(
+      number: 'QPMS-HK-2026-0002',
+      block: 'Block A',
+      floor: '1st Floor',
+      location: 'ICU Washroom',
+      category: 'Wet Area',
+      description: 'Wet floor near ICU washroom.',
+      priority: TicketPriority.high,
+      raisedBy: 'Hospital User',
+      raisedAt: now.subtract(const Duration(days: 1, hours: 2)),
+      status: TicketStatus.closed,
+      assignedPerson: 'Meena R.',
+      assignedRole: 'Housekeeping Supervisor',
+      slaLabel: 'Closed after client confirmation',
+      complaintPhotoAssets: const [AppAssets.wetFloor],
+      completionPhotoAssets: const [AppAssets.wetFloor],
+      resolutionNotes:
+          'Area mopped and dried. Wet-floor caution signage removed after verification.',
+      feedbackRating: 5,
+      feedbackComment: 'Resolved quickly. Thank you.',
+      isSatisfied: true,
+      updates: [
+        TicketUpdate(
+          title: 'Complaint raised',
+          body: 'Safety cleaning request logged.',
+          dateTime: now.subtract(const Duration(days: 1, hours: 2)),
+        ),
+        TicketUpdate(
+          title: 'Resolved – Awaiting Confirmation',
+          body: 'Area cleaned and made safe.',
+          dateTime: now.subtract(
+            const Duration(days: 1, hours: 1, minutes: 38),
+          ),
+        ),
+        TicketUpdate(
+          title: 'Closed',
+          body: 'Client confirmed satisfaction.',
+          dateTime: now.subtract(
+            const Duration(days: 1, hours: 1, minutes: 25),
+          ),
+        ),
+      ],
+    ),
+    Ticket(
+      number: 'QPMS-HK-2026-0001',
+      block: 'Block C',
+      floor: '4th Floor',
+      location: 'Staff Washroom',
+      category: 'Consumables',
+      description: 'Soap dispenser empty in staff washroom.',
+      priority: TicketPriority.low,
+      raisedBy: 'Hospital User',
+      raisedAt: now.subtract(const Duration(days: 2, hours: 1)),
+      status: TicketStatus.closed,
+      assignedPerson: 'Rajesh K.',
+      assignedRole: 'Housekeeping Supervisor',
+      slaLabel: 'Closed after client confirmation',
+      complaintPhotoAssets: const [AppAssets.consumables],
+      completionPhotoAssets: const [AppAssets.consumables],
+      resolutionNotes: 'Soap dispenser refilled and tested.',
+      feedbackRating: 4,
+      feedbackComment: 'Completed satisfactorily.',
+      isSatisfied: true,
+      updates: [
+        TicketUpdate(
+          title: 'Complaint raised',
+          body: 'Consumables request logged.',
+          dateTime: now.subtract(const Duration(days: 2, hours: 1)),
+        ),
+        TicketUpdate(
+          title: 'Closed',
+          body: 'Client confirmed satisfaction.',
+          dateTime: now.subtract(const Duration(days: 2, minutes: 25)),
+        ),
+      ],
+    ),
+  ];
+}
 
 List<NotificationItem> initialNotifications() => [
   NotificationItem(
     id: 'n1',
-    title: 'Ticket successfully raised',
-    body: 'TKT-2026-001 has been created.',
-    time: '17 Jun 2026, 09:16 AM',
-    iconKey: 'ticket',
-    ticketNumber: featuredTicketNumber,
+    title: 'Confirmation required',
+    body: 'QPMS-HK-2026-0003 has been resolved. Please verify the work.',
+    time: '35 min ago',
+    iconKey: 'done',
+    ticketNumber: 'QPMS-HK-2026-0003',
   ),
   NotificationItem(
     id: 'n2',
-    title: 'Ravi Kumar assigned',
-    body: 'Ravi Kumar has been assigned to TKT-2026-001.',
-    time: '17 Jun 2026, 09:20 AM',
-    iconKey: 'person',
-    ticketNumber: featuredTicketNumber,
+    title: 'Complaint escalated',
+    body: 'QPMS-HK-2026-0005 is now assigned to the Operations Executive.',
+    time: '26 min ago',
+    iconKey: 'alert',
+    ticketNumber: 'QPMS-HK-2026-0005',
   ),
   NotificationItem(
     id: 'n3',
-    title: 'Work started',
-    body: 'Electrical inspection has started.',
-    time: '17 Jun 2026, 10:15 AM',
-    iconKey: 'work',
-    ticketNumber: featuredTicketNumber,
-  ),
-  NotificationItem(
-    id: 'n4',
-    title: 'New technician comment added',
-    body: 'Ravi Kumar added a new work update.',
-    time: '17 Jun 2026, 10:40 AM',
-    iconKey: 'comment',
-    ticketNumber: featuredTicketNumber,
-  ),
-  NotificationItem(
-    id: 'n5',
-    title: 'Ticket resolved',
-    body: 'TKT-2026-001 has been resolved.',
-    time: '17 Jun 2026, 11:45 AM',
-    iconKey: 'done',
-    ticketNumber: featuredTicketNumber,
-  ),
-  NotificationItem(
-    id: 'n6',
-    title: 'Ticket closed',
-    body: 'Your ticket TKT-2026-001 has been closed.',
-    time: '17 Jun 2026, 04:00 PM',
-    iconKey: 'closed',
-    ticketNumber: featuredTicketNumber,
+    title: 'Housekeeping team assigned',
+    body: 'Meena R. is working on QPMS-HK-2026-0004.',
+    time: '2 hr ago',
+    iconKey: 'person',
+    ticketNumber: 'QPMS-HK-2026-0004',
   ),
 ];

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'auth/login_screen.dart';
+import 'hospital_housekeeping/hospital_models.dart';
+import 'hospital_housekeeping/hospital_shell.dart';
+import 'hospital_housekeeping/hospital_ticket_api.dart';
 import 'home/home_shell.dart';
 import 'models/fo_models.dart';
 import 'services/config_service.dart';
@@ -21,6 +24,7 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
   bool _loading = true;
   String? _error;
   FoUser? _user;
+  HospitalDemoSession? _hospitalDemoSession;
 
   @override
   void initState() {
@@ -43,6 +47,7 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
   }
 
   Future<void> _handleResume() async {
+    if (_hospitalDemoSession != null) return;
     try {
       await CrashLogService.record(
         employeeCode: _user?.employeeCode,
@@ -173,7 +178,27 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
 
   Future<void> _setUser(FoUser user) async {
     await LocalStore.saveUser(user);
-    if (mounted) setState(() => _user = user);
+    if (mounted) {
+      setState(() {
+        _hospitalDemoSession = null;
+        _user = user;
+      });
+    }
+  }
+
+  void _setHospitalDemoSession(HospitalDemoSession session) {
+    if (!mounted) return;
+    setState(() {
+      _hospitalDemoSession = session;
+      _user = null;
+    });
+  }
+
+  Future<void> _logoutHospitalDemo() async {
+    if (_hospitalDemoSession?.isDemo == false && SupabaseService.isReady) {
+      await HospitalTicketApi.closeSession();
+    }
+    if (mounted) setState(() => _hospitalDemoSession = null);
   }
 
   Future<void> _logout() async {
@@ -183,6 +208,11 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
         employeeCode: employeeCode,
         screen: 'app',
         action: 'SESSION_REFRESH_LOGOUT_REQUESTED',
+      );
+      await TrackingService.stop(
+        user: _user,
+        updateRemoteLiveStatus: false,
+        reason: 'logout',
       );
       if (SupabaseService.isReady) {
         try {
@@ -196,9 +226,6 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
             stackTrace: stackTrace,
           );
         }
-      }
-      if (employeeCode?.trim().isNotEmpty == true) {
-        await LocalStore.clearActiveVisits(employeeCode: employeeCode!.trim());
       }
       await LocalStore.clearUser();
       await CrashLogService.record(
@@ -232,7 +259,18 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
   Widget _home() {
     if (_loading) return const SplashScreen();
     if (_error != null) return ConfigErrorScreen(message: _error!);
-    if (_user == null) return LoginScreen(onAuthenticated: _setUser);
+    if (_hospitalDemoSession != null) {
+      return HospitalHousekeepingShell(
+        session: _hospitalDemoSession!,
+        onLogout: _logoutHospitalDemo,
+      );
+    }
+    if (_user == null) {
+      return LoginScreen(
+        onAuthenticated: _setUser,
+        onHospitalDemoAuthenticated: _setHospitalDemoSession,
+      );
+    }
     return HomeShell(user: _user!, onLogout: _logout);
   }
 }

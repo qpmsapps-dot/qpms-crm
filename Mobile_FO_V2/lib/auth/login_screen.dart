@@ -1,15 +1,24 @@
 import 'package:flutter/material.dart';
 
+import '../hospital_housekeeping/hospital_demo_auth.dart';
+import '../hospital_housekeeping/hospital_models.dart';
+import '../hospital_housekeeping/hospital_ticket_api.dart';
 import '../models/fo_models.dart';
 import '../services/crash_log_service.dart';
+import '../services/config_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({required this.onAuthenticated, super.key});
+  const LoginScreen({
+    required this.onAuthenticated,
+    this.onHospitalDemoAuthenticated,
+    super.key,
+  });
 
   final ValueChanged<FoUser> onAuthenticated;
+  final ValueChanged<HospitalDemoSession>? onHospitalDemoAuthenticated;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -35,23 +44,53 @@ class _LoginScreenState extends State<LoginScreen> {
       _message = null;
     });
     try {
+      final loginId = _loginId.text.trim();
+      if (HospitalDemoAuth.isDemoLoginId(loginId)) {
+        final session = AppConfig.hospitalDemoMode
+            ? HospitalDemoAuth.authenticate(
+                loginId: loginId,
+                candidatePassword: _password.text,
+              )
+            : await HospitalTicketApi.login(
+                email: loginId,
+                password: _password.text,
+              );
+        if (session == null) {
+          throw const HospitalDemoLoginException(
+            'Invalid local demo credentials.',
+          );
+        }
+        final callback = widget.onHospitalDemoAuthenticated;
+        if (callback == null) {
+          throw const HospitalDemoLoginException(
+            'Hospital demo module is unavailable.',
+          );
+        }
+        callback(session);
+        return;
+      }
       final user = await SupabaseService.login(
-        loginId: _loginId.text,
+        loginId: loginId,
         password: _password.text,
       );
       widget.onAuthenticated(user);
     } catch (error, stackTrace) {
       final loginError = error is MobileLoginException ? error : null;
-      await CrashLogService.record(
-        screen: 'login',
-        action: loginError?.action ?? 'LOGIN_FAILED',
-        error: error,
-        stackTrace: stackTrace,
-      );
+      final demoError = error is HospitalDemoLoginException ? error : null;
+      if (demoError == null) {
+        await CrashLogService.record(
+          screen: 'login',
+          action: loginError?.action ?? 'LOGIN_FAILED',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
       if (mounted) {
         setState(
           () => _message =
-              loginError?.message ?? 'Login failed. Please try again.',
+              demoError?.message ??
+              loginError?.message ??
+              'Login failed. Please try again.',
         );
       }
     } finally {
@@ -143,6 +182,19 @@ class _LoginScreenState extends State<LoginScreen> {
                             },
                       child: const Text('Register for Mobile Access'),
                     ),
+                    const Divider(height: 26),
+                    const Row(
+                      children: [
+                        Icon(Icons.science_outlined, size: 18, color: qpmsBlue),
+                        SizedBox(width: 7),
+                        Expanded(
+                          child: Text(
+                            'Hospital housekeeping UAT accounts use the same login form.',
+                            style: TextStyle(color: qpmsMuted, fontSize: 11),
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -152,4 +204,13 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
   }
+}
+
+class HospitalDemoLoginException implements Exception {
+  const HospitalDemoLoginException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
 }

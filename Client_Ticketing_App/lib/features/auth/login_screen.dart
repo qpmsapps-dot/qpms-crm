@@ -3,27 +3,27 @@ import 'package:provider/provider.dart';
 
 import '../../app/routes.dart';
 import '../../core/constants/app_colors.dart';
-import '../../core/widgets/illustrated_background.dart';
 import '../../core/widgets/logo_mark.dart';
 import '../../state/auth_controller.dart';
+import '../../state/notification_controller.dart';
+import '../../state/ticket_controller.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
-
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _userId = TextEditingController();
+  final _loginId = TextEditingController();
   final _password = TextEditingController();
   bool _obscure = true;
   String? _error;
 
   @override
   void dispose() {
-    _userId.dispose();
+    _loginId.dispose();
     _password.dispose();
     super.dispose();
   }
@@ -31,141 +31,182 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthController>();
-    return GestureDetector(
-      onTap: FocusScope.of(context).unfocus,
-      child: Scaffold(
-        body: SafeArea(
-          child: IllustratedBackground(
-            child: SingleChildScrollView(
-              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-              padding: const EdgeInsets.fromLTRB(22, 28, 22, 24),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const SizedBox(height: 20),
-                    const Center(child: LogoMark(size: 88)),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'QPMS',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 38,
-                        fontWeight: FontWeight.w900,
-                        color: AppColors.deepBlue,
-                      ),
+    return Scaffold(
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const SizedBox(height: 32),
+                  const LogoMark(size: 88),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'QPMS Client Ticketing',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 27,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.deepBlue,
                     ),
-                    const Text(
-                      'Quality Property\nManagement Services',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.deepBlue,
-                      ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Raise. Track. Resolve.',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.green,
                     ),
-                    const SizedBox(height: 42),
-                    TextFormField(
-                      controller: _userId,
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.person_outline),
-                        labelText: 'User ID',
-                      ),
-                      validator: (value) =>
-                          value == null || value.trim().isEmpty
-                          ? 'Enter User ID'
-                          : null,
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _password,
-                      obscureText: _obscure,
-                      decoration: InputDecoration(
-                        prefixIcon: const Icon(Icons.lock_outline),
-                        labelText: 'Password',
-                        suffixIcon: IconButton(
-                          icon: Icon(
-                            _obscure
-                                ? Icons.visibility_off_outlined
-                                : Icons.visibility_outlined,
-                          ),
-                          onPressed: () => setState(() => _obscure = !_obscure),
-                        ),
-                      ),
-                      validator: (value) => value == null || value.isEmpty
-                          ? 'Enter password'
-                          : null,
-                    ),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(
-                        onPressed: () => _showMessage(
-                          'Please contact the QPMS administrator to reset your password.',
-                        ),
-                        child: const Text('Forgot Password?'),
-                      ),
-                    ),
-                    if (_error != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: Text(
-                          _error!,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: AppColors.red,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                    ElevatedButton(
-                      onPressed: auth.isLoading ? null : _submit,
-                      child: auth.isLoading
-                          ? const SizedBox(
-                              height: 22,
-                              width: 22,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Text('Sign In'),
-                    ),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 16),
-                      child: Text(
-                        'or continue with',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: AppColors.muted,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _SocialButton(
-                            label: 'Google',
-                            icon: Icons.g_mobiledata_rounded,
-                            onTap: () => _showMessage(
-                              'Social login will be available in the production version.',
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _SocialButton(
-                            label: 'Microsoft',
-                            icon: Icons.window_rounded,
-                            onTap: () => _showMessage(
-                              'Social login will be available in the production version.',
-                            ),
-                          ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Housekeeping support for a cleaner, safer care environment.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(height: 1.4, color: AppColors.muted),
+                  ),
+                  const SizedBox(height: 30),
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(color: AppColors.line),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(
+                            0xFF0F172A,
+                          ).withValues(alpha: 0.06),
+                          blurRadius: 24,
+                          offset: const Offset(0, 10),
                         ),
                       ],
                     ),
-                  ],
-                ),
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Welcome back',
+                            style: TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w900,
+                              color: AppColors.ink,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Sign in to manage your housekeeping complaints.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              height: 1.4,
+                              color: AppColors.muted,
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                          TextFormField(
+                            controller: _loginId,
+                            keyboardType: TextInputType.emailAddress,
+                            autofillHints: const [
+                              AutofillHints.username,
+                              AutofillHints.email,
+                            ],
+                            decoration: const InputDecoration(
+                              labelText: 'Login ID / Email',
+                              prefixIcon: Icon(Icons.person_outline_rounded),
+                            ),
+                            validator: (value) =>
+                                value == null || value.trim().isEmpty
+                                ? 'Enter your Login ID or email.'
+                                : null,
+                          ),
+                          const SizedBox(height: 14),
+                          TextFormField(
+                            controller: _password,
+                            obscureText: _obscure,
+                            autofillHints: const [AutofillHints.password],
+                            decoration: InputDecoration(
+                              labelText: 'Password',
+                              prefixIcon: const Icon(
+                                Icons.lock_outline_rounded,
+                              ),
+                              suffixIcon: IconButton(
+                                onPressed: () =>
+                                    setState(() => _obscure = !_obscure),
+                                icon: Icon(
+                                  _obscure
+                                      ? Icons.visibility_outlined
+                                      : Icons.visibility_off_outlined,
+                                ),
+                                tooltip: _obscure
+                                    ? 'Show password'
+                                    : 'Hide password',
+                              ),
+                            ),
+                            validator: (value) => value == null || value.isEmpty
+                                ? 'Enter your password.'
+                                : null,
+                          ),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton(
+                              onPressed: _forgotPassword,
+                              child: const Text('Forgot Password?'),
+                            ),
+                          ),
+                          if (_error != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: Text(
+                                _error!,
+                                style: const TextStyle(
+                                  color: AppColors.red,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ElevatedButton(
+                            onPressed: auth.isLoading ? null : _submit,
+                            child: auth.isLoading
+                                ? const SizedBox.square(
+                                    dimension: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Text('Login'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.shield_outlined,
+                        size: 16,
+                        color: AppColors.muted,
+                      ),
+                      SizedBox(width: 6),
+                      Text(
+                        'Secure QPMS client access',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 30),
+                ],
               ),
             ),
           ),
@@ -175,47 +216,57 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _submit() async {
-    FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
     setState(() => _error = null);
-    final ok = await context.read<AuthController>().login(
-      _userId.text,
-      _password.text,
-    );
+    final auth = context.read<AuthController>();
+    final tickets = context.read<TicketController>();
+    final notifications = context.read<NotificationController>();
+    final ok = await auth.login(_loginId.text, _password.text);
     if (!mounted) return;
     if (ok) {
+      await tickets.load();
+      await notifications.load();
+      if (!mounted) return;
       Navigator.pushReplacementNamed(context, AppRoutes.dashboard);
     } else {
-      setState(() => _error = 'Invalid User ID or Password');
+      setState(() => _error = 'Invalid Login ID or password.');
     }
   }
 
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
-}
-
-class _SocialButton extends StatelessWidget {
-  const _SocialButton({
-    required this.label,
-    required this.icon,
-    required this.onTap,
-  });
-  final String label;
-  final IconData icon;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      onPressed: onTap,
-      icon: Icon(icon, color: AppColors.royalBlue),
-      label: Text(label, style: const TextStyle(fontWeight: FontWeight.w800)),
-      style: OutlinedButton.styleFrom(
-        minimumSize: const Size.fromHeight(48),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+  void _forgotPassword() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => const SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircleAvatar(
+                backgroundColor: AppColors.paleBlue,
+                child: Icon(
+                  Icons.lock_reset_rounded,
+                  color: AppColors.royalBlue,
+                ),
+              ),
+              SizedBox(height: 12),
+              Text(
+                'Forgot Password',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.deepBlue,
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Please contact your hospital administrator or QPMS support to reset your client access password.',
+                textAlign: TextAlign.center,
+                style: TextStyle(height: 1.45, color: AppColors.muted),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

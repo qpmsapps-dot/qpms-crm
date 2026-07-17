@@ -34,7 +34,7 @@ class TicketCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      ticket.title,
+                      ticket.category,
                       style: const TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 14,
@@ -48,7 +48,7 @@ class TicketCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            ticket.site,
+            ticket.fullLocation,
             style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
           ),
           const SizedBox(height: 10),
@@ -56,7 +56,7 @@ class TicketCard extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  ticket.raisedDate,
+                  formatTicketDateTime(ticket.raisedAt),
                   style: const TextStyle(
                     fontSize: 11,
                     color: Color(0xFF64748B),

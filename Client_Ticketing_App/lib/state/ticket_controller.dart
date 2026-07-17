@@ -1,105 +1,345 @@
-import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart';
 
-import '../core/constants/app_assets.dart';
-import '../data/mock_data.dart';
 import '../models/ticket.dart';
+import '../models/ticket_update.dart';
+import '../data/mock_data.dart';
+import '../services/app_config.dart';
+import '../services/hospital_ticket_api.dart';
 
-class DraftTicket {
-  DraftTicket({
-    this.category = 'Electrical',
-    this.title = 'Lights Flickering in Main Corridor',
-    this.description =
-        'Lights in the main corridor are flickering continuously and require urgent inspection.',
-    this.site = 'Rajiv Gandhi Government Hospital, Chennai',
-    this.priority = TicketPriority.high,
-    this.photos = const [],
-  });
+class ComplaintDraft {
+  ComplaintDraft({
+    this.block = 'Block A',
+    this.floor = 'Ground Floor',
+    this.location = 'OPD Waiting Area',
+    this.category = 'Housekeeping',
+    this.priority = TicketPriority.medium,
+    this.description = '',
+    this.photoPaths = const [],
+    String? idempotencyKey,
+  }) : idempotencyKey =
+           idempotencyKey ?? 'client-${DateTime.now().microsecondsSinceEpoch}';
 
+  String block;
+  String floor;
+  String location;
   String category;
-  String title;
-  String description;
-  String site;
   TicketPriority priority;
-  List<String> photos;
+  String description;
+  List<String> photoPaths;
+  final String idempotencyKey;
 }
 
 class TicketController extends ChangeNotifier {
-  TicketController({this.preferences}) {
-    resetMockData();
+  TicketController({bool? demoMode})
+    : demoMode = demoMode ?? ClientAppConfig.demoMode {
+    if (this.demoMode) {
+      resetMockData();
+    } else {
+      _tickets = [];
+    }
   }
 
-  final SharedPreferences? preferences;
-  final Map<String, List<String>> _comments = {};
+  final bool demoMode;
+  bool _loading = false;
+  String? _error;
+  List<Map<String, dynamic>> _blocks = [];
+  List<Map<String, dynamic>> _locations = [];
+  List<Map<String, dynamic>> _categories = [];
+
   late List<Ticket> _tickets;
+  int _nextTicketSequence = 6;
 
   List<Ticket> get tickets => List.unmodifiable(_tickets);
+  bool get isLoading => _loading;
+  String? get error => _error;
+  List<Map<String, dynamic>> get blocks => List.unmodifiable(_blocks);
+  List<Map<String, dynamic>> get locations => List.unmodifiable(_locations);
+  List<Map<String, dynamic>> get categories => List.unmodifiable(_categories);
+  int get openCount => _tickets
+      .where(
+        (ticket) =>
+            ticketMatchesFilter(ticket, TicketListFilter.open) ||
+            ticket.status == TicketStatus.inProgress,
+      )
+      .length;
+  int get closedCount =>
+      _tickets.where((ticket) => ticket.status == TicketStatus.closed).length;
+  int get confirmationCount => _tickets
+      .where((ticket) => ticket.status == TicketStatus.awaitingConfirmation)
+      .length;
 
-  Ticket ticketByNumber(String number) {
-    return _tickets.firstWhere((ticket) => ticket.number == number);
+  Ticket ticketByNumber(String number) =>
+      _tickets.firstWhere((ticket) => ticket.number == number);
+
+  List<Ticket> filterTickets(TicketListFilter filter, {String query = ''}) {
+    final needle = query.trim().toLowerCase();
+    return _tickets.where((ticket) {
+      final searchable =
+          '${ticket.number} ${ticket.fullLocation} ${ticket.category} ${ticket.description}'
+              .toLowerCase();
+      return ticketMatchesFilter(ticket, filter) &&
+          (needle.isEmpty || searchable.contains(needle));
+    }).toList();
   }
 
-  List<Ticket> filterByStatus(TicketStatus? status) {
-    if (status == null) return tickets;
-    return _tickets.where((ticket) => ticket.status == status).toList();
+  bool isDraftValid(ComplaintDraft draft) {
+    return draft.block.trim().isNotEmpty &&
+        draft.floor.trim().isNotEmpty &&
+        draft.location.trim().isNotEmpty &&
+        draft.category.trim().isNotEmpty &&
+        draft.description.trim().isNotEmpty;
   }
 
-  List<String> commentsFor(String ticketNumber) {
-    return List.unmodifiable(_comments[ticketNumber] ?? const []);
-  }
-
-  void addComment(String ticketNumber, String text) {
-    final cleanText = text.trim();
-    if (cleanText.isEmpty) return;
-    _comments.putIfAbsent(ticketNumber, () => <String>[]).add(cleanText);
+  Future<void> load() async {
+    if (demoMode) return;
+    _loading = true;
+    _error = null;
     notifyListeners();
+    try {
+      final responses = await Future.wait([
+        HospitalTicketApi.request('GET', '/api/hospital-tickets'),
+        HospitalTicketApi.request('GET', '/api/hospital-tickets/blocks'),
+        HospitalTicketApi.request('GET', '/api/hospital-tickets/locations'),
+        HospitalTicketApi.request('GET', '/api/hospital-tickets/categories'),
+      ]);
+      _tickets = _ticketRows(responses[0]['tickets']);
+      _blocks = _mapRows(responses[1]['blocks']);
+      _locations = _mapRows(responses[2]['locations']);
+      _categories = _mapRows(responses[3]['categories']);
+    } catch (error) {
+      _error = error.toString();
+    } finally {
+      _loading = false;
+      notifyListeners();
+    }
   }
 
-  Ticket submitDraft(DraftTicket draft) {
+  Future<void> loadDetail(String ticketNumber) async {
+    if (demoMode) return;
+    try {
+      final response = await HospitalTicketApi.request(
+        'GET',
+        '/api/hospital-tickets/$ticketNumber',
+      );
+      var ticket = Ticket.fromApi(
+        Map<String, dynamic>.from(response['ticket'] as Map),
+        updates: _timeline(response['timeline']),
+      );
+      final complaintPhotos = <String>[];
+      final completionPhotos = <String>[];
+      for (final attachment in _mapRows(response['attachments'])) {
+        final signed = await HospitalTicketApi.request(
+          'GET',
+          '/api/hospital-tickets/${ticket.id}/attachments/${attachment['id']}/sign-download',
+        );
+        final url = '${signed['signed_url'] ?? ''}';
+        if (attachment['attachment_type'] == 'complaint_photo') {
+          complaintPhotos.add(url);
+        } else if (attachment['attachment_type'] == 'completion_photo') {
+          completionPhotos.add(url);
+        }
+      }
+      ticket = ticket.copyWith(
+        complaintPhotoAssets: complaintPhotos,
+        completionPhotoAssets: completionPhotos,
+      );
+      final index = _tickets.indexWhere((row) => row.number == ticket.number);
+      if (index >= 0) {
+        _tickets[index] = ticket;
+      } else {
+        _tickets.insert(0, ticket);
+      }
+      notifyListeners();
+    } catch (error) {
+      _error = error.toString();
+      notifyListeners();
+    }
+  }
+
+  Future<Ticket> submitComplaint(ComplaintDraft draft, {DateTime? now}) async {
+    if (!isDraftValid(draft)) {
+      throw ArgumentError('All required complaint fields must be completed.');
+    }
+    if (!demoMode) {
+      if (_blocks.isEmpty || _locations.isEmpty || _categories.isEmpty) {
+        throw const HospitalApiException(
+          'Complaint master data is unavailable. Refresh and try again.',
+        );
+      }
+      final block = _blocks.firstWhere(
+        (row) => row['block_name'] == draft.block,
+        orElse: () => _blocks.first,
+      );
+      final blockLocations = _locations
+          .where((row) => row['block_id'] == block['id'])
+          .toList();
+      if (blockLocations.isEmpty) {
+        throw const HospitalApiException(
+          'No authorized complaint location is available for this block.',
+        );
+      }
+      final location = blockLocations.firstWhere(
+        (row) => row['location_name'] == draft.location,
+        orElse: () => blockLocations.first,
+      );
+      final category = _categories.firstWhere(
+        (row) => row['category_name'] == draft.category,
+        orElse: () => _categories.first,
+      );
+      final response = await HospitalTicketApi.request(
+        'POST',
+        '/api/hospital-tickets',
+        headers: {'Idempotency-Key': draft.idempotencyKey},
+        body: {
+          'block_id': block['id'],
+          'location_id': location['id'],
+          'category_id': category['id'],
+          'priority': draft.priority.name,
+          'title': draft.description.trim().length > 100
+              ? draft.description.trim().substring(0, 100)
+              : draft.description.trim(),
+          'description': draft.description.trim(),
+        },
+      );
+      final row = Map<String, dynamic>.from(response['ticket'] as Map);
+      for (final photoPath in draft.photoPaths.take(3)) {
+        await HospitalTicketApi.uploadPhoto(
+          ticketId: '${row['id']}',
+          filePath: photoPath,
+          attachmentType: 'complaint_photo',
+        );
+      }
+      final ticket = Ticket.fromApi(
+        row,
+        updates: _timeline(response['timeline']),
+      );
+      _tickets.insert(0, ticket);
+      notifyListeners();
+      return ticket;
+    }
+    final raisedAt = now ?? DateTime.now();
+    final number =
+        'QPMS-HK-${raisedAt.year}-${_nextTicketSequence.toString().padLeft(4, '0')}';
+    _nextTicketSequence += 1;
     final ticket = Ticket(
-      number: featuredTicketNumber,
-      category: draft.category,
-      title: draft.title.trim(),
-      site: draft.site,
+      number: number,
+      block: draft.block.trim(),
+      floor: draft.floor.trim(),
+      location: draft.location.trim(),
+      category: draft.category.trim(),
       description: draft.description.trim(),
       priority: draft.priority,
-      raisedBy: 'Client User',
-      assignedTechnician: 'Ravi Kumar',
-      raisedDate: '17 June 2026, 09:15 AM',
-      status: TicketStatus.inProgress,
-      photoAssets: draft.photos.isEmpty
-          ? const [
-              AppAssets.photoPanel,
-              AppAssets.photoLight,
-              AppAssets.photoWiring,
-            ]
-          : draft.photos,
+      raisedBy: 'Hospital User',
+      raisedAt: raisedAt,
+      status: TicketStatus.open,
+      assignedPerson: 'Assignment pending',
+      assignedRole: 'Housekeeping Supervisor',
+      slaLabel: 'Supervisor SLA • 20 minutes',
+      complaintPhotoAssets: List.unmodifiable(draft.photoPaths),
+      updates: [
+        TicketUpdate(
+          title: 'Complaint raised',
+          body: 'Sent to the Housekeeping Supervisor. SLA: 20 minutes.',
+          dateTime: raisedAt,
+        ),
+      ],
     );
-    _tickets.removeWhere((item) => item.number == featuredTicketNumber);
     _tickets.insert(0, ticket);
-    _comments.putIfAbsent(featuredTicketNumber, initialComments);
     notifyListeners();
-    _saveDemoMarker();
     return ticket;
   }
 
-  bool isDraftValid(DraftTicket draft) {
-    return draft.category.trim().isNotEmpty &&
-        draft.title.trim().isNotEmpty &&
-        draft.description.trim().isNotEmpty &&
-        draft.site.trim().isNotEmpty;
+  Future<void> submitFeedback({
+    required String ticketNumber,
+    required int rating,
+    required String comment,
+    required bool satisfied,
+    DateTime? now,
+  }) async {
+    final index = _tickets.indexWhere(
+      (ticket) => ticket.number == ticketNumber,
+    );
+    if (index < 0) throw ArgumentError('Ticket not found.');
+    final ticket = _tickets[index];
+    if (ticket.status != TicketStatus.awaitingConfirmation) {
+      throw StateError('Feedback is available only after resolution.');
+    }
+    if (!demoMode) {
+      final response = await HospitalTicketApi.request(
+        'POST',
+        '/api/hospital-tickets/${ticket.id}/feedback',
+        body: {
+          'version': ticket.version,
+          'rating': rating,
+          'comments': comment.trim(),
+          'satisfaction_status': satisfied ? 'satisfied' : 'not_satisfied',
+        },
+      );
+      _tickets[index] = Ticket.fromApi(
+        Map<String, dynamic>.from(response['ticket'] as Map),
+        updates: _timeline(response['timeline']),
+      );
+      notifyListeners();
+      return;
+    }
+    final submittedAt = now ?? DateTime.now();
+    final update = satisfied
+        ? TicketUpdate(
+            title: 'Closed',
+            body: 'Client confirmed satisfaction with the completed work.',
+            dateTime: submittedAt,
+          )
+        : TicketUpdate(
+            title: 'Reopened',
+            body: comment.trim().isEmpty
+                ? 'Client was not satisfied. Returned to Housekeeping Supervisor.'
+                : 'Client was not satisfied: ${comment.trim()}',
+            dateTime: submittedAt,
+            isEscalation: true,
+          );
+    _tickets[index] = ticket.copyWith(
+      status: satisfied ? TicketStatus.closed : TicketStatus.open,
+      assignedPerson: satisfied ? ticket.assignedPerson : 'Assignment pending',
+      assignedRole: satisfied ? ticket.assignedRole : 'Housekeeping Supervisor',
+      slaLabel: satisfied
+          ? 'Closed after client confirmation'
+          : 'Reopened • Supervisor SLA restarted: 20 minutes',
+      feedbackRating: rating,
+      feedbackComment: comment.trim(),
+      isSatisfied: satisfied,
+      updates: [...ticket.updates, update],
+    );
+    notifyListeners();
   }
 
   void resetMockData() {
     _tickets = initialTickets();
-    _comments
-      ..clear()
-      ..[featuredTicketNumber] = initialComments();
+    _nextTicketSequence = 6;
     notifyListeners();
   }
 
-  Future<void> _saveDemoMarker() async {
-    final prefs = preferences ?? await SharedPreferences.getInstance();
-    await prefs.setString('qpms_last_demo_ticket', featuredTicketNumber);
-  }
+  static List<Map<String, dynamic>> _mapRows(dynamic value) => value is List
+      ? value
+            .whereType<Map>()
+            .map((row) => Map<String, dynamic>.from(row))
+            .toList()
+      : [];
+
+  static List<Ticket> _ticketRows(dynamic value) =>
+      _mapRows(value).map(Ticket.fromApi).toList();
+
+  static List<TicketUpdate> _timeline(dynamic value) => _mapRows(value)
+      .map(
+        (row) => TicketUpdate(
+          title: '${row['event_type'] ?? 'Update'}'.replaceAll('_', ' '),
+          body: '${row['remarks'] ?? ''}',
+          dateTime:
+              DateTime.tryParse('${row['created_at'] ?? ''}')?.toLocal() ??
+              DateTime.now(),
+          isEscalation:
+              '${row['event_type'] ?? ''}'.contains('escalat') ||
+              '${row['event_type'] ?? ''}'.contains('breach'),
+        ),
+      )
+      .toList();
 }

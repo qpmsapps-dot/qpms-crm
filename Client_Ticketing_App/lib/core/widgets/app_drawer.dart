@@ -3,8 +3,6 @@ import 'package:provider/provider.dart';
 
 import '../../app/routes.dart';
 import '../../state/auth_controller.dart';
-import '../../state/notification_controller.dart';
-import '../../state/ticket_controller.dart';
 import '../constants/app_colors.dart';
 import 'logo_mark.dart';
 
@@ -37,7 +35,7 @@ class QpmsDrawer extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          'Client User',
+                          'Hospital Client User',
                           style: TextStyle(color: AppColors.muted),
                         ),
                       ],
@@ -55,7 +53,7 @@ class QpmsDrawer extends StatelessWidget {
             _item(
               context,
               Icons.add_circle_rounded,
-              'Raise Ticket',
+              'Raise Complaint',
               AppRoutes.raiseTicket,
             ),
             _item(
@@ -73,29 +71,11 @@ class QpmsDrawer extends StatelessWidget {
             _item(
               context,
               Icons.location_on_rounded,
-              'Sites / Locations',
+              'Blocks / Locations',
               AppRoutes.locations,
             ),
             _item(context, Icons.info_rounded, 'About QPMS', AppRoutes.about),
             const Spacer(),
-            ListTile(
-              leading: const Icon(
-                Icons.restart_alt_rounded,
-                color: AppColors.purple,
-              ),
-              title: const Text(
-                'Reset Demo Data',
-                style: TextStyle(fontWeight: FontWeight.w800),
-              ),
-              onTap: () {
-                context.read<TicketController>().resetMockData();
-                context.read<NotificationController>().resetMockData();
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Demo data reset.')),
-                );
-              },
-            ),
             ListTile(
               leading: const Icon(Icons.logout_rounded, color: AppColors.red),
               title: const Text(

@@ -6,9 +6,11 @@ import '../features/dashboard/dashboard_screen.dart';
 import '../features/locations/locations_screen.dart';
 import '../features/notifications/notifications_screen.dart';
 import '../features/raise_ticket/raise_ticket_screen.dart';
+import '../features/raise_ticket/ticket_submitted_screen.dart';
 import '../features/splash/splash_screen.dart';
 import '../features/tickets/my_tickets_screen.dart';
 import '../features/tickets/ticket_details_screen.dart';
+import '../features/tickets/feedback_screen.dart';
 import '../state/auth_controller.dart';
 import '../state/notification_controller.dart';
 import '../state/ticket_controller.dart';
@@ -27,7 +29,7 @@ class QpmsClientTicketingApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => NotificationController()),
       ],
       child: MaterialApp(
-        title: 'QPMS Client Ticketing App',
+        title: 'QPMS Client Ticketing',
         debugShowCheckedModeBanner: false,
         theme: buildQpmsTheme(),
         initialRoute: AppRoutes.splash,
@@ -42,11 +44,24 @@ class QpmsClientTicketingApp extends StatelessWidget {
           AppRoutes.about: (_) => const AboutScreen(),
         },
         onGenerateRoute: (settings) {
+          if (settings.name == AppRoutes.ticketSubmitted) {
+            return MaterialPageRoute(
+              builder: (_) => TicketSubmittedScreen(
+                ticketNumber: settings.arguments as String,
+              ),
+            );
+          }
           if (settings.name == AppRoutes.ticketDetails) {
             return MaterialPageRoute(
               builder: (_) => TicketDetailsScreen(
                 ticketNumber: settings.arguments as String,
               ),
+            );
+          }
+          if (settings.name == AppRoutes.feedback) {
+            return MaterialPageRoute(
+              builder: (_) =>
+                  FeedbackScreen(ticketNumber: settings.arguments as String),
             );
           }
           return null;

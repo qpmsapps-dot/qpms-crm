@@ -1,4 +1,3 @@
-import 'package:client_ticketing_app/data/mock_data.dart';
 import 'package:client_ticketing_app/models/ticket.dart';
 import 'package:client_ticketing_app/state/auth_controller.dart';
 import 'package:client_ticketing_app/state/notification_controller.dart';
@@ -9,54 +8,117 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUp(() {
-    SharedPreferences.setMockInitialValues({});
-  });
+  setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  test('Login succeeds for admin/admin', () async {
-    final auth = AuthController();
-    final ok = await auth.login('admin', 'admin');
-    expect(ok, isTrue);
+  test('demo login remains available for the frontend prototype', () async {
+    final auth = AuthController(demoMode: true);
+    expect(await auth.login('admin', 'admin'), isTrue);
     expect(auth.isAuthenticated, isTrue);
   });
 
-  test('Login fails for incorrect credentials', () async {
-    final auth = AuthController();
-    final ok = await auth.login('admin', 'wrong');
-    expect(ok, isFalse);
+  test('login rejects incorrect credentials', () async {
+    final auth = AuthController(demoMode: true);
+    expect(await auth.login('admin', 'wrong'), isFalse);
     expect(auth.isAuthenticated, isFalse);
   });
 
-  test('Ticket validation blocks incomplete submission', () {
-    final tickets = TicketController();
-    final draft = DraftTicket(title: '', description: 'Need help');
-    expect(tickets.isDraftValid(draft), isFalse);
-  });
-
-  test('Ticket submission adds the ticket locally', () {
-    final tickets = TicketController();
-    final draft = DraftTicket();
-    final submitted = tickets.submitDraft(draft);
-    expect(submitted.number, featuredTicketNumber);
-    expect(tickets.tickets.first.number, featuredTicketNumber);
-    expect(tickets.tickets.first.title, 'Lights Flickering in Main Corridor');
-  });
-
-  test('Status filters return the correct tickets', () {
-    final tickets = TicketController();
-    final closed = tickets.filterByStatus(TicketStatus.closed);
-    expect(closed, isNotEmpty);
+  test('complaint validation requires a description', () {
+    final controller = TicketController(demoMode: true);
+    expect(controller.isDraftValid(ComplaintDraft(description: '')), isFalse);
     expect(
-      closed.every((ticket) => ticket.status == TicketStatus.closed),
+      controller.isDraftValid(
+        ComplaintDraft(description: 'Bathroom not cleaned properly.'),
+      ),
       isTrue,
     );
   });
 
-  test('Mark all notifications as read works', () async {
-    final notifications = NotificationController();
+  test('submission generates a unique open housekeeping ticket', () async {
+    final controller = TicketController(demoMode: true);
+    final now = DateTime(2026, 7, 16, 10, 30);
+    final ticket = await controller.submitComplaint(
+      ComplaintDraft(
+        block: 'Block A',
+        floor: '3rd Floor',
+        location: 'Nurse Station',
+        category: 'Washroom Cleaning',
+        priority: TicketPriority.high,
+        description: 'Bathroom not cleaned properly near nurse station.',
+      ),
+      now: now,
+    );
+
+    expect(ticket.number, 'QPMS-HK-2026-0006');
+    expect(ticket.status, TicketStatus.open);
+    expect(ticket.assignedRole, 'Housekeeping Supervisor');
+    expect(ticket.slaLabel, contains('20 minutes'));
+    expect(controller.tickets.first.number, ticket.number);
+  });
+
+  test('ticket filters search by ticket id and location', () {
+    final controller = TicketController(demoMode: true);
+    final open = controller.filterTickets(TicketListFilter.open);
+    expect(open, isNotEmpty);
+    expect(
+      open.every(
+        (ticket) => ticketMatchesFilter(ticket, TicketListFilter.open),
+      ),
+      isTrue,
+    );
+
+    final locationMatches = controller.filterTickets(
+      TicketListFilter.open,
+      query: '3rd Floor',
+    );
+    expect(locationMatches, hasLength(1));
+    expect(locationMatches.single.location, 'Staff Washroom');
+  });
+
+  test('satisfied feedback closes the same resolved ticket', () async {
+    final controller = TicketController(demoMode: true);
+    const number = 'QPMS-HK-2026-0003';
+    final countBefore = controller.tickets.length;
+
+    await controller.submitFeedback(
+      ticketNumber: number,
+      rating: 5,
+      comment: 'Clean and ready for use.',
+      satisfied: true,
+      now: DateTime(2026, 7, 16, 11),
+    );
+
+    final ticket = controller.ticketByNumber(number);
+    expect(controller.tickets.length, countBefore);
+    expect(ticket.status, TicketStatus.closed);
+    expect(ticket.isSatisfied, isTrue);
+    expect(ticket.updates.last.title, 'Closed');
+  });
+
+  test('not satisfied reopens the same ticket without duplication', () async {
+    final controller = TicketController(demoMode: true);
+    const number = 'QPMS-HK-2026-0003';
+    final countBefore = controller.tickets.length;
+
+    await controller.submitFeedback(
+      ticketNumber: number,
+      rating: 2,
+      comment: 'Floor is still wet near the entrance.',
+      satisfied: false,
+      now: DateTime(2026, 7, 16, 11),
+    );
+
+    final ticket = controller.ticketByNumber(number);
+    expect(controller.tickets.length, countBefore);
+    expect(ticket.status, TicketStatus.open);
+    expect(ticket.assignedRole, 'Housekeeping Supervisor');
+    expect(ticket.slaLabel, contains('restarted'));
+    expect(ticket.updates.last.title, 'Reopened');
+  });
+
+  test('mark all notifications as read works', () async {
+    final notifications = NotificationController(demoMode: true);
     expect(notifications.unreadCount, greaterThan(0));
     await notifications.markAllRead();
     expect(notifications.unreadCount, 0);
-    expect(notifications.items.every((item) => item.isRead), isTrue);
   });
 }

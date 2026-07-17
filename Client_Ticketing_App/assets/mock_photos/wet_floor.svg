@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 400">
+  <rect width="640" height="400" rx="28" fill="#eef7ff"/>
+  <path d="M0 285h640v115H0z" fill="#dbeafe"/>
+  <path d="M320 64L190 310h260L320 64z" fill="#fbbf24" stroke="#f59e0b" stroke-width="10"/>
+  <path d="M320 135v90" stroke="#78350f" stroke-width="20" stroke-linecap="round"/>
+  <circle cx="320" cy="265" r="12" fill="#78350f"/>
+  <path d="M68 345c65-34 112-34 177 0s112 34 177 0 108-34 150-6" fill="none" stroke="#38bdf8" stroke-width="14" stroke-linecap="round"/>
+  <text x="320" y="378" text-anchor="middle" font-family="Arial" font-size="28" font-weight="700" fill="#062a8f">Wet Floor Support</text>
+</svg>
