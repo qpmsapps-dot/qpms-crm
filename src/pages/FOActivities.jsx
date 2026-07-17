@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Battery,
   Bike,
@@ -57,7 +57,8 @@ import qpmsLogo from "../assets/qpms-logo.png";
 import { useAuth } from "../context/auth-context.js";
 import { usePageTitle } from "../hooks/usePageTitle.js";
 import { isSupabaseConfigured, supabase } from "../lib/supabase.js";
-import { api } from "../services/api.js";
+import { authenticatedApiRequest, authenticatedFetch } from "../services/api.js";
+import { authSessionManager, invalidateAuthOnUnauthorized, isAuthSessionError, SESSION_EXPIRED_MESSAGE } from "../services/authSession.js";
 import { assertDemoWriteAllowed } from "../utils/demoAccess.js";
 import {
   EMPTY_OPERATIONS_SUMMARY,
@@ -2714,21 +2715,49 @@ function flattenRouteLinePoints(routeLines = []) {
 function MapViewport({ pins, sitePins, routeLines, expanded, command }) {
   const map = useMap();
   const didInitialFitRef = useRef(false);
+  const mountedRef = useRef(true);
+  const safelyUseMap = useCallback((callback) => {
+    if (!mountedRef.current) return false;
+    try {
+      const container = map.getContainer();
+      if (!container?.isConnected || !map._loaded) return false;
+      callback(map);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [map]);
 
   useEffect(() => {
-    window.setTimeout(() => map.invalidateSize(), 80);
-  }, [expanded, map]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => safelyUseMap((activeMap) => activeMap.invalidateSize()), 80);
+    return () => window.clearTimeout(timer);
+  }, [expanded, safelyUseMap]);
 
   useEffect(() => {
     const container = map.getContainer();
     const parent = container.parentElement;
     if (!parent || typeof ResizeObserver === "undefined") return undefined;
+    let animationFrame = null;
     const observer = new ResizeObserver(() => {
-      window.requestAnimationFrame(() => map.invalidateSize());
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        safelyUseMap((activeMap) => activeMap.invalidateSize());
+      });
     });
     observer.observe(parent);
-    return () => observer.disconnect();
-  }, [map]);
+    return () => {
+      observer.disconnect();
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
+    };
+  }, [map, safelyUseMap]);
 
   useEffect(() => {
     const validPinPoints = pins
@@ -2739,16 +2768,16 @@ function MapViewport({ pins, sitePins, routeLines, expanded, command }) {
       .filter(Boolean);
 
     if (!validPinPoints.length && !didInitialFitRef.current) {
-      map.setView(SOUTH_INDIA_CENTER, 6);
+      safelyUseMap((activeMap) => activeMap.setView(SOUTH_INDIA_CENTER, 6));
       didInitialFitRef.current = true;
       return;
     }
 
     if (!command && !didInitialFitRef.current && validPinPoints.length) {
-      map.fitBounds(
+      safelyUseMap((activeMap) => activeMap.fitBounds(
         validPinPoints,
         { padding: [44, 44], maxZoom: 13 },
-      );
+      ));
       didInitialFitRef.current = true;
       return;
     }
@@ -2766,7 +2795,7 @@ function MapViewport({ pins, sitePins, routeLines, expanded, command }) {
         });
         return;
       }
-      map.flyTo(coordinates, 15, { duration: 0.55 });
+      safelyUseMap((activeMap) => activeMap.flyTo(coordinates, 15, { duration: 0.55 }));
       return;
     }
 
@@ -2774,9 +2803,9 @@ function MapViewport({ pins, sitePins, routeLines, expanded, command }) {
       const routePoints = flattenRouteLinePoints(routeLines);
       const points = [...routePoints, ...validSitePoints];
       if (points.length === 1) {
-        map.flyTo(points[0], 14, { duration: 0.45 });
+        safelyUseMap((activeMap) => activeMap.flyTo(points[0], 14, { duration: 0.45 }));
       } else if (points.length > 1) {
-        map.fitBounds(points, { padding: [56, 56], maxZoom: 15 });
+        safelyUseMap((activeMap) => activeMap.fitBounds(points, { padding: [56, 56], maxZoom: 15 }));
       } else {
         console.warn("[Operations Map] Fit Route skipped: no valid coordinates");
       }
@@ -2785,17 +2814,17 @@ function MapViewport({ pins, sitePins, routeLines, expanded, command }) {
 
     if (command.type === "fit-all") {
       if (validPinPoints.length === 1) {
-        map.flyTo(validPinPoints[0], 13, { duration: 0.45 });
+        safelyUseMap((activeMap) => activeMap.flyTo(validPinPoints[0], 13, { duration: 0.45 }));
       } else if (validPinPoints.length > 1) {
-        map.fitBounds(
+        safelyUseMap((activeMap) => activeMap.fitBounds(
           validPinPoints,
           { padding: [44, 44], maxZoom: 13 },
-        );
+        ));
       } else {
         console.warn("[Operations Map] Fit All skipped: no valid coordinates");
       }
     }
-  }, [command, map, pins, routeLines, sitePins]);
+  }, [command, pins, routeLines, safelyUseMap, sitePins]);
 
   return null;
 }
@@ -3527,6 +3556,7 @@ async function exportHistoricalOperationsDashboardExcel({
   currentUser,
 }) {
   if (!isSupabaseConfigured || !supabase) return;
+  await authSessionManager().requireSession();
   const fromDate = dateInputValue(from);
   const toDate = dateInputValue(to);
   const fromIso = formatDateForDb(startOfIndiaDayFromInput(fromDate));
@@ -9848,7 +9878,8 @@ function useAnimatedOfficerMarkers(officers, selectedOfficerId, selectedRouteLog
 
 export default function FOActivities() {
   usePageTitle("FO Activities");
-  const { user } = useAuth();
+  const { user, session, authStatus, authError } = useAuth();
+  const hasActiveSession = authStatus === "ready" && Boolean(session?.access_token);
   const currentRole = normalizeRoleKey(generatedUserRole(user));
   const fullTechnicalAccess = hasTechnicalKmAccess(user);
   const canRunBatchKmRecalculation = ["admin", "developer", "qpmsadmin", "md", "coo"].includes(currentRole);
@@ -9928,10 +9959,11 @@ export default function FOActivities() {
   useEffect(() => {
     let cancelled = false;
     async function loadFoOperations() {
-      if (!isSupabaseConfigured || !supabase) {
+      if (!isSupabaseConfigured || !supabase || !hasActiveSession) {
         return;
       }
       try {
+        await authSessionManager().requireSession();
         const fromIso = formatDateForDb(selectedRange.from);
         const toIso = formatDateForDb(selectedRange.to);
         const [attendanceRes, siteVisits, liveStatusRows, profilesRes] =
@@ -10002,7 +10034,8 @@ export default function FOActivities() {
         }
       } catch (error) {
         console.warn("[myQPMS FO] Supabase FO fetch failed.", error);
-        if (!cancelled) {
+        const authInvalidated = await invalidateAuthOnUnauthorized(error);
+        if (!cancelled && !authInvalidated) {
           setAttendanceKpiRows([]);
           setSiteVisitRows([]);
           setLiveOfficers([]);
@@ -10013,17 +10046,18 @@ export default function FOActivities() {
     return () => {
       cancelled = true;
     };
-  }, [refreshToken, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate, user]);
+  }, [hasActiveSession, refreshToken, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate, user]);
 
   useEffect(() => {
+    if (!hasActiveSession) return undefined;
     const interval = window.setInterval(() => {
       setRefreshToken((value) => value + 1);
     }, 12000);
     return () => window.clearInterval(interval);
-  }, []);
+  }, [hasActiveSession]);
 
   useEffect(() => {
-    if (!isSupabaseConfigured || !supabase) return undefined;
+    if (!isSupabaseConfigured || !supabase || !hasActiveSession) return undefined;
     const channel = supabase
       .channel("fo-operations-live-status")
       .on(
@@ -10050,17 +10084,16 @@ export default function FOActivities() {
         if (status === "SUBSCRIBED") {
           console.log("REALTIME_CONNECTED");
         } else if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) {
-          console.log("REALTIME_RECONNECT", status);
-          setRefreshToken((value) => value + 1);
+          console.log("REALTIME_STATUS", status);
         }
       });
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user]);
+  }, [hasActiveSession, user]);
 
   useEffect(() => {
-    if (!isSupabaseConfigured || !supabase) return undefined;
+    if (!isSupabaseConfigured || !supabase || !hasActiveSession) return undefined;
     const channel = supabase
       .channel("fo-operations-site-visits")
       .on(
@@ -10075,7 +10108,7 @@ export default function FOActivities() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [hasActiveSession]);
 
   const officers = useMemo(
     () =>
@@ -10093,13 +10126,14 @@ export default function FOActivities() {
     summaryRequestSequenceRef.current = requestSequence;
 
     async function loadFilteredSummary() {
+      if (!hasActiveSession) {
+        setFilteredSummaryLoading(false);
+        setFilteredSummaryError(authError || SESSION_EXPIRED_MESSAGE);
+        return;
+      }
       setFilteredSummaryLoading(true);
       setFilteredSummaryError("");
-      setFilteredSummary(EMPTY_OPERATIONS_SUMMARY);
       try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const accessToken = sessionData?.session?.access_token;
-        if (!accessToken) throw new Error("An active session is required.");
         const query = operationsSummaryQuery({
           dateFrom: selectedRange.fromDate,
           dateTo: selectedRange.toDate,
@@ -10107,8 +10141,7 @@ export default function FOActivities() {
           business: businessFilter,
           status: statusFilter,
         });
-        const response = await fetch(`${API_BASE_URL}/api/fo/operations/summary?${query}`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
+        const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/operations/summary?${query}`, {
           signal: controller.signal,
         });
         const payload = await response.json();
@@ -10127,7 +10160,6 @@ export default function FOActivities() {
         if (error.name === "AbortError") return;
         if (!shouldAcceptSummaryResponse(requestSequence, summaryRequestSequenceRef.current)) return;
         console.warn("[myQPMS FO] Filtered summary failed.", error);
-        setFilteredSummary(EMPTY_OPERATIONS_SUMMARY);
         setFilteredSummaryError(error.message || "Filtered summary failed.");
       } finally {
         if (shouldAcceptSummaryResponse(requestSequence, summaryRequestSequenceRef.current)) {
@@ -10138,7 +10170,7 @@ export default function FOActivities() {
 
     if (isSupabaseConfigured && supabase) loadFilteredSummary();
     return () => controller.abort();
-  }, [businessFilter, selectedRange.fromDate, selectedRange.toDate, stateFilter, statusFilter, summaryRefreshToken]);
+  }, [authError, businessFilter, hasActiveSession, selectedRange.fromDate, selectedRange.toDate, stateFilter, statusFilter, summaryRefreshToken]);
   const operationalOfficerKeys = useMemo(() => {
     const keys = new Set();
     officers.forEach((officer) => {
@@ -10332,22 +10364,16 @@ export default function FOActivities() {
       failed: totals.failed,
     });
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData?.session?.access_token;
-      if (!accessToken) {
-        throw new Error("Admin session expired. Please login again.");
-      }
       let done = false;
       while (!done) {
         let page = null;
         let pageError = null;
         for (let attempt = 1; attempt <= 3 && !page; attempt += 1) {
           try {
-            const response = await fetch(`${API_BASE_URL}/api/fo/km/recalculate-batch`, {
+            const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/km/recalculate-batch`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                Authorization: `Bearer ${accessToken}`,
               },
               body: JSON.stringify({
                 fromDate: selectedRange.fromDate,
@@ -10367,6 +10393,10 @@ export default function FOActivities() {
             page = responseBody;
           } catch (error) {
             pageError = error;
+            if (isAuthSessionError(error)) throw error;
+            if (attempt < 3) {
+              await new Promise((resolve) => window.setTimeout(resolve, attempt * 500));
+            }
           }
         }
         if (!page) {
@@ -10918,10 +10948,14 @@ export default function FOActivities() {
       if (supportPendingAction === "check_out") {
         const visit = availability.activeVisit;
         if (!visit?.id) throw new Error("No active site visit found for Check Out.");
-        await api.post(`/api/fo/site-visits/${visit.id}/force-checkout`, {
-          remarks: supportRemarks.trim(),
-          checkout_latitude: coordinates?.[0] ?? null,
-          checkout_longitude: coordinates?.[1] ?? null,
+        await authenticatedApiRequest({
+          method: "POST",
+          url: `/api/fo/site-visits/${visit.id}/force-checkout`,
+          data: {
+            remarks: supportRemarks.trim(),
+            checkout_latitude: coordinates?.[0] ?? null,
+            checkout_longitude: coordinates?.[1] ?? null,
+          },
         });
         setSupportMessage("Active site visit checked out.");
       }
@@ -10984,6 +11018,7 @@ export default function FOActivities() {
       await loadSupportContext(supportOfficer);
     } catch (error) {
       console.warn("[myQPMS FO] Support action failed.", error);
+      await invalidateAuthOnUnauthorized(error);
       setSupportMessage(error?.message || "Support action failed.");
     } finally {
       setSupportBusy(false);
@@ -11094,7 +11129,7 @@ export default function FOActivities() {
     setKmRecalcBusy(true);
     setKmRecalcResult(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/fo/km/recalculate`, {
+      const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/km/recalculate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -11156,16 +11191,10 @@ export default function FOActivities() {
     setKmRecalcResult(null);
     setSupportMessage("");
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData?.session?.access_token;
-      if (!accessToken) {
-        throw new Error("Admin session expired. Please login again.");
-      }
-      const response = await fetch(`${API_BASE_URL}/api/fo/km/recalculate-switch-mode`, {
+      const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/km/recalculate-switch-mode`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
           attendance_id: attendanceId,
@@ -11245,18 +11274,12 @@ export default function FOActivities() {
 
     setCheckoutReviewBusyVisitId(visit.id);
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData?.session?.access_token;
-      if (!accessToken) {
-        throw new Error("Admin session expired. Please login again.");
-      }
-      const response = await fetch(
+      const response = await authenticatedFetch(
         `${API_BASE_URL}/api/fo/site-visits/${visit.id}/checkout-missing-km-review`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
           },
           body: JSON.stringify({
             action: normalizedAction,
@@ -11697,7 +11720,7 @@ export default function FOActivities() {
         />
         <FleetKpi
           label="Payable KM"
-          value={distanceTravelled}
+          value={filteredSummaryError ? "--" : distanceTravelled}
           icon={Route}
           tone="green"
           hint={filteredSummaryLoading ? null : "Filtered"}
@@ -11706,7 +11729,7 @@ export default function FOActivities() {
         />
         <FleetKpi
           label="Petrol Amount"
-          value={formatInr(totalPetrolAmount)}
+          value={filteredSummaryError ? "--" : formatInr(totalPetrolAmount)}
           icon={CircleGauge}
           tone="amber"
           hint={filteredSummaryLoading ? null : "Filtered"}

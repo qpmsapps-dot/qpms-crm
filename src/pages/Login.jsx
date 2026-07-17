@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { motion as Motion } from 'framer-motion';
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Logo from '../components/Logo.jsx';
 import { useAuth } from '../context/auth-context.js';
 import { findMockUser } from '../data/mockUsers.js';
@@ -82,6 +82,7 @@ export default function Login() {
   const [isWelcoming, setIsWelcoming] = useState(false);
   const [welcomeUser, setWelcomeUser] = useState(null);
   const navigate = useNavigate();
+  const location = useLocation();
   const { loginWithAppPassword, loginWithPassword, isDemoAuthEnabled } = useAuth();
   usePageTitle('Sign in');
 
@@ -103,7 +104,11 @@ export default function Login() {
         setWelcomeUser(nextUser);
         setIsWelcoming(true);
         window.setTimeout(() => {
-          navigate('/dashboard', { replace: true });
+          const returnLocation = location.state?.from;
+          const returnPath = returnLocation?.pathname
+            ? `${returnLocation.pathname}${returnLocation.search || ''}${returnLocation.hash || ''}`
+            : '';
+          navigate(returnPath && returnPath !== '/login' ? returnPath : '/dashboard', { replace: true });
         }, 900);
         return nextUser;
       } catch (authError) {
@@ -154,6 +159,7 @@ export default function Login() {
   const activeWelcomeUser = welcomeUser || matchedWelcomeUser;
   const resolvedWelcomeName = activeWelcomeUser?.displayName || activeWelcomeUser?.name || '';
   const welcomeText = resolvedWelcomeName ? `Welcome Back, ${resolvedWelcomeName}` : 'Welcome Back';
+  const sessionMessage = String(location.state?.sessionMessage || '').trim();
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-slate-950 text-slate-950">
@@ -254,9 +260,9 @@ export default function Login() {
                 </button>
               </div>
 
-              {error ? (
+              {error || sessionMessage ? (
                 <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
-                  {error}
+                  {error || sessionMessage}
                 </p>
               ) : null}
 

@@ -8,7 +8,7 @@ import { canAccessRoute } from '../utils/authRoles.js';
 export default function MainLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [theme, setTheme] = useState('light');
-  const { user, authStatus } = useAuth();
+  const { user, session, authStatus, authError } = useAuth();
   const location = useLocation();
 
   if (authStatus === 'loading') {
@@ -19,8 +19,8 @@ export default function MainLayout() {
     );
   }
 
-  if (!user) {
-    return <Navigate to="/login" replace />;
+  if (!user || (!session && !user.isDemoReadOnly)) {
+    return <Navigate to="/login" state={{ from: location, sessionMessage: authError || '' }} replace />;
   }
 
   if (user.requiresPasswordChange) {

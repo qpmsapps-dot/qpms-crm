@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import { api, clearBackendToken, readBackendToken, setBackendToken } from '../services/api.js';
 import { normalizeCanonicalRole } from '../utils/authRoles.js';
@@ -8,6 +8,11 @@ import {
   isDemoReadOnlyUser,
 } from '../utils/demoAccess.js';
 import { AuthContext } from './auth-context.js';
+import {
+  authSessionManager,
+  configureAuthSession,
+  SESSION_EXPIRED_MESSAGE,
+} from '../services/authSession.js';
 
 const authStorageKey = 'qpms-crm-auth-user';
 const isDemoAuthEnabled =
@@ -107,9 +112,11 @@ async function fetchProfileForSession(session) {
 
 export function AuthProvider({ children }) {
   const [user, setUserState] = useState(readStoredUser);
+  const [session, setSessionState] = useState(null);
   const [backendToken, setBackendTokenState] = useState(readBackendToken);
   const [authStatus, setAuthStatus] = useState(isProductionAuthMode ? 'loading' : 'ready');
   const [authError, setAuthError] = useState('');
+  const intentionalSignOutRef = useRef(false);
 
   useEffect(() => {
     const storedUser = readStoredUser();
@@ -137,15 +144,29 @@ export function AuthProvider({ children }) {
     }
 
     let active = true;
+    const manager = configureAuthSession(supabase);
     queueMicrotask(() => {
       if (active) setAuthStatus('loading');
     });
 
-    supabase.auth.getSession()
-      .then(async ({ data, error }) => {
+    const unsubscribeManager = manager.subscribe((nextSession, reason) => {
+      if (!active) return;
+      setSessionState(nextSession);
+      if (!nextSession && reason === SESSION_EXPIRED_MESSAGE) {
+        setUserState(null);
+        setAuthStatus('ready');
+        setAuthError(SESSION_EXPIRED_MESSAGE);
+        window.localStorage.removeItem(authStorageKey);
+        clearBackendToken();
+        setBackendTokenState('');
+      }
+    });
+
+    manager.bootstrap()
+      .then(async (nextSession) => {
         if (!active) return;
-        if (error) throw error;
-        const nextUser = await fetchProfileForSession(data.session);
+        setSessionState(nextSession);
+        const nextUser = await fetchProfileForSession(nextSession);
         if (!active) return;
         setUserState(nextUser);
         setAuthStatus('ready');
@@ -160,7 +181,8 @@ export function AuthProvider({ children }) {
           setAuthError('');
           return;
         }
-        void supabase.auth.signOut();
+        void manager.clearInvalidSession(error.message || 'Session restore failed');
+        setSessionState(null);
         setUserState(null);
         setAuthStatus(isProductionAuthMode ? 'error' : 'ready');
         setAuthError(error.message || 'Session restore failed');
@@ -169,13 +191,30 @@ export function AuthProvider({ children }) {
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
         if (!active) return;
+        const preserveSessionError = manager.getSession() === null;
+        const intentionalSignOut = intentionalSignOutRef.current || isSetPasswordRoute();
+        intentionalSignOutRef.current = false;
+        manager.setSession(null, 'SIGNED_OUT');
+        setSessionState(null);
         setUserState(null);
         setAuthStatus('ready');
-        setAuthError('');
+        if (!preserveSessionError) {
+          setAuthError(intentionalSignOut ? '' : SESSION_EXPIRED_MESSAGE);
+        }
         if (typeof window !== 'undefined') {
           window.localStorage.removeItem(authStorageKey);
           clearBackendToken();
           setBackendTokenState('');
+        }
+        return;
+      }
+      if (event === 'INITIAL_SESSION') return;
+      manager.setSession(session, event);
+      setSessionState(session || null);
+      if (event === 'TOKEN_REFRESHED') {
+        if (active) {
+          setAuthStatus('ready');
+          setAuthError('');
         }
         return;
       }
@@ -195,7 +234,8 @@ export function AuthProvider({ children }) {
             setAuthError('');
             return;
           }
-          void supabase.auth.signOut();
+          void manager.clearInvalidSession(error.message || 'Profile sync failed');
+          setSessionState(null);
           setUserState(null);
           setAuthStatus(isProductionAuthMode ? 'error' : 'ready');
           setAuthError(error.message || 'Profile sync failed');
@@ -204,6 +244,7 @@ export function AuthProvider({ children }) {
 
     return () => {
       active = false;
+      unsubscribeManager();
       listener?.subscription?.unsubscribe();
     };
   }, []);
@@ -280,12 +321,17 @@ export function AuthProvider({ children }) {
       setAuthError(error.message);
       throw error;
     }
+    configureAuthSession(supabase).setSession(data.session, 'SIGNED_IN');
+    setSessionState(data.session || null);
 
     let nextUser;
     try {
       nextUser = await fetchProfileForSession(data.session);
     } catch (profileError) {
+      intentionalSignOutRef.current = true;
       await supabase.auth.signOut();
+      configureAuthSession(supabase).setSession(null, 'SIGNED_OUT');
+      setSessionState(null);
       setUserState(null);
       setAuthStatus('ready');
       setAuthError(profileError.message);
@@ -301,9 +347,9 @@ export function AuthProvider({ children }) {
 
   const refreshUserProfile = useCallback(async () => {
     if (!isSupabaseConfigured || !supabase) return null;
-    const { data, error } = await supabase.auth.getSession();
-    if (error) throw error;
-    const nextUser = await fetchProfileForSession(data.session);
+    const activeSession = await authSessionManager().requireSession();
+    const nextUser = await fetchProfileForSession(activeSession);
+    setSessionState(activeSession);
     setUserState(nextUser);
     setAuthStatus('ready');
     setAuthError('');
@@ -312,19 +358,25 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     if (isSupabaseConfigured && supabase && !isDemoReadOnlyUser(user)) {
+      intentionalSignOutRef.current = true;
       await supabase.auth.signOut();
+    }
+    if (isSupabaseConfigured && supabase) {
+      configureAuthSession(supabase).setSession(null, 'SIGNED_OUT');
     }
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(authStorageKey);
     }
     clearBackendToken();
     setBackendTokenState('');
+    setSessionState(null);
     setUserState(null);
   }, [user]);
 
   const value = useMemo(
     () => ({
       user,
+      session,
       setUser,
       loginBackend,
       loginWithAppPassword,
@@ -337,7 +389,7 @@ export function AuthProvider({ children }) {
       isProductionAuthMode,
       backendToken,
     }),
-    [user, setUser, loginBackend, loginWithAppPassword, loginWithPassword, refreshUserProfile, logout, authStatus, authError, backendToken],
+    [user, session, setUser, loginBackend, loginWithAppPassword, loginWithPassword, refreshUserProfile, logout, authStatus, authError, backendToken],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

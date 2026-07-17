@@ -4,9 +4,9 @@ import test from 'node:test';
 
 const source = await readFile(new URL('../src/pages/FOActivities.jsx', import.meta.url), 'utf8');
 
-test('filtered summary cancels stale requests and clears misleading totals on load or failure', () => {
+test('filtered summary cancels stale requests without replacing failures with zero', () => {
   assert.match(source, /const controller = new AbortController\(\)/);
-  assert.match(source, /setFilteredSummary\(EMPTY_OPERATIONS_SUMMARY\)/);
+  assert.doesNotMatch(source, /setFilteredSummary\(EMPTY_OPERATIONS_SUMMARY\)/);
   assert.match(source, /return \(\) => controller\.abort\(\)/);
   assert.match(source, /shouldAcceptSummaryResponse\(requestSequence, summaryRequestSequenceRef\.current\)/);
 });

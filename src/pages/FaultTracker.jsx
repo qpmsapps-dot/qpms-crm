@@ -33,7 +33,7 @@ import {
 import * as XLSX from 'xlsx';
 import { useAuth } from '../context/auth-context.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
-import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
+import { authenticatedFetch } from '../services/api.js';
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:4000').replace(/\/+$/, '');
 
@@ -544,21 +544,6 @@ function parseTicketRows(rows) {
 }
 
 async function faultTrackerApiRequest(config) {
-  if (!isSupabaseConfigured || !supabase) {
-    throw new Error('Supabase Auth is not configured.');
-  }
-  async function readAccessToken({ forceRefresh = false } = {}) {
-    const sessionResult = forceRefresh
-      ? await supabase.auth.refreshSession()
-      : await supabase.auth.getSession();
-    if (sessionResult.error) throw sessionResult.error;
-    const accessToken = String(sessionResult.data.session?.access_token || '').trim();
-    if (!accessToken || accessToken === 'undefined' || accessToken === 'null') {
-      throw new Error('Your login session has expired. Please refresh or login again.');
-    }
-    return accessToken;
-  }
-
   const params = config.params && typeof config.params === 'object'
     ? new URLSearchParams(
       Object.entries(config.params)
@@ -567,25 +552,16 @@ async function faultTrackerApiRequest(config) {
     ).toString()
     : '';
   const url = `${API_BASE_URL}${config.url}${params ? `?${params}` : ''}`;
-  async function sendRequest(accessToken) {
-    return fetch(url, {
+  try {
+    const response = await authenticatedFetch(url, {
       method: String(config.method || 'GET').toUpperCase(),
       headers: {
         'Content-Type': 'application/json',
         ...(config.headers || {}),
-        Authorization: `Bearer ${accessToken}`,
       },
       body: config.data === undefined ? undefined : JSON.stringify(config.data),
     });
-  }
-
-  try {
-    let response = await sendRequest(await readAccessToken());
-    let payload = await response.json().catch(() => ({}));
-    if (response.status === 401) {
-      response = await sendRequest(await readAccessToken({ forceRefresh: true }));
-      payload = await response.json().catch(() => ({}));
-    }
+    const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (payload?.code === 'state_mapping_missing') {
         throw new Error(payload.message || 'State mapping not configured for your profile. Please contact Admin.');

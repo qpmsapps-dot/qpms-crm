@@ -10,6 +10,7 @@ import UserFormDrawer from '../../components/user-management/UserFormDrawer.jsx'
 import UserManagementHeader from '../../components/user-management/UserManagementHeader.jsx';
 import UserManagementSummary from '../../components/user-management/UserManagementSummary.jsx';
 import { usePageTitle } from '../../hooks/usePageTitle.js';
+import { useAuth } from '../../context/auth-context.js';
 import {
   createAdminUser,
   deactivateAdminUser,
@@ -26,6 +27,7 @@ import {
   updateAdminUser,
 } from '../../services/api.js';
 import { parseEmployeeExcel } from '../../utils/employeeExcelParser.js';
+import { authSessionManager, SESSION_EXPIRED_MESSAGE } from '../../services/authSession.js';
 
 const tabs = ['Employees', 'Hierarchy', 'HOD Mapping', 'Create Accounts', 'Activity'];
 const pageSize = 24;
@@ -123,6 +125,7 @@ function placeholderText(tab) {
 
 export default function UserManagement() {
   usePageTitle('User Management');
+  const { session, authStatus, authError } = useAuth();
 
   const [users, setUsers] = useState([]);
   const [total, setTotal] = useState(0);
@@ -166,6 +169,15 @@ export default function UserManagement() {
 
   const loadUsers = useCallback(async () => {
     void refreshVersion;
+    if (authStatus === 'loading') {
+      setLoading(true);
+      return;
+    }
+    if (!session?.access_token) {
+      setLoading(false);
+      setLoadError(authError || 'Your session has expired. Please sign in again.');
+      return;
+    }
     setLoading(true);
     setLoadError('');
     try {
@@ -184,13 +196,10 @@ export default function UserManagement() {
       setTotalPages(Number(result.totalPages || 0));
     } catch (error) {
       setLoadError(apiErrorMessage(error));
-      setUsers([]);
-      setTotal(0);
-      setTotalPages(0);
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, filters, page, refreshVersion]);
+  }, [authError, authStatus, debouncedSearch, filters, page, refreshVersion, session?.access_token]);
 
   useEffect(() => {
     // Data fetching is the external synchronization performed by this effect.
@@ -213,8 +222,13 @@ export default function UserManagement() {
       .map((value) => ({ value, label: provisioningLabel(value) })),
   }), [users]);
 
-  function refreshList() {
-    setRefreshVersion((value) => value + 1);
+  async function refreshList() {
+    try {
+      await authSessionManager().requireSession();
+      setRefreshVersion((value) => value + 1);
+    } catch {
+      setLoadError(SESSION_EXPIRED_MESSAGE);
+    }
   }
 
   function showMessage(text, link = '') {
@@ -475,7 +489,7 @@ export default function UserManagement() {
         />
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm font-bold text-slate-600">
-            {loading ? 'Loading profiles...' : `${users.length} shown of ${total} profiles`}
+            {loading ? 'Loading profiles...' : loadError ? 'Profiles unavailable' : `${users.length} shown of ${total} profiles`}
           </p>
           <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
             <button type="button" onClick={() => setViewMode('card')} className={`focus-ring inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold ${viewMode === 'card' ? 'bg-qpms-600 text-white' : 'text-slate-600'}`}>

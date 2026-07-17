@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import { assertDemoWriteAllowed } from '../utils/demoAccess.js';
+import { authSessionManager, AuthSessionError } from './authSession.js';
 
 const API_BASE =
   import.meta.env.VITE_API_URL?.replace(/\/+$/, '') ||
@@ -35,29 +36,33 @@ export const api = axios.create({
   },
 });
 
-async function adminApiRequest(config) {
+export async function authenticatedApiRequest(config) {
   if (!isSupabaseConfigured || !supabase) {
     throw new Error('Supabase Auth is not configured.');
   }
-  const { data, error } = await supabase.auth.getSession();
-  if (error) throw error;
-  const accessToken = data.session?.access_token;
-  if (!accessToken) {
-    throw new Error('An active Supabase session is required.');
-  }
+  const manager = authSessionManager();
+  const accessToken = await manager.accessToken();
+  return api.request({
+    ...config,
+    headers: {
+      ...(config.headers || {}),
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+}
+
+export async function authenticatedFetch(input, init = {}) {
+  return authSessionManager().authenticatedFetch(fetch, input, init);
+}
+
+async function adminApiRequest(config) {
   try {
-    const response = await api.request({
-      ...config,
-      headers: {
-        ...(config.headers || {}),
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
+    const response = await authenticatedApiRequest(config);
     return response.data;
   } catch (requestError) {
     const status = requestError.response?.status;
     const serverMessage = requestError.response?.data?.message;
-    if (status === 401) {
+    if (status === 401 || requestError.isAuthSessionError) {
       throw new Error(serverMessage || 'Your Supabase session has expired. Sign in again.');
     }
     if (status === 403) {
@@ -307,7 +312,7 @@ export function getLeadManagementAssignees() {
   });
 }
 
-api.interceptors.request.use((config) => {
+api.interceptors.request.use(async (config) => {
   if (!API_BASE) {
     return Promise.reject(
       new Error('VITE_API_URL is missing.')
@@ -320,6 +325,30 @@ api.interceptors.request.use((config) => {
   const token = readBackendToken();
   if (token && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${token}`;
+  } else if (!config.headers.Authorization && !String(config.url || '').includes('/api/auth/login')) {
+    config.headers.Authorization = `Bearer ${await authSessionManager().accessToken()}`;
   }
   return config;
 });
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const config = error.config || {};
+    if (error.response?.status !== 401 || String(config.url || '').includes('/api/auth/login')) {
+      return Promise.reject(error);
+    }
+    if (config._authRetry === true) {
+      await authSessionManager().clearInvalidSession();
+      return Promise.reject(new AuthSessionError());
+    }
+    config._authRetry = true;
+    const staleAccessToken = String(config.headers?.Authorization || '').replace(/^Bearer\s+/i, '');
+    const refreshedSession = await authSessionManager().refresh({ staleAccessToken });
+    config.headers = {
+      ...(config.headers || {}),
+      Authorization: `Bearer ${refreshedSession.access_token}`,
+    };
+    return api.request(config);
+  },
+);
