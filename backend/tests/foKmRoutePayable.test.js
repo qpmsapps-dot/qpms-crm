@@ -4,265 +4,416 @@ import assert from 'node:assert/strict';
 import {
   calculateCanonicalRoutePayableKm,
   calculateFoKmHistoricalImpact,
+  calculateTravelLegKm,
+  recalculateAttendanceTravelLegs,
+  resolveEffectiveAttendanceEnd,
 } from '../foKmRecalculationService.js';
 
 const attendance = (overrides = {}) => ({
-  id: 'fdd10c5b-7d63-4ee6-8784-323cb9c36384',
-  employee_code: 'QPMSKL1674',
-  attendance_date: '2026-07-14',
-  logout_time: '2026-07-14T13:02:20.957Z',
+  id: 'attendance-1',
+  fo_user_id: 'profile-1',
+  employee_code: 'QPMSADMIN',
+  attendance_date: '2026-07-16',
+  login_time: '2026-07-16T04:30:00.000Z',
+  logout_time: '2026-07-16T16:28:05.000Z',
   status: 'Completed',
   travel_mode: 'bike',
   payable_km_allowed: true,
-  eligible_km: 78.28,
+  eligible_km: 20.5,
   rate_per_km: 4,
+  metadata: {},
   ...overrides,
-});
-
-const visit = (id, routeKm, metadata = {}) => ({
-  id,
-  employee_code: 'QPMSKL1674',
-  check_in_time: '2026-07-14T06:33:23.875Z',
-  check_out_time: '2026-07-14T07:34:15.032Z',
-  status: 'Checked Out',
-  route_km: routeKm,
-  metadata,
-});
-
-const visits = () => [visit('visit-1', 76), visit('visit-2', 1.3)];
-
-const googleFinal = (km = 76.46) => ({
-  km,
-  calculated: true,
-  includedInPayable: true,
-  provider: km === 0 ? 'none' : 'google_directions',
-  status: 'calculated',
-  reason: km === 0 ? 'same_or_near_same_location' : null,
 });
 
 const gpsLeg = (type, km, overrides = {}) => ({
   type,
+  from_time: '2026-07-16T12:41:20.000Z',
+  to_time: '2026-07-16T16:28:05.000Z',
   km,
   status: 'calculated',
   source: 'GPS_BASED',
-  gps_log_count: 24,
-  valid_points: 20,
-  rejected_points: 4,
+  payable: true,
+  gps_log_count: 513,
+  valid_points: 497,
+  rejected_points: 16,
+  raw_gps_km: km,
+  accepted_gps_km: km,
+  reconstructed_gap_km: 0,
+  google_direct_route_km: 12.42,
+  review_flags: [],
   ...overrides,
 });
 
-const qpmsGpsLegs = () => [
-  gpsLeg('start_to_first_checkin', 76.23),
-  gpsLeg('site_checkout_to_next_checkin', 1.32),
-  gpsLeg('last_checkout_to_end_day', 0.73),
-];
+function gpsRows({ count = 12, start = '2026-07-16T12:41:20.000Z', accuracy = 10, mocked = false } = {}) {
+  const startMs = new Date(start).getTime();
+  return Array.from({ length: count }, (_, index) => ({
+    id: `gps-${index}`,
+    attendance_id: 'attendance-1',
+    fo_user_id: 'profile-1',
+    latitude: 13.028 + index * 0.0002,
+    longitude: 80.248 - index * 0.0002,
+    accuracy,
+    is_mocked: mocked,
+    source: 'mobile',
+    captured_at: new Date(startMs + index * 10000).toISOString(),
+    metadata: {},
+  }));
+}
 
-test('QPMSKL1674 uses the long valid Google final route instead of tiny GPS final evidence', () => {
-  const result = calculateCanonicalRoutePayableKm({
-    attendance: attendance(),
-    visits: visits(),
-    finalReturnLeg: googleFinal(),
-    gpsTravelLegs: qpmsGpsLegs(),
-  });
+class Query {
+  constructor(rows) {
+    this.rows = [...rows];
+  }
+  select() { return this; }
+  eq(column, value) { this.rows = this.rows.filter((row) => row[column] === value); return this; }
+  gt(column, value) { this.rows = this.rows.filter((row) => new Date(row[column]) > new Date(value)); return this; }
+  gte(column, value) { this.rows = this.rows.filter((row) => new Date(row[column]) >= new Date(value)); return this; }
+  lte(column, value) { this.rows = this.rows.filter((row) => new Date(row[column]) <= new Date(value)); return this; }
+  order(column, { ascending = true } = {}) { this.rows.sort((a, b) => (a[column] > b[column] ? 1 : -1) * (ascending ? 1 : -1)); return this; }
+  limit(value) { this.rows = this.rows.slice(0, value); return Promise.resolve({ data: this.rows, error: null }); }
+  single() { return Promise.resolve({ data: this.rows[0] || null, error: null }); }
+  maybeSingle() { return Promise.resolve({ data: this.rows[0] || null, error: null }); }
+}
 
-  assert.equal(result.siteVisitRouteKm, 77.3);
-  assert.equal(result.finalReturnPayableKm, 76.46);
-  assert.equal(result.payableBeforeAdjustmentKm, 153.76);
-  assert.equal(result.calculatedPayableKm, 153.76);
-  assert.equal(result.petrolAmount, 615.04);
-  assert.equal(result.finalReturnGpsAuditKm, 0.73);
-  assert.equal(result.finalReturnSourceComparison.suspicious, true);
-  assert.ok(result.reviewFlags.includes('FINAL_RETURN_GPS_ROUTE_MISMATCH_REVIEW'));
-});
-
-test('valid completed site routes and final route form the canonical payable total', () => {
-  const result = calculateCanonicalRoutePayableKm({
-    attendance: attendance(),
-    visits: [visit('one', 10), visit('two', 5.25), visit('open', 99, { ignored: true })],
-    finalReturnLeg: googleFinal(7.5),
-    gpsTravelLegs: [gpsLeg('last_checkout_to_end_day', 7.4)],
-  });
-  // Mark the third visit open so it is not a valid completed route leg.
-  const corrected = calculateCanonicalRoutePayableKm({
-    attendance: attendance(),
-    visits: [
-      visit('one', 10),
-      visit('two', 5.25),
-      { ...visit('open', 99), check_out_time: null, checkout_time: null, status: 'Checked In' },
-    ],
-    finalReturnLeg: googleFinal(7.5),
-    gpsTravelLegs: result.auditTravelLegs,
-  });
-  assert.equal(corrected.siteVisitRouteKm, 15.25);
-  assert.equal(corrected.calculatedPayableKm, 22.75);
-});
-
-test('no final return movement adds zero and remains a valid route calculation', () => {
-  const result = calculateCanonicalRoutePayableKm({
-    attendance: attendance(),
-    visits: visits(),
-    finalReturnLeg: googleFinal(0),
-    gpsTravelLegs: [gpsLeg('last_checkout_to_end_day', 0, { gps_log_count: 20, valid_points: 18 })],
-  });
-  assert.equal(result.finalReturnPayableKm, 0);
-  assert.equal(result.finalReturnIncluded, true);
-  assert.equal(result.calculatedPayableKm, 77.3);
-});
-
-test('route failure uses a final GPS fallback only when existing quality checks pass', () => {
-  const result = calculateCanonicalRoutePayableKm({
-    attendance: attendance(),
-    visits: visits(),
-    finalReturnLeg: { calculated: false, includedInPayable: false, reason: 'google_route_unavailable' },
-    gpsTravelLegs: [gpsLeg('last_checkout_to_end_day', 12.4)],
-  });
-  assert.equal(result.finalReturnPayableSource, 'gps_quality_checked_fallback');
-  assert.equal(result.finalReturnPayableKm, 12.4);
-  assert.equal(result.calculatedPayableKm, 89.7);
-  assert.equal(result.auditTravelLegs[0].payable, true);
-});
-
-test('route failure with poor GPS evidence does not silently add the final leg', () => {
-  const result = calculateCanonicalRoutePayableKm({
-    attendance: attendance(),
-    visits: visits(),
-    finalReturnLeg: { calculated: false, includedInPayable: false, reason: 'google_route_unavailable' },
-    gpsTravelLegs: [gpsLeg('last_checkout_to_end_day', 12.4, { gps_log_count: 4, valid_points: 3 })],
-  });
-  assert.equal(result.finalReturnPayableSource, 'none');
-  assert.equal(result.finalReturnPayableKm, 0);
-  assert.equal(result.calculatedPayableKm, 77.3);
-  assert.ok(result.reviewFlags.includes('FINAL_RETURN_ROUTE_AND_GPS_UNAVAILABLE_REVIEW'));
-});
-
-test('no-site sourcing attendance stays outside the route-based formula', () => {
-  const noSiteAttendance = attendance({ eligible_km: 42.5 });
-  const impact = calculateFoKmHistoricalImpact({
-    attendance: noSiteAttendance,
-    visits: [],
-    finalReturnLeg: { calculated: false },
-    gpsTravelLegs: [gpsLeg('full_day', 42.5)],
-  });
-  assert.equal(impact.calculation.routeBasedSelected, false);
-  assert.equal(impact.corrected_route_based_payable_km, 42.5);
-  assert.equal(impact.difference_km, 0);
-});
-
-test('approved missing-checkout adjustment is included exactly once', () => {
-  const approvedMetadata = {
-    checkout_review_status: 'approved',
-    approved_missing_checkout_km: 4.5,
-    approved_missing_checkout_adjustment_km: 4.5,
+function clientWith(rows, { attendanceRow = attendance(), visits = [] } = {}) {
+  return {
+    from(table) {
+      if (table === 'fo_location_logs') return new Query(rows);
+      if (table === 'fo_attendance') return new Query([attendanceRow]);
+      if (table === 'fo_site_visits') return new Query(visits);
+      throw new Error(`Unexpected table ${table}`);
+    },
   };
-  const duplicateVisit = visit('visit-2', 1.3, approvedMetadata);
+}
+
+test('QPMSADMIN final sourcing detour keeps cleaned GPS instead of shorter direct route', () => {
   const result = calculateCanonicalRoutePayableKm({
     attendance: attendance(),
-    visits: [visit('visit-1', 76), duplicateVisit],
-    finalReturnLeg: googleFinal(),
-    gpsTravelLegs: qpmsGpsLegs(),
+    gpsTravelLegs: [gpsLeg('start_to_first_checkin', 8.1), gpsLeg('last_checkout_to_end_day', 25.14)],
   });
-  assert.equal(result.approvedAdjustmentKm, 4.5);
-  assert.equal(result.payableBeforeAdjustmentKm, 153.76);
-  assert.equal(result.calculatedPayableKm, 158.26);
-  assert.equal(result.petrolAmount, 633.04);
+  assert.equal(result.finalReturnPayableKm, 25.14);
+  assert.equal(result.finalReturnPayableSource, 'GPS_BASED');
+  assert.equal(result.finalReturnGoogleKm, 12.42);
+  assert.equal(result.calculatedPayableKm, 33.24);
+  assert.equal(result.petrolAmount, 132.96);
+  assert.equal(result.payableKmSource, 'gps_travel_leg_based');
 });
 
-test('non-bike attendance remains governed by the existing non-payable policy', () => {
-  const nonBike = attendance({ travel_mode: 'bus', payable_km_allowed: false, eligible_km: 0 });
-  const impact = calculateFoKmHistoricalImpact({
-    attendance: nonBike,
-    visits: visits(),
-    finalReturnLeg: googleFinal(),
-    gpsTravelLegs: qpmsGpsLegs(),
-  });
-  assert.equal(impact.calculation.routeBasedSelected, false);
-  assert.equal(impact.calculation.payableKmAllowed, false);
-  assert.equal(impact.corrected_route_based_payable_km, 0);
-
-  const ownVehicle = calculateFoKmHistoricalImpact({
-    attendance: attendance({ travel_mode: 'own_vehicle', eligible_km: 81.5 }),
-    visits: visits(),
-    finalReturnLeg: googleFinal(),
-    gpsTravelLegs: qpmsGpsLegs(),
-  });
-  assert.equal(ownVehicle.calculation.routeBasedSelected, false);
-  assert.equal(ownVehicle.corrected_route_based_payable_km, 81.5);
+test('all eligible GPS travel windows are summed and checked-in distance is absent', () => {
+  const legs = [
+    gpsLeg('start_to_first_checkin', 8.1),
+    gpsLeg('site_checkout_to_next_checkin', 4.2),
+    gpsLeg('last_checkout_to_end_day', 25.14),
+  ];
+  const result = calculateCanonicalRoutePayableKm({ attendance: attendance(), gpsTravelLegs: legs });
+  assert.equal(result.gpsTravelLegTotal, 37.44);
+  assert.equal(result.auditTravelLegs.length, 3);
+  assert.ok(result.auditTravelLegs.every((leg) => leg.payable));
 });
 
-test('route total reconciles to payable before separately identified adjustments', () => {
+test('valid GPS remains payable when it is greater than Google comparison', () => {
   const result = calculateCanonicalRoutePayableKm({
     attendance: attendance(),
-    visits: visits(),
-    finalReturnLeg: googleFinal(),
-    gpsTravelLegs: qpmsGpsLegs(),
+    gpsTravelLegs: [gpsLeg('last_checkout_to_end_day', 25.14)],
   });
-  assert.equal(result.payableBeforeAdjustmentKm, result.siteVisitRouteKm + result.finalReturnPayableKm);
-  assert.equal(result.calculatedPayableKm, result.payableBeforeAdjustmentKm + result.approvedAdjustmentKm);
+  assert.equal(result.calculatedPayableKm, 25.14);
+  assert.equal(result.finalReturnSourceComparison.difference_km, 12.72);
 });
 
-test('metadata contract truthfully identifies the actual payable and GPS audit sources', () => {
-  const result = calculateCanonicalRoutePayableKm({
+test('GPS leg calculation uses cleaned chronological points and anchors', async () => {
+  const rows = gpsRows();
+  const result = await calculateTravelLegKm({
+    client: clientWith(rows),
     attendance: attendance(),
-    visits: visits(),
-    finalReturnLeg: googleFinal(),
-    gpsTravelLegs: qpmsGpsLegs(),
+    fromTime: rows[0].captured_at,
+    toTime: rows.at(-1).captured_at,
+    fromLat: rows[0].latitude,
+    fromLng: rows[0].longitude,
+    toLat: rows.at(-1).latitude,
+    toLng: rows.at(-1).longitude,
   });
-  assert.equal(result.payableKmSource, 'route_based_completed_site_day');
-  assert.match(result.payableKmFormula, /site_visit_route_km/);
-  assert.equal(result.finalReturnIncluded, true);
-  assert.equal(result.finalReturnPayableSource, 'google_directions');
-  assert.equal(result.gpsTravelLegTotal, 78.28);
-  assert.ok(result.auditTravelLegs.every((leg) => leg.payable === false));
+  assert.equal(result.legSource, 'GPS_BASED');
+  assert.equal(result.payable, true);
+  assert.equal(result.gpsLogCount, 11);
+  assert.ok(result.legKm > 0);
 });
 
-test('re-running the canonical calculation is deterministic and does not duplicate adjustments', () => {
+test('poor accuracy and mock logs fail GPS quality', async () => {
+  for (const rows of [gpsRows({ accuracy: 75 }), gpsRows({ mocked: true })]) {
+    const result = await calculateTravelLegKm({
+      client: clientWith(rows),
+      attendance: attendance(),
+      fromTime: rows[0].captured_at,
+      toTime: rows.at(-1).captured_at,
+      fromLat: rows[0].latitude,
+      fromLng: rows[0].longitude,
+      toLat: rows.at(-1).latitude,
+      toLng: rows.at(-1).longitude,
+      options: { maxGoogleDirectionsCalls: 0 },
+    });
+    assert.equal(result.legSource, 'HAVERSINE_ROUTE_FALLBACK');
+    assert.ok(result.reviewFlags.includes('GOOGLE_ROUTE_FAILED_USED_HAVERSINE'));
+  }
+});
+
+test('insufficient GPS uses exact-window Google fallback', async (t) => {
+  const previousEnabled = process.env.ENABLE_GOOGLE_DIRECTIONS;
+  const previousFetch = global.fetch;
+  process.env.ENABLE_GOOGLE_DIRECTIONS = 'true';
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    json: async () => ({ status: 'OK', routes: [{ legs: [{ distance: { value: 12420 } }] }] }),
+  });
+  t.after(() => {
+    if (previousEnabled === undefined) delete process.env.ENABLE_GOOGLE_DIRECTIONS;
+    else process.env.ENABLE_GOOGLE_DIRECTIONS = previousEnabled;
+    global.fetch = previousFetch;
+  });
+  const rows = gpsRows({ count: 4 });
+  const result = await calculateTravelLegKm({
+    client: clientWith(rows),
+    attendance: attendance(),
+    fromTime: rows[0].captured_at,
+    toTime: rows.at(-1).captured_at,
+    fromLat: rows[0].latitude,
+    fromLng: rows[0].longitude,
+    toLat: rows.at(-1).latitude,
+    toLng: rows.at(-1).longitude,
+    options: { googleMapsApiKey: 'test-key' },
+  });
+  assert.equal(result.legSource, 'GOOGLE_ROUTE_FALLBACK');
+  assert.equal(result.legKm, 12.42);
+});
+
+test('approved adjustment is excluded when GPS covers the exact window', () => {
+  const leg = gpsLeg('last_checkout_to_end_day', 25.14);
+  const result = calculateCanonicalRoutePayableKm({
+    attendance: attendance({ metadata: { approved_adjustments: [{
+      type: 'final_window_detour',
+      status: 'approved',
+      approved_km: 5,
+      from_time: leg.from_time,
+      to_time: leg.to_time,
+    }] } }),
+    gpsTravelLegs: [leg],
+  });
+  assert.equal(result.approvedAdjustmentKm, 0);
+  assert.equal(result.adjustmentAudits[0].exclusion_reason, 'gps_already_covers_window');
+});
+
+test('approved adjustment is added once only for an uncovered exact window', () => {
+  const uncovered = gpsLeg('last_checkout_to_end_day', 0, { status: 'skipped', source: 'SKIPPED', payable: false });
   const input = {
-    attendance: attendance(),
-    visits: [
-      visit('visit-1', 76),
-      visit('visit-2', 1.3, { checkout_review_status: 'approved', approved_missing_checkout_km: 2 }),
-    ],
-    finalReturnLeg: googleFinal(),
-    gpsTravelLegs: qpmsGpsLegs(),
+    attendance: attendance({ metadata: { approved_adjustments: [{
+      type: 'missing_checkout', status: 'approved', approved_km: 5,
+      from_time: uncovered.from_time, to_time: uncovered.to_time,
+    }] } }),
+    gpsTravelLegs: [uncovered],
   };
   const first = calculateCanonicalRoutePayableKm(input);
   const second = calculateCanonicalRoutePayableKm(input);
+  assert.equal(first.approvedAdjustmentKm, 5);
+  assert.equal(first.calculatedPayableKm, 5);
   assert.deepEqual(second, first);
-  assert.equal(second.approvedAdjustmentKm, 2);
-  assert.equal(second.calculatedPayableKm, 155.76);
 });
 
-test('pre-site sourcing evidence remains intact but is audit-only for a valid route-based day', () => {
-  const preSite = gpsLeg('start_to_first_checkin', 90, {
-    source: 'PRE_SITE_GPS_SOURCING',
-    payable_km_source_reason: 'pre_site_sourcing_raw_gps_used_because_filtered_gps_was_much_lower',
+test('route fallback coverage also prevents adjustment double counting', () => {
+  const leg = gpsLeg('last_checkout_to_end_day', 12.42, { source: 'GOOGLE_ROUTE_FALLBACK' });
+  const result = calculateCanonicalRoutePayableKm({
+    attendance: attendance({ metadata: { approved_adjustments: [{
+      status: 'approved', approved_km: 5, from_time: leg.from_time, to_time: leg.to_time,
+    }] } }),
+    gpsTravelLegs: [leg],
   });
+  assert.equal(result.approvedAdjustmentKm, 0);
+  assert.equal(result.adjustmentAudits[0].exclusion_reason, 'route_fallback_already_covers_window');
+});
+
+test('non-bike attendance remains non-payable', () => {
+  const result = calculateCanonicalRoutePayableKm({
+    attendance: attendance({ travel_mode: 'bus', payable_km_allowed: false }),
+    gpsTravelLegs: [gpsLeg('full_day_no_site', 42.5, { source: 'FULL_DAY_GPS_NO_SITE' })],
+  });
+  assert.equal(result.calculatedPayableKm, 0);
+  assert.equal(result.payableKmAllowed, false);
+});
+
+test('no-site full-day GPS leg is a payable canonical window', () => {
   const result = calculateCanonicalRoutePayableKm({
     attendance: attendance(),
-    visits: visits(),
-    finalReturnLeg: googleFinal(),
-    gpsTravelLegs: [preSite, gpsLeg('last_checkout_to_end_day', 0.73)],
+    visits: [],
+    gpsTravelLegs: [gpsLeg('full_day_no_site', 42.5, { source: 'FULL_DAY_GPS_NO_SITE' })],
   });
-  assert.equal(result.auditTravelLegs[0].source, 'PRE_SITE_GPS_SOURCING');
-  assert.equal(result.auditTravelLegs[0].payable_km_source_reason, preSite.payable_km_source_reason);
-  assert.equal(result.auditTravelLegs[0].payable_status, 'audit_only_route_based_formula_selected');
-  assert.equal(result.calculatedPayableKm, 153.76);
+  assert.equal(result.calculatedPayableKm, 42.5);
+  assert.equal(result.auditTravelLegs[0].payable, true);
 });
 
-test('historical impact helper is read-only and reports the corrected difference', () => {
-  const originalAttendance = attendance();
-  const snapshot = structuredClone(originalAttendance);
+test('historical impact helper stays read-only', () => {
+  const original = attendance();
+  const snapshot = structuredClone(original);
   const impact = calculateFoKmHistoricalImpact({
-    attendance: originalAttendance,
-    visits: visits(),
-    finalReturnLeg: googleFinal(),
-    gpsTravelLegs: qpmsGpsLegs(),
+    attendance: original,
+    gpsTravelLegs: [gpsLeg('last_checkout_to_end_day', 25.14)],
   });
   assert.equal(impact.dry_run, true);
-  assert.equal(impact.current_stored_payable_km, 78.28);
-  assert.equal(impact.corrected_route_based_payable_km, 153.76);
-  assert.equal(impact.difference_km, 75.48);
-  assert.equal(impact.corrected_petrol_amount, 615.04);
-  assert.equal(impact.affected_reason, 'stored_payable_differs_from_canonical_route_based_formula');
-  assert.deepEqual(originalAttendance, snapshot);
+  assert.equal(impact.current_stored_payable_km, 20.5);
+  assert.equal(impact.corrected_route_based_payable_km, 25.14);
+  assert.equal(impact.difference_km, 4.64);
+  assert.deepEqual(original, snapshot);
+});
+
+test('auto-ended attendance resolves to the last valid same-day mobile GPS point', async () => {
+  const rows = gpsRows({ start: '2026-07-16T12:41:20.000Z' });
+  const autoEnded = attendance({
+    status: 'Stale Auto Ended',
+    metadata: { auto_ended: true },
+    logout_time: '2026-07-16T18:29:00.000Z',
+  });
+  const resolved = await resolveEffectiveAttendanceEnd(clientWith(rows, { attendanceRow: autoEnded }), autoEnded);
+  assert.equal(resolved.source, 'last_mobile_gps_before_auto_end');
+  assert.equal(resolved.time.toISOString(), rows.at(-1).captured_at);
+  assert.deepEqual(resolved.coordinate, {
+    latitude: rows.at(-1).latitude,
+    longitude: rows.at(-1).longitude,
+  });
+});
+
+test('auto-ended open visit without confirmed departure produces a zero reviewed final leg', async () => {
+  const stationary = gpsRows().map((row, index) => ({
+    ...row,
+    latitude: 13.028 + index * 0.000001,
+    longitude: 80.248 + index * 0.000001,
+  }));
+  const autoEnded = attendance({ status: 'Stale Auto Ended', metadata: { auto_ended: true } });
+  const openVisit = {
+    id: 'visit-open', attendance_id: autoEnded.id, check_in_time: stationary[0].captured_at,
+    check_out_time: null, check_in_latitude: 13.028, check_in_longitude: 80.248,
+    status: 'Checked In', metadata: {},
+  };
+  const result = await recalculateAttendanceTravelLegs(
+    clientWith(stationary, { attendanceRow: autoEnded, visits: [openVisit] }),
+    autoEnded.id,
+    { persist: false, auditDelayedCheckout: false, maxGoogleDirectionsCalls: 0 },
+  );
+  const final = result.travel_legs.find((leg) => leg.type === 'last_checkout_to_end_day');
+  assert.equal(final.status, 'skipped');
+  assert.equal(final.reason, 'no_confirmed_departure_from_open_site');
+  assert.ok(final.review_flags.includes('AUTO_END_OPEN_SITE_NO_CONFIRMED_DEPARTURE_REVIEW'));
+});
+
+test('auto-ended open visit counts only after two-point confirmed departure', async () => {
+  const rows = gpsRows().map((row, index) => ({
+    ...row,
+    latitude: index < 2 ? 13.028 : 13.03 + index * 0.0002,
+    longitude: index < 2 ? 80.248 : 80.25 + index * 0.0002,
+  }));
+  const autoEnded = attendance({ status: 'Stale Auto Ended', metadata: { auto_ended: true } });
+  const openVisit = {
+    id: 'visit-open', attendance_id: autoEnded.id, check_in_time: rows[0].captured_at,
+    check_out_time: null, check_in_latitude: 13.028, check_in_longitude: 80.248,
+    status: 'Checked In', metadata: {},
+  };
+  const result = await recalculateAttendanceTravelLegs(
+    clientWith(rows, { attendanceRow: autoEnded, visits: [openVisit] }),
+    autoEnded.id,
+    { persist: false, auditDelayedCheckout: false, maxGoogleDirectionsCalls: 0 },
+  );
+  const final = result.travel_legs.find((leg) => leg.type === 'last_checkout_to_end_day');
+  assert.equal(final.status, 'calculated');
+  assert.ok(final.review_flags.includes('AUTO_END_OPEN_SITE_CONFIRMED_DEPARTURE'));
+  assert.ok(final.km > 0);
+});
+
+test('historical missing attendance binding safely falls back to employee and time window', async () => {
+  const rows = gpsRows().map((row) => ({ ...row, attendance_id: null }));
+  const result = await calculateTravelLegKm({
+    client: clientWith(rows), attendance: attendance(),
+    fromTime: rows[0].captured_at, toTime: rows.at(-1).captured_at,
+    fromLat: rows[0].latitude, fromLng: rows[0].longitude,
+    toLat: rows.at(-1).latitude, toLng: rows.at(-1).longitude,
+  });
+  assert.equal(result.legSource, 'GPS_BASED');
+  assert.equal(result.gpsLogBindingSource, 'employee_time_window_fallback');
+});
+
+test('travel-window construction excludes every checked-in GPS interval without reusing points', async () => {
+  const timedRows = (start, prefix) => gpsRows({ start }).map((row, index) => ({ ...row, id: `${prefix}-${index}` }));
+  const rows = [
+    ...timedRows('2026-07-16T04:35:00.000Z', 'before-first'),
+    ...timedRows('2026-07-16T05:10:00.000Z', 'inside-first'),
+    ...timedRows('2026-07-16T06:05:00.000Z', 'between-sites'),
+    ...timedRows('2026-07-16T06:40:00.000Z', 'inside-second'),
+    ...timedRows('2026-07-16T07:05:00.000Z', 'after-last'),
+  ];
+  const row = attendance({
+    login_time: '2026-07-16T04:30:00.000Z', logout_time: '2026-07-16T08:00:00.000Z',
+    start_latitude: 13.028, start_longitude: 80.248,
+    end_latitude: 13.031, end_longitude: 80.245,
+  });
+  const visits = [
+    {
+      id: 'visit-1', attendance_id: row.id,
+      check_in_time: '2026-07-16T05:00:00.000Z', check_out_time: '2026-07-16T06:00:00.000Z',
+      check_in_latitude: 13.03, check_in_longitude: 80.246,
+      check_out_latitude: 13.03, check_out_longitude: 80.246,
+      status: 'Completed', metadata: {},
+    },
+    {
+      id: 'visit-2', attendance_id: row.id,
+      check_in_time: '2026-07-16T06:30:00.000Z', check_out_time: '2026-07-16T07:00:00.000Z',
+      check_in_latitude: 13.031, check_in_longitude: 80.245,
+      check_out_latitude: 13.031, check_out_longitude: 80.245,
+      status: 'Completed', metadata: {},
+    },
+  ];
+  const result = await recalculateAttendanceTravelLegs(
+    clientWith(rows, { attendanceRow: row, visits }), row.id,
+    { persist: false, auditDelayedCheckout: false, maxGoogleDirectionsCalls: 0 },
+  );
+  assert.deepEqual(result.travel_legs.map((leg) => leg.type), [
+    'start_to_first_checkin', 'site_checkout_to_next_checkin', 'last_checkout_to_end_day',
+  ]);
+  assert.equal(result.gps_log_count, 36);
+  assert.ok(result.travel_legs.every((leg) => leg.gps_log_count === 12));
+  assert.equal(result.travel_legs.some((leg) => String(leg.from_time).includes('05:10')), false);
+});
+
+test('a GPS row on a shared travel-window boundary is counted only once', async () => {
+  const before = gpsRows({ start: '2026-07-16T04:50:00.000Z' })
+    .slice(0, 10)
+    .map((row, index) => ({ ...row, id: `before-${index}` }));
+  const boundary = {
+    ...before.at(-1),
+    id: 'shared-boundary',
+    captured_at: '2026-07-16T05:00:00.000Z',
+  };
+  const after = gpsRows({ start: '2026-07-16T05:00:10.000Z' })
+    .slice(0, 10)
+    .map((row, index) => ({ ...row, id: `after-${index}` }));
+  const rows = [...before, boundary, ...after];
+  const client = clientWith(rows);
+  const common = {
+    client,
+    attendance: attendance(),
+    fromLat: 13.028,
+    fromLng: 80.248,
+    toLat: 13.031,
+    toLng: 80.245,
+    options: { maxGoogleDirectionsCalls: 0 },
+  };
+  const first = await calculateTravelLegKm({
+    ...common,
+    fromTime: '2026-07-16T04:49:00.000Z',
+    toTime: '2026-07-16T05:00:00.000Z',
+  });
+  const second = await calculateTravelLegKm({
+    ...common,
+    fromTime: '2026-07-16T05:00:00.000Z',
+    toTime: '2026-07-16T05:10:00.000Z',
+  });
+  assert.equal(first.gpsLogCount, 11);
+  assert.equal(second.gpsLogCount, 10);
+  assert.equal(first.gpsLogCount + second.gpsLogCount, rows.length);
 });

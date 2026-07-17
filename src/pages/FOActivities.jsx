@@ -9897,6 +9897,8 @@ export default function FOActivities() {
   const [kmRecalcResult, setKmRecalcResult] = useState(null);
   const [switchKmRecalcBusy, setSwitchKmRecalcBusy] = useState(false);
   const [batchKmRecalcBusy, setBatchKmRecalcBusy] = useState(false);
+  const [batchKmRecalcProgress, setBatchKmRecalcProgress] = useState(null);
+  const [batchKmRecalcResume, setBatchKmRecalcResume] = useState(null);
   const [dashboardExportBusy, setDashboardExportBusy] = useState(false);
   const [customFromDate, setCustomFromDate] = useState(
     toDateInputValue(new Date()),
@@ -10291,57 +10293,153 @@ export default function FOActivities() {
       window.alert(error.message);
       return;
     }
-    const confirmed = window.confirm(
-      "This will recalculate payable KM for all eligible completed attendances in the selected date range. Stale auto-ended rows and rows without End Day GPS will be skipped. Continue?",
-    );
+    const batchKey = JSON.stringify({
+      fromDate: selectedRange.fromDate,
+      toDate: selectedRange.toDate,
+      state: stateFilter,
+      business: businessFilter,
+      status: statusFilter,
+    });
+    const resumable = batchKmRecalcResume?.batchKey === batchKey
+      ? batchKmRecalcResume
+      : null;
+    const confirmed = window.confirm(resumable
+      ? `Resume Recalculate All KM after ${resumable.totals.processed} processed attendances?`
+      : "This will recalculate payable KM from eligible GPS travel windows for completed attendances in the selected date range. Continue?");
     if (!confirmed) return;
 
     setBatchKmRecalcBusy(true);
+    const totals = resumable
+      ? {
+          ...resumable.totals,
+          counters: { ...resumable.totals.counters },
+          results: [...resumable.totals.results],
+        }
+      : {
+          processed: 0,
+          updated: 0,
+          skipped: 0,
+          failed: 0,
+          counters: {},
+          results: [],
+        };
+    let cursor = resumable?.cursor || null;
+    let completed = false;
+    setBatchKmRecalcProgress({
+      processed: totals.processed,
+      updated: totals.updated,
+      skipped: totals.skipped,
+      failed: totals.failed,
+    });
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData?.session?.access_token;
       if (!accessToken) {
         throw new Error("Admin session expired. Please login again.");
       }
-      const response = await fetch(`${API_BASE_URL}/api/fo/km/recalculate-batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          fromDate: selectedRange.fromDate,
-          toDate: selectedRange.toDate,
-          state: stateFilter,
-          business: businessFilter,
-          status: statusFilter,
-          dryRun: false,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok || payload.ok === false) {
-        throw new Error(payload.message || "Batch KM recalculation failed.");
+      let done = false;
+      while (!done) {
+        let page = null;
+        let pageError = null;
+        for (let attempt = 1; attempt <= 3 && !page; attempt += 1) {
+          try {
+            const response = await fetch(`${API_BASE_URL}/api/fo/km/recalculate-batch`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${accessToken}`,
+              },
+              body: JSON.stringify({
+                fromDate: selectedRange.fromDate,
+                toDate: selectedRange.toDate,
+                state: stateFilter,
+                business: businessFilter,
+                status: statusFilter,
+                batchSize: 50,
+                cursor,
+                dryRun: false,
+              }),
+            });
+            const responseBody = await response.json();
+            if (!response.ok || responseBody.ok === false) {
+              throw new Error(responseBody.message || "Batch KM recalculation failed.");
+            }
+            page = responseBody;
+          } catch (error) {
+            pageError = error;
+          }
+        }
+        if (!page) {
+          throw pageError || new Error("Batch KM recalculation failed after 3 attempts.");
+        }
+        totals.processed += Number(page.processed || 0);
+        totals.updated += Number(page.updated || 0);
+        totals.skipped += Number(page.skipped || 0);
+        totals.failed += Number(page.failed || 0);
+        totals.results.push(...(page.results || []));
+        Object.entries(page.counters || {}).forEach(([key, value]) => {
+          totals.counters[key] = Number(totals.counters[key] || 0) + Number(value || 0);
+        });
+        setBatchKmRecalcProgress({
+          processed: totals.processed,
+          updated: totals.updated,
+          skipped: totals.skipped,
+          failed: totals.failed,
+        });
+        cursor = page.nextCursor || null;
+        done = page.done === true || !cursor;
+        if (done) {
+          setBatchKmRecalcResume(null);
+        } else {
+          setBatchKmRecalcResume({
+            batchKey,
+            cursor,
+            totals: {
+              ...totals,
+              counters: { ...totals.counters },
+              results: [...totals.results],
+            },
+          });
+        }
       }
+      completed = true;
       window.alert(
         [
           "Recalculate All KM completed.",
-          `Scanned: ${payload.scanned ?? 0}`,
-          `Updated: ${payload.updated ?? 0}`,
-          `Skipped - Missing End GPS: ${payload.skipped_missing_end_location ?? 0}`,
-          `Skipped - Stale Auto Ended: ${payload.skipped_stale_auto_ended ?? 0}`,
-          `Skipped - No Visits: ${payload.skipped_no_visits ?? 0}`,
-          `Skipped - Missing Origin: ${payload.skipped_missing_origin ?? 0}`,
-          `Failed: ${payload.failed ?? 0}`,
+          `Processed: ${totals.processed}`,
+          `Updated: ${totals.updated}`,
+          `Skipped: ${totals.skipped}`,
+          `Failed: ${totals.failed}`,
         ].join("\n"),
       );
-      setKmRecalcResult(payload);
+      setKmRecalcResult(totals);
       setRefreshToken((value) => value + 1);
       setSummaryRefreshToken((value) => value + 1);
     } catch (error) {
       console.warn("[myQPMS FO] Batch KM recalculation failed.", error);
-      window.alert(error.message || "Batch KM recalculation failed.");
+      setKmRecalcResult(totals);
+      setBatchKmRecalcResume({
+        batchKey,
+        cursor,
+        totals: {
+          ...totals,
+          counters: { ...totals.counters },
+          results: [...totals.results],
+        },
+      });
+      window.alert(
+        [
+          error.message || "Batch KM recalculation failed after 3 attempts.",
+          "Progress was preserved and can be resumed.",
+          `Processed: ${totals.processed}`,
+          `Updated: ${totals.updated}`,
+          `Skipped: ${totals.skipped}`,
+          `Failed: ${totals.failed}`,
+        ].join("\n"),
+      );
     } finally {
       setBatchKmRecalcBusy(false);
+      if (completed) setBatchKmRecalcProgress(null);
     }
   }
 
@@ -11538,7 +11636,9 @@ export default function FOActivities() {
                 className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-amber-200 bg-amber-50 px-3 text-sm font-black text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <RefreshCw className={`h-4 w-4 ${batchKmRecalcBusy ? "animate-spin" : ""}`} />
-                {batchKmRecalcBusy ? "Recalculating..." : "Recalculate All KM"}
+                {batchKmRecalcBusy
+                  ? `Recalculating${batchKmRecalcProgress ? ` (${batchKmRecalcProgress.processed})` : ""}...`
+                  : "Recalculate All KM"}
               </button>
             </div>
           ) : null}
