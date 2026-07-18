@@ -80,7 +80,12 @@ export async function getHospitalTicket(client, actor, ticketId) {
 }
 
 export function hospitalTicketForActor(actor, ticket) {
-  if (actor?.user?.profile_type !== 'client') return ticket;
+  const assignmentState = ticket?.metadata?.assignment_state
+    || (ticket?.current_assignee_user_id ? 'assigned' : 'unassigned');
+  const assignmentFailureReason = ticket?.metadata?.assignment_failure_reason || null;
+  if (actor?.user?.profile_type !== 'client') {
+    return { ...ticket, assignment_state: assignmentState, assignment_failure_reason: assignmentFailureReason };
+  }
   const {
     idempotency_key: _idempotencyKey,
     metadata: _metadata,
@@ -92,7 +97,7 @@ export function hospitalTicketForActor(actor, ticket) {
     resolved_by_user_id: _resolvedByUserId,
     ...safeTicket
   } = ticket;
-  return safeTicket;
+  return { ...safeTicket, assignment_state: assignmentState, assignment_failure_reason: assignmentFailureReason };
 }
 
 export function clientCanSeeHospitalEvent(event) {
@@ -157,6 +162,29 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
   const errors = validateHospitalAction({ role: actor.user.role_code, status: current.ticket.status_code, action, payload });
   if (errors.length) { const error = new Error(errors.join(' ')); error.code = '42501'; throw error; }
   if (!Number.isInteger(Number(expectedVersion))) { const error = new Error('Ticket version is required.'); error.code = '22023'; throw error; }
+  const requiredRole = ['manual_escalation', 'escalate_operations'].includes(action)
+    ? 'operations_executive'
+    : action === 'escalate_facility'
+      ? 'facility_manager'
+      : null;
+  if (requiredRole) {
+    const assignee = await client.from('hospital_ticket_users').select('id')
+      .eq('client_id', current.ticket.client_id).eq('role_code', requiredRole).eq('is_active', true).limit(1);
+    if (assignee.error) throw assignee.error;
+    if (!(assignee.data || []).length) {
+      const reason = `no_active_${requiredRole}`;
+      const recorded = await client.rpc('rpc_record_hospital_assignment_failure', {
+        p_ticket_id: current.ticket.id,
+        p_expected_version: Number(expectedVersion),
+        p_stage: requiredRole,
+        p_reason: reason,
+      });
+      if (recorded.error) throw recorded.error;
+      const error = new Error(`Escalation is blocked because no active ${requiredRole.replaceAll('_', ' ')} is mapped.`);
+      error.code = '55000';
+      throw error;
+    }
+  }
   const result = await client.rpc('rpc_hospital_ticket_action', {
     p_ticket_id: current.ticket.id,
     p_actor_user_id: actor.user.id,
@@ -171,7 +199,7 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
 
 export function hospitalSlaState(ticket, now = new Date()) {
   let dueAt = null;
-  if (['open', 'assigned', 'accepted', 'in_progress'].includes(ticket.status_code)) dueAt = ticket.supervisor_sla_due_at;
+  if (['open', 'assigned', 'accepted', 'in_progress', 'reopened'].includes(ticket.status_code)) dueAt = ticket.supervisor_sla_due_at;
   if (ticket.status_code === 'escalated_operations_executive') dueAt = ticket.operations_sla_due_at;
   if (!dueAt) return { state: 'not_applicable', due_at: null, remaining_seconds: 0 };
   const remaining = Math.floor((new Date(dueAt).getTime() - now.getTime()) / 1000);
