@@ -45,12 +45,6 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
         .where((row) => row['block_name'] == selectedBlock)
         .toList();
     final blockId = matchingBlocks.isEmpty ? null : matchingBlocks.first['id'];
-    final locationValues = controller.locations.isEmpty
-        ? demoLocations
-        : controller.locations
-              .where((row) => blockId == null || row['block_id'] == blockId)
-              .map((row) => '${row['location_name']}')
-              .toList();
     final floorValues = controller.locations.isEmpty
         ? demoFloors
         : controller.locations
@@ -58,6 +52,25 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
               .map((row) => '${row['floor_name']}')
               .toSet()
               .toList();
+    final selectedFloor = floorValues.contains(_draft.floor)
+        ? _draft.floor
+        : floorValues.first;
+    final locationValues = controller.locations.isEmpty
+        ? demoLocations
+        : controller.locations
+              .where(
+                (row) =>
+                    (blockId == null || row['block_id'] == blockId) &&
+                    row['floor_name'] == selectedFloor,
+              )
+              .map((row) => '${row['location_name']}')
+              .toList();
+    final selectedLocation = locationValues.contains(_draft.location)
+        ? _draft.location
+        : locationValues.first;
+    _draft.block = selectedBlock;
+    _draft.floor = selectedFloor;
+    _draft.location = selectedLocation;
     final categoryValues = controller.categories.isEmpty
         ? housekeepingCategories
         : controller.categories
@@ -105,16 +118,24 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
                     const SizedBox(height: 12),
                     _SelectField(
                       label: 'Floor',
-                      value: _draft.floor,
+                      value: selectedFloor,
                       values: floorValues,
                       icon: Icons.layers_rounded,
-                      onChanged: (value) =>
-                          setState(() => _draft.floor = value),
+                      onChanged: (value) => setState(() {
+                        _draft.floor = value;
+                        final locations = controller.locationsForBlockAndFloor(
+                          _draft.block,
+                          value,
+                        );
+                        _draft.location = locations.isEmpty
+                            ? ''
+                            : locations.first;
+                      }),
                     ),
                     const SizedBox(height: 12),
                     _SelectField(
                       label: 'Department / Location',
-                      value: _draft.location,
+                      value: selectedLocation,
                       values: locationValues,
                       icon: Icons.location_on_rounded,
                       onChanged: (value) =>

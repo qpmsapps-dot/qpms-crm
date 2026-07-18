@@ -51,7 +51,9 @@ class DashboardScreen extends StatelessWidget {
       ),
       body: SafeArea(
         child: RefreshIndicator(
-          onRefresh: () => tickets.load(),
+          onRefresh: () async {
+            await Future.wait([tickets.load(), notifications.load()]);
+          },
           child: ListView(
             padding: const EdgeInsets.fromLTRB(18, 10, 18, 28),
             children: [

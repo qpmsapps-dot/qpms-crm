@@ -55,6 +55,48 @@ class TicketController extends ChangeNotifier {
   List<Map<String, dynamic>> get blocks => List.unmodifiable(_blocks);
   List<Map<String, dynamic>> get locations => List.unmodifiable(_locations);
   List<Map<String, dynamic>> get categories => List.unmodifiable(_categories);
+
+  @visibleForTesting
+  void replaceMastersForTesting({
+    required List<Map<String, dynamic>> blocks,
+    required List<Map<String, dynamic>> locations,
+    List<Map<String, dynamic>> categories = const [],
+  }) {
+    _blocks = blocks;
+    _locations = locations;
+    _categories = categories;
+  }
+
+  List<String> floorsForBlock(String blockName) {
+    final matches = _blocks
+        .where((row) => row['block_name'] == blockName)
+        .toList();
+    if (matches.isEmpty) return const [];
+    final block = matches.first;
+    return _locations
+        .where((row) => row['block_id'] == block['id'])
+        .map((row) => '${row['floor_name'] ?? ''}'.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList();
+  }
+
+  List<String> locationsForBlockAndFloor(String blockName, String floorName) {
+    final matches = _blocks
+        .where((row) => row['block_name'] == blockName)
+        .toList();
+    if (matches.isEmpty) return const [];
+    final block = matches.first;
+    return _locations
+        .where(
+          (row) =>
+              row['block_id'] == block['id'] && row['floor_name'] == floorName,
+        )
+        .map((row) => '${row['location_name'] ?? ''}'.trim())
+        .where((value) => value.isNotEmpty)
+        .toList();
+  }
+
   int get openCount => _tickets
       .where(
         (ticket) =>
@@ -83,11 +125,17 @@ class TicketController extends ChangeNotifier {
   }
 
   bool isDraftValid(ComplaintDraft draft) {
-    return draft.block.trim().isNotEmpty &&
+    final basic =
+        draft.block.trim().isNotEmpty &&
         draft.floor.trim().isNotEmpty &&
         draft.location.trim().isNotEmpty &&
         draft.category.trim().isNotEmpty &&
         draft.description.trim().isNotEmpty;
+    if (!basic || demoMode || _locations.isEmpty) return basic;
+    return locationsForBlockAndFloor(
+      draft.block,
+      draft.floor,
+    ).contains(draft.location);
   }
 
   Future<void> load() async {
@@ -166,10 +214,13 @@ class TicketController extends ChangeNotifier {
           'Complaint master data is unavailable. Refresh and try again.',
         );
       }
-      final block = _blocks.firstWhere(
-        (row) => row['block_name'] == draft.block,
-        orElse: () => _blocks.first,
-      );
+      final matchingBlocks = _blocks
+          .where((row) => row['block_name'] == draft.block)
+          .toList();
+      if (matchingBlocks.length != 1) {
+        throw const HospitalApiException('Select a valid hospital block.');
+      }
+      final block = matchingBlocks.single;
       final blockLocations = _locations
           .where((row) => row['block_id'] == block['id'])
           .toList();
@@ -178,14 +229,26 @@ class TicketController extends ChangeNotifier {
           'No authorized complaint location is available for this block.',
         );
       }
-      final location = blockLocations.firstWhere(
-        (row) => row['location_name'] == draft.location,
-        orElse: () => blockLocations.first,
-      );
-      final category = _categories.firstWhere(
-        (row) => row['category_name'] == draft.category,
-        orElse: () => _categories.first,
-      );
+      final matchingLocations = blockLocations
+          .where(
+            (row) =>
+                row['location_name'] == draft.location &&
+                row['floor_name'] == draft.floor,
+          )
+          .toList();
+      if (matchingLocations.length != 1) {
+        throw const HospitalApiException(
+          'The selected location does not belong to the selected block and floor.',
+        );
+      }
+      final location = matchingLocations.single;
+      final matchingCategories = _categories
+          .where((row) => row['category_name'] == draft.category)
+          .toList();
+      if (matchingCategories.length != 1) {
+        throw const HospitalApiException('Select a valid complaint category.');
+      }
+      final category = matchingCategories.single;
       final response = await HospitalTicketApi.request(
         'POST',
         '/api/hospital-tickets',

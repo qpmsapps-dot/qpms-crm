@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import '../../core/widgets/chips.dart';
 import '../../models/ticket.dart';
 import '../../models/ticket_update.dart';
 import '../../state/ticket_controller.dart';
+import '../../state/auth_controller.dart';
 
 class TicketDetailsScreen extends StatefulWidget {
   const TicketDetailsScreen({required this.ticketNumber, super.key});
@@ -20,11 +22,43 @@ class TicketDetailsScreen extends StatefulWidget {
   State<TicketDetailsScreen> createState() => _TicketDetailsScreenState();
 }
 
-class _TicketDetailsScreenState extends State<TicketDetailsScreen> {
+class _TicketDetailsScreenState extends State<TicketDetailsScreen>
+    with WidgetsBindingObserver {
+  Timer? _pollTimer;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     context.read<TicketController>().loadDetail(widget.ticketNumber);
+    _startPolling();
+  }
+
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      if (!mounted || !context.read<AuthController>().isAuthenticated) {
+        _pollTimer?.cancel();
+        return;
+      }
+      context.read<TicketController>().loadDetail(widget.ticketNumber);
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startPolling();
+    } else {
+      _pollTimer?.cancel();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _pollTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -51,138 +85,143 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen> {
             )
           : null,
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(18, 6, 18, 26),
-          children: [
-            AppCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+        child: RefreshIndicator(
+          onRefresh: () =>
+              context.read<TicketController>().loadDetail(widget.ticketNumber),
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(18, 6, 18, 26),
+            children: [
+              AppCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                ticket.number,
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w900,
+                                  color: AppColors.deepBlue,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                formatTicketDateTime(ticket.raisedAt),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.muted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        PriorityChip(ticket.priority),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    StatusChip(ticket.status),
+                    const SizedBox(height: 14),
+                    _InfoLine(
+                      Icons.location_on_rounded,
+                      'Location',
+                      ticket.fullLocation,
+                    ),
+                    _InfoLine(
+                      Icons.cleaning_services_rounded,
+                      'Category',
+                      ticket.category,
+                    ),
+                    _InfoLine(
+                      Icons.description_rounded,
+                      'Complaint',
+                      ticket.description,
+                    ),
+                  ],
+                ),
+              ),
+              if (ticket.complaintPhotoAssets.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                _PhotoSection(
+                  title: 'Complaint photo',
+                  assets: ticket.complaintPhotoAssets,
+                ),
+              ],
+              const SizedBox(height: 14),
+              _AssignmentCard(ticket: ticket),
+              const SizedBox(height: 14),
+              _ProgressCard(ticket: ticket),
+              const SizedBox(height: 14),
+              _UpdatesCard(updates: ticket.updates),
+              if (ticket.resolutionNotes.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                AppCard(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              ticket.number,
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w900,
-                                color: AppColors.deepBlue,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              formatTicketDateTime(ticket.raisedAt),
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: AppColors.muted,
-                              ),
-                            ),
-                          ],
+                      const _CardTitle(
+                        icon: Icons.task_alt_rounded,
+                        title: 'Resolution notes',
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        ticket.resolutionNotes,
+                        style: const TextStyle(
+                          height: 1.45,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.ink,
                         ),
                       ),
-                      PriorityChip(ticket.priority),
                     ],
                   ),
-                  const SizedBox(height: 14),
-                  StatusChip(ticket.status),
-                  const SizedBox(height: 14),
-                  _InfoLine(
-                    Icons.location_on_rounded,
-                    'Location',
-                    ticket.fullLocation,
-                  ),
-                  _InfoLine(
-                    Icons.cleaning_services_rounded,
-                    'Category',
-                    ticket.category,
-                  ),
-                  _InfoLine(
-                    Icons.description_rounded,
-                    'Complaint',
-                    ticket.description,
-                  ),
-                ],
-              ),
-            ),
-            if (ticket.complaintPhotoAssets.isNotEmpty) ...[
-              const SizedBox(height: 14),
-              _PhotoSection(
-                title: 'Complaint photo',
-                assets: ticket.complaintPhotoAssets,
-              ),
-            ],
-            const SizedBox(height: 14),
-            _AssignmentCard(ticket: ticket),
-            const SizedBox(height: 14),
-            _ProgressCard(ticket: ticket),
-            const SizedBox(height: 14),
-            _UpdatesCard(updates: ticket.updates),
-            if (ticket.resolutionNotes.isNotEmpty) ...[
-              const SizedBox(height: 14),
-              AppCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const _CardTitle(
-                      icon: Icons.task_alt_rounded,
-                      title: 'Resolution notes',
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      ticket.resolutionNotes,
-                      style: const TextStyle(
-                        height: 1.45,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.ink,
-                      ),
-                    ),
-                  ],
                 ),
-              ),
-            ],
-            if (ticket.completionPhotoAssets.isNotEmpty) ...[
-              const SizedBox(height: 14),
-              _PhotoSection(
-                title: 'Completion photo',
-                assets: ticket.completionPhotoAssets,
-              ),
-            ],
-            if (ticket.status == TicketStatus.closed &&
-                ticket.feedbackRating != null) ...[
-              const SizedBox(height: 14),
-              AppCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const _CardTitle(
-                      icon: Icons.star_rounded,
-                      title: 'Your feedback',
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: List.generate(
-                        5,
-                        (index) => Icon(
-                          index < ticket.feedbackRating!
-                              ? Icons.star_rounded
-                              : Icons.star_border_rounded,
-                          color: const Color(0xFFF59E0B),
-                        ),
+              ],
+              if (ticket.completionPhotoAssets.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                _PhotoSection(
+                  title: 'Completion photo',
+                  assets: ticket.completionPhotoAssets,
+                ),
+              ],
+              if (ticket.status == TicketStatus.closed &&
+                  ticket.feedbackRating != null) ...[
+                const SizedBox(height: 14),
+                AppCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const _CardTitle(
+                        icon: Icons.star_rounded,
+                        title: 'Your feedback',
                       ),
-                    ),
-                    if (ticket.feedbackComment.isNotEmpty) ...[
                       const SizedBox(height: 8),
-                      Text(ticket.feedbackComment),
+                      Row(
+                        children: List.generate(
+                          5,
+                          (index) => Icon(
+                            index < ticket.feedbackRating!
+                                ? Icons.star_rounded
+                                : Icons.star_border_rounded,
+                            color: const Color(0xFFF59E0B),
+                          ),
+                        ),
+                      ),
+                      if (ticket.feedbackComment.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(ticket.feedbackComment),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );

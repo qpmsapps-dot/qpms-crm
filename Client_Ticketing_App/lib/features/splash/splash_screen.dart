@@ -26,9 +26,11 @@ class _SplashScreenState extends State<SplashScreen>
       vsync: this,
       duration: const Duration(milliseconds: 900),
     )..forward();
-    Future<void>.delayed(const Duration(milliseconds: 1300), () async {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final auth = context.read<AuthController>();
+      await auth.load();
+      if (!mounted) return;
       final tickets = context.read<TicketController>();
       final notifications = context.read<NotificationController>();
       if (auth.isAuthenticated) {

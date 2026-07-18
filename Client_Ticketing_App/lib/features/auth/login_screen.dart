@@ -229,7 +229,9 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, AppRoutes.dashboard);
     } else {
-      setState(() => _error = 'Invalid Login ID or password.');
+      setState(
+        () => _error = auth.errorMessage ?? 'Invalid Login ID or password.',
+      );
     }
   }
 

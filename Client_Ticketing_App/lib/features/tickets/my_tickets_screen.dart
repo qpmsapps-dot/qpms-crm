@@ -82,21 +82,28 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
             ),
             const SizedBox(height: 10),
             Expanded(
-              child: tickets.isEmpty
-                  ? const _EmptyTickets()
-                  : ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(18, 4, 18, 100),
-                      itemCount: tickets.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 10),
-                      itemBuilder: (context, index) => TicketCard(
-                        ticket: tickets[index],
-                        onTap: () => Navigator.pushNamed(
-                          context,
-                          AppRoutes.ticketDetails,
-                          arguments: tickets[index].number,
+              child: RefreshIndicator(
+                onRefresh: controller.load,
+                child: tickets.isEmpty
+                      ? ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          children: const [SizedBox(height: 150), _EmptyTickets()],
+                      )
+                    : ListView.separated(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.fromLTRB(18, 4, 18, 100),
+                        itemCount: tickets.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) => TicketCard(
+                          ticket: tickets[index],
+                          onTap: () => Navigator.pushNamed(
+                            context,
+                            AppRoutes.ticketDetails,
+                            arguments: tickets[index].number,
+                          ),
                         ),
                       ),
-                    ),
+              ),
             ),
           ],
         ),

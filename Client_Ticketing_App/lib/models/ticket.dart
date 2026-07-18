@@ -92,7 +92,9 @@ class Ticket {
       status: _statusFromCode('${row['status_code'] ?? 'open'}'),
       assignedPerson: '${assignee['display_name'] ?? 'Assignment pending'}',
       assignedRole: '${row['current_assignee_role'] ?? ''}',
-      slaLabel: '${row['sla_label'] ?? 'SLA managed by QPMS'}',
+      slaLabel: row['assignment_state'] == 'unassigned'
+          ? 'Assignment pending • Supervisor SLA not started'
+          : '${row['sla_label'] ?? 'SLA managed by QPMS'}',
       resolutionNotes: '${row['resolution_remarks'] ?? ''}',
       feedbackRating: row['client_rating'] as int?,
       feedbackComment: '${row['client_feedback'] ?? ''}',

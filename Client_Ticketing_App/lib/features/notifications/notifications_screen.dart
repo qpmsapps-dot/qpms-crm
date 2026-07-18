@@ -26,67 +26,71 @@ class NotificationsScreen extends StatelessWidget {
         ],
       ),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
-          children: [
-            for (final item in controller.items)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: AppCard(
-                  onTap: item.ticketNumber == null
-                      ? null
-                      : () => Navigator.pushNamed(
-                          context,
-                          AppRoutes.ticketDetails,
-                          arguments: item.ticketNumber,
-                        ),
-                  child: Row(
-                    children: [
-                      _NotificationIcon(item),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              item.title,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w900,
-                                color: AppColors.deepBlue,
+        child: RefreshIndicator(
+          onRefresh: controller.load,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+            children: [
+              for (final item in controller.items)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: AppCard(
+                    onTap: item.ticketNumber == null
+                        ? null
+                        : () => Navigator.pushNamed(
+                            context,
+                            AppRoutes.ticketDetails,
+                            arguments: item.ticketNumber,
+                          ),
+                    child: Row(
+                      children: [
+                        _NotificationIcon(item),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.title,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  color: AppColors.deepBlue,
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              item.body,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
+                              const SizedBox(height: 3),
+                              Text(
+                                item.body,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              item.time,
-                              style: const TextStyle(
-                                color: AppColors.muted,
-                                fontSize: 12,
+                              const SizedBox(height: 3),
+                              Text(
+                                item.time,
+                                style: const TextStyle(
+                                  color: AppColors.muted,
+                                  fontSize: 12,
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (!item.isRead)
-                        Container(
-                          width: 9,
-                          height: 9,
-                          decoration: const BoxDecoration(
-                            color: AppColors.royalBlue,
-                            shape: BoxShape.circle,
+                            ],
                           ),
                         ),
-                    ],
+                        if (!item.isRead)
+                          Container(
+                            width: 9,
+                            height: 9,
+                            decoration: const BoxDecoration(
+                              color: AppColors.royalBlue,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
