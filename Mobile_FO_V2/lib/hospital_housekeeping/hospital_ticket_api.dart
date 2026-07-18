@@ -26,53 +26,62 @@ class HospitalTicketApi {
       password: password,
     );
     try {
-      final response = await request('GET', '/api/hospital-tickets/me');
-      final user = Map<String, dynamic>.from(response['user'] as Map);
-      if (user['profile_type'] != 'internal') {
-        throw const HospitalTicketApiException(
-          'An internal Hospital Ticketing profile is required.',
-        );
-      }
-      final role = switch (user['role_code']) {
-        'housekeeping_supervisor' => HospitalDemoRole.supervisor,
-        'operations_executive' => HospitalDemoRole.operationsExecutive,
-        'facility_manager' => HospitalDemoRole.facilityManager,
-        _ => throw const HospitalTicketApiException(
-          'This account cannot use the internal housekeeping module.',
-        ),
-      };
-      final scopes = response['scopes'] is List
-          ? response['scopes'] as List
-          : const [];
-      String? assignedBlock;
-      if (role == HospitalDemoRole.supervisor) {
-        final blockScopes = scopes
-            .whereType<Map>()
-            .where((row) => row['scope_type'] == 'block')
-            .toList();
-        final blockScope = blockScopes.isEmpty ? null : blockScopes.first;
-        if (blockScope != null) {
-          final blocks = await request('GET', '/api/hospital-tickets/blocks');
-          final matchingBlocks = (blocks['blocks'] as List? ?? const [])
-              .whereType<Map>()
-              .where((row) => row['id'] == blockScope['block_id'])
-              .toList();
-          final block = matchingBlocks.isEmpty ? null : matchingBlocks.first;
-          assignedBlock = block?['block_name']?.toString();
-        }
-      }
-      return HospitalDemoSession(
-        loginId: email.trim().toLowerCase(),
-        displayName: '${user['display_name'] ?? ''}',
-        role: role,
-        assignedBlock: assignedBlock,
-        userId: '${user['id'] ?? ''}',
-        isDemo: false,
-      );
+      return await discoverCurrentInternalSession(emailHint: email);
     } catch (_) {
       await SupabaseService.client.auth.signOut();
       rethrow;
     }
+  }
+
+  static Future<HospitalDemoSession> discoverCurrentInternalSession({
+    String? emailHint,
+  }) async {
+    final response = await request('GET', '/api/hospital-tickets/me');
+    final user = Map<String, dynamic>.from(response['user'] as Map);
+    if (user['profile_type'] != 'internal') {
+      throw const HospitalTicketApiException(
+        'An internal Hospital Ticketing profile is required.',
+      );
+    }
+    final role = switch (user['role_code']) {
+      'housekeeping_supervisor' => HospitalDemoRole.supervisor,
+      'operations_executive' => HospitalDemoRole.operationsExecutive,
+      'facility_manager' => HospitalDemoRole.facilityManager,
+      _ => throw const HospitalTicketApiException(
+        'This account cannot use the internal housekeeping module.',
+      ),
+    };
+    final scopes = response['scopes'] is List
+        ? response['scopes'] as List
+        : const [];
+    String? assignedBlock;
+    if (role == HospitalDemoRole.supervisor) {
+      final blockScopes = scopes
+          .whereType<Map>()
+          .where((row) => row['scope_type'] == 'block')
+          .toList();
+      final blockScope = blockScopes.isEmpty ? null : blockScopes.first;
+      if (blockScope != null) {
+        final blocks = await request('GET', '/api/hospital-tickets/blocks');
+        final matchingBlocks = (blocks['blocks'] as List? ?? const [])
+            .whereType<Map>()
+            .where((row) => row['id'] == blockScope['block_id'])
+            .toList();
+        final block = matchingBlocks.isEmpty ? null : matchingBlocks.first;
+        assignedBlock = block?['block_name']?.toString();
+      }
+    }
+    return HospitalDemoSession(
+      loginId:
+          (emailHint ?? SupabaseService.client.auth.currentUser?.email ?? '')
+              .trim()
+              .toLowerCase(),
+      displayName: '${user['display_name'] ?? ''}',
+      role: role,
+      assignedBlock: assignedBlock,
+      userId: '${user['id'] ?? ''}',
+      isDemo: false,
+    );
   }
 
   static Future<List<HospitalTicket>> fetchTickets() async {
@@ -183,6 +192,7 @@ class HospitalTicketApi {
     if (token == null) {
       throw const HospitalTicketApiException(
         'Your session expired. Please sign in again.',
+        code: 'session_expired',
       );
     }
     final base = AppConfig.backendApiUrl.replaceAll(RegExp(r'/+$'), '');

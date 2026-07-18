@@ -26,18 +26,22 @@ class HospitalHousekeepingShell extends StatefulWidget {
       _HospitalHousekeepingShellState();
 }
 
-class _HospitalHousekeepingShellState extends State<HospitalHousekeepingShell> {
+class _HospitalHousekeepingShellState extends State<HospitalHousekeepingShell>
+    with WidgetsBindingObserver {
   late final HospitalController _controller;
   Timer? _clock;
+  Timer? _refreshTimer;
   int _index = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _controller = HospitalController(session: widget.session)
       ..addListener(_refresh);
     if (!widget.session.isDemo) {
       unawaited(_controller.load());
+      _startRefreshTimer();
     }
     _clock = Timer.periodic(
       const Duration(seconds: 1),
@@ -50,10 +54,30 @@ class _HospitalHousekeepingShellState extends State<HospitalHousekeepingShell> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _clock?.cancel();
+    _refreshTimer?.cancel();
     _controller.removeListener(_refresh);
     _controller.dispose();
     super.dispose();
+  }
+
+  void _startRefreshTimer() {
+    if (widget.session.isDemo || _refreshTimer?.isActive == true) return;
+    _refreshTimer = Timer.periodic(const Duration(seconds: 20), (_) async {
+      await _controller.load();
+      if (_controller.sessionExpired) _refreshTimer?.cancel();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startRefreshTimer();
+    } else {
+      _refreshTimer?.cancel();
+      _refreshTimer = null;
+    }
   }
 
   void _refresh() {

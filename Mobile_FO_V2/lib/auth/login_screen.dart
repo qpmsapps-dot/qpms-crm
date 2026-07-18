@@ -45,16 +45,12 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     try {
       final loginId = _loginId.text.trim();
-      if (HospitalDemoAuth.isDemoLoginId(loginId)) {
-        final session = AppConfig.hospitalDemoMode
-            ? HospitalDemoAuth.authenticate(
-                loginId: loginId,
-                candidatePassword: _password.text,
-              )
-            : await HospitalTicketApi.login(
-                email: loginId,
-                password: _password.text,
-              );
+      if (AppConfig.hospitalDemoMode &&
+          HospitalDemoAuth.isDemoLoginId(loginId)) {
+        final session = HospitalDemoAuth.authenticate(
+          loginId: loginId,
+          candidatePassword: _password.text,
+        );
         if (session == null) {
           throw const HospitalDemoLoginException(
             'Invalid local demo credentials.',
@@ -69,11 +65,44 @@ class _LoginScreenState extends State<LoginScreen> {
         callback(session);
         return;
       }
-      final user = await SupabaseService.login(
-        loginId: loginId,
-        password: _password.text,
-      );
-      widget.onAuthenticated(user);
+      FoUser? user;
+      Object? employeeLoginError;
+      try {
+        user = await SupabaseService.login(
+          loginId: loginId,
+          password: _password.text,
+        );
+      } catch (error) {
+        employeeLoginError = error;
+      }
+
+      if (SupabaseService.client.auth.currentSession != null) {
+        try {
+          final hospitalSession =
+              await HospitalTicketApi.discoverCurrentInternalSession(
+                emailHint: loginId,
+              );
+          final callback = widget.onHospitalDemoAuthenticated;
+          if (callback == null) {
+            throw const HospitalDemoLoginException(
+              'Hospital Housekeeping module is unavailable.',
+            );
+          }
+          callback(hospitalSession);
+          return;
+        } on HospitalTicketApiException {
+          if (user == null) rethrow;
+        }
+      }
+      if (user != null) {
+        widget.onAuthenticated(user);
+        return;
+      }
+      throw employeeLoginError ??
+          const MobileLoginException(
+            MobileLoginFailureType.profileNotFound,
+            'Login failed. Please try again.',
+          );
     } catch (error, stackTrace) {
       final loginError = error is MobileLoginException ? error : null;
       final demoError = error is HospitalDemoLoginException ? error : null;

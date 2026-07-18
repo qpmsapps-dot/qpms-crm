@@ -124,7 +124,11 @@ class _HospitalTicketDetailScreenState
                 _row('Original Supervisor', ticket.supervisorName),
                 _row(
                   'Supervisor SLA due',
-                  DateFormat('dd MMM, hh:mm a').format(ticket.supervisorDueAt),
+                  ticket.supervisorDueAt == null
+                      ? 'Not started • assignment pending'
+                      : DateFormat(
+                          'dd MMM, hh:mm a',
+                        ).format(ticket.supervisorDueAt!),
                 ),
                 if (ticket.operationsEscalatedAt != null)
                   _row(

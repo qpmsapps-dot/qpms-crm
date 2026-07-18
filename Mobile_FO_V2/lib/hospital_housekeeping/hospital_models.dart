@@ -118,7 +118,7 @@ class HospitalTicket {
   final String responsiblePerson;
   final String responsibleRole;
   final String supervisorName;
-  final DateTime supervisorDueAt;
+  final DateTime? supervisorDueAt;
   final DateTime? operationsEscalatedAt;
   final DateTime? operationsDueAt;
   final DateTime? facilityEscalatedAt;
@@ -221,11 +221,9 @@ class HospitalTicket {
       responsiblePerson: '${assignee['display_name'] ?? 'Assignment pending'}',
       responsibleRole: '${row['current_assignee_role'] ?? ''}',
       supervisorName: 'Assigned Housekeeping Supervisor',
-      supervisorDueAt:
-          DateTime.tryParse(
-            '${row['supervisor_sla_due_at'] ?? ''}',
-          )?.toLocal() ??
-          DateTime.now(),
+      supervisorDueAt: DateTime.tryParse(
+        '${row['supervisor_sla_due_at'] ?? ''}',
+      )?.toLocal(),
       operationsEscalatedAt: DateTime.tryParse(
         '${row['supervisor_escalated_at'] ?? ''}',
       )?.toLocal(),

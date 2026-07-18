@@ -53,6 +53,7 @@ class HospitalController extends ChangeNotifier {
   final HospitalSlaPolicy slaPolicy;
   final bool productionMode;
   bool _loading = false;
+  bool _sessionExpired = false;
   String? _error;
   late List<HospitalTicket> _tickets;
   late DateTime _now;
@@ -60,6 +61,7 @@ class HospitalController extends ChangeNotifier {
 
   DateTime get now => _now;
   bool get isLoading => _loading;
+  bool get sessionExpired => _sessionExpired;
   String? get error => _error;
   List<HospitalTicket> get allTickets => List.unmodifiable(_tickets);
   List<Map<String, dynamic>> _notifications = [];
@@ -80,7 +82,7 @@ class HospitalController extends ChangeNotifier {
       _tickets.firstWhere((ticket) => ticket.id == id);
 
   Future<void> load() async {
-    if (!productionMode) return;
+    if (!productionMode || _loading || _sessionExpired) return;
     _loading = true;
     _error = null;
     notifyListeners();
@@ -94,6 +96,14 @@ class HospitalController extends ChangeNotifier {
       _now = DateTime.now();
     } catch (error) {
       _error = error.toString();
+      if (error is HospitalTicketApiException &&
+          const {
+            'invalid_token',
+            'authentication_required',
+            'session_expired',
+          }.contains(error.code)) {
+        _sessionExpired = true;
+      }
     } finally {
       _loading = false;
       notifyListeners();
@@ -104,7 +114,11 @@ class HospitalController extends ChangeNotifier {
     if (!productionMode) return;
     await HospitalTicketApi.markNotificationRead(id);
     _notifications = _notifications
-        .map((row) => row['id'] == id ? {...row, 'read_at': DateTime.now().toIso8601String()} : row)
+        .map(
+          (row) => row['id'] == id
+              ? {...row, 'read_at': DateTime.now().toIso8601String()}
+              : row,
+        )
         .toList();
     notifyListeners();
   }

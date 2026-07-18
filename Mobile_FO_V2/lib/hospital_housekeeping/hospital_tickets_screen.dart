@@ -75,24 +75,37 @@ class _HospitalTicketsScreenState extends State<HospitalTicketsScreen> {
         ),
         Expanded(
           child: rows.isEmpty
-              ? const Center(
-                  child: Text(
-                    'No tickets match this view.',
-                    style: TextStyle(color: qpmsMuted),
+              ? RefreshIndicator(
+                  onRefresh: widget.controller.load,
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: const [
+                      SizedBox(height: 180),
+                      Center(
+                        child: Text(
+                          'No tickets match this view.',
+                          style: TextStyle(color: qpmsMuted),
+                        ),
+                      ),
+                    ],
                   ),
                 )
-              : ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 110),
-                  itemCount: rows.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 10),
-                  itemBuilder: (_, index) => HospitalTicketCard(
-                    ticket: rows[index],
-                    controller: widget.controller,
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => HospitalTicketDetailScreen(
-                          controller: widget.controller,
-                          ticketId: rows[index].id,
+              : RefreshIndicator(
+                  onRefresh: widget.controller.load,
+                  child: ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 110),
+                    itemCount: rows.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (_, index) => HospitalTicketCard(
+                      ticket: rows[index],
+                      controller: widget.controller,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => HospitalTicketDetailScreen(
+                            controller: widget.controller,
+                            ticketId: rows[index].id,
+                          ),
                         ),
                       ),
                     ),
