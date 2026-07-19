@@ -11,6 +11,7 @@ import '../services/app_state_sync_service.dart';
 import '../services/crash_log_service.dart';
 import '../services/local_db_service.dart';
 import '../services/local_store.dart';
+import '../services/performance_log_service.dart';
 import '../services/permission_service.dart';
 import '../services/route_distance_service.dart';
 import '../services/supabase_service.dart';
@@ -21,6 +22,12 @@ import '../utils/date_utils.dart';
 import '../utils/local_id.dart';
 
 enum _CheckoutRecoveryAction { retry, fixState }
+
+enum _NoSiteFoundAction { cancel, refresh, add }
+
+const double _activityImageMaxDimension = 1600;
+const int _activityImageQuality = 78;
+const int _activityUploadMaxBytes = 5 * 1024 * 1024;
 
 class TasksScreen extends StatefulWidget {
   const TasksScreen({
@@ -240,6 +247,7 @@ class _TasksScreenState extends State<TasksScreen>
       await TrackingService.stop(
         user: widget.user,
         updateRemoteLiveStatus: false,
+        reason: 'attendance_date_mismatch',
       );
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
@@ -272,6 +280,8 @@ class _TasksScreenState extends State<TasksScreen>
   }
 
   Future<void> _checkIn() async {
+    if (_busy) return;
+    final perf = Stopwatch()..start();
     setState(() => _busy = true);
     try {
       await CrashLogService.record(
@@ -280,6 +290,11 @@ class _TasksScreenState extends State<TasksScreen>
         action: 'CHECKIN_CLICKED',
       );
       final attendance = await LocalStore.getAttendance();
+      PerformanceLogService.step(
+        operation: 'check_in',
+        step: 'attendance_load',
+        stopwatch: perf,
+      );
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
         screen: 'tasks',
@@ -303,6 +318,11 @@ class _TasksScreenState extends State<TasksScreen>
       _attendance = activeAttendance;
       final remoteActiveVisit = await _restoreRemoteActiveVisit(
         activeAttendance,
+      );
+      PerformanceLogService.step(
+        operation: 'check_in',
+        step: 'active_visit_lookup',
+        stopwatch: perf,
       );
       if (remoteActiveVisit != null) {
         await CrashLogService.record(
@@ -336,6 +356,11 @@ class _TasksScreenState extends State<TasksScreen>
             employeeCode: widget.user.employeeCode,
             action: 'CHECKIN_LOCATION_READINESS',
           );
+      PerformanceLogService.step(
+        operation: 'check_in',
+        step: 'permission_check',
+        stopwatch: perf,
+      );
       if (!locationReadiness.allowed) {
         _toast(
           locationReadiness.message ??
@@ -356,6 +381,11 @@ class _TasksScreenState extends State<TasksScreen>
             accuracy: LocationAccuracy.high,
             timeLimit: Duration(seconds: 15),
           ),
+        );
+        PerformanceLogService.step(
+          operation: 'check_in',
+          step: 'gps_capture',
+          stopwatch: perf,
         );
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
@@ -394,25 +424,12 @@ class _TasksScreenState extends State<TasksScreen>
         action: 'CHECKIN_SITE_MATCH_START',
       );
       final stores = await SupabaseService.fetchStoresWithGps();
-      final nearby =
-          stores
-              .where(
-                (store) => store.latitude != null && store.longitude != null,
-              )
-              .map(
-                (store) => _NearbyStore(
-                  store: store,
-                  distanceMeters: Geolocator.distanceBetween(
-                    position.latitude,
-                    position.longitude,
-                    store.latitude!,
-                    store.longitude!,
-                  ),
-                ),
-              )
-              .where((match) => match.distanceMeters <= 100)
-              .toList()
-            ..sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
+      var nearby = _nearbyStoresFromPosition(stores, position);
+      PerformanceLogService.step(
+        operation: 'check_in',
+        step: 'store_load',
+        stopwatch: perf,
+      );
 
       Store? store;
       await CrashLogService.record(
@@ -460,28 +477,78 @@ class _TasksScreenState extends State<TasksScreen>
           action: 'CHECKIN_SITE_MATCH_NOT_FOUND',
         );
         if (!mounted) return;
-        final addNew = await showDialog<bool>(
+        final action = await showDialog<_NoSiteFoundAction>(
           context: context,
           builder: (_) => const _NoSiteFoundDialog(),
         );
-        if (addNew != true || !mounted) return;
-        await CrashLogService.record(
-          employeeCode: widget.user.employeeCode,
-          screen: 'tasks',
-          action: 'FO_ADD_SITE_OPENED',
-        );
-        if (!mounted) return;
-        store = await showDialog<Store?>(
-          context: context,
-          builder: (_) => _AddStoreDialog(
-            user: widget.user,
-            attendance: activeAttendance,
-            latitude: position.latitude,
-            longitude: position.longitude,
-            accuracy: position.accuracy,
-          ),
-        );
-        if (store == null || !mounted) return;
+        if (action == _NoSiteFoundAction.refresh) {
+          final refreshedStores = await SupabaseService.fetchStoresWithGps(
+            forceRefresh: true,
+          );
+          nearby = _nearbyStoresFromPosition(refreshedStores, position);
+          PerformanceLogService.step(
+            operation: 'check_in',
+            step: 'store_manual_refresh',
+            stopwatch: perf,
+          );
+          if (nearby.isNotEmpty) {
+            if (!mounted) return;
+            final selected = nearby.length == 1
+                ? nearby.first
+                : await showModalBottomSheet<_NearbyStore?>(
+                    context: context,
+                    isScrollControlled: true,
+                    useSafeArea: true,
+                    backgroundColor: Colors.transparent,
+                    builder: (_) => _NearbySitesSheet(
+                      matches: nearby,
+                      isLoading: false,
+                      errorMessage: null,
+                    ),
+                  );
+            if (selected == null || !mounted) return;
+            final confirmed = await showDialog<bool>(
+              context: context,
+              builder: (_) => _WelcomeSiteDialog(
+                match: selected,
+                accuracy: position.accuracy,
+              ),
+            );
+            if (confirmed != true || !mounted) return;
+            store = selected.store;
+          } else {
+            if (!mounted) return;
+            final addAfterRefresh = await showDialog<bool>(
+              context: context,
+              builder: (_) => const AlertDialog(
+                title: Text('No registered site found within 100 meters.'),
+                actions: [_NoSiteCancelButton(), _NoSiteAddButton()],
+              ),
+            );
+            if (addAfterRefresh != true || !mounted) return;
+          }
+        } else if (action != _NoSiteFoundAction.add || !mounted) {
+          return;
+        }
+        if (store == null) {
+          await CrashLogService.record(
+            employeeCode: widget.user.employeeCode,
+            screen: 'tasks',
+            action: 'FO_ADD_SITE_OPENED',
+          );
+          if (!mounted) return;
+          store = await showDialog<Store?>(
+            context: context,
+            builder: (_) => _AddStoreDialog(
+              user: widget.user,
+              attendance: activeAttendance,
+              latitude: position.latitude,
+              longitude: position.longitude,
+              accuracy: position.accuracy,
+            ),
+          );
+          if (store == null || !mounted) return;
+        }
       }
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
@@ -519,10 +586,20 @@ class _TasksScreenState extends State<TasksScreen>
       }
 
       final visit = await _createVisit(store, position, activeAttendance);
+      PerformanceLogService.step(
+        operation: 'check_in',
+        step: 'visit_create',
+        stopwatch: perf,
+      );
       await TrackingService.pauseForSiteVisit(
         user: widget.user,
         visit: visit,
         finalPosition: position,
+      );
+      PerformanceLogService.step(
+        operation: 'check_in',
+        step: 'tracking_pause',
+        stopwatch: perf,
       );
       setState(() => _activeVisit = visit);
       _toast(
@@ -550,6 +627,7 @@ class _TasksScreenState extends State<TasksScreen>
   }
 
   Future<void> _addSiteFromCheckIn() async {
+    if (_busy) return;
     setState(() => _busy = true);
     try {
       final attendance = await LocalStore.getAttendance();
@@ -992,10 +1070,41 @@ class _TasksScreenState extends State<TasksScreen>
         longitude <= 180;
   }
 
+  List<_NearbyStore> _nearbyStoresFromPosition(
+    Iterable<Store> stores,
+    Position position,
+  ) {
+    final nearby =
+        stores
+            .where((store) => store.latitude != null && store.longitude != null)
+            .map(
+              (store) => _NearbyStore(
+                store: store,
+                distanceMeters: Geolocator.distanceBetween(
+                  position.latitude,
+                  position.longitude,
+                  store.latitude!,
+                  store.longitude!,
+                ),
+              ),
+            )
+            .where((match) => match.distanceMeters <= 100)
+            .toList()
+          ..sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
+    return nearby;
+  }
+
   Future<void> _checkOut() async {
+    if (_busy) return;
+    final perf = Stopwatch()..start();
     var visit = _activeVisit;
     final attendance = await LocalStore.getAttendance();
     if (attendance?.isActive != true) return;
+    PerformanceLogService.step(
+      operation: 'check_out',
+      step: 'attendance_load',
+      stopwatch: perf,
+    );
     setState(() => _busy = true);
     try {
       if (SupabaseService.isReady) {
@@ -1009,6 +1118,11 @@ class _TasksScreenState extends State<TasksScreen>
               user: widget.user,
               attendance: attendance!,
             );
+        PerformanceLogService.step(
+          operation: 'check_out',
+          step: 'active_visit_lookup',
+          stopwatch: perf,
+        );
         if (remoteVisit != null) {
           await CrashLogService.record(
             employeeCode: widget.user.employeeCode,
@@ -1032,6 +1146,11 @@ class _TasksScreenState extends State<TasksScreen>
             employeeCode: widget.user.employeeCode,
             action: 'CHECKOUT_LOCATION_READINESS',
           );
+      PerformanceLogService.step(
+        operation: 'check_out',
+        step: 'permission_check',
+        stopwatch: perf,
+      );
       if (!locationReadiness.allowed) {
         _toast(
           locationReadiness.message ??
@@ -1046,6 +1165,11 @@ class _TasksScreenState extends State<TasksScreen>
             accuracy: LocationAccuracy.high,
             timeLimit: Duration(seconds: 15),
           ),
+        );
+        PerformanceLogService.step(
+          operation: 'check_out',
+          step: 'gps_capture',
+          stopwatch: perf,
         );
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
@@ -1185,6 +1309,11 @@ class _TasksScreenState extends State<TasksScreen>
           user: widget.user,
           visit: visit,
         );
+        PerformanceLogService.step(
+          operation: 'check_out',
+          step: 'visit_checkout_update',
+          stopwatch: perf,
+        );
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'tasks',
@@ -1272,6 +1401,11 @@ class _TasksScreenState extends State<TasksScreen>
             const Duration(milliseconds: 1),
           ),
           onLog: (_, _) {},
+        );
+        PerformanceLogService.step(
+          operation: 'check_out',
+          step: 'tracking_resume',
+          stopwatch: perf,
         );
       }
       setState(() => _activeVisit = null);
@@ -1977,6 +2111,9 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
       {};
   PlatformFile? _pdf;
   bool _submitting = false;
+  String? _submitStep;
+  int _uploadedCount = 0;
+  int _uploadTotal = 0;
   bool _loadingExistingTraining = false;
   bool _draftSaved = false;
   bool _existingTrainingDocument = false;
@@ -2063,7 +2200,11 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
   }
 
   Future<void> _addPhotos() async {
-    final files = await _picker.pickMultiImage(imageQuality: 80);
+    final files = await _picker.pickMultiImage(
+      maxWidth: _activityImageMaxDimension,
+      maxHeight: _activityImageMaxDimension,
+      imageQuality: _activityImageQuality,
+    );
     if (files.isEmpty || !mounted) return;
     setState(() => _photos.addAll(files));
   }
@@ -2074,7 +2215,9 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
   }) async {
     final file = await _picker.pickImage(
       source: ImageSource.gallery,
-      imageQuality: 80,
+      maxWidth: _activityImageMaxDimension,
+      maxHeight: _activityImageMaxDimension,
+      imageQuality: _activityImageQuality,
     );
     if (file == null || !mounted) return;
     setState(() {
@@ -2097,7 +2240,11 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
   }
 
   Future<void> _pickTrainingCategoryPhoto(_TrainingCategory category) async {
-    final files = await _picker.pickMultiImage(imageQuality: 80);
+    final files = await _picker.pickMultiImage(
+      maxWidth: _activityImageMaxDimension,
+      maxHeight: _activityImageMaxDimension,
+      imageQuality: _activityImageQuality,
+    );
     if (files.isEmpty || !mounted) return;
     setState(() {
       final rows = _trainingPhotos.putIfAbsent(category.key, () => []);
@@ -2291,6 +2438,7 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
             _trainingSubmitNote(),
             const SizedBox(height: 14),
           ],
+          if (_submitting) ...[_submitProgress(), const SizedBox(height: 14)],
           Row(
             children: [
               Expanded(
@@ -2332,6 +2480,39 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
     );
   }
 
+  Widget _submitProgress() {
+    final step = _submitStep ?? 'Submitting activity';
+    final suffix = _uploadTotal > 0 ? ' ($_uploadedCount/$_uploadTotal)' : '';
+    return Row(
+      children: [
+        const SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            '$step$suffix',
+            style: const TextStyle(
+              color: qpmsMuted,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _setSubmitStep(String step, {int? uploadedCount, int? uploadTotal}) {
+    if (!mounted) return;
+    setState(() {
+      _submitStep = step;
+      if (uploadedCount != null) _uploadedCount = uploadedCount;
+      if (uploadTotal != null) _uploadTotal = uploadTotal;
+    });
+  }
+
   Future<void> _saveTrainingDraft() async {
     await _persistActivity(
       targetStatus: 'draft',
@@ -2345,6 +2526,8 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
     required bool requireTrainingEvidence,
     required bool popOnSuccess,
   }) async {
+    if (_submitting) return;
+    final perf = Stopwatch()..start();
     final remarks = _remarks.text.trim();
     if (!SupabaseService.isReady) {
       _snack(
@@ -2365,12 +2548,23 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
       return;
     }
 
-    setState(() => _submitting = true);
+    setState(() {
+      _submitting = true;
+      _submitStep = 'Preparing activity';
+      _uploadedCount = 0;
+      _uploadTotal = 0;
+    });
     String? submissionId;
     final orphanedUploadUrls = <String>[];
     try {
       final activityType = _activityTypeValue(widget.type);
       final uploadItems = await _activityUploadItems();
+      _setSubmitStep('Capturing location', uploadTotal: uploadItems.length);
+      PerformanceLogService.step(
+        operation: 'activity_submission',
+        step: 'image_prepare',
+        stopwatch: perf,
+      );
       final hasExistingTrainingEvidence = widget.type == FoActivityType.training
           ? _hasExistingTrainingEvidence
           : false;
@@ -2397,11 +2591,22 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
       } catch (_) {
         position = null;
       }
+      PerformanceLogService.step(
+        operation: 'activity_submission',
+        step: 'gps_capture',
+        stopwatch: perf,
+      );
 
+      _setSubmitStep('Saving activity');
       final existing = await SupabaseService.findActivitySubmission(
         user: widget.user,
         visit: widget.visit,
         activityType: activityType,
+      );
+      PerformanceLogService.step(
+        operation: 'activity_submission',
+        step: 'submission_lookup',
+        stopwatch: perf,
       );
       submissionId = existing?['id']?.toString();
       final metadata = Map<String, dynamic>.from(
@@ -2446,12 +2651,22 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
           localId: newLocalId('activity-submission'),
           status: statusToSave,
         );
+        PerformanceLogService.step(
+          operation: 'activity_submission',
+          step: 'submission_create',
+          stopwatch: perf,
+        );
       } else {
         await SupabaseService.updateActivitySubmissionMetadata(
           submissionId: submissionId!,
           metadata: metadata,
           remarks: widget.type == FoActivityType.training ? null : remarks,
           status: statusToSave,
+        );
+        PerformanceLogService.step(
+          operation: 'activity_submission',
+          step: 'submission_update',
+          stopwatch: perf,
         );
       }
       if (!SupabaseService.isValidUuid(submissionId)) {
@@ -2460,6 +2675,12 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
 
       for (var index = 0; index < uploadItems.length; index += 1) {
         final item = uploadItems[index];
+        _setSubmitStep(
+          'Uploading images',
+          uploadedCount: index,
+          uploadTotal: uploadItems.length,
+        );
+        final fileSize = item.bytes.length;
         final fileUrl = await SupabaseService.uploadActivityFile(
           user: widget.user,
           attendance: widget.attendance,
@@ -2482,18 +2703,31 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
             fileUrl: fileUrl,
             fileName: item.fileName,
             fileType: item.contentType,
-            fileSize: item.bytes.length,
+            fileSize: fileSize,
             localId: newLocalId('activity-upload'),
             metadata: item.metadata,
           );
+          item.releaseBytes();
+          _setSubmitStep(
+            'Uploading images',
+            uploadedCount: index + 1,
+            uploadTotal: uploadItems.length,
+          );
           orphanedUploadUrls.remove(fileUrl);
         } catch (_) {
+          item.releaseBytes();
           await SupabaseService.deleteActivityFile(fileUrl);
           orphanedUploadUrls.remove(fileUrl);
           rethrow;
         }
       }
+      PerformanceLogService.step(
+        operation: 'activity_submission',
+        step: 'file_uploads',
+        stopwatch: perf,
+      );
       if (uploadItems.isNotEmpty) {
+        _setSubmitStep('Finalizing activity');
         metadata['pending_images'] = widget.type == FoActivityType.training
             ? _trainingCompletedCategoryCount == 0
             : false;
@@ -2513,10 +2747,16 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
           remarks: widget.type == FoActivityType.training ? null : remarks,
           status: statusToSave,
         );
+        PerformanceLogService.step(
+          operation: 'activity_submission',
+          step: 'submission_finalize',
+          stopwatch: perf,
+        );
       }
 
       if (!mounted) return;
       if (widget.type == FoActivityType.training) {
+        _setSubmitStep('Refreshing training details');
         await _loadExistingTraining();
         if (!mounted) return;
         setState(() {
@@ -2541,7 +2781,14 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
       if (!mounted) return;
       _snack(_activitySubmitErrorMessage(error));
     } finally {
-      if (mounted) setState(() => _submitting = false);
+      if (mounted) {
+        setState(() {
+          _submitting = false;
+          _submitStep = null;
+          _uploadedCount = 0;
+          _uploadTotal = 0;
+        });
+      }
     }
   }
 
@@ -2665,6 +2912,9 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
     Map<String, dynamic> metadata = const {},
   }) async {
     final bytes = await file.readAsBytes();
+    if (bytes.isEmpty || bytes.length > _activityUploadMaxBytes) {
+      throw StateError('Inspection photo must be 5 MB or less.');
+    }
     final extension = _fileExtension(file.name);
     return _ActivityUploadItem(
       uploadRole: uploadRole,
@@ -2689,6 +2939,9 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
         (filePath == null ? null : await File(filePath).readAsBytes());
     if (bytes == null) {
       throw StateError('Training document could not be selected.');
+    }
+    if (bytes.isEmpty || bytes.length > _activityUploadMaxBytes) {
+      throw StateError('Inspection photo must be 5 MB or less.');
     }
     return _ActivityUploadItem(
       uploadRole: uploadRole,
@@ -3612,7 +3865,7 @@ class _CleaningArea {
 }
 
 class _ActivityUploadItem {
-  const _ActivityUploadItem({
+  _ActivityUploadItem({
     required this.uploadRole,
     required this.fileName,
     required this.bytes,
@@ -3623,10 +3876,14 @@ class _ActivityUploadItem {
 
   final String uploadRole;
   final String fileName;
-  final Uint8List bytes;
+  Uint8List bytes;
   final String extension;
   final String contentType;
   final Map<String, dynamic> metadata;
+
+  void releaseBytes() {
+    bytes = Uint8List(0);
+  }
 }
 
 class _TrainingCategory {
@@ -4260,14 +4517,43 @@ class _NoSiteFoundDialog extends StatelessWidget {
       title: const Text('No registered site found within 100 meters.'),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
+          onPressed: () => Navigator.of(context).pop(_NoSiteFoundAction.cancel),
           child: const Text('Cancel'),
         ),
+        TextButton(
+          onPressed: () =>
+              Navigator.of(context).pop(_NoSiteFoundAction.refresh),
+          child: const Text('Refresh & Retry'),
+        ),
         FilledButton(
-          onPressed: () => Navigator.of(context).pop(true),
+          onPressed: () => Navigator.of(context).pop(_NoSiteFoundAction.add),
           child: const Text('Add New Site'),
         ),
       ],
+    );
+  }
+}
+
+class _NoSiteCancelButton extends StatelessWidget {
+  const _NoSiteCancelButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton(
+      onPressed: () => Navigator.of(context).pop(false),
+      child: const Text('Cancel'),
+    );
+  }
+}
+
+class _NoSiteAddButton extends StatelessWidget {
+  const _NoSiteAddButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return FilledButton(
+      onPressed: () => Navigator.of(context).pop(true),
+      child: const Text('Add New Site'),
     );
   }
 }

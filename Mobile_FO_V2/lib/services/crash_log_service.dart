@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -5,15 +6,45 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'local_store.dart';
 import 'supabase_service.dart';
+import '../tracking/tracking_flags.dart';
 
 class CrashLogService {
   static const _key = 'mobile_crash_logs_queue';
+  static const _lastBatchSyncKey = 'mobile_crash_logs_last_batch_sync_at';
   static const _generalThrottleWindow = Duration(minutes: 10);
   static const _gpsThrottleWindow = Duration(minutes: 30);
   static bool _syncing = false;
   static final Map<String, DateTime> _lastRecordedByFingerprint = {};
 
   static Future<void> record({
+    String? employeeCode,
+    required String screen,
+    required String action,
+    Object? error,
+    StackTrace? stackTrace,
+  }) async {
+    if (_isImmediateAction(action)) {
+      await _recordNow(
+        employeeCode: employeeCode,
+        screen: screen,
+        action: action,
+        error: error,
+        stackTrace: stackTrace,
+      );
+      return;
+    }
+    unawaited(
+      _recordNow(
+        employeeCode: employeeCode,
+        screen: screen,
+        action: action,
+        error: error,
+        stackTrace: stackTrace,
+      ),
+    );
+  }
+
+  static Future<void> _recordNow({
     String? employeeCode,
     required String screen,
     required String action,
@@ -78,17 +109,36 @@ class CrashLogService {
           ? logs.sublist(logs.length - 150)
           : logs;
       await prefs.setString(_key, jsonEncode(retained));
-      await sync();
+      await sync(force: _isImmediateAction(action));
     } catch (logError) {
       debugPrint('[myQPMS FO V2] Crash logging failed: $logError');
     }
   }
 
-  static Future<void> sync() async {
+  static Future<void> sync({bool force = false}) async {
     if (_syncing || !SupabaseService.isReady) return;
+    final prefs = await SharedPreferences.getInstance();
+    final logs = await _read();
+    final pending = logs.where((e) => e['synced'] != true).length;
+    if (pending == 0) return;
+    if (!force && TrackingFlags.enableDiagnosticBatching) {
+      final lastSyncAt = DateTime.tryParse(
+        prefs.getString(_lastBatchSyncKey) ?? '',
+      );
+      if (lastSyncAt == null) {
+        await prefs.setString(
+          _lastBatchSyncKey,
+          DateTime.now().toUtc().toIso8601String(),
+        );
+        if (pending < TrackingFlags.diagnosticBatchSize) return;
+      } else if (pending < TrackingFlags.diagnosticBatchSize &&
+          DateTime.now().toUtc().difference(lastSyncAt) <
+              TrackingFlags.diagnosticBatchInterval) {
+        return;
+      }
+    }
     _syncing = true;
     try {
-      final logs = await _read();
       var changed = false;
       for (final log in logs.where((e) => e['synced'] != true)) {
         try {
@@ -102,8 +152,11 @@ class CrashLogService {
         }
       }
       if (changed) {
-        final prefs = await SharedPreferences.getInstance();
         await prefs.setString(_key, jsonEncode(logs));
+        await prefs.setString(
+          _lastBatchSyncKey,
+          DateTime.now().toUtc().toIso8601String(),
+        );
       }
     } finally {
       _syncing = false;
@@ -125,10 +178,9 @@ class CrashLogService {
     required String action,
     required String errorMessage,
   }) {
-    final normalizedError = errorMessage
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim()
-        .toLowerCase();
+    final normalizedError = _isHighFrequencyGpsLog(screen, action)
+        ? ''
+        : errorMessage.replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
     return [
       employeeCode?.trim().toLowerCase() ?? '',
       screen.trim().toLowerCase(),
@@ -142,6 +194,16 @@ class CrashLogService {
     return value.contains('gps') ||
         value.contains('tracking') ||
         value.contains('background');
+  }
+
+  static bool _isImmediateAction(String action) {
+    final value = action.toUpperCase();
+    return value.contains('FATAL') ||
+        value.contains('DATABASE_CORRUPTION') ||
+        value.contains('UNRECOVERABLE') ||
+        value == 'BACKGROUND_SUPABASE_INIT_FAILED' ||
+        value == 'BOOTSTRAP_FAILED' ||
+        (value.contains('END_DAY') && value.contains('FAILED'));
   }
 
   static Future<bool> _hasRecentQueuedDuplicate(

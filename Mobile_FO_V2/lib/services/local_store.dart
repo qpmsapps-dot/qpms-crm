@@ -13,6 +13,9 @@ class LocalStore {
   static const _backgroundSessionKey = 'background_tracking_session';
   static const _logsKey = 'location_logs';
   static const _visitsKey = 'site_visits';
+  static const _storeMasterGpsCacheKey = 'store_master_gps_cache';
+  static const _storeMasterGpsCacheSavedAtKey =
+      'store_master_gps_cache_saved_at';
 
   static Future<void> saveUser(FoUser user) async {
     final prefs = await SharedPreferences.getInstance();
@@ -118,6 +121,17 @@ class LocalStore {
     await prefs.remove(_backgroundSessionKey);
   }
 
+  static Future<void> markBackgroundRemoteValidationSucceeded(
+    DateTime value,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final encoded = prefs.getString(_backgroundSessionKey);
+    if (encoded == null || encoded.isEmpty) return;
+    final session = Map<String, dynamic>.from(jsonDecode(encoded) as Map);
+    session['remote_validation_succeeded_at'] = value.toUtc().toIso8601String();
+    await prefs.setString(_backgroundSessionKey, jsonEncode(session));
+  }
+
   static Future<void> addLocationLog(
     LocationLog log, {
     String eventType = 'gps',
@@ -128,11 +142,24 @@ class LocalStore {
     await LocalDbService.upsertGpsLog(log, eventType: eventType);
   }
 
-  static Future<List<LocationLog>> getLocationLogs() async {
-    final dbLogs = await LocalDbService.getGpsLogs();
-    final legacyLogs = (await _readList(
-      _logsKey,
-    )).map((e) => LocationLog.fromJson(e)).toList();
+  static Future<List<LocationLog>> getLocationLogs({
+    String? attendanceId,
+  }) async {
+    final cleanAttendanceId = attendanceId?.trim();
+    final dbLogs = await LocalDbService.getGpsLogs(
+      attendanceId: cleanAttendanceId?.isEmpty == true
+          ? null
+          : cleanAttendanceId,
+    );
+    final legacyLogs = (await _readList(_logsKey))
+        .map((e) => LocationLog.fromJson(e))
+        .where(
+          (log) =>
+              cleanAttendanceId == null ||
+              cleanAttendanceId.isEmpty ||
+              log.attendanceId == cleanAttendanceId,
+        )
+        .toList();
     final byId = <String, LocationLog>{};
     for (final log in legacyLogs) {
       if (log.id.isNotEmpty) byId[log.id] = log;
@@ -201,6 +228,42 @@ class LocalStore {
     return (await _readList(
       _visitsKey,
     )).map((e) => SiteVisit.fromJson(e)).toList();
+  }
+
+  static Future<void> saveStoresWithGpsCache(List<Store> stores) async {
+    final prefs = await SharedPreferences.getInstance();
+    final rows = stores
+        .map(
+          (store) => {
+            'id': store.id,
+            'store_name': store.storeName,
+            'client_name': store.clientName,
+            'store_code': store.storeCode,
+            'state': store.state,
+            'business': store.business,
+            'latitude': store.latitude,
+            'longitude': store.longitude,
+            'gps_accuracy': store.gpsAccuracy,
+          },
+        )
+        .toList();
+    await prefs.setString(_storeMasterGpsCacheKey, jsonEncode(rows));
+    await prefs.setString(
+      _storeMasterGpsCacheSavedAtKey,
+      DateTime.now().toUtc().toIso8601String(),
+    );
+  }
+
+  static Future<List<Store>> getStoresWithGpsCache() async {
+    final rows = await _readList(_storeMasterGpsCacheKey);
+    return rows.map(Store.fromJson).toList();
+  }
+
+  static Future<DateTime?> getStoresWithGpsCacheSavedAt() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getString(_storeMasterGpsCacheSavedAtKey);
+    if (value == null || value.isEmpty) return null;
+    return DateTime.tryParse(value)?.toUtc();
   }
 
   static Future<SiteVisit?> activeVisit({

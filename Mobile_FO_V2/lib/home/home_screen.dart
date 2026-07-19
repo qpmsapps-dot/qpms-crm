@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -14,6 +15,7 @@ import '../models/fo_models.dart';
 import '../services/app_state_sync_service.dart';
 import '../services/crash_log_service.dart';
 import '../services/local_store.dart';
+import '../services/performance_log_service.dart';
 import '../services/permission_service.dart';
 import '../services/supabase_service.dart';
 import '../services/tracking_health_service.dart';
@@ -144,6 +146,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _load() async {
+    unawaited(SupabaseService.refreshStoresWithGpsCache());
     await CrashLogService.record(
       employeeCode: widget.user.employeeCode,
       screen: 'home',
@@ -406,7 +409,9 @@ class _HomeScreenState extends State<HomeScreen>
     final todayKey = indiaDateKey(DateTime.now());
     int? localToday;
     try {
-      final localLogs = await LocalStore.getLocationLogs();
+      final localLogs = await LocalStore.getLocationLogs(
+        attendanceId: attendanceId,
+      );
       localToday = localLogs
           .where(
             (log) =>
@@ -491,6 +496,7 @@ class _HomeScreenState extends State<HomeScreen>
       await TrackingService.stop(
         user: widget.user,
         updateRemoteLiveStatus: false,
+        reason: 'attendance_date_mismatch',
       );
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
@@ -613,6 +619,7 @@ class _HomeScreenState extends State<HomeScreen>
           : null;
       final saved = remote ?? updated;
       await LocalStore.saveAttendance(saved);
+      await TrackingService.flushForTransition('travel_mode_change');
       if (!mounted) return;
       setState(() {
         _attendance = saved;
@@ -701,9 +708,16 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _startDay() async {
+    if (_busy) return;
+    final perf = Stopwatch()..start();
     setState(() => _busy = true);
     try {
       final authValidation = SupabaseService.validateStartDayAuth(widget.user);
+      PerformanceLogService.step(
+        operation: 'start_day',
+        step: 'auth_validation',
+        stopwatch: perf,
+      );
       if (!authValidation.isValid) {
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
@@ -730,6 +744,11 @@ class _HomeScreenState extends State<HomeScreen>
         final existing = SupabaseService.isReady
             ? await SupabaseService.findActiveAttendanceForToday(widget.user)
             : null;
+        PerformanceLogService.step(
+          operation: 'start_day',
+          step: 'active_attendance_check',
+          stopwatch: perf,
+        );
         if (existing != null) {
           await CrashLogService.record(
             employeeCode: widget.user.employeeCode,
@@ -744,6 +763,11 @@ class _HomeScreenState extends State<HomeScreen>
         final completed = SupabaseService.isReady
             ? await SupabaseService.findClosedAttendanceForToday(widget.user)
             : null;
+        PerformanceLogService.step(
+          operation: 'start_day',
+          step: 'closed_attendance_check',
+          stopwatch: perf,
+        );
         if (completed != null) {
           await CrashLogService.record(
             employeeCode: widget.user.employeeCode,
@@ -784,6 +808,11 @@ class _HomeScreenState extends State<HomeScreen>
         return;
       }
       final ok = await PermissionService.ensureLocation();
+      PerformanceLogService.step(
+        operation: 'start_day',
+        step: 'permission_check',
+        stopwatch: perf,
+      );
       if (!ok) {
         _toast(PermissionService.message);
         return;
@@ -799,6 +828,11 @@ class _HomeScreenState extends State<HomeScreen>
           accuracy: LocationAccuracy.high,
           timeLimit: Duration(seconds: 20),
         ),
+      );
+      PerformanceLogService.step(
+        operation: 'start_day',
+        step: 'gps_capture',
+        stopwatch: perf,
       );
       int? battery;
       try {
@@ -831,6 +865,11 @@ class _HomeScreenState extends State<HomeScreen>
         attendance.remoteId = await SupabaseService.createAttendance(
           attendance,
           widget.user,
+        );
+        PerformanceLogService.step(
+          operation: 'start_day',
+          step: 'attendance_create',
+          stopwatch: perf,
         );
       } catch (error, stackTrace) {
         final failureValidation = SupabaseService.validateStartDayAuth(
@@ -876,6 +915,11 @@ class _HomeScreenState extends State<HomeScreen>
             'attendance_id=${attendance.remoteId} local_id=${attendance.id} active=${attendance.isActive}',
       );
       await LocalStore.saveAttendance(attendance);
+      PerformanceLogService.step(
+        operation: 'start_day',
+        step: 'attendance_local_save',
+        stopwatch: perf,
+      );
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
         screen: 'home',
@@ -897,6 +941,11 @@ class _HomeScreenState extends State<HomeScreen>
         action: 'ROUTE_ANCHOR_START_DAY_SAVED',
         capturedAt: attendance.startTime,
       );
+      PerformanceLogService.step(
+        operation: 'start_day',
+        step: 'route_anchor_save',
+        stopwatch: perf,
+      );
       setState(() {
         _attendance = attendance;
         _battery = battery;
@@ -912,6 +961,11 @@ class _HomeScreenState extends State<HomeScreen>
         user: widget.user,
         attendance: attendance,
         onLog: _onLog,
+      );
+      PerformanceLogService.step(
+        operation: 'start_day',
+        step: 'tracking_start',
+        stopwatch: perf,
       );
       if (!trackingStarted) {
         throw StateError('Background tracking failed to start.');
@@ -1303,6 +1357,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _endDay() async {
     if (_busy) return;
+    final perf = Stopwatch()..start();
     final attendance = _attendance;
     if (attendance == null) return;
     setState(() => _busy = true);
@@ -1326,6 +1381,11 @@ class _HomeScreenState extends State<HomeScreen>
       final resolvedAttendance = await SupabaseService.resolveEndDayAttendance(
         user: widget.user,
         attendance: attendance,
+      );
+      PerformanceLogService.step(
+        operation: 'end_day',
+        step: 'attendance_resolution',
+        stopwatch: perf,
       );
       if (resolvedAttendance == null ||
           !SupabaseService.isValidUuid(
@@ -1362,6 +1422,7 @@ class _HomeScreenState extends State<HomeScreen>
             user: widget.user,
             routeKm: attendance.eligibleKm,
             updateRemoteLiveStatus: false,
+            reason: 'end_day_already_completed',
           );
           await CrashLogService.record(
             employeeCode: widget.user.employeeCode,
@@ -1397,6 +1458,11 @@ class _HomeScreenState extends State<HomeScreen>
             user: widget.user,
             attendance: resolvedAttendance.attendance,
           );
+      PerformanceLogService.step(
+        operation: 'end_day',
+        step: 'active_visit_lookup',
+        stopwatch: perf,
+      );
       final openVisitsCount = openSiteVisit == null ? 0 : 1;
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
@@ -1448,6 +1514,11 @@ class _HomeScreenState extends State<HomeScreen>
         attendance: attendance,
         endTime: endTime,
       );
+      PerformanceLogService.step(
+        operation: 'end_day',
+        step: 'end_location_resolution',
+        stopwatch: perf,
+      );
       int? battery;
       try {
         battery = await Battery().batteryLevel;
@@ -1459,7 +1530,17 @@ class _HomeScreenState extends State<HomeScreen>
       final endAccuracy = endLocation.accuracy;
       const endSpeed = 0.0;
       await TrackingService.syncQueuedLogs(force: true);
+      PerformanceLogService.step(
+        operation: 'end_day',
+        step: 'queued_log_sync',
+        stopwatch: perf,
+      );
       final actualKm = await _calculateContinuedKm(attendance);
+      PerformanceLogService.step(
+        operation: 'end_day',
+        step: 'continued_km_calculation',
+        stopwatch: perf,
+      );
       final autoCloseResult = endDayWithOpenSite
           ? await SupabaseService.autoCloseOpenSiteVisitsForEndDay(
               user: widget.user,
@@ -1467,7 +1548,17 @@ class _HomeScreenState extends State<HomeScreen>
               closedAt: endTime,
             )
           : (firstClosedVisitId: null, closedCount: 0);
+      PerformanceLogService.step(
+        operation: 'end_day',
+        step: 'open_visit_autoclose',
+        stopwatch: perf,
+      );
       final routeKm = await _routeKmFromVisits(attendance);
+      PerformanceLogService.step(
+        operation: 'end_day',
+        step: 'route_km_from_visits',
+        stopwatch: perf,
+      );
       attendance
         ..endTime = endTime
         ..endLat = endLatitude
@@ -1492,6 +1583,11 @@ class _HomeScreenState extends State<HomeScreen>
               autoClosedSiteVisitId: autoCloseResult.firstClosedVisitId,
               endLocationMetadata: endLocation.toMetadata(),
             );
+        PerformanceLogService.step(
+          operation: 'end_day',
+          step: 'attendance_close',
+          stopwatch: perf,
+        );
         attendance
           ..remoteId = completedAttendance.attendance.remoteId
           ..endTime = completedAttendance.attendance.endTime ?? endTime
@@ -1525,9 +1621,19 @@ class _HomeScreenState extends State<HomeScreen>
             foUserId: widget.user.employeeCode,
             date: attendance.attendanceDate,
           );
+          PerformanceLogService.step(
+            operation: 'end_day',
+            step: 'backend_km_recalculation',
+            stopwatch: perf,
+          );
           final refreshedAttendance = await SupabaseService.findAttendanceById(
             user: widget.user,
             attendanceId: attendance.remoteId!,
+          );
+          PerformanceLogService.step(
+            operation: 'end_day',
+            step: 'attendance_refetch',
+            stopwatch: perf,
           );
           if (refreshedAttendance != null) {
             attendance
@@ -1586,6 +1692,11 @@ class _HomeScreenState extends State<HomeScreen>
           routeKm: attendance.eligibleKm,
           attendanceId: attendance.remoteId,
         );
+        PerformanceLogService.step(
+          operation: 'end_day',
+          step: 'live_status_update',
+          stopwatch: perf,
+        );
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'home',
@@ -1611,6 +1722,12 @@ class _HomeScreenState extends State<HomeScreen>
           speed: endSpeed,
           routeKm: attendance.eligibleKm,
           updateRemoteLiveStatus: false,
+          reason: 'end_day',
+        );
+        PerformanceLogService.step(
+          operation: 'end_day',
+          step: 'tracking_stop',
+          stopwatch: perf,
         );
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
@@ -2223,6 +2340,17 @@ class _HomeScreenState extends State<HomeScreen>
                   : formatTime(health.lastGpsAt),
             ),
             _plainHealthRow('Pending GPS Logs', '${health.pendingGpsLogs}'),
+            _plainHealthRow(
+              'Pilot GPS C / Q / U',
+              '${health.dailyMetrics['gps_collected'] ?? 0} / '
+                  '${health.dailyMetrics['gps_queued'] ?? 0} / '
+                  '${health.dailyMetrics['gps_uploaded'] ?? 0}',
+            ),
+            _plainHealthRow(
+              'Pilot batches OK / failed',
+              '${health.dailyMetrics['batch_successes'] ?? 0} / '
+                  '${health.dailyMetrics['batch_failures'] ?? 0}',
+            ),
             _plainHealthRow(
               'Last Sync',
               health.lastSyncAt == null

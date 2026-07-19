@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/fo_models.dart';
@@ -9,6 +11,8 @@ import '../utils/date_utils.dart';
 import '../utils/mobile_roles.dart';
 import 'config_service.dart';
 import 'crash_log_service.dart';
+import 'local_store.dart';
+import 'performance_log_service.dart';
 
 class DuplicateEmployeeIdException implements Exception {
   const DuplicateEmployeeIdException();
@@ -50,6 +54,9 @@ class StoreCreateException implements Exception {
   @override
   String toString() => message;
 }
+
+typedef StorePageLoader =
+    Future<List<Map<String, dynamic>>> Function(int from, int to);
 
 class EndDayAttendanceResolution {
   const EndDayAttendanceResolution({
@@ -1221,6 +1228,24 @@ class SupabaseService {
       }
     }
     return latest;
+  }
+
+  static Future<bool> isAttendanceConfirmedActive({
+    required FoUser user,
+    required Attendance attendance,
+  }) async {
+    final attendanceId = attendance.remoteId?.trim();
+    if (!isValidUuid(attendanceId)) return false;
+    final row = await client
+        .from('fo_attendance')
+        .select('id, attendance_date, status, logout_time')
+        .eq('id', attendanceId!)
+        .eq('fo_user_id', user.employeeCode)
+        .maybeSingle();
+    if (row == null) return false;
+    return row['attendance_date']?.toString() == indiaDateKey(DateTime.now()) &&
+        row['status']?.toString().toLowerCase() == 'active' &&
+        row['logout_time'] == null;
   }
 
   static Future<Attendance?> findOpenActiveAttendance(FoUser user) async {
@@ -2613,15 +2638,118 @@ class SupabaseService {
     return List<Map<String, dynamic>>.from(rows).map(Store.fromJson).toList();
   }
 
-  static Future<List<Store>> fetchStoresWithGps({int limit = 500}) async {
-    final rows = await client
-        .from('store_master')
-        .select()
-        .not('latitude', 'is', null)
-        .not('longitude', 'is', null)
-        .eq('status', 'Active')
-        .limit(limit);
-    return List<Map<String, dynamic>>.from(rows).map(Store.fromJson).toList();
+  static Future<List<Store>> fetchStoresWithGps({
+    int pageSize = 500,
+    bool forceRefresh = false,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    if (!forceRefresh) {
+      final cached = await LocalStore.getStoresWithGpsCache();
+      if (cached.isNotEmpty) {
+        PerformanceLogService.step(
+          operation: 'store_master',
+          step: 'cache_load',
+          stopwatch: stopwatch,
+        );
+        unawaited(refreshStoresWithGpsCache(pageSize: pageSize));
+        return cached;
+      }
+    }
+
+    try {
+      final stores = await _fetchStoresWithGpsRemote(pageSize: pageSize);
+      await LocalStore.saveStoresWithGpsCache(stores);
+      PerformanceLogService.step(
+        operation: 'store_master',
+        step: 'remote_load',
+        stopwatch: stopwatch,
+      );
+      return stores;
+    } catch (error) {
+      final cached = await LocalStore.getStoresWithGpsCache();
+      if (cached.isNotEmpty) {
+        PerformanceLogService.step(
+          operation: 'store_master',
+          step: 'remote_failed_cache_fallback',
+          stopwatch: stopwatch,
+          status: 'fallback',
+        );
+        return cached;
+      }
+      PerformanceLogService.step(
+        operation: 'store_master',
+        step: 'remote_load',
+        stopwatch: stopwatch,
+        status: 'failed',
+      );
+      rethrow;
+    }
+  }
+
+  static Future<void> refreshStoresWithGpsCache({int pageSize = 500}) async {
+    final stopwatch = Stopwatch()..start();
+    try {
+      final stores = await _fetchStoresWithGpsRemote(pageSize: pageSize);
+      await LocalStore.saveStoresWithGpsCache(stores);
+      PerformanceLogService.step(
+        operation: 'store_master',
+        step: 'background_refresh',
+        stopwatch: stopwatch,
+      );
+    } catch (_) {
+      PerformanceLogService.step(
+        operation: 'store_master',
+        step: 'background_refresh',
+        stopwatch: stopwatch,
+        status: 'failed',
+      );
+    }
+  }
+
+  static Future<DateTime?> storesWithGpsCacheSavedAt() {
+    return LocalStore.getStoresWithGpsCacheSavedAt();
+  }
+
+  static Future<List<Store>> _fetchStoresWithGpsRemote({int pageSize = 500}) {
+    return collectStorePages(
+      pageSize: pageSize,
+      loadPage: (from, to) async {
+        final rows = await client
+            .from('store_master')
+            .select()
+            .not('latitude', 'is', null)
+            .not('longitude', 'is', null)
+            .eq('status', 'Active')
+            .order('id', ascending: true)
+            .range(from, to);
+        return List<Map<String, dynamic>>.from(rows);
+      },
+    );
+  }
+
+  @visibleForTesting
+  static Future<List<Store>> collectStorePages({
+    required StorePageLoader loadPage,
+    int pageSize = 500,
+    int maxPages = 100,
+  }) async {
+    if (pageSize <= 0) throw ArgumentError.value(pageSize, 'pageSize');
+    if (maxPages <= 0) throw ArgumentError.value(maxPages, 'maxPages');
+
+    final storesById = <String, Store>{};
+    for (var page = 0; page < maxPages; page += 1) {
+      final from = page * pageSize;
+      final rows = await loadPage(from, from + pageSize - 1);
+      for (final row in rows) {
+        final store = Store.fromJson(row);
+        storesById.putIfAbsent(store.id, () => store);
+      }
+      if (rows.length < pageSize) return storesById.values.toList();
+    }
+
+    throw StateError(
+      'Store Master pagination exceeded the $maxPages-page safety limit.',
+    );
   }
 
   static Future<String?> createStore({
@@ -2704,7 +2832,7 @@ class SupabaseService {
         stackTrace: stackTrace,
       );
       throw StoreCreateException(
-        _storeCreateErrorMessage(error),
+        _storeCreateErrorMessage(error, storeCode: code),
         code: error.code,
       );
     } catch (error, stackTrace) {
@@ -2722,19 +2850,56 @@ class SupabaseService {
     }
   }
 
-  static String _storeCreateErrorMessage(PostgrestException error) {
-    switch (error.code) {
+  static String _storeCreateErrorMessage(
+    PostgrestException error, {
+    String? storeCode,
+  }) {
+    return storeCreateErrorMessage(
+      code: error.code,
+      message: error.message,
+      details: error.details?.toString(),
+      storeCode: storeCode,
+    );
+  }
+
+  @visibleForTesting
+  static String storeCreateErrorMessage({
+    String? code,
+    String? message,
+    String? details,
+    String? storeCode,
+  }) {
+    final normalizedCode = code?.trim() ?? '';
+    final duplicateEvidence = [
+      normalizedCode,
+      message ?? '',
+      details ?? '',
+    ].join(' ').toLowerCase();
+    final isDuplicate =
+        normalizedCode == '23505' ||
+        normalizedCode == '409' ||
+        duplicateEvidence.contains('duplicate key') ||
+        duplicateEvidence.contains('unique constraint') ||
+        duplicateEvidence.contains('already exists') ||
+        duplicateEvidence.contains('23505');
+    if (isDuplicate) {
+      final normalizedStoreCode = storeCode?.trim().toUpperCase() ?? '';
+      final storeLabel = normalizedStoreCode.isEmpty
+          ? 'Store'
+          : 'Store $normalizedStoreCode';
+      return '$storeLabel already exists. Please close Add Site and use Check-In to Site.';
+    }
+
+    switch (normalizedCode) {
       case '42501':
         return 'Store permission was denied. Please sign out, sign in again, and retry.';
-      case '23505':
-        return 'This Store ID already exists. Please use a different Store ID.';
       case '23502':
         return 'A required store field is missing. Please complete all fields and retry.';
       case '42703':
       case 'PGRST204':
         return 'The app store form does not match the server schema. Please contact support.';
       default:
-        return 'Store could not be saved (error ${error.code}). Please retry or contact support.';
+        return 'Store could not be saved (error $normalizedCode). Please retry or contact support.';
     }
   }
 
