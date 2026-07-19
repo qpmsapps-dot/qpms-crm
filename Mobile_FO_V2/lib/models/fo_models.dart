@@ -121,6 +121,7 @@ class Attendance {
     this.eligibleKm = 0,
     this.totalRouteKm = 0,
     this.endRouteKm = 0,
+    this.petrolAmount,
     String travelMode = travelModeBike,
     bool? payableKmAllowed,
     this.travelModeNote,
@@ -145,6 +146,7 @@ class Attendance {
   double eligibleKm;
   double totalRouteKm;
   double endRouteKm;
+  double? petrolAmount;
   final String travelMode;
   final bool payableKmAllowed;
   String? travelModeNote;
@@ -175,6 +177,7 @@ class Attendance {
       eligibleKm: eligibleKm,
       totalRouteKm: totalRouteKm,
       endRouteKm: endRouteKm,
+      petrolAmount: petrolAmount,
       travelMode: travelMode,
       payableKmAllowed: payableKmAllowed,
       travelModeNote: travelModeNote,
@@ -199,6 +202,7 @@ class Attendance {
     'eligible_km': eligibleKm,
     'total_route_km': totalRouteKm,
     'end_route_km': endRouteKm,
+    if (petrolAmount != null) 'petrol_amount': petrolAmount,
     'travel_mode': travelMode,
     'payable_km_allowed': payableKmAllowed,
     'travel_mode_note': travelModeNote,
@@ -229,6 +233,7 @@ class Attendance {
       totalRouteKm:
           _double(json['total_route_km']) ?? _double(json['eligible_km']) ?? 0,
       endRouteKm: _double(json['end_route_km']) ?? 0,
+      petrolAmount: _double(json['petrol_amount']),
       travelMode: travelMode,
       payableKmAllowed:
           _bool(json['payable_km_allowed']) ??

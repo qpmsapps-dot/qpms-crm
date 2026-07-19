@@ -2004,6 +2004,7 @@ class SupabaseService {
           _double(row['eligible_km']) ??
           _double(row['total_approved_km']) ??
           0,
+      petrolAmount: _double(row['petrol_amount']),
       travelMode: travelMode,
       payableKmAllowed:
           _bool(row['payable_km_allowed']) ??
