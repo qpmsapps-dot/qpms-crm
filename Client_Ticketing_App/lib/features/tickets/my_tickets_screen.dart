@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../app/routes.dart';
 import '../../core/constants/app_colors.dart';
-import '../../core/widgets/app_drawer.dart';
+import '../../core/widgets/client_bottom_nav.dart';
 import '../../core/widgets/ticket_card.dart';
 import '../../models/ticket.dart';
 import '../../state/ticket_controller.dart';
@@ -15,7 +15,7 @@ class MyTicketsScreen extends StatefulWidget {
 }
 
 class _MyTicketsScreenState extends State<MyTicketsScreen> {
-  TicketListFilter _filter = TicketListFilter.open;
+  TicketListFilter _filter = TicketListFilter.all;
   final _search = TextEditingController();
 
   @override
@@ -29,15 +29,9 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
     final controller = context.watch<TicketController>();
     final tickets = controller.filterTickets(_filter, query: _search.text);
     return Scaffold(
-      drawer: const QpmsDrawer(),
+      bottomNavigationBar: const ClientBottomNav(currentRoute: AppRoutes.tickets),
       appBar: AppBar(
-        title: const Text('My Tickets'),
-        leading: Builder(
-          builder: (context) => IconButton(
-            icon: const Icon(Icons.menu_rounded),
-            onPressed: () => Scaffold.of(context).openDrawer(),
-          ),
-        ),
+        title: const Text('Complaints'),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => Navigator.pushNamed(context, AppRoutes.raiseTicket),
@@ -64,10 +58,15 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
               child: Row(
                 children: TicketListFilter.values.map((filter) {
                   final label = switch (filter) {
+                    TicketListFilter.all => 'All',
                     TicketListFilter.open => 'Open',
+                    TicketListFilter.assigned => 'Assigned',
                     TicketListFilter.inProgress => 'In Progress',
+                    TicketListFilter.awaitingConfirmation =>
+                      'Awaiting Confirmation',
                     TicketListFilter.resolved => 'Resolved',
                     TicketListFilter.closed => 'Closed',
+                    TicketListFilter.reopened => 'Reopened',
                   };
                   return Padding(
                     padding: const EdgeInsets.only(right: 8),

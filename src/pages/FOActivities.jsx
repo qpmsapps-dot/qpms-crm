@@ -59,7 +59,7 @@ import { usePageTitle } from "../hooks/usePageTitle.js";
 import { isSupabaseConfigured, supabase } from "../lib/supabase.js";
 import { authenticatedApiRequest, authenticatedFetch } from "../services/api.js";
 import { authSessionManager, invalidateAuthOnUnauthorized, isAuthSessionError, SESSION_EXPIRED_MESSAGE } from "../services/authSession.js";
-import { assertDemoWriteAllowed } from "../utils/demoAccess.js";
+import { assertDemoWriteAllowed, isDemoUser } from "../utils/demoAccess.js";
 import {
   EMPTY_OPERATIONS_SUMMARY,
   activityPreviewFileKind,
@@ -9879,7 +9879,8 @@ function useAnimatedOfficerMarkers(officers, selectedOfficerId, selectedRouteLog
 export default function FOActivities() {
   usePageTitle("FO Activities");
   const { user, session, authStatus, authError } = useAuth();
-  const hasActiveSession = authStatus === "ready" && Boolean(session?.access_token);
+  const hasDemoBackendReadSession = authStatus === "ready" && isDemoUser(user);
+  const hasActiveSession = authStatus === "ready" && (Boolean(session?.access_token) || hasDemoBackendReadSession);
   const currentRole = normalizeRoleKey(generatedUserRole(user));
   const fullTechnicalAccess = hasTechnicalKmAccess(user);
   const canRunBatchKmRecalculation = ["admin", "developer", "qpmsadmin", "md", "coo"].includes(currentRole);
@@ -9943,6 +9944,7 @@ export default function FOActivities() {
   const [filteredSummaryLoading, setFilteredSummaryLoading] = useState(false);
   const [filteredSummaryError, setFilteredSummaryError] = useState("");
   const [summaryRefreshToken, setSummaryRefreshToken] = useState(0);
+  const [demoDateRange, setDemoDateRange] = useState(null);
   const [detailDraftFromDate, setDetailDraftFromDate] = useState(customFromDate);
   const [detailDraftToDate, setDetailDraftToDate] = useState(customToDate);
   const profileRowsRef = useRef([]);
@@ -9963,6 +9965,37 @@ export default function FOActivities() {
         return;
       }
       try {
+        if (hasDemoBackendReadSession) {
+          const query = operationsSummaryQuery({
+            dateFrom: selectedRange.fromDate,
+            dateTo: selectedRange.toDate,
+            state: stateFilter,
+            business: businessFilter,
+            status: statusFilter,
+          });
+          const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/operations/dashboard?${query}`);
+          const payload = await response.json();
+          if (!response.ok || payload.ok === false) {
+            throw new Error(payload.message || "Operations dashboard failed.");
+          }
+          const profileRows = payload.profiles || [];
+          const officersFromBackend = buildLiveFoData({
+            attendance: payload.attendances || [],
+            visits: payload.site_visits || [],
+            liveStatus: payload.live_status || [],
+            profiles: profileRows,
+            logs: [],
+            statusDate: selectedRange.toDate,
+            currentUser: user,
+          });
+          if (!cancelled) {
+            profileRowsRef.current = profileRows;
+            setAttendanceKpiRows(payload.attendances || []);
+            setSiteVisitRows(payload.site_visits || []);
+            setLiveOfficers(officersFromBackend);
+          }
+          return;
+        }
         await authSessionManager().requireSession();
         const fromIso = formatDateForDb(selectedRange.from);
         const toIso = formatDateForDb(selectedRange.to);
@@ -10046,18 +10079,18 @@ export default function FOActivities() {
     return () => {
       cancelled = true;
     };
-  }, [hasActiveSession, refreshToken, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate, user]);
+  }, [businessFilter, hasActiveSession, hasDemoBackendReadSession, refreshToken, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate, stateFilter, statusFilter, user]);
 
   useEffect(() => {
-    if (!hasActiveSession) return undefined;
+    if (!hasActiveSession || hasDemoBackendReadSession) return undefined;
     const interval = window.setInterval(() => {
       setRefreshToken((value) => value + 1);
     }, 12000);
     return () => window.clearInterval(interval);
-  }, [hasActiveSession]);
+  }, [hasActiveSession, hasDemoBackendReadSession]);
 
   useEffect(() => {
-    if (!isSupabaseConfigured || !supabase || !hasActiveSession) return undefined;
+    if (!isSupabaseConfigured || !supabase || !hasActiveSession || hasDemoBackendReadSession) return undefined;
     const channel = supabase
       .channel("fo-operations-live-status")
       .on(
@@ -10090,10 +10123,10 @@ export default function FOActivities() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [hasActiveSession, user]);
+  }, [hasActiveSession, hasDemoBackendReadSession, user]);
 
   useEffect(() => {
-    if (!isSupabaseConfigured || !supabase || !hasActiveSession) return undefined;
+    if (!isSupabaseConfigured || !supabase || !hasActiveSession || hasDemoBackendReadSession) return undefined;
     const channel = supabase
       .channel("fo-operations-site-visits")
       .on(
@@ -10108,7 +10141,7 @@ export default function FOActivities() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [hasActiveSession]);
+  }, [hasActiveSession, hasDemoBackendReadSession]);
 
   const officers = useMemo(
     () =>
@@ -10119,6 +10152,32 @@ export default function FOActivities() {
       ),
     [liveOfficers, user],
   );
+
+  useEffect(() => {
+    if (!hasDemoBackendReadSession) return undefined;
+    let cancelled = false;
+    async function loadDemoDateRange() {
+      try {
+        const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/operations/demo-date-range`);
+        const payload = await response.json();
+        if (!response.ok || payload.ok === false) throw new Error(payload.message || "Demo date range failed.");
+        if (cancelled || !payload.latest_demo_date) return;
+        setDemoDateRange(payload);
+        setCustomFromDate(payload.latest_demo_date);
+        setCustomToDate(payload.latest_demo_date);
+        setDraftFromDate(payload.latest_demo_date);
+        setDraftToDate(payload.latest_demo_date);
+        setDetailDraftFromDate(payload.latest_demo_date);
+        setDetailDraftToDate(payload.latest_demo_date);
+      } catch (error) {
+        console.warn("[myQPMS FO] Demo date resolver failed.", error);
+      }
+    }
+    loadDemoDateRange();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasDemoBackendReadSession]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -10270,6 +10329,12 @@ export default function FOActivities() {
     if (!draftFromDate || !draftToDate || draftFromDate > draftToDate) {
       window.alert("Select a valid From Date and To Date.");
       return;
+    }
+    if (hasDemoBackendReadSession && demoDateRange?.earliest_demo_date && demoDateRange?.latest_demo_date) {
+      if (draftFromDate < demoDateRange.earliest_demo_date || draftToDate > demoDateRange.latest_demo_date) {
+        window.alert("Demo dates must stay within the prepared sample data range.");
+        return;
+      }
     }
     setCustomFromDate(draftFromDate);
     setCustomToDate(draftToDate);
@@ -10587,7 +10652,7 @@ export default function FOActivities() {
   useEffect(() => {
     let cancelled = false;
     async function loadSelectedRouteLogs() {
-      if (!shouldLoadRouteLogs || !routeOfficer || !isSupabaseConfigured || !supabase) {
+      if (hasDemoBackendReadSession || !shouldLoadRouteLogs || !routeOfficer || !isSupabaseConfigured || !supabase) {
         setSelectedRouteLogs([]);
         return;
       }
@@ -10664,12 +10729,12 @@ export default function FOActivities() {
     return () => {
       cancelled = true;
     };
-  }, [routeOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate, shouldLoadRouteLogs]);
+  }, [hasDemoBackendReadSession, routeOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate, shouldLoadRouteLogs]);
 
   useEffect(() => {
     let cancelled = false;
     async function loadSelectedActivityUploads() {
-      if (!selectedOfficer || !isSupabaseConfigured || !supabase) {
+      if (hasDemoBackendReadSession || !selectedOfficer || !isSupabaseConfigured || !supabase) {
         setSelectedActivitySubmissions([]);
         setSelectedActivityUploads([]);
         return;
@@ -10802,7 +10867,7 @@ export default function FOActivities() {
     return () => {
       cancelled = true;
     };
-  }, [selectedActivityReloadToken, selectedOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate]);
+  }, [hasDemoBackendReadSession, selectedActivityReloadToken, selectedOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate]);
 
   async function loadSupportContext(officer) {
     if (!officer || !isSupabaseConfigured || !supabase) {
@@ -11548,6 +11613,12 @@ export default function FOActivities() {
             </span>
         </div>
       </div>
+      {hasDemoBackendReadSession ? (
+        <div className="rounded-xl border border-qpms-100 bg-qpms-50 px-4 py-3 text-sm font-bold text-qpms-800">
+          Sample Demo Data
+          {demoDateRange?.latest_demo_date ? ` - showing latest prepared date ${demoDateRange.latest_demo_date}` : ''}
+        </div>
+      ) : null}
 
       <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-[0_10px_28px_rgba(15,23,42,0.05)] dark:border-slate-800 dark:bg-slate-900">
         <div className="grid items-end gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto_auto]">
@@ -11559,6 +11630,8 @@ export default function FOActivities() {
               type="date"
               value={draftFromDate}
               onChange={(event) => setDraftFromDate(event.target.value)}
+              min={hasDemoBackendReadSession ? demoDateRange?.earliest_demo_date || undefined : undefined}
+              max={hasDemoBackendReadSession ? demoDateRange?.latest_demo_date || undefined : undefined}
               className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             />
           </label>
@@ -11570,6 +11643,8 @@ export default function FOActivities() {
               type="date"
               value={draftToDate}
               onChange={(event) => setDraftToDate(event.target.value)}
+              min={hasDemoBackendReadSession ? demoDateRange?.earliest_demo_date || undefined : undefined}
+              max={hasDemoBackendReadSession ? demoDateRange?.latest_demo_date || undefined : undefined}
               className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             />
           </label>

@@ -164,7 +164,11 @@ class AppStateSyncService {
 
   static Future<void> _stopTrackingSafely(FoUser user) async {
     try {
-      await TrackingService.stop(user: user, updateRemoteLiveStatus: false);
+      await TrackingService.stop(
+        user: user,
+        updateRemoteLiveStatus: false,
+        reason: 'app_state_sync_closed_or_stale',
+      );
     } catch (_) {
       // Manual recovery must keep going even if tracking stop cleanup fails.
     }

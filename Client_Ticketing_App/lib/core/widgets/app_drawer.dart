@@ -59,7 +59,7 @@ class QpmsDrawer extends StatelessWidget {
             _item(
               context,
               Icons.confirmation_number_rounded,
-              'My Tickets',
+              'NIMS Tickets',
               AppRoutes.tickets,
             ),
             _item(

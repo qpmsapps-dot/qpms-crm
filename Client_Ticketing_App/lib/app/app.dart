@@ -5,6 +5,7 @@ import '../features/auth/login_screen.dart';
 import '../features/dashboard/dashboard_screen.dart';
 import '../features/locations/locations_screen.dart';
 import '../features/notifications/notifications_screen.dart';
+import '../features/profile/profile_screen.dart';
 import '../features/raise_ticket/raise_ticket_screen.dart';
 import '../features/raise_ticket/ticket_submitted_screen.dart';
 import '../features/splash/splash_screen.dart';
@@ -40,6 +41,7 @@ class QpmsClientTicketingApp extends StatelessWidget {
           AppRoutes.raiseTicket: (_) => const RaiseTicketScreen(),
           AppRoutes.tickets: (_) => const MyTicketsScreen(),
           AppRoutes.notifications: (_) => const NotificationsScreen(),
+          AppRoutes.profile: (_) => const ProfileScreen(),
           AppRoutes.locations: (_) => const LocationsScreen(),
           AppRoutes.about: (_) => const AboutScreen(),
         },

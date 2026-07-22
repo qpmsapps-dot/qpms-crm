@@ -70,6 +70,8 @@ function profileToUser(profile, sessionUser) {
     authProvider: 'supabase',
     requiresPasswordChange: profile?.requires_password_change === true,
     metadata,
+    is_demo: profile?.is_demo === true || metadata.is_demo === true,
+    read_only: profile?.read_only === true || metadata.read_only === true,
     profileImageUrl,
   };
   return {
@@ -293,20 +295,19 @@ export function AuthProvider({ children }) {
 
   const loginWithPassword = useCallback(async (email, password) => {
     const normalizedEmail = email.trim().toLowerCase();
-    if (isDemoReadOnlyCredentials(normalizedEmail, password)) {
-      if (import.meta.env.DEV) {
-        console.info('Demo read-only login bypass activated');
-      }
-      const nextUser = createDemoReadOnlyUser(normalizedEmail);
-      clearBackendToken();
-      setBackendTokenState('');
-      setUserState(nextUser);
-      setAuthStatus('ready');
-      setAuthError('');
-      return nextUser;
-    }
 
     if (!isSupabaseConfigured || !supabase) {
+      if (isDemoReadOnlyCredentials(normalizedEmail, password) && isDemoAuthEnabled) {
+        const backendLogin = await loginBackend(normalizedEmail, password);
+        const nextUser = {
+          ...createDemoReadOnlyUser(normalizedEmail),
+          backendToken: backendLogin.token || '',
+        };
+        setUserState(nextUser);
+        setAuthStatus('ready');
+        setAuthError('');
+        return nextUser;
+      }
       throw new Error('Supabase Auth is not configured.');
     }
 
@@ -317,6 +318,19 @@ export function AuthProvider({ children }) {
       password,
     });
     if (error) {
+      if (isDemoReadOnlyCredentials(normalizedEmail, password) && isDemoAuthEnabled) {
+        const backendLogin = await loginBackend(normalizedEmail, password);
+        const nextUser = {
+          ...createDemoReadOnlyUser(normalizedEmail),
+          backendToken: backendLogin.token || '',
+        };
+        configureAuthSession(supabase).setSession(null, 'DEMO_BACKEND_SIGNED_IN');
+        setSessionState(null);
+        setUserState(nextUser);
+        setAuthStatus('ready');
+        setAuthError('');
+        return nextUser;
+      }
       setAuthStatus('ready');
       setAuthError(error.message);
       throw error;
@@ -343,7 +357,7 @@ export function AuthProvider({ children }) {
     setUserState(nextUser);
     setAuthStatus('ready');
     return nextUser;
-  }, []);
+  }, [loginBackend]);
 
   const refreshUserProfile = useCallback(async () => {
     if (!isSupabaseConfigured || !supabase) return null;

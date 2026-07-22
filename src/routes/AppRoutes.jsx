@@ -15,6 +15,7 @@ import Settings from '../pages/Settings.jsx';
 import StoreMaster from '../pages/StoreMaster.jsx';
 import Tickets from '../pages/Tickets.jsx';
 import FaultTracker from '../pages/FaultTracker.jsx';
+import DeepCleaning from '../pages/DeepCleaning.jsx';
 import UserManagement from '../pages/settings/UserManagement.jsx';
 import { isDemoMode } from '../config/demoMode.js';
 import {
@@ -50,6 +51,7 @@ export const router = createBrowserRouter([
           { path: 'existing-business', element: <ExistingBusinessPage /> },
           { path: 'tickets', element: <Tickets /> },
           { path: 'fault-tracker', element: <FaultTracker /> },
+          { path: 'deep-cleaning', element: <DeepCleaning /> },
           { path: 'assets', element: <AssetCenterPage /> },
           { path: 'tasks', element: <Tasks /> },
           {

@@ -19,6 +19,8 @@ import {
   getStoreMaster,
   updateStoreMasterRecord,
 } from '../services/api.js';
+import { useAuth } from '../context/auth-context.js';
+import { demoReadOnlyMessage, isReadOnlyUser } from '../utils/demoAccess.js';
 
 const DEFAULT_STATES = ['TN', 'AP', 'KA', 'KL', 'TG'];
 const DEFAULT_BUSINESSES = [
@@ -305,6 +307,8 @@ function StoreDrawer({ mode, row, form, errors, saving, stateOptions, businessOp
 
 export default function StoreMaster() {
   usePageTitle('Store Master');
+  const { user } = useAuth();
+  const demoReadOnly = isReadOnlyUser(user);
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState({
     totalStores: 0,
@@ -377,6 +381,10 @@ export default function StoreMaster() {
   }
 
   function openDrawer(mode, row = null) {
+    if (demoReadOnly && ['create', 'edit'].includes(mode)) {
+      setMessage(demoReadOnlyMessage);
+      return;
+    }
     setDrawerMode(mode);
     setSelectedRow(row);
     setForm(row ? rowToForm(row) : emptyForm());
@@ -388,6 +396,10 @@ export default function StoreMaster() {
 
   async function saveStore() {
     if (Object.keys(errors).length) return;
+    if (demoReadOnly) {
+      setMessage(demoReadOnlyMessage);
+      return;
+    }
     if (outsideSouthIndia(form.latitude, form.longitude)) {
       const confirmed = window.confirm('Coordinates appear outside South India. Save anyway?');
       if (!confirmed) return;
@@ -505,9 +517,15 @@ export default function StoreMaster() {
           <button type="button" onClick={exportExcel} className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-black text-emerald-700 hover:bg-emerald-100">
             <Download className="h-4 w-4" /> Export Excel
           </button>
-          <button type="button" onClick={() => openDrawer('create')} className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl bg-qpms-700 px-4 text-sm font-black text-white shadow-lg shadow-qpms-600/20 hover:bg-qpms-800">
-            <Plus className="h-4 w-4" /> Add Store
-          </button>
+          {demoReadOnly ? (
+            <span className="inline-flex h-10 items-center rounded-xl border border-amber-200 bg-amber-50 px-4 text-sm font-black text-amber-800">
+              Tender Demo - read-only
+            </span>
+          ) : (
+            <button type="button" onClick={() => openDrawer('create')} className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl bg-qpms-700 px-4 text-sm font-black text-white shadow-lg shadow-qpms-600/20 hover:bg-qpms-800">
+              <Plus className="h-4 w-4" /> Add Store
+            </button>
+          )}
         </div>
       </section>
 
@@ -559,9 +577,11 @@ export default function StoreMaster() {
                       <button type="button" onClick={() => openDrawer('view', row)} className="focus-ring inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 font-black text-slate-600 hover:bg-slate-50">
                         <Eye className="h-3.5 w-3.5" /> View
                       </button>
-                      <button type="button" onClick={() => openDrawer('edit', row)} className="focus-ring inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 font-black text-slate-600 hover:bg-slate-50">
-                        <Edit className="h-3.5 w-3.5" /> Edit
-                      </button>
+                      {!demoReadOnly ? (
+                        <button type="button" onClick={() => openDrawer('edit', row)} className="focus-ring inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 font-black text-slate-600 hover:bg-slate-50">
+                          <Edit className="h-3.5 w-3.5" /> Edit
+                        </button>
+                      ) : null}
                       <button type="button" disabled={!isValidLatLng(row.latitude, row.longitude)} onClick={() => openMap(row)} className="focus-ring inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 font-black text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">
                         <Map className="h-3.5 w-3.5" /> Map
                       </button>

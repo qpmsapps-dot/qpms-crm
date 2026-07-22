@@ -49,6 +49,7 @@ class _HospitalTicketDetailScreenState
     final ticket = widget.controller.ticketById(widget.ticketId);
     final sla = widget.controller.slaFor(ticket);
     final actions = widget.controller.actionsFor(ticket);
+    final busy = widget.controller.isTicketBusy(ticket.id);
     return Scaffold(
       appBar: AppBar(title: const Text('Complaint details')),
       body: ListView(
@@ -84,7 +85,7 @@ class _HospitalTicketDetailScreenState
                   Text(
                     sla.label,
                     style: TextStyle(
-                      color: _slaColor(sla.state.name),
+                      color: _slaColor(sla.state),
                       fontSize: 19,
                       fontWeight: FontWeight.w900,
                     ),
@@ -95,20 +96,56 @@ class _HospitalTicketDetailScreenState
           ),
           const SizedBox(height: 12),
           _Section(
-            title: 'Complaint',
+            title: 'Location',
             children: [
-              _row('Block / Floor', '${ticket.block} • ${ticket.floor}'),
-              _row('Department / Location', ticket.location),
+              _locationHero(ticket),
+              const SizedBox(height: 12),
+              ..._locationRows(ticket),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _Section(
+            title: 'Issue',
+            children: [
               _row('Category', ticket.category),
+              if (ticket.locationType.trim().isNotEmpty)
+                _row('Location type', ticket.locationType),
               _row('Description', ticket.description),
               _row('Reported by', ticket.reportedBy),
               _row(
                 'Raised',
                 DateFormat('dd MMM yyyy, hh:mm a').format(ticket.raisedAt),
               ),
+              if (ticket.assignedAt != null)
+                _row(
+                  'Assigned',
+                  DateFormat('dd MMM yyyy, hh:mm a').format(ticket.assignedAt!),
+                ),
+              if (ticket.acceptedAt != null)
+                _row(
+                  'Accepted',
+                  DateFormat('dd MMM yyyy, hh:mm a').format(ticket.acceptedAt!),
+                ),
+              if (ticket.workStartedAt != null)
+                _row(
+                  'Work started',
+                  DateFormat(
+                    'dd MMM yyyy, hh:mm a',
+                  ).format(ticket.workStartedAt!),
+                ),
+              _row(
+                'Supervisor SLA',
+                ticket.supervisorDueAt == null
+                    ? 'No supervisor SLA - unassigned'
+                    : DateFormat(
+                        'dd MMM yyyy, hh:mm a',
+                      ).format(ticket.supervisorDueAt!),
+              ),
               _row(
                 'Responsible',
-                '${ticket.responsiblePerson} • ${ticket.responsibleRole}',
+                ticket.responsibleRole.trim().isEmpty
+                    ? ticket.responsiblePerson
+                    : '${ticket.responsiblePerson} - ${ticket.responsibleRole}',
               ),
               _row('Escalation level', _escalationLabel(ticket)),
               if (ticket.complaintPhotoPaths.isNotEmpty)
@@ -125,7 +162,7 @@ class _HospitalTicketDetailScreenState
                 _row(
                   'Supervisor SLA due',
                   ticket.supervisorDueAt == null
-                      ? 'Not started • assignment pending'
+                      ? 'Not started - assignment pending'
                       : DateFormat(
                           'dd MMM, hh:mm a',
                         ).format(ticket.supervisorDueAt!),
@@ -179,7 +216,7 @@ class _HospitalTicketDetailScreenState
                 if (ticket.clientRating != null)
                   _row(
                     'Client feedback',
-                    '${ticket.clientRating}/5 • ${ticket.clientFeedback}',
+                    '${ticket.clientRating}/5 - ${ticket.clientFeedback}',
                   ),
               ],
             ),
@@ -195,7 +232,7 @@ class _HospitalTicketDetailScreenState
             const SizedBox(height: 12),
             _Section(
               title: 'Available actions',
-              children: [_actionButtons(ticket, actions)],
+              children: [_actionButtons(ticket, actions, busy)],
             ),
           ],
         ],
@@ -203,23 +240,64 @@ class _HospitalTicketDetailScreenState
     );
   }
 
+  Widget _locationHero(HospitalTicket ticket) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: const Color(0xFFE8F5F5),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: hospitalTeal.withValues(alpha: .25)),
+    ),
+    child: Text(
+      ticket.fullLocationDisplay.isEmpty
+          ? 'Location snapshot unavailable'
+          : ticket.fullLocationDisplay,
+      style: const TextStyle(
+        color: Color(0xFF0B6061),
+        fontSize: 15,
+        fontWeight: FontWeight.w900,
+        height: 1.35,
+      ),
+    ),
+  );
+
+  List<Widget> _locationRows(HospitalTicket ticket) => [
+    _optionalRow('Site', ticket.site),
+    _optionalRow('Block', ticket.block),
+    _optionalRow('Floor', ticket.floor),
+    _optionalRow('Department', ticket.department),
+    _optionalRow('Ward', ticket.ward),
+    _optionalRow(
+      'Room / Area',
+      ticket.roomArea.isEmpty ? ticket.location : ticket.roomArea,
+    ),
+    _optionalRow('Exact landmark', ticket.exactLandmark),
+    _optionalRow('Complete path', ticket.completeLocationPath),
+  ].whereType<Widget>().toList();
+
   Widget _actionButtons(
     HospitalTicket ticket,
     Set<HospitalTicketAction> actions,
+    bool busy,
   ) {
     final buttons = <Widget>[];
     void add(
       HospitalTicketAction action,
       String label,
       IconData icon,
-      VoidCallback callback, {
+      Future<void> Function() callback, {
       bool demo = false,
     }) {
       if (!actions.contains(action)) return;
       buttons.add(
         OutlinedButton.icon(
-          onPressed: () => _confirm(label, callback),
-          icon: Icon(icon),
+          onPressed: busy ? null : () => _confirm(label, callback),
+          icon: busy
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Icon(icon),
           label: Text(demo ? '$label (Demo only)' : label),
         ),
       );
@@ -229,13 +307,13 @@ class _HospitalTicketDetailScreenState
       HospitalTicketAction.accept,
       'Accept Ticket',
       Icons.task_alt,
-      () => widget.controller.accept(ticket.id),
+      () async => widget.controller.accept(ticket.id),
     );
     add(
       HospitalTicketAction.startWork,
       'Start Work',
       Icons.play_arrow,
-      () => widget.controller.startWork(ticket.id),
+      () async => widget.controller.startWork(ticket.id),
     );
     add(
       HospitalTicketAction.addProgress,
@@ -269,13 +347,13 @@ class _HospitalTicketDetailScreenState
       HospitalTicketAction.takeOver,
       'Take Over',
       Icons.person_pin_circle_outlined,
-      () => widget.controller.takeOver(ticket.id),
+      () async => widget.controller.takeOver(ticket.id),
     );
     add(
       HospitalTicketAction.reassignSupervisor,
       'Reassign to Supervisor',
       Icons.assignment_ind_outlined,
-      () => widget.controller.reassignSupervisor(ticket.id),
+      () async => widget.controller.reassignSupervisor(ticket.id),
     );
     add(
       HospitalTicketAction.assignSupport,
@@ -291,13 +369,13 @@ class _HospitalTicketDetailScreenState
       HospitalTicketAction.escalateManually,
       'Escalate Manually',
       Icons.trending_up,
-      () => widget.controller.escalateManually(ticket.id),
+      () async => widget.controller.escalateManually(ticket.id),
     );
     add(
       HospitalTicketAction.escalateFurther,
       'Escalate Further',
       Icons.warning_amber,
-      () => widget.controller.escalateFurther(ticket.id),
+      () async => widget.controller.escalateFurther(ticket.id),
     );
     add(
       HospitalTicketAction.resolve,
@@ -309,14 +387,14 @@ class _HospitalTicketDetailScreenState
       HospitalTicketAction.simulateSupervisorBreach,
       'Simulate Supervisor SLA Breach',
       Icons.timer_off_outlined,
-      () => widget.controller.simulateSupervisorBreach(ticket.id),
+      () async => widget.controller.simulateSupervisorBreach(ticket.id),
       demo: true,
     );
     add(
       HospitalTicketAction.simulateOperationsBreach,
       'Simulate Operations SLA Breach',
       Icons.timer_off_outlined,
-      () => widget.controller.simulateOperationsBreach(ticket.id),
+      () async => widget.controller.simulateOperationsBreach(ticket.id),
       demo: true,
     );
     add(
@@ -336,7 +414,7 @@ class _HospitalTicketDetailScreenState
     return Wrap(spacing: 8, runSpacing: 8, children: buttons);
   }
 
-  Future<void> _confirm(String label, VoidCallback callback) async {
+  Future<void> _confirm(String label, Future<void> Function() callback) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -356,7 +434,8 @@ class _HospitalTicketDetailScreenState
     );
     if (ok == true) {
       try {
-        callback();
+        await callback();
+        if (mounted) _message('$label completed.');
       } catch (error) {
         _message(error.toString());
       }
@@ -512,6 +591,7 @@ class _HospitalTicketDetailScreenState
         content: TextField(
           controller: controller,
           autofocus: true,
+          maxLength: 500,
           maxLines: 3,
           decoration: InputDecoration(hintText: hint),
         ),
@@ -557,6 +637,12 @@ class _HospitalTicketDetailScreenState
     ),
   );
 
+  static Widget? _optionalRow(String label, String value) {
+    final text = value.trim();
+    if (text.isEmpty) return null;
+    return _row(label, text);
+  }
+
   static Widget _photos(String label, List<String> paths) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
@@ -587,11 +673,13 @@ class _HospitalTicketDetailScreenState
       : ticket.operationsEscalatedAt != null
       ? 'Operations Executive'
       : 'Supervisor';
-  static Color _slaColor(String state) => state == 'breached'
-      ? hospitalRed
-      : state == 'nearBreach'
-      ? hospitalAmber
-      : hospitalGreen;
+
+  static Color _slaColor(HospitalSlaState state) => switch (state) {
+    HospitalSlaState.breached => hospitalRed,
+    HospitalSlaState.nearBreach => hospitalAmber,
+    HospitalSlaState.healthy => hospitalGreen,
+    HospitalSlaState.notApplicable => qpmsBlue,
+  };
 }
 
 class _Section extends StatelessWidget {
@@ -645,7 +733,7 @@ class _TimelineEvent extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w900),
               ),
               Text(
-                '${event.actor} • ${event.actorRole}',
+                '${event.actor} - ${event.actorRole}',
                 style: const TextStyle(color: qpmsMuted, fontSize: 11),
               ),
               Text(

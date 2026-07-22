@@ -29,6 +29,118 @@ const housekeepingCategories = [
   'Wet Area',
 ];
 
+const demoBlockRows = [
+  {'id': 'demo-block-a', 'block_name': 'Block A', 'is_active': true},
+  {'id': 'demo-block-b', 'block_name': 'Block B', 'is_active': true},
+  {'id': 'demo-main', 'block_name': 'Main Building', 'is_active': true},
+];
+
+const demoFloorRows = [
+  {
+    'id': 'demo-a-1',
+    'block_id': 'demo-block-a',
+    'floor_name': '1st Floor',
+    'is_active': true,
+  },
+  {
+    'id': 'demo-a-3',
+    'block_id': 'demo-block-a',
+    'floor_name': '3rd Floor',
+    'is_active': true,
+  },
+  {
+    'id': 'demo-b-g',
+    'block_id': 'demo-block-b',
+    'floor_name': 'Ground Floor',
+    'is_active': true,
+  },
+  {
+    'id': 'demo-main-2',
+    'block_id': 'demo-main',
+    'floor_name': '2nd Floor',
+    'is_active': true,
+  },
+];
+
+const demoDepartmentRows = [
+  {
+    'id': 'demo-dept-icu',
+    'block_id': 'demo-block-a',
+    'floor_id': 'demo-a-1',
+    'department_name': 'ICU',
+    'is_active': true,
+  },
+  {
+    'id': 'demo-dept-ward',
+    'block_id': 'demo-block-a',
+    'floor_id': 'demo-a-3',
+    'department_name': 'Patient Ward',
+    'is_active': true,
+  },
+  {
+    'id': 'demo-dept-opd',
+    'block_id': 'demo-block-b',
+    'floor_id': 'demo-b-g',
+    'department_name': 'OPD',
+    'is_active': true,
+  },
+  {
+    'id': 'demo-dept-admin',
+    'block_id': 'demo-main',
+    'floor_id': '',
+    'department_name': 'Administration',
+    'is_active': true,
+  },
+];
+
+const demoLocationRows = [
+  {
+    'id': 'demo-loc-icu-wash',
+    'block_id': 'demo-block-a',
+    'floor_id': 'demo-a-1',
+    'department_id': 'demo-dept-icu',
+    'floor_name': '1st Floor',
+    'department_name': 'ICU',
+    'location_name': 'ICU Washroom',
+    'room_number': '',
+    'area_name': 'ICU Washroom',
+    'is_active': true,
+  },
+  {
+    'id': 'demo-loc-staff-wash',
+    'block_id': 'demo-block-a',
+    'floor_id': 'demo-a-3',
+    'department_id': 'demo-dept-ward',
+    'floor_name': '3rd Floor',
+    'department_name': 'Patient Ward',
+    'location_name': 'Staff Washroom',
+    'area_name': 'Staff Washroom',
+    'is_active': true,
+  },
+  {
+    'id': 'demo-loc-opd',
+    'block_id': 'demo-block-b',
+    'floor_id': 'demo-b-g',
+    'department_id': 'demo-dept-opd',
+    'floor_name': 'Ground Floor',
+    'department_name': 'OPD',
+    'location_name': 'OPD Waiting Area',
+    'area_name': 'Waiting Area',
+    'is_active': true,
+  },
+  {
+    'id': 'demo-loc-admin',
+    'block_id': 'demo-main',
+    'floor_id': '',
+    'department_id': 'demo-dept-admin',
+    'floor_name': 'Floor not confirmed',
+    'department_name': 'Administration',
+    'location_name': 'Nurse Station',
+    'area_name': 'Nurse Station',
+    'is_active': true,
+  },
+];
+
 final demoSites = <ClientSite>[
   for (final block in demoBlocks) ClientSite(block),
 ];

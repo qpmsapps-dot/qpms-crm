@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
 import { canViewHospitalTicket, hospitalAllowedActions, scopeAllows } from './hospitalTicketAuthService.js';
+import { nimsRosterCoverageMatrix } from './hospitalTicketRoutingService.js';
 import { cleanHospitalText, normalizeHospitalTicketCreate, slaMinutes, validateHospitalAction, validateHospitalTicketCreate } from './hospitalTicketWorkflowService.js';
 
 const TICKET_SELECT = `
   *,
   block:hospital_blocks(id,block_code,block_name),
-  location:hospital_locations(id,floor_name,department_name,location_name,location_code),
+  location:hospital_locations(id,floor_name,department_name,location_name,location_code,room_number,area_name,ward_name),
   category:hospital_ticket_categories(id,category_code,category_name),
   assignee:hospital_ticket_users!hospital_tickets_current_assignee_user_id_fkey(id,display_name,role_code)
 `;
@@ -15,7 +16,7 @@ export async function loadHospitalMasters(client, actor) {
   const clientId = actor.user.client_id;
   const [blocksResult, locationsResult, categoriesResult] = await Promise.all([
     client.from('hospital_blocks').select('*').eq('client_id', clientId).eq('is_active', true).order('sort_order'),
-    client.from('hospital_locations').select('*').eq('client_id', clientId).eq('is_active', true).order('floor_name'),
+    client.from('hospital_locations').select('*,floor:hospital_floors(id,floor_code,floor_name,floor_number,verification_status),department:hospital_departments(id,department_code,department_name,department_type,verification_status)').eq('client_id', clientId).eq('is_active', true).order('floor_name'),
     client.from('hospital_ticket_categories').select('*').or(`client_id.is.null,client_id.eq.${clientId}`).eq('is_active', true).order('sort_order'),
   ]);
   for (const result of [blocksResult, locationsResult, categoriesResult]) if (result.error) throw result.error;
@@ -24,6 +25,134 @@ export async function loadHospitalMasters(client, actor) {
   const locations = (locationsResult.data || []).filter((row) => blockIds.has(row.block_id)
     && scopeAllows(actor.scopes, { clientId, blockId: row.block_id, locationId: row.id, permission: 'view' }));
   return { blocks, locations, categories: categoriesResult.data || [] };
+}
+
+export async function listHospitalFloors(client, actor, filters = {}) {
+  const blockId = cleanHospitalUuid(filters.block_id || filters.blockId, 'block_id');
+  let query = client.from('hospital_floors').select('*').eq('client_id', actor.user.client_id).eq('is_active', true).order('sort_order').order('floor_name');
+  if (blockId) query = query.eq('block_id', blockId);
+  const result = await query;
+  if (result.error) throw result.error;
+  return (result.data || []).filter((row) => scopeAllows(actor.scopes, {
+    clientId: row.client_id,
+    blockId: row.block_id,
+    permission: 'view',
+  }));
+}
+
+export async function listHospitalDepartments(client, actor, filters = {}) {
+  const blockId = cleanHospitalUuid(filters.block_id || filters.blockId, 'block_id');
+  const floorId = cleanHospitalUuid(filters.floor_id || filters.floorId, 'floor_id');
+  let query = client.from('hospital_departments').select('*,floor:hospital_floors(id,floor_code,floor_name,floor_number)').eq('client_id', actor.user.client_id).eq('is_active', true).order('department_name');
+  if (blockId) query = query.eq('block_id', blockId);
+  if (floorId) query = query.eq('floor_id', floorId);
+  const result = await query;
+  if (result.error) throw result.error;
+  return (result.data || []).filter((row) => scopeAllows(actor.scopes, {
+    clientId: row.client_id,
+    blockId: row.block_id,
+    permission: 'view',
+  }));
+}
+
+export async function listHospitalHierarchyLocations(client, actor, filters = {}) {
+  const blockId = cleanHospitalUuid(filters.block_id || filters.blockId, 'block_id');
+  const floorId = cleanHospitalUuid(filters.floor_id || filters.floorId, 'floor_id');
+  const departmentId = cleanHospitalUuid(filters.department_id || filters.departmentId, 'department_id');
+  let query = client.from('hospital_locations')
+    .select('*,block:hospital_blocks(id,block_code,block_name),floor:hospital_floors(id,floor_code,floor_name,floor_number),department:hospital_departments(id,department_code,department_name,department_type)')
+    .eq('client_id', actor.user.client_id)
+    .eq('is_active', true)
+    .order('floor_name')
+    .order('department_name')
+    .order('location_name');
+  if (blockId) query = query.eq('block_id', blockId);
+  if (floorId) query = query.eq('floor_id', floorId);
+  if (departmentId) query = query.eq('department_id', departmentId);
+  const result = await query;
+  if (result.error) throw result.error;
+  return (result.data || []).filter((row) => scopeAllows(actor.scopes, {
+    clientId: row.client_id,
+    blockId: row.block_id,
+    locationId: row.id,
+    permission: 'view',
+  }));
+}
+
+export async function loadHospitalLocationHierarchy(client, actor, filters = {}) {
+  const [masters, floors, departments, locations] = await Promise.all([
+    loadHospitalMasters(client, actor),
+    listHospitalFloors(client, actor, filters),
+    listHospitalDepartments(client, actor, filters),
+    listHospitalHierarchyLocations(client, actor, filters),
+  ]);
+  const blockIdSet = new Set(masters.blocks.map((row) => row.id));
+  return {
+    blocks: masters.blocks,
+    floors: floors.filter((row) => blockIdSet.has(row.block_id)),
+    departments: departments.filter((row) => blockIdSet.has(row.block_id)),
+    locations,
+  };
+}
+
+function requireRoutingAdmin(actor) {
+  if (!actor?.user || actor.user.profile_type !== 'internal'
+    || !['operations_executive', 'facility_manager'].includes(actor.user.role_code)) {
+    const error = new Error('Routing configuration is available only to authorised operations users.');
+    error.code = '42501';
+    throw error;
+  }
+}
+
+export async function listHospitalRoutingShifts(client, actor) {
+  requireRoutingAdmin(actor);
+  const result = await client
+    .from('hospital_shifts')
+    .select('id,client_id,shift_code,shift_name,starts_at,ends_at,timezone,days_of_week,is_overnight,verification_status,is_active,source,source_reference,metadata')
+    .or(`client_id.is.null,client_id.eq.${actor.user.client_id}`)
+    .order('starts_at');
+  if (result.error) throw result.error;
+  return result.data || [];
+}
+
+export async function listHospitalRoutingAssignments(client, actor) {
+  requireRoutingAdmin(actor);
+  const result = await client
+    .from('hospital_supervisor_assignments')
+    .select('id,client_id,user_id,block_id,department_id,category_id,shift_id,assignment_type,routing_priority,effective_from,effective_to,days_of_week,verification_status,is_active,source,source_reference,metadata,user:hospital_ticket_users(id,display_name,role_code,is_active),block:hospital_blocks(id,block_name),shift:hospital_shifts(id,shift_name,starts_at,ends_at,is_overnight)')
+    .eq('client_id', actor.user.client_id)
+    .order('routing_priority')
+    .order('created_at');
+  if (result.error) throw result.error;
+  return result.data || [];
+}
+
+export function nimsSupervisorCoverageReport(actor) {
+  requireRoutingAdmin(actor);
+  return {
+    blocks: nimsRosterCoverageMatrix(),
+    confirmations_required: [
+      'Core Block morning supervisor',
+      'Core Block evening supervisor',
+      'Extra Mural morning supervisor',
+      'Extra Mural evening supervisor',
+      'Admin Block coverage from 4 PM-8 PM',
+      'OPD Block coverage from 4 PM-8 PM',
+      'Oncology Block coverage from 4 PM-8 PM',
+      'Whether broad Overall/Campus/Administration responsibilities map to exact blocks',
+      'Primary/backup order for overlapping Speciality, Millennium, and night supervisors',
+      'Emergency & Physiotherapy versus Trauma identity',
+    ],
+  };
+}
+
+export function cleanHospitalUuid(value, fieldName = 'id') {
+  const text = cleanHospitalText(value, 80);
+  if (!text) return '';
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) return text;
+  const error = new Error(`${fieldName} must be a valid UUID.`);
+  error.code = '22023';
+  throw error;
 }
 
 function applyTicketFilters(query, filters = {}) {
@@ -97,6 +226,12 @@ export function hospitalTicketForActor(actor, ticket) {
     resolved_by_user_id: _resolvedByUserId,
     ...safeTicket
   } = ticket;
+  if (safeTicket.assignee && typeof safeTicket.assignee === 'object') {
+    safeTicket.assignee = {
+      display_name: safeTicket.assignee.display_name || '',
+      role_code: safeTicket.assignee.role_code || '',
+    };
+  }
   return { ...safeTicket, assignment_state: assignmentState, assignment_failure_reason: assignmentFailureReason };
 }
 
@@ -125,25 +260,152 @@ export async function createHospitalTicket(client, actor, body, idempotencyHeade
   const errors = validateHospitalTicketCreate(payload);
   if (errors.length) { const error = new Error(errors.join(' ')); error.code = '22023'; throw error; }
   if (!['doctor', 'hospital_management'].includes(actor.user.role_code)) { const error = new Error('Only client users can raise complaints.'); error.code = '42501'; throw error; }
-  const location = await client.from('hospital_locations').select('*').eq('id', payload.locationId).maybeSingle();
-  if (location.error) throw location.error;
-  if (!location.data || location.data.block_id !== payload.blockId || !scopeAllows(actor.scopes, { clientId: actor.user.client_id, blockId: payload.blockId, locationId: payload.locationId, permission: 'create' })) {
-    const error = new Error('Selected location is outside your complaint scope.'); error.code = '42501'; throw error;
-  }
+  payload.blockId = cleanHospitalUuid(payload.blockId, 'block_id');
+  payload.floorId = cleanHospitalUuid(payload.floorId, 'floor_id');
+  payload.departmentId = cleanHospitalUuid(payload.departmentId, 'department_id');
+  payload.locationId = cleanHospitalUuid(payload.locationId, 'location_id');
+  payload.categoryId = cleanHospitalUuid(payload.categoryId, 'category_id');
+  await validateHospitalCreateHierarchy(client, actor, payload);
   const sla = slaMinutes();
   const result = await client.rpc('rpc_create_hospital_ticket', {
     p_actor_user_id: actor.user.id,
     p_block_id: payload.blockId,
-    p_location_id: payload.locationId,
+    p_location_id: payload.locationId || null,
     p_category_id: payload.categoryId,
     p_priority: payload.priority,
     p_title: payload.title,
     p_description: payload.description,
     p_idempotency_key: payload.idempotencyKey,
     p_supervisor_sla_minutes: sla.supervisor,
+    p_floor_id: payload.floorId || null,
+    p_department_id: payload.departmentId || null,
+    p_exact_landmark: payload.exactLandmark || null,
   });
   if (result.error) throw result.error;
+  if (payload.exactLandmark && result.data?.ticket?.location_id) {
+    await applyExactLandmarkSnapshot(client, result.data?.ticket?.id, payload.exactLandmark);
+  }
   return result.data;
+}
+
+async function validateHospitalCreateHierarchy(client, actor, payload) {
+  const block = await client
+    .from('hospital_blocks')
+    .select('id,client_id,is_active')
+    .eq('id', payload.blockId)
+    .maybeSingle();
+  if (block.error) throw block.error;
+  if (!block.data || block.data.client_id !== actor.user.client_id || block.data.is_active !== true) {
+    const error = new Error('Selected block is outside your complaint scope.');
+    error.code = '42501';
+    throw error;
+  }
+
+  if (!scopeAllows(actor.scopes, { clientId: actor.user.client_id, blockId: payload.blockId, locationId: payload.locationId || undefined, permission: 'create' })) {
+    const error = new Error('Selected hierarchy is outside your complaint scope.');
+    error.code = '42501';
+    throw error;
+  }
+
+  let floor = null;
+  if (payload.floorId) {
+    const floorResult = await client
+      .from('hospital_floors')
+      .select('id,client_id,block_id,is_active')
+      .eq('id', payload.floorId)
+      .maybeSingle();
+    if (floorResult.error) throw floorResult.error;
+    floor = floorResult.data;
+    if (!floor || floor.client_id !== actor.user.client_id || floor.block_id !== payload.blockId || floor.is_active !== true) {
+      const error = new Error('Selected floor is outside the selected block.');
+      error.code = '42501';
+      throw error;
+    }
+  }
+
+  let department = null;
+  if (payload.departmentId) {
+    const departmentResult = await client
+      .from('hospital_departments')
+      .select('id,client_id,block_id,floor_id,is_active')
+      .eq('id', payload.departmentId)
+      .maybeSingle();
+    if (departmentResult.error) throw departmentResult.error;
+    department = departmentResult.data;
+    if (!department || department.client_id !== actor.user.client_id || department.block_id !== payload.blockId || department.is_active !== true) {
+      const error = new Error('Selected department is outside the selected block.');
+      error.code = '42501';
+      throw error;
+    }
+    if (payload.floorId && department.floor_id && department.floor_id !== payload.floorId) {
+      const error = new Error('Selected department is outside the selected floor.');
+      error.code = '42501';
+      throw error;
+    }
+  }
+
+  if (!payload.locationId) return;
+
+  const location = await client
+    .from('hospital_locations')
+    .select('id,client_id,block_id,floor_id,department_id,is_active')
+    .eq('id', payload.locationId)
+    .maybeSingle();
+  if (location.error) throw location.error;
+  if (!location.data || location.data.client_id !== actor.user.client_id || location.data.block_id !== payload.blockId || location.data.is_active !== true) {
+    const error = new Error('Selected location is outside your complaint scope.');
+    error.code = '42501';
+    throw error;
+  }
+  if (payload.floorId && location.data.floor_id && location.data.floor_id !== payload.floorId) {
+    const error = new Error('Selected location is outside the selected floor.');
+    error.code = '42501';
+    throw error;
+  }
+  if (payload.departmentId && location.data.department_id && location.data.department_id !== payload.departmentId) {
+    const error = new Error('Selected location is outside the selected department.');
+    error.code = '42501';
+    throw error;
+  }
+}
+
+async function applyExactLandmarkSnapshot(client, ticketId, exactLandmark) {
+  const id = cleanHospitalText(ticketId, 80);
+  const landmark = cleanHospitalText(exactLandmark, 180);
+  if (!id || !landmark) return;
+  const current = await client
+    .from('hospital_tickets')
+    .select('id,site_name_snapshot,block_name_snapshot,floor_name,department_name,room_area_snapshot,location_text,location_path_snapshot')
+    .eq('id', id)
+    .maybeSingle();
+  if (current.error || !current.data) {
+    if (current.error) throw current.error;
+    return;
+  }
+  const parts = [
+    current.data.site_name_snapshot,
+    current.data.block_name_snapshot,
+    current.data.floor_name,
+    current.data.department_name,
+    current.data.room_area_snapshot,
+    current.data.location_text,
+    landmark,
+  ].map((value) => cleanHospitalText(value, 240)).filter(Boolean);
+  const seen = new Set();
+  const path = parts.filter((part) => {
+    const key = part.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).join(' > ');
+  const updated = await client
+    .from('hospital_tickets')
+    .update({
+      exact_landmark_snapshot: landmark,
+      location_path_snapshot: path || current.data.location_path_snapshot,
+    })
+    .eq('id', id);
+  if (updated.error) throw updated.error;
 }
 
 export async function performHospitalAction(client, actor, ticketId, action, expectedVersion, payload = {}) {

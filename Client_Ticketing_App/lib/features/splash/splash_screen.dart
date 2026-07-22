@@ -55,51 +55,64 @@ class _SplashScreenState extends State<SplashScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Center(
-          child: FadeTransition(
-            opacity: CurvedAnimation(
-              parent: _controller,
-              curve: Curves.easeOut,
-            ),
-            child: ScaleTransition(
-              scale: Tween<double>(begin: 0.92, end: 1).animate(_controller),
-              child: const Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  LogoMark(size: 96),
-                  SizedBox(height: 18),
-                  Text(
-                    'QPMS',
-                    style: TextStyle(
-                      fontSize: 42,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.deepBlue,
-                    ),
+        child: Stack(
+          children: [
+            Center(
+              child: FadeTransition(
+                opacity: CurvedAnimation(
+                  parent: _controller,
+                  curve: Curves.easeOut,
+                ),
+                child: ScaleTransition(
+                  scale: Tween<double>(begin: 0.92, end: 1).animate(_controller),
+                  child: const Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      LogoMark(size: 104),
+                      SizedBox(height: 28),
+                      Text(
+                        'Loading...',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.deepBlue,
+                        ),
+                      ),
+                      SizedBox(height: 6),
+                      Text(
+                        'Please wait',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                      SizedBox(height: 20),
+                      SizedBox(
+                        width: 26,
+                        height: 26,
+                        child: CircularProgressIndicator(strokeWidth: 2.5),
+                      ),
+                    ],
                   ),
-                  SizedBox(height: 4),
-                  Text(
-                    'Client Ticketing',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.royalBlue,
-                    ),
-                  ),
-                  SizedBox(height: 22),
-                  Text(
-                    'Raise. Track. Resolve.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 22,
-                      height: 1.22,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.ink,
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
-          ),
+            const Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: EdgeInsets.only(bottom: 18),
+                child: Text(
+                  'Client Ticketing App v1.0.0',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.muted,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

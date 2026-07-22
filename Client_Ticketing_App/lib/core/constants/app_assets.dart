@@ -1,5 +1,5 @@
 class AppAssets {
-  static const logo = 'assets/branding/QPMS_Logo.png';
+  static const logo = 'assets/branding/qpms-logo.png';
   static const facilityBanner = 'assets/illustrations/facility_banner.svg';
   static const workerCorner = 'assets/illustrations/worker_corner.svg';
   static const washroom = 'assets/mock_photos/washroom_cleaning.svg';

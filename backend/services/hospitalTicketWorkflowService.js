@@ -8,11 +8,14 @@ export function cleanHospitalText(value, maxLength = 500) {
 export function normalizeHospitalTicketCreate(body = {}) {
   return {
     blockId: cleanHospitalText(body.block_id || body.blockId, 80),
+    floorId: cleanHospitalText(body.floor_id || body.floorId, 80),
+    departmentId: cleanHospitalText(body.department_id || body.departmentId, 80),
     locationId: cleanHospitalText(body.location_id || body.locationId, 80),
     categoryId: cleanHospitalText(body.category_id || body.categoryId, 80),
     priority: cleanHospitalText(body.priority, 20).toLowerCase(),
     title: cleanHospitalText(body.title, 160),
     description: cleanHospitalText(body.description, 1500),
+    exactLandmark: cleanHospitalText(body.exact_landmark || body.exactLandmark, 180),
     idempotencyKey: cleanHospitalText(body.idempotency_key || body.idempotencyKey, 160),
   };
 }
@@ -20,7 +23,8 @@ export function normalizeHospitalTicketCreate(body = {}) {
 export function validateHospitalTicketCreate(payload) {
   const errors = [];
   if (!payload.blockId) errors.push('Block is required.');
-  if (!payload.locationId) errors.push('Location is required.');
+  if (!payload.locationId && !cleanHospitalText(payload.exactLandmark, 180)) errors.push('Select a room/area or provide an exact location landmark.');
+  if (!payload.locationId && !cleanHospitalText(payload.departmentId, 80)) errors.push('Select a department/unit for landmark-only tickets.');
   if (!payload.categoryId) errors.push('Category is required.');
   if (!PRIORITIES.has(payload.priority)) errors.push('Priority must be low, medium, high, or critical.');
   if (!payload.title) errors.push('Title is required.');

@@ -4,6 +4,7 @@ import 'package:myqpms_fo_v2/hospital_housekeeping/hospital_controller.dart';
 import 'package:myqpms_fo_v2/hospital_housekeeping/hospital_demo_auth.dart';
 import 'package:myqpms_fo_v2/hospital_housekeeping/hospital_demo_repository.dart';
 import 'package:myqpms_fo_v2/hospital_housekeeping/hospital_models.dart';
+import 'package:myqpms_fo_v2/hospital_housekeeping/hospital_sla_policy.dart';
 import 'package:myqpms_fo_v2/utils/mobile_roles.dart';
 
 void main() {
@@ -162,6 +163,132 @@ void main() {
         HospitalTicketStatus.escalatedFacilityManager,
       );
       expect(value.allTickets.length, count);
+    });
+  });
+
+  group('Phase 2B hospital ticket compatibility', () {
+    test('room-backed ticket location display uses immutable snapshots', () {
+      final ticket = HospitalTicket.fromApi({
+        'id': 'QPMS-HK-2026-000008',
+        'site_name_snapshot': 'NIMS Hyderabad',
+        'block_name_snapshot': 'Speciality Block',
+        'floor_name': '5th Floor',
+        'department_name': 'Surgical Gastroenterology',
+        'location_text': '503',
+        'room_area_snapshot': '503',
+        'exact_landmark_snapshot': 'Test landmark near Room 503',
+        'location_path_snapshot':
+            'NIMS Hyderabad > Speciality Block > 5th Floor > Surgical Gastroenterology > 503 > Test landmark near Room 503',
+        'category': {'category_name': 'Housekeeping'},
+        'priority': 'medium',
+        'description': 'Test',
+        'raised_by_name': 'Doctor',
+        'raised_at': seed.toIso8601String(),
+        'status_code': 'assigned',
+        'current_assignee_role': 'housekeeping_supervisor',
+        'assignee': {'display_name': 'Supervisor'},
+        'supervisor_sla_due_at': seed
+            .add(const Duration(minutes: 20))
+            .toIso8601String(),
+      });
+
+      expect(ticket.fullLocationDisplay, contains('NIMS Hyderabad'));
+      expect(ticket.conciseLocation, isNot(contains('Room 503')));
+      expect(ticket.conciseLocation, contains('503'));
+      expect(ticket.supervisorDueAt, isNotNull);
+    });
+
+    test('landmark-only ticket hides missing floor and dedupes landmark', () {
+      final ticket = HospitalTicket.fromApi({
+        'id': 'QPMS-HK-2026-000007',
+        'site_name_snapshot': 'NIMS Hyderabad',
+        'block_name_snapshot': 'Speciality Block',
+        'floor_name': 'Not specified',
+        'department_name': 'SPL Cardiology OP',
+        'location_text': 'Opposite Nursing Station near Lift 2',
+        'exact_landmark_snapshot': 'Opposite Nursing Station near Lift 2',
+        'location_path_snapshot':
+            'NIMS Hyderabad > Speciality Block > SPL Cardiology OP > Opposite Nursing Station near Lift 2',
+        'category': {'category_name': 'Housekeeping'},
+        'priority': 'medium',
+        'description': 'Test',
+        'raised_by_name': 'Doctor',
+        'raised_at': seed.toIso8601String(),
+        'status_code': 'open',
+      });
+
+      expect(ticket.floor, isEmpty);
+      expect(ticket.fullLocationDisplay, isNot(contains('Not specified')));
+      expect(
+        'Opposite Nursing Station near Lift 2'
+            .allMatches(ticket.fullLocationDisplay)
+            .length,
+        1,
+      );
+      expect(ticket.conciseLocation, contains('SPL Cardiology OP'));
+    });
+
+    test('unassigned ticket shows no false supervisor SLA', () {
+      final ticket = HospitalTicket.fromApi({
+        'id': 'QPMS-HK-2026-000009',
+        'block_name_snapshot': 'Speciality Block',
+        'department_name': 'Surgical Gastroenterology',
+        'location_text': '503',
+        'category': {'category_name': 'Housekeeping'},
+        'priority': 'medium',
+        'description': 'Test',
+        'raised_by_name': 'Doctor',
+        'raised_at': seed.toIso8601String(),
+        'status_code': 'open',
+      });
+
+      final sla = const HospitalSlaPolicy().snapshot(ticket, seed);
+      expect(ticket.responsiblePerson, 'Assignment pending');
+      expect(sla.label, 'No supervisor SLA - unassigned');
+    });
+
+    test(
+      'production actions derive helper buttons from backend permissions',
+      () {
+        final session = const HospitalDemoSession(
+          loginId: 'sup@test',
+          displayName: 'Supervisor',
+          role: HospitalDemoRole.supervisor,
+          assignedBlock: 'Speciality Block',
+          isDemo: false,
+        );
+        final controller = HospitalController(session: session);
+        final ticket = HospitalTicket.fromApi({
+          'id': 'ticket-1',
+          'block': {'block_name': 'Speciality Block'},
+          'location_text': '503',
+          'category': {'category_name': 'Housekeeping'},
+          'priority': 'medium',
+          'description': 'Test',
+          'raised_by_name': 'Doctor',
+          'raised_at': seed.toIso8601String(),
+          'status_code': 'in_progress',
+          'allowed_actions': ['progress', 'resolve'],
+        });
+
+        final actions = controller.actionsFor(ticket);
+        expect(actions, contains(HospitalTicketAction.addProgress));
+        expect(actions, contains(HospitalTicketAction.addRemarks));
+        expect(actions, contains(HospitalTicketAction.uploadProgressPhoto));
+        expect(actions, contains(HospitalTicketAction.resolve));
+        expect(actions, isNot(contains(HospitalTicketAction.accept)));
+      },
+    );
+
+    test('demo mode includes hierarchy and landmark-only ticket examples', () {
+      final value = controller('sup.blocka@qpmsdemo.com');
+      final landmark = value.ticketById('QPMS-HH-2026-0100');
+
+      expect(landmark.site, 'NIMS Hyderabad');
+      expect(landmark.floor, isEmpty);
+      expect(landmark.exactLandmark, contains('Opposite Nursing Station'));
+      expect(landmark.fullLocationDisplay, isNot(contains('null')));
+      expect(value.visibleTickets, contains(landmark));
     });
   });
 

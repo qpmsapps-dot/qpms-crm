@@ -8,6 +8,7 @@ import {
   MapPinned,
   Settings,
   ShieldCheck,
+  Sparkles,
   Store,
   Wrench,
   Workflow,
@@ -26,6 +27,7 @@ import {
   isOperationsTeam,
 } from '../data/mockUsers.js';
 import { canAccessNavRoute } from '../utils/authRoles.js';
+import { isDemoUser } from '../utils/demoAccess.js';
 import Logo from './Logo.jsx';
 
 const executiveNavGroups = [
@@ -46,6 +48,7 @@ const executiveNavGroups = [
       { label: 'Operations', to: '/fo-activities', icon: MapPinned },
       { label: 'Tickets', to: '/tickets', icon: FileText },
       { label: 'Fault Tracker', to: '/fault-tracker', icon: ClipboardList },
+      { label: 'Deep Cleaning', to: '/deep-cleaning', icon: Sparkles },
       { label: 'Asset Management', to: '/assets', icon: Wrench },
       { label: 'Reports', to: '/reports', icon: BarChart3 },
     ],
@@ -85,6 +88,7 @@ const adminDemoNavGroups = [
       { label: 'Operations', to: '/fo-activities', icon: MapPinned },
       { label: 'Tickets', to: '/tickets', icon: FileText },
       { label: 'Fault Tracker', to: '/fault-tracker', icon: ClipboardList },
+      { label: 'Deep Cleaning', to: '/deep-cleaning', icon: Sparkles },
       { label: 'Asset Management', to: '/assets', icon: Wrench },
       { label: 'Reports', to: '/reports', icon: BarChart3 },
     ],
@@ -131,9 +135,37 @@ const operationsNavGroups = [
       { label: 'Operations', to: '/fo-activities', icon: MapPinned },
       { label: 'Tickets', to: '/tickets', icon: FileText },
       { label: 'Fault Tracker', to: '/fault-tracker', icon: ClipboardList },
+      { label: 'Deep Cleaning', to: '/deep-cleaning', icon: Sparkles },
       { label: 'Asset Management', to: '/assets', icon: Wrench },
       { label: 'Reports', to: '/reports', icon: BarChart3 },
       { label: 'Settings', to: '/settings', icon: Settings },
+    ],
+  },
+];
+
+const tenderDemoNavGroups = [
+  {
+    title: 'Tender Demo',
+    items: [
+      { label: 'Dashboard', to: '/dashboard', icon: Home },
+      { label: 'Field Operations', to: '/fo-activities', icon: MapPinned },
+      { label: 'Client Ticketing', to: '/tickets', icon: FileText },
+      { label: 'Reports and Analytics', to: '/reports', icon: BarChart3 },
+    ],
+  },
+  {
+    title: 'Reliance Retail',
+    items: [
+      { label: 'Deep Cleaning', to: '/deep-cleaning', icon: Sparkles },
+      { label: 'Fault Tracker', to: '/fault-tracker', icon: ClipboardList },
+      { label: 'Store Master', to: '/store-master', icon: Store },
+    ],
+  },
+  {
+    title: 'Workflow Demo',
+    items: [
+      { label: 'Lead Management', to: '/crm', icon: Workflow },
+      { label: 'Approvals', to: '/approvals', icon: ShieldCheck },
     ],
   },
 ];
@@ -152,7 +184,9 @@ export default function Sidebar({ isOpen, onClose }) {
   const location = useLocation();
   const currentTarget = `${location.pathname}${location.search}`;
   const executiveViewer = isManagement(user) || isFinanceLeadership(user);
-  const baseNavGroups = isAdmin(user)
+  const baseNavGroups = isDemoUser(user)
+    ? tenderDemoNavGroups
+    : isAdmin(user)
     ? adminDemoNavGroups
     : executiveViewer
     ? executiveNavGroups
@@ -206,6 +240,11 @@ export default function Sidebar({ isOpen, onClose }) {
           <div className="rounded-2xl border border-slate-100 bg-gradient-to-br from-white to-qpms-50/70 p-3 shadow-sm ring-1 ring-white/70 dark:border-slate-800 dark:from-slate-950 dark:to-qpms-900/10 dark:ring-white/5">
             <Logo className="h-10 w-10" />
           </div>
+          {isDemoUser(user) ? (
+            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-black uppercase tracking-wide text-amber-800">
+              Tender Demo - Read-Only Access
+            </div>
+          ) : null}
         </div>
 
         <nav className="flex-1 space-y-5 overflow-y-auto px-4 py-5">

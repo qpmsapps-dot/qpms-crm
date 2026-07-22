@@ -15,7 +15,16 @@ enum TicketStatus {
 
 enum TicketPriority { low, medium, high }
 
-enum TicketListFilter { open, inProgress, resolved, closed }
+enum TicketListFilter {
+  all,
+  open,
+  assigned,
+  inProgress,
+  awaitingConfirmation,
+  resolved,
+  closed,
+  reopened,
+}
 
 class Ticket {
   const Ticket({
@@ -25,6 +34,12 @@ class Ticket {
     required this.block,
     required this.floor,
     required this.location,
+    this.site = '',
+    this.department = '',
+    this.ward = '',
+    this.roomArea = '',
+    this.exactLandmark = '',
+    this.completeLocationPath = '',
     required this.category,
     required this.description,
     required this.priority,
@@ -50,6 +65,12 @@ class Ticket {
   final String block;
   final String floor;
   final String location;
+  final String site;
+  final String department;
+  final String ward;
+  final String roomArea;
+  final String exactLandmark;
+  final String completeLocationPath;
   final String category;
   final String description;
   final TicketPriority priority;
@@ -75,13 +96,36 @@ class Ticket {
     final location = row['location'] is Map ? row['location'] as Map : const {};
     final category = row['category'] is Map ? row['category'] as Map : const {};
     final assignee = row['assignee'] is Map ? row['assignee'] as Map : const {};
+    final roomArea = _firstText([
+      row['room_area_snapshot'],
+      location['room_number'],
+      location['area_name'],
+    ]);
     return Ticket(
       id: '${row['id'] ?? ''}',
       version: int.tryParse('${row['version'] ?? 1}') ?? 1,
       number: '${row['ticket_no'] ?? ''}',
-      block: '${block['block_name'] ?? ''}',
-      floor: '${row['floor_name'] ?? location['floor_name'] ?? ''}',
-      location: '${row['location_text'] ?? location['location_name'] ?? ''}',
+      site: '${row['site_name_snapshot'] ?? ''}',
+      block: _firstText([row['block_name_snapshot'], block['block_name']]),
+      floor: _firstText([
+        row['floor_name_snapshot'],
+        row['floor_name'],
+        location['floor_name'],
+      ]),
+      department: _firstText([
+        row['department_name_snapshot'],
+        row['department_name'],
+        location['department_name'],
+      ]),
+      ward: '${row['ward_name_snapshot'] ?? ''}',
+      roomArea: roomArea,
+      exactLandmark: '${row['exact_landmark_snapshot'] ?? ''}',
+      completeLocationPath: '${row['location_path_snapshot'] ?? ''}',
+      location: _firstText([
+        row['location_text'],
+        location['location_name'],
+        roomArea,
+      ]),
       category: '${category['category_name'] ?? ''}',
       description: '${row['description'] ?? ''}',
       priority: _priorityFromCode('${row['priority'] ?? 'medium'}'),
@@ -105,7 +149,21 @@ class Ticket {
     );
   }
 
-  String get fullLocation => '$block • $floor • $location';
+  String get fullLocation => _joinLocation([block, floor, location]);
+  String get conciseLocation =>
+      _joinLocation([block, floor, roomArea.isNotEmpty ? roomArea : location]);
+  String get detailLocation => completeLocationPath.isNotEmpty
+      ? completeLocationPath
+      : _joinLocation([
+          site,
+          block,
+          floor,
+          department,
+          ward,
+          roomArea,
+          location,
+          exactLandmark,
+        ]);
 
   Ticket copyWith({
     TicketStatus? status,
@@ -127,6 +185,12 @@ class Ticket {
       block: block,
       floor: floor,
       location: location,
+      site: site,
+      department: department,
+      ward: ward,
+      roomArea: roomArea,
+      exactLandmark: exactLandmark,
+      completeLocationPath: completeLocationPath,
       category: category,
       description: description,
       priority: priority,
@@ -176,17 +240,18 @@ String priorityLabel(TicketPriority priority) => switch (priority) {
 
 bool ticketMatchesFilter(Ticket ticket, TicketListFilter filter) {
   return switch (filter) {
-    TicketListFilter.open => const {
-      TicketStatus.open,
-      TicketStatus.assigned,
-      TicketStatus.escalatedOperations,
-      TicketStatus.escalatedFacilityManager,
-      TicketStatus.reopened,
-    }.contains(ticket.status),
-    TicketListFilter.inProgress => ticket.status == TicketStatus.inProgress,
+    TicketListFilter.all => true,
+    TicketListFilter.open => ticket.status == TicketStatus.open,
+    TicketListFilter.assigned => ticket.status == TicketStatus.assigned,
+    TicketListFilter.inProgress =>
+      ticket.status == TicketStatus.accepted ||
+          ticket.status == TicketStatus.inProgress,
+    TicketListFilter.awaitingConfirmation =>
+      ticket.status == TicketStatus.awaitingConfirmation,
     TicketListFilter.resolved =>
       ticket.status == TicketStatus.awaitingConfirmation,
     TicketListFilter.closed => ticket.status == TicketStatus.closed,
+    TicketListFilter.reopened => ticket.status == TicketStatus.reopened,
   };
 }
 
@@ -208,6 +273,33 @@ TicketPriority _priorityFromCode(String value) => switch (value) {
   'low' => TicketPriority.low,
   _ => TicketPriority.medium,
 };
+
+String _firstText(List<dynamic> values) {
+  for (final value in values) {
+    final text = '${value ?? ''}'.trim();
+    if (text.isNotEmpty &&
+        text != 'null' &&
+        !_isMissingLocationPlaceholder(text)) {
+      return text;
+    }
+  }
+  return '';
+}
+
+String _joinLocation(List<String> values) {
+  final seen = <String>{};
+  return values
+      .map((value) => value.trim())
+      .where((value) => value.isNotEmpty)
+      .where((value) => !_isMissingLocationPlaceholder(value))
+      .where((value) => seen.add(value.toLowerCase()))
+      .join(' • ');
+}
+
+bool _isMissingLocationPlaceholder(String value) {
+  final key = value.trim().toLowerCase();
+  return key == 'not specified' || key == 'floor not confirmed';
+}
 
 String formatTicketDateTime(DateTime value) {
   const months = [

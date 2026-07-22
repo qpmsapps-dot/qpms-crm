@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../app/routes.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/widgets/app_card.dart';
+import '../../core/widgets/client_bottom_nav.dart';
 import '../../models/notification_item.dart';
 import '../../state/notification_controller.dart';
 
@@ -25,6 +26,9 @@ class NotificationsScreen extends StatelessWidget {
           ),
         ],
       ),
+      bottomNavigationBar: const ClientBottomNav(
+        currentRoute: AppRoutes.notifications,
+      ),
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: controller.load,
@@ -32,69 +36,108 @@ class NotificationsScreen extends StatelessWidget {
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
             children: [
-              for (final item in controller.items)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: AppCard(
-                    onTap: item.ticketNumber == null
-                        ? null
-                        : () => Navigator.pushNamed(
-                            context,
-                            AppRoutes.ticketDetails,
-                            arguments: item.ticketNumber,
-                          ),
-                    child: Row(
-                      children: [
-                        _NotificationIcon(item),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                item.title,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w900,
-                                  color: AppColors.deepBlue,
+              if (controller.items.isEmpty)
+                const _EmptyNotifications()
+              else
+                for (final item in controller.items)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: AppCard(
+                      onTap: item.ticketNumber == null
+                          ? null
+                          : () => Navigator.pushNamed(
+                              context,
+                              AppRoutes.ticketDetails,
+                              arguments: item.ticketNumber,
+                            ),
+                      child: Row(
+                        children: [
+                          _NotificationIcon(item),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  item.title,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w900,
+                                    color: AppColors.deepBlue,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                item.body,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
+                                const SizedBox(height: 3),
+                                Text(
+                                  item.body,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                item.time,
-                                style: const TextStyle(
-                                  color: AppColors.muted,
-                                  fontSize: 12,
+                                const SizedBox(height: 3),
+                                Text(
+                                  item.time,
+                                  style: const TextStyle(
+                                    color: AppColors.muted,
+                                    fontSize: 12,
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (!item.isRead)
-                          Container(
-                            width: 9,
-                            height: 9,
-                            decoration: const BoxDecoration(
-                              color: AppColors.royalBlue,
-                              shape: BoxShape.circle,
+                              ],
                             ),
                           ),
-                      ],
+                          if (!item.isRead)
+                            Container(
+                              width: 9,
+                              height: 9,
+                              decoration: const BoxDecoration(
+                                color: AppColors.royalBlue,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+class _EmptyNotifications extends StatelessWidget {
+  const _EmptyNotifications();
+
+  @override
+  Widget build(BuildContext context) => const Padding(
+    padding: EdgeInsets.only(top: 120),
+    child: Column(
+      children: [
+        CircleAvatar(
+          radius: 30,
+          backgroundColor: AppColors.paleBlue,
+          child: Icon(
+            Icons.notifications_none_rounded,
+            color: AppColors.royalBlue,
+          ),
+        ),
+        SizedBox(height: 14),
+        Text(
+          'No Notifications',
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w900,
+            color: AppColors.deepBlue,
+          ),
+        ),
+        SizedBox(height: 5),
+        Text(
+          'Ticket updates will appear here.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: AppColors.muted),
+        ),
+      ],
+    ),
+  );
 }
 
 class _NotificationIcon extends StatelessWidget {

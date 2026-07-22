@@ -3,11 +3,16 @@ import 'dart:math';
 import 'dart:ui';
 
 import 'package:battery_plus/battery_plus.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../models/fo_models.dart';
 import '../tracking/route_km_calculator.dart';
+import '../tracking/phase1_tracking_policy.dart';
+import '../tracking/tracking_flags.dart';
+import '../tracking/tracking_health_metrics.dart';
+import '../utils/date_utils.dart';
 import '../utils/local_id.dart';
 import 'config_service.dart';
 import 'crash_log_service.dart';
@@ -53,6 +58,7 @@ class BackgroundTrackingService {
         androidConfiguration: AndroidConfiguration(
           onStart: _onStart,
           autoStart: false,
+          autoStartOnBoot: true,
           isForegroundMode: true,
           notificationChannelId: notificationChannelId,
           initialNotificationTitle: notificationTitle,
@@ -111,12 +117,20 @@ class BackgroundTrackingService {
     }
   }
 
-  static Future<void> stopTracking() async {
+  static Future<bool> stopTracking({String reason = 'explicit_stop'}) async {
     if (!_configured) {
       await configure();
     }
     try {
-      FlutterBackgroundService().invoke('stopService');
+      final service = FlutterBackgroundService();
+      service.invoke('stopService', {'reason': reason});
+      final deadline = DateTime.now().add(
+        TrackingFlags.gracefulFlushTimeout + const Duration(seconds: 2),
+      );
+      while (await service.isRunning() && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      return !await service.isRunning();
     } catch (error, stackTrace) {
       await CrashLogService.record(
         screen: 'tracking',
@@ -124,6 +138,7 @@ class BackgroundTrackingService {
         error: error,
         stackTrace: stackTrace,
       );
+      return false;
     }
   }
 
@@ -191,22 +206,180 @@ void _onStart(ServiceInstance service) async {
   }
 
   Timer? timer;
+  StreamSubscription<List<ConnectivityResult>>? connectivitySubscription;
   var tickRunning = false;
+  var stopRequested = false;
+  var queueFlushRunning = false;
   Position? lastPosition;
   var nextTickInterval = BackgroundTrackingService.fallbackInterval;
   DateTime? lastSuccessfulSync;
+  DateTime? lastLiveStatusWrite;
+  DateTime? lastAttendanceKmWrite;
+  DateTime? lastRemoteValidationAttempt;
+  DateTime? lastRemoteValidationSuccess = DateTime.tryParse(
+    session['remote_validation_succeeded_at']?.toString() ??
+        session['saved_at']?.toString() ??
+        '',
+  );
+  TrackingMotionState? lastMotionState;
+  final batchScheduler = GpsBatchScheduler();
   String? monitoredVisitId;
   var consecutiveAwayChecks = 0;
   DateTime? lastSiteAwayNotificationAt;
+  await TrackingHealthMetrics.increment('service_starts');
+  await TrackingHealthMetrics.setValue(
+    'wake_lock_state',
+    'plugin_managed_unobservable',
+  );
 
-  Future<void> stopSelf() async {
+  Future<void> stopSelf({String reason = 'service_stop'}) async {
+    stopRequested = true;
     timer?.cancel();
     timer = null;
+    await connectivitySubscription?.cancel();
+    connectivitySubscription = null;
+    await LocalStore.clearBackgroundTrackingSession();
+    await TrackingHealthMetrics.increment('service_stops');
+    await TrackingHealthMetrics.setValue('last_stop_reason', reason);
+    await TrackingHealthMetrics.setValue(
+      'wake_lock_state',
+      'service_stop_requested',
+    );
     await CrashLogService.record(
       screen: 'tracking',
       action: 'BACKGROUND_SERVICE_STOPPED',
+      error: 'reason=$reason',
     );
     service.stopSelf();
+  }
+
+  Future<bool> flushQueue({required String reason, bool force = false}) async {
+    if (queueFlushRunning || !SupabaseService.isReady) return false;
+    final queueLength = await LocalStore.countUnsyncedLocationLogs();
+    await TrackingHealthMetrics.setValue('queue_size', queueLength);
+    final now = DateTime.now();
+    final decision = batchScheduler.decision(
+      now: now,
+      queuedPoints: queueLength,
+      force: force,
+    );
+    if (!decision.shouldFlush) return queueLength == 0;
+    queueFlushRunning = true;
+    batchScheduler.markAttempt(now);
+    await TrackingHealthMetrics.increment('batch_attempts');
+    try {
+      final uploaded = await _syncQueuedLogs(employeeCode: sessionEmployeeCode);
+      if (uploaded == null) {
+        final delay = batchScheduler.markFailure(DateTime.now());
+        await TrackingHealthMetrics.increment('batch_failures');
+        await TrackingHealthMetrics.setValue('retry_seconds', delay.inSeconds);
+        return false;
+      }
+      batchScheduler.markSuccess();
+      lastSuccessfulSync = DateTime.now();
+      await TrackingHealthMetrics.increment('batch_successes');
+      await TrackingHealthMetrics.increment('gps_uploaded', by: uploaded);
+      await TrackingHealthMetrics.setValue('retry_seconds', 0);
+      await TrackingHealthMetrics.setValue(
+        'queue_size',
+        await LocalStore.countUnsyncedLocationLogs(),
+      );
+      return true;
+    } finally {
+      queueFlushRunning = false;
+    }
+  }
+
+  Future<void> shutdown({required String reason}) async {
+    if (stopRequested) return;
+    stopRequested = true;
+    timer?.cancel();
+    timer = null;
+    try {
+      await flushQueue(
+        reason: reason,
+        force: true,
+      ).timeout(TrackingFlags.gracefulFlushTimeout);
+    } catch (_) {
+      // Unsent rows stay pending in SQLite and are retried after a valid login.
+    }
+    await stopSelf(reason: reason);
+  }
+
+  Future<bool> validateRemoteAttendance({
+    required FoUser user,
+    required Attendance attendance,
+    bool force = false,
+  }) async {
+    if (!TrackingFlags.enableRemoteAttendanceValidation ||
+        !SupabaseService.isReady) {
+      return true;
+    }
+    final now = DateTime.now();
+    if (!force &&
+        lastRemoteValidationAttempt != null &&
+        now.difference(lastRemoteValidationAttempt!) <
+            TrackingFlags.remoteAttendanceValidationInterval) {
+      return true;
+    }
+    lastRemoteValidationAttempt = now;
+    if (SupabaseService.client.auth.currentSession == null ||
+        SupabaseService.client.auth.currentUser == null) {
+      await TrackingHealthMetrics.setValue(
+        'remote_validation_result',
+        'unauthorized',
+      );
+      await shutdown(reason: 'authentication_not_authorized');
+      return false;
+    }
+    try {
+      final remoteActive = await SupabaseService.isAttendanceConfirmedActive(
+        user: user,
+        attendance: attendance,
+      );
+      if (!remoteActive) {
+        await TrackingHealthMetrics.increment('remote_validation_closed');
+        await TrackingHealthMetrics.setValue(
+          'remote_validation_result',
+          'closed',
+        );
+        await shutdown(reason: 'backend_attendance_closed');
+        return false;
+      }
+      lastRemoteValidationSuccess = now;
+      await LocalStore.markBackgroundRemoteValidationSucceeded(now);
+      await TrackingHealthMetrics.increment('remote_validation_active');
+      await TrackingHealthMetrics.setValue(
+        'remote_validation_result',
+        'active',
+      );
+      return true;
+    } catch (error) {
+      final lower = error.toString().toLowerCase();
+      final unauthorized =
+          lower.contains('jwt') ||
+          lower.contains('session expired') ||
+          lower.contains('unauthorized') ||
+          lower.contains('401');
+      if (unauthorized) {
+        await shutdown(reason: 'authentication_expired');
+        return false;
+      }
+      final graceStart =
+          lastRemoteValidationSuccess ??
+          DateTime.tryParse(session['saved_at']?.toString() ?? '') ??
+          now;
+      if (now.difference(graceStart) >
+          TrackingFlags.offlineAttendanceGracePeriod) {
+        await shutdown(reason: 'offline_validation_grace_expired');
+        return false;
+      }
+      await TrackingHealthMetrics.setValue(
+        'remote_validation_result',
+        'offline_grace',
+      );
+      return true;
+    }
   }
 
   Duration intervalFor({Position? position, int? battery}) {
@@ -229,7 +402,7 @@ void _onStart(ServiceInstance service) async {
   }
 
   Future<void> runTick() async {
-    if (tickRunning) return;
+    if (tickRunning || stopRequested) return;
     tickRunning = true;
     try {
       await _checkpoint(action: 'RUN_TICK_START');
@@ -299,7 +472,22 @@ void _onStart(ServiceInstance service) async {
         detail: 'remote_id=${attendance?.remoteId ?? '--'}',
       );
       if (attendance == null || !attendance.isActive) {
-        await stopSelf();
+        await shutdown(reason: 'no_active_local_attendance');
+        return;
+      }
+      final attendanceDate =
+          attendance.attendanceDate?.trim().isNotEmpty == true
+          ? attendance.attendanceDate!.trim()
+          : indiaDateKey(attendance.startTime);
+      if (attendanceDate != indiaDateKey(DateTime.now())) {
+        await shutdown(reason: 'attendance_date_mismatch');
+        return;
+      }
+      if (!await validateRemoteAttendance(
+        user: user,
+        attendance: attendance,
+        force: lastRemoteValidationAttempt == null,
+      )) {
         return;
       }
       final attendanceId = _attendanceId(attendance);
@@ -310,18 +498,39 @@ void _onStart(ServiceInstance service) async {
           action: 'TRACKING_CRASH',
           error: 'Background tracking cannot continue without attendance_id.',
         );
-        await stopSelf();
+        await shutdown(reason: 'attendance_id_missing');
         return;
       }
       final activeVisit = await LocalStore.activeVisit();
       if (activeVisit != null) {
         final visitId = activeVisit.remoteId ?? activeVisit.id;
-        if (monitoredVisitId != visitId) {
+        final enteredSiteVisit = monitoredVisitId != visitId;
+        if (enteredSiteVisit) {
           monitoredVisitId = visitId;
           consecutiveAwayChecks = 0;
           lastSiteAwayNotificationAt = null;
+          await flushQueue(reason: 'check_in', force: true);
+          if (SupabaseService.isReady) {
+            try {
+              await SupabaseService.updateAttendanceKm(attendance);
+              lastAttendanceKmWrite = DateTime.now();
+              await TrackingHealthMetrics.increment('attendance_km_writes');
+            } catch (_) {
+              // Local attendance and queued GPS remain authoritative offline.
+            }
+          }
         }
-        if (SupabaseService.isReady) {
+        final now = DateTime.now();
+        if (SupabaseService.isReady &&
+            (!TrackingFlags.enableLiveStatusCoalescing ||
+                enteredSiteVisit ||
+                WriteCadence.isDue(
+                  now: now,
+                  lastWriteAt: lastLiveStatusWrite,
+                  interval: WriteCadence.liveStatus(
+                    TrackingMotionState.checkedIn,
+                  ),
+                ))) {
           try {
             await SupabaseService.updateLiveStatus(
               user: user,
@@ -335,6 +544,9 @@ void _onStart(ServiceInstance service) async {
               attendanceId: attendance.remoteId,
               activeSiteVisitId: activeVisit.remoteId,
             );
+            lastLiveStatusWrite = now;
+            lastMotionState = TrackingMotionState.checkedIn;
+            await TrackingHealthMetrics.increment('live_status_writes');
           } catch (error, stackTrace) {
             await _checkpointError(
               employeeCode: user.employeeCode,
@@ -559,7 +771,10 @@ void _onStart(ServiceInstance service) async {
           action: 'LOCALSTORE_GET_LOCATION_LOGS_START',
           detail: 'attendance_id=$attendanceId',
         );
-        existingLogs = await LocalStore.getLocationLogs();
+        existingLogs = await LocalStore.getLocationLogs(
+          attendanceId: attendanceId,
+        );
+        if (stopRequested) return;
         await _checkpoint(
           employeeCode: user.employeeCode,
           action: 'LOCALSTORE_GET_LOCATION_LOGS_SUCCESS',
@@ -584,6 +799,8 @@ void _onStart(ServiceInstance service) async {
       );
       try {
         await LocalStore.addLocationLog(log, eventType: 'background_tracking');
+        await TrackingHealthMetrics.increment('gps_collected');
+        await TrackingHealthMetrics.increment('gps_queued');
         await CrashLogService.record(
           employeeCode: user.employeeCode,
           screen: 'tracking',
@@ -605,103 +822,14 @@ void _onStart(ServiceInstance service) async {
         detail: 'attendance_id=$attendanceId local_id=${log.id}',
       );
 
-      if (SupabaseService.isReady) {
-        try {
-          await _checkpoint(
-            employeeCode: user.employeeCode,
-            action: 'QUEUED_LOCATION_SYNC_START',
-          );
-          await _syncQueuedLogs(employeeCode: user.employeeCode);
-          await _checkpoint(
-            employeeCode: user.employeeCode,
-            action: 'QUEUED_LOCATION_SYNC_SUCCESS',
-          );
-        } catch (error, stackTrace) {
-          await _checkpointError(
-            employeeCode: user.employeeCode,
-            action: 'QUEUED_LOCATION_SYNC_FAILED',
-            error: error,
-            stackTrace: stackTrace,
-          );
-        }
-        try {
-          await _checkpoint(
-            employeeCode: user.employeeCode,
-            action: 'LOCATION_INSERT_START',
-            detail: 'attendance_id=$attendanceId local_id=${log.id}',
-          );
-          await _checkpoint(
-            employeeCode: user.employeeCode,
-            action: 'SUPABASE_INSERT_LOCATION_START',
-            detail: 'attendance_id=$attendanceId local_id=${log.id}',
-          );
-          log.remoteId = await SupabaseService.insertLocation(log);
-          log.synced = true;
-          lastSuccessfulSync = DateTime.now();
-          await _checkpoint(
-            employeeCode: user.employeeCode,
-            action: 'SUPABASE_INSERT_LOCATION_SUCCESS',
-            detail: 'remote_id=${log.remoteId ?? '--'} local_id=${log.id}',
-          );
-          await _checkpoint(
-            employeeCode: user.employeeCode,
-            action: 'LOCATION_INSERT_SUCCESS',
-            detail: 'remote_id=${log.remoteId ?? '--'} local_id=${log.id}',
-          );
-          await CrashLogService.record(
-            employeeCode: user.employeeCode,
-            screen: 'tracking',
-            action: 'BACKGROUND_LOCATION_LOG_SYNC_SUCCESS',
-          );
-        } catch (error, stackTrace) {
-          await _checkpointError(
-            employeeCode: user.employeeCode,
-            action: 'LOCATION_INSERT_FAILED',
-            error: error,
-            stackTrace: stackTrace,
-          );
-          await CrashLogService.record(
-            employeeCode: user.employeeCode,
-            screen: 'tracking',
-            action: 'LOCATION_SYNC_FAILED',
-            error: error,
-            stackTrace: stackTrace,
-          );
-          // Keep the local copy queued; the next tick will retry.
-        }
-      }
-
-      await _checkpoint(
-        employeeCode: user.employeeCode,
-        action: 'LOCAL_LOG_SAVE_START',
-        detail: 'attendance_id=$attendanceId local_id=${log.id}',
-      );
-      await _checkpoint(
-        employeeCode: user.employeeCode,
-        action: 'LOCALSTORE_ADD_LOCATION_LOG_START',
-        detail: 'attendance_id=$attendanceId local_id=${log.id}',
-      );
-      try {
-        await LocalStore.addLocationLog(log, eventType: 'background_tracking');
-      } catch (error, stackTrace) {
-        await _checkpointError(
-          employeeCode: user.employeeCode,
-          action: 'LOCAL_LOG_SAVE_FAILED',
-          error: error,
-          stackTrace: stackTrace,
-        );
-        rethrow;
-      }
-      await _checkpoint(
-        employeeCode: user.employeeCode,
-        action: 'LOCALSTORE_ADD_LOCATION_LOG_SUCCESS',
-      );
-      await _checkpoint(
-        employeeCode: user.employeeCode,
-        action: 'LOCAL_LOG_SAVE_SUCCESS',
-        detail: 'attendance_id=$attendanceId local_id=${log.id}',
-      );
       final queueLength = await LocalStore.countUnsyncedLocationLogs();
+      await TrackingHealthMetrics.setValue('queue_size', queueLength);
+      await TrackingHealthMetrics.increment('duplicate_attempts_prevented');
+      if (TrackingFlags.enableGpsBatching) {
+        unawaited(flushQueue(reason: 'scheduled_tracking_tick'));
+      } else {
+        await flushQueue(reason: 'legacy_immediate_flush', force: true);
+      }
       await _checkpoint(
         employeeCode: user.employeeCode,
         action: 'LOCATION_QUEUE_LENGTH',
@@ -785,86 +913,43 @@ void _onStart(ServiceInstance service) async {
         rethrow;
       }
 
-      if (SupabaseService.isReady) {
+      final motionState = _motionState(position, lastPosition);
+      final motionChanged =
+          lastMotionState != null && lastMotionState != motionState;
+      final writeNow = DateTime.now();
+      if (SupabaseService.isReady &&
+          (!TrackingFlags.enableAttendanceKmCoalescing ||
+              WriteCadence.isDue(
+                now: writeNow,
+                lastWriteAt: lastAttendanceKmWrite,
+                interval: WriteCadence.attendanceKm(motionState),
+              ))) {
         try {
-          final remoteAttendanceId = attendance.remoteId?.trim();
-          await _checkpoint(
+          await SupabaseService.updateAttendanceKm(attendance);
+          lastAttendanceKmWrite = writeNow;
+          await TrackingHealthMetrics.increment('attendance_km_writes');
+        } catch (error, stackTrace) {
+          await _checkpointError(
             employeeCode: user.employeeCode,
-            action: 'ATTENDANCE_UPDATE_START',
-            detail:
-                'remote_id=${remoteAttendanceId ?? '--'} local_id=${attendance.id} km=${attendance.actualKm}',
+            action: 'ATTENDANCE_KM_UPDATE_FAILED',
+            error: error,
+            stackTrace: stackTrace,
           );
-          await _checkpoint(
-            employeeCode: user.employeeCode,
-            action: 'ATTENDANCE_KM_UPDATE_START',
-            detail:
-                'remote_id=${remoteAttendanceId ?? '--'} local_id=${attendance.id} actual_km=${attendance.actualKm} total_raw_km=${attendance.actualKm} total_route_km=${attendance.totalRouteKm} total_approved_km=${attendance.eligibleKm}',
-          );
-          if (remoteAttendanceId == null || remoteAttendanceId.isEmpty) {
-            await _checkpoint(
-              employeeCode: user.employeeCode,
-              action: 'ATTENDANCE_KM_UPDATE_SKIPPED_NO_REMOTE_ID',
-              detail: 'local_id=${attendance.id} km=${attendance.actualKm}',
-            );
-          } else {
-            await _checkpoint(
-              employeeCode: user.employeeCode,
-              action: 'SUPABASE_UPDATE_ATTENDANCE_KM_START',
-              detail:
-                  'attendance_uuid=$remoteAttendanceId local_id=${attendance.id} km=${attendance.actualKm}',
-            );
-            await SupabaseService.updateAttendanceKm(attendance);
-            await _checkpoint(
-              employeeCode: user.employeeCode,
-              action: 'SUPABASE_UPDATE_ATTENDANCE_KM_SUCCESS',
-              detail:
-                  'attendance_uuid=$remoteAttendanceId local_id=${attendance.id} km=${attendance.actualKm}',
-            );
-            await _checkpoint(
-              employeeCode: user.employeeCode,
-              action: 'ATTENDANCE_UPDATE_SUCCESS',
-              detail:
-                  'attendance_uuid=$remoteAttendanceId local_id=${attendance.id} km=${attendance.actualKm}',
-            );
-          }
-          await _checkpoint(
-            employeeCode: user.employeeCode,
-            action: 'LIVE_STATUS_UPDATE_START',
-            detail: 'fo_user_id=${user.employeeCode} km=${attendance.actualKm}',
-          );
-          await _checkpoint(
-            employeeCode: user.employeeCode,
-            action: 'SUPABASE_UPDATE_LIVE_STATUS_START',
-            detail: 'fo_user_id=${user.employeeCode} km=${attendance.actualKm}',
-          );
-          String currentStatus;
-          try {
-            await _checkpoint(
-              employeeCode: user.employeeCode,
-              action: 'CURRENT_STATUS_LOAD_START',
-              detail: 'attendance_id=$attendanceId',
-            );
-            currentStatus = await _currentStatusLabel(
-              employeeCode: user.employeeCode,
-            );
-            await _checkpoint(
-              employeeCode: user.employeeCode,
-              action: 'CURRENT_STATUS_LOAD_SUCCESS',
-              detail: 'status=$currentStatus',
-            );
-          } catch (error, stackTrace) {
-            await _checkpointError(
-              employeeCode: user.employeeCode,
-              action: 'CURRENT_STATUS_LOAD_FAILED',
-              error: error,
-              stackTrace: stackTrace,
-            );
-            rethrow;
-          }
+        }
+      }
+      if (SupabaseService.isReady &&
+          (!TrackingFlags.enableLiveStatusCoalescing ||
+              motionChanged ||
+              WriteCadence.isDue(
+                now: writeNow,
+                lastWriteAt: lastLiveStatusWrite,
+                interval: WriteCadence.liveStatus(motionState),
+              ))) {
+        try {
           await SupabaseService.updateLiveStatus(
             user: user,
             isTracking: true,
-            status: currentStatus,
+            status: 'Active',
             latitude: log.latitude,
             longitude: log.longitude,
             accuracy: log.accuracy,
@@ -873,43 +958,18 @@ void _onStart(ServiceInstance service) async {
             routeKm: attendance.eligibleKm,
             attendanceId: attendance.remoteId,
           );
-          await _checkpoint(
-            employeeCode: user.employeeCode,
-            action: 'SUPABASE_UPDATE_LIVE_STATUS_SUCCESS',
-            detail: 'fo_user_id=${user.employeeCode} km=${attendance.actualKm}',
-          );
-          await CrashLogService.record(
-            employeeCode: user.employeeCode,
-            screen: 'tracking',
-            action: 'BACKGROUND_LIVE_STATUS_SYNC_SUCCESS',
-          );
-          await _checkpoint(
-            employeeCode: user.employeeCode,
-            action: 'LIVE_STATUS_UPDATE_SUCCESS',
-            detail: 'fo_user_id=${user.employeeCode} km=${attendance.actualKm}',
-          );
-          await CrashLogService.record(
-            employeeCode: user.employeeCode,
-            screen: 'tracking',
-            action: 'LOCATION_SYNC_SUCCESS',
-          );
+          lastLiveStatusWrite = writeNow;
+          await TrackingHealthMetrics.increment('live_status_writes');
         } catch (error, stackTrace) {
           await _checkpointError(
             employeeCode: user.employeeCode,
-            action: 'ATTENDANCE_OR_LIVE_STATUS_UPDATE_FAILED',
+            action: 'LIVE_STATUS_UPDATE_FAILED',
             error: error,
             stackTrace: stackTrace,
           );
-          await CrashLogService.record(
-            employeeCode: user.employeeCode,
-            screen: 'tracking',
-            action: 'LOCATION_SYNC_FAILED',
-            error: error,
-            stackTrace: stackTrace,
-          );
-          // The service stays alive and retries on the next tick.
         }
       }
+      lastMotionState = motionState;
 
       try {
         await _checkpoint(
@@ -966,6 +1026,7 @@ void _onStart(ServiceInstance service) async {
   }
 
   Future<void> startTicks() async {
+    if (stopRequested) return;
     if (service is AndroidServiceInstance) {
       service.setAsForegroundService();
       service.setForegroundNotificationInfo(
@@ -993,7 +1054,9 @@ void _onStart(ServiceInstance service) async {
         );
       }
       timer?.cancel();
-      timer = Timer(nextInterval, () => unawaited(runAndSchedule()));
+      if (!stopRequested) {
+        timer = Timer(nextInterval, () => unawaited(runAndSchedule()));
+      }
     }
 
     await runAndSchedule();
@@ -1014,9 +1077,15 @@ void _onStart(ServiceInstance service) async {
   service.on('refreshTracking').listen((_) {
     unawaited(startTicks());
   });
-  service.on('stopService').listen((_) {
+  service.on('flushQueue').listen((event) {
+    final reason = event?['reason']?.toString() ?? 'external_transition';
+    unawaited(flushQueue(reason: reason, force: true));
+  });
+  service.on('stopService').listen((event) {
     unawaited(
-      stopSelf().then(
+      shutdown(
+        reason: event?['reason']?.toString() ?? 'explicit_service_stop',
+      ).then(
         (_) => CrashLogService.record(
           screen: 'tracking',
           action: 'TRACKING_STOPPED',
@@ -1025,11 +1094,19 @@ void _onStart(ServiceInstance service) async {
     );
   });
 
+  connectivitySubscription = Connectivity().onConnectivityChanged.listen((
+    results,
+  ) {
+    if (stopRequested || results.contains(ConnectivityResult.none)) return;
+    batchScheduler.allowConnectivityRetry();
+    unawaited(flushQueue(reason: 'connectivity_restored'));
+  });
+
   final attendance = await LocalStore.getAttendance();
   if (attendance?.isActive == true) {
     await startTicks();
   } else {
-    await stopSelf();
+    await shutdown(reason: 'service_recovery_without_active_attendance');
   }
 }
 
@@ -1040,6 +1117,19 @@ bool _isUsablePosition(Position position) {
       position.latitude <= 90 &&
       position.longitude >= -180 &&
       position.longitude <= 180;
+}
+
+TrackingMotionState _motionState(Position position, Position? previous) {
+  if (previous == null) return TrackingMotionState.moving;
+  final movedMeters = Geolocator.distanceBetween(
+    previous.latitude,
+    previous.longitude,
+    position.latitude,
+    position.longitude,
+  );
+  return movedMeters >= 10 || position.speed >= 1.5
+      ? TrackingMotionState.moving
+      : TrackingMotionState.stationary;
 }
 
 bool _isValidLatLng(double? latitude, double? longitude) {
@@ -1059,7 +1149,7 @@ Future<double> _calculateKm(String attendanceId, {String? employeeCode}) async {
     action: 'KM_LOCAL_LOGS_LOAD_START',
     detail: 'attendance_id=$attendanceId',
   );
-  final allLogs = await LocalStore.getLocationLogs();
+  final allLogs = await LocalStore.getLocationLogs(attendanceId: attendanceId);
   await _checkpoint(
     employeeCode: employeeCode,
     action: 'KM_LOCAL_LOGS_LOAD_SUCCESS',
@@ -1103,18 +1193,20 @@ Future<double> _calculateKm(String attendanceId, {String? employeeCode}) async {
   return km;
 }
 
-Future<void> _syncQueuedLogs({String? employeeCode}) async {
+Future<int?> _syncQueuedLogs({String? employeeCode}) async {
   await _checkpoint(
     employeeCode: employeeCode,
     action: 'QUEUED_LOCATION_LOCAL_LOGS_LOAD_START',
   );
-  final logs = await LocalStore.getUnsyncedLocationLogs(limit: 50);
+  final logs = await LocalStore.getUnsyncedLocationLogs(
+    limit: TrackingFlags.gpsBatchSize,
+  );
   await _checkpoint(
     employeeCode: employeeCode,
     action: 'QUEUED_LOCATION_LOCAL_LOGS_LOAD_SUCCESS',
     detail: 'count=${logs.length}',
   );
-  if (logs.isEmpty) return;
+  if (logs.isEmpty) return 0;
   try {
     await CrashLogService.record(
       employeeCode: employeeCode,
@@ -1134,7 +1226,7 @@ Future<void> _syncQueuedLogs({String? employeeCode}) async {
         action: 'GPS_LOG_RETRY_PENDING',
         error: 'count=${logs.length}',
       );
-      return;
+      return null;
     }
     await LocalStore.markLocationLogsSynced(remoteIds);
     await LocalStore.cleanupOldSyncedLocationLogs(keepDays: 10);
@@ -1142,6 +1234,7 @@ Future<void> _syncQueuedLogs({String? employeeCode}) async {
       employeeCode: employeeCode,
       action: 'QUEUED_LOCATION_LOCAL_LOGS_SAVE_SUCCESS',
     );
+    return remoteIds.length;
   } catch (error, stackTrace) {
     await LocalStore.markLocationLogsSyncFailed(
       logs.map((log) => log.id).toList(),
@@ -1154,21 +1247,8 @@ Future<void> _syncQueuedLogs({String? employeeCode}) async {
       error: error,
       stackTrace: stackTrace,
     );
+    return null;
   }
-}
-
-Future<String> _currentStatusLabel({String? employeeCode}) async {
-  await _checkpoint(
-    employeeCode: employeeCode,
-    action: 'LOCALSTORE_ACTIVE_VISIT_START',
-  );
-  final activeVisit = await LocalStore.activeVisit();
-  await _checkpoint(
-    employeeCode: employeeCode,
-    action: 'LOCALSTORE_ACTIVE_VISIT_SUCCESS',
-    detail: 'active_visit_id=${activeVisit?.id ?? '--'}',
-  );
-  return activeVisit == null ? 'Active' : 'On Site Visit';
 }
 
 Future<void> _checkpoint({

@@ -34,6 +34,7 @@ import * as XLSX from 'xlsx';
 import { useAuth } from '../context/auth-context.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { authenticatedFetch } from '../services/api.js';
+import { demoReadOnlyMessage, isReadOnlyUser } from '../utils/demoAccess.js';
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:4000').replace(/\/+$/, '');
 
@@ -1395,6 +1396,7 @@ export default function FaultTracker() {
   const [isDetailedViewOpen, setIsDetailedViewOpen] = useState(false);
 
   const userId = user?.id || '';
+  const demoReadOnly = isReadOnlyUser(user);
   const canSwitchView = isAdminDeveloperUser(user);
   const canImport = isAdminDeveloperUser(user);
   const isStateRestricted = isCoordinatorMisUser(user) && !canSwitchView;
@@ -1501,12 +1503,20 @@ export default function FaultTracker() {
   }
 
   function openUpdate(ticket) {
+    if (demoReadOnly) {
+      setImportError(demoReadOnlyMessage);
+      return;
+    }
     setEditingTicket(ticket);
     setDraftStage(ticket.ifmsStage || ifmsStages[0]);
     setDraftRemarks(ticket.remarks || '');
   }
 
   function saveUpdate() {
+    if (demoReadOnly) {
+      setImportError(demoReadOnlyMessage);
+      return;
+    }
     const updatedBy = user?.displayName || user?.name || user?.email || 'Demo User';
     setTickets((current) => current.map((ticket) => (
       ticket.id === editingTicket.id
@@ -1772,7 +1782,13 @@ export default function FaultTracker() {
                     <td className="px-3 py-2.5"><span className="inline-flex rounded-full bg-slate-100 px-2 py-1 text-[10px] font-black text-slate-700">{ticket.ifmsStage || 'Not Updated'}</span></td>
                     <td className="max-w-64 px-3 py-2.5 font-semibold text-slate-600">{ticket.remarks || '-'}</td>
                     <td className="px-3 py-2.5 font-semibold text-slate-600">{ticket.lastUpdatedBy || '-'}</td>
-                    <td className="px-3 py-2.5"><button onClick={() => openUpdate(ticket)} className="rounded-lg bg-slate-950 px-3 py-1.5 text-[11px] font-black text-white hover:bg-slate-800">Update</button></td>
+                    <td className="px-3 py-2.5">
+                      {demoReadOnly ? (
+                        <span className="rounded-lg bg-slate-100 px-3 py-1.5 text-[11px] font-black text-slate-500">Read-only</span>
+                      ) : (
+                        <button onClick={() => openUpdate(ticket)} className="rounded-lg bg-slate-950 px-3 py-1.5 text-[11px] font-black text-white hover:bg-slate-800">Update</button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -8,7 +8,14 @@ import {
   getHospitalTicket,
   hospitalDashboard,
   listHospitalTickets,
+  listHospitalRoutingAssignments,
+  listHospitalRoutingShifts,
+  listHospitalDepartments,
+  listHospitalFloors,
+  listHospitalHierarchyLocations,
   loadHospitalMasters,
+  loadHospitalLocationHierarchy,
+  nimsSupervisorCoverageReport,
   performHospitalAction,
   signedAttachmentDownload,
 } from '../services/hospitalTicketService.js';
@@ -41,6 +48,35 @@ export function createHospitalTicketRouter({ anonClient, serviceClient, environm
   router.get('/blocks', masterHandler('blocks'));
   router.get('/locations', masterHandler('locations'));
   router.get('/categories', masterHandler('categories'));
+  router.get('/floors', async (request, response) => {
+    try { response.json({ ok: true, floors: await listHospitalFloors(serviceClient, request.hospitalActor, request.query) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
+  router.get('/departments', async (request, response) => {
+    try { response.json({ ok: true, departments: await listHospitalDepartments(serviceClient, request.hospitalActor, request.query) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
+  router.get('/hierarchy/locations', async (request, response) => {
+    try { response.json({ ok: true, locations: await listHospitalHierarchyLocations(serviceClient, request.hospitalActor, request.query) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
+  router.get('/hierarchy', async (request, response) => {
+    try { response.json({ ok: true, hierarchy: await loadHospitalLocationHierarchy(serviceClient, request.hospitalActor, request.query) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
+
+  router.get('/routing/shifts', async (request, response) => {
+    try { response.json({ ok: true, shifts: await listHospitalRoutingShifts(serviceClient, request.hospitalActor) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
+  router.get('/routing/assignments', async (request, response) => {
+    try { response.json({ ok: true, assignments: await listHospitalRoutingAssignments(serviceClient, request.hospitalActor) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
+  router.get('/routing/coverage', async (request, response) => {
+    try { response.json({ ok: true, coverage: nimsSupervisorCoverageReport(request.hospitalActor) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
 
   router.get('/dashboard', async (request, response) => {
     try { response.json({ ok: true, ...(await hospitalDashboard(serviceClient, request.hospitalActor)) }); }

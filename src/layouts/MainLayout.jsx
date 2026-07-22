@@ -4,6 +4,7 @@ import Navbar from '../components/Navbar.jsx';
 import Sidebar from '../components/Sidebar.jsx';
 import { useAuth } from '../context/auth-context.js';
 import { canAccessRoute } from '../utils/authRoles.js';
+import { isDemoUser } from '../utils/demoAccess.js';
 
 export default function MainLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -40,6 +41,14 @@ export default function MainLayout() {
         <div className="min-w-0 flex-1">
           <Navbar onMenuClick={() => setSidebarOpen(true)} theme={theme} onThemeToggle={() => setTheme((value) => (value === 'dark' ? 'light' : 'dark'))} />
           <main className={usesWideWorkspace ? 'w-full px-3 py-4 sm:px-4 lg:px-5 xl:px-6' : 'mx-auto w-full max-w-[1560px] px-4 py-6 sm:px-6 lg:px-8'}>
+            {isDemoUser(user) ? (
+              <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900 shadow-sm">
+                <span className="mr-2 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-black uppercase tracking-wide text-amber-800">
+                  Tender Demo
+                </span>
+                Read-Only Access
+              </div>
+            ) : null}
             <Outlet />
           </main>
         </div>

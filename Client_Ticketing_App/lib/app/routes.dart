@@ -9,5 +9,6 @@ class AppRoutes {
   static const feedback = '/feedback';
   static const notifications = '/notifications';
   static const locations = '/locations';
+  static const profile = '/profile';
   static const about = '/about';
 }

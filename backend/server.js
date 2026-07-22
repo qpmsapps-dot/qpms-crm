@@ -26,7 +26,21 @@ import {
   previousReportDate,
   sendDailyOperationsReports,
 } from './services/dailyOperationsReportService.js';
-import { buildOperationsSummary } from './services/operationsSummaryService.js';
+import {
+  accessResponseForClient,
+  resolveCurrentUserAccess,
+} from './services/accessControlService.js';
+import {
+  getDemoAccessScope,
+  isDemoUser,
+  isReadOnlyUser,
+  rejectDemoMutation,
+  sanitizeDemoRecord,
+} from './services/demoAccessService.js';
+import {
+  buildOperationsSummary,
+  normalizeOperationsSummaryFilters,
+} from './services/operationsSummaryService.js';
 import {
   canAccessLeadModule,
   canCreateLead,
@@ -78,10 +92,6 @@ const app = express();
 const port = Number(process.env.PORT || 4000);
 const demoBackendAuthEnabled =
   String(process.env.ENABLE_DEMO_AUTH || '').trim().toLowerCase() === 'true';
-const DEMO_READ_ONLY_MESSAGE =
-  'Demo access is read-only. Changes are disabled for this account.';
-const DEMO_READ_ONLY_EMAILS = new Set(['admin@qpms.co.in']);
-const DEMO_READ_ONLY_ROLES = new Set(['DEMOADMIN', 'READONLYADMIN']);
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
   .split(',')
   .map((origin) => origin.trim())
@@ -110,7 +120,7 @@ const apiDemoUsers = [
   { id: 'coo', name: 'COO', email: 'coo@qpms.co.in', password: '123456', role: 'COO' },
   { id: 'gm', name: 'General Manager', email: 'gm@qpms.co.in', password: '123456', role: 'GM / Top Management' },
   { id: 'existing-operations', name: 'Existing Business Operations', email: 'existingoperations@qpms.co.in', password: '123456', role: 'Existing Business Operations Team' },
-  { id: 'admin', name: 'Admin', email: 'admin@qpms.co.in', password: '123456', role: 'Admin', isDemoReadOnly: true },
+  { id: 'admin', name: 'Admin', email: 'admin@qpms.co.in', password: '123456', role: 'DEMO_ADMIN', isDemoReadOnly: true, is_demo: true, read_only: true },
 ];
 
 const apiSessions = new Map();
@@ -305,7 +315,7 @@ app.post(
           now: requestedTime,
         }),
       });
-    } catch (error) {
+    } catch {
       response.status(500).json({
         ok: false,
         code: 'hospital_sla_run_failed',
@@ -449,37 +459,12 @@ function getBearerToken(request) {
   return String(request.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
 }
 
-function normalizeDemoAccessRole(role) {
-  return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
-}
-
-function isMutationRequest(request) {
-  return !['GET', 'HEAD', 'OPTIONS'].includes(String(request.method || 'GET').toUpperCase());
-}
-
 function isDemoReadOnlyIdentity(identity = {}, authUser = {}) {
-  const email = String(
-    identity.email ||
-      identity.username ||
-      authUser.email ||
-      authUser.user_metadata?.email ||
-      '',
-  ).trim().toLowerCase();
-  const role = normalizeDemoAccessRole(identity.rawRole || identity.role);
-  return Boolean(identity.isDemoReadOnly) ||
-    DEMO_READ_ONLY_EMAILS.has(email) ||
-    DEMO_READ_ONLY_ROLES.has(role);
+  return isReadOnlyUser(identity, authUser);
 }
 
 function blockDemoReadOnlyMutation(request, response, identity = {}, authUser = {}) {
-  if (!isMutationRequest(request)) return false;
-  if (!isDemoReadOnlyIdentity(identity, authUser)) return false;
-  response.status(403).json({
-    ok: false,
-    code: 'DEMO_READ_ONLY',
-    message: DEMO_READ_ONLY_MESSAGE,
-  });
-  return true;
+  return rejectDemoMutation(request, response, identity, authUser);
 }
 
 function requireApiAuth(request, response, next) {
@@ -492,6 +477,42 @@ function requireApiAuth(request, response, next) {
   request.apiUser = user;
   if (blockDemoReadOnlyMutation(request, response, user)) return;
   next();
+}
+
+function requireSupabaseJwtOrDemoApiRead(request, response, next) {
+  const token = getBearerToken(request);
+  const apiUser = apiSessions.get(token);
+  if (apiUser) {
+    if (!isDemoReadOnlyIdentity(apiUser)) {
+      response.status(403).json({ ok: false, message: 'Supabase Bearer token required.' });
+      return;
+    }
+    if (blockDemoReadOnlyMutation(request, response, apiUser)) return;
+    request.apiUser = apiUser;
+    request.profile = {
+      id: apiUser.profileId || apiUser.id || 'demo-read-only-admin',
+      auth_user_id: null,
+      email: apiUser.email || apiUser.username || null,
+      username: apiUser.username || apiUser.email || null,
+      full_name: apiUser.name || 'QPMS Demo Admin',
+      display_name: apiUser.name || 'QPMS Demo Admin',
+      role: apiUser.rawRole || apiUser.role || 'DEMO_ADMIN',
+      is_active: true,
+      status: 'Active',
+      web_access_enabled: true,
+      is_demo: true,
+      read_only: true,
+      metadata: {
+        ...(apiUser.metadata || {}),
+        ...getDemoAccessScope(apiUser),
+      },
+    };
+    request.employeeCode = null;
+    request.userRole = request.profile.role;
+    next();
+    return;
+  }
+  requireSupabaseJwt(request, response, next);
 }
 
 async function requireSupabaseJwt(request, response, next) {
@@ -589,6 +610,67 @@ async function requireSupabaseJwt(request, response, next) {
   } catch (error) {
     const safeError = sanitizeSupabaseDiagnosticError(error);
     console.warn('[myQPMS Auth] Supabase JWT verification failed', {
+      message: safeError.message,
+      code: safeError.code,
+    });
+    response.status(error.statusCode || 401).json({
+      ok: false,
+      message: error.statusCode === 503
+        ? error.message
+        : 'Unable to verify Supabase access token.',
+      ...(error.statusCode === 503 && error.diagnosticReason
+        ? { diagnosticReason: error.diagnosticReason }
+        : {}),
+    });
+  }
+}
+
+async function requireSupabaseJwtAllowMissingProfile(request, response, next) {
+  const accessToken = getBearerToken(request);
+  if (!accessToken) {
+    response.status(401).json({ ok: false, message: 'Supabase Bearer token required.' });
+    return;
+  }
+  if (!supabaseAnon) {
+    response.status(503).json({
+      ok: false,
+      message: 'Supabase JWT verification is not configured on the API server.',
+      diagnosticReason: serviceRoleConfigurationReason(),
+    });
+    return;
+  }
+
+  try {
+    const { data: authData, error: authError } = await supabaseAnon.auth.getUser(accessToken);
+    if (authError || !authData?.user) {
+      response.status(401).json({ ok: false, message: 'Invalid or expired Supabase access token.' });
+      return;
+    }
+
+    const adminClient = requireServiceRoleSupabase();
+    await assertServiceRoleAuthAdminAccess(adminClient);
+    const { data: profile, error: profileError } = await adminClient
+      .from('profiles')
+      .select('*')
+      .eq('auth_user_id', authData.user.id)
+      .maybeSingle();
+    if (profileError) {
+      const configurationError = new Error('Backend service-role profile lookup failed.');
+      configurationError.statusCode = 503;
+      configurationError.code = 'service_role_profile_lookup_failed';
+      configurationError.diagnosticReason = 'service_role_profile_lookup_failed';
+      throw configurationError;
+    }
+
+    request.authUser = authData.user;
+    request.profile = profile || null;
+    request.employeeCode = profile ? String(profile.employee_code || '').trim() || null : null;
+    request.userRole = profile ? String(profile.role || '').trim() : '';
+    if (profile && blockDemoReadOnlyMutation(request, response, profile, authData.user)) return;
+    next();
+  } catch (error) {
+    const safeError = sanitizeSupabaseDiagnosticError(error);
+    console.warn('[myQPMS Access] Supabase JWT verification failed', {
       message: safeError.message,
       code: safeError.code,
     });
@@ -836,6 +918,7 @@ const STORE_MASTER_EDITABLE_FIELDS = [
 function hasStoreMasterPermission(profile) {
   if (!profile || profile.is_active !== true) return false;
   if (String(profile.status || '').trim().toLowerCase() !== 'active') return false;
+  if (isDemoUser(profile)) return true;
   return new Set(['DEVELOPER', 'ADMIN', 'QPMSADMIN', 'MD', 'COO']).has(
     normalizePermissionRole(profile.role),
   );
@@ -1823,20 +1906,18 @@ function currentProfileMetadata(profileOrBody = {}) {
 }
 
 function inviteMetadataForResult(invite = {}, timestamp = new Date().toISOString()) {
-  const method = invite.method === 'supabase_invite_link'
-    ? 'manual_setup_link'
-    : invite.method === 'temporary_password'
-      ? 'temporary_password'
-      : 'supabase_invite_email';
+  const method = invite.method === 'password_recovery_email'
+    ? 'password_recovery_email'
+    : 'supabase_invite_email';
   return {
-    invite_status: invite.method === 'temporary_password' ? 'password_change_required' : 'sent',
+    invite_status: 'sent',
     invite_sent_at: timestamp,
     invite_method: method,
     invite_redirect_to: '/set-password',
   };
 }
 
-async function createInvitedAuthUser(client, { email, authMetadata, password }) {
+async function createInvitedAuthUser(client, { email, authMetadata }) {
   const redirectTo = passwordSetupRedirectUrl();
   const inviteResult = {
     method: 'supabase_invite',
@@ -1846,65 +1927,19 @@ async function createInvitedAuthUser(client, { email, authMetadata, password }) 
     warning: null,
   };
 
-  if (!password) {
-    const { data, error } = await client.auth.admin.inviteUserByEmail(email, {
-      data: authMetadata,
-      redirectTo,
-    });
-    if (!error && data?.user) {
-      return { user: data.user, invite: { ...inviteResult, email_sent: true } };
-    }
-
-    const inviteError = error;
-    const { data: linkData, error: linkError } = await client.auth.admin.generateLink({
-      type: 'invite',
-      email,
-      options: {
-        data: authMetadata,
-        redirectTo,
-      },
-    });
-    if (!linkError && linkData?.user) {
-      return {
-        user: linkData.user,
-        invite: {
-          method: 'supabase_invite_link',
-          email_sent: false,
-          setup_link: linkData.properties?.action_link || null,
-          message:
-            'Account created. Email invite could not be sent because SMTP is not configured. Please share the password setup link manually.',
-          warning: safeAuthError(inviteError).message,
-        },
-      };
-    }
-
-    throw userManagementHttpError(
-      503,
-      'Supabase invite email and manual setup link generation both failed.',
-      {
-        invite_error: safeAuthError(inviteError),
-        link_error: safeAuthError(linkError),
-      },
-    );
+  const { data, error } = await client.auth.admin.inviteUserByEmail(email, {
+    data: authMetadata,
+    redirectTo,
+  });
+  if (!error && data?.user) {
+    return { user: data.user, invite: { ...inviteResult, email_sent: true } };
   }
 
-  const { data: authData, error: authError } = await client.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: authMetadata,
-  });
-  if (authError) throw authError;
-  return {
-    user: authData.user,
-    invite: {
-      method: 'temporary_password',
-      email_sent: false,
-      setup_link: null,
-      message: 'Account created with a temporary password. User must change password on first login.',
-      warning: null,
-    },
-  };
+  throw userManagementHttpError(
+    503,
+    'Supabase invite email could not be sent. Verify Auth SMTP/invite configuration and retry.',
+    { invite_error: safeAuthError(error) },
+  );
 }
 
 async function markProfileAuthSyncFailure(client, profileId, error) {
@@ -2665,15 +2700,18 @@ const FAULT_TRACKER_READ_ALL_ROLE_KEYS = new Set([
 const FAULT_TRACKER_STATE_RESTRICTED_ROLE_KEYS = new Set(['PROJECTCOORDINATOR', 'MIS']);
 
 function faultTrackerCanAccess(profile) {
+  if (isDemoUser(profile)) return true;
   const roleKey = faultTrackerRoleKey(profile);
   return FAULT_TRACKER_READ_ALL_ROLE_KEYS.has(roleKey) || FAULT_TRACKER_STATE_RESTRICTED_ROLE_KEYS.has(roleKey);
 }
 
 function faultTrackerCanManage(profile) {
+  if (isDemoUser(profile)) return false;
   return FAULT_TRACKER_MANAGE_ROLE_KEYS.has(faultTrackerRoleKey(profile));
 }
 
 function faultTrackerCanReadAll(profile) {
+  if (isDemoUser(profile)) return true;
   return FAULT_TRACKER_READ_ALL_ROLE_KEYS.has(faultTrackerRoleKey(profile));
 }
 
@@ -2783,6 +2821,12 @@ function faultTrackerTicketPayload(ticket, importBatchId) {
   };
 }
 
+function serializeStoreMasterRowForProfile(row, linkedSiteVisits = 0, profile = {}) {
+  const serialized = serializeStoreMasterRow(row, linkedSiteVisits);
+  if (!isDemoUser(profile)) return serialized;
+  return sanitizeDemoRecord(serialized, ['created_by_full_name']);
+}
+
 function faultTrackerHttpError(statusCode, code, message, details = null) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -2848,7 +2892,7 @@ function respondFaultTrackerError(response, error) {
   response.status(error?.statusCode || safeError.statusCode || 500).json(payload);
 }
 
-app.get('/api/fault-tracker/imports', requireSupabaseJwt, requireFaultTrackerAccess, async (request, response) => {
+app.get('/api/fault-tracker/imports', requireSupabaseJwtOrDemoApiRead, requireFaultTrackerAccess, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     console.log('[Fault Tracker] imports list route hit', {
@@ -2866,13 +2910,16 @@ app.get('/api/fault-tracker/imports', requireSupabaseJwt, requireFaultTrackerAcc
       logFaultTrackerDbError('GET /api/fault-tracker/imports', 'fault_tracker_import_batches', 'select_imports', error);
       throw error;
     }
-    response.json({ ok: true, imports: data || [] });
+    const imports = isDemoUser(request.profile)
+      ? (data || []).map((row) => sanitizeDemoRecord(row, ['metadata']))
+      : data || [];
+    response.json({ ok: true, imports });
   } catch (error) {
     respondFaultTrackerError(response, error);
   }
 });
 
-app.get('/api/fault-tracker/tickets', requireSupabaseJwt, requireFaultTrackerAccess, async (request, response) => {
+app.get('/api/fault-tracker/tickets', requireSupabaseJwtOrDemoApiRead, requireFaultTrackerAccess, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     const roleCanReadAll = faultTrackerCanReadAll(request.profile);
@@ -2983,13 +3030,17 @@ app.get('/api/fault-tracker/tickets', requireSupabaseJwt, requireFaultTrackerAcc
       throw importBatchError;
     }
     const importBatch = Array.isArray(importBatches) ? importBatches[0] : null;
-    response.json({ ok: true, import_batch: importBatch || null, tickets: tickets || [] });
+    response.json({
+      ok: true,
+      import_batch: isDemoUser(request.profile) ? sanitizeDemoRecord(importBatch || null, ['metadata']) : importBatch || null,
+      tickets: isDemoUser(request.profile) ? (tickets || []).map((row) => sanitizeDemoRecord(row)) : tickets || [],
+    });
   } catch (error) {
     respondFaultTrackerError(response, error);
   }
 });
 
-app.post('/api/fault-tracker/import', requireSupabaseJwt, requireFaultTrackerManage, async (request, response) => {
+app.post('/api/fault-tracker/import', requireSupabaseJwtOrDemoApiRead, requireFaultTrackerManage, async (request, response) => {
   let createdBatchId = null;
   try {
     const client = requireServiceRoleSupabase();
@@ -3157,6 +3208,138 @@ app.post('/api/fault-tracker/import', requireSupabaseJwt, requireFaultTrackerMan
   }
 });
 
+app.get('/api/access/me', requireSupabaseJwtAllowMissingProfile, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const result = await resolveCurrentUserAccess({
+      client,
+      authUser: request.authUser,
+      profile: request.profile,
+      requestedModule: request.query?.module,
+      requestedPermission: request.query?.permission,
+      requestedClientId: request.query?.client_id,
+      requestedScopes: {
+        client_id: request.query?.client_id,
+        state: request.query?.state,
+        branch: request.query?.branch,
+        site: request.query?.site,
+        store: request.query?.store,
+        hospital_block: request.query?.hospital_block_id || request.query?.block_id,
+        floor: request.query?.floor_id,
+        department: request.query?.department_id,
+        location: request.query?.location_id,
+      },
+    });
+    if (result.ok === false) {
+      response.status(403).json({
+        ok: false,
+        code: result.code || 'access_denied',
+        message: result.message || 'Access is not available for this account.',
+      });
+      return;
+    }
+    response.json(accessResponseForClient(result));
+  } catch (error) {
+    const safeError = sanitizeSupabaseDiagnosticError(error);
+    console.warn('[Access Control] Failed to resolve current access', {
+      code: safeError.code,
+      message: safeError.message,
+    });
+    response.status(error.statusCode || 500).json({
+      ok: false,
+      message: 'Unable to load account access.',
+    });
+  }
+});
+
+async function selectAccessFoundationTable(client, table, columns = '*') {
+  const { data, error } = await client
+    .from(table)
+    .select(columns)
+    .order('name', { ascending: true });
+  if (error) {
+    const text = `${error.code || ''} ${error.message || ''}`.toLowerCase();
+    if (
+      error.code === '42P01' ||
+      error.code === 'PGRST205' ||
+      text.includes('could not find the table') ||
+      text.includes('does not exist') ||
+      text.includes('schema cache')
+    ) {
+      return { available: false, rows: [] };
+    }
+    throw error;
+  }
+  return { available: true, rows: data || [] };
+}
+
+app.get(
+  '/api/access/foundation',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      const [
+        businessVerticals,
+        clients,
+        modules,
+        roles,
+        permissions,
+      ] = await Promise.all([
+        selectAccessFoundationTable(client, 'access_business_verticals', 'id,code,name,active'),
+        selectAccessFoundationTable(client, 'access_clients', 'id,business_vertical_id,code,name,client_type,active'),
+        selectAccessFoundationTable(client, 'access_modules', 'id,code,name,application_target,active'),
+        selectAccessFoundationTable(client, 'access_roles', 'id,code,name,user_type,module_id,active'),
+        selectAccessFoundationTable(client, 'access_permissions', 'id,code,name,module_id,action,resource,active'),
+      ]);
+      const available = [
+        businessVerticals,
+        clients,
+        modules,
+        roles,
+        permissions,
+      ].every((result) => result.available);
+      response.json({
+        ok: true,
+        available,
+        feature_gated: !available,
+        business_verticals: businessVerticals.rows,
+        clients: clients.rows,
+        modules: modules.rows,
+        roles: roles.rows,
+        permissions: permissions.rows,
+        scope_types: [
+          'global',
+          'business_vertical',
+          'client',
+          'all_client',
+          'state',
+          'branch',
+          'site',
+          'store',
+          'hospital_block',
+          'floor',
+          'location',
+          'department',
+          'assigned_ticket',
+          'employee_self',
+        ],
+      });
+    } catch (error) {
+      const safeError = sanitizeSupabaseDiagnosticError(error);
+      console.warn('[Access Control] Failed to load foundation options', {
+        code: safeError.code,
+        message: safeError.message,
+      });
+      response.status(error.statusCode || 500).json({
+        ok: false,
+        message: 'Unable to load access foundation options.',
+      });
+    }
+  },
+);
+
 app.get('/api/profile/me', requireSupabaseJwt, (request, response) => {
   response.json({
     ok: true,
@@ -3283,7 +3466,7 @@ app.post('/api/profile/avatar', requireSupabaseJwt, async (request, response) =>
   }
 });
 
-app.get('/api/store-master', requireSupabaseJwt, requireStoreMasterPermission, async (request, response) => {
+app.get('/api/store-master', requireSupabaseJwtOrDemoApiRead, requireStoreMasterPermission, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     const page = Math.max(1, Number.parseInt(String(request.query.page || '1'), 10) || 1);
@@ -3347,7 +3530,7 @@ app.get('/api/store-master', requireSupabaseJwt, requireStoreMasterPermission, a
 
     response.json({
       ok: true,
-      rows: (data || []).map((row) => serializeStoreMasterRow(row, linkedCounts.get(row.id) || 0)),
+      rows: (data || []).map((row) => serializeStoreMasterRowForProfile(row, linkedCounts.get(row.id) || 0, request.profile)),
       pagination: {
         page,
         limit,
@@ -3373,7 +3556,7 @@ app.get('/api/store-master', requireSupabaseJwt, requireStoreMasterPermission, a
   }
 });
 
-app.get('/api/store-master/:id', requireSupabaseJwt, requireStoreMasterPermission, async (request, response) => {
+app.get('/api/store-master/:id', requireSupabaseJwtOrDemoApiRead, requireStoreMasterPermission, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     const { data, error } = await client
@@ -3388,13 +3571,13 @@ app.get('/api/store-master/:id', requireSupabaseJwt, requireStoreMasterPermissio
       .select('id', { count: 'exact', head: true })
       .eq('store_id', data.id);
     if (countError) throw countError;
-    response.json({ ok: true, row: serializeStoreMasterRow(data, count || 0) });
+    response.json({ ok: true, row: serializeStoreMasterRowForProfile(data, count || 0, request.profile) });
   } catch (error) {
     storeMasterErrorResponse(response, error);
   }
 });
 
-app.post('/api/store-master', requireSupabaseJwt, requireStoreMasterPermission, async (request, response) => {
+app.post('/api/store-master', requireSupabaseJwtOrDemoApiRead, requireStoreMasterPermission, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     const payload = buildStoreMasterPayload(request.body || {}, null, request.profile);
@@ -3424,7 +3607,7 @@ app.post('/api/store-master', requireSupabaseJwt, requireStoreMasterPermission, 
   }
 });
 
-app.patch('/api/store-master/:id', requireSupabaseJwt, requireStoreMasterPermission, async (request, response) => {
+app.patch('/api/store-master/:id', requireSupabaseJwtOrDemoApiRead, requireStoreMasterPermission, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     const { data: existing, error: existingError } = await client
@@ -3794,8 +3977,12 @@ app.post(
       const employeeCode = normalizeEmployeeCode(body.employee_code);
       const fullName = textOrNull(body.full_name);
       const email = normalizeEmail(body.email);
-      const temporaryPassword = textOrNull(body.temporary_password);
-      const password = temporaryPassword || textOrNull(body.password);
+      if (textOrNull(body.temporary_password) || textOrNull(body.password)) {
+        throw userManagementHttpError(
+          400,
+          'Admins cannot set user passwords. Use Invite User so the user can create their own password.',
+        );
+      }
       if (!employeeCode) throw userManagementHttpError(400, 'employee_code is required.');
       if (!fullName) throw userManagementHttpError(400, 'full_name is required.');
       if (!email) {
@@ -3871,7 +4058,6 @@ app.post(
       };
       const { user: invitedAuthUser, invite: inviteResult } = await createInvitedAuthUser(client, {
         email,
-        password,
         authMetadata,
       });
       createdAuthUser = invitedAuthUser;
@@ -3886,7 +4072,7 @@ app.post(
       const profilePayload = profileCreatePayload(
         createBody,
         createdAuthUser.id,
-        Boolean(temporaryPassword),
+        false,
       );
       const { data: profile, error: profileError } = await client
         .from('profiles')
@@ -3971,7 +4157,6 @@ app.post(
         },
         metadata: {
           auth_user_created: true,
-          temporary_password_used: Boolean(temporaryPassword),
           invite: inviteResult,
           hierarchy_warnings: hierarchyResolution.warnings,
         },
@@ -4441,13 +4626,11 @@ app.post(
       const client = requireServiceRoleSupabase();
       await assertUserManagementFoundation(client);
       const reason = textOrNull(request.body?.reason);
-      const temporaryPassword = textOrNull(request.body?.temporary_password);
-      const password = temporaryPassword || textOrNull(request.body?.new_password);
       if (!reason) throw userManagementHttpError(400, 'reason is required.');
-      if (!password) {
+      if (textOrNull(request.body?.temporary_password) || textOrNull(request.body?.new_password)) {
         throw userManagementHttpError(
           400,
-          'new_password or temporary_password is required.',
+          'Admins cannot set user passwords. Use Resend Invitation so the user can create their own password.',
         );
       }
       const oldProfile = await loadProfileById(client, request.params.profileId);
@@ -4458,29 +4641,30 @@ app.post(
           'Profile has no auth_user_id; password cannot be reset until Auth provisioning is repaired.',
         );
       }
-      const requiresPasswordChange = hasOwn(request.body, 'requires_password_change')
-        ? booleanValue(request.body.requires_password_change, true)
-        : true;
-      const { error: authError } = await client.auth.admin.updateUserById(
-        oldProfile.auth_user_id,
-        { password },
+      const email = normalizeEmail(oldProfile.email);
+      if (!email) throw userManagementHttpError(400, 'Profile email is required to resend an invitation.');
+      if (!supabaseAnon) {
+        throw userManagementHttpError(
+          503,
+          'Supabase Auth email flow is not configured on the API server.',
+        );
+      }
+      const { error: recoveryError } = await supabaseAnon.auth.resetPasswordForEmail(
+        email,
+        { redirectTo: passwordSetupRedirectUrl() },
       );
-      if (authError) throw authError;
+      if (recoveryError) throw recoveryError;
 
       const { data: updatedProfile, error: profileError } = await client
         .from('profiles')
         .update({
-          requires_password_change: requiresPasswordChange,
+          requires_password_change: true,
           metadata: {
             ...currentProfileMetadata(oldProfile),
-            ...(requiresPasswordChange
-              ? {
-                  invite_status: 'password_reset_sent',
-                  invite_sent_at: new Date().toISOString(),
-                  invite_method: 'admin_reset',
-                  invite_redirect_to: '/set-password',
-                }
-              : {}),
+            invite_status: 'sent',
+            invite_sent_at: new Date().toISOString(),
+            invite_method: 'password_recovery_email',
+            invite_redirect_to: '/set-password',
           },
           auth_provisioning_status: 'provisioned',
           auth_provisioning_error: null,
@@ -4497,24 +4681,23 @@ app.post(
             requires_password_change: oldProfile.requires_password_change,
           },
           newData: {
-            requires_password_change: requiresPasswordChange,
+            requires_password_change: true,
           },
           reason,
           metadata: {
-            auth_password_updated: true,
+            invitation_email_sent: true,
             profile_sync_error: safeAuthError(profileError),
-            temporary_password_used: Boolean(temporaryPassword),
           },
           request,
         });
         throw userManagementHttpError(
           500,
-          'Password was updated in Supabase Auth, but the profile password-change flag could not be synchronized.',
+          'Invitation email was sent, but the profile password-setup flag could not be synchronized.',
           { error: safeAuthError(profileError) },
         );
       }
       await writeUserManagementAudit(client, {
-        action: 'RESET_PASSWORD',
+        action: 'RESEND_INVITATION',
         targetProfile: updatedProfile,
         oldData: {
           requires_password_change: oldProfile.requires_password_change,
@@ -4524,7 +4707,11 @@ app.post(
         },
         reason,
         metadata: {
-          temporary_password_used: Boolean(temporaryPassword),
+          invite: {
+            method: 'password_recovery_email',
+            email_sent: true,
+            setup_link: null,
+          },
         },
         request,
       });
@@ -4533,6 +4720,12 @@ app.post(
         profile_id: updatedProfile.id,
         auth_user_id: updatedProfile.auth_user_id,
         requires_password_change: updatedProfile.requires_password_change,
+        invite: {
+          method: 'password_recovery_email',
+          email_sent: true,
+          setup_link: null,
+          message: 'Password setup invitation sent. The user can create their own password from the email link.',
+        },
       });
     } catch (error) {
       respondUserManagementError(response, error);
@@ -6287,7 +6480,7 @@ app.post(
   },
 );
 
-app.get('/api/fo/operations/summary', requireSupabaseJwt, async (request, response) => {
+app.get('/api/fo/operations/summary', requireSupabaseJwtOrDemoApiRead, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     const summary = await buildOperationsSummary(
@@ -6307,6 +6500,207 @@ app.get('/api/fo/operations/summary', requireSupabaseJwt, async (request, respon
       message: status >= 500
         ? 'Operations summary is temporarily unavailable. Please retry.'
         : error.message,
+    });
+  }
+});
+
+function demoMaskedFoRows({ profiles = [], attendances = [], siteVisits = [], liveStatus = [] }) {
+  const map = new Map();
+  let index = 1;
+  const assign = (value) => {
+    const key = String(value || '').trim().toUpperCase();
+    if (!key) return '';
+    if (!map.has(key)) {
+      map.set(key, `DEMO-FO-${String(index).padStart(3, '0')}`);
+      index += 1;
+    }
+    return map.get(key);
+  };
+  const assignGroup = (values = []) => {
+    const keys = values.map((value) => String(value || '').trim().toUpperCase()).filter(Boolean);
+    if (!keys.length) return '';
+    const existing = keys.map((key) => map.get(key)).find(Boolean);
+    const masked = existing || `DEMO-FO-${String(index).padStart(3, '0')}`;
+    if (!existing) index += 1;
+    keys.forEach((key) => map.set(key, masked));
+    return masked;
+  };
+  for (const profile of profiles) {
+    assignGroup([profile.employee_code, profile.username, profile.id]);
+  }
+  const maskRow = (row = {}) => {
+    const next = sanitizeDemoRecord(row);
+    const masked = assign(row.employee_code || row.username || row.fo_user_id || row.id);
+    if (masked) {
+      next.employee_code = masked;
+      next.username = masked;
+      next.fo_user_id = masked;
+      next.full_name = `Demo Field Officer ${masked.slice(-3)}`;
+      next.display_name = `Demo Field Officer ${masked.slice(-3)}`;
+    }
+    return next;
+  };
+  return {
+    profiles: profiles.map(maskRow),
+    attendances: attendances.map(maskRow),
+    site_visits: siteVisits.map(maskRow),
+    live_status: liveStatus.map(maskRow),
+  };
+}
+
+app.get('/api/fo/operations/dashboard', requireSupabaseJwtOrDemoApiRead, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const filters = normalizeOperationsSummaryFilters(request.query || {}, currentIndiaDateInput());
+    const [profilesRes, attendanceRes, siteVisitsRes, liveStatusRes] = await Promise.all([
+      client
+        .from('profiles')
+        .select('id,full_name,display_name,employee_code,username,role,department,designation,business,state,status,is_active,metadata')
+        .eq('is_active', true)
+        .limit(5000),
+      client
+        .from('fo_attendance')
+        .select('*')
+        .gte('attendance_date', filters.date_from)
+        .lte('attendance_date', filters.date_to)
+        .order('login_time', { ascending: false })
+        .limit(5000),
+      client
+        .from('fo_site_visits')
+        .select('*')
+        .gte('check_in_time', `${filters.date_from}T00:00:00.000Z`)
+        .lte('check_in_time', `${filters.date_to}T23:59:59.999Z`)
+        .order('check_in_time', { ascending: false })
+        .limit(5000),
+      client
+        .from('fo_live_status')
+        .select('*')
+        .order('last_seen_at', { ascending: false })
+        .limit(5000),
+    ]);
+    const errors = [profilesRes, attendanceRes, siteVisitsRes, liveStatusRes].map((result) => result.error).filter(Boolean);
+    if (errors.length) throw errors[0];
+    const rows = {
+      profiles: profilesRes.data || [],
+      attendances: attendanceRes.data || [],
+      site_visits: siteVisitsRes.data || [],
+      live_status: liveStatusRes.data || [],
+    };
+    response.json({
+      ok: true,
+      ...(isDemoUser(request.profile)
+        ? demoMaskedFoRows({
+          profiles: rows.profiles,
+          attendances: rows.attendances,
+          siteVisits: rows.site_visits,
+          liveStatus: rows.live_status,
+        })
+        : rows),
+      applied_filters: filters,
+    });
+  } catch (error) {
+    const status = Number(error?.statusCode || 500);
+    if (status >= 500) {
+      console.error('[myQPMS Operations Dashboard] request failed', sanitizeSupabaseDiagnosticError(error));
+    }
+    response.status(status).json({
+      ok: false,
+      message: status >= 500
+        ? 'Operations dashboard is temporarily unavailable. Please retry.'
+        : error.message,
+    });
+  }
+});
+
+app.get('/api/fo/operations/demo-date-range', requireSupabaseJwtOrDemoApiRead, async (request, response) => {
+  try {
+    if (!isDemoUser(request.profile)) {
+      response.status(403).json({ ok: false, message: 'Demo date range is available only for demo users.' });
+      return;
+    }
+    const client = requireServiceRoleSupabase();
+    const [{ data: latestRows, error: latestError }, { data: earliestRows, error: earliestError }] = await Promise.all([
+      client
+        .from('fo_attendance')
+        .select('attendance_date')
+        .not('attendance_date', 'is', null)
+        .order('attendance_date', { ascending: false })
+        .limit(1),
+      client
+        .from('fo_attendance')
+        .select('attendance_date')
+        .not('attendance_date', 'is', null)
+        .order('attendance_date', { ascending: true })
+        .limit(1),
+    ]);
+    if (latestError) throw latestError;
+    if (earliestError) throw earliestError;
+    const latest = String(latestRows?.[0]?.attendance_date || '').slice(0, 10) || null;
+    const earliest = String(earliestRows?.[0]?.attendance_date || '').slice(0, 10) || latest;
+    response.json({
+      ok: true,
+      latest_demo_date: latest,
+      earliest_demo_date: earliest,
+      label: latest ? 'Sample Demo Data' : 'No demo attendance data available',
+    });
+  } catch (error) {
+    const status = Number(error?.statusCode || 500);
+    response.status(status).json({
+      ok: false,
+      message: status >= 500 ? 'Demo date range is temporarily unavailable.' : error.message,
+    });
+  }
+});
+
+app.get('/api/deep-cleaning/records', requireSupabaseJwtOrDemoApiRead, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const [submissionsRes, uploadsRes, storesRes, profilesRes, visitsRes] = await Promise.all([
+      client
+        .from('fo_activity_submissions')
+        .select('*')
+        .eq('activity_type', 'deep_cleaning')
+        .order('submitted_at', { ascending: false })
+        .limit(1000),
+      client
+        .from('fo_activity_uploads')
+        .select('*')
+        .or('activity_type.eq.deep_cleaning,upload_role.ilike.%deep_cleaning%')
+        .order('uploaded_at', { ascending: false })
+        .limit(1500),
+      client
+        .from('store_master')
+        .select('id,store_code,store_name,client_name,state,business,latitude,longitude,gps_accuracy,status,metadata')
+        .in('business', ['Reliance Retail', 'Reliance', 'IFMS'])
+        .limit(5000),
+      client
+        .from('profiles')
+        .select('employee_code,username,full_name,display_name,business,state,role,designation,department')
+        .in('business', ['Reliance Retail', 'Reliance', 'IFMS'])
+        .limit(5000),
+      client
+        .from('fo_site_visits')
+        .select('id,store_code,store_name,site_name,client_name,state,employee_code,fo_user_id,check_in_time,metadata')
+        .order('check_in_time', { ascending: false })
+        .limit(3000),
+    ]);
+    const errors = [submissionsRes, uploadsRes, storesRes, profilesRes, visitsRes].map((result) => result.error).filter(Boolean);
+    if (errors.length) throw errors[0];
+    const demo = isDemoUser(request.profile);
+    const sanitizeRows = (rows) => demo ? (rows || []).map((row) => sanitizeDemoRecord(row)) : rows || [];
+    response.json({
+      ok: true,
+      submissions: sanitizeRows(submissionsRes.data),
+      uploads: sanitizeRows(uploadsRes.data),
+      stores: demo ? (storesRes.data || []).map((row) => sanitizeDemoRecord(row, ['created_by_full_name'])) : storesRes.data || [],
+      profiles: sanitizeRows(profilesRes.data),
+      visits: sanitizeRows(visitsRes.data),
+    });
+  } catch (error) {
+    const status = Number(error?.statusCode || 500);
+    response.status(status).json({
+      ok: false,
+      message: status >= 500 ? 'Deep Cleaning records are temporarily unavailable.' : error.message,
     });
   }
 });

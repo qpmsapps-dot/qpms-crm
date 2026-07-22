@@ -11,25 +11,46 @@ import 'hospital_ticket_api.dart';
 class HospitalDashboardSummary {
   const HospitalDashboardSummary({
     required this.newComplaints,
+    required this.awaitingAcceptance,
     required this.open,
     required this.assigned,
     required this.inProgress,
+    required this.dueSoon,
+    required this.breached,
     required this.nearBreach,
     required this.escalated,
     required this.awaitingConfirmation,
     required this.reopened,
     required this.closedToday,
+    required this.unassigned,
   });
 
   final int newComplaints;
+  final int awaitingAcceptance;
   final int open;
   final int assigned;
   final int inProgress;
+  final int dueSoon;
+  final int breached;
   final int nearBreach;
   final int escalated;
   final int awaitingConfirmation;
   final int reopened;
   final int closedToday;
+  final int unassigned;
+}
+
+enum HospitalTicketListFilter {
+  all,
+  newAssignments,
+  awaitingAcceptance,
+  inProgress,
+  dueSoon,
+  breached,
+  escalated,
+  reopened,
+  resolvedToday,
+  unassigned,
 }
 
 class HospitalController extends ChangeNotifier {
@@ -65,8 +86,10 @@ class HospitalController extends ChangeNotifier {
   String? get error => _error;
   List<HospitalTicket> get allTickets => List.unmodifiable(_tickets);
   List<Map<String, dynamic>> _notifications = [];
+  final Set<String> _busyTicketIds = {};
   List<Map<String, dynamic>> get notifications =>
       List.unmodifiable(_notifications);
+  bool isTicketBusy(String ticketId) => _busyTicketIds.contains(ticketId);
 
   List<HospitalTicket> get visibleTickets {
     final rows = accessPolicy.visibleTickets(session, _tickets);
@@ -77,6 +100,42 @@ class HospitalController extends ChangeNotifier {
   List<HospitalTicket> get urgentTickets => visibleTickets
       .where((ticket) => !ticket.isFinal && !ticket.isAwaitingClient)
       .toList();
+
+  List<HospitalTicket> filteredTickets({
+    HospitalTicketListFilter filter = HospitalTicketListFilter.all,
+    HospitalTicketStatus? status,
+    HospitalPriority? priority,
+    String query = '',
+    String block = '',
+    String category = '',
+    bool assignedToMe = false,
+  }) {
+    final text = query.trim().toLowerCase();
+    return visibleTickets.where((ticket) {
+      if (status != null && ticket.status != status) return false;
+      if (priority != null && ticket.priority != priority) return false;
+      if (block.isNotEmpty && ticket.block != block) return false;
+      if (category.isNotEmpty && ticket.category != category) return false;
+      if (assignedToMe &&
+          ticket.responsiblePerson.trim().toLowerCase() !=
+              session.displayName.trim().toLowerCase()) {
+        return false;
+      }
+      if (!_matchesDashboardFilter(ticket, filter)) return false;
+      if (text.isEmpty) return true;
+      return [
+        ticket.id,
+        ticket.block,
+        ticket.floor,
+        ticket.department,
+        ticket.location,
+        ticket.roomArea,
+        ticket.exactLandmark,
+        ticket.category,
+        ticket.description,
+      ].join(' ').toLowerCase().contains(text);
+    }).toList();
+  }
 
   HospitalTicket ticketById(String id) =>
       _tickets.firstWhere((ticket) => ticket.id == id);
@@ -154,10 +213,17 @@ class HospitalController extends ChangeNotifier {
             break;
         }
       }
+      final allowedActions = response['allowed_actions'] is List
+          ? (response['allowed_actions'] as List)
+                .map((value) => hospitalActionFromCode('$value'))
+                .whereType<HospitalTicketAction>()
+                .toSet()
+          : <HospitalTicketAction>{};
       final ticket = HospitalTicket.fromApi(row).copyWith(
         complaintPhotoPaths: complaintPhotos,
         progressPhotoPaths: progressPhotos,
         completionPhotoPaths: completionPhotos,
+        allowedActions: allowedActions,
         events: timeline.whereType<Map>().map((event) {
           return HospitalTicketEvent(
             action: '${event['event_type'] ?? 'update'}'.replaceAll('_', ' '),
@@ -181,19 +247,16 @@ class HospitalController extends ChangeNotifier {
   HospitalSlaSnapshot slaFor(HospitalTicket ticket) =>
       slaPolicy.snapshot(ticket, _now);
 
-  Set<HospitalTicketAction> actionsFor(HospitalTicket ticket) => productionMode
-      ? accessPolicy
-            .allowedActions(session, ticket)
-            .where(
-              (action) => !{
-                HospitalTicketAction.simulateSupervisorBreach,
-                HospitalTicketAction.simulateOperationsBreach,
-                HospitalTicketAction.simulateClientSatisfied,
-                HospitalTicketAction.simulateClientNotSatisfied,
-              }.contains(action),
-            )
-            .toSet()
-      : accessPolicy.allowedActions(session, ticket);
+  Set<HospitalTicketAction> actionsFor(HospitalTicket ticket) {
+    if (!productionMode) return accessPolicy.allowedActions(session, ticket);
+    final actions = {...ticket.allowedActions};
+    if (actions.contains(HospitalTicketAction.addProgress)) {
+      actions
+        ..add(HospitalTicketAction.addRemarks)
+        ..add(HospitalTicketAction.uploadProgressPhoto);
+    }
+    return actions;
+  }
 
   HospitalDashboardSummary get summary {
     final rows = visibleTickets;
@@ -207,11 +270,26 @@ class HospitalController extends ChangeNotifier {
                 _now.difference(ticket.raisedAt) <= const Duration(minutes: 10),
           )
           .length,
+      awaitingAcceptance: rows
+          .where(
+            (ticket) =>
+                ticket.status == HospitalTicketStatus.assigned ||
+                ticket.status == HospitalTicketStatus.open,
+          )
+          .length,
       open: count(HospitalTicketStatus.open),
       assigned: count(HospitalTicketStatus.assigned),
       inProgress:
           count(HospitalTicketStatus.accepted) +
           count(HospitalTicketStatus.inProgress),
+      dueSoon: rows
+          .where(
+            (ticket) => slaFor(ticket).state == HospitalSlaState.nearBreach,
+          )
+          .length,
+      breached: rows
+          .where((ticket) => slaFor(ticket).state == HospitalSlaState.breached)
+          .length,
       nearBreach: rows
           .where(
             (ticket) => slaFor(ticket).state == HospitalSlaState.nearBreach,
@@ -233,6 +311,13 @@ class HospitalController extends ChangeNotifier {
                       event.action == 'Final closure' &&
                       _sameDate(event.occurredAt, _now),
                 ),
+          )
+          .length,
+      unassigned: rows
+          .where(
+            (ticket) =>
+                !ticket.isFinal &&
+                ticket.responsiblePerson == 'Assignment pending',
           )
           .length,
     );
@@ -647,15 +732,19 @@ class HospitalController extends ChangeNotifier {
     String path, [
     Map<String, dynamic> payload = const {},
   ]) async {
+    if (_busyTicketIds.contains(ticket.id)) return;
+    _busyTicketIds.add(ticket.id);
     _loading = true;
     _error = null;
     notifyListeners();
     try {
       await HospitalTicketApi.action(ticket.id, path, ticket.version, payload);
-      await load();
+      await loadDetail(ticket.id);
     } catch (error) {
-      _loading = false;
       _error = error.toString();
+    } finally {
+      _busyTicketIds.remove(ticket.id);
+      _loading = false;
       notifyListeners();
     }
   }
@@ -718,6 +807,43 @@ class HospitalController extends ChangeNotifier {
   void _requireAction(HospitalTicket ticket, HospitalTicketAction action) {
     if (!actionsFor(ticket).contains(action)) {
       throw StateError('${action.name} is not allowed for this ticket.');
+    }
+  }
+
+  bool _matchesDashboardFilter(
+    HospitalTicket ticket,
+    HospitalTicketListFilter filter,
+  ) {
+    switch (filter) {
+      case HospitalTicketListFilter.all:
+        return true;
+      case HospitalTicketListFilter.newAssignments:
+      case HospitalTicketListFilter.awaitingAcceptance:
+        return ticket.status == HospitalTicketStatus.open ||
+            ticket.status == HospitalTicketStatus.assigned;
+      case HospitalTicketListFilter.inProgress:
+        return ticket.status == HospitalTicketStatus.accepted ||
+            ticket.status == HospitalTicketStatus.inProgress;
+      case HospitalTicketListFilter.dueSoon:
+        return slaFor(ticket).state == HospitalSlaState.nearBreach;
+      case HospitalTicketListFilter.breached:
+        return slaFor(ticket).state == HospitalSlaState.breached;
+      case HospitalTicketListFilter.escalated:
+        return ticket.status ==
+                HospitalTicketStatus.escalatedOperationsExecutive ||
+            ticket.status == HospitalTicketStatus.escalatedFacilityManager;
+      case HospitalTicketListFilter.reopened:
+        return ticket.status == HospitalTicketStatus.reopened;
+      case HospitalTicketListFilter.resolvedToday:
+        return ticket.status == HospitalTicketStatus.closed &&
+            ticket.events.any(
+              (event) =>
+                  event.action == 'Final closure' &&
+                  _sameDate(event.occurredAt, _now),
+            );
+      case HospitalTicketListFilter.unassigned:
+        return !ticket.isFinal &&
+            ticket.responsiblePerson == 'Assignment pending';
     }
   }
 

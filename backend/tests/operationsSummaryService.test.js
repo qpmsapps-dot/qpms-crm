@@ -95,6 +95,31 @@ test('empty result returns zero totals', () => {
   assert.equal(result.matching_employee_count, 0);
 });
 
+test('DEMO_ADMIN can read all approved operations summary totals', () => {
+  const demoActor = { role: 'DEMO_ADMIN', status: 'active', is_active: true, is_demo: true, read_only: true };
+  assert.equal(canAccessOperationsSummary(demoActor), true);
+  const result = summarizeOperationsRows({
+    actor: demoActor,
+    profiles,
+    hierarchyRows: [],
+    liveRows: [],
+    attendances,
+    filters: {
+      date_from: '2026-07-01', date_to: '2026-07-14', state: null, business: null, status: null,
+    },
+  });
+  assert.equal(result.payable_km, 135);
+  assert.equal(result.petrol_amount, 545);
+});
+
+test('TENDER_DEMO is normalized as a full-visibility read actor', () => {
+  const demoActor = { role: 'TENDER_DEMO', status: 'active', is_active: true, is_demo: true, read_only: true };
+  const codes = operationsSummaryAllowedEmployeeCodes(demoActor, profiles, []);
+  assert.equal(codes.has('KL1'), true);
+  assert.equal(codes.has('KL2'), true);
+  assert.equal(codes.has('TN1'), true);
+});
+
 test('live status resolves profile id to employee code using current_status', () => {
   const result = summarizeOperationsRows({
     actor,

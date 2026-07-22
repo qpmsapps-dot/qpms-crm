@@ -57,7 +57,11 @@ class HospitalTicketCard extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                '${ticket.block} • ${ticket.floor} • ${ticket.location}',
+                ticket.conciseLocation.isEmpty
+                    ? 'Location snapshot unavailable'
+                    : ticket.conciseLocation,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 5),
@@ -78,7 +82,9 @@ class HospitalTicketCard extends StatelessWidget {
                   const SizedBox(width: 5),
                   Expanded(
                     child: Text(
-                      '${ticket.responsiblePerson} • ${ticket.responsibleRole}',
+                      ticket.responsibleRole.trim().isEmpty
+                          ? ticket.responsiblePerson
+                          : '${ticket.responsiblePerson} - ${ticket.responsibleRole}',
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 12, color: qpmsMuted),
                     ),

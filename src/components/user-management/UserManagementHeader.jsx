@@ -38,7 +38,7 @@ export default function UserManagementHeader({
             <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} /> {syncing ? 'Syncing...' : 'Sync Auth Users'}
           </button>
           <button type="button" onClick={onAddUser} className="focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-full border border-qpms-300 bg-white px-4 text-sm font-bold text-qpms-700">
-            <UserPlus className="h-4 w-4" /> Add User
+            <UserPlus className="h-4 w-4" /> Invite User
           </button>
         </div>
       </div>

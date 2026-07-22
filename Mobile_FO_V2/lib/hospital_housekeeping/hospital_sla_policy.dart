@@ -37,11 +37,16 @@ class HospitalSlaPolicy {
   HospitalSlaSnapshot snapshot(HospitalTicket ticket, DateTime now) {
     final due = dueAt(ticket);
     if (due == null) {
-      return const HospitalSlaSnapshot(
+      final unassigned =
+          ticket.responsiblePerson == 'Assignment pending' ||
+          ticket.responsibleRole.trim().isEmpty;
+      return HospitalSlaSnapshot(
         state: HospitalSlaState.notApplicable,
         referenceTime: null,
         remaining: Duration.zero,
-        label: 'Operational oversight',
+        label: unassigned
+            ? 'No supervisor SLA - unassigned'
+            : 'Operational oversight',
       );
     }
     final remaining = due.difference(now);

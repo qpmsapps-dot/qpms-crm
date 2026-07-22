@@ -87,7 +87,8 @@ class _HomeScreenState extends State<HomeScreen>
   Attendance? _attendance;
   bool _busy = false;
   String? _busyMessage;
-  bool _kmRefreshBusy = false;
+  bool _endDayKmRefreshInFlight = false;
+  bool _finalKmAwaitingBackend = false;
   int? _battery;
   double _km = 0;
   int _sitesToday = 0;
@@ -98,6 +99,12 @@ class _HomeScreenState extends State<HomeScreen>
   TrackingHealthSnapshot? _trackingHealth;
   int? _localGpsLogsToday;
   int? _syncedGpsLogsToday;
+
+  static const List<Duration> _endDayKmRecalculationRetryDelays = [
+    Duration(seconds: 5),
+    Duration(seconds: 15),
+    Duration(seconds: 30),
+  ];
 
   bool get _showTrackingDebug {
     return isMobileDebugVisible(
@@ -355,6 +362,7 @@ class _HomeScreenState extends State<HomeScreen>
       final eligibleKm = attendance?.eligibleKm ?? 0;
       final totalRouteKm = attendance?.totalRouteKm ?? 0;
       _km = eligibleKm > 0 ? eligibleKm : totalRouteKm;
+      _finalKmAwaitingBackend = false;
       _sitesToday = visits
           .where((visit) => visit.checkInTime.isAfter(today))
           .length;
@@ -523,6 +531,7 @@ class _HomeScreenState extends State<HomeScreen>
         _attendance = null;
         _battery = null;
         _km = 0;
+        _finalKmAwaitingBackend = false;
         _sitesToday = 0;
         _currentSite = null;
       });
@@ -626,6 +635,7 @@ class _HomeScreenState extends State<HomeScreen>
       setState(() {
         _attendance = saved;
         _km = saved.eligibleKm > 0 ? saved.eligibleKm : saved.totalRouteKm;
+        _finalKmAwaitingBackend = false;
       });
       if (saved.payableKmAllowed) {
         _toast('Travel mode updated.');
@@ -784,6 +794,7 @@ class _HomeScreenState extends State<HomeScreen>
               setState(() {
                 _attendance = completed;
                 _km = completed.eligibleKm;
+                _finalKmAwaitingBackend = false;
               });
             }
             return;
@@ -952,6 +963,7 @@ class _HomeScreenState extends State<HomeScreen>
         _attendance = attendance;
         _battery = battery;
         _km = 0;
+        _finalKmAwaitingBackend = false;
       });
       _firstGpsPingLogged = false;
       await CrashLogService.record(
@@ -1121,6 +1133,7 @@ class _HomeScreenState extends State<HomeScreen>
         _attendance = attendance;
         _battery = attendance.batteryStart ?? _battery;
         _km = attendance.eligibleKm;
+        _finalKmAwaitingBackend = false;
       });
     }
     final remoteVisit = SupabaseService.isReady
@@ -1448,7 +1461,9 @@ class _HomeScreenState extends State<HomeScreen>
         if (mounted) {
           setState(() {
             _attendance = attendance;
-            _km = attendance.eligibleKm;
+            _finalKmAwaitingBackend = SupabaseService.isValidUuid(
+              attendance.remoteId,
+            );
             _battery = attendance.batteryEnd;
             _currentSite = null;
           });
@@ -1456,6 +1471,15 @@ class _HomeScreenState extends State<HomeScreen>
         _toast(
           'End Day was already completed. App status has been synchronized.',
         );
+        if (SupabaseService.isValidUuid(attendance.remoteId)) {
+          unawaited(
+            _refreshEndDayKmFromBackend(
+              attendanceId: attendance.remoteId!,
+              attendanceDate: attendance.attendanceDate,
+              fallbackBattery: attendance.batteryEnd,
+            ),
+          );
+        }
         return;
       }
       final openSiteVisit =
@@ -1617,82 +1641,6 @@ class _HomeScreenState extends State<HomeScreen>
         _toast('End Day failed. Please try again.');
         return;
       }
-      var recalcPending = false;
-      double? confirmedPetrolAmount;
-      if (SupabaseService.isValidUuid(attendance.remoteId)) {
-        try {
-          _setBusyMessage('Calculating final travel KM...');
-          final recalcResult = await SupabaseService.triggerFoKmRecalculation(
-            attendanceId: attendance.remoteId!,
-            foUserId: widget.user.employeeCode,
-            date: attendance.attendanceDate,
-          );
-          if (!_recalculationResultBelongsToAttendance(
-            recalcResult,
-            attendance.remoteId!,
-          )) {
-            throw StateError('KM recalculation returned a different record.');
-          }
-          PerformanceLogService.step(
-            operation: 'end_day',
-            step: 'backend_km_recalculation',
-            stopwatch: perf,
-          );
-          _setBusyMessage('Updating final KM...');
-          final refreshedAttendance = await SupabaseService.findAttendanceById(
-            user: widget.user,
-            attendanceId: attendance.remoteId!,
-          );
-          PerformanceLogService.step(
-            operation: 'end_day',
-            step: 'attendance_refetch',
-            stopwatch: perf,
-          );
-          if (refreshedAttendance != null) {
-            _applyBackendAttendance(
-              target: attendance,
-              source: refreshedAttendance,
-              fallbackBattery: battery,
-            );
-          }
-          final confirmedKm = _numberFromRecalculation(
-            recalcResult['approved_km'] ??
-                recalcResult['total_route_km'] ??
-                recalcResult['new_total_route_km'],
-          );
-          if (confirmedKm != null) {
-            attendance
-              ..eligibleKm = confirmedKm
-              ..totalRouteKm =
-                  _numberFromRecalculation(recalcResult['total_route_km']) ??
-                  confirmedKm;
-          }
-          confirmedPetrolAmount =
-              _numberFromRecalculation(
-                recalcResult['petrol_amount'] ??
-                    recalcResult['new_petrol_amount'],
-              ) ??
-              refreshedAttendance?.petrolAmount;
-          attendance.petrolAmount = confirmedPetrolAmount;
-          await LocalStore.saveAttendance(attendance);
-          await CrashLogService.record(
-            employeeCode: widget.user.employeeCode,
-            screen: 'home',
-            action: 'END_DAY_KM_RECALCULATION_TRIGGERED',
-            error:
-                'attendance_id=${attendance.remoteId} route_km=${attendance.eligibleKm}',
-          );
-        } catch (error, stackTrace) {
-          await CrashLogService.record(
-            employeeCode: widget.user.employeeCode,
-            screen: 'home',
-            action: 'END_DAY_KM_RECALCULATION_FAILED',
-            error: error,
-            stackTrace: stackTrace,
-          );
-          recalcPending = true;
-        }
-      }
       var secondarySyncPending = false;
       try {
         await CrashLogService.record(
@@ -1767,7 +1715,9 @@ class _HomeScreenState extends State<HomeScreen>
       if (mounted) {
         setState(() {
           _attendance = attendance;
-          _km = attendance.eligibleKm;
+          _finalKmAwaitingBackend = SupabaseService.isValidUuid(
+            attendance.remoteId,
+          );
           _battery = battery;
           _currentSite = null;
         });
@@ -1778,12 +1728,20 @@ class _HomeScreenState extends State<HomeScreen>
         action: 'END_DAY_CACHE_CLEARED',
         error: 'attendance_id=${attendance.remoteId ?? attendance.id}',
       );
-      _showEndDayResult(
-        attendance: attendance,
-        recalculationPending: recalcPending,
-        secondarySyncPending: secondarySyncPending,
-        petrolAmount: confirmedPetrolAmount ?? attendance.petrolAmount,
-      );
+      if (secondarySyncPending) {
+        _toast('Day ended successfully. Status synchronization pending.');
+      } else {
+        _toast('Day ended successfully.');
+      }
+      if (SupabaseService.isValidUuid(attendance.remoteId)) {
+        unawaited(
+          _refreshEndDayKmFromBackend(
+            attendanceId: attendance.remoteId!,
+            attendanceDate: attendance.attendanceDate,
+            fallbackBattery: battery,
+          ),
+        );
+      }
     } catch (error, stackTrace) {
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
@@ -1801,17 +1759,6 @@ class _HomeScreenState extends State<HomeScreen>
         });
       }
     }
-  }
-
-  void _setBusyMessage(String message) {
-    if (!mounted) return;
-    setState(() => _busyMessage = message);
-  }
-
-  double? _numberFromRecalculation(Object? value) {
-    if (value == null) return null;
-    if (value is num && value.isFinite) return value.toDouble();
-    return double.tryParse(value.toString());
   }
 
   bool _recalculationResultBelongsToAttendance(
@@ -1842,106 +1789,90 @@ class _HomeScreenState extends State<HomeScreen>
       ..metadata = source.metadata;
   }
 
-  String _finalKmMessage(Attendance attendance, {double? petrolAmount}) {
-    final lines = <String>[
-      'Day ended successfully',
-      'Final payable KM: ${attendance.eligibleKm.toStringAsFixed(2)} km',
-    ];
-    if (petrolAmount != null) {
-      lines.add('Petrol amount: \u20B9${petrolAmount.toStringAsFixed(2)}');
-    }
-    return lines.join('\n');
-  }
-
-  void _showEndDayResult({
-    required Attendance attendance,
-    required bool recalculationPending,
-    required bool secondarySyncPending,
-    double? petrolAmount,
-  }) {
-    if (!mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
-    final message = recalculationPending
-        ? 'Day ended successfully. Final KM calculation is still processing.'
-        : _finalKmMessage(attendance, petrolAmount: petrolAmount);
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          secondarySyncPending && !recalculationPending
-              ? '$message\nStatus synchronization pending.'
-              : message,
-        ),
-        action: recalculationPending
-            ? SnackBarAction(
-                label: 'Refresh KM',
-                onPressed: () {
-                  unawaited(_refreshFinalKm(attendance.remoteId));
-                },
-              )
-            : null,
-      ),
-    );
-  }
-
-  Future<void> _refreshFinalKm(String? attendanceId) async {
-    if (_kmRefreshBusy) return;
-    final id = attendanceId?.trim();
-    if (!SupabaseService.isReady || !SupabaseService.isValidUuid(id)) {
-      _toast('Final KM is still processing. Please try again.');
+  Future<void> _refreshEndDayKmFromBackend({
+    required String attendanceId,
+    String? attendanceDate,
+    int? fallbackBattery,
+  }) async {
+    final id = attendanceId.trim();
+    if (_endDayKmRefreshInFlight ||
+        !SupabaseService.isReady ||
+        !SupabaseService.isValidUuid(id)) {
       return;
     }
-    if (mounted) setState(() => _kmRefreshBusy = true);
+    _endDayKmRefreshInFlight = true;
     try {
-      final refreshedAttendance = await SupabaseService.findAttendanceById(
-        user: widget.user,
-        attendanceId: id!,
-      );
-      if (refreshedAttendance == null) {
-        _toast('Final KM is still processing. Please try again.');
-        return;
+      for (
+        var attempt = 0;
+        attempt <= _endDayKmRecalculationRetryDelays.length;
+        attempt += 1
+      ) {
+        if (attempt > 0) {
+          await Future<void>.delayed(
+            _endDayKmRecalculationRetryDelays[attempt - 1],
+          );
+        }
+        try {
+          final recalcResult = await SupabaseService.triggerFoKmRecalculation(
+            attendanceId: id,
+            foUserId: widget.user.employeeCode,
+            date: attendanceDate,
+          );
+          if (!_recalculationResultBelongsToAttendance(recalcResult, id)) {
+            throw StateError('KM recalculation returned a different record.');
+          }
+          final refreshedAttendance = await SupabaseService.findAttendanceById(
+            user: widget.user,
+            attendanceId: id,
+          );
+          if (refreshedAttendance == null) {
+            throw StateError('KM recalculation attendance refresh failed.');
+          }
+          final current = _attendance;
+          if (current != null &&
+              (current.remoteId ?? current.id).trim() == id) {
+            _applyBackendAttendance(
+              target: current,
+              source: refreshedAttendance,
+              fallbackBattery: fallbackBattery ?? _battery,
+            );
+            await LocalStore.saveAttendance(current);
+            if (!mounted) return;
+            setState(() {
+              _attendance = current;
+              _km = current.eligibleKm;
+              _battery = current.batteryEnd ?? _battery;
+              _finalKmAwaitingBackend = false;
+            });
+          } else {
+            await LocalStore.saveAttendance(refreshedAttendance);
+            if (!mounted) return;
+            setState(() {
+              _attendance = refreshedAttendance;
+              _km = refreshedAttendance.eligibleKm;
+              _battery = refreshedAttendance.batteryEnd ?? _battery;
+              _finalKmAwaitingBackend = false;
+            });
+          }
+          await CrashLogService.record(
+            employeeCode: widget.user.employeeCode,
+            screen: 'home',
+            action: 'END_DAY_KM_RECALCULATION_REFRESHED',
+            error: 'attendance_id=$id route_km=$_km',
+          );
+          return;
+        } catch (error, stackTrace) {
+          await CrashLogService.record(
+            employeeCode: widget.user.employeeCode,
+            screen: 'home',
+            action: 'END_DAY_KM_RECALCULATION_RETRY_PENDING',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
       }
-      final current = _attendance;
-      if (current != null &&
-          (current.remoteId ?? current.id) == (refreshedAttendance.remoteId)) {
-        _applyBackendAttendance(
-          target: current,
-          source: refreshedAttendance,
-          fallbackBattery: _battery,
-        );
-        await LocalStore.saveAttendance(current);
-        if (!mounted) return;
-        setState(() {
-          _attendance = current;
-          _km = current.eligibleKm;
-          _battery = current.batteryEnd ?? _battery;
-        });
-        _toast(_finalKmMessage(current, petrolAmount: current.petrolAmount));
-      } else {
-        await LocalStore.saveAttendance(refreshedAttendance);
-        if (!mounted) return;
-        setState(() {
-          _attendance = refreshedAttendance;
-          _km = refreshedAttendance.eligibleKm;
-          _battery = refreshedAttendance.batteryEnd ?? _battery;
-        });
-        _toast(
-          _finalKmMessage(
-            refreshedAttendance,
-            petrolAmount: refreshedAttendance.petrolAmount,
-          ),
-        );
-      }
-    } catch (error, stackTrace) {
-      await CrashLogService.record(
-        employeeCode: widget.user.employeeCode,
-        screen: 'home',
-        action: 'END_DAY_FINAL_KM_REFRESH_FAILED',
-        error: error,
-        stackTrace: stackTrace,
-      );
-      _toast('Final KM is still processing. Please try again.');
     } finally {
-      if (mounted) setState(() => _kmRefreshBusy = false);
+      _endDayKmRefreshInFlight = false;
     }
   }
 
@@ -1965,6 +1896,7 @@ class _HomeScreenState extends State<HomeScreen>
           setState(() {
             _attendance = completed;
             _km = completed.eligibleKm;
+            _finalKmAwaitingBackend = false;
           });
         }
         _toast('Today\'s duty is already completed.');
@@ -2025,7 +1957,9 @@ class _HomeScreenState extends State<HomeScreen>
       setState(() => _currentSite = visit?.storeName);
     });
     setState(() {
-      _km = _attendance?.eligibleKm ?? 0;
+      if (!_finalKmAwaitingBackend) {
+        _km = _attendance?.eligibleKm ?? 0;
+      }
       _battery = log.battery;
     });
   }
@@ -2285,7 +2219,7 @@ class _HomeScreenState extends State<HomeScreen>
                     icon: Icons.route_rounded,
                     color: qpmsBlue,
                     label: 'Today KM',
-                    value: '${_km.toStringAsFixed(2)} km',
+                    value: _todayKmLabel(),
                   ),
                   _metricTile(
                     width: width,
@@ -2775,6 +2709,11 @@ class _HomeScreenState extends State<HomeScreen>
         ],
       ),
     );
+  }
+
+  String _todayKmLabel() {
+    if (_finalKmAwaitingBackend) return '--';
+    return '${_km.toStringAsFixed(2)} km';
   }
 
   Widget _recentActivityCard(bool active) {

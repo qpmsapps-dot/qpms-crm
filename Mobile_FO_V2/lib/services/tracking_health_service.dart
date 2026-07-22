@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart' as ph;
 import '../models/fo_models.dart';
 import '../tracking/tracking_flags.dart';
 import '../tracking/tracking_service.dart';
+import '../tracking/tracking_health_metrics.dart';
 import 'crash_log_service.dart';
 import 'local_db_service.dart';
 import 'local_store.dart';
@@ -25,6 +26,7 @@ class TrackingHealthSnapshot {
     this.lastGpsAt,
     this.lastSyncAt,
     this.guidance = const [],
+    this.dailyMetrics = const {},
   });
 
   final HealthLevel locationPermission;
@@ -37,6 +39,7 @@ class TrackingHealthSnapshot {
   final DateTime? lastGpsAt;
   final DateTime? lastSyncAt;
   final List<String> guidance;
+  final Map<String, dynamic> dailyMetrics;
 
   String get locationPermissionLabel =>
       _label(locationPermission, ok: 'OK', needsAction: 'Needs Action');
@@ -99,6 +102,7 @@ class TrackingHealthService {
       final latestLocalGps = await LocalDbService.latestGpsLogTime();
       final lastGpsAt = TrackingService.lastGpsSync ?? latestLocalGps;
       final lastSyncAt = TrackingService.lastSuccessfulSync;
+      final dailyMetrics = await TrackingHealthMetrics.today();
       final tracking = TrackingService.isActive || backgroundSession
           ? HealthLevel.ok
           : HealthLevel.needsAction;
@@ -128,6 +132,7 @@ class TrackingHealthService {
         lastGpsAt: lastGpsAt,
         lastSyncAt: lastSyncAt,
         guidance: guidance,
+        dailyMetrics: dailyMetrics,
       );
     } catch (error, stackTrace) {
       await CrashLogService.record(
@@ -146,6 +151,7 @@ class TrackingHealthService {
         backgroundSessionExists: false,
         pendingGpsLogs: 0,
         guidance: ['Unable to load app health. Please try Sync Now.'],
+        dailyMetrics: {},
       );
     }
   }

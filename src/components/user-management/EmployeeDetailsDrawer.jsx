@@ -49,7 +49,6 @@ function hierarchyPathLabel(employee, hierarchy = {}) {
 
 function ActionPanel({ action, employee, busy, onCancel, onSubmit }) {
   const [reason, setReason] = useState('');
-  const [password, setPassword] = useState('');
   const [newEmployeeCode, setNewEmployeeCode] = useState('');
   const [confirmationText, setConfirmationText] = useState('');
   const [preview, setPreview] = useState(null);
@@ -57,23 +56,19 @@ function ActionPanel({ action, employee, busy, onCancel, onSubmit }) {
 
   const isHardDelete = action === 'Hard Delete';
   const isRepair = action === 'Repair Employee Code';
-  const isReset = action === 'Reset Password';
+  const isInvite = action === 'Resend Invitation';
   const requiredConfirmation = isHardDelete
     ? 'HARD DELETE TEST USER'
     : isRepair
       ? 'REPAIR EMPLOYEE CODE'
       : '';
-  const needsReason = ['Deactivate', 'Reactivate', 'Reset Password', 'Hard Delete', 'Repair Employee Code'].includes(action);
+  const needsReason = ['Deactivate', 'Reactivate', 'Resend Invitation', 'Hard Delete', 'Repair Employee Code'].includes(action);
 
   async function submit(event) {
     event.preventDefault();
     setError('');
     if (needsReason && !reason.trim()) {
       setError('Reason is required.');
-      return;
-    }
-    if (isReset && !password) {
-      setError('Temporary password is required.');
       return;
     }
     if (isRepair && !newEmployeeCode.trim()) {
@@ -95,8 +90,7 @@ function ActionPanel({ action, employee, busy, onCancel, onSubmit }) {
       }
       await onSubmit(action, {
         reason: reason.trim(),
-        temporary_password: isReset ? password : undefined,
-        requires_password_change: isReset ? true : undefined,
+        requires_password_change: isInvite ? true : undefined,
         old_employee_code: isRepair ? employee.employeeCode : undefined,
         new_employee_code: isRepair ? newEmployeeCode.trim().toUpperCase() : undefined,
         confirmation_text: isHardDelete || isRepair ? confirmationText : undefined,
@@ -136,11 +130,10 @@ function ActionPanel({ action, employee, busy, onCancel, onSubmit }) {
             <textarea value={reason} onChange={(event) => setReason(event.target.value)} className="mt-1 min-h-20 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm font-semibold" />
           </label>
         ) : null}
-        {isReset ? (
-          <label className="block">
-            <span className="text-[11px] font-bold uppercase text-slate-500">Temporary Password *</span>
-            <input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold" />
-          </label>
+        {isInvite ? (
+          <p className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold leading-5 text-sky-800">
+            The user will receive a secure setup email and create their own password. No password is shown to the admin.
+          </p>
         ) : null}
         {isRepair ? (
           <label className="block">
@@ -314,7 +307,7 @@ export default function EmployeeDetailsDrawer({
             <div className="mt-3 flex flex-wrap gap-2">
               <button type="button" onClick={() => onEdit(employee)} className="focus-ring rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700">Edit Profile</button>
               {employee.loginEnabled ? (
-                <button type="button" onClick={() => setActiveAction('Reset Password')} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700"><KeyRound className="h-3.5 w-3.5" /> Reset Password</button>
+                <button type="button" onClick={() => setActiveAction('Resend Invitation')} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700"><KeyRound className="h-3.5 w-3.5" /> Resend Invitation</button>
               ) : (
                 <button type="button" onClick={() => submitAction('Enable Login Access', {})} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-emerald-200 px-3 py-2 text-xs font-bold text-emerald-700"><KeyRound className="h-3.5 w-3.5" /> Enable Login Access</button>
               )}

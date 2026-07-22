@@ -86,6 +86,7 @@ void main() {
           block: 'Block A',
           floor: '3rd Floor',
           location: 'Ward B3',
+          category: 'Housekeeping',
           description: 'Mismatch',
         ),
       ),

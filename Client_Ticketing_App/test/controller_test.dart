@@ -24,10 +24,18 @@ void main() {
 
   test('complaint validation requires a description', () {
     final controller = TicketController(demoMode: true);
-    expect(controller.isDraftValid(ComplaintDraft(description: '')), isFalse);
     expect(
       controller.isDraftValid(
-        ComplaintDraft(description: 'Bathroom not cleaned properly.'),
+        ComplaintDraft(category: 'Housekeeping', description: ''),
+      ),
+      isFalse,
+    );
+    expect(
+      controller.isDraftValid(
+        ComplaintDraft(
+          category: 'Housekeeping',
+          description: 'Bathroom not cleaned properly.',
+        ),
       ),
       isTrue,
     );
@@ -57,17 +65,15 @@ void main() {
 
   test('ticket filters search by ticket id and location', () {
     final controller = TicketController(demoMode: true);
-    final open = controller.filterTickets(TicketListFilter.open);
-    expect(open, isNotEmpty);
+    final all = controller.filterTickets(TicketListFilter.all);
+    expect(all, isNotEmpty);
     expect(
-      open.every(
-        (ticket) => ticketMatchesFilter(ticket, TicketListFilter.open),
-      ),
+      all.every((ticket) => ticketMatchesFilter(ticket, TicketListFilter.all)),
       isTrue,
     );
 
     final locationMatches = controller.filterTickets(
-      TicketListFilter.open,
+      TicketListFilter.all,
       query: '3rd Floor',
     );
     expect(locationMatches, hasLength(1));

@@ -48,7 +48,7 @@ class TicketCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            ticket.fullLocation,
+            ticket.conciseLocation,
             style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
           ),
           const SizedBox(height: 10),

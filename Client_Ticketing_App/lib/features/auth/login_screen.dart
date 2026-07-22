@@ -43,9 +43,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 children: [
                   const SizedBox(height: 32),
                   const LogoMark(size: 88),
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 24),
                   const Text(
-                    'QPMS Client Ticketing',
+                    'Welcome Back',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 27,
@@ -53,18 +53,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       color: AppColors.deepBlue,
                     ),
                   ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Raise. Track. Resolve.',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.green,
-                    ),
-                  ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Housekeeping support for a cleaner, safer care environment.',
+                    'Sign in to continue',
                     textAlign: TextAlign.center,
                     style: TextStyle(height: 1.4, color: AppColors.muted),
                   ),
@@ -90,24 +81,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            'Welcome back',
-                            style: TextStyle(
-                              fontSize: 19,
-                              fontWeight: FontWeight.w900,
-                              color: AppColors.ink,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          const Text(
-                            'Sign in to manage your housekeeping complaints.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              height: 1.4,
-                              color: AppColors.muted,
-                            ),
-                          ),
-                          const SizedBox(height: 18),
+                          const SizedBox(height: 2),
                           TextFormField(
                             controller: _loginId,
                             keyboardType: TextInputType.emailAddress,
@@ -116,7 +90,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               AutofillHints.email,
                             ],
                             decoration: const InputDecoration(
-                              labelText: 'Login ID / Email',
+                              labelText: 'Email or Mobile',
                               prefixIcon: Icon(Icons.person_outline_rounded),
                             ),
                             validator: (value) =>
@@ -230,7 +204,9 @@ class _LoginScreenState extends State<LoginScreen> {
       Navigator.pushReplacementNamed(context, AppRoutes.dashboard);
     } else {
       setState(
-        () => _error = auth.errorMessage ?? 'Invalid Login ID or password.',
+        () => _error =
+            auth.errorMessage ??
+            'Unable to sign in. Please check your details and try again.',
       );
     }
   }

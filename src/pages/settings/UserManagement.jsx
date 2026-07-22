@@ -29,7 +29,7 @@ import {
 import { parseEmployeeExcel } from '../../utils/employeeExcelParser.js';
 import { authSessionManager, SESSION_EXPIRED_MESSAGE } from '../../services/authSession.js';
 
-const tabs = ['Employees', 'Hierarchy', 'HOD Mapping', 'Create Accounts', 'Activity'];
+const tabs = ['Employees', 'Hierarchy', 'HOD Mapping', 'Invitations', 'Activity'];
 const pageSize = 24;
 const emptyFilters = {
   state: '',
@@ -61,7 +61,7 @@ function inviteLifecycleLabel(profile = {}) {
   const status = String(metadata.invite_status || '').trim().toLowerCase();
   const method = String(metadata.invite_method || '').trim().toLowerCase();
   if (status === 'accepted') return 'Password Set / Accepted';
-  if (method === 'manual_setup_link') return 'Manual Setup Link Generated';
+  if (method === 'manual_setup_link') return 'Legacy Manual Setup Link Generated';
   if (status === 'password_reset_sent') return 'Password Change Required';
   if (status === 'sent') return 'Invite Sent';
   return profile.auth_user_id ? 'Login Enabled' : 'Profile Only';
@@ -149,7 +149,6 @@ export default function UserManagement() {
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState('');
-  const [messageLink, setMessageLink] = useState('');
   const [importOpen, setImportOpen] = useState(false);
   const [importReview, setImportReview] = useState(null);
   const [importEmployees, setImportEmployees] = useState([]);
@@ -231,20 +230,14 @@ export default function UserManagement() {
     }
   }
 
-  function showMessage(text, link = '') {
+  function showMessage(text) {
     setMessage(text);
-    setMessageLink(link);
     window.setTimeout(() => {
       setMessage('');
-      setMessageLink('');
-    }, link ? 30000 : 5000);
+    }, 5000);
   }
 
   function showInviteMessage(invite, fallback) {
-    if (invite?.setup_link) {
-      showMessage(invite.message || 'Manual setup link generated. Share this link with the employee.', invite.setup_link);
-      return;
-    }
     showMessage(invite?.message || fallback);
   }
 
@@ -303,7 +296,7 @@ export default function UserManagement() {
       if (formMode === 'edit') {
         showMessage('User profile updated.');
       } else {
-        showInviteMessage(result.invite, 'User account created and invite prepared.');
+        showInviteMessage(result.invite, 'User account invited.');
       }
     } catch (error) {
       setFormError(apiErrorMessage(error));
@@ -341,7 +334,7 @@ export default function UserManagement() {
       let result;
       if (action === 'Deactivate') result = await deactivateAdminUser(user.id, actionPayload);
       if (action === 'Reactivate') result = await reactivateAdminUser(user.id, actionPayload);
-      if (action === 'Reset Password') result = await resetAdminUserPassword(user.id, actionPayload);
+      if (action === 'Resend Invitation') result = await resetAdminUserPassword(user.id, actionPayload);
       if (action === 'Hard Delete Preview') result = await getHardDeletePreview(user.id);
       if (action === 'Hard Delete') result = await hardDeleteAdminUser(user.id, actionPayload);
       if (action === 'Repair Employee Code Preview') result = await previewEmployeeCodeRepair(user.id, actionPayload);
@@ -389,7 +382,7 @@ export default function UserManagement() {
       setEnableLoginEmail('');
       setEnableLoginMobile('');
       refreshList();
-      showInviteMessage(result.invite, 'Login access enabled.');
+      showInviteMessage(result.invite, 'Invitation sent.');
     } catch (error) {
       showMessage(apiErrorMessage(error));
     } finally {
@@ -464,8 +457,8 @@ export default function UserManagement() {
           <UserPlus className="h-8 w-8" />
         </div>
         <h2 className="mt-5 text-xl font-bold text-slate-950">No profiles found</h2>
-        <p className="mx-auto mt-2 max-w-md text-sm font-semibold text-slate-500">Adjust the backend filters, sync existing Auth users, or create a user.</p>
-        <button type="button" onClick={openAddUser} className="focus-ring mt-5 rounded-xl bg-qpms-600 px-4 py-2 text-sm font-bold text-white">Add User</button>
+        <p className="mx-auto mt-2 max-w-md text-sm font-semibold text-slate-500">Adjust the backend filters, sync existing Auth users, or invite a user.</p>
+        <button type="button" onClick={openAddUser} className="focus-ring mt-5 rounded-xl bg-qpms-600 px-4 py-2 text-sm font-bold text-white">Invite User</button>
       </section>
     );
   }
@@ -573,20 +566,8 @@ export default function UserManagement() {
         <div className="fixed bottom-5 right-5 z-[70] max-w-xl rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 shadow-xl">
           <div className="flex items-start gap-3">
             <span className="min-w-0 flex-1">{message}</span>
-            <button type="button" aria-label="Dismiss message" onClick={() => { setMessage(''); setMessageLink(''); }} className="grid h-7 w-7 place-items-center rounded-full text-slate-400 hover:bg-slate-50"><X className="h-4 w-4" /></button>
+            <button type="button" aria-label="Dismiss message" onClick={() => setMessage('')} className="grid h-7 w-7 place-items-center rounded-full text-slate-400 hover:bg-slate-50"><X className="h-4 w-4" /></button>
           </div>
-          {messageLink ? (
-            <div className="mt-3 flex gap-2">
-              <input readOnly value={messageLink} className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-600" />
-              <button
-                type="button"
-                onClick={() => navigator.clipboard?.writeText(messageLink)}
-                className="focus-ring rounded-lg border border-qpms-200 px-3 text-xs font-black text-qpms-700"
-              >
-                Copy
-              </button>
-            </div>
-          ) : null}
         </div>
       ) : null}
 

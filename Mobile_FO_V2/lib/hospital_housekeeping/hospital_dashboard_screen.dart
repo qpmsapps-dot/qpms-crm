@@ -5,6 +5,7 @@ import 'hospital_controller.dart';
 import 'hospital_models.dart';
 import 'hospital_ticket_card.dart';
 import 'hospital_ticket_detail_screen.dart';
+import 'hospital_tickets_screen.dart';
 
 class HospitalDashboardScreen extends StatelessWidget {
   const HospitalDashboardScreen({required this.controller, super.key});
@@ -14,51 +15,78 @@ class HospitalDashboardScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final summary = controller.summary;
-    final items = <(String, int, IconData, Color)>[
+    final items = <(String, int, IconData, Color, HospitalTicketListFilter)>[
       (
-        'New Complaints',
+        'New Assignments',
         summary.newComplaints,
         Icons.new_releases_outlined,
         qpmsBlue,
+        HospitalTicketListFilter.newAssignments,
       ),
-      ('Open', summary.open, Icons.inbox_outlined, qpmsBlue),
+      (
+        'Awaiting Acceptance',
+        summary.awaitingAcceptance,
+        Icons.inbox_outlined,
+        qpmsBlue,
+        HospitalTicketListFilter.awaitingAcceptance,
+      ),
       (
         'Assigned',
         summary.assigned,
         Icons.assignment_ind_outlined,
         hospitalTeal,
+        HospitalTicketListFilter.awaitingAcceptance,
       ),
       (
         'In Progress',
         summary.inProgress,
         Icons.cleaning_services_outlined,
         hospitalTeal,
+        HospitalTicketListFilter.inProgress,
       ),
       (
-        'Near SLA Breach',
-        summary.nearBreach,
+        'Due Soon',
+        summary.dueSoon,
         Icons.timer_outlined,
         hospitalAmber,
+        HospitalTicketListFilter.dueSoon,
+      ),
+      (
+        'SLA Breached',
+        summary.breached,
+        Icons.timer_off_outlined,
+        hospitalRed,
+        HospitalTicketListFilter.breached,
       ),
       (
         'Escalated',
         summary.escalated,
         Icons.warning_amber_rounded,
         hospitalRed,
+        HospitalTicketListFilter.escalated,
       ),
       (
-        'Awaiting Confirmation',
-        summary.awaitingConfirmation,
-        Icons.fact_check_outlined,
-        hospitalGreen,
+        'Reopened',
+        summary.reopened,
+        Icons.replay_rounded,
+        hospitalRed,
+        HospitalTicketListFilter.reopened,
       ),
-      ('Reopened', summary.reopened, Icons.replay_rounded, hospitalRed),
       (
-        'Closed Today',
+        'Resolved Today',
         summary.closedToday,
         Icons.task_alt_rounded,
         hospitalGreen,
+        HospitalTicketListFilter.resolvedToday,
       ),
+      if (controller.session.role != HospitalDemoRole.supervisor)
+        (
+          'Unassigned',
+          summary.unassigned,
+          Icons.assignment_late_outlined,
+          hospitalAmber,
+          HospitalTicketListFilter.unassigned,
+        ),
     ];
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 120),
@@ -104,34 +132,45 @@ class HospitalDashboardScreen extends StatelessWidget {
           ),
           itemBuilder: (_, index) {
             final item = items[index];
-            return Container(
-              padding: const EdgeInsets.all(11),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
+            return InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => HospitalTicketsScreen(
+                    controller: controller,
+                    initialFilter: item.$5,
+                  ),
+                ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(item.$3, color: item.$4, size: 21),
-                  const Spacer(),
-                  Text(
-                    '${item.$2}',
-                    style: TextStyle(
-                      color: item.$4,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
+              child: Container(
+                padding: const EdgeInsets.all(11),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(item.$3, color: item.$4, size: 21),
+                    const Spacer(),
+                    Text(
+                      '${item.$2}',
+                      style: TextStyle(
+                        color: item.$4,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
-                  ),
-                  Text(
-                    item.$1,
-                    maxLines: 2,
-                    style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
+                    Text(
+                      item.$1,
+                      maxLines: 2,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             );
           },

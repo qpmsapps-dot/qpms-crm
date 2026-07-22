@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../app/routes.dart';
 import '../../core/constants/app_colors.dart';
+import '../../core/utils/friendly_errors.dart';
 import '../../core/widgets/app_card.dart';
 import '../../state/ticket_controller.dart';
 
@@ -16,8 +17,8 @@ class FeedbackScreen extends StatefulWidget {
 
 class _FeedbackScreenState extends State<FeedbackScreen> {
   final _comments = TextEditingController();
-  int _rating = 5;
-  bool? _satisfied;
+  int? _rating;
+  bool _submitting = false;
   String? _error;
 
   @override
@@ -37,43 +38,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(18, 6, 18, 28),
           children: [
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: const Color(0xFFECFDF5),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFFA7F3D0)),
-              ),
-              child: const Column(
-                children: [
-                  CircleAvatar(
-                    radius: 28,
-                    backgroundColor: Colors.white,
-                    child: Icon(
-                      Icons.verified_rounded,
-                      size: 30,
-                      color: AppColors.green,
-                    ),
-                  ),
-                  SizedBox(height: 12),
-                  Text(
-                    'Has the issue been resolved?',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.deepBlue,
-                    ),
-                  ),
-                  SizedBox(height: 5),
-                  Text(
-                    'Please check the completed work before confirming.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: AppColors.muted),
-                  ),
-                ],
-              ),
-            ),
+            const _RatingHeader(),
             const SizedBox(height: 16),
             AppCard(
               child: Column(
@@ -112,7 +77,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               child: Column(
                 children: [
                   const Text(
-                    'Rate the housekeeping service',
+                    'Rate the service',
                     style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w900,
@@ -125,16 +90,34 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                     children: List.generate(
                       5,
                       (index) => IconButton(
-                        onPressed: () => setState(() => _rating = index + 1),
+                        iconSize: 38,
+                        onPressed: _submitting
+                            ? null
+                            : () => setState(() {
+                                _rating = index + 1;
+                                _error = null;
+                              }),
                         icon: Icon(
-                          index < _rating
+                          index < (_rating ?? 0)
                               ? Icons.star_rounded
                               : Icons.star_border_rounded,
                           size: 34,
-                          color: const Color(0xFFF59E0B),
+                          color: index < (_rating ?? 0)
+                              ? const Color(0xFFF59E0B)
+                              : const Color(0xFFCBD5E1),
                         ),
                         tooltip: '${index + 1} star',
                       ),
+                    ),
+                  ),
+                  Text(
+                    _rating == null
+                        ? 'Select a rating'
+                        : '${_rating!} Star${_rating == 1 ? '' : 's'} - ${_ratingLabel(_rating!)}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.deepBlue,
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -142,41 +125,13 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                     controller: _comments,
                     minLines: 3,
                     maxLines: 5,
+                    maxLength: 300,
+                    enabled: !_submitting,
                     decoration: const InputDecoration(
                       labelText: 'Comments',
                       hintText: 'Tell us about the completed work',
                       alignLabelWithHint: true,
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _DecisionButton(
-                          label: 'Not Satisfied',
-                          icon: Icons.replay_rounded,
-                          selected: _satisfied == false,
-                          color: AppColors.red,
-                          onTap: () => setState(() {
-                            _satisfied = false;
-                            _error = null;
-                          }),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _DecisionButton(
-                          label: 'Satisfied',
-                          icon: Icons.thumb_up_alt_rounded,
-                          selected: _satisfied == true,
-                          color: AppColors.green,
-                          onTap: () => setState(() {
-                            _satisfied = true;
-                            _error = null;
-                          }),
-                        ),
-                      ),
-                    ],
                   ),
                   if (_error != null) ...[
                     const SizedBox(height: 12),
@@ -193,55 +148,111 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               ),
             ),
             const SizedBox(height: 18),
-            ElevatedButton(
-              onPressed: _submit,
-              child: Text(
-                _satisfied == false
-                    ? 'Reopen This Ticket'
-                    : 'Submit Confirmation',
-              ),
+            ElevatedButton.icon(
+              onPressed: _submitting ? null : () => _submit(satisfied: true),
+              icon: _submitting
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.star_rounded),
+              label: const Text('Submit Rating'),
             ),
-            if (_satisfied == false) ...[
-              const SizedBox(height: 8),
-              const Text(
-                'This reopens the same ticket and restarts the Housekeeping Supervisor SLA. A duplicate ticket will not be created.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 11,
-                  height: 1.4,
-                  color: AppColors.muted,
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: _submitting ? null : _confirmReopen,
+              icon: const Icon(Icons.replay_rounded),
+              label: const Text('Not Satisfied / Reopen'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.red,
+                side: const BorderSide(color: AppColors.red),
+                minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
                 ),
               ),
-            ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Not satisfied keeps the same ticket open for another review. A duplicate complaint is not created.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                height: 1.4,
+                color: AppColors.muted,
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Future<void> _submit() async {
-    if (_satisfied == null) {
-      setState(() => _error = 'Please select Satisfied or Not Satisfied.');
-      return;
-    }
-    if (_satisfied == false && _comments.text.trim().isEmpty) {
+  Future<void> _confirmReopen() async {
+    final reason = _comments.text.trim();
+    if (reason.isEmpty) {
       setState(() => _error = 'Please tell us what still needs attention.');
       return;
     }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Reopen complaint?'),
+        content: const Text(
+          'This will mark the work as not satisfied and reopen the same complaint.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.red),
+            child: const Text('Submit & Reopen'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) await _submit(satisfied: false);
+  }
+
+  Future<void> _submit({required bool satisfied}) async {
+    if (_rating == null) {
+      setState(() => _error = 'Select a rating from 1 to 5 stars.');
+      return;
+    }
+    if (!satisfied && _comments.text.trim().isEmpty) {
+      setState(() => _error = 'Please tell us what still needs attention.');
+      return;
+    }
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
     try {
       await context.read<TicketController>().submitFeedback(
         ticketNumber: widget.ticketNumber,
-        rating: _rating,
+        rating: _rating!,
         comment: _comments.text,
-        satisfied: _satisfied!,
+        satisfied: satisfied,
       );
     } catch (error) {
       if (!mounted) return;
-      setState(() => _error = error.toString());
+      setState(() {
+        _submitting = false;
+        _error = friendlyErrorMessage(
+          error,
+          fallback: 'Unable to submit feedback. Please try again.',
+        );
+      });
       return;
     }
     if (!mounted) return;
-    final message = _satisfied!
+    final message = satisfied
         ? 'Thank you. The ticket is now closed.'
         : 'The same ticket has been reopened.';
     ScaffoldMessenger.of(
@@ -256,48 +267,49 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }
 }
 
-class _DecisionButton extends StatelessWidget {
-  const _DecisionButton({
-    required this.label,
-    required this.icon,
-    required this.selected,
-    required this.color,
-    required this.onTap,
-  });
-  final String label;
-  final IconData icon;
-  final bool selected;
-  final Color color;
-  final VoidCallback onTap;
+class _RatingHeader extends StatelessWidget {
+  const _RatingHeader();
+
   @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    borderRadius: BorderRadius.circular(14),
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
-      decoration: BoxDecoration(
-        color: selected ? color.withValues(alpha: 0.1) : Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: selected ? color : AppColors.line,
-          width: selected ? 2 : 1,
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(18),
+    decoration: BoxDecoration(
+      color: const Color(0xFFECFDF5),
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: const Color(0xFFA7F3D0)),
+    ),
+    child: const Column(
+      children: [
+        CircleAvatar(
+          radius: 28,
+          backgroundColor: Colors.white,
+          child: Icon(Icons.verified_rounded, size: 30, color: AppColors.green),
         ),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, color: color),
-          const SizedBox(height: 5),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w900,
-              color: selected ? color : AppColors.ink,
-            ),
+        SizedBox(height: 12),
+        Text(
+          'How was the work completed?',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w900,
+            color: AppColors.deepBlue,
           ),
-        ],
-      ),
+        ),
+        SizedBox(height: 5),
+        Text(
+          'Rate the service before confirming the completed work.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: AppColors.muted),
+        ),
+      ],
     ),
   );
 }
+
+String _ratingLabel(int rating) => switch (rating) {
+  1 => 'Very Poor',
+  2 => 'Poor',
+  3 => 'Average',
+  4 => 'Good',
+  _ => 'Excellent',
+};

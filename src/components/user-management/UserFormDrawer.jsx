@@ -384,7 +384,7 @@ export default function UserFormDrawer({
         <div className="sticky top-0 z-10 flex items-start justify-between border-b border-slate-200 bg-white px-5 py-4">
           <div>
             <h2 className="text-lg font-bold text-slate-950">
-              {mode === 'edit' ? 'Edit User' : 'Create User'}
+              {mode === 'edit' ? 'Edit User' : 'Invite User'}
             </h2>
             <p className="text-sm font-semibold text-slate-500">
               {mode === 'edit'
@@ -543,7 +543,7 @@ export default function UserFormDrawer({
           <div className="sticky bottom-0 -mx-5 flex justify-end gap-2 border-t border-slate-200 bg-white px-5 py-4">
             <button type="button" disabled={busy} onClick={onClose} className="focus-ring rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700">Cancel</button>
             <button type="submit" disabled={busy} className="focus-ring rounded-xl bg-qpms-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-60">
-              {busy ? 'Saving...' : mode === 'edit' ? 'Save Changes' : profileOnlyMd ? 'Create MD Profile' : 'Create User'}
+              {busy ? 'Saving...' : mode === 'edit' ? 'Save Changes' : profileOnlyMd ? 'Create MD Profile' : 'Invite User'}
             </button>
           </div>
         </form>

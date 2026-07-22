@@ -11,9 +11,12 @@ import '../services/background_tracking_service.dart';
 import '../services/crash_log_service.dart';
 import '../services/local_store.dart';
 import '../services/supabase_service.dart';
+import '../utils/date_utils.dart';
 import '../utils/local_id.dart';
 import 'route_km_calculator.dart';
+import 'phase1_tracking_policy.dart';
 import 'tracking_flags.dart';
+import 'tracking_health_metrics.dart';
 
 // ignore: constant_identifier_names
 const bool ENABLE_BACKGROUND_SERVICE =
@@ -24,8 +27,8 @@ class TrackingService {
   static const movingInterval = Duration(seconds: 10);
   static const stationaryInterval = Duration(seconds: 75);
   static const lowBatteryInterval = Duration(seconds: 45);
-  static const queueSyncInterval = Duration(seconds: 30);
-  static const _batchSize = 50;
+  static const queueSyncInterval = TrackingFlags.gpsBatchInterval;
+  static const _batchSize = TrackingFlags.gpsBatchSize;
   static Timer? _timer;
   static StreamSubscription<Map<String, dynamic>?>? _updatesSub;
   static bool _starting = false;
@@ -36,6 +39,10 @@ class TrackingService {
   static bool _usingTimerFallback = false;
   static int _startGeneration = 0;
   static DateTime? _lastQueueSyncAttempt;
+  static DateTime? _lastFallbackLiveStatusWrite;
+  static DateTime? _lastFallbackAttendanceKmWrite;
+  static DateTime? _lastFallbackRemoteValidationAttempt;
+  static DateTime? _lastFallbackRemoteValidationSuccess;
   static DateTime? _lastGpsSync;
   static DateTime? _lastSuccessfulSync;
   static double? _lastLatitude;
@@ -46,6 +53,8 @@ class TrackingService {
   static int _gpsLogsToday = 0;
   static int _queueLength = 0;
   static String? _lastTrackingError;
+  static TrackingMotionState? _lastFallbackMotionState;
+  static final GpsBatchScheduler _batchScheduler = GpsBatchScheduler();
 
   static bool get isActive =>
       _timer?.isActive == true || _updatesSub != null || _pausedForSiteVisit;
@@ -262,6 +271,7 @@ class TrackingService {
     double? speed,
     double? routeKm,
     bool updateRemoteLiveStatus = true,
+    String reason = 'explicit_stop',
   }) async {
     try {
       await CrashLogService.record(
@@ -273,14 +283,34 @@ class TrackingService {
       _timer = null;
       await _updatesSub?.cancel();
       _updatesSub = null;
+      if (!_usingAndroidService) {
+        try {
+          await syncQueuedLogs(
+            force: true,
+          ).timeout(TrackingFlags.gracefulFlushTimeout);
+        } catch (_) {
+          // Pending rows remain durable and will be retried after valid login.
+        }
+      }
       if (_usingAndroidService ||
           TrackingFlags.enableAndroidForegroundLocationService) {
-        await BackgroundTrackingService.stopTracking();
+        final stopped = await BackgroundTrackingService.stopTracking(
+          reason: reason,
+        );
+        if (!stopped) {
+          _lastTrackingError = 'Foreground tracking stop was not acknowledged.';
+        }
       }
       await BackgroundTrackingService.clearActiveSession();
       _usingAndroidService = false;
       _usingTimerFallback = false;
       _pausedForSiteVisit = false;
+      _lastFallbackLiveStatusWrite = null;
+      _lastFallbackAttendanceKmWrite = null;
+      _lastFallbackMotionState = null;
+      _lastFallbackRemoteValidationAttempt = null;
+      _lastFallbackRemoteValidationSuccess = null;
+      await TrackingHealthMetrics.setValue('last_stop_reason', reason);
       await CrashLogService.record(
         employeeCode: user?.employeeCode,
         screen: 'tracking',
@@ -341,6 +371,7 @@ class TrackingService {
       }
       _pausedForSiteVisit = true;
       BackgroundTrackingService.refreshAfterSiteVisitChange();
+      await flushForTransition('check_in');
 
       final attendance = await LocalStore.getAttendance();
       final attendanceId = attendance == null
@@ -419,6 +450,20 @@ class TrackingService {
     }
   }
 
+  static Future<void> flushForTransition(String reason) async {
+    if (_usingAndroidService) {
+      FlutterBackgroundService().invoke('flushQueue', {'reason': reason});
+      return;
+    }
+    try {
+      await syncQueuedLogs(
+        force: true,
+      ).timeout(TrackingFlags.gracefulFlushTimeout);
+    } catch (_) {
+      // The durable queue is intentionally retained for the next safe retry.
+    }
+  }
+
   static Future<void> resumeAfterSiteCheckout({
     required FoUser user,
     required Attendance attendance,
@@ -429,6 +474,7 @@ class TrackingService {
     try {
       _pausedForSiteVisit = false;
       BackgroundTrackingService.refreshAfterSiteVisitChange();
+      await flushForTransition('checkout');
       final attendanceId = _remoteAttendanceId(attendance);
       LocationLog? checkoutLog;
       if (attendanceId != null && checkoutPosition != null) {
@@ -480,6 +526,19 @@ class TrackingService {
       if (_usingAndroidService) {
         return;
       }
+      final attendanceDate =
+          attendance.attendanceDate?.trim().isNotEmpty == true
+          ? attendance.attendanceDate!.trim()
+          : indiaDateKey(attendance.startTime);
+      if (attendanceDate != indiaDateKey(DateTime.now())) {
+        await stop(
+          user: user,
+          updateRemoteLiveStatus: false,
+          reason: 'attendance_date_mismatch',
+        );
+        return;
+      }
+      if (!await _validateFallbackAttendance(user, attendance)) return;
       if (_timer?.isActive != true &&
           TrackingFlags.enableFlutterTimerFallback) {
         _usingTimerFallback = true;
@@ -568,6 +627,19 @@ class TrackingService {
         );
         return;
       }
+      final attendanceDate =
+          attendance.attendanceDate?.trim().isNotEmpty == true
+          ? attendance.attendanceDate!.trim()
+          : indiaDateKey(attendance.startTime);
+      if (attendanceDate != indiaDateKey(DateTime.now())) {
+        await stop(
+          user: user,
+          updateRemoteLiveStatus: false,
+          reason: 'attendance_date_mismatch',
+        );
+        return;
+      }
+      if (!await _validateFallbackAttendance(user, attendance)) return;
       final activeVisit = await LocalStore.activeVisit();
       if (_pausedForSiteVisit || activeVisit != null) {
         _timer?.cancel();
@@ -608,6 +680,8 @@ class TrackingService {
       );
       try {
         await LocalStore.addLocationLog(log, eventType: 'tracking');
+        await TrackingHealthMetrics.increment('gps_collected');
+        await TrackingHealthMetrics.increment('gps_queued');
         await CrashLogService.record(
           employeeCode: user.employeeCode,
           screen: 'tracking',
@@ -625,7 +699,11 @@ class TrackingService {
         );
         return;
       }
-      _updateAdaptiveInterval(position, battery, user.employeeCode);
+      final motionState = _updateAdaptiveInterval(
+        position,
+        battery,
+        user.employeeCode,
+      );
       await _syncQueuedLogsIfDue(force: _lastQueueSyncAttempt == null);
       await _refreshGpsLogsToday(user.employeeCode, attendanceId);
 
@@ -637,39 +715,63 @@ class TrackingService {
             ? attendance.eligibleKm
             : attendance.totalRouteKm;
       await LocalStore.saveAttendance(attendance);
-      try {
-        await SupabaseService.updateAttendanceKm(attendance);
-      } catch (error, stackTrace) {
-        tickHadError = true;
-        await _recordDemoStableError(
-          employeeCode: user.employeeCode,
-          action: 'FOREGROUND_ATTENDANCE_KM_UPDATE_FAILED',
-          error: error,
-          stackTrace: stackTrace,
-        );
+      final now = DateTime.now();
+      if (!TrackingFlags.enableAttendanceKmCoalescing ||
+          WriteCadence.isDue(
+            now: now,
+            lastWriteAt: _lastFallbackAttendanceKmWrite,
+            interval: WriteCadence.attendanceKm(motionState),
+          )) {
+        try {
+          await SupabaseService.updateAttendanceKm(attendance);
+          _lastFallbackAttendanceKmWrite = now;
+          await TrackingHealthMetrics.increment('attendance_km_writes');
+        } catch (error, stackTrace) {
+          tickHadError = true;
+          await _recordDemoStableError(
+            employeeCode: user.employeeCode,
+            action: 'FOREGROUND_ATTENDANCE_KM_UPDATE_FAILED',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
       }
-      try {
-        await SupabaseService.updateLiveStatus(
-          user: user,
-          isTracking: true,
-          status: 'Active',
-          latitude: acceptedLog?.latitude,
-          longitude: acceptedLog?.longitude,
-          accuracy: acceptedLog?.accuracy,
-          speed: acceptedLog?.speed,
-          battery: battery,
-          routeKm: attendance.eligibleKm,
-          attendanceId: attendanceId,
-        );
-      } catch (error, stackTrace) {
-        tickHadError = true;
-        await _recordDemoStableError(
-          employeeCode: user.employeeCode,
-          action: 'FOREGROUND_LIVE_STATUS_UPDATE_FAILED',
-          error: error,
-          stackTrace: stackTrace,
-        );
+      final motionChanged =
+          _lastFallbackMotionState != null &&
+          _lastFallbackMotionState != motionState;
+      if (!TrackingFlags.enableLiveStatusCoalescing ||
+          motionChanged ||
+          WriteCadence.isDue(
+            now: now,
+            lastWriteAt: _lastFallbackLiveStatusWrite,
+            interval: WriteCadence.liveStatus(motionState),
+          )) {
+        try {
+          await SupabaseService.updateLiveStatus(
+            user: user,
+            isTracking: true,
+            status: 'Active',
+            latitude: acceptedLog?.latitude,
+            longitude: acceptedLog?.longitude,
+            accuracy: acceptedLog?.accuracy,
+            speed: acceptedLog?.speed,
+            battery: battery,
+            routeKm: attendance.eligibleKm,
+            attendanceId: attendanceId,
+          );
+          _lastFallbackLiveStatusWrite = now;
+          await TrackingHealthMetrics.increment('live_status_writes');
+        } catch (error, stackTrace) {
+          tickHadError = true;
+          await _recordDemoStableError(
+            employeeCode: user.employeeCode,
+            action: 'FOREGROUND_LIVE_STATUS_UPDATE_FAILED',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
       }
+      _lastFallbackMotionState = motionState;
       _lastGpsSync = log.capturedAt;
       _lastLatitude = log.latitude;
       _lastLongitude = log.longitude;
@@ -708,7 +810,7 @@ class TrackingService {
     });
   }
 
-  static void _updateAdaptiveInterval(
+  static TrackingMotionState _updateAdaptiveInterval(
     Position position,
     int? battery,
     String employeeCode,
@@ -741,7 +843,9 @@ class TrackingService {
           error: 'low_battery=$battery seconds=${lowBatteryInterval.inSeconds}',
         ),
       );
-      return;
+      return moving
+          ? TrackingMotionState.moving
+          : TrackingMotionState.stationary;
     }
     _nextForegroundInterval = moving ? movingInterval : stationaryInterval;
     unawaited(
@@ -753,6 +857,7 @@ class TrackingService {
             'speed=$speed moved_m=$movedMeters seconds=${_nextForegroundInterval.inSeconds}',
       ),
     );
+    return moving ? TrackingMotionState.moving : TrackingMotionState.stationary;
   }
 
   static Future<void> _refreshGpsLogsToday(
@@ -760,7 +865,9 @@ class TrackingService {
     String attendanceId,
   ) async {
     final today = DateTime.now();
-    final localLogs = await LocalStore.getLocationLogs();
+    final localLogs = await LocalStore.getLocationLogs(
+      attendanceId: attendanceId,
+    );
     _gpsLogsToday = localLogs
         .where(
           (log) =>
@@ -801,6 +908,8 @@ class TrackingService {
       capturedAt: capturedAt ?? DateTime.now(),
     );
     await LocalStore.addLocationLog(log, eventType: anchorAction ?? 'anchor');
+    await TrackingHealthMetrics.increment('gps_collected');
+    await TrackingHealthMetrics.increment('gps_queued');
     await CrashLogService.record(
       employeeCode: user.employeeCode,
       screen: 'tracking',
@@ -816,7 +925,9 @@ class TrackingService {
         error: 'attendance_id=$attendanceId',
       );
     }
-    await _syncQueuedLogsIfDue(force: _lastQueueSyncAttempt == null);
+    await _syncQueuedLogsIfDue(
+      force: anchorAction != null || _lastQueueSyncAttempt == null,
+    );
     await _refreshGpsLogsToday(user.employeeCode, attendanceId);
 
     final liveKm = await calculateKm(attendanceId);
@@ -829,6 +940,8 @@ class TrackingService {
     if (SupabaseService.isReady) {
       try {
         await SupabaseService.updateAttendanceKm(attendance);
+        _lastFallbackAttendanceKmWrite = DateTime.now();
+        await TrackingHealthMetrics.increment('attendance_km_writes');
       } catch (error, stackTrace) {
         await _recordDemoStableError(
           employeeCode: user.employeeCode,
@@ -921,27 +1034,112 @@ class TrackingService {
 
   static Future<void> _syncQueuedLogsIfDue({bool force = false}) async {
     final now = DateTime.now();
-    if (!force &&
-        _lastQueueSyncAttempt != null &&
-        now.difference(_lastQueueSyncAttempt!) < queueSyncInterval) {
-      return;
-    }
+    final queueLength = await LocalStore.countUnsyncedLocationLogs();
+    final decision = _batchScheduler.decision(
+      now: now,
+      queuedPoints: queueLength,
+      force: force,
+    );
+    if (!decision.shouldFlush) return;
     _lastQueueSyncAttempt = now;
-    await syncQueuedLogs();
+    await syncQueuedLogs(force: force);
   }
 
-  static Future<void> syncQueuedLogs({bool force = false}) async {
-    if (_usingAndroidService && !force) return;
-    if (_syncingQueuedLogs || !SupabaseService.isReady) return;
+  static Future<bool> _validateFallbackAttendance(
+    FoUser user,
+    Attendance attendance,
+  ) async {
+    if (!TrackingFlags.enableRemoteAttendanceValidation ||
+        !SupabaseService.isReady) {
+      return true;
+    }
+    final now = DateTime.now();
+    if (_lastFallbackRemoteValidationAttempt != null &&
+        now.difference(_lastFallbackRemoteValidationAttempt!) <
+            TrackingFlags.remoteAttendanceValidationInterval) {
+      return true;
+    }
+    _lastFallbackRemoteValidationAttempt = now;
+    if (SupabaseService.client.auth.currentSession == null ||
+        SupabaseService.client.auth.currentUser == null) {
+      await stop(
+        user: user,
+        updateRemoteLiveStatus: false,
+        reason: 'authentication_not_authorized',
+      );
+      return false;
+    }
+    try {
+      final active = await SupabaseService.isAttendanceConfirmedActive(
+        user: user,
+        attendance: attendance,
+      );
+      if (!active) {
+        await TrackingHealthMetrics.increment('remote_validation_closed');
+        await stop(
+          user: user,
+          updateRemoteLiveStatus: false,
+          reason: 'backend_attendance_closed',
+        );
+        return false;
+      }
+      _lastFallbackRemoteValidationSuccess = now;
+      await TrackingHealthMetrics.increment('remote_validation_active');
+      return true;
+    } catch (error) {
+      final lower = error.toString().toLowerCase();
+      if (lower.contains('jwt') ||
+          lower.contains('session expired') ||
+          lower.contains('unauthorized') ||
+          lower.contains('401')) {
+        await stop(
+          user: user,
+          updateRemoteLiveStatus: false,
+          reason: 'authentication_expired',
+        );
+        return false;
+      }
+      final graceStart =
+          _lastFallbackRemoteValidationSuccess ?? attendance.startTime;
+      if (now.difference(graceStart) >
+          TrackingFlags.offlineAttendanceGracePeriod) {
+        await stop(
+          user: user,
+          updateRemoteLiveStatus: false,
+          reason: 'offline_validation_grace_expired',
+        );
+        return false;
+      }
+      return true;
+    }
+  }
+
+  static Future<bool> syncQueuedLogs({bool force = false}) async {
+    if (_usingAndroidService) {
+      if (force) {
+        FlutterBackgroundService().invoke('flushQueue', {
+          'reason': 'forced_ui_flush',
+        });
+      }
+      return false;
+    }
+    if (_syncingQueuedLogs || !SupabaseService.isReady) return false;
     _syncingQueuedLogs = true;
+    final attemptAt = DateTime.now();
+    _batchScheduler.markAttempt(attemptAt);
+    await TrackingHealthMetrics.increment('batch_attempts');
     try {
       _queueLength = await LocalStore.countUnsyncedLocationLogs();
+      await TrackingHealthMetrics.setValue('queue_size', _queueLength);
       await CrashLogService.record(
         screen: 'tracking',
         action: 'LOCATION_QUEUE_LENGTH',
         error: 'queue_length=$_queueLength',
       );
-      if (_queueLength == 0) return;
+      if (_queueLength == 0) {
+        _batchScheduler.markSuccess();
+        return true;
+      }
       final logs = await LocalStore.getUnsyncedLocationLogs(limit: _batchSize);
       await CrashLogService.record(
         screen: 'tracking',
@@ -959,10 +1157,21 @@ class TrackingService {
           action: 'GPS_LOG_RETRY_PENDING',
           error: 'count=${logs.length}',
         );
+        final delay = _batchScheduler.markFailure(DateTime.now());
+        await TrackingHealthMetrics.increment('batch_failures');
+        await TrackingHealthMetrics.setValue('retry_seconds', delay.inSeconds);
+        return false;
       } else {
         await LocalStore.markLocationLogsSynced(remoteIds);
         _lastSuccessfulSync = DateTime.now();
+        _batchScheduler.markSuccess();
         await LocalStore.cleanupOldSyncedLocationLogs(keepDays: 10);
+        await TrackingHealthMetrics.increment('batch_successes');
+        await TrackingHealthMetrics.increment(
+          'gps_uploaded',
+          by: remoteIds.length,
+        );
+        await TrackingHealthMetrics.setValue('retry_seconds', 0);
         await CrashLogService.record(
           screen: 'tracking',
           action: 'GPS_LOG_BATCH_SYNCED',
@@ -970,13 +1179,19 @@ class TrackingService {
         );
       }
       _queueLength = await LocalStore.countUnsyncedLocationLogs();
+      await TrackingHealthMetrics.setValue('queue_size', _queueLength);
+      return true;
     } catch (error, stackTrace) {
+      final delay = _batchScheduler.markFailure(DateTime.now());
+      await TrackingHealthMetrics.increment('batch_failures');
+      await TrackingHealthMetrics.setValue('retry_seconds', delay.inSeconds);
       await CrashLogService.record(
         screen: 'tracking',
         action: 'GPS_LOG_SYNC_FAILED',
         error: error,
         stackTrace: stackTrace,
       );
+      return false;
     } finally {
       _syncingQueuedLogs = false;
     }
@@ -1005,9 +1220,7 @@ class TrackingService {
   }
 
   static Future<double> calculateKm(String attendanceId) async {
-    final logs = (await LocalStore.getLocationLogs())
-        .where((log) => log.attendanceId == attendanceId)
-        .toList();
+    final logs = await LocalStore.getLocationLogs(attendanceId: attendanceId);
     final visits = (await LocalStore.getVisits())
         .where(
           (visit) =>
@@ -1021,9 +1234,7 @@ class TrackingService {
 
   static Future<LocationLog?> latestValidLog(String attendanceId) async {
     return RouteKmCalculator.latestValidLog(
-      (await LocalStore.getLocationLogs())
-          .where((log) => log.attendanceId == attendanceId)
-          .toList(),
+      await LocalStore.getLocationLogs(attendanceId: attendanceId),
     );
   }
 }

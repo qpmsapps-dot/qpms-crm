@@ -312,83 +312,9 @@ class SupabaseService {
     String? business,
     required String password,
   }) async {
-    final cleanFullName = fullName.trim();
-    final cleanEmployeeId = employeeId.trim();
-    final cleanEmail = email.trim().toLowerCase();
-    final cleanMobile = _digits(mobile);
-    final cleanBirthDate = birthDate.trim();
-    final cleanGender = gender.trim();
-    final cleanState = state.trim();
-    final cleanDepartment = department.trim();
-    final cleanDesignation = designation.trim();
-    final cleanBusiness = business?.trim();
-    final derivedRole = deriveMobileRole(cleanDepartment, cleanDesignation);
-    final provisionedAt = DateTime.now().toUtc().toIso8601String();
-
-    if (cleanEmployeeId.isEmpty) {
-      throw ArgumentError('Employee ID is required.');
-    }
-
-    final existingProfile = await client
-        .from('profiles')
-        .select('id')
-        .ilike('employee_code', cleanEmployeeId)
-        .maybeSingle();
-    if (existingProfile != null) {
-      throw const DuplicateEmployeeIdException();
-    }
-
-    final auth = await client.auth.signUp(
-      email: cleanEmail,
-      password: password,
-      data: {
-        'employee_code': cleanEmployeeId,
-        'username': cleanEmployeeId,
-        'full_name': cleanFullName,
-        'display_name': cleanFullName,
-        'mobile': cleanMobile,
-        'birth_date': cleanBirthDate,
-        'gender': cleanGender,
-        'state': cleanState,
-        'department': cleanDepartment,
-        'designation': cleanDesignation,
-        'business': cleanBusiness?.isEmpty == true ? null : cleanBusiness,
-        'role': derivedRole,
-        'source': 'mobile_registration',
-        'status': 'Active',
-        'is_active': true,
-      },
+    throw UnsupportedError(
+      'Accounts are created by your organisation administrator. Please contact support if you need access.',
     );
-    final authUser = auth.user;
-    if (authUser == null) {
-      throw StateError('Registration did not return an auth user.');
-    }
-    await client.from('profiles').upsert({
-      'auth_user_id': authUser.id,
-      'employee_code': cleanEmployeeId,
-      'username': cleanEmployeeId,
-      'full_name': cleanFullName,
-      'display_name': cleanFullName,
-      'mobile': cleanMobile,
-      'email': cleanEmail,
-      'birth_date': cleanBirthDate,
-      'gender': cleanGender,
-      'state': cleanState,
-      'department': cleanDepartment,
-      'designation': cleanDesignation,
-      'business': cleanBusiness?.isEmpty == true ? null : cleanBusiness,
-      'role': derivedRole,
-      'status': 'Active',
-      'is_active': true,
-      'mobile_access_enabled': true,
-      'web_access_enabled': true,
-      'auth_provisioning_status': 'provisioned',
-      'auth_provisioning_error': null,
-      'auth_provisioned_at': provisionedAt,
-      'last_profile_sync_at': provisionedAt,
-      'requires_password_change': false,
-    }, onConflict: 'auth_user_id');
-    return fetchCurrentProfile();
   }
 
   static Future<FoUser> login({

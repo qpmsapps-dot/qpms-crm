@@ -37,6 +37,16 @@ export const api = axios.create({
 });
 
 export async function authenticatedApiRequest(config) {
+  const backendToken = readBackendToken();
+  if (backendToken) {
+    return api.request({
+      ...config,
+      headers: {
+        ...(config.headers || {}),
+        Authorization: `Bearer ${backendToken}`,
+      },
+    });
+  }
   if (!isSupabaseConfigured || !supabase) {
     throw new Error('Supabase Auth is not configured.');
   }
@@ -52,6 +62,20 @@ export async function authenticatedApiRequest(config) {
 }
 
 export async function authenticatedFetch(input, init = {}) {
+  const method = String(init?.method || 'GET').toUpperCase();
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    assertDemoWriteAllowed();
+  }
+  const backendToken = readBackendToken();
+  if (backendToken) {
+    return fetch(input, {
+      ...init,
+      headers: {
+        ...(init.headers || {}),
+        Authorization: `Bearer ${backendToken}`,
+      },
+    });
+  }
   return authSessionManager().authenticatedFetch(fetch, input, init);
 }
 
@@ -85,6 +109,21 @@ export function getAdminUserMe() {
   return adminApiRequest({
     method: 'GET',
     url: '/api/admin/users/me',
+  });
+}
+
+export function getMyAccess(params = {}) {
+  return adminApiRequest({
+    method: 'GET',
+    url: '/api/access/me',
+    params,
+  });
+}
+
+export function getAccessFoundation() {
+  return adminApiRequest({
+    method: 'GET',
+    url: '/api/access/foundation',
   });
 }
 

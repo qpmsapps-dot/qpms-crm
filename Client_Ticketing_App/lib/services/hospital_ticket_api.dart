@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_config.dart';
+import '../models/hospital_location_models.dart';
 
 class HospitalApiException implements Exception {
   const HospitalApiException(this.message, {this.code = '', this.statusCode});
@@ -16,6 +17,71 @@ class HospitalApiException implements Exception {
 }
 
 class HospitalTicketApi {
+  static Future<List<HospitalBlock>> loadBlocks() async {
+    final response = await request('GET', '/api/hospital-tickets/blocks');
+    return _rows(response['blocks']).map(HospitalBlock.fromJson).toList();
+  }
+
+  static Future<List<HospitalFloor>> loadFloors(String blockId) async {
+    final response = await request(
+      'GET',
+      '/api/hospital-tickets/floors',
+      query: {'block_id': blockId},
+    );
+    return _rows(response['floors']).map(HospitalFloor.fromJson).toList();
+  }
+
+  static Future<List<HospitalDepartment>> loadDepartments(
+    String blockId, {
+    String? floorId,
+  }) async {
+    final query = {'block_id': blockId};
+    if (floorId != null && floorId.isNotEmpty) query['floor_id'] = floorId;
+    final response = await request(
+      'GET',
+      '/api/hospital-tickets/departments',
+      query: query,
+    );
+    return _rows(
+      response['departments'],
+    ).map(HospitalDepartment.fromJson).toList();
+  }
+
+  static Future<List<HospitalLocation>> loadHierarchyLocations(
+    String blockId, {
+    String? floorId,
+    String? departmentId,
+  }) async {
+    final query = {'block_id': blockId};
+    if (floorId != null && floorId.isNotEmpty) query['floor_id'] = floorId;
+    if (departmentId != null && departmentId.isNotEmpty) {
+      query['department_id'] = departmentId;
+    }
+    final response = await request(
+      'GET',
+      '/api/hospital-tickets/hierarchy/locations',
+      query: query,
+    );
+    return _rows(response['locations']).map(HospitalLocation.fromJson).toList();
+  }
+
+  static Future<Map<String, List<Object>>> loadCompleteHierarchy() async {
+    final response = await request('GET', '/api/hospital-tickets/hierarchy');
+    final hierarchy = response['hierarchy'] is Map
+        ? Map<String, dynamic>.from(response['hierarchy'] as Map)
+        : <String, dynamic>{};
+    return {
+      'blocks': _rows(hierarchy['blocks']).map(HospitalBlock.fromJson).toList(),
+      'floors': _rows(hierarchy['floors']).map(HospitalFloor.fromJson).toList(),
+      'departments': _rows(
+        hierarchy['departments'],
+      ).map(HospitalDepartment.fromJson).toList(),
+      'locations': _rows(
+        hierarchy['locations'],
+      ).map(HospitalLocation.fromJson).toList(),
+    };
+  }
+
   static Future<void> uploadPhoto({
     required String ticketId,
     required String filePath,
@@ -127,4 +193,11 @@ class HospitalTicketApi {
       client.close(force: true);
     }
   }
+
+  static List<Map<String, dynamic>> _rows(dynamic value) => value is List
+      ? value
+            .whereType<Map>()
+            .map((row) => Map<String, dynamic>.from(row))
+            .toList()
+      : const [];
 }

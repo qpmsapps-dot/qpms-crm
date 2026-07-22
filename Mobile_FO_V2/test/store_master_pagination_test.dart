@@ -235,7 +235,7 @@ void main() {
 
     expect(source, contains('maxWidth: _activityImageMaxDimension'));
     expect(source, contains('maxHeight: _activityImageMaxDimension'));
-    expect(source, contains('_imageContentType(extension)'));
+    expect(source, contains('contentTypeForExtension(extension)'));
   });
 
   test('duplicate activity submit calls are ignored while submitting', () {
@@ -252,5 +252,63 @@ void main() {
 
     expect(source, contains('unawaited('));
     expect(source, contains('_isImmediateAction(action)'));
+  });
+
+  group('Activity upload Phase 2A safeguards', () {
+    late String source;
+
+    setUp(() {
+      source = File('lib/tasks/tasks_screen.dart').readAsStringSync();
+    });
+
+    test('builds an upload plan before reading bytes', () {
+      expect(source, contains('List<_ActivityUploadSource>'));
+      expect(
+        source,
+        contains('final uploadSources = _activityUploadSources()'),
+      );
+      expect(source, isNot(contains('Future<List<_ActivityUploadItem>>')));
+    });
+
+    test('captures GPS and saves activity before preparing image bytes', () {
+      final gps = source.indexOf("step: 'gps_capture'");
+      final submission = source.indexOf("step: 'submission_create'");
+      final prepare = source.indexOf("step: 'image_prepare'", gps + 1);
+
+      expect(gps, greaterThan(-1));
+      expect(submission, greaterThan(gps));
+      expect(prepare, greaterThan(submission));
+    });
+
+    test('tracks completed uploads and skips them on retry', () {
+      expect(source, contains('final Set<String> _completedUploadKeys'));
+      expect(source, contains('!_completedUploadKeys.contains(source.key)'));
+      expect(source, contains('_completedUploadKeys.add(source.key)'));
+    });
+
+    test('marks upload complete only after attachment row creation', () {
+      final link = source.indexOf('SupabaseService.createActivityUpload');
+      final complete = source.indexOf('_completedUploadKeys.add(source.key)');
+
+      expect(link, greaterThan(-1));
+      expect(complete, greaterThan(link));
+    });
+
+    test('releases image bytes after success and failure', () {
+      expect(
+        RegExp(r'item\.releaseBytes\(\);').allMatches(source),
+        hasLength(2),
+      );
+    });
+
+    test('blocks navigation and duplicate submit while submitting', () {
+      expect(source, contains('PopScope('));
+      expect(source, contains('canPop: !_submitting'));
+      expect(source, contains('if (_submitting) return;'));
+      expect(
+        source,
+        contains('onPressed: _submitting ? null : _submitActivity'),
+      );
+    });
   });
 }

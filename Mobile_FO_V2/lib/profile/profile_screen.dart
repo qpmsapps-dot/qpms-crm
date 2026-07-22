@@ -119,7 +119,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         builder: (dialogContext) => AlertDialog(
           title: const Text('Active Day Detected'),
           content: const Text(
-            'You have an active attendance or site visit. Logout will only refresh your login session. Your Start Day, active visit, and pending GPS logs will be kept safely. After login, tap Fix App State / Retry Checkout.',
+            'You have an active attendance or site visit. Logout will stop tracking on this device without ending attendance or checking out the site. Pending GPS logs and attendance state will be kept. Log in again promptly to resume tracking, then use Fix App State / Retry Checkout if needed.',
           ),
           actions: [
             TextButton(

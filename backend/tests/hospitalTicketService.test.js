@@ -80,6 +80,42 @@ test('ticket creation validates canonical fields and priority', () => {
   assert.ok(validateHospitalTicketCreate({ ...payload, idempotencyKey: '' }).length > 0);
 });
 
+test('ticket creation accepts hierarchy plus landmark without a room location', () => {
+  const payload = normalizeHospitalTicketCreate({
+    block_id: 'block-a',
+    floor_id: '',
+    department_id: 'department-a',
+    location_id: null,
+    exact_landmark: '  Opposite Nursing Station near Lift 2  ',
+    category_id: 'category-a',
+    priority: 'Medium',
+    title: 'Wet floor',
+    description: 'Wet floor near nursing station',
+    idempotency_key: 'request-2',
+  });
+
+  assert.equal(payload.locationId, '');
+  assert.equal(payload.exactLandmark, 'Opposite Nursing Station near Lift 2');
+  assert.deepEqual(validateHospitalTicketCreate(payload), []);
+});
+
+test('ticket creation rejects landmark-only requests without a department or landmark', () => {
+  const payload = normalizeHospitalTicketCreate({
+    block_id: 'block-a',
+    category_id: 'category-a',
+    priority: 'medium',
+    title: 'Wet floor',
+    description: 'Wet floor',
+    idempotency_key: 'request-3',
+  });
+
+  assert.deepEqual(validateHospitalTicketCreate(payload), [
+    'Select a room/area or provide an exact location landmark.',
+    'Select a department/unit for landmark-only tickets.',
+  ]);
+  assert.ok(validateHospitalTicketCreate({ ...payload, departmentId: 'department-a', exactLandmark: '   ' }).includes('Select a room/area or provide an exact location landmark.'));
+});
+
 test('ticket detail selects UUIDs by id and ticket numbers without a UUID cast', () => {
   assert.equal(hospitalTicketIdentifierColumn('5f6eb87f-e9ed-4f4c-a557-4cf5ce68d8a8'), 'id');
   assert.equal(hospitalTicketIdentifierColumn('QPMS-HK-2026-000001'), 'ticket_no');
@@ -94,11 +130,22 @@ test('client responses omit internal identifiers and internal-only timeline upda
     idempotency_key: 'private-retry-key',
     current_assignee_user_id: 'internal-user-id',
     metadata: { internal: true },
+    assignee: {
+      id: 'supervisor-user-id',
+      display_name: 'PHASE 2D UAT Supervisor',
+      role_code: 'housekeeping_supervisor',
+      employee_code: 'EMP-1',
+      phone: '9999999999',
+    },
   });
   assert.equal(view.ticket_no, 'QPMS-HK-2026-000001');
   assert.equal('idempotency_key' in view, false);
   assert.equal('current_assignee_user_id' in view, false);
   assert.equal('metadata' in view, false);
+  assert.deepEqual(view.assignee, {
+    display_name: 'PHASE 2D UAT Supervisor',
+    role_code: 'housekeeping_supervisor',
+  });
   assert.equal(clientCanSeeHospitalEvent({ event_type: 'progress_update', event_data: {} }), false);
   assert.equal(clientCanSeeHospitalEvent({ event_type: 'progress_update', event_data: { is_client_visible: true } }), true);
   assert.equal('event_data' in clientHospitalEventView({ event_type: 'ticket_created', event_data: {}, actor_user_id: 'actor' }), false);

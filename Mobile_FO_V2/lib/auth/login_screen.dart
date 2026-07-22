@@ -8,7 +8,6 @@ import '../services/crash_log_service.dart';
 import '../services/config_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
-import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({
@@ -197,19 +196,15 @@ class _LoginScreenState extends State<LoginScreen> {
                         child: Text(_busy ? 'Signing in...' : 'Login'),
                       ),
                     ),
-                    TextButton(
-                      onPressed: _busy
-                          ? null
-                          : () async {
-                              final user = await Navigator.of(context)
-                                  .push<FoUser>(
-                                    MaterialPageRoute(
-                                      builder: (_) => const RegisterScreen(),
-                                    ),
-                                  );
-                              if (user != null) widget.onAuthenticated(user);
-                            },
-                      child: const Text('Register for Mobile Access'),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Account access is provided by your organisation.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: qpmsMuted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     const Divider(height: 26),
                     const Row(

@@ -29,6 +29,20 @@ const double _activityImageMaxDimension = 1600;
 const int _activityImageQuality = 78;
 const int _activityUploadMaxBytes = 5 * 1024 * 1024;
 
+String _fileExtensionFromName(String fileName) {
+  final clean = fileName.trim().toLowerCase();
+  final extension = clean.contains('.') ? clean.split('.').last : 'jpg';
+  switch (extension) {
+    case 'jpeg':
+      return 'jpg';
+    case 'png':
+      return 'png';
+    case 'jpg':
+    default:
+      return 'jpg';
+  }
+}
+
 class TasksScreen extends StatefulWidget {
   const TasksScreen({
     required this.user,
@@ -2114,9 +2128,15 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
   String? _submitStep;
   int _uploadedCount = 0;
   int _uploadTotal = 0;
+  int _nextUploadKey = 1;
+  String? _lastSubmissionId;
   bool _loadingExistingTraining = false;
   bool _draftSaved = false;
   bool _existingTrainingDocument = false;
+  final Expando<String> _uploadObjectKeys = Expando<String>(
+    'activity_upload_object_keys',
+  );
+  final Set<String> _completedUploadKeys = <String>{};
 
   static const List<_TrainingCategory> _trainingCategories = [
     _TrainingCategory(
@@ -2387,87 +2407,92 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
   @override
   Widget build(BuildContext context) {
     final spec = _spec;
-    return Scaffold(
-      body: FoPage(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        children: [
-          Row(
-            children: [
-              IconButton(
-                onPressed: () => Navigator.of(context).pop(),
-                icon: const Icon(Icons.arrow_back_rounded, color: qpmsBlue),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      spec.title,
-                      style: const TextStyle(
-                        color: foNavy,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    Text(
-                      spec.subtitle,
-                      style: const TextStyle(
-                        color: Color(0xFF53607D),
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Icon(spec.icon, color: spec.color, size: 34),
-            ],
-          ),
-          const SizedBox(height: 18),
-          _siteInfo(),
-          const SizedBox(height: 14),
-          if (widget.type == FoActivityType.inspection) _inspectionBody(),
-          if (widget.type == FoActivityType.deepCleaning) _cleaningBody(),
-          if (widget.type == FoActivityType.training) _trainingBody(),
-          if (widget.type != FoActivityType.training) ...[
-            const SizedBox(height: 14),
-            _remarksCard(optional: true),
-          ],
-          const SizedBox(height: 20),
-          if (widget.type == FoActivityType.training) ...[
-            _trainingSubmitNote(),
-            const SizedBox(height: 14),
-          ],
-          if (_submitting) ...[_submitProgress(), const SizedBox(height: 14)],
-          Row(
-            children: [
-              Expanded(
-                child: FoOutlinedButton(
-                  label: widget.type == FoActivityType.training
-                      ? 'Save Draft'
-                      : 'Save as Draft',
+    return PopScope(
+      canPop: !_submitting,
+      child: Scaffold(
+        body: FoPage(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            Row(
+              children: [
+                IconButton(
                   onPressed: _submitting
                       ? null
-                      : widget.type == FoActivityType.training
-                      ? _saveTrainingDraft
-                      : () => _snack('Draft saved locally for this session.'),
+                      : () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.arrow_back_rounded, color: qpmsBlue),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FoPrimaryButton(
-                  label: _submitting
-                      ? 'Submitting...'
-                      : widget.type == FoActivityType.training
-                      ? 'Submit Training'
-                      : 'Submit',
-                  icon: Icons.check_rounded,
-                  onPressed: _submitting ? null : _submitActivity,
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        spec.title,
+                        style: const TextStyle(
+                          color: foNavy,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      Text(
+                        spec.subtitle,
+                        style: const TextStyle(
+                          color: Color(0xFF53607D),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+                Icon(spec.icon, color: spec.color, size: 34),
+              ],
+            ),
+            const SizedBox(height: 18),
+            _siteInfo(),
+            const SizedBox(height: 14),
+            if (widget.type == FoActivityType.inspection) _inspectionBody(),
+            if (widget.type == FoActivityType.deepCleaning) _cleaningBody(),
+            if (widget.type == FoActivityType.training) _trainingBody(),
+            if (widget.type != FoActivityType.training) ...[
+              const SizedBox(height: 14),
+              _remarksCard(optional: true),
             ],
-          ),
-        ],
+            const SizedBox(height: 20),
+            if (widget.type == FoActivityType.training) ...[
+              _trainingSubmitNote(),
+              const SizedBox(height: 14),
+            ],
+            if (_submitting) ...[_submitProgress(), const SizedBox(height: 14)],
+            Row(
+              children: [
+                Expanded(
+                  child: FoOutlinedButton(
+                    label: widget.type == FoActivityType.training
+                        ? 'Save Draft'
+                        : 'Save as Draft',
+                    onPressed: _submitting
+                        ? null
+                        : widget.type == FoActivityType.training
+                        ? _saveTrainingDraft
+                        : () => _snack('Draft saved locally for this session.'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FoPrimaryButton(
+                    label: _submitting
+                        ? 'Submitting...'
+                        : widget.type == FoActivityType.training
+                        ? 'Submit Training'
+                        : 'Submit',
+                    icon: Icons.check_rounded,
+                    onPressed: _submitting ? null : _submitActivity,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2482,7 +2507,9 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
 
   Widget _submitProgress() {
     final step = _submitStep ?? 'Submitting activity';
-    final suffix = _uploadTotal > 0 ? ' ($_uploadedCount/$_uploadTotal)' : '';
+    final suffix = _uploadTotal > 0 && !step.contains(' of ')
+        ? ' ($_uploadedCount/$_uploadTotal)'
+        : '';
     return Row(
       children: [
         const SizedBox(
@@ -2556,13 +2583,17 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
     });
     String? submissionId;
     final orphanedUploadUrls = <String>[];
+    var successfulUploads = 0;
+    var failedUploads = 0;
     try {
       final activityType = _activityTypeValue(widget.type);
-      final uploadItems = await _activityUploadItems();
-      _setSubmitStep('Capturing location', uploadTotal: uploadItems.length);
+      final uploadSources = _activityUploadSources()
+          .where((source) => !_completedUploadKeys.contains(source.key))
+          .toList();
+      _setSubmitStep('Capturing location', uploadTotal: uploadSources.length);
       PerformanceLogService.step(
         operation: 'activity_submission',
-        step: 'image_prepare',
+        step: 'upload_plan',
         stopwatch: perf,
       );
       final hasExistingTrainingEvidence = widget.type == FoActivityType.training
@@ -2570,16 +2601,17 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
           : false;
       if (requireTrainingEvidence &&
           widget.type == FoActivityType.training &&
-          uploadItems.isEmpty &&
+          uploadSources.isEmpty &&
           !hasExistingTrainingEvidence) {
         _snack(
           'Please upload at least one training photo or document before submitting.',
         );
         return;
       }
+      final hasCompletedUploadsThisSession = _completedUploadKeys.isNotEmpty;
       final pendingImages = widget.type == FoActivityType.training
           ? _trainingCompletedCategoryCount == 0
-          : uploadItems.isEmpty;
+          : uploadSources.isEmpty && !hasCompletedUploadsThisSession;
       Position? position;
       try {
         position = await Geolocator.getCurrentPosition(
@@ -2608,7 +2640,9 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
         step: 'submission_lookup',
         stopwatch: perf,
       );
-      submissionId = existing?['id']?.toString();
+      submissionId = SupabaseService.isValidUuid(_lastSubmissionId)
+          ? _lastSubmissionId
+          : existing?['id']?.toString();
       final metadata = Map<String, dynamic>.from(
         existing?['metadata'] is Map ? existing!['metadata'] as Map : const {},
       );
@@ -2672,27 +2706,45 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
       if (!SupabaseService.isValidUuid(submissionId)) {
         throw StateError('Activity submission could not be created.');
       }
+      _lastSubmissionId = submissionId;
 
-      for (var index = 0; index < uploadItems.length; index += 1) {
-        final item = uploadItems[index];
+      for (var index = 0; index < uploadSources.length; index += 1) {
+        final source = uploadSources[index];
         _setSubmitStep(
-          'Uploading images',
+          'Preparing image ${index + 1} of ${uploadSources.length}',
           uploadedCount: index,
-          uploadTotal: uploadItems.length,
+          uploadTotal: uploadSources.length,
+        );
+        final item = await source.prepare();
+        PerformanceLogService.step(
+          operation: 'activity_submission',
+          step: 'image_prepare',
+          stopwatch: perf,
+        );
+        _setSubmitStep(
+          'Uploading image ${index + 1} of ${uploadSources.length}',
+          uploadedCount: index,
+          uploadTotal: uploadSources.length,
         );
         final fileSize = item.bytes.length;
-        final fileUrl = await SupabaseService.uploadActivityFile(
-          user: widget.user,
-          attendance: widget.attendance,
-          activityType: activityType,
-          submissionId: submissionId!,
-          fileName: item.fileName,
-          bytes: item.bytes,
-          contentType: item.contentType,
-          extension: item.extension,
-        );
-        orphanedUploadUrls.add(fileUrl);
+        String? fileUrl;
         try {
+          fileUrl = await SupabaseService.uploadActivityFile(
+            user: widget.user,
+            attendance: widget.attendance,
+            activityType: activityType,
+            submissionId: submissionId!,
+            fileName: item.fileName,
+            bytes: item.bytes,
+            contentType: item.contentType,
+            extension: item.extension,
+          );
+          orphanedUploadUrls.add(fileUrl);
+          _setSubmitStep(
+            'Linking attachment ${index + 1} of ${uploadSources.length}',
+            uploadedCount: index,
+            uploadTotal: uploadSources.length,
+          );
           await SupabaseService.createActivityUpload(
             user: widget.user,
             attendance: widget.attendance,
@@ -2708,16 +2760,21 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
             metadata: item.metadata,
           );
           item.releaseBytes();
+          _completedUploadKeys.add(source.key);
+          successfulUploads += 1;
           _setSubmitStep(
-            'Uploading images',
+            'Uploading image ${index + 1} of ${uploadSources.length}',
             uploadedCount: index + 1,
-            uploadTotal: uploadItems.length,
+            uploadTotal: uploadSources.length,
           );
           orphanedUploadUrls.remove(fileUrl);
         } catch (_) {
+          failedUploads += 1;
           item.releaseBytes();
-          await SupabaseService.deleteActivityFile(fileUrl);
-          orphanedUploadUrls.remove(fileUrl);
+          if (fileUrl != null && orphanedUploadUrls.contains(fileUrl)) {
+            await SupabaseService.deleteActivityFile(fileUrl);
+            orphanedUploadUrls.remove(fileUrl);
+          }
           rethrow;
         }
       }
@@ -2726,8 +2783,8 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
         step: 'file_uploads',
         stopwatch: perf,
       );
-      if (uploadItems.isNotEmpty) {
-        _setSubmitStep('Finalizing activity');
+      if (uploadSources.isNotEmpty) {
+        _setSubmitStep('Completing submission');
         metadata['pending_images'] = widget.type == FoActivityType.training
             ? _trainingCompletedCategoryCount == 0
             : false;
@@ -2756,15 +2813,19 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
 
       if (!mounted) return;
       if (widget.type == FoActivityType.training) {
-        _setSubmitStep('Refreshing training details');
-        await _loadExistingTraining();
-        if (!mounted) return;
+        if (!popOnSuccess) {
+          _setSubmitStep('Completing submission');
+          await _loadExistingTraining();
+          if (!mounted) return;
+        }
         setState(() {
           _draftSaved = statusToSave == 'draft';
           _trainingPhotos.clear();
           _pdf = null;
         });
       }
+      _completedUploadKeys.clear();
+      _lastSubmissionId = null;
       if (popOnSuccess) {
         Navigator.of(context).pop(true);
       } else {
@@ -2779,7 +2840,17 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
         }
       }
       if (!mounted) return;
-      _snack(_activitySubmitErrorMessage(error));
+      final pendingUploads = _activityUploadSources()
+          .where((source) => !_completedUploadKeys.contains(source.key))
+          .length;
+      failedUploads = failedUploads == 0 && pendingUploads > 0
+          ? pendingUploads
+          : failedUploads;
+      _snack(
+        successfulUploads > 0
+            ? '$successfulUploads file(s) uploaded. $failedUploads file(s) still pending. Please retry.'
+            : _activitySubmitErrorMessage(error),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -2789,20 +2860,6 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
           _uploadTotal = 0;
         });
       }
-    }
-  }
-
-  String _fileExtension(String fileName) {
-    final clean = fileName.trim().toLowerCase();
-    final extension = clean.contains('.') ? clean.split('.').last : 'jpg';
-    switch (extension) {
-      case 'jpeg':
-        return 'jpg';
-      case 'png':
-        return 'png';
-      case 'jpg':
-      default:
-        return 'jpg';
     }
   }
 
@@ -2821,26 +2878,38 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
     }
   }
 
-  Future<List<_ActivityUploadItem>> _activityUploadItems() async {
-    final items = <_ActivityUploadItem>[];
+  String _uploadObjectKey(Object object) {
+    final existing = _uploadObjectKeys[object];
+    if (existing != null) return existing;
+    final value = 'activity_upload_${_nextUploadKey++}';
+    _uploadObjectKeys[object] = value;
+    return value;
+  }
+
+  List<_ActivityUploadSource> _activityUploadSources() {
+    final items = <_ActivityUploadSource>[];
     if (widget.type == FoActivityType.deepCleaning) {
       for (var index = 0; index < _areas.length; index += 1) {
         final area = _areas[index];
         if (area.before != null) {
           items.add(
-            await _uploadItemFromXFile(
-              area.before!,
+            _ActivityUploadSource.xFile(
+              key: _uploadObjectKey(area.before!),
+              file: area.before!,
               uploadRole: 'deep_cleaning_before',
               fallbackName: 'area_${index + 1}_before',
+              contentTypeForExtension: _imageContentType,
             ),
           );
         }
         if (area.after != null) {
           items.add(
-            await _uploadItemFromXFile(
-              area.after!,
+            _ActivityUploadSource.xFile(
+              key: _uploadObjectKey(area.after!),
+              file: area.after!,
               uploadRole: 'deep_cleaning_after',
               fallbackName: 'area_${index + 1}_after',
+              contentTypeForExtension: _imageContentType,
             ),
           );
         }
@@ -2852,10 +2921,12 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
         final files = _trainingPhotos[category.key] ?? const <XFile>[];
         for (var index = 0; index < files.length; index += 1) {
           items.add(
-            await _uploadItemFromXFile(
-              files[index],
+            _ActivityUploadSource.xFile(
+              key: _uploadObjectKey(files[index]),
+              file: files[index],
               uploadRole: 'training_photo',
               fallbackName: '${category.key}_${index + 1}',
+              contentTypeForExtension: _imageContentType,
               metadata: {
                 'training_category': category.key,
                 'training_category_label': category.label,
@@ -2867,8 +2938,9 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
       }
       if (_pdf != null) {
         items.add(
-          await _uploadItemFromPlatformFile(
-            _pdf!,
+          _ActivityUploadSource.platformFile(
+            key: _uploadObjectKey(_pdf!),
+            file: _pdf!,
             uploadRole: 'training_document',
             fallbackName: 'training_document',
             metadata: {
@@ -2886,71 +2958,26 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
         : 'inspection_photo';
     for (var index = 0; index < _photos.length; index += 1) {
       items.add(
-        await _uploadItemFromXFile(
-          _photos[index],
+        _ActivityUploadSource.xFile(
+          key: _uploadObjectKey(_photos[index]),
+          file: _photos[index],
           uploadRole: uploadRole,
           fallbackName: '${_activityTypeValue(widget.type)}_${index + 1}',
+          contentTypeForExtension: _imageContentType,
         ),
       );
     }
     if (widget.type == FoActivityType.training && _pdf != null) {
       items.add(
-        await _uploadItemFromPlatformFile(
-          _pdf!,
+        _ActivityUploadSource.platformFile(
+          key: _uploadObjectKey(_pdf!),
+          file: _pdf!,
           uploadRole: 'training_document',
           fallbackName: 'training_document',
         ),
       );
     }
     return items;
-  }
-
-  Future<_ActivityUploadItem> _uploadItemFromXFile(
-    XFile file, {
-    required String uploadRole,
-    required String fallbackName,
-    Map<String, dynamic> metadata = const {},
-  }) async {
-    final bytes = await file.readAsBytes();
-    if (bytes.isEmpty || bytes.length > _activityUploadMaxBytes) {
-      throw StateError('Inspection photo must be 5 MB or less.');
-    }
-    final extension = _fileExtension(file.name);
-    return _ActivityUploadItem(
-      uploadRole: uploadRole,
-      fileName: file.name.isEmpty ? '$fallbackName.$extension' : file.name,
-      bytes: bytes,
-      extension: extension,
-      contentType: _imageContentType(extension),
-      metadata: metadata,
-    );
-  }
-
-  Future<_ActivityUploadItem> _uploadItemFromPlatformFile(
-    PlatformFile file, {
-    required String uploadRole,
-    required String fallbackName,
-    Map<String, dynamic> metadata = const {},
-  }) async {
-    final extension = file.extension?.toLowerCase() == 'pdf' ? 'pdf' : 'pdf';
-    final filePath = file.path;
-    final bytes =
-        file.bytes ??
-        (filePath == null ? null : await File(filePath).readAsBytes());
-    if (bytes == null) {
-      throw StateError('Training document could not be selected.');
-    }
-    if (bytes.isEmpty || bytes.length > _activityUploadMaxBytes) {
-      throw StateError('Inspection photo must be 5 MB or less.');
-    }
-    return _ActivityUploadItem(
-      uploadRole: uploadRole,
-      fileName: file.name.isEmpty ? '$fallbackName.$extension' : file.name,
-      bytes: bytes,
-      extension: extension,
-      contentType: 'application/pdf',
-      metadata: metadata,
-    );
   }
 
   String _activitySubmitErrorMessage(Object error) {
@@ -3862,6 +3889,113 @@ class _ActivitySpec {
 class _CleaningArea {
   XFile? before;
   XFile? after;
+}
+
+class _ActivityUploadSource {
+  const _ActivityUploadSource._({
+    required this.key,
+    required this.uploadRole,
+    required this.fallbackName,
+    required this.metadata,
+    required this.contentTypeForExtension,
+    this.xFile,
+    this.platformFile,
+  });
+
+  factory _ActivityUploadSource.xFile({
+    required String key,
+    required XFile file,
+    required String uploadRole,
+    required String fallbackName,
+    required String Function(String extension) contentTypeForExtension,
+    Map<String, dynamic> metadata = const {},
+  }) {
+    return _ActivityUploadSource._(
+      key: key,
+      xFile: file,
+      uploadRole: uploadRole,
+      fallbackName: fallbackName,
+      metadata: metadata,
+      contentTypeForExtension: contentTypeForExtension,
+    );
+  }
+
+  factory _ActivityUploadSource.platformFile({
+    required String key,
+    required PlatformFile file,
+    required String uploadRole,
+    required String fallbackName,
+    Map<String, dynamic> metadata = const {},
+  }) {
+    return _ActivityUploadSource._(
+      key: key,
+      platformFile: file,
+      uploadRole: uploadRole,
+      fallbackName: fallbackName,
+      metadata: metadata,
+      contentTypeForExtension: (_) => 'application/pdf',
+    );
+  }
+
+  final String key;
+  final XFile? xFile;
+  final PlatformFile? platformFile;
+  final String uploadRole;
+  final String fallbackName;
+  final Map<String, dynamic> metadata;
+  final String Function(String extension) contentTypeForExtension;
+
+  Future<_ActivityUploadItem> prepare() async {
+    final xFile = this.xFile;
+    if (xFile != null) {
+      final length = await xFile.length();
+      if (length <= 0 || length > _activityUploadMaxBytes) {
+        throw StateError('Inspection photo must be 5 MB or less.');
+      }
+      final bytes = await xFile.readAsBytes();
+      if (bytes.isEmpty || bytes.length > _activityUploadMaxBytes) {
+        throw StateError('Inspection photo must be 5 MB or less.');
+      }
+      final extension = _fileExtensionFromName(xFile.name);
+      return _ActivityUploadItem(
+        uploadRole: uploadRole,
+        fileName: xFile.name.isEmpty ? '$fallbackName.$extension' : xFile.name,
+        bytes: bytes,
+        extension: extension,
+        contentType: contentTypeForExtension(extension),
+        metadata: metadata,
+      );
+    }
+
+    final platformFile = this.platformFile;
+    if (platformFile == null) {
+      throw StateError('Selected file could not be prepared.');
+    }
+    if (platformFile.size <= 0 || platformFile.size > _activityUploadMaxBytes) {
+      throw StateError('Inspection photo must be 5 MB or less.');
+    }
+    final filePath = platformFile.path;
+    final bytes =
+        platformFile.bytes ??
+        (filePath == null ? null : await File(filePath).readAsBytes());
+    if (bytes == null) {
+      throw StateError('Training document could not be selected.');
+    }
+    if (bytes.isEmpty || bytes.length > _activityUploadMaxBytes) {
+      throw StateError('Inspection photo must be 5 MB or less.');
+    }
+    const extension = 'pdf';
+    return _ActivityUploadItem(
+      uploadRole: uploadRole,
+      fileName: platformFile.name.isEmpty
+          ? '$fallbackName.$extension'
+          : platformFile.name,
+      bytes: bytes,
+      extension: extension,
+      contentType: 'application/pdf',
+      metadata: metadata,
+    );
+  }
 }
 
 class _ActivityUploadItem {

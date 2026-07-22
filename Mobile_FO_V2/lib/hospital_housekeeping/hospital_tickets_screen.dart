@@ -7,9 +7,14 @@ import 'hospital_ticket_card.dart';
 import 'hospital_ticket_detail_screen.dart';
 
 class HospitalTicketsScreen extends StatefulWidget {
-  const HospitalTicketsScreen({required this.controller, super.key});
+  const HospitalTicketsScreen({
+    required this.controller,
+    this.initialFilter = HospitalTicketListFilter.all,
+    super.key,
+  });
 
   final HospitalController controller;
+  final HospitalTicketListFilter initialFilter;
 
   @override
   State<HospitalTicketsScreen> createState() => _HospitalTicketsScreenState();
@@ -18,6 +23,17 @@ class HospitalTicketsScreen extends StatefulWidget {
 class _HospitalTicketsScreenState extends State<HospitalTicketsScreen> {
   final _search = TextEditingController();
   HospitalTicketStatus? _status;
+  HospitalPriority? _priority;
+  late HospitalTicketListFilter _filter;
+  String _block = '';
+  String _category = '';
+  bool _assignedToMe = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _filter = widget.initialFilter;
+  }
 
   @override
   void dispose() {
@@ -27,14 +43,21 @@ class _HospitalTicketsScreenState extends State<HospitalTicketsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final query = _search.text.trim().toLowerCase();
-    final rows = widget.controller.visibleTickets.where((ticket) {
-      if (_status != null && ticket.status != _status) return false;
-      if (query.isEmpty) return true;
-      return '${ticket.id} ${ticket.block} ${ticket.floor} ${ticket.location} ${ticket.category} ${ticket.description}'
-          .toLowerCase()
-          .contains(query);
-    }).toList();
+    final blocks =
+        widget.controller.visibleTickets.map((t) => t.block).toSet().toList()
+          ..sort();
+    final categories =
+        widget.controller.visibleTickets.map((t) => t.category).toSet().toList()
+          ..sort();
+    final rows = widget.controller.filteredTickets(
+      filter: _filter,
+      status: _status,
+      priority: _priority,
+      query: _search.text,
+      block: _block,
+      category: _category,
+      assignedToMe: _assignedToMe,
+    );
     return Column(
       children: [
         Padding(
@@ -56,10 +79,46 @@ class _HospitalTicketsScreenState extends State<HospitalTicketsScreen> {
             children: [
               ChoiceChip(
                 label: const Text('All'),
-                selected: _status == null,
-                onSelected: (_) => setState(() => _status = null),
+                selected:
+                    _filter == HospitalTicketListFilter.all &&
+                    _status == null &&
+                    _priority == null &&
+                    _block.isEmpty &&
+                    _category.isEmpty &&
+                    !_assignedToMe,
+                onSelected: (_) => setState(() {
+                  _filter = HospitalTicketListFilter.all;
+                  _status = null;
+                  _priority = null;
+                  _block = '';
+                  _category = '';
+                  _assignedToMe = false;
+                }),
               ),
               const SizedBox(width: 7),
+              _chip(
+                'Assigned to me',
+                _assignedToMe,
+                () => setState(() => _assignedToMe = !_assignedToMe),
+              ),
+              _chip(
+                'Due soon',
+                _filter == HospitalTicketListFilter.dueSoon,
+                () =>
+                    setState(() => _filter = HospitalTicketListFilter.dueSoon),
+              ),
+              _chip(
+                'SLA breached',
+                _filter == HospitalTicketListFilter.breached,
+                () =>
+                    setState(() => _filter = HospitalTicketListFilter.breached),
+              ),
+              _chip(
+                'Reopened',
+                _filter == HospitalTicketListFilter.reopened,
+                () =>
+                    setState(() => _filter = HospitalTicketListFilter.reopened),
+              ),
               ...HospitalTicketStatus.values.map(
                 (status) => Padding(
                   padding: const EdgeInsets.only(right: 7),
@@ -69,6 +128,37 @@ class _HospitalTicketsScreenState extends State<HospitalTicketsScreen> {
                     onSelected: (_) => setState(() => _status = status),
                   ),
                 ),
+              ),
+              const SizedBox(width: 7),
+              _menuChip(
+                label: _priority?.label ?? 'Priority',
+                selected: _priority != null,
+                onClear: () => setState(() => _priority = null),
+                children: [
+                  for (final priority in HospitalPriority.values)
+                    PopupMenuItem(value: priority, child: Text(priority.label)),
+                ],
+                onSelected: (value) => setState(() => _priority = value),
+              ),
+              _menuChip(
+                label: _block.isEmpty ? 'Block' : _block,
+                selected: _block.isNotEmpty,
+                onClear: () => setState(() => _block = ''),
+                children: [
+                  for (final block in blocks)
+                    PopupMenuItem(value: block, child: Text(block)),
+                ],
+                onSelected: (value) => setState(() => _block = value),
+              ),
+              _menuChip(
+                label: _category.isEmpty ? 'Category' : _category,
+                selected: _category.isNotEmpty,
+                onClear: () => setState(() => _category = ''),
+                children: [
+                  for (final category in categories)
+                    PopupMenuItem(value: category, child: Text(category)),
+                ],
+                onSelected: (value) => setState(() => _category = value),
               ),
             ],
           ),
@@ -115,4 +205,38 @@ class _HospitalTicketsScreenState extends State<HospitalTicketsScreen> {
       ],
     );
   }
+
+  Widget _chip(String label, bool selected, VoidCallback onTap) => Padding(
+    padding: const EdgeInsets.only(right: 7),
+    child: ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onTap(),
+    ),
+  );
+
+  Widget _menuChip<T>({
+    required String label,
+    required bool selected,
+    required VoidCallback onClear,
+    required List<PopupMenuEntry<T>> children,
+    required ValueChanged<T> onSelected,
+  }) => Padding(
+    padding: const EdgeInsets.only(right: 7),
+    child: PopupMenuButton<T>(
+      onSelected: onSelected,
+      itemBuilder: (_) => [
+        PopupMenuItem<T>(
+          enabled: selected,
+          onTap: onClear,
+          child: const Text('Clear'),
+        ),
+        ...children,
+      ],
+      child: Chip(
+        label: Text(label),
+        backgroundColor: selected ? const Color(0xFFE8F5F5) : null,
+      ),
+    ),
+  );
 }

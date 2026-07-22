@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../theme/app_theme.dart';
 import 'hospital_controller.dart';
 import 'hospital_ticket_card.dart';
+import 'hospital_ticket_detail_screen.dart';
 
 class HospitalNotificationsScreen extends StatelessWidget {
   const HospitalNotificationsScreen({required this.controller, super.key});
@@ -60,9 +61,24 @@ class HospitalNotificationsScreen extends StatelessWidget {
               trailing: unread
                   ? const Icon(Icons.circle, size: 10, color: hospitalTeal)
                   : null,
-              onTap: unread
-                  ? () => controller.markNotificationRead('${item['id']}')
-                  : null,
+              onTap: () async {
+                if (unread) {
+                  await controller.markNotificationRead('${item['id']}');
+                }
+                final ticket = item['ticket'] is Map
+                    ? item['ticket'] as Map
+                    : const {};
+                final ticketNo = '${ticket['ticket_no'] ?? ''}'.trim();
+                if (ticketNo.isEmpty || !context.mounted) return;
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => HospitalTicketDetailScreen(
+                      controller: controller,
+                      ticketId: ticketNo,
+                    ),
+                  ),
+                );
+              },
             ),
           );
         },

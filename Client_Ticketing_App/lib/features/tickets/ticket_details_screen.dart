@@ -130,9 +130,35 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen>
                     const SizedBox(height: 14),
                     _InfoLine(
                       Icons.location_on_rounded,
-                      'Location',
-                      ticket.fullLocation,
+                      'Path',
+                      ticket.detailLocation,
                     ),
+                    if (ticket.site.isNotEmpty)
+                      _InfoLine(Icons.business_rounded, 'Site', ticket.site),
+                    if (ticket.block.isNotEmpty)
+                      _InfoLine(Icons.apartment_rounded, 'Block', ticket.block),
+                    if (ticket.floor.isNotEmpty)
+                      _InfoLine(Icons.layers_rounded, 'Floor', ticket.floor),
+                    if (ticket.department.isNotEmpty)
+                      _InfoLine(
+                        Icons.local_hospital_rounded,
+                        'Unit',
+                        ticket.department,
+                      ),
+                    if (ticket.ward.isNotEmpty)
+                      _InfoLine(Icons.bed_rounded, 'Ward', ticket.ward),
+                    if (ticket.roomArea.isNotEmpty)
+                      _InfoLine(
+                        Icons.meeting_room_rounded,
+                        'Room',
+                        ticket.roomArea,
+                      ),
+                    if (ticket.exactLandmark.isNotEmpty)
+                      _InfoLine(
+                        Icons.place_rounded,
+                        'Landmark',
+                        ticket.exactLandmark,
+                      ),
                     _InfoLine(
                       Icons.cleaning_services_rounded,
                       'Category',

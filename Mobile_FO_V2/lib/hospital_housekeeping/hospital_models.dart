@@ -89,6 +89,17 @@ class HospitalTicket {
     required this.supervisorName,
     required this.supervisorDueAt,
     required this.events,
+    this.site = '',
+    this.department = '',
+    this.ward = '',
+    this.roomArea = '',
+    this.exactLandmark = '',
+    this.completeLocationPath = '',
+    this.locationType = '',
+    this.assignedAt,
+    this.acceptedAt,
+    this.workStartedAt,
+    this.allowedActions = const {},
     this.complaintPhotoPaths = const [],
     this.progressPhotoPaths = const [],
     this.completionPhotoPaths = const [],
@@ -106,14 +117,24 @@ class HospitalTicket {
   });
 
   final String id;
+  final String site;
   final String block;
   final String floor;
+  final String department;
   final String location;
+  final String ward;
+  final String roomArea;
+  final String exactLandmark;
+  final String completeLocationPath;
+  final String locationType;
   final String category;
   final HospitalPriority priority;
   final String description;
   final String reportedBy;
   final DateTime raisedAt;
+  final DateTime? assignedAt;
+  final DateTime? acceptedAt;
+  final DateTime? workStartedAt;
   final HospitalTicketStatus status;
   final String responsiblePerson;
   final String responsibleRole;
@@ -134,6 +155,7 @@ class HospitalTicket {
   final bool? clientSatisfied;
   final int reopenedCount;
   final int version;
+  final Set<HospitalTicketAction> allowedActions;
 
   bool get isFinal =>
       status == HospitalTicketStatus.closed ||
@@ -146,6 +168,10 @@ class HospitalTicket {
     HospitalTicketStatus? status,
     String? responsiblePerson,
     String? responsibleRole,
+    DateTime? assignedAt,
+    DateTime? acceptedAt,
+    DateTime? workStartedAt,
+    DateTime? supervisorDueAt,
     DateTime? operationsEscalatedAt,
     DateTime? operationsDueAt,
     DateTime? facilityEscalatedAt,
@@ -161,22 +187,33 @@ class HospitalTicket {
     bool? clientSatisfied,
     int? reopenedCount,
     int? version,
+    Set<HospitalTicketAction>? allowedActions,
   }) {
     return HospitalTicket(
       id: id,
+      site: site,
       block: block,
       floor: floor,
+      department: department,
       location: location,
+      ward: ward,
+      roomArea: roomArea,
+      exactLandmark: exactLandmark,
+      completeLocationPath: completeLocationPath,
+      locationType: locationType,
       category: category,
       priority: priority,
       description: description,
       reportedBy: reportedBy,
       raisedAt: raisedAt,
+      assignedAt: assignedAt ?? this.assignedAt,
+      acceptedAt: acceptedAt ?? this.acceptedAt,
+      workStartedAt: workStartedAt ?? this.workStartedAt,
       status: status ?? this.status,
       responsiblePerson: responsiblePerson ?? this.responsiblePerson,
       responsibleRole: responsibleRole ?? this.responsibleRole,
       supervisorName: supervisorName,
-      supervisorDueAt: supervisorDueAt,
+      supervisorDueAt: supervisorDueAt ?? this.supervisorDueAt,
       operationsEscalatedAt:
           operationsEscalatedAt ?? this.operationsEscalatedAt,
       operationsDueAt: operationsDueAt ?? this.operationsDueAt,
@@ -193,6 +230,7 @@ class HospitalTicket {
       clientSatisfied: clientSatisfied ?? this.clientSatisfied,
       reopenedCount: reopenedCount ?? this.reopenedCount,
       version: version ?? this.version,
+      allowedActions: allowedActions ?? this.allowedActions,
     );
   }
 
@@ -201,11 +239,48 @@ class HospitalTicket {
     final location = row['location'] is Map ? row['location'] as Map : const {};
     final category = row['category'] is Map ? row['category'] as Map : const {};
     final assignee = row['assignee'] is Map ? row['assignee'] as Map : const {};
+    final floorName = _firstText([
+      row['floor_name_snapshot'],
+      row['floor_name'],
+      location['floor_name'],
+    ]);
+    final departmentName = _firstText([
+      row['department_name_snapshot'],
+      row['department_name'],
+      location['department_name'],
+    ]);
+    final roomArea = _firstText([
+      row['room_area_snapshot'],
+      location['room_number'],
+      location['area_name'],
+    ]);
+    final locationText = _firstText([
+      row['location_text'],
+      location['location_name'],
+    ]);
+    final exactLandmark = _firstText([row['exact_landmark_snapshot']]);
+    final locationPath = _firstText([
+      row['location_path_snapshot'],
+      row['complete_location_path'],
+    ]);
+    final allowed = row['allowed_actions'] is List
+        ? (row['allowed_actions'] as List)
+              .map((value) => hospitalActionFromCode('$value'))
+              .whereType<HospitalTicketAction>()
+              .toSet()
+        : <HospitalTicketAction>{};
     return HospitalTicket(
       id: '${row['id'] ?? ''}',
-      block: '${block['block_name'] ?? ''}',
-      floor: '${row['floor_name'] ?? location['floor_name'] ?? ''}',
-      location: '${row['location_text'] ?? location['location_name'] ?? ''}',
+      site: _firstText([row['site_name_snapshot'], row['client_name']]),
+      block: _firstText([row['block_name_snapshot'], block['block_name']]),
+      floor: floorName,
+      department: departmentName,
+      location: locationText,
+      ward: _firstText([row['ward_name_snapshot'], location['ward_name']]),
+      roomArea: roomArea,
+      exactLandmark: exactLandmark,
+      completeLocationPath: locationPath,
+      locationType: _firstText([location['location_type']]),
       category: '${category['category_name'] ?? ''}',
       priority: switch ('${row['priority'] ?? 'medium'}') {
         'critical' || 'high' => HospitalPriority.high,
@@ -217,10 +292,21 @@ class HospitalTicket {
       raisedAt:
           DateTime.tryParse('${row['raised_at'] ?? ''}')?.toLocal() ??
           DateTime.now(),
+      assignedAt: DateTime.tryParse('${row['assigned_at'] ?? ''}')?.toLocal(),
+      acceptedAt: DateTime.tryParse('${row['accepted_at'] ?? ''}')?.toLocal(),
+      workStartedAt: DateTime.tryParse(
+        '${row['work_started_at'] ?? ''}',
+      )?.toLocal(),
       status: _hospitalStatusFromCode('${row['status_code'] ?? 'open'}'),
       responsiblePerson: '${assignee['display_name'] ?? 'Assignment pending'}',
       responsibleRole: '${row['current_assignee_role'] ?? ''}',
-      supervisorName: 'Assigned Housekeeping Supervisor',
+      supervisorName: _firstText([
+        row['supervisor_name'],
+        assignee['role_code'] == 'housekeeping_supervisor'
+            ? assignee['display_name']
+            : '',
+        'Assigned Housekeeping Supervisor',
+      ]),
       supervisorDueAt: DateTime.tryParse(
         '${row['supervisor_sla_due_at'] ?? ''}',
       )?.toLocal(),
@@ -243,9 +329,81 @@ class HospitalTicket {
           : row['client_satisfaction_status'] == 'satisfied',
       reopenedCount: int.tryParse('${row['reopen_count'] ?? 0}') ?? 0,
       version: int.tryParse('${row['version'] ?? 1}') ?? 1,
+      allowedActions: allowed,
       events: const [],
     );
   }
+
+  List<String> get locationParts => _dedupe([
+    site,
+    block,
+    floor,
+    department,
+    ward,
+    roomArea,
+    _locationWithoutDuplicateRoom,
+    exactLandmark,
+  ]);
+
+  String get fullLocationDisplay {
+    if (completeLocationPath.trim().isNotEmpty) {
+      return _dedupe(
+        completeLocationPath
+            .split(RegExp(r'\s*(?:>|•)\s*'))
+            .map((part) => part.trim())
+            .toList(),
+      ).join('\n');
+    }
+    return locationParts.join('\n');
+  }
+
+  String get conciseLocation {
+    final parts = _dedupe([
+      block,
+      floor,
+      department,
+      roomArea,
+      _locationWithoutDuplicateRoom,
+      exactLandmark,
+    ]);
+    return parts.take(4).join(' • ');
+  }
+
+  String get _locationWithoutDuplicateRoom {
+    final key = location.trim().toLowerCase();
+    if (key.isEmpty || key == roomArea.trim().toLowerCase()) return '';
+    if (key == exactLandmark.trim().toLowerCase()) return '';
+    return location;
+  }
+}
+
+String _firstText(List<dynamic> values) {
+  for (final value in values) {
+    final text = '${value ?? ''}'.trim();
+    if (text.isNotEmpty &&
+        text != 'null' &&
+        !_isMissingLocationPlaceholder(text)) {
+      return text;
+    }
+  }
+  return '';
+}
+
+List<String> _dedupe(List<String> values) {
+  final seen = <String>{};
+  return values
+      .map((value) => value.trim())
+      .where((value) => value.isNotEmpty)
+      .where((value) => !_isMissingLocationPlaceholder(value))
+      .where((value) => seen.add(value.toLowerCase()))
+      .toList();
+}
+
+bool _isMissingLocationPlaceholder(String value) {
+  final key = value.trim().toLowerCase();
+  return key == 'not specified' ||
+      key == 'floor not confirmed' ||
+      key == 'unknown room';
 }
 
 HospitalTicketStatus _hospitalStatusFromCode(String value) => switch (value) {
@@ -261,6 +419,19 @@ HospitalTicketStatus _hospitalStatusFromCode(String value) => switch (value) {
   'closed' => HospitalTicketStatus.closed,
   'cancelled' => HospitalTicketStatus.cancelled,
   _ => HospitalTicketStatus.open,
+};
+
+HospitalTicketAction? hospitalActionFromCode(String value) => switch (value) {
+  'accept' => HospitalTicketAction.accept,
+  'start_work' => HospitalTicketAction.startWork,
+  'progress' => HospitalTicketAction.addProgress,
+  'request_assistance' => HospitalTicketAction.requestAssistance,
+  'manual_escalation' => HospitalTicketAction.escalateManually,
+  'take_over' => HospitalTicketAction.takeOver,
+  'reassign_supervisor' => HospitalTicketAction.reassignSupervisor,
+  'assign_support' => HospitalTicketAction.assignSupport,
+  'resolve' => HospitalTicketAction.resolve,
+  _ => null,
 };
 
 extension HospitalDemoRoleLabels on HospitalDemoRole {

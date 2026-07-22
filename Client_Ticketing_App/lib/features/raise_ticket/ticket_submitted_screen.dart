@@ -43,7 +43,7 @@ class TicketSubmittedScreen extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             const Text(
-              'The Housekeeping Supervisor has been notified. You can track every update from My Tickets.',
+              'Your complaint has been submitted. You can track every update from Complaints.',
               textAlign: TextAlign.center,
               style: TextStyle(height: 1.45, color: AppColors.muted),
             ),
