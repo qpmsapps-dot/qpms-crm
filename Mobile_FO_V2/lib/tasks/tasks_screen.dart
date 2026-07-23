@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../models/fo_models.dart';
 import '../services/app_state_sync_service.dart';
+import '../services/checkin_store_matcher.dart';
 import '../services/crash_log_service.dart';
 import '../services/local_db_service.dart';
 import '../services/local_store.dart';
@@ -23,7 +24,7 @@ import '../utils/local_id.dart';
 
 enum _CheckoutRecoveryAction { retry, fixState }
 
-enum _NoSiteFoundAction { cancel, refresh, add }
+enum _NoSiteFoundAction { cancel, refresh, retryGps }
 
 const double _activityImageMaxDimension = 1600;
 const int _activityImageQuality = 78;
@@ -383,38 +384,9 @@ class _TasksScreenState extends State<TasksScreen>
         return;
       }
 
-      await CrashLogService.record(
-        employeeCode: widget.user.employeeCode,
-        screen: 'tasks',
-        action: 'CHECKIN_GPS_FETCH_START',
-      );
       late final Position position;
       try {
-        position = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            timeLimit: Duration(seconds: 15),
-          ),
-        );
-        PerformanceLogService.step(
-          operation: 'check_in',
-          step: 'gps_capture',
-          stopwatch: perf,
-        );
-        await CrashLogService.record(
-          employeeCode: widget.user.employeeCode,
-          screen: 'tasks',
-          action: 'CHECKIN_GPS_FETCH_SUCCESS',
-          error:
-              'lat=${position.latitude} lng=${position.longitude} accuracy=${position.accuracy}',
-        );
-        await CrashLogService.record(
-          employeeCode: widget.user.employeeCode,
-          screen: 'tasks',
-          action: 'SITE_VISIT_CHECKIN_GPS_CAPTURED',
-          error:
-              'lat=${position.latitude} lng=${position.longitude} accuracy=${position.accuracy}',
-        );
+        position = await _captureCheckInPosition(perf);
       } catch (error, stackTrace) {
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
@@ -426,19 +398,16 @@ class _TasksScreenState extends State<TasksScreen>
         await _showErrorDialog('Check In failed', error);
         return;
       }
-      if (position.accuracy > 100) {
-        throw StateError(
-          'GPS accuracy is weak. Please move to an open area and try again.',
-        );
-      }
 
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
         screen: 'tasks',
         action: 'CHECKIN_SITE_MATCH_START',
       );
-      final stores = await SupabaseService.fetchStoresWithGps();
-      var nearby = _nearbyStoresFromPosition(stores, position);
+      var nearby = await _loadNearbyStoresForCheckIn(
+        position,
+        forceRefresh: false,
+      );
       PerformanceLogService.step(
         operation: 'check_in',
         step: 'store_load',
@@ -457,111 +426,77 @@ class _TasksScreenState extends State<TasksScreen>
           screen: 'tasks',
           action: 'CHECKIN_SITE_MATCH_FOUND',
         );
-        if (!mounted) return;
-        final selected = nearby.length == 1
-            ? nearby.first
-            : await showModalBottomSheet<_NearbyStore?>(
-                context: context,
-                isScrollControlled: true,
-                useSafeArea: true,
-                backgroundColor: Colors.transparent,
-                builder: (_) => _NearbySitesSheet(
-                  matches: nearby,
-                  isLoading: false,
-                  errorMessage: null,
-                ),
-              );
-        if (selected == null || !mounted) return;
-        final confirmed = await showDialog<bool>(
-          context: context,
-          builder: (_) =>
-              _WelcomeSiteDialog(match: selected, accuracy: position.accuracy),
-        );
-        if (confirmed != true || !mounted) return;
+        final selected = await _selectNearbyStore(nearby, position);
+        if (selected == null) return;
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'tasks',
           action: 'CHECKIN_EXISTING_SITE_CONFIRMED',
         );
-        store = selected.store;
+        store = selected;
       } else {
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'tasks',
           action: 'CHECKIN_SITE_MATCH_NOT_FOUND',
         );
-        if (!mounted) return;
-        final action = await showDialog<_NoSiteFoundAction>(
-          context: context,
-          builder: (_) => const _NoSiteFoundDialog(),
+        nearby = await _loadNearbyStoresForCheckIn(
+          position,
+          forceRefresh: true,
         );
-        if (action == _NoSiteFoundAction.refresh) {
-          final refreshedStores = await SupabaseService.fetchStoresWithGps(
-            forceRefresh: true,
-          );
-          nearby = _nearbyStoresFromPosition(refreshedStores, position);
-          PerformanceLogService.step(
-            operation: 'check_in',
-            step: 'store_manual_refresh',
-            stopwatch: perf,
-          );
-          if (nearby.isNotEmpty) {
-            if (!mounted) return;
-            final selected = nearby.length == 1
-                ? nearby.first
-                : await showModalBottomSheet<_NearbyStore?>(
-                    context: context,
-                    isScrollControlled: true,
-                    useSafeArea: true,
-                    backgroundColor: Colors.transparent,
-                    builder: (_) => _NearbySitesSheet(
-                      matches: nearby,
-                      isLoading: false,
-                      errorMessage: null,
-                    ),
-                  );
-            if (selected == null || !mounted) return;
-            final confirmed = await showDialog<bool>(
-              context: context,
-              builder: (_) => _WelcomeSiteDialog(
-                match: selected,
-                accuracy: position.accuracy,
-              ),
-            );
-            if (confirmed != true || !mounted) return;
-            store = selected.store;
-          } else {
-            if (!mounted) return;
-            final addAfterRefresh = await showDialog<bool>(
-              context: context,
-              builder: (_) => const AlertDialog(
-                title: Text('No registered site found within 100 meters.'),
-                actions: [_NoSiteCancelButton(), _NoSiteAddButton()],
-              ),
-            );
-            if (addAfterRefresh != true || !mounted) return;
-          }
-        } else if (action != _NoSiteFoundAction.add || !mounted) {
-          return;
-        }
-        if (store == null) {
-          await CrashLogService.record(
-            employeeCode: widget.user.employeeCode,
-            screen: 'tasks',
-            action: 'FO_ADD_SITE_OPENED',
-          );
+        PerformanceLogService.step(
+          operation: 'check_in',
+          step: 'store_forced_refresh',
+          stopwatch: perf,
+        );
+        if (nearby.isNotEmpty) {
+          final selected = await _selectNearbyStore(nearby, position);
+          if (selected == null) return;
+          store = selected;
+        } else {
+          final stores = await SupabaseService.fetchStoresWithGps();
+          final diagnostic = _storeMatchResult(stores, position);
           if (!mounted) return;
-          store = await showDialog<Store?>(
+          final action = await showDialog<_NoSiteFoundAction>(
             context: context,
-            builder: (_) => _AddStoreDialog(
-              user: widget.user,
-              attendance: activeAttendance,
-              latitude: position.latitude,
-              longitude: position.longitude,
-              accuracy: position.accuracy,
+            builder: (_) => _NoSiteFoundDialog(
+              accuracyMeters: position.accuracy,
+              nearest: diagnostic.diagnostics.nearestStore == null
+                  ? null
+                  : _NearbyStore.fromMatch(
+                      diagnostic.diagnostics.nearestStore!,
+                    ),
             ),
           );
-          if (store == null || !mounted) return;
+          if (action == _NoSiteFoundAction.retryGps) {
+            final retryPosition = await _captureCheckInPosition(perf);
+            nearby = await _loadNearbyStoresForCheckIn(
+              retryPosition,
+              forceRefresh: false,
+            );
+            if (nearby.isEmpty) {
+              nearby = await _loadNearbyStoresForCheckIn(
+                retryPosition,
+                forceRefresh: true,
+              );
+            }
+            final selected = nearby.isEmpty
+                ? null
+                : await _selectNearbyStore(nearby, retryPosition);
+            if (selected == null) return;
+            store = selected;
+          } else if (action == _NoSiteFoundAction.refresh) {
+            nearby = await _loadNearbyStoresForCheckIn(
+              position,
+              forceRefresh: true,
+            );
+            if (nearby.isEmpty) return;
+            final selected = await _selectNearbyStore(nearby, position);
+            if (selected == null) return;
+            store = selected;
+          } else {
+            return;
+          }
         }
       }
       await CrashLogService.record(
@@ -1084,28 +1019,155 @@ class _TasksScreenState extends State<TasksScreen>
         longitude <= 180;
   }
 
-  List<_NearbyStore> _nearbyStoresFromPosition(
+  Future<Position> _captureCheckInPosition(Stopwatch perf) async {
+    await CrashLogService.record(
+      employeeCode: widget.user.employeeCode,
+      screen: 'tasks',
+      action: 'CHECKIN_GPS_FETCH_START',
+    );
+    Position? bestReading;
+    for (var attempt = 1; attempt <= 3; attempt += 1) {
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+      final sample = CheckInLocationSample(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracyMeters: position.accuracy,
+        timestamp: position.timestamp,
+      );
+      final usable = CheckInStoreMatcher.hasUsableFreshLocation(
+        sample,
+        now: DateTime.now().toUtc(),
+      );
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tasks',
+        action: 'CHECKIN_GPS_READING',
+        error:
+            'attempt=$attempt accuracy=${position.accuracy.toStringAsFixed(1)} '
+            'timestamp=${position.timestamp.toUtc().toIso8601String()} '
+            'usable=$usable',
+      );
+      if (usable) {
+        PerformanceLogService.step(
+          operation: 'check_in',
+          step: 'gps_capture',
+          stopwatch: perf,
+        );
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'tasks',
+          action: 'CHECKIN_GPS_FETCH_SUCCESS',
+          error:
+              'lat=${position.latitude} lng=${position.longitude} '
+              'accuracy=${position.accuracy}',
+        );
+        await CrashLogService.record(
+          employeeCode: widget.user.employeeCode,
+          screen: 'tasks',
+          action: 'SITE_VISIT_CHECKIN_GPS_CAPTURED',
+          error:
+              'lat=${position.latitude} lng=${position.longitude} '
+              'accuracy=${position.accuracy}',
+        );
+        return position;
+      }
+      if (bestReading == null || position.accuracy < bestReading.accuracy) {
+        bestReading = position;
+      }
+    }
+    final accuracy = bestReading?.accuracy;
+    final accuracyText = accuracy == null
+        ? 'unavailable'
+        : '${accuracy.toStringAsFixed(0)} m';
+    throw StateError(
+      'GPS accuracy is weak ($accuracyText). Please move to an open area and retry GPS.',
+    );
+  }
+
+  Future<List<_NearbyStore>> _loadNearbyStoresForCheckIn(
+    Position position, {
+    required bool forceRefresh,
+  }) async {
+    final cacheSavedAt = await SupabaseService.storesWithGpsCacheSavedAt();
+    final stores = await SupabaseService.fetchStoresWithGps(
+      forceRefresh: forceRefresh,
+    );
+    final result = _storeMatchResult(stores, position);
+    await _recordStoreMatchDiagnostics(
+      result,
+      forceRefresh: forceRefresh,
+      cacheSavedAt: cacheSavedAt,
+    );
+    return result.nearby.map(_NearbyStore.fromMatch).toList();
+  }
+
+  CheckInStoreResult _storeMatchResult(
     Iterable<Store> stores,
     Position position,
   ) {
-    final nearby =
-        stores
-            .where((store) => store.latitude != null && store.longitude != null)
-            .map(
-              (store) => _NearbyStore(
-                store: store,
-                distanceMeters: Geolocator.distanceBetween(
-                  position.latitude,
-                  position.longitude,
-                  store.latitude!,
-                  store.longitude!,
-                ),
-              ),
-            )
-            .where((match) => match.distanceMeters <= 100)
-            .toList()
-          ..sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
-    return nearby;
+    return CheckInStoreMatcher.findNearbyStores(
+      stores: stores,
+      latitude: position.latitude,
+      longitude: position.longitude,
+    );
+  }
+
+  Future<void> _recordStoreMatchDiagnostics(
+    CheckInStoreResult result, {
+    required bool forceRefresh,
+    required DateTime? cacheSavedAt,
+  }) async {
+    final diagnostics = result.diagnostics;
+    final nearest = diagnostics.nearestStore;
+    await CrashLogService.record(
+      employeeCode: widget.user.employeeCode,
+      screen: 'tasks',
+      action: 'CHECKIN_STORE_MATCH_DIAGNOSTICS',
+      error:
+          'source=${forceRefresh ? 'remote_force_refresh' : 'cache_or_remote'} '
+          'cache_saved_at=${cacheSavedAt?.toIso8601String() ?? '--'} '
+          'loaded=${diagnostics.totalLoaded} '
+          'valid_gps=${diagnostics.validGpsStores} '
+          'excluded_invalid_gps=${diagnostics.excludedInvalidCoordinates} '
+          'nearby=${result.nearby.length} '
+          'nearest_code=${nearest?.store.storeCode ?? '--'} '
+          'nearest_distance=${nearest?.distanceMeters.toStringAsFixed(1) ?? '--'} '
+          'nearest_radius=${nearest?.radiusMeters.toStringAsFixed(0) ?? '--'} '
+          'forced_refresh=$forceRefresh',
+    );
+  }
+
+  Future<Store?> _selectNearbyStore(
+    List<_NearbyStore> nearby,
+    Position position,
+  ) async {
+    if (!mounted) return null;
+    final selected = nearby.length == 1
+        ? nearby.first
+        : await showModalBottomSheet<_NearbyStore?>(
+            context: context,
+            isScrollControlled: true,
+            useSafeArea: true,
+            backgroundColor: Colors.transparent,
+            builder: (_) => _NearbySitesSheet(
+              matches: nearby,
+              isLoading: false,
+              errorMessage: null,
+            ),
+          );
+    if (selected == null || !mounted) return null;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) =>
+          _WelcomeSiteDialog(match: selected, accuracy: position.accuracy),
+    );
+    if (confirmed != true || !mounted) return null;
+    return selected.store;
   }
 
   Future<void> _checkOut() async {
@@ -4150,10 +4212,21 @@ class _StoreSearchDialogState extends State<_StoreSearchDialog> {
 }
 
 class _NearbyStore {
-  const _NearbyStore({required this.store, required this.distanceMeters});
+  const _NearbyStore({
+    required this.store,
+    required this.distanceMeters,
+    this.radiusMeters = defaultCheckInRadiusMeters,
+  });
+
+  factory _NearbyStore.fromMatch(CheckInStoreMatch match) => _NearbyStore(
+    store: match.store,
+    distanceMeters: match.distanceMeters,
+    radiusMeters: match.radiusMeters,
+  );
 
   final Store store;
   final double distanceMeters;
+  final double radiusMeters;
 }
 
 // ignore: unused_element
@@ -4643,12 +4716,29 @@ class _WelcomeSiteDialog extends StatelessWidget {
 }
 
 class _NoSiteFoundDialog extends StatelessWidget {
-  const _NoSiteFoundDialog();
+  const _NoSiteFoundDialog({required this.accuracyMeters, this.nearest});
+
+  final double accuracyMeters;
+  final _NearbyStore? nearest;
 
   @override
   Widget build(BuildContext context) {
+    final nearest = this.nearest;
     return AlertDialog(
-      title: const Text('No registered site found within 100 meters.'),
+      title: const Text('No eligible store found'),
+      content: Text(
+        [
+          'No eligible store was found within the allowed Check-In radius.',
+          '',
+          'Current GPS accuracy: ${accuracyMeters.toStringAsFixed(0)} m',
+          if (nearest != null) ...[
+            'Nearest store: ${nearest.store.storeCode} - ${nearest.store.storeName}',
+            'Distance: ${nearest.distanceMeters.toStringAsFixed(0)} m',
+            'Allowed radius: ${nearest.radiusMeters.toStringAsFixed(0)} m',
+          ] else
+            'Nearest store: Not available',
+        ].join('\n'),
+      ),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(_NoSiteFoundAction.cancel),
@@ -4657,37 +4747,14 @@ class _NoSiteFoundDialog extends StatelessWidget {
         TextButton(
           onPressed: () =>
               Navigator.of(context).pop(_NoSiteFoundAction.refresh),
-          child: const Text('Refresh & Retry'),
+          child: const Text('Refresh Stores'),
         ),
         FilledButton(
-          onPressed: () => Navigator.of(context).pop(_NoSiteFoundAction.add),
-          child: const Text('Add New Site'),
+          onPressed: () =>
+              Navigator.of(context).pop(_NoSiteFoundAction.retryGps),
+          child: const Text('Retry GPS'),
         ),
       ],
-    );
-  }
-}
-
-class _NoSiteCancelButton extends StatelessWidget {
-  const _NoSiteCancelButton();
-
-  @override
-  Widget build(BuildContext context) {
-    return TextButton(
-      onPressed: () => Navigator.of(context).pop(false),
-      child: const Text('Cancel'),
-    );
-  }
-}
-
-class _NoSiteAddButton extends StatelessWidget {
-  const _NoSiteAddButton();
-
-  @override
-  Widget build(BuildContext context) {
-    return FilledButton(
-      onPressed: () => Navigator.of(context).pop(true),
-      child: const Text('Add New Site'),
     );
   }
 }

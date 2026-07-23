@@ -224,11 +224,25 @@ void main() {
     });
   });
 
-  test('the existing 100-metre nearby comparison remains unchanged', () {
-    final source = File('lib/tasks/tasks_screen.dart').readAsStringSync();
-    expect(source, contains('match.distanceMeters <= 100'));
-    expect(source, contains('if (distance > 100) continue;'));
-  });
+  test(
+    'Check-In keeps a 100-metre default radius with matcher enforcement',
+    () {
+      final matcherSource = File(
+        'lib/services/checkin_store_matcher.dart',
+      ).readAsStringSync();
+      final screenSource = File(
+        'lib/tasks/tasks_screen.dart',
+      ).readAsStringSync();
+
+      expect(matcherSource, contains('defaultCheckInRadiusMeters = 100'));
+      expect(
+        matcherSource,
+        contains('distance <= defaultCheckInRadiusMeters + 0.001'),
+      );
+      expect(screenSource, contains('_loadNearbyStoresForCheckIn'));
+      expect(screenSource, contains('if (distance > 100) continue;'));
+    },
+  );
 
   test('activity images are resized before upload format is preserved', () {
     final source = File('lib/tasks/tasks_screen.dart').readAsStringSync();
