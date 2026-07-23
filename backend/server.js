@@ -1523,6 +1523,12 @@ const CREATE_USER_ROLE_OPTIONS = new Set([
   'ADMIN',
 ]);
 
+const CLIENT_CREATE_ROLE_KEYS = new Set([
+  'HOSPITALMANAGEMENT',
+  'RMO',
+  'DOCTOR',
+]);
+
 const OPERATIONAL_CREATE_ROLE_KEYS = new Set([
   'FO',
   'KAM',
@@ -1535,6 +1541,321 @@ const IFMS_BUSINESS_KEYS = new Set(['IFMS', 'RELIANCERETAIL', 'RELIANCE']);
 
 function createUserRoleKey(role) {
   return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+function accessCode(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeUserType(value) {
+  const text = accessCode(value || 'internal');
+  return text === 'client' ? 'client' : 'internal';
+}
+
+function accessPayloadFromBody(body = {}) {
+  const input =
+    body.access_assignment && typeof body.access_assignment === 'object' && !Array.isArray(body.access_assignment)
+      ? body.access_assignment
+      : body.unified_access && typeof body.unified_access === 'object' && !Array.isArray(body.unified_access)
+        ? body.unified_access
+        : {};
+  const scope = input.scope && typeof input.scope === 'object' && !Array.isArray(input.scope)
+    ? input.scope
+    : {};
+  return {
+    user_type: normalizeUserType(body.user_type || input.user_type),
+    business_vertical_id: textOrNull(input.business_vertical_id),
+    client_id: textOrNull(input.client_id),
+    module_id: textOrNull(input.module_id),
+    role_id: textOrNull(input.role_id),
+    verification_status: accessCode(input.verification_status || 'verified') || 'verified',
+    effective_from: textOrNull(input.effective_from),
+    effective_to: textOrNull(input.effective_to),
+    source: textOrNull(input.source) || 'web_invite',
+    scope_type: accessCode(scope.scope_type || input.scope_type),
+    scope_id: textOrNull(scope.scope_id || input.scope_id),
+    scope_code: textOrNull(scope.scope_code || input.scope_code),
+    scope_text: textOrNull(scope.scope_text || input.scope_text),
+  };
+}
+
+function accessPayloadPresent(access) {
+  return Boolean(
+    access.business_vertical_id ||
+    access.client_id ||
+    access.module_id ||
+    access.role_id ||
+    access.scope_type ||
+    access.scope_id ||
+    access.scope_code ||
+    access.scope_text,
+  );
+}
+
+function scopeRequiresValue(scopeType) {
+  return !['global', 'all_client', 'employee_self'].includes(accessCode(scopeType));
+}
+
+function validateAccessInvitePayload(access) {
+  if (!accessPayloadPresent(access)) return;
+  if (!access.business_vertical_id) throw userManagementHttpError(400, 'Business Vertical is required.');
+  if (!access.module_id) throw userManagementHttpError(400, 'Module is required.');
+  if (!access.role_id) throw userManagementHttpError(400, 'Unified Role is required.');
+  if (!access.scope_type) throw userManagementHttpError(400, 'Scope Type is required.');
+  if (scopeRequiresValue(access.scope_type) && !access.scope_id && !access.scope_code && !access.scope_text) {
+    throw userManagementHttpError(400, 'Scope Value is required.');
+  }
+  if (!['verified', 'draft'].includes(access.verification_status)) {
+    throw userManagementHttpError(400, 'Unified access verification status must be verified or draft.');
+  }
+}
+
+async function loadAccessFoundationRecord(client, table, id, label) {
+  const { data, error } = await client
+    .from(table)
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw userManagementHttpError(400, `${label} is not available.`);
+  if (data.active === false) throw userManagementHttpError(400, `${label} is inactive.`);
+  return data;
+}
+
+async function validateUnifiedAccessFoundation(client, access) {
+  if (!accessPayloadPresent(access)) return null;
+  validateAccessInvitePayload(access);
+  const [vertical, module, role] = await Promise.all([
+    loadAccessFoundationRecord(client, 'access_business_verticals', access.business_vertical_id, 'Business Vertical'),
+    loadAccessFoundationRecord(client, 'access_modules', access.module_id, 'Module'),
+    loadAccessFoundationRecord(client, 'access_roles', access.role_id, 'Unified Role'),
+  ]);
+  let accessClient = null;
+  if (access.client_id) {
+    accessClient = await loadAccessFoundationRecord(client, 'access_clients', access.client_id, 'Client');
+    if (String(accessClient.business_vertical_id) !== String(vertical.id)) {
+      throw userManagementHttpError(400, 'Client does not belong to the selected Business Vertical.');
+    }
+  }
+  if (role.module_id && String(role.module_id) !== String(module.id)) {
+    throw userManagementHttpError(400, 'Role is not available for the selected Module.');
+  }
+  if (normalizeUserType(role.user_type) !== access.user_type) {
+    throw userManagementHttpError(400, 'Role is not available for the selected User Type.');
+  }
+  const { data: verticalModule, error: verticalModuleError } = await client
+    .from('access_business_vertical_modules')
+    .select('enabled')
+    .eq('business_vertical_id', vertical.id)
+    .eq('module_id', module.id)
+    .maybeSingle();
+  if (verticalModuleError) throw verticalModuleError;
+  if (!verticalModule?.enabled) throw userManagementHttpError(400, 'Module is not enabled for the selected Business Vertical.');
+  if (accessClient) {
+    const { data: clientModule, error: clientModuleError } = await client
+      .from('access_client_modules')
+      .select('enabled')
+      .eq('client_id', accessClient.id)
+      .eq('module_id', module.id)
+      .maybeSingle();
+    if (clientModuleError) throw clientModuleError;
+    if (!clientModule?.enabled) throw userManagementHttpError(400, 'Module is not enabled for the selected Client.');
+  }
+  return { vertical, accessClient, module, role };
+}
+
+async function createUnifiedAccessForProfile(client, profile, authUserId, access, request) {
+  if (!accessPayloadPresent(access)) return null;
+  const foundation = await validateUnifiedAccessFoundation(client, access);
+  const effectiveFrom = access.effective_from || new Date().toISOString();
+  let query = client
+    .from('access_user_assignments')
+    .select('*')
+    .eq('auth_user_id', authUserId)
+    .eq('business_vertical_id', access.business_vertical_id)
+    .eq('module_id', access.module_id)
+    .eq('role_id', access.role_id)
+    .eq('active', true)
+    .neq('verification_status', 'rejected')
+    .is('effective_to', null)
+    .limit(1);
+  if (access.client_id) query = query.eq('client_id', access.client_id);
+  else query = query.is('client_id', null);
+  const { data: existingAssignments, error: existingError } = await query;
+  if (existingError) throw existingError;
+  let assignment = existingAssignments?.[0] || null;
+  if (!assignment) {
+    const { data, error } = await client
+      .from('access_user_assignments')
+      .insert({
+        auth_user_id: authUserId,
+        profile_id: profile.id,
+        business_vertical_id: access.business_vertical_id,
+        client_id: access.client_id,
+        module_id: access.module_id,
+        role_id: access.role_id,
+        active: true,
+        verification_status: access.verification_status,
+        effective_from: effectiveFrom,
+        effective_to: access.effective_to,
+        source: access.source,
+        metadata: {
+          source: 'web_user_management_invite',
+          user_type: access.user_type,
+        },
+        created_by: request.authUser.id,
+      })
+      .select('*')
+      .single();
+    if (error) throw error;
+    assignment = data;
+  }
+
+  const scopeIdentity = {
+    user_assignment_id: assignment.id,
+    scope_type: access.scope_type,
+    scope_id: access.scope_id,
+    scope_code: access.scope_code,
+    scope_text: access.scope_text,
+  };
+  let scopeQuery = client
+    .from('access_user_scopes')
+    .select('*')
+    .eq('user_assignment_id', assignment.id)
+    .eq('scope_type', access.scope_type)
+    .eq('allowed', true)
+    .limit(1);
+  scopeQuery = access.scope_id ? scopeQuery.eq('scope_id', access.scope_id) : scopeQuery.is('scope_id', null);
+  scopeQuery = access.scope_code ? scopeQuery.eq('scope_code', access.scope_code) : scopeQuery.is('scope_code', null);
+  scopeQuery = access.scope_text ? scopeQuery.eq('scope_text', access.scope_text) : scopeQuery.is('scope_text', null);
+  const { data: existingScopes, error: existingScopeError } = await scopeQuery;
+  if (existingScopeError) throw existingScopeError;
+  let scope = existingScopes?.[0] || null;
+  if (!scope) {
+    const { data, error } = await client
+      .from('access_user_scopes')
+      .insert({
+        ...scopeIdentity,
+        allowed: true,
+        effective_from: effectiveFrom,
+        effective_to: access.effective_to,
+        metadata: { source: 'web_user_management_invite' },
+        created_by: request.authUser.id,
+      })
+      .select('*')
+      .single();
+    if (error) throw error;
+    scope = data;
+  }
+
+  const auditPayload = {
+    actor_user_id: request.authUser.id,
+    action: 'access_assignment_created',
+    target_type: 'profile',
+    target_id: profile.id,
+    after_state: sanitizeAuditData({
+      assignment: {
+        id: assignment.id,
+        auth_user_id: authUserId,
+        profile_id: profile.id,
+        business_vertical_id: access.business_vertical_id,
+        client_id: access.client_id,
+        module_id: access.module_id,
+        role_id: access.role_id,
+        verification_status: assignment.verification_status,
+        active: assignment.active,
+      },
+      scope: scopeIdentity,
+    }),
+    metadata: {
+      source: 'web_user_management_invite',
+      business_vertical_code: foundation.vertical.code,
+      client_code: foundation.accessClient?.code || null,
+      module_code: foundation.module.code,
+      role_code: foundation.role.code,
+    },
+  };
+  const { error: auditError } = await client.from('access_audit_logs').insert(auditPayload);
+  if (auditError) throw auditError;
+  return {
+    assignment: {
+      status: assignment.verification_status,
+      active: assignment.active,
+      business_vertical: foundation.vertical.code,
+      client: foundation.accessClient?.code || null,
+      module: foundation.module.code,
+      role: foundation.role.code,
+    },
+    scope: {
+      scope_type: scope.scope_type,
+      scope_id: scope.scope_id,
+      scope_code: scope.scope_code,
+      scope_text: scope.scope_text,
+    },
+  };
+}
+
+async function loadUnifiedAccessSummaryForProfile(client, profileId) {
+  const { data: assignments, error } = await client
+    .from('access_user_assignments')
+    .select(`
+      id,
+      active,
+      verification_status,
+      effective_from,
+      effective_to,
+      business_vertical:access_business_verticals(code,name),
+      client:access_clients(code,name),
+      module:access_modules(code,name),
+      role:access_roles(code,name,user_type)
+    `)
+    .eq('profile_id', profileId)
+    .order('created_at', { ascending: false })
+    .limit(20);
+  if (error) {
+    if (accessTableMissing(error)) return [];
+    throw error;
+  }
+  if (!assignments?.length) return [];
+  const assignmentIds = assignments.map((assignment) => assignment.id);
+  const { data: scopes, error: scopesError } = await client
+    .from('access_user_scopes')
+    .select('user_assignment_id,scope_type,scope_id,scope_code,scope_text,allowed,effective_from,effective_to')
+    .in('user_assignment_id', assignmentIds);
+  if (scopesError) {
+    if (accessTableMissing(scopesError)) return [];
+    throw scopesError;
+  }
+  return assignments.map((assignment) => ({
+    business_vertical: assignment.business_vertical || null,
+    client: assignment.client || null,
+    module: assignment.module || null,
+    role: assignment.role || null,
+    active: assignment.active === true,
+    verification_status: assignment.verification_status || null,
+    effective_from: assignment.effective_from || null,
+    effective_to: assignment.effective_to || null,
+    scopes: (scopes || [])
+      .filter((scope) => scope.user_assignment_id === assignment.id)
+      .map((scope) => ({
+        scope_type: scope.scope_type,
+        scope_id: scope.scope_id,
+        scope_code: scope.scope_code,
+        scope_text: scope.scope_text,
+        allowed: scope.allowed === true,
+        effective_from: scope.effective_from,
+        effective_to: scope.effective_to,
+      })),
+  }));
+}
+
+function accessTableMissing(error) {
+  const text = `${error?.code || ''} ${error?.message || ''}`.toLowerCase();
+  return error?.code === '42P01' ||
+    error?.code === 'PGRST205' ||
+    text.includes('could not find the table') ||
+    text.includes('does not exist') ||
+    text.includes('schema cache');
 }
 
 function businessKey(value) {
@@ -1832,6 +2153,19 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
 
 function validateCreateUserBody(body) {
   const roleKey = createUserRoleKey(body.role);
+  const userType = normalizeUserType(body.user_type);
+  const access = accessPayloadFromBody(body);
+  if (userType === 'client') {
+    if (!CLIENT_CREATE_ROLE_KEYS.has(roleKey)) {
+      throw userManagementHttpError(400, 'Client User role must be Hospital Management / RMO or Doctor.');
+    }
+    validateAccessInvitePayload(access);
+    if (!accessPayloadPresent(access)) {
+      throw userManagementHttpError(400, 'Client, Module, Role and Scope are required for Client User invites.');
+    }
+    if (!access.client_id) throw userManagementHttpError(400, 'Client is required for Client User invites.');
+    return;
+  }
   if (!CREATE_USER_ROLE_OPTIONS.has(roleKey)) {
     throw userManagementHttpError(400, 'role must be one of MD, COO, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, or Admin.');
   }
@@ -3253,10 +3587,13 @@ app.get('/api/access/me', requireSupabaseJwtAllowMissingProfile, async (request,
 });
 
 async function selectAccessFoundationTable(client, table, columns = '*') {
-  const { data, error } = await client
+  let query = client
     .from(table)
-    .select(columns)
-    .order('name', { ascending: true });
+    .select(columns);
+  if (!['access_business_vertical_modules', 'access_client_modules'].includes(table)) {
+    query = query.order('name', { ascending: true });
+  }
+  const { data, error } = await query;
   if (error) {
     const text = `${error.code || ''} ${error.message || ''}`.toLowerCase();
     if (
@@ -3284,12 +3621,16 @@ app.get(
         businessVerticals,
         clients,
         modules,
+        verticalModules,
+        clientModules,
         roles,
         permissions,
       ] = await Promise.all([
         selectAccessFoundationTable(client, 'access_business_verticals', 'id,code,name,active'),
         selectAccessFoundationTable(client, 'access_clients', 'id,business_vertical_id,code,name,client_type,active'),
         selectAccessFoundationTable(client, 'access_modules', 'id,code,name,application_target,active'),
+        selectAccessFoundationTable(client, 'access_business_vertical_modules', 'business_vertical_id,module_id,enabled,effective_from,effective_to'),
+        selectAccessFoundationTable(client, 'access_client_modules', 'client_id,module_id,enabled,effective_from,effective_to'),
         selectAccessFoundationTable(client, 'access_roles', 'id,code,name,user_type,module_id,active'),
         selectAccessFoundationTable(client, 'access_permissions', 'id,code,name,module_id,action,resource,active'),
       ]);
@@ -3297,6 +3638,8 @@ app.get(
         businessVerticals,
         clients,
         modules,
+        verticalModules,
+        clientModules,
         roles,
         permissions,
       ].every((result) => result.available);
@@ -3307,6 +3650,8 @@ app.get(
         business_verticals: businessVerticals.rows,
         clients: clients.rows,
         modules: modules.rows,
+        business_vertical_modules: verticalModules.rows,
+        client_modules: clientModules.rows,
         roles: roles.rows,
         permissions: permissions.rows,
         scope_types: [
@@ -3335,6 +3680,134 @@ app.get(
       response.status(error.statusCode || 500).json({
         ok: false,
         message: 'Unable to load access foundation options.',
+      });
+    }
+  },
+);
+
+app.get(
+  '/api/access/scope-options',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      const scopeType = accessCode(request.query.scope_type);
+      const clientId = textOrNull(request.query.client_id);
+      const options = [];
+      if (['global', 'business_vertical', 'client', 'all_client', 'employee_self'].includes(scopeType)) {
+        response.json({ ok: true, options });
+        return;
+      }
+
+      let selectedClient = null;
+      if (clientId) {
+        const { data, error } = await client
+          .from('access_clients')
+          .select('id,code,name,metadata')
+          .eq('id', clientId)
+          .maybeSingle();
+        if (error) throw error;
+        selectedClient = data || null;
+      }
+      const legacyHospitalClientId = selectedClient?.metadata?.legacy_hospital_client_id || null;
+
+      if (scopeType === 'state') {
+        const [profiles, stores] = await Promise.all([
+          client.from('profiles').select('state').not('state', 'is', null).limit(5000),
+          client.from('store_master').select('state').not('state', 'is', null).limit(5000),
+        ]);
+        if (profiles.error) throw profiles.error;
+        if (stores.error) throw stores.error;
+        const states = Array.from(new Set([...(profiles.data || []), ...(stores.data || [])]
+          .map((row) => textOrNull(row.state))
+          .filter(Boolean)))
+          .sort();
+        response.json({ ok: true, options: states.map((state) => ({ id: null, code: state, label: state })) });
+        return;
+      }
+
+      if (scopeType === 'store') {
+        let query = client.from('store_master').select('id,store_code,store_name,state,client_name,business').limit(1000);
+        if (selectedClient?.code === 'reliance_retail') {
+          query = query.or('business.ilike.%reliance%,client_name.ilike.%reliance%');
+        }
+        const { data, error } = await query;
+        if (error) throw error;
+        response.json({
+          ok: true,
+          options: (data || []).map((row) => ({
+            id: row.id,
+            code: row.store_code || null,
+            label: [row.store_code, row.store_name, row.state].filter(Boolean).join(' - '),
+          })),
+        });
+        return;
+      }
+
+      if (scopeType === 'hospital_block') {
+        let query = client.from('hospital_blocks').select('id,block_code,block_name,name,is_active').eq('is_active', true).limit(1000);
+        if (legacyHospitalClientId) query = query.eq('client_id', legacyHospitalClientId);
+        const { data, error } = await query;
+        if (error) throw error;
+        response.json({
+          ok: true,
+          options: (data || []).map((row) => ({
+            id: row.id,
+            code: row.block_code || null,
+            label: row.block_name || row.name || row.block_code || row.id,
+          })),
+        });
+        return;
+      }
+
+      if (scopeType === 'location') {
+        let query = client.from('hospital_locations').select('id,location_code,location_name,name,complete_location_path,is_active').eq('is_active', true).limit(1000);
+        if (legacyHospitalClientId) query = query.eq('client_id', legacyHospitalClientId);
+        const { data, error } = await query;
+        if (error) throw error;
+        response.json({
+          ok: true,
+          options: (data || []).map((row) => ({
+            id: row.id,
+            code: row.location_code || null,
+            label: row.complete_location_path || row.location_name || row.name || row.location_code || row.id,
+          })),
+        });
+        return;
+      }
+
+      if (scopeType === 'department') {
+        let query = client.from('hospital_departments').select('id,department_code,department_name,name,is_active').eq('is_active', true).limit(1000);
+        if (legacyHospitalClientId) query = query.eq('client_id', legacyHospitalClientId);
+        const { data, error } = await query;
+        if (error) throw error;
+        response.json({
+          ok: true,
+          options: (data || []).map((row) => ({
+            id: row.id,
+            code: row.department_code || null,
+            label: row.department_name || row.name || row.department_code || row.id,
+          })),
+        });
+        return;
+      }
+
+      if (['branch', 'site'].includes(scopeType)) {
+        response.json({ ok: true, options: [] });
+        return;
+      }
+
+      response.status(400).json({ ok: false, message: 'Unsupported scope type.' });
+    } catch (error) {
+      const safeError = sanitizeSupabaseDiagnosticError(error);
+      console.warn('[Access Control] Failed to load scope options', {
+        code: safeError.code,
+        message: safeError.message,
+      });
+      response.status(error.statusCode || 500).json({
+        ok: false,
+        message: 'Unable to load scope options.',
       });
     }
   },
@@ -3996,6 +4469,8 @@ app.post(
         }
       }
       validateCreateUserBody(body);
+      const userType = normalizeUserType(body.user_type);
+      const unifiedAccess = accessPayloadFromBody(body);
       await ensureUniqueProfileIdentity(client, { employeeCode, email });
 
       if (body.create_profile_only === true && createUserRoleKey(body.role) === 'MD') {
@@ -4032,7 +4507,10 @@ app.post(
       }
 
       await ensureUniqueAuthEmail(client, email);
-      const hierarchyResolution = await buildCreateHierarchyMetadata(client, body, employeeCode);
+      const hierarchyResolution = userType === 'client'
+        ? { metadata: { user_type: 'client', unified_access_requested: accessPayloadPresent(unifiedAccess) }, hierarchyFields: {}, warnings: [] }
+        : await buildCreateHierarchyMetadata(client, body, employeeCode);
+      await validateUnifiedAccessFoundation(client, unifiedAccess);
       let createBody = {
         ...body,
         display_name: textOrNull(body.display_name) || fullName,
@@ -4055,6 +4533,7 @@ app.post(
         department: textOrNull(body.department),
         business: textOrNull(body.business),
         state: textOrNull(body.state),
+        user_type: userType,
       };
       const { user: invitedAuthUser, invite: inviteResult } = await createInvitedAuthUser(client, {
         email,
@@ -4122,31 +4601,41 @@ app.post(
       createdProfile = profile;
 
       let hierarchy = null;
-      try {
-        hierarchy = await saveHierarchy(
-          client,
-          createdProfile.employee_code,
-          createBody,
-          request.authUser.id,
-        );
-      } catch (hierarchyError) {
-        await writeUserManagementAudit(client, {
-          action: 'CREATE_USER_HIERARCHY_FAILED',
-          targetProfile: createdProfile,
-          newData: createdProfile,
-          metadata: {
-            profile_created: true,
-            hierarchy_saved: false,
-            error: safeAuthError(hierarchyError),
-          },
-          request,
-        });
-        throw userManagementHttpError(
-          500,
-          'User and profile were created, but hierarchy could not be saved. No user data was deleted.',
-          { profile_id: createdProfile.id, error: safeAuthError(hierarchyError) },
-        );
+      if (userType !== 'client') {
+        try {
+          hierarchy = await saveHierarchy(
+            client,
+            createdProfile.employee_code,
+            createBody,
+            request.authUser.id,
+          );
+        } catch (hierarchyError) {
+          await writeUserManagementAudit(client, {
+            action: 'CREATE_USER_HIERARCHY_FAILED',
+            targetProfile: createdProfile,
+            newData: createdProfile,
+            metadata: {
+              profile_created: true,
+              hierarchy_saved: false,
+              error: safeAuthError(hierarchyError),
+            },
+            request,
+          });
+          throw userManagementHttpError(
+            500,
+            'User and profile were created, but hierarchy could not be saved. No user data was deleted.',
+            { profile_id: createdProfile.id, error: safeAuthError(hierarchyError) },
+          );
+        }
       }
+
+      const unifiedAccessResult = await createUnifiedAccessForProfile(
+        client,
+        createdProfile,
+        createdAuthUser.id,
+        unifiedAccess,
+        request,
+      );
 
       await writeUserManagementAudit(client, {
         action: 'CREATE_USER',
@@ -4154,11 +4643,13 @@ app.post(
         newData: {
           profile: createdProfile,
           hierarchy,
+          unified_access: unifiedAccessResult,
         },
         metadata: {
           auth_user_created: true,
           invite: inviteResult,
           hierarchy_warnings: hierarchyResolution.warnings,
+          user_type: userType,
         },
         request,
       });
@@ -4168,6 +4659,7 @@ app.post(
         hierarchy,
         invite: inviteResult,
         hierarchyWarnings: hierarchyResolution.warnings,
+        unifiedAccess: unifiedAccessResult,
       });
     } catch (error) {
       respondUserManagementError(response, error);
@@ -4330,14 +4822,16 @@ app.get(
       await assertUserManagementFoundation(client);
       const profile = await loadProfileById(client, request.params.profileId);
       if (!profile) throw userManagementHttpError(404, 'User profile not found.');
-      const [counts, hierarchy] = await Promise.all([
+      const [counts, hierarchy, unifiedAccess] = await Promise.all([
         loadOperationalCounts(client, [profile.employee_code]),
         loadHierarchy(client, profile.employee_code),
+        loadUnifiedAccessSummaryForProfile(client, profile.id),
       ]);
       response.json({
         ok: true,
         profile: attachOperationalCounts(profile, counts),
         hierarchy,
+        unifiedAccess,
       });
     } catch (error) {
       respondUserManagementError(response, error);

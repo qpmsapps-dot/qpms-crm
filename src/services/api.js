@@ -127,6 +127,14 @@ export function getAccessFoundation() {
   });
 }
 
+export function getAccessScopeOptions(params = {}) {
+  return adminApiRequest({
+    method: 'GET',
+    url: '/api/access/scope-options',
+    params,
+  });
+}
+
 export function getMyProfile() {
   return adminApiRequest({
     method: 'GET',

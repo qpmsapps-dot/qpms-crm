@@ -47,6 +47,19 @@ function hierarchyPathLabel(employee, hierarchy = {}) {
   return path.filter(Boolean).join(' -> ');
 }
 
+function accessLabel(value) {
+  if (!value) return 'Not available';
+  if (typeof value === 'string') return value;
+  return value.name || value.code || 'Not available';
+}
+
+function scopeLabel(scope = {}) {
+  return [
+    scope.scope_type ? scope.scope_type.replaceAll('_', ' ') : null,
+    scope.scope_text || scope.scope_code || scope.scope_id,
+  ].filter(Boolean).join(': ') || 'Not available';
+}
+
 function ActionPanel({ action, employee, busy, onCancel, onSubmit }) {
   const [reason, setReason] = useState('');
   const [newEmployeeCode, setNewEmployeeCode] = useState('');
@@ -301,6 +314,40 @@ export default function EmployeeDetailsDrawer({
               </dl>
             </section>
           ))}
+
+          <section className="rounded-xl border border-slate-200 p-4">
+            <h3 className="text-sm font-bold text-slate-950">Unified Access</h3>
+            {employee.unifiedAccess?.length ? (
+              <div className="mt-3 space-y-3">
+                {employee.unifiedAccess.map((assignment, index) => (
+                  <div key={`${assignment.module?.code || 'module'}-${index}`} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <dl className="grid gap-3 sm:grid-cols-2">
+                      <Field label="Business Vertical" value={accessLabel(assignment.business_vertical)} />
+                      <Field label="Client" value={accessLabel(assignment.client)} />
+                      <Field label="Module" value={accessLabel(assignment.module)} />
+                      <Field label="Role" value={accessLabel(assignment.role)} />
+                      <Field label="Assignment status" value={`${assignment.active ? 'Active' : 'Inactive'} / ${assignment.verification_status || 'Unknown'}`} />
+                      <Field label="Effective dates" value={[assignment.effective_from, assignment.effective_to || 'No end date'].filter(Boolean).join(' -> ')} />
+                    </dl>
+                    <div className="mt-3">
+                      <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Scope</p>
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        {(assignment.scopes || []).length ? assignment.scopes.map((scope, scopeIndex) => (
+                          <span key={`${scope.scope_type}-${scopeIndex}`} className="rounded-full bg-white px-2 py-1 text-xs font-bold text-slate-700 ring-1 ring-slate-200">
+                            {scopeLabel(scope)}
+                          </span>
+                        )) : <span className="text-sm font-semibold text-slate-500">No scopes configured</span>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">
+                No unified access assignment is linked to this profile yet.
+              </p>
+            )}
+          </section>
 
           <section className="rounded-xl border border-slate-200 p-4">
             <h3 className="text-sm font-bold text-slate-950">Account Actions</h3>

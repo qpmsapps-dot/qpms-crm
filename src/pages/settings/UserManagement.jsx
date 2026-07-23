@@ -67,7 +67,7 @@ function inviteLifecycleLabel(profile = {}) {
   return profile.auth_user_id ? 'Login Enabled' : 'Profile Only';
 }
 
-function mapProfile(profile, hierarchy = null) {
+function mapProfile(profile, hierarchy = null, unifiedAccess = []) {
   const isActive = profile?.is_active === true;
   const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
   const mergedHierarchy = {
@@ -104,6 +104,7 @@ function mapProfile(profile, hierarchy = null) {
     attendanceCount: Number(profile.attendance_count || 0),
     siteVisitCount: Number(profile.site_visit_count || 0),
     gpsLogCount: Number(profile.gps_log_count || 0),
+    unifiedAccess: Array.isArray(unifiedAccess) ? unifiedAccess : [],
   };
 }
 
@@ -254,7 +255,7 @@ export default function UserManagement() {
       setBusy(true);
       try {
         const result = await getAdminUser(user.id);
-        completeUser = mapProfile(result.profile, result.hierarchy);
+        completeUser = mapProfile(result.profile, result.hierarchy, result.unifiedAccess);
       } catch (error) {
         showMessage(apiErrorMessage(error));
         return;
@@ -273,7 +274,7 @@ export default function UserManagement() {
     setDetailLoading(true);
     try {
       const result = await getAdminUser(user.id);
-      setDrawerUser(mapProfile(result.profile, result.hierarchy));
+      setDrawerUser(mapProfile(result.profile, result.hierarchy, result.unifiedAccess));
     } catch (error) {
       showMessage(apiErrorMessage(error));
     } finally {
@@ -288,7 +289,9 @@ export default function UserManagement() {
       const result = formMode === 'edit'
         ? await updateAdminUser(editingUser.id, payload)
         : await createAdminUser(payload);
-      const next = result.profile ? mapProfile(result.profile, result.hierarchy) : null;
+      const next = result.profile
+        ? mapProfile(result.profile, result.hierarchy, result.unifiedAccess ? [result.unifiedAccess] : result.unifiedAccess)
+        : null;
       if (next && drawerUser?.id === next.id) setDrawerUser(next);
       setFormOpen(false);
       setEditingUser(null);
@@ -348,7 +351,7 @@ export default function UserManagement() {
       } else {
         try {
           const refreshed = await getAdminUser(user.id);
-          setDrawerUser(mapProfile(refreshed.profile, refreshed.hierarchy));
+          setDrawerUser(mapProfile(refreshed.profile, refreshed.hierarchy, refreshed.unifiedAccess));
         } catch {
           setDrawerUser(null);
         }
@@ -376,7 +379,7 @@ export default function UserManagement() {
         mobile: enableLoginMobile.trim() || undefined,
       });
       if (result.profile && drawerUser?.employeeCode === enableLoginUser.employeeCode) {
-        setDrawerUser(mapProfile(result.profile, drawerUser.hierarchy));
+        setDrawerUser(mapProfile(result.profile, drawerUser.hierarchy, drawerUser.unifiedAccess));
       }
       setEnableLoginUser(null);
       setEnableLoginEmail('');

@@ -1,8 +1,9 @@
 import { X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { getHierarchyOptions } from '../../services/api.js';
+import { getAccessFoundation, getAccessScopeOptions, getHierarchyOptions } from '../../services/api.js';
 
 const emptyForm = {
+  user_type: 'internal',
   employee_code: '',
   full_name: '',
   display_name: '',
@@ -24,6 +25,15 @@ const emptyForm = {
   business_head_employee_code: '',
   gm_employee_code: '',
   coo_employee_code: '',
+  access_business_vertical_id: '',
+  access_client_id: '',
+  access_module_id: '',
+  access_role_id: '',
+  access_scope_type: '',
+  access_scope_id: '',
+  access_scope_code: '',
+  access_scope_text: '',
+  access_verification_status: 'verified',
 };
 
 const roleOptions = [
@@ -47,6 +57,26 @@ const businessOptions = [
 ];
 const operationalRoles = new Set(['FO', 'KAM', 'Operations Manager', 'Branch Head', 'Business Head']);
 const reportingRequiredRoles = new Set(['FO', 'KAM', 'Operations Manager', 'Branch Head']);
+const userTypeOptions = [
+  { value: 'internal', label: 'Internal User' },
+  { value: 'client', label: 'Client User' },
+];
+const fallbackScopeTypes = [
+  'global',
+  'business_vertical',
+  'client',
+  'all_client',
+  'state',
+  'branch',
+  'site',
+  'store',
+  'hospital_block',
+  'floor',
+  'location',
+  'department',
+  'assigned_ticket',
+  'employee_self',
+];
 
 function isIfmsBusiness(value) {
   return ['IFMS', 'RELIANCE RETAIL', 'RELIANCE'].includes(String(value || '').trim().toUpperCase());
@@ -107,6 +137,14 @@ function TextField({
   );
 }
 
+function optionValue(option) {
+  return typeof option === 'object' && option !== null ? option.value : option;
+}
+
+function optionLabel(option) {
+  return typeof option === 'object' && option !== null ? option.label : option;
+}
+
 function SelectField({ name, label, value, onChange, options, required = false, error, disabled = false }) {
   return (
     <label className="block">
@@ -125,7 +163,7 @@ function SelectField({ name, label, value, onChange, options, required = false, 
       >
         <option value="">Select {label}</option>
         {options.map((option) => (
-          <option key={option} value={option}>{option}</option>
+          <option key={optionValue(option)} value={optionValue(option)}>{optionLabel(option)}</option>
         ))}
       </select>
       {error ? <p className="mt-1 text-xs font-semibold text-rose-600">{error}</p> : null}
@@ -191,9 +229,57 @@ export default function UserFormDrawer({
   });
   const [hierarchyLoading, setHierarchyLoading] = useState(false);
   const [hierarchyError, setHierarchyError] = useState('');
+  const [foundation, setFoundation] = useState({
+    available: false,
+    business_verticals: [],
+    clients: [],
+    modules: [],
+    business_vertical_modules: [],
+    client_modules: [],
+    roles: [],
+    permissions: [],
+    scope_types: fallbackScopeTypes,
+  });
+  const [foundationLoading, setFoundationLoading] = useState(false);
+  const [foundationError, setFoundationError] = useState('');
+  const [scopeOptions, setScopeOptions] = useState([]);
+  const [scopeOptionsLoading, setScopeOptionsLoading] = useState(false);
+  const [scopeOptionsError, setScopeOptionsError] = useState('');
 
   useEffect(() => {
     if (!open || mode !== 'add') return undefined;
+    let active = true;
+    setFoundationLoading(true);
+    setFoundationError('');
+    getAccessFoundation()
+      .then((result) => {
+        if (!active) return;
+        setFoundation({
+          available: result.available !== false,
+          business_verticals: result.business_verticals || [],
+          clients: result.clients || [],
+          modules: result.modules || [],
+          business_vertical_modules: result.business_vertical_modules || [],
+          client_modules: result.client_modules || [],
+          roles: result.roles || [],
+          permissions: result.permissions || [],
+          scope_types: result.scope_types || fallbackScopeTypes,
+        });
+      })
+      .catch((error) => {
+        if (!active) return;
+        setFoundationError(error.message || 'Unable to load unified access options.');
+      })
+      .finally(() => {
+        if (active) setFoundationLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [mode, open]);
+
+  useEffect(() => {
+    if (!open || mode !== 'add' || values.user_type === 'client') return undefined;
     let active = true;
     queueMicrotask(() => {
       if (!active) return;
@@ -229,7 +315,43 @@ export default function UserFormDrawer({
     return () => {
       active = false;
     };
-  }, [mode, open, values.business, values.role, values.state]);
+  }, [mode, open, values.business, values.role, values.state, values.user_type]);
+
+  useEffect(() => {
+    if (!open || mode !== 'add' || !values.access_scope_type) {
+      setScopeOptions([]);
+      setScopeOptionsError('');
+      return undefined;
+    }
+    if (['global', 'business_vertical', 'client', 'all_client', 'employee_self'].includes(values.access_scope_type)) {
+      setScopeOptions([]);
+      setScopeOptionsError('');
+      return undefined;
+    }
+    let active = true;
+    setScopeOptionsLoading(true);
+    setScopeOptionsError('');
+    getAccessScopeOptions({
+      scope_type: values.access_scope_type,
+      client_id: values.access_client_id || undefined,
+      module_id: values.access_module_id || undefined,
+    })
+      .then((result) => {
+        if (!active) return;
+        setScopeOptions(result.options || []);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setScopeOptions([]);
+        setScopeOptionsError(error.message || 'Unable to load scope values.');
+      })
+      .finally(() => {
+        if (active) setScopeOptionsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [mode, open, values.access_client_id, values.access_module_id, values.access_scope_type]);
 
   const gmLevelOptions = useMemo(
     () => (isIfmsBusiness(values.business) ? hierarchyOptions.southHeads : hierarchyOptions.gms),
@@ -278,13 +400,117 @@ export default function UserFormDrawer({
     () => businessOptionsWithCurrent(values.business),
     [values.business],
   );
+  const filteredClients = useMemo(
+    () => foundation.clients
+      .filter((client) => !values.access_business_vertical_id || client.business_vertical_id === values.access_business_vertical_id)
+      .map((client) => ({ value: client.id, label: client.name || client.code })),
+    [foundation.clients, values.access_business_vertical_id],
+  );
+  const filteredModules = useMemo(
+    () => foundation.modules
+      .filter((module) => module.active !== false)
+      .filter((module) => {
+        if (!values.access_business_vertical_id) return false;
+        return foundation.business_vertical_modules.some((mapping) =>
+          mapping.business_vertical_id === values.access_business_vertical_id &&
+          mapping.module_id === module.id &&
+          mapping.enabled !== false);
+      })
+      .filter((module) => {
+        if (!values.access_client_id) return true;
+        return foundation.client_modules.some((mapping) =>
+          mapping.client_id === values.access_client_id &&
+          mapping.module_id === module.id &&
+          mapping.enabled !== false);
+      })
+      .map((module) => ({ value: module.id, label: module.name || module.code })),
+    [foundation.business_vertical_modules, foundation.client_modules, foundation.modules, values.access_business_vertical_id, values.access_client_id],
+  );
+  const filteredAccessRoles = useMemo(
+    () => foundation.roles
+      .filter((role) => role.active !== false)
+      .filter((role) => !values.access_module_id || !role.module_id || role.module_id === values.access_module_id)
+      .filter((role) => String(role.user_type || '').toLowerCase() === values.user_type)
+      .map((role) => ({ value: role.id, label: role.name || role.code })),
+    [foundation.roles, values.access_module_id, values.user_type],
+  );
+  const scopeTypeOptions = useMemo(
+    () => (foundation.scope_types || fallbackScopeTypes).map((scopeType) => ({
+      value: scopeType,
+      label: scopeType.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
+    })),
+    [foundation.scope_types],
+  );
+  const scopeValueOptions = useMemo(
+    () => scopeOptions.map((option) => ({
+      value: option.id || option.code || option.label,
+      label: option.label || option.code || option.id,
+      raw: option,
+    })),
+    [scopeOptions],
+  );
 
   if (!open) return null;
 
   function update(key, value) {
+    const selectedAccessRole = key === 'access_role_id'
+      ? foundation.roles.find((role) => role.id === value)
+      : null;
     setValues((current) => ({
       ...current,
       [key]: value,
+      ...(key === 'user_type'
+        ? {
+          role: value === 'client' ? '' : 'FO',
+          state: '',
+          business: '',
+          manager_employee_code: '',
+          access_business_vertical_id: '',
+          access_client_id: '',
+          access_module_id: '',
+          access_role_id: '',
+          access_scope_type: '',
+          access_scope_id: '',
+          access_scope_code: '',
+          access_scope_text: '',
+        }
+        : {}),
+      ...(key === 'access_business_vertical_id'
+        ? {
+          access_client_id: '',
+          access_module_id: '',
+          access_role_id: '',
+          access_scope_type: '',
+          access_scope_id: '',
+          access_scope_code: '',
+          access_scope_text: '',
+        }
+        : {}),
+      ...(key === 'access_client_id'
+        ? {
+          access_module_id: '',
+          access_role_id: '',
+          access_scope_type: '',
+          access_scope_id: '',
+          access_scope_code: '',
+          access_scope_text: '',
+        }
+        : {}),
+      ...(key === 'access_module_id'
+        ? {
+          access_role_id: '',
+          access_scope_type: '',
+          access_scope_id: '',
+          access_scope_code: '',
+          access_scope_text: '',
+        }
+        : {}),
+      ...(key === 'access_role_id' && selectedAccessRole
+        ? { role: selectedAccessRole.code === 'hospital_management' ? 'Hospital Management' : selectedAccessRole.name || selectedAccessRole.code }
+        : {}),
+      ...(key === 'access_scope_type'
+        ? { access_scope_id: '', access_scope_code: '', access_scope_text: '' }
+        : {}),
       ...(key === 'role'
         ? { create_profile_only: value === 'MD' }
         : {}),
@@ -294,12 +520,22 @@ export default function UserFormDrawer({
     }));
   }
 
+  function updateScopeValue(value) {
+    const selected = scopeValueOptions.find((option) => option.value === value)?.raw || null;
+    setValues((current) => ({
+      ...current,
+      access_scope_id: selected?.id || '',
+      access_scope_code: selected?.code || (!selected?.id ? value : ''),
+      access_scope_text: selected?.label || '',
+    }));
+  }
+
   function needsState(role) {
-    return operationalRoles.has(role);
+    return values.user_type !== 'client' && operationalRoles.has(role);
   }
 
   function needsBusiness(role) {
-    return operationalRoles.has(role);
+    return values.user_type !== 'client' && operationalRoles.has(role);
   }
 
   function reportingLabel(role) {
@@ -319,15 +555,35 @@ export default function UserFormDrawer({
     const fullName = values.full_name.trim();
     const email = values.email.trim().toLowerCase();
     const profileOnlyMd = mode === 'add' && values.role === 'MD' && values.create_profile_only;
-    if (!employeeCode) nextErrors.employee_code = 'Employee code is required.';
+    if (!employeeCode) nextErrors.employee_code = values.user_type === 'client' ? 'Client user code is required.' : 'Employee code is required.';
     if (!fullName) nextErrors.full_name = 'Full name is required.';
     if (!profileOnlyMd && !email) nextErrors.email = 'Email is required for Supabase Auth.';
     if (!profileOnlyMd && !values.mobile.trim()) nextErrors.mobile = 'Mobile number is required.';
-    if (!values.role) nextErrors.role = 'Role is required.';
-    if (mode === 'add' && needsState(values.role) && !values.state) nextErrors.state = 'State is required.';
-    if (mode === 'add' && needsBusiness(values.role) && !values.business) nextErrors.business = 'Business is required.';
-    if (mode === 'add' && reportingRequiredRoles.has(values.role) && !values.manager_employee_code) {
+    if (values.user_type !== 'client' && !values.role) nextErrors.role = 'Role is required.';
+    if (mode === 'add' && values.user_type !== 'client' && needsState(values.role) && !values.state) nextErrors.state = 'State is required.';
+    if (mode === 'add' && values.user_type !== 'client' && needsBusiness(values.role) && !values.business) nextErrors.business = 'Business is required.';
+    if (mode === 'add' && values.user_type !== 'client' && reportingRequiredRoles.has(values.role) && !values.manager_employee_code) {
       nextErrors.manager_employee_code = `${reportingLabel(values.role)} is required.`;
+    }
+    if (mode === 'add') {
+      if (!values.access_business_vertical_id) nextErrors.access_business_vertical_id = 'Business Vertical is required.';
+      if (values.user_type === 'client' && !values.access_client_id) nextErrors.access_client_id = 'Client is required.';
+      if (!values.access_module_id) nextErrors.access_module_id = 'Module is required.';
+      if (!values.access_role_id) nextErrors.access_role_id = 'Unified Role is required.';
+      if (!values.access_scope_type) nextErrors.access_scope_type = 'Scope Type is required.';
+      if (values.access_scope_type === 'client' && !values.access_client_id) {
+        nextErrors.access_client_id = 'Client is required for client scope.';
+      }
+      if (
+        values.access_scope_type &&
+        !['global', 'business_vertical', 'client', 'all_client', 'employee_self'].includes(values.access_scope_type) &&
+        !values.access_scope_id &&
+        !values.access_scope_code &&
+        !values.access_scope_text
+      ) {
+        nextErrors.access_scope_value = 'Scope Value is required.';
+      }
+      if (foundationError) nextErrors.access_business_vertical_id = 'Unified access options are unavailable.';
     }
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       nextErrors.email = 'Enter a valid email.';
@@ -342,6 +598,7 @@ export default function UserFormDrawer({
     if (Object.keys(nextErrors).length) return;
 
     const payload = {
+      user_type: values.user_type,
       employee_code: employeeCode,
       full_name: fullName,
       display_name: values.display_name.trim() || fullName,
@@ -364,12 +621,46 @@ export default function UserFormDrawer({
       coo_employee_code: values.coo_employee_code.trim().toUpperCase() || null,
     };
     if (mode === 'add') {
+      const selectedAccessRole = foundation.roles.find((role) => role.id === values.access_role_id);
+      const selectedAccessModule = foundation.modules.find((module) => module.id === values.access_module_id);
+      const selectedAccessClient = foundation.clients.find((client) => client.id === values.access_client_id);
+      const selectedAccessVertical = foundation.business_verticals.find((vertical) => vertical.id === values.access_business_vertical_id);
       payload.requires_password_change = false;
       payload.display_name = fullName;
-      payload.department = null;
-      payload.designation = null;
-      payload.reporting_manager_employee_code = values.manager_employee_code.trim().toUpperCase() || null;
+      payload.role = values.user_type === 'client'
+        ? (selectedAccessRole?.code === 'hospital_management' ? 'Hospital Management' : selectedAccessRole?.name || values.role)
+        : values.role;
+      payload.business = values.business.trim() || selectedAccessVertical?.name || null;
+      payload.department = values.user_type === 'client' ? null : null;
+      payload.designation = values.user_type === 'client' ? selectedAccessRole?.name || null : null;
+      payload.reporting_manager_employee_code = values.user_type === 'client'
+        ? null
+        : values.manager_employee_code.trim().toUpperCase() || null;
       payload.create_profile_only = profileOnlyMd;
+      payload.metadata = {
+        user_type: values.user_type,
+        access_client_name: selectedAccessClient?.name || null,
+        access_module_code: selectedAccessModule?.code || null,
+      };
+      payload.access_assignment = {
+        user_type: values.user_type,
+        business_vertical_id: values.access_business_vertical_id,
+        client_id: values.access_client_id || null,
+        module_id: values.access_module_id,
+        role_id: values.access_role_id,
+        verification_status: values.access_verification_status,
+        source: 'web_invite',
+        scope: {
+          scope_type: values.access_scope_type,
+          scope_id: values.access_scope_type === 'business_vertical'
+            ? values.access_business_vertical_id
+            : values.access_scope_type === 'client'
+              ? values.access_client_id
+              : values.access_scope_id || null,
+          scope_code: values.access_scope_code || null,
+          scope_text: values.access_scope_text || null,
+        },
+      };
     } else {
       delete payload.employee_code;
       payload.status = values.status;
@@ -409,14 +700,15 @@ export default function UserFormDrawer({
               <section className="rounded-xl border border-slate-200 p-4">
                 <h3 className="text-sm font-bold text-slate-950">Basic Access Details</h3>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <TextField name="employee_code" label="Employee Code" required value={values.employee_code} error={errors.employee_code} onChange={update} />
+                  <SelectField name="user_type" label="User Type" required value={values.user_type} options={userTypeOptions} error={errors.user_type} onChange={update} />
+                  <TextField name="employee_code" label={values.user_type === 'client' ? 'Client User Code' : 'Employee Code'} required value={values.employee_code} error={errors.employee_code} onChange={update} />
                   <TextField name="full_name" label="Full Name" required value={values.full_name} error={errors.full_name} onChange={update} />
                   <TextField name="email" label="Email" required={!profileOnlyMd} type="email" value={values.email} error={errors.email} onChange={update} />
                   <TextField name="mobile" label="Mobile Number" required={!profileOnlyMd} value={values.mobile} error={errors.mobile} onChange={update} />
                 </div>
               </section>
 
-              <section className="rounded-xl border border-slate-200 p-4">
+              {values.user_type !== 'client' ? <section className="rounded-xl border border-slate-200 p-4">
                 <h3 className="text-sm font-bold text-slate-950">Work Mapping</h3>
                 <div className="mt-3 grid gap-3 sm:grid-cols-3">
                   <SelectField name="state" label="State" required={needsState(values.role)} value={values.state} options={stateOptions} error={errors.state} onChange={update} />
@@ -433,9 +725,100 @@ export default function UserFormDrawer({
                     Create profile only, no login access now
                   </label>
                 ) : null}
+              </section> : null}
+
+              <section className="rounded-xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-bold text-slate-950">Unified Module Access</h3>
+                  {foundationLoading ? <span className="text-xs font-bold text-slate-400">Loading...</span> : null}
+                </div>
+                {foundationError ? (
+                  <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">
+                    {foundationError}
+                    <button type="button" className="ml-2 underline" onClick={() => setFoundationError('')}>Dismiss</button>
+                  </div>
+                ) : null}
+                {foundation.available === false ? (
+                  <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                    Unified access foundation is not available yet. Apply and validate the access foundation before creating unified assignments.
+                  </p>
+                ) : null}
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <SelectField
+                    name="access_business_vertical_id"
+                    label="Business Vertical"
+                    required
+                    value={values.access_business_vertical_id}
+                    options={foundation.business_verticals.filter((item) => item.active !== false).map((item) => ({ value: item.id, label: item.name || item.code }))}
+                    error={errors.access_business_vertical_id}
+                    disabled={foundationLoading}
+                    onChange={update}
+                  />
+                  <SelectField
+                    name="access_client_id"
+                    label="Client"
+                    required={values.user_type === 'client'}
+                    value={values.access_client_id}
+                    options={filteredClients}
+                    error={errors.access_client_id}
+                    disabled={!values.access_business_vertical_id || foundationLoading}
+                    onChange={update}
+                  />
+                  <SelectField
+                    name="access_module_id"
+                    label="Module"
+                    required
+                    value={values.access_module_id}
+                    options={filteredModules}
+                    error={errors.access_module_id}
+                    disabled={!values.access_business_vertical_id || foundationLoading}
+                    onChange={update}
+                  />
+                  <SelectField
+                    name="access_role_id"
+                    label="Role"
+                    required
+                    value={values.access_role_id}
+                    options={filteredAccessRoles}
+                    error={errors.access_role_id}
+                    disabled={!values.access_module_id || foundationLoading}
+                    onChange={update}
+                  />
+                  <SelectField
+                    name="access_scope_type"
+                    label="Scope Type"
+                    required
+                    value={values.access_scope_type}
+                    options={scopeTypeOptions}
+                    error={errors.access_scope_type}
+                    disabled={!values.access_role_id || foundationLoading}
+                    onChange={update}
+                  />
+                  {['global', 'business_vertical', 'client', 'all_client', 'employee_self'].includes(values.access_scope_type) ? (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">
+                      Scope value is derived from the selected access context.
+                    </div>
+                  ) : (
+                    <SelectField
+                      name="access_scope_value"
+                      label="Scope Value"
+                      required
+                      value={values.access_scope_id || values.access_scope_code}
+                      options={scopeValueOptions}
+                      error={errors.access_scope_value}
+                      disabled={!values.access_scope_type || scopeOptionsLoading}
+                      onChange={(_, value) => updateScopeValue(value)}
+                    />
+                  )}
+                </div>
+                {scopeOptionsLoading ? <p className="mt-2 text-xs font-bold text-slate-400">Loading scope values...</p> : null}
+                {scopeOptionsError ? <p className="mt-2 text-xs font-bold text-rose-600">{scopeOptionsError}</p> : null}
+                {values.access_scope_type && !scopeOptionsLoading && !scopeOptionsError && !['global', 'business_vertical', 'client', 'all_client', 'employee_self'].includes(values.access_scope_type) && scopeValueOptions.length === 0 ? (
+                  <p className="mt-2 text-xs font-bold text-amber-700">No scope values are available for this selection.</p>
+                ) : null}
               </section>
 
-              {!profileOnlyMd ? <section className="rounded-xl border border-slate-200 p-4">
+              {!profileOnlyMd && values.user_type !== 'client' ? <section className="rounded-xl border border-slate-200 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-sm font-bold text-slate-950">Reporting Hierarchy</h3>
                   {hierarchyLoading ? <span className="text-xs font-bold text-slate-400">Loading...</span> : null}
