@@ -40,6 +40,10 @@ class HospitalDemoSession {
     required this.displayName,
     required this.role,
     this.assignedBlock,
+    this.userCode = '',
+    this.email = '',
+    this.mobile = '',
+    this.clientName = '',
     this.userId = '',
     this.isDemo = true,
   });
@@ -48,6 +52,10 @@ class HospitalDemoSession {
   final String displayName;
   final HospitalDemoRole role;
   final String? assignedBlock;
+  final String userCode;
+  final String email;
+  final String mobile;
+  final String clientName;
   final String userId;
   final bool isDemo;
 
@@ -75,6 +83,7 @@ class HospitalTicketEvent {
 class HospitalTicket {
   const HospitalTicket({
     required this.id,
+    this.ticketNumber = '',
     required this.block,
     required this.floor,
     required this.location,
@@ -117,6 +126,7 @@ class HospitalTicket {
   });
 
   final String id;
+  final String ticketNumber;
   final String site;
   final String block;
   final String floor;
@@ -191,6 +201,7 @@ class HospitalTicket {
   }) {
     return HospitalTicket(
       id: id,
+      ticketNumber: ticketNumber,
       site: site,
       block: block,
       floor: floor,
@@ -271,6 +282,7 @@ class HospitalTicket {
         : <HospitalTicketAction>{};
     return HospitalTicket(
       id: '${row['id'] ?? ''}',
+      ticketNumber: _firstText([row['ticket_no'], row['ticket_number']]),
       site: _firstText([row['site_name_snapshot'], row['client_name']]),
       block: _firstText([row['block_name_snapshot'], block['block_name']]),
       floor: floorName,

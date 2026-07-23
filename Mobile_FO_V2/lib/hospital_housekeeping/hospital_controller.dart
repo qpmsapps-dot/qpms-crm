@@ -53,14 +53,67 @@ enum HospitalTicketListFilter {
   unassigned,
 }
 
+abstract class HospitalTicketGateway {
+  Future<List<HospitalTicket>> fetchTickets();
+  Future<List<Map<String, dynamic>>> fetchNotifications();
+  Future<void> markNotificationRead(String id);
+  Future<Map<String, dynamic>> fetchDetail(String ticketId);
+  Future<String> signedDownload(String ticketId, String attachmentId);
+  Future<Map<String, dynamic>> action(
+    String ticketId,
+    String path,
+    int version, [
+    Map<String, dynamic> payload = const {},
+  ]);
+  Future<void> uploadPhoto(String ticketId, String filePath, String type);
+}
+
+class LiveHospitalTicketGateway implements HospitalTicketGateway {
+  const LiveHospitalTicketGateway();
+
+  @override
+  Future<List<HospitalTicket>> fetchTickets() =>
+      HospitalTicketApi.fetchTickets();
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchNotifications() =>
+      HospitalTicketApi.fetchNotifications();
+
+  @override
+  Future<void> markNotificationRead(String id) =>
+      HospitalTicketApi.markNotificationRead(id);
+
+  @override
+  Future<Map<String, dynamic>> fetchDetail(String ticketId) =>
+      HospitalTicketApi.fetchDetail(ticketId);
+
+  @override
+  Future<String> signedDownload(String ticketId, String attachmentId) =>
+      HospitalTicketApi.signedDownload(ticketId, attachmentId);
+
+  @override
+  Future<Map<String, dynamic>> action(
+    String ticketId,
+    String path,
+    int version, [
+    Map<String, dynamic> payload = const {},
+  ]) => HospitalTicketApi.action(ticketId, path, version, payload);
+
+  @override
+  Future<void> uploadPhoto(String ticketId, String filePath, String type) =>
+      HospitalTicketApi.uploadPhoto(ticketId, filePath, type);
+}
+
 class HospitalController extends ChangeNotifier {
   HospitalController({
     required this.session,
     HospitalDemoRepository? repository,
     HospitalAccessPolicy? accessPolicy,
     HospitalSlaPolicy? slaPolicy,
+    HospitalTicketGateway? api,
     bool? productionMode,
   }) : _repository = repository ?? HospitalDemoRepository(),
+       _api = api ?? const LiveHospitalTicketGateway(),
        accessPolicy = accessPolicy ?? const HospitalAccessPolicy(),
        slaPolicy = slaPolicy ?? const HospitalSlaPolicy(),
        productionMode = productionMode ?? !session.isDemo {
@@ -70,6 +123,7 @@ class HospitalController extends ChangeNotifier {
 
   final HospitalDemoSession session;
   final HospitalDemoRepository _repository;
+  final HospitalTicketGateway _api;
   final HospitalAccessPolicy accessPolicy;
   final HospitalSlaPolicy slaPolicy;
   final bool productionMode;
@@ -79,6 +133,13 @@ class HospitalController extends ChangeNotifier {
   late List<HospitalTicket> _tickets;
   late DateTime _now;
   int _nextTicketNumber = 109;
+  int _detailRequestSerial = 0;
+  final Map<String, int> _detailRequestTokens = {};
+  final Set<String> _detailLoadingTicketIds = {};
+  final Set<String> _detailRefreshingTicketIds = {};
+  final Map<String, String> _detailErrors = {};
+  final Map<String, DateTime> _detailLoadedAt = {};
+  final Map<String, String> _signedAttachmentUrls = {};
 
   DateTime get now => _now;
   bool get isLoading => _loading;
@@ -90,6 +151,12 @@ class HospitalController extends ChangeNotifier {
   List<Map<String, dynamic>> get notifications =>
       List.unmodifiable(_notifications);
   bool isTicketBusy(String ticketId) => _busyTicketIds.contains(ticketId);
+  bool isDetailLoading(String ticketId) =>
+      _detailLoadingTicketIds.contains(ticketId);
+  bool isDetailRefreshing(String ticketId) =>
+      _detailRefreshingTicketIds.contains(ticketId);
+  String? detailError(String ticketId) => _detailErrors[ticketId];
+  DateTime? detailLoadedAt(String ticketId) => _detailLoadedAt[ticketId];
 
   List<HospitalTicket> get visibleTickets {
     final rows = accessPolicy.visibleTickets(session, _tickets);
@@ -137,8 +204,9 @@ class HospitalController extends ChangeNotifier {
     }).toList();
   }
 
-  HospitalTicket ticketById(String id) =>
-      _tickets.firstWhere((ticket) => ticket.id == id);
+  HospitalTicket ticketById(String id) => _tickets.firstWhere(
+    (ticket) => ticket.id == id || ticket.ticketNumber == id,
+  );
 
   Future<void> load() async {
     if (!productionMode || _loading || _sessionExpired) return;
@@ -147,10 +215,10 @@ class HospitalController extends ChangeNotifier {
     notifyListeners();
     try {
       final results = await Future.wait([
-        HospitalTicketApi.fetchTickets(),
-        HospitalTicketApi.fetchNotifications(),
+        _api.fetchTickets(),
+        _api.fetchNotifications(),
       ]);
-      _tickets = results[0] as List<HospitalTicket>;
+      _tickets = _mergeListRefresh(results[0] as List<HospitalTicket>);
       _notifications = results[1] as List<Map<String, dynamic>>;
       _now = DateTime.now();
     } catch (error) {
@@ -171,7 +239,7 @@ class HospitalController extends ChangeNotifier {
 
   Future<void> markNotificationRead(String id) async {
     if (!productionMode) return;
-    await HospitalTicketApi.markNotificationRead(id);
+    await _api.markNotificationRead(id);
     _notifications = _notifications
         .map(
           (row) => row['id'] == id
@@ -182,37 +250,33 @@ class HospitalController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> loadDetail(String ticketId) async {
+  Future<void> loadDetail(
+    String ticketId, {
+    bool force = false,
+    bool retrying = false,
+  }) async {
     if (!productionMode) return;
+    if (_detailLoadingTicketIds.contains(ticketId) && !force) return;
+    final token = ++_detailRequestSerial;
+    _detailRequestTokens[ticketId] = token;
+    final alreadyLoaded =
+        ticketById(ticketId).events.isNotEmpty ||
+        _detailLoadedAt.containsKey(ticketId);
+    _detailLoadingTicketIds.add(ticketId);
+    if (alreadyLoaded) _detailRefreshingTicketIds.add(ticketId);
+    _detailErrors.remove(ticketId);
+    notifyListeners();
     try {
-      final response = await HospitalTicketApi.fetchDetail(ticketId);
+      final response = await _api.fetchDetail(ticketId);
+      if (_detailRequestTokens[ticketId] != token) return;
       final row = Map<String, dynamic>.from(response['ticket'] as Map);
       final timeline = response['timeline'] is List
           ? response['timeline'] as List
           : const [];
-      final complaintPhotos = <String>[];
-      final progressPhotos = <String>[];
-      final completionPhotos = <String>[];
       final attachments = response['attachments'] is List
           ? response['attachments'] as List
           : const [];
-      for (final attachment in attachments.whereType<Map>()) {
-        final url = await HospitalTicketApi.signedDownload(
-          '${row['id']}',
-          '${attachment['id']}',
-        );
-        switch (attachment['attachment_type']) {
-          case 'complaint_photo':
-            complaintPhotos.add(url);
-            break;
-          case 'progress_photo':
-            progressPhotos.add(url);
-            break;
-          case 'completion_photo':
-            completionPhotos.add(url);
-            break;
-        }
-      }
+      final previous = _findTicket('${row['id']}') ?? _findTicket(ticketId);
       final allowedActions = response['allowed_actions'] is List
           ? (response['allowed_actions'] as List)
                 .map((value) => hospitalActionFromCode('$value'))
@@ -220,9 +284,9 @@ class HospitalController extends ChangeNotifier {
                 .toSet()
           : <HospitalTicketAction>{};
       final ticket = HospitalTicket.fromApi(row).copyWith(
-        complaintPhotoPaths: complaintPhotos,
-        progressPhotoPaths: progressPhotos,
-        completionPhotoPaths: completionPhotos,
+        complaintPhotoPaths: previous?.complaintPhotoPaths,
+        progressPhotoPaths: previous?.progressPhotoPaths,
+        completionPhotoPaths: previous?.completionPhotoPaths,
         allowedActions: allowedActions,
         events: timeline.whereType<Map>().map((event) {
           return HospitalTicketEvent(
@@ -238,8 +302,34 @@ class HospitalController extends ChangeNotifier {
         }).toList(),
       );
       _replace(ticket);
+      _detailLoadedAt[ticket.id] = DateTime.now();
+      _detailErrors.remove(ticket.id);
+      _detailLoadingTicketIds.remove(ticketId);
+      _detailRefreshingTicketIds.remove(ticketId);
+      notifyListeners();
+      unawaited(
+        _signDetailAttachments(
+          ticket.id,
+          attachments.whereType<Map>().toList(),
+          token,
+        ),
+      );
     } catch (error) {
-      _error = error.toString();
+      if (!retrying && _detailRequestTokens[ticketId] == token) {
+        _detailLoadingTicketIds.remove(ticketId);
+        _detailRefreshingTicketIds.remove(ticketId);
+        await loadDetail(ticketId, force: true, retrying: true);
+        return;
+      }
+      if (_detailRequestTokens[ticketId] == token) {
+        _detailErrors[ticketId] = _friendlyError(error);
+        _error = _friendlyError(error);
+      }
+    } finally {
+      if (_detailRequestTokens[ticketId] == token) {
+        _detailLoadingTicketIds.remove(ticketId);
+        _detailRefreshingTicketIds.remove(ticketId);
+      }
       notifyListeners();
     }
   }
@@ -335,12 +425,11 @@ class HospitalController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void accept(String ticketId) {
+  Future<void> accept(String ticketId) {
     final ticket = ticketById(ticketId);
     _requireAction(ticket, HospitalTicketAction.accept);
     if (productionMode) {
-      unawaited(_remoteAction(ticket, 'accept'));
-      return;
+      return _remoteAction(ticket, 'accept');
     }
     _replace(
       ticket.copyWith(
@@ -353,14 +442,14 @@ class HospitalController extends ChangeNotifier {
         ],
       ),
     );
+    return Future.value();
   }
 
-  void startWork(String ticketId) {
+  Future<void> startWork(String ticketId) {
     final ticket = ticketById(ticketId);
     _requireAction(ticket, HospitalTicketAction.startWork);
     if (productionMode) {
-      unawaited(_remoteAction(ticket, 'start-work'));
-      return;
+      return _remoteAction(ticket, 'start-work');
     }
     _replace(
       ticket.copyWith(
@@ -371,9 +460,10 @@ class HospitalController extends ChangeNotifier {
         ],
       ),
     );
+    return Future.value();
   }
 
-  void addUpdate(
+  Future<void> addUpdate(
     String ticketId, {
     required String remarks,
     String? photoPath,
@@ -385,8 +475,7 @@ class HospitalController extends ChangeNotifier {
     }
     if (remarks.trim().isEmpty) throw ArgumentError('Remarks are required.');
     if (productionMode) {
-      unawaited(_remoteProgress(ticket, remarks.trim(), photoPath));
-      return;
+      return _remoteProgress(ticket, remarks.trim(), photoPath);
     }
     _replace(
       ticket.copyWith(
@@ -399,9 +488,10 @@ class HospitalController extends ChangeNotifier {
         ],
       ),
     );
+    return Future.value();
   }
 
-  void resolve(
+  Future<void> resolve(
     String ticketId, {
     required String actionTaken,
     required String resolutionRemarks,
@@ -416,15 +506,12 @@ class HospitalController extends ChangeNotifier {
       throw ArgumentError('A completion photo is required.');
     }
     if (productionMode) {
-      unawaited(
-        _remoteResolve(
-          ticket,
-          actionTaken,
-          resolutionRemarks,
-          completionPhotoPath,
-        ),
+      return _remoteResolve(
+        ticket,
+        actionTaken,
+        resolutionRemarks,
+        completionPhotoPath,
       );
-      return;
     }
     _replace(
       ticket.copyWith(
@@ -449,28 +536,29 @@ class HospitalController extends ChangeNotifier {
         ],
       ),
     );
+    return Future.value();
   }
 
-  void requestAssistance(String ticketId, String remarks) {
+  Future<void> requestAssistance(String ticketId, String remarks) {
     final ticket = ticketById(ticketId);
     _requireAction(ticket, HospitalTicketAction.requestAssistance);
     if (productionMode) {
-      unawaited(
-        _remoteAction(ticket, 'request-assistance', {
-          'remarks': remarks.trim(),
-        }),
-      );
-      return;
+      return _remoteAction(ticket, 'request-assistance', {
+        'remarks': remarks.trim(),
+      });
     }
-    addUpdate(ticketId, remarks: remarks, action: 'Assistance requested');
+    return addUpdate(
+      ticketId,
+      remarks: remarks,
+      action: 'Assistance requested',
+    );
   }
 
-  void takeOver(String ticketId) {
+  Future<void> takeOver(String ticketId) {
     final ticket = ticketById(ticketId);
     _requireAction(ticket, HospitalTicketAction.takeOver);
     if (productionMode) {
-      unawaited(_remoteAction(ticket, 'take-over'));
-      return;
+      return _remoteAction(ticket, 'take-over');
     }
     _replace(
       ticket.copyWith(
@@ -482,18 +570,16 @@ class HospitalController extends ChangeNotifier {
         ],
       ),
     );
+    return Future.value();
   }
 
-  void reassignSupervisor(String ticketId) {
+  Future<void> reassignSupervisor(String ticketId) {
     final ticket = ticketById(ticketId);
     _requireAction(ticket, HospitalTicketAction.reassignSupervisor);
     if (productionMode) {
-      unawaited(
-        _remoteAction(ticket, 'reassign-supervisor', {
-          'remarks': 'Reassigned to the block Housekeeping Supervisor.',
-        }),
-      );
-      return;
+      return _remoteAction(ticket, 'reassign-supervisor', {
+        'remarks': 'Reassigned to the block Housekeeping Supervisor.',
+      });
     }
     _replace(
       ticket.copyWith(
@@ -508,18 +594,18 @@ class HospitalController extends ChangeNotifier {
         ],
       ),
     );
+    return Future.value();
   }
 
-  void assignSupport(String ticketId, String remarks) {
+  Future<void> assignSupport(String ticketId, String remarks) {
     final ticket = ticketById(ticketId);
     _requireAction(ticket, HospitalTicketAction.assignSupport);
     if (productionMode) {
-      unawaited(
-        _remoteAction(ticket, 'assign-support', {'remarks': remarks.trim()}),
-      );
-      return;
+      return _remoteAction(ticket, 'assign-support', {
+        'remarks': remarks.trim(),
+      });
     }
-    addUpdate(ticketId, remarks: remarks, action: 'Support assigned');
+    return addUpdate(ticketId, remarks: remarks, action: 'Support assigned');
   }
 
   void simulateSupervisorBreach(String ticketId) {
@@ -534,16 +620,13 @@ class HospitalController extends ChangeNotifier {
     );
   }
 
-  void escalateManually(String ticketId) {
+  Future<void> escalateManually(String ticketId) {
     final ticket = ticketById(ticketId);
     _requireAction(ticket, HospitalTicketAction.escalateManually);
     if (productionMode) {
-      unawaited(
-        _remoteAction(ticket, 'escalate', {
-          'remarks': 'Manually escalated for operational support.',
-        }),
-      );
-      return;
+      return _remoteAction(ticket, 'escalate', {
+        'remarks': 'Manually escalated for operational support.',
+      });
     }
     _replace(
       slaPolicy.escalateSupervisorBreach(
@@ -552,6 +635,7 @@ class HospitalController extends ChangeNotifier {
         reason: 'Manually escalated for immediate operational support.',
       ),
     );
+    return Future.value();
   }
 
   void simulateOperationsBreach(String ticketId) {
@@ -566,16 +650,13 @@ class HospitalController extends ChangeNotifier {
     );
   }
 
-  void escalateFurther(String ticketId) {
+  Future<void> escalateFurther(String ticketId) {
     final ticket = ticketById(ticketId);
     _requireAction(ticket, HospitalTicketAction.escalateFurther);
     if (productionMode) {
-      unawaited(
-        _remoteAction(ticket, 'escalate', {
-          'remarks': 'Escalated for Facility Manager oversight.',
-        }),
-      );
-      return;
+      return _remoteAction(ticket, 'escalate', {
+        'remarks': 'Escalated for Facility Manager oversight.',
+      });
     }
     _replace(
       slaPolicy.escalateOperationsBreach(
@@ -584,6 +665,7 @@ class HospitalController extends ChangeNotifier {
         reason: 'Escalated further for Facility Manager oversight.',
       ),
     );
+    return Future.value();
   }
 
   void simulateClientFeedback(
@@ -727,6 +809,80 @@ class HospitalController extends ChangeNotifier {
     notifyListeners();
   }
 
+  HospitalTicket? _findTicket(String id) {
+    for (final ticket in _tickets) {
+      if (ticket.id == id || ticket.ticketNumber == id) return ticket;
+    }
+    return null;
+  }
+
+  List<HospitalTicket> _mergeListRefresh(List<HospitalTicket> freshRows) {
+    final previousById = {for (final ticket in _tickets) ticket.id: ticket};
+    return freshRows.map((fresh) {
+      final previous = previousById[fresh.id];
+      if (previous == null) return fresh;
+      return fresh.copyWith(
+        complaintPhotoPaths: previous.complaintPhotoPaths,
+        progressPhotoPaths: previous.progressPhotoPaths,
+        completionPhotoPaths: previous.completionPhotoPaths,
+        events: previous.events,
+        allowedActions: previous.allowedActions,
+      );
+    }).toList();
+  }
+
+  Future<void> _signDetailAttachments(
+    String ticketId,
+    List<Map> attachments,
+    int token,
+  ) async {
+    final complaintPhotos = <String>[];
+    final progressPhotos = <String>[];
+    final completionPhotos = <String>[];
+    for (final attachment in attachments) {
+      if (_detailRequestTokens[ticketId] != token) return;
+      final attachmentId = '${attachment['id'] ?? ''}';
+      if (attachmentId.isEmpty) continue;
+      String? url = _signedAttachmentUrls[attachmentId];
+      if (url == null || url.isEmpty) {
+        try {
+          url = await _api.signedDownload(ticketId, attachmentId);
+          if (url.isNotEmpty) _signedAttachmentUrls[attachmentId] = url;
+        } catch (_) {
+          continue;
+        }
+      }
+      if (url.isEmpty) continue;
+      switch (attachment['attachment_type']) {
+        case 'complaint_photo':
+          complaintPhotos.add(url);
+          break;
+        case 'progress_photo':
+          progressPhotos.add(url);
+          break;
+        case 'completion_photo':
+          completionPhotos.add(url);
+          break;
+      }
+    }
+    if (_detailRequestTokens[ticketId] != token) return;
+    final current = _findTicket(ticketId);
+    if (current == null) return;
+    _replace(
+      current.copyWith(
+        complaintPhotoPaths: complaintPhotos.isEmpty
+            ? current.complaintPhotoPaths
+            : complaintPhotos,
+        progressPhotoPaths: progressPhotos.isEmpty
+            ? current.progressPhotoPaths
+            : progressPhotos,
+        completionPhotoPaths: completionPhotos.isEmpty
+            ? current.completionPhotoPaths
+            : completionPhotos,
+      ),
+    );
+  }
+
   Future<void> _remoteAction(
     HospitalTicket ticket,
     String path, [
@@ -738,10 +894,22 @@ class HospitalController extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      await HospitalTicketApi.action(ticket.id, path, ticket.version, payload);
-      await loadDetail(ticket.id);
+      final response = await _api.action(
+        ticket.id,
+        path,
+        ticket.version,
+        payload,
+      );
+      final row = response['ticket'] is Map
+          ? Map<String, dynamic>.from(response['ticket'] as Map)
+          : null;
+      if (row != null) {
+        _replace(_mergeDetailTicket(row, response));
+      }
+      await loadDetail(ticket.id, force: true);
     } catch (error) {
-      _error = error.toString();
+      _error = _friendlyError(error);
+      rethrow;
     } finally {
       _busyTicketIds.remove(ticket.id);
       _loading = false;
@@ -756,17 +924,61 @@ class HospitalController extends ChangeNotifier {
   ) async {
     try {
       if (photoPath != null) {
-        await HospitalTicketApi.uploadPhoto(
-          ticket.id,
-          photoPath,
-          'progress_photo',
-        );
+        await _api.uploadPhoto(ticket.id, photoPath, 'progress_photo');
       }
       await _remoteAction(ticket, 'progress', {'remarks': remarks});
     } catch (error) {
-      _error = error.toString();
+      _error = _friendlyError(error);
       notifyListeners();
+      rethrow;
     }
+  }
+
+  HospitalTicket _mergeDetailTicket(
+    Map<String, dynamic> row,
+    Map<String, dynamic> response,
+  ) {
+    final previous = _findTicket('${row['id']}');
+    final timeline = response['timeline'] is List
+        ? response['timeline'] as List
+        : const [];
+    final allowedActions = response['allowed_actions'] is List
+        ? (response['allowed_actions'] as List)
+              .map((value) => hospitalActionFromCode('$value'))
+              .whereType<HospitalTicketAction>()
+              .toSet()
+        : previous?.allowedActions ?? <HospitalTicketAction>{};
+    return HospitalTicket.fromApi(row).copyWith(
+      complaintPhotoPaths: previous?.complaintPhotoPaths,
+      progressPhotoPaths: previous?.progressPhotoPaths,
+      completionPhotoPaths: previous?.completionPhotoPaths,
+      allowedActions: allowedActions,
+      events: timeline.isEmpty
+          ? previous?.events
+          : timeline.whereType<Map>().map((event) {
+              return HospitalTicketEvent(
+                action: '${event['event_type'] ?? 'update'}'.replaceAll(
+                  '_',
+                  ' ',
+                ),
+                actor: '${event['actor_name'] ?? 'QPMS'}',
+                actorRole: '${event['actor_role'] ?? 'system'}',
+                occurredAt:
+                    DateTime.tryParse(
+                      '${event['created_at'] ?? ''}',
+                    )?.toLocal() ??
+                    DateTime.now(),
+                remarks: '${event['remarks'] ?? ''}',
+                hasPhoto: event['event_type'] == 'photo_uploaded',
+              );
+            }).toList(),
+    );
+  }
+
+  String _friendlyError(Object error) {
+    if (error is HospitalTicketApiException) return error.message;
+    if (error is TimeoutException) return 'The request timed out. Try again.';
+    return 'Unable to complete this action. Please try again.';
   }
 
   Future<void> _remoteResolve(
@@ -776,18 +988,15 @@ class HospitalController extends ChangeNotifier {
     String photoPath,
   ) async {
     try {
-      await HospitalTicketApi.uploadPhoto(
-        ticket.id,
-        photoPath,
-        'completion_photo',
-      );
+      await _api.uploadPhoto(ticket.id, photoPath, 'completion_photo');
       await _remoteAction(ticket, 'resolve', {
         'resolution_action': actionTaken.trim(),
         'resolution_remarks': remarks.trim(),
       });
     } catch (error) {
-      _error = error.toString();
+      _error = _friendlyError(error);
       notifyListeners();
+      rethrow;
     }
   }
 
