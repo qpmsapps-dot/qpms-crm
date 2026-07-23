@@ -31,6 +31,13 @@ import {
   resolveCurrentUserAccess,
 } from './services/accessControlService.js';
 import {
+  getWebHospitalTicketDetail,
+  hospitalWebAccessResponse,
+  listWebHospitalTickets,
+  resolveHospitalWebAccess,
+  summarizeWebHospitalTickets,
+} from './services/hospitalTicketWebDashboardService.js';
+import {
   getDemoAccessScope,
   isDemoUser,
   isReadOnlyUser,
@@ -3582,6 +3589,107 @@ app.get('/api/access/me', requireSupabaseJwtAllowMissingProfile, async (request,
     response.status(error.statusCode || 500).json({
       ok: false,
       message: 'Unable to load account access.',
+    });
+  }
+});
+
+async function requireHospitalWebAccess(request, response, next) {
+  try {
+    const client = requireServiceRoleSupabase();
+    const access = await resolveHospitalWebAccess({
+      client,
+      authUser: request.authUser,
+      profile: request.profile,
+    });
+    if (!access.allowed) {
+      response.status(access.status || 403).json({
+        ok: false,
+        code: access.code || 'hospital_web_access_denied',
+        message: access.message || 'Hospital ticket dashboard access denied.',
+      });
+      return;
+    }
+    request.hospitalWebAccess = access;
+    next();
+  } catch (error) {
+    const safeError = sanitizeSupabaseDiagnosticError(error);
+    console.warn('[Hospital Web Tickets] Access resolution failed', {
+      code: safeError.code,
+      message: safeError.message,
+    });
+    response.status(error.statusCode || 500).json({
+      ok: false,
+      code: 'hospital_web_access_failed',
+      message: 'Unable to verify Hospital Ticket dashboard access.',
+    });
+  }
+}
+
+app.get('/api/web/hospital-tickets/summary', requireSupabaseJwtAllowMissingProfile, requireHospitalWebAccess, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const counts = await summarizeWebHospitalTickets(client, request.hospitalWebAccess, request.query || {});
+    response.json({
+      ok: true,
+      counts,
+      access: hospitalWebAccessResponse(request.hospitalWebAccess),
+    });
+  } catch (error) {
+    const safeError = sanitizeSupabaseDiagnosticError(error);
+    console.warn('[Hospital Web Tickets] Summary failed', {
+      code: safeError.code,
+      message: safeError.message,
+    });
+    response.status(error.statusCode || 500).json({
+      ok: false,
+      code: 'hospital_web_summary_failed',
+      message: 'Unable to load Hospital Ticket summary.',
+    });
+  }
+});
+
+app.get('/api/web/hospital-tickets', requireSupabaseJwtAllowMissingProfile, requireHospitalWebAccess, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const result = await listWebHospitalTickets(client, request.hospitalWebAccess, request.query || {});
+    response.json({
+      ok: true,
+      ...result,
+      access: hospitalWebAccessResponse(request.hospitalWebAccess),
+    });
+  } catch (error) {
+    const safeError = sanitizeSupabaseDiagnosticError(error);
+    console.warn('[Hospital Web Tickets] List failed', {
+      code: safeError.code,
+      message: safeError.message,
+    });
+    response.status(error.statusCode || 500).json({
+      ok: false,
+      code: 'hospital_web_list_failed',
+      message: 'Unable to load Hospital Tickets.',
+    });
+  }
+});
+
+app.get('/api/web/hospital-tickets/:ticketId', requireSupabaseJwtAllowMissingProfile, requireHospitalWebAccess, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const detail = await getWebHospitalTicketDetail(client, request.hospitalWebAccess, request.params.ticketId);
+    response.json({
+      ok: true,
+      ...detail,
+      access: hospitalWebAccessResponse(request.hospitalWebAccess),
+    });
+  } catch (error) {
+    const safeError = sanitizeSupabaseDiagnosticError(error);
+    console.warn('[Hospital Web Tickets] Detail failed', {
+      code: safeError.code,
+      message: safeError.message,
+    });
+    response.status(error.statusCode || 500).json({
+      ok: false,
+      code: error.statusCode === 404 ? 'hospital_ticket_not_found' : 'hospital_web_detail_failed',
+      message: error.statusCode === 404 ? error.message : 'Unable to load Hospital Ticket details.',
     });
   }
 });
