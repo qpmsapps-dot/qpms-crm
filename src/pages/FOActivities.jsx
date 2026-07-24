@@ -72,6 +72,12 @@ import {
 const SOUTH_INDIA_CENTER = [13.0827, 80.2707];
 const INDIA_TIME_ZONE = "Asia/Kolkata";
 const RATE_PER_KM = 4;
+const CAR_RATE_PER_KM = 8;
+const TRAVEL_MODE_RATE_PER_KM = {
+  bike: RATE_PER_KM,
+  own_vehicle: RATE_PER_KM,
+  car: CAR_RATE_PER_KM,
+};
 const MAX_GPS_ACCURACY_METERS = 50;
 const MIN_ROUTE_SEGMENT_METERS = 5;
 const MAX_ROUTE_SEGMENT_METERS = 1000;
@@ -92,7 +98,7 @@ const HIDDEN_EMPLOYEE_CODE_SET = new Set(HIDDEN_EMPLOYEE_CODES);
 const FO_SITE_VISIT_SELECT =
   "id,fo_user_id,employee_code,full_name,attendance_id,store_id,store_name,site_name,client_name,store_code,state,check_in_time,checkout_time,check_out_time,check_in_latitude,check_in_longitude,check_out_latitude,check_out_longitude,checkout_distance_meters,checkout_location_status,current_latitude,current_longitude,origin_lat,origin_lng,destination_lat,destination_lng,route_km,google_route_polyline,visit_duration_minutes,status,visit_status,checkout_note,metadata";
 const FO_LIVE_STATUS_SELECT =
-  "fo_user_id,latitude,longitude,last_seen_at,updated_at,route_km_today,is_online,is_tracking,current_status,display_name,username,accuracy,battery_percentage";
+  "fo_user_id,latitude,longitude,last_seen_at,updated_at,route_km_today,travel_mode,rate_per_km,is_online,is_tracking,current_status,display_name,username,accuracy,battery_percentage";
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:4000").replace(/\/+$/, "");
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
 const MARKER_ANIMATION_MIN_MS = 15000;
@@ -159,6 +165,51 @@ function calculatePetrolAmount(
   ratePerKm = RATE_PER_KM,
 ) {
   return toSafeNumber(payableKm) * toSafeNumber(ratePerKm, RATE_PER_KM);
+}
+
+function normalizeTravelMode(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  return ["bike", "own_vehicle", "car", "auto", "bus", "train", "other"].includes(normalized)
+    ? normalized
+    : "";
+}
+
+function travelModeLabel(value) {
+  switch (normalizeTravelMode(value)) {
+    case "bike":
+    case "own_vehicle":
+      return "Bike";
+    case "car":
+      return "Car";
+    case "auto":
+      return "Auto";
+    case "bus":
+      return "Bus";
+    case "train":
+      return "Train";
+    case "other":
+      return "Others";
+    default:
+      return "Not selected";
+  }
+}
+
+function travelModeRatePerKm(value, fallback = RATE_PER_KM) {
+  const normalized = normalizeTravelMode(value);
+  if (TRAVEL_MODE_RATE_PER_KM[normalized]) {
+    return TRAVEL_MODE_RATE_PER_KM[normalized];
+  }
+  return toSafeNumber(fallback, RATE_PER_KM);
+}
+
+function currentTravelModeFromRows({ live, attendance, officer } = {}) {
+  return normalizeTravelMode(live?.travel_mode) ||
+    normalizeTravelMode(attendance?.travel_mode) ||
+    normalizeTravelMode(officer?.travelMode) ||
+    "";
 }
 
 function formatCurrency(value) {
@@ -849,7 +900,7 @@ function foSafeKmFromLogs(logs = [], visits = []) {
     reviewRequired: kmConfidence === "LOW" || kmConfidence === "REVIEW",
     actualTravelKm,
     claimKm: actualTravelKm,
-    petrolAmount: actualTravelKm * RATE_PER_KM,
+    petrolAmount: calculatePetrolAmount(actualTravelKm),
     adjustmentApplied: adjustmentParts.join(", "),
   };
 }
@@ -1172,6 +1223,11 @@ function enrichOfficer({ officer, attendance, visits = [], live, profilesByCode 
   ];
   const kmMatch = kmCandidates.find(([value]) => value !== null && value !== undefined);
   const eligibleKm = Number(kmMatch?.[0] || 0);
+  const travelMode = currentTravelModeFromRows({ live, attendance, officer });
+  const ratePerKm = travelModeRatePerKm(
+    travelMode,
+    live?.rate_per_km ?? attendance?.rate_per_km ?? officer.ratePerKm,
+  );
   const profileOnly = Boolean(
     profile &&
       !live &&
@@ -1233,6 +1289,10 @@ function enrichOfficer({ officer, attendance, visits = [], live, profilesByCode 
       : null,
     eligibleKm,
     routeKmToday: eligibleKm,
+    travelMode,
+    travelModeLabel: travelModeLabel(travelMode),
+    ratePerKm,
+    petrolAmount: calculatePetrolAmount(eligibleKm, ratePerKm),
     routeKmSource: kmSource,
     kmSource,
     dataSources,
@@ -1452,7 +1512,7 @@ function emptyFoSafeKmMetrics(fallbackKm = 0) {
     kmConfidence: rawGpsKm > 0 ? "REVIEW" : "REVIEW",
     reviewRequired: true,
     claimKm: rawGpsKm,
-    petrolAmount: rawGpsKm * RATE_PER_KM,
+    petrolAmount: calculatePetrolAmount(rawGpsKm),
     adjustmentApplied: "Supervisor review required",
   };
 }
@@ -1483,6 +1543,19 @@ function payableKmFromAttendance(row) {
     ? numberOrNull(metadata.approved_adjustment_km) || 0
     : 0;
   return Math.max(0, storedPayableKm - includedAdjustmentKm);
+}
+
+function petrolAmountFromAttendance(row) {
+  const stored = numberOrNull(row?.petrol_amount);
+  if (stored !== null) return stored;
+  return calculatePetrolAmount(
+    payableKmFromAttendance(row),
+    travelModeRatePerKm(row?.travel_mode, row?.rate_per_km),
+  );
+}
+
+function sumAttendancePetrolAmount(rows = []) {
+  return rows.reduce((sum, row) => sum + petrolAmountFromAttendance(row), 0);
 }
 
 function includedApprovedAdjustmentKmFromAttendance(row) {
@@ -1710,7 +1783,13 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
   const foSafeKm = actualTravelKmFromAttendanceOrLogs(record, foLogs, foVisits);
   const actualKm = Number(foSafeKm.actualTravelKm ?? record.actual_km ?? record.total_raw_km ?? 0);
   const eligibleKm = payableKm;
-  const petrolAmount = eligibleKm * RATE_PER_KM;
+  const travelMode = currentTravelModeFromRows({ live, attendance: record });
+  const ratePerKm = travelModeRatePerKm(
+    travelMode,
+    live?.rate_per_km ?? record.rate_per_km,
+  );
+  const storedPetrolAmount = numberOrNull(record.petrol_amount);
+  const petrolAmount = storedPetrolAmount ?? calculatePetrolAmount(eligibleKm, ratePerKm);
   const reviewFlags = reviewFlagsForOfficer({
     systemKm: eligibleKm,
     attendance: record,
@@ -1763,7 +1842,9 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
     filteredGpsKm: Number(foSafeKm.filteredGpsKm || 0),
     actualTravelKm: Number(foSafeKm.actualTravelKm || actualKm || 0),
     eligibleKm,
-    ratePerKm: RATE_PER_KM,
+    travelMode,
+    travelModeLabel: travelModeLabel(travelMode),
+    ratePerKm,
     petrolAmount,
     routeKmToday: eligibleKm,
     routeKmSource: payableRouteKm.source,
@@ -1915,8 +1996,11 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
         ? rangeFinalPayableKm
         : officer.routeKmToday,
       petrolAmount: rangeAttendances.length
-        ? calculatePetrolAmount(rangeFinalPayableKm)
-        : calculatePetrolAmount(officer.eligibleKm ?? officer.routeKmToday),
+        ? sumAttendancePetrolAmount(rangeAttendances)
+        : calculatePetrolAmount(
+            officer.eligibleKm ?? officer.routeKmToday,
+            officer.ratePerKm,
+          ),
     };
   });
   const mergeDiagnostics = {
@@ -1987,7 +2071,16 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     visits: existing.visits || [],
   });
   const eligibleKm = payableRouteKm.km;
-  const petrolAmount = eligibleKm * RATE_PER_KM;
+  const travelMode = currentTravelModeFromRows({
+    live: row,
+    attendance: existing.attendance,
+    officer: existing,
+  });
+  const ratePerKm = travelModeRatePerKm(
+    travelMode,
+    row?.rate_per_km ?? existing.attendance?.rate_per_km ?? existing.ratePerKm,
+  );
+  const petrolAmount = calculatePetrolAmount(eligibleKm, ratePerKm);
   const reviewFlags = reviewFlagsForOfficer({
     systemKm: eligibleKm,
     attendance: existing.attendance,
@@ -2027,6 +2120,9 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     eligibleKm,
     routeKmToday: eligibleKm,
     routeKmSource: payableRouteKm.source,
+    travelMode,
+    travelModeLabel: travelModeLabel(travelMode),
+    ratePerKm,
     petrolAmount,
     reviewFlags,
     foSafeKm: existing.foSafeKm || emptyFoSafeKmMetrics(actualKm),
@@ -2269,6 +2365,7 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
   const distanceToday = Number(
     officer.eligibleKm ?? officer.routeKmToday ?? 0,
   );
+  const ratePerKm = travelModeRatePerKm(officer.travelMode, officer.ratePerKm);
   const hasReviewWarning =
     Boolean(officer.reviewFlags?.length) || officer.foSafeKm?.reviewRequired;
   const statusStyles =
@@ -2322,10 +2419,13 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
                 Petrol Amount
               </span>
               <strong className="mt-0.5 block text-xs text-slate-900 dark:text-white">
-                {formatCurrency(calculatePetrolAmount(distanceToday))}
+                {formatCurrency(calculatePetrolAmount(distanceToday, ratePerKm))}
               </strong>
             </div>
           </div>
+          <p className="mt-2 truncate text-[10px] font-bold text-slate-500">
+            Travel Mode: {officer.travelModeLabel || travelModeLabel(officer.travelMode)}
+          </p>
           <div className="mt-2 flex items-center justify-between gap-2 text-[10px] font-semibold text-slate-400">
             <span className="truncate">
               <Clock className="mr-1 inline h-3 w-3" />
@@ -2351,7 +2451,8 @@ function ExecutiveOfficerPanel({
 }) {
   if (!officer) return null;
   const routeKm = Number(officer.eligibleKm ?? officer.routeKmToday ?? 0);
-  const petrolAmount = calculatePetrolAmount(routeKm);
+  const ratePerKm = travelModeRatePerKm(officer.travelMode, officer.ratePerKm);
+  const petrolAmount = calculatePetrolAmount(routeKm, ratePerKm);
   const status = officerStatus(officer);
   const activeVisit = (officer.visits || []).find(isSiteVisitOpen);
   const coordinates = normalizeCoordinates(officer.coordinates);
@@ -2423,6 +2524,12 @@ function ExecutiveOfficerPanel({
               <span className="text-slate-500">Business / State</span>
               <strong className="text-right text-slate-800 dark:text-slate-100">
                 {officer.business || "--"} / {officer.state || "--"}
+              </strong>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">Travel Mode</span>
+              <strong className="text-right text-slate-800 dark:text-slate-100">
+                {officer.travelModeLabel || travelModeLabel(officer.travelMode)}
               </strong>
             </div>
           </div>
@@ -2505,7 +2612,8 @@ function SelectedOfficerSummary({
       }`
     : "--";
   const claimKmLabel = hasClaimKm ? formatDisplayKm(claimKm) : "--";
-  const claimPetrol = calculatePetrolAmount(claimKm);
+  const ratePerKm = travelModeRatePerKm(officer.travelMode, officer.ratePerKm);
+  const claimPetrol = calculatePetrolAmount(claimKm, ratePerKm);
   const statusText = status.label;
   const statusClass = isOperationallyActive(officer)
     ? "bg-emerald-50 text-emerald-700"
@@ -2613,6 +2721,10 @@ function SelectedOfficerSummary({
         </p>
       ) : null}
       <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl border border-slate-100 bg-white/70 p-3 text-[11px] font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-900/60">
+        <span>Travel Mode</span>
+        <strong className="text-right text-slate-800 dark:text-slate-100">
+          {officer.travelModeLabel || travelModeLabel(officer.travelMode)}
+        </strong>
         <span>Petrol Amount</span>
         <strong className="text-right text-slate-800 dark:text-slate-100">
           {formatInr(claimPetrol)}
@@ -3359,7 +3471,8 @@ function exportFilteredOperationsDashboardExcel({
         "Base Payable KM": basePayableKm.toFixed(2),
         "Approved Missing KM Adjustment": approvedMissingKm.toFixed(2),
         "Final Payable KM": finalPayableKm.toFixed(2),
-        "Petrol Amount": calculatePetrolAmount(finalPayableKm).toFixed(2),
+        "Travel Mode": travelModeLabel(row?.travel_mode || officer.travelMode),
+        "Petrol Amount": petrolAmountFromAttendance(row).toFixed(2),
         "Last Location Time": formatDateTime(lastLocationTime),
       });
     });
@@ -3461,7 +3574,8 @@ function exportFilteredOperationsDashboardExcel({
         "Base Payable KM": basePayableKm.toFixed(2),
         "Approved Missing KM Adjustment": approvedMissingKm.toFixed(2),
         "Final Payable KM": finalPayableKm.toFixed(2),
-        "Petrol Amount": calculatePetrolAmount(finalPayableKm).toFixed(2),
+        "Travel Mode": officer.travelModeLabel || travelModeLabel(officer.travelMode),
+        "Petrol Amount": sumAttendancePetrolAmount(officerAttendances).toFixed(2),
         "Last Location Time": formatDateTime(
           latestAttendance?.last_location_time ||
             latestAttendance?.updated_at ||
@@ -3493,6 +3607,7 @@ function exportFilteredOperationsDashboardExcel({
     "Base Payable KM",
     "Approved Missing KM Adjustment",
     "Final Payable KM",
+    "Travel Mode",
     "Petrol Amount",
     "Last Location Time",
   ]);
@@ -3529,6 +3644,7 @@ function exportFilteredOperationsDashboardExcel({
       "Base Payable KM",
       "Approved Missing KM Adjustment",
       "Final Payable KM",
+      "Travel Mode",
       "Petrol Amount",
       "Last Location Time",
     ]);
@@ -3969,7 +4085,15 @@ async function exportFoOperationsExcel({
     const basePayableKm = payableRouteKm;
     const approvedMissingKm = approvedMissingCheckoutAdjustmentKm(visits);
     const eligibleKm = basePayableKm + approvedMissingKm;
-    const petrolAmount = eligibleKm * RATE_PER_KM;
+    const exportTravelMode = currentTravelModeFromRows({ live, attendance, officer });
+    const exportRatePerKm = travelModeRatePerKm(
+      exportTravelMode,
+      live?.rate_per_km ?? attendance?.rate_per_km ?? officer.ratePerKm,
+    );
+    const petrolAmount = calculatePetrolAmount(
+      eligibleKm,
+      exportRatePerKm,
+    );
     if (Math.abs(payableRouteKm - calculatedKm) > 2 && calculatedKm > 0) {
       exceptionRows.push({
         "Employee ID": foId,
@@ -3996,7 +4120,8 @@ async function exportFoOperationsExcel({
       "Final Payable KM": eligibleKm.toFixed(2),
       "Route vs Actual KM": (eligibleKm - safeKm.actualTravelKm).toFixed(2),
       "Claim KM": eligibleKm.toFixed(2),
-      "Rate Per KM": RATE_PER_KM,
+      "Travel Mode": travelModeLabel(exportTravelMode),
+      "Rate Per KM": exportRatePerKm,
       "Petrol Amount": petrolAmount.toFixed(2),
       "KM Confidence": safeKm.kmConfidence,
       "Review Required": safeKm.reviewRequired ? "Yes" : "No",
@@ -4045,6 +4170,7 @@ async function exportFoOperationsExcel({
     "Final Payable KM",
     "Route vs Actual KM",
     "Claim KM",
+    "Travel Mode",
     "Rate Per KM",
     "Petrol Amount",
     "KM Confidence",
@@ -7015,8 +7141,15 @@ function FieldOfficerDetailsView({
     Number.isFinite(kmDelta) && Number.isFinite(gpsAuditKm) && gpsAuditKm > 0
       ? (kmDelta / gpsAuditKm) * 100
       : null;
-  const ratePerKm = RATE_PER_KM;
-  const petrolAmount = calculatePetrolAmount(totalKm, ratePerKm);
+  const travelMode = currentTravelModeFromRows({ attendance, officer });
+  const ratePerKm = travelModeRatePerKm(
+    travelMode,
+    officer?.ratePerKm ?? attendance?.rate_per_km,
+  );
+  const storedDetailPetrolAmount = attendances.length
+    ? sumAttendancePetrolAmount(attendances)
+    : null;
+  const petrolAmount = storedDetailPetrolAmount ?? calculatePetrolAmount(totalKm, ratePerKm);
   const startPoint = pointFromAttendanceStart(firstAttendance);
   const endPoint = routePointFromAttendanceEnd(lastAttendance);
   const startBattery =
@@ -7304,11 +7437,12 @@ function FieldOfficerDetailsView({
           </div>
         </header>
 
-        <div className="grid grid-cols-2 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:grid-cols-3 xl:grid-cols-6">
+        <div className="grid grid-cols-2 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:grid-cols-3 xl:grid-cols-7">
           <DetailSummaryCard icon={PlayCircle} label="Start Day" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
           <DetailSummaryCard icon={Square} label="End Day" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
           <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Selected range" tone="purple" />
           <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint="Includes approved missing checkout adjustments" tone="green" />
+          <DetailSummaryCard icon={Bike} label="Travel Mode" value={travelModeLabel(travelMode)} hint={`Current @ ${formatInr(ratePerKm)} / km`} tone="blue" />
           <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`Final @ ${formatInr(ratePerKm)} / km`} tone="amber" />
           <DetailSummaryCard icon={ShieldCheck} label="Status" value={displayValue(lastAttendance.status || status.label)} hint={attendances.length > 1 ? `${attendances.length} attendance days` : "--"} tone={isLive ? "green" : "blue"} />
         </div>
@@ -7374,6 +7508,7 @@ function FieldOfficerDetailsView({
                 <div className="flex justify-between"><span className="text-slate-500">Base Payable KM</span><strong>{basePayableKm.toFixed(1)} km</strong></div>
                 <div className="flex justify-between"><span className="text-slate-500">Approved Missing KM</span><strong>{approvedMissingCheckoutKm.toFixed(1)} km</strong></div>
                 <div className="flex justify-between"><span className="text-slate-500">Final Payable KM</span><strong className="text-emerald-600">{Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"}</strong></div>
+                <div className="flex justify-between"><span className="text-slate-500">Travel Mode</span><strong>{travelModeLabel(travelMode)}</strong></div>
                 <div className="flex justify-between border-t border-slate-100 pt-3"><span className="text-slate-600">Petrol Amount</span><strong className="text-lg">{moneyLabel(petrolAmount)}</strong></div>
               </div>
             </section>
@@ -9002,7 +9137,7 @@ function FieldOfficerDetailsView({
               </strong>
             </span>
             <span>
-              Petrol @ ₹4/km:{" "}
+              Petrol @ {formatInr(ratePerKm)}/km:{" "}
               <strong className="text-slate-950">
                 {moneyLabel(petrolAmount)}
               </strong>
@@ -9174,7 +9309,7 @@ function FieldOfficerDetailsView({
                     {moneyLabel(petrolAmount)}
                   </p>
                   <p className="mt-1 text-xs font-semibold text-amber-700">
-                    @ ₹4 / km
+                    @ {formatInr(ratePerKm)} / km
                   </p>
                 </div>
               </div>
@@ -9183,7 +9318,7 @@ function FieldOfficerDetailsView({
                   ["Base Payable KM", `${basePayableKm.toFixed(1)} km`],
                   ["Approved Missing KM Adjustment", `${approvedMissingCheckoutKm.toFixed(1)} km`],
                   ["Final Payable KM", Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"],
-                  ["Petrol Amount @ ₹4/km", moneyLabel(petrolAmount)],
+                  [`Petrol Amount @ ${formatInr(ratePerKm)}/km`, moneyLabel(petrolAmount)],
                   ["Google Direct Route KM", googleDirectRouteKm === null ? "--" : `${googleDirectRouteKm.toFixed(1)} km`],
                   ["Raw GPS KM", `${Number(gpsMetrics.rawGpsKm || 0).toFixed(1)} km`],
                   ["Filtered GPS KM", `${Number(gpsMetrics.filteredGpsKm || 0).toFixed(1)} km`],
@@ -9314,7 +9449,7 @@ function FieldOfficerDetailsView({
 
             <p className="mt-5 border-t border-slate-200 pt-3 text-[11px] leading-5 text-slate-500">
               Payable KM is based on approved route KM used for petrol
-              reimbursement. Petrol amount is calculated at ₹4 per km.
+              reimbursement. Petrol amount is calculated at the selected travel-mode rate.
             </p>
           </article>
         </div>
@@ -9413,7 +9548,8 @@ function FoSupportActionPanel({
       }`
     : "--";
   const claimKmLabel = hasClaimKm ? formatDisplayKm(claimKm) : "--";
-  const claimPetrol = calculatePetrolAmount(claimKm);
+  const ratePerKm = travelModeRatePerKm(officer.travelMode, officer.ratePerKm);
+  const claimPetrol = calculatePetrolAmount(claimKm, ratePerKm);
   const statusText = status.label;
   const statusClass = isOperationallyActive(officer)
     ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
@@ -10607,10 +10743,11 @@ export default function FOActivities() {
         ? payableKm
         : selectedOfficerBase.routeKmToday,
       petrolAmount: rangeAttendances.length
-        ? calculatePetrolAmount(payableKm)
+        ? sumAttendancePetrolAmount(rangeAttendances)
         : calculatePetrolAmount(
             selectedOfficerBase.eligibleKm ??
               selectedOfficerBase.routeKmToday,
+            selectedOfficerBase.ratePerKm,
           ),
     };
   }, [selectedOfficerBase, visibleAttendanceKpiRows]);

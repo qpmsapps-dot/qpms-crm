@@ -32,3 +32,12 @@ test('activity preview has broken-image, PDF, lazy-thumbnail and signed-url hand
   assert.match(source, /signedActivityUploadUrl\(upload\)/);
   assert.doesNotMatch(source, /href=\{upload\.displayUrl \|\| upload\.file_url/);
 });
+
+test('Operations dashboard requests and displays current travel mode', () => {
+  assert.match(source, /FO_LIVE_STATUS_SELECT\s*=[\s\S]*travel_mode,rate_per_km/);
+  assert.match(source, /function travelModeRatePerKm/);
+  assert.match(source, /case "car":\s*return "Car"/);
+  assert.match(source, /Travel Mode:/);
+  assert.match(source, /<DetailSummaryCard icon=\{Bike\} label="Travel Mode"/);
+  assert.match(source, /sumAttendancePetrolAmount\(rangeAttendances\)/);
+});

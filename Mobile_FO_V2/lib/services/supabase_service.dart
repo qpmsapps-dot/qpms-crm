@@ -577,6 +577,7 @@ class SupabaseService {
       );
     }
     final cleanMode = normalizeTravelMode(travelMode);
+    final ratePerKm = travelModeRatePerKm(cleanMode);
     final cleanNote = travelModeNote?.trim();
     final row = await client
         .from('fo_attendance')
@@ -593,12 +594,24 @@ class SupabaseService {
         .eq('fo_user_id', user.employeeCode)
         .select('*')
         .maybeSingle();
+    await client.from('fo_live_status').upsert({
+      'fo_user_id': user.employeeCode,
+      'username': user.employeeCode,
+      'display_name': user.fullName,
+      'attendance_id': id,
+      'travel_mode': cleanMode,
+      'rate_per_km': ratePerKm,
+      'last_seen_at': DateTime.now().toUtc().toIso8601String(),
+      'source': 'mobile',
+      'sync_status': 'synced',
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    }, onConflict: 'fo_user_id');
     await CrashLogService.record(
       employeeCode: user.employeeCode,
       screen: 'home',
       action: 'TRAVEL_MODE_UPDATED',
       error:
-          'attendance_id=$id travel_mode=$cleanMode payable_km_allowed=$payableKmAllowed',
+          'attendance_id=$id travel_mode=$cleanMode rate_per_km=$ratePerKm payable_km_allowed=$payableKmAllowed',
     );
     return row == null ? null : _attendanceFromRow(row, user);
   }
@@ -1059,6 +1072,7 @@ class SupabaseService {
     }
     if (fareAmount != null) {
       payload['fare_amount'] = double.parse(fareAmount.toStringAsFixed(2));
+      payload['payable_amount'] = double.parse(fareAmount.toStringAsFixed(2));
     }
     final remarksText = remarks?.trim();
     if (remarksText != null) payload['remarks'] = remarksText;
@@ -1562,6 +1576,7 @@ class SupabaseService {
       await _syncAttendanceRouteKmFromVisits(attendance);
       final payableKm = _payableRouteKmForAttendance(attendance);
       final approvedKm = _approvedKmForAttendance(attendance);
+      final ratePerKm = travelModeRatePerKm(attendance.travelMode);
       await client
           .from('fo_attendance')
           .update({
@@ -1574,8 +1589,8 @@ class SupabaseService {
             'total_raw_km': attendance.actualKm,
             'total_route_km': payableKm,
             'total_approved_km': approvedKm,
-            'rate_per_km': 4,
-            'petrol_amount': approvedKm * 4,
+            'rate_per_km': ratePerKm,
+            'petrol_amount': approvedKm * ratePerKm,
             'status': 'Completed',
           })
           .eq('id', id);
@@ -1596,7 +1611,7 @@ class SupabaseService {
         screen: 'tracking',
         action: 'ROUTE_KM_ATTENDANCE_UPDATED',
         error:
-            'attendance_uuid=$id total_route_km=${attendance.totalRouteKm} eligible_km=${attendance.eligibleKm} petrol_amount=${attendance.eligibleKm * 4}',
+            'attendance_uuid=$id total_route_km=${attendance.totalRouteKm} eligible_km=${attendance.eligibleKm} petrol_amount=${attendance.eligibleKm * ratePerKm}',
       );
     } catch (error, stackTrace) {
       await CrashLogService.record(
@@ -1641,6 +1656,7 @@ class SupabaseService {
     final existingMetadata = _jsonMap(remoteActive.metadata);
     final payableKm = _payableRouteKmForAttendance(attendance);
     final approvedKm = _approvedKmForAttendance(attendance);
+    final ratePerKm = travelModeRatePerKm(attendance.travelMode);
     final metadata = {
       ...existingMetadata,
       ...endLocationMetadata,
@@ -1664,8 +1680,8 @@ class SupabaseService {
           'total_raw_km': attendance.actualKm,
           'total_route_km': payableKm,
           'total_approved_km': approvedKm,
-          'rate_per_km': 4,
-          'petrol_amount': approvedKm * 4,
+          'rate_per_km': ratePerKm,
+          'petrol_amount': approvedKm * ratePerKm,
           'status': 'Completed',
           'metadata': metadata,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -1784,14 +1800,15 @@ class SupabaseService {
       await _syncAttendanceRouteKmFromVisits(attendance);
       final payableKm = _payableRouteKmForAttendance(attendance);
       final approvedKm = _approvedKmForAttendance(attendance);
+      final ratePerKm = travelModeRatePerKm(attendance.travelMode);
       final payload = {
         'actual_km': payableKm,
         'eligible_km': approvedKm,
         'total_raw_km': attendance.actualKm,
         'total_route_km': payableKm,
         'total_approved_km': approvedKm,
-        'rate_per_km': 4,
-        'petrol_amount': approvedKm * 4,
+        'rate_per_km': ratePerKm,
+        'petrol_amount': approvedKm * ratePerKm,
         'travel_mode': attendance.travelMode,
         'payable_km_allowed': attendance.payableKmAllowed,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -1829,7 +1846,7 @@ class SupabaseService {
         screen: 'tracking',
         action: 'ROUTE_KM_ATTENDANCE_UPDATED',
         error:
-            'attendance_uuid=$id total_route_km=${attendance.totalRouteKm} eligible_km=${attendance.eligibleKm} petrol_amount=${attendance.eligibleKm * 4}',
+            'attendance_uuid=$id total_route_km=${attendance.totalRouteKm} eligible_km=${attendance.eligibleKm} petrol_amount=${attendance.eligibleKm * ratePerKm}',
       );
     } catch (error, stackTrace) {
       await CrashLogService.record(
@@ -1966,6 +1983,10 @@ class SupabaseService {
       'end_lng': travelLeg.endLng,
       'calculated_km': double.parse(travelLeg.calculatedKm.toStringAsFixed(2)),
       'payable_km': double.parse(travelLeg.payableKm.toStringAsFixed(2)),
+      'rate_per_km': double.parse(travelLeg.ratePerKm.toStringAsFixed(2)),
+      'payable_amount': double.parse(
+        travelLeg.payableAmount.toStringAsFixed(2),
+      ),
       'fare_amount': double.parse(travelLeg.fareAmount.toStringAsFixed(2)),
       'proof_file_url': travelLeg.proofFileUrl,
       'remarks': travelLeg.remarks,
@@ -1994,6 +2015,8 @@ class SupabaseService {
       endLng: _double(row['end_lng']),
       calculatedKm: _double(row['calculated_km']) ?? 0,
       payableKm: _double(row['payable_km']) ?? 0,
+      ratePerKm: _double(row['rate_per_km']),
+      payableAmount: _double(row['payable_amount']),
       fareAmount: _double(row['fare_amount']) ?? 0,
       proofFileUrl: row['proof_file_url']?.toString(),
       remarks: row['remarks']?.toString(),
