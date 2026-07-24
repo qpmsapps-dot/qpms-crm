@@ -638,7 +638,10 @@ class _HomeScreenState extends State<HomeScreen>
         _finalKmAwaitingBackend = false;
       });
       if (saved.payableKmAllowed) {
-        _toast('Travel mode updated.');
+        _toast(
+          'Travel mode changed to ${travelModeLabel(saved.travelMode)}. '
+          'Rate: ₹${travelModeRatePerKm(saved.travelMode).toStringAsFixed(0)}/KM',
+        );
       } else {
         _toast('Travel mode and claim saved.');
       }
@@ -3032,6 +3035,7 @@ class _TravelModeDialogState extends State<_TravelModeDialog> {
   Widget build(BuildContext context) {
     const options = [
       travelModeBike,
+      travelModeCar,
       travelModeAuto,
       travelModeBus,
       travelModeTrain,

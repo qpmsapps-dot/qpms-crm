@@ -2,15 +2,29 @@ import '../utils/mobile_roles.dart';
 
 const travelModeBike = 'bike';
 const travelModeOwnVehicle = 'own_vehicle';
+const travelModeCar = 'car';
 const travelModeAuto = 'auto';
 const travelModeBus = 'bus';
 const travelModeTrain = 'train';
 const travelModeOther = 'other';
 
-const payableTravelModes = {travelModeBike, travelModeOwnVehicle};
+const defaultTravelModeRatePerKm = 4.0;
+const carTravelModeRatePerKm = 8.0;
+const travelModeRatesPerKm = {
+  travelModeBike: defaultTravelModeRatePerKm,
+  travelModeOwnVehicle: defaultTravelModeRatePerKm,
+  travelModeCar: carTravelModeRatePerKm,
+};
+
+const payableTravelModes = {
+  travelModeBike,
+  travelModeOwnVehicle,
+  travelModeCar,
+};
 const allTravelModes = {
   travelModeBike,
   travelModeOwnVehicle,
+  travelModeCar,
   travelModeAuto,
   travelModeBus,
   travelModeTrain,
@@ -29,8 +43,15 @@ String normalizeTravelMode(String? value) {
 bool payableKmAllowedForTravelMode(String? value) =>
     payableTravelModes.contains(normalizeTravelMode(value));
 
+double travelModeRatePerKm(String? value) {
+  final mode = normalizeTravelMode(value);
+  return travelModeRatesPerKm[mode] ?? defaultTravelModeRatePerKm;
+}
+
 String travelModeLabel(String? value) {
   switch (normalizeTravelMode(value)) {
+    case travelModeCar:
+      return 'Car';
     case travelModeAuto:
       return 'Auto';
     case travelModeBus:
@@ -264,6 +285,8 @@ class TravelLeg {
     this.endLng,
     this.calculatedKm = 0,
     this.payableKm = 0,
+    double? ratePerKm,
+    double? payableAmount,
     this.fareAmount = 0,
     this.proofFileUrl,
     this.remarks,
@@ -271,6 +294,8 @@ class TravelLeg {
     this.createdAt,
     this.updatedAt,
   }) : travelMode = normalizeTravelMode(travelMode),
+       ratePerKm = ratePerKm ?? travelModeRatePerKm(travelMode),
+       payableAmount = payableAmount ?? fareAmount,
        payableKmAllowed =
            payableKmAllowed ?? payableKmAllowedForTravelMode(travelMode);
 
@@ -289,6 +314,8 @@ class TravelLeg {
   double? endLng;
   double calculatedKm;
   double payableKm;
+  final double ratePerKm;
+  double payableAmount;
   double fareAmount;
   String? proofFileUrl;
   String? remarks;
@@ -314,6 +341,8 @@ class TravelLeg {
     'end_lng': endLng,
     'calculated_km': calculatedKm,
     'payable_km': payableKm,
+    'rate_per_km': ratePerKm,
+    'payable_amount': payableAmount,
     'fare_amount': fareAmount,
     'proof_file_url': proofFileUrl,
     'remarks': remarks,
@@ -342,6 +371,8 @@ class TravelLeg {
       endLng: _double(json['end_lng']),
       calculatedKm: _double(json['calculated_km']) ?? 0,
       payableKm: _double(json['payable_km']) ?? 0,
+      ratePerKm: _double(json['rate_per_km']),
+      payableAmount: _double(json['payable_amount']),
       fareAmount: _double(json['fare_amount']) ?? 0,
       proofFileUrl: _nullableText(json['proof_file_url']),
       remarks: _nullableText(json['remarks']),

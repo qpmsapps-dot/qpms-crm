@@ -75,12 +75,13 @@ class Query {
   maybeSingle() { return Promise.resolve({ data: this.rows[0] || null, error: null }); }
 }
 
-function clientWith(rows, { attendanceRow = attendance(), visits = [] } = {}) {
+function clientWith(rows, { attendanceRow = attendance(), visits = [], travelLegs = [] } = {}) {
   return {
     from(table) {
       if (table === 'fo_location_logs') return new Query(rows);
       if (table === 'fo_attendance') return new Query([attendanceRow]);
       if (table === 'fo_site_visits') return new Query(visits);
+      if (table === 'fo_travel_legs') return new Query(travelLegs);
       throw new Error(`Unexpected table ${table}`);
     },
   };
@@ -240,6 +241,60 @@ test('non-bike attendance remains non-payable', () => {
   assert.equal(result.payableKmAllowed, false);
 });
 
+test('car travel is payable at eight rupees per km', () => {
+  const result = calculateCanonicalRoutePayableKm({
+    attendance: attendance({ travel_mode: 'Car', payable_km_allowed: true, rate_per_km: 8 }),
+    gpsTravelLegs: [gpsLeg('start_to_first_checkin', 10, { travel_mode: 'CAR' })],
+  });
+
+  assert.equal(result.calculatedPayableKm, 10);
+  assert.equal(result.petrolAmount, 80);
+  assert.equal(result.auditTravelLegs[0].travel_mode, 'car');
+  assert.equal(result.auditTravelLegs[0].rate_per_km, 8);
+  assert.equal(result.auditTravelLegs[0].payable_amount, 80);
+});
+
+test('mixed bike and car legs keep their own rates and amounts', () => {
+  const result = calculateCanonicalRoutePayableKm({
+    attendance: attendance({ travel_mode: 'car', payable_km_allowed: true, rate_per_km: 8 }),
+    gpsTravelLegs: [
+      gpsLeg('start_to_first_checkin', 10, { travel_mode: 'bike', rate_per_km: 4 }),
+      gpsLeg('site_checkout_to_next_checkin', 15, { travel_mode: 'car', rate_per_km: 8 }),
+    ],
+  });
+
+  assert.equal(result.calculatedPayableKm, 25);
+  assert.equal(result.petrolAmount, 160);
+  assert.deepEqual(
+    result.auditTravelLegs.map((leg) => ({
+      mode: leg.travel_mode,
+      km: leg.payable_km,
+      rate: leg.rate_per_km,
+      amount: leg.payable_amount,
+    })),
+    [
+      { mode: 'bike', km: 10, rate: 4, amount: 40 },
+      { mode: 'car', km: 15, rate: 8, amount: 120 },
+    ],
+  );
+});
+
+test('null and unknown travel modes retain the legacy bike fallback', () => {
+  const nullMode = calculateCanonicalRoutePayableKm({
+    attendance: attendance({ travel_mode: null, payable_km_allowed: null, rate_per_km: null }),
+    gpsTravelLegs: [gpsLeg('start_to_first_checkin', 10)],
+  });
+  const unknownMode = calculateCanonicalRoutePayableKm({
+    attendance: attendance({ travel_mode: 'spaceship', payable_km_allowed: null, rate_per_km: null }),
+    gpsTravelLegs: [gpsLeg('start_to_first_checkin', 10)],
+  });
+
+  assert.equal(nullMode.calculatedPayableKm, 10);
+  assert.equal(nullMode.petrolAmount, 40);
+  assert.equal(unknownMode.calculatedPayableKm, 10);
+  assert.equal(unknownMode.petrolAmount, 40);
+});
+
 test('no-site full-day GPS leg is a payable canonical window', () => {
   const result = calculateCanonicalRoutePayableKm({
     attendance: attendance(),
@@ -378,6 +433,94 @@ test('travel-window construction excludes every checked-in GPS interval without 
   assert.equal(result.gps_log_count, 36);
   assert.ok(result.travel_legs.every((leg) => leg.gps_log_count === 12));
   assert.equal(result.travel_legs.some((leg) => String(leg.from_time).includes('05:10')), false);
+});
+
+test('travel-leg recalculation preserves persisted bike and car leg snapshots', async () => {
+  const timedRows = (start, prefix) => gpsRows({ start }).map((row, index) => ({ ...row, id: `${prefix}-${index}` }));
+  const rows = [
+    ...timedRows('2026-07-16T04:35:00.000Z', 'before-first'),
+    ...timedRows('2026-07-16T06:05:00.000Z', 'between-sites'),
+    ...timedRows('2026-07-16T07:05:00.000Z', 'after-last'),
+  ];
+  const row = attendance({
+    travel_mode: 'car',
+    rate_per_km: 8,
+    login_time: '2026-07-16T04:30:00.000Z',
+    logout_time: '2026-07-16T08:00:00.000Z',
+    start_latitude: 13.028,
+    start_longitude: 80.248,
+    end_latitude: 13.031,
+    end_longitude: 80.245,
+  });
+  const visits = [
+    {
+      id: 'visit-1',
+      attendance_id: row.id,
+      check_in_time: '2026-07-16T05:00:00.000Z',
+      check_out_time: '2026-07-16T06:00:00.000Z',
+      check_in_latitude: 13.03,
+      check_in_longitude: 80.246,
+      check_out_latitude: 13.03,
+      check_out_longitude: 80.246,
+      status: 'Completed',
+      metadata: {},
+    },
+    {
+      id: 'visit-2',
+      attendance_id: row.id,
+      check_in_time: '2026-07-16T06:30:00.000Z',
+      check_out_time: '2026-07-16T07:00:00.000Z',
+      check_in_latitude: 13.031,
+      check_in_longitude: 80.245,
+      check_out_latitude: 13.031,
+      check_out_longitude: 80.245,
+      status: 'Completed',
+      metadata: {},
+    },
+  ];
+  const travelLegs = [
+    {
+      id: 'leg-bike',
+      attendance_id: row.id,
+      travel_mode: 'bike',
+      payable_km_allowed: true,
+      started_at: '2026-07-16T04:30:00.000Z',
+      ended_at: '2026-07-16T05:00:00.000Z',
+      rate_per_km: 4,
+      status: 'completed',
+    },
+    {
+      id: 'leg-car',
+      attendance_id: row.id,
+      travel_mode: 'car',
+      payable_km_allowed: true,
+      started_at: '2026-07-16T06:00:00.000Z',
+      ended_at: '2026-07-16T06:30:00.000Z',
+      rate_per_km: 8,
+      status: 'completed',
+    },
+  ];
+
+  const result = await recalculateAttendanceTravelLegs(
+    clientWith(rows, { attendanceRow: row, visits, travelLegs }),
+    row.id,
+    { persist: false, auditDelayedCheckout: false, maxGoogleDirectionsCalls: 0 },
+  );
+
+  assert.deepEqual(
+    result.travel_legs.slice(0, 2).map((leg) => ({
+      mode: leg.travel_mode,
+      rate: leg.rate_per_km,
+    })),
+    [
+      { mode: 'bike', rate: 4 },
+      { mode: 'car', rate: 8 },
+    ],
+  );
+  assert.equal(
+    result.petrol_amount,
+    Number(result.travel_legs.reduce((sum, leg) => sum + Number(leg.payable_amount || 0), 0).toFixed(2)),
+  );
 });
 
 test('a GPS row on a shared travel-window boundary is counted only once', async () => {
