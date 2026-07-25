@@ -17,6 +17,7 @@ import {
   recalculateFoKmForToday,
   recalculateSwitchModeKmTemporary,
 } from './foKmRecalculationService.js';
+import { authorizeFoKmRecalculation } from './services/foKmRecalculationAuthorizationService.js';
 import {
   cleanupStaleFoSessions,
   cleanupStaleLiveStatusReferences,
@@ -7307,8 +7308,25 @@ app.get('/api/deep-cleaning/records', requireSupabaseJwtOrDemoApiRead, async (re
   }
 });
 
-app.post('/api/fo/km/recalculate', async (request, response) => {
-  const payload = request.body || {};
+app.post('/api/fo/km/recalculate', requireSupabaseJwt, async (request, response) => {
+  let payload = request.body || {};
+  const client = requireServiceRoleSupabase();
+  try {
+    const authorization = await authorizeFoKmRecalculation({
+      client,
+      payload,
+      profile: request.profile,
+    });
+    payload = authorization.payload;
+  } catch (error) {
+    response.status(error.statusCode || 500).json({
+      ok: false,
+      message: error.statusCode
+        ? error.message
+        : 'Unable to authorize KM recalculation.',
+    });
+    return;
+  }
   const lockKey = foKmRecalculationLockKey(payload);
   const lockDate = normalizeFoKmRecalculationDate(payload.date);
   pruneStaleFoKmRecalculationLocks();
@@ -7318,7 +7336,6 @@ app.post('/api/fo/km/recalculate', async (request, response) => {
   }
   addFoKmRecalculationLock(lockKey);
   try {
-    const client = requireServiceRoleSupabase();
     await assertServiceRoleAuthAdminAccess(client);
     const result = await recalculateFoKm(client, payload, {
       maxGoogleDirectionsCalls: payload.max_google_directions_calls,

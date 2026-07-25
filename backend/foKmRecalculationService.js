@@ -1441,7 +1441,7 @@ async function hasTravelLegRows(client, attendance) {
 async function loadPersistedTravelLegSnapshots(client, attendance) {
   const { data, error } = await client
     .from('fo_travel_legs')
-    .select('id,attendance_id,travel_mode,payable_km_allowed,started_at,ended_at,payable_km,rate_per_km,payable_amount,fare_amount,status')
+    .select('id,attendance_id,travel_mode,payable_km_allowed,started_at,ended_at,start_lat,start_lng,end_lat,end_lng,payable_km,rate_per_km,payable_amount,fare_amount,status')
     .eq('attendance_id', attendance.id)
     .order('started_at', { ascending: true })
     .limit(1000);
@@ -1461,7 +1461,44 @@ async function loadPersistedTravelLegSnapshots(client, attendance) {
   return Array.isArray(data) ? data : [];
 }
 
+function completedPersistedTravelLegs(snapshots = []) {
+  return snapshots
+    .map((snapshot) => {
+      const from = coordinateFrom(snapshot, ['start_lat'], ['start_lng']);
+      const to = coordinateFrom(snapshot, ['end_lat'], ['end_lng']);
+      return {
+        snapshot,
+        from,
+        to,
+        fromTime: parseValidDate(snapshot?.started_at),
+        toTime: parseValidDate(snapshot?.ended_at),
+      };
+    })
+    .filter(({ snapshot, from, to, fromTime, toTime }) => (
+      snapshot &&
+      snapshot.status !== 'cancelled' &&
+      from &&
+      to &&
+      fromTime &&
+      toTime
+    ))
+    .map(({ snapshot, from, to, fromTime, toTime }) => ({
+      type: 'persisted_travel_leg',
+      fromTime,
+      toTime,
+      from,
+      to,
+      fromSource: 'fo_travel_legs',
+      toSource: 'fo_travel_legs',
+      travel_mode: snapshot.travel_mode,
+      payable_km_allowed: snapshot.payable_km_allowed,
+      persistedSnapshot: snapshot,
+      reviewFlags: [],
+    }));
+}
+
 function persistedSnapshotForLeg(leg, snapshots = []) {
+  if (leg?.persistedSnapshot) return leg.persistedSnapshot;
   const legStart = parseValidDate(leg?.fromTime);
   const legEnd = parseValidDate(leg?.toTime);
   if (!legStart || !legEnd) return null;
@@ -2263,8 +2300,21 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
   const travelPolicy = travelModeAllowsPayableKm(attendance);
   const ratePerKm = ratePerKmForTravelMode(attendance.travel_mode, attendance.rate_per_km);
   const effectiveEnd = await resolveEffectiveAttendanceEnd(client, attendance, { includeEvidence: true });
-  const candidateLegs = buildCompletedTravelLegs(attendance, visits, effectiveEnd);
   const persistedLegSnapshots = await loadPersistedTravelLegSnapshots(client, attendance);
+  if (persistedLegSnapshots.some((snapshot) => (
+    snapshot?.status === 'active' || !snapshot?.ended_at
+  ))) {
+    const error = new Error(
+      'Final travel leg closure is pending. Retry KM recalculation shortly.',
+    );
+    error.statusCode = 409;
+    error.code = 'travel_leg_closure_pending';
+    throw error;
+  }
+  const persistedCandidateLegs = completedPersistedTravelLegs(persistedLegSnapshots);
+  const candidateLegs = persistedCandidateLegs.length > 0
+    ? persistedCandidateLegs
+    : buildCompletedTravelLegs(attendance, visits, effectiveEnd);
   const legAudit = [];
   const delayedCheckoutAudits = [];
 
@@ -2410,6 +2460,16 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
           ? 'HAVERSINE_ROUTE_FALLBACK'
           : 'NO_COMPLETED_TRAVEL_LEGS';
   const reviewFlags = [];
+  if (
+    persistedCandidateLegs.length === 0 &&
+    (
+      safeAttendanceMetadata(attendance).previous_travel_mode ||
+      safeAttendanceMetadata(attendance).travel_mode_changed_at ||
+      suspectsMultipleTravelModeSwitches(safeAttendanceMetadata(attendance))
+    )
+  ) {
+    reviewFlags.push('LEGACY_MIXED_MODE_WITHOUT_TRAVEL_LEG_SNAPSHOTS');
+  }
   if (!travelPolicy.payableKmAllowed) reviewFlags.push('NON_PAYABLE_TRAVEL_MODE');
   if (legAudit.some((leg) => leg.status === 'skipped')) reviewFlags.push('INCOMPLETE_TRAVEL_LEGS_SKIPPED');
   if (calculatedSources.has('HAVERSINE_ROUTE_FALLBACK')) reviewFlags.push('GOOGLE_ROUTE_FAILED_USED_HAVERSINE');
@@ -2724,15 +2784,11 @@ export async function recalculateFullDayGpsNoSiteVisitKm(serviceRoleClient, payl
     calculated_by: options.actor || null,
   };
   const attendanceUpdate = {
-    actual_km: result.eligible_km,
     total_route_km: result.eligible_km,
     eligible_km: result.eligible_km,
     total_approved_km: result.eligible_km,
     petrol_amount: result.petrol_amount,
-    total_raw_km: result.raw_gps_km,
-    raw_gps_km: result.raw_gps_km,
-    filtered_gps_km: result.filtered_gps_km,
-    actual_travel_km: result.filtered_gps_km,
+    route_sync_status: 'canonical_end_day_recalculation',
     metadata,
   };
   const { error } = await client
@@ -2961,22 +3017,17 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   const payableTravelLegAudit = canonicalRouteCalculation.routeBasedSelected
     ? canonicalRouteCalculation.auditTravelLegs
     : legRecalculation.travel_legs || [];
+  const canonicalRouteSyncStatus = 'canonical_end_day_recalculation';
   const attendanceUpdate = {
-    actual_km: approvedKm,
     total_route_km: approvedKm,
     eligible_km: approvedKm,
-    total_raw_km: actualTravelKm,
-    raw_gps_km: actualTravelKm,
-    filtered_gps_km: filteredGpsKm,
-    actual_travel_km: actualTravelKm,
-    actual_travel_updated_at: new Date().toISOString(),
     total_approved_km: approvedKm,
     petrol_amount: petrolAmount,
     travel_mode: travelPolicy.travelMode,
     payable_km_allowed: travelPolicy.payableKmAllowed,
     rate_per_km: ratePerKm,
     eligibility_status: reviewFlags.length ? [...new Set(reviewFlags)].join(',') : 'Approved',
-    route_sync_status: routeSyncStatus,
+    route_sync_status: canonicalRouteSyncStatus,
     metadata: {
       ...existingMetadata,
       final_return_leg_km: payableFinalReturnKm,
@@ -3237,7 +3288,8 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     haversine_fallback_km: legRecalculation.haversine_fallback_km || 0,
     site_visits_missing_route_km: visitsMissingRouteKm,
     review_flags: [...new Set(reviewFlags)],
-    route_sync_status: routeSyncStatus,
+    route_sync_status: canonicalRouteSyncStatus,
+    canonical_km_source: routeSyncStatus,
     payable_km_source: routeSyncStatus,
     payable_km_formula: canonicalRouteCalculation.payableKmFormula,
     site_visit_route_km_sum: canonicalRouteCalculation.routeBasedSelected

@@ -19,6 +19,7 @@ import '../services/performance_log_service.dart';
 import '../services/permission_service.dart';
 import '../services/supabase_service.dart';
 import '../services/tracking_health_service.dart';
+import '../services/travel_leg_lifecycle_service.dart';
 import '../theme/app_theme.dart';
 import '../tracking/route_km_calculator.dart';
 import '../tracking/tracking_service.dart';
@@ -84,6 +85,9 @@ class _EndLocationResolution {
 
 class _HomeScreenState extends State<HomeScreen>
     with AutomaticKeepAliveClientMixin<HomeScreen>, WidgetsBindingObserver {
+  TravelLegLifecycleService get _travelLegLifecycle =>
+      TravelLegLifecycleService(gateway: SupabaseTravelLegGateway(widget.user));
+
   Attendance? _attendance;
   bool _busy = false;
   String? _busyMessage;
@@ -610,6 +614,18 @@ class _HomeScreenState extends State<HomeScreen>
     );
     setState(() => _busy = true);
     try {
+      await TrackingService.flushForTransition('travel_mode_change');
+      final transitionPosition = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+      final transitionBoundary = TravelLegBoundary(
+        at: DateTime.now().toUtc(),
+        latitude: transitionPosition.latitude,
+        longitude: transitionPosition.longitude,
+      );
       if (!selectedPayable) {
         final claimSaved = await _saveTravelExpenseClaim(
           current,
@@ -629,8 +645,32 @@ class _HomeScreenState extends State<HomeScreen>
             )
           : null;
       final saved = remote ?? updated;
+      try {
+        await _travelLegLifecycle.changeMode(
+          attendanceId: saved.remoteId!,
+          employeeCode: widget.user.employeeCode,
+          oldMode: current.travelMode,
+          newMode: saved.travelMode,
+          boundary: transitionBoundary,
+        );
+      } catch (_) {
+        await SupabaseService.updateAttendanceTravelMode(
+          user: widget.user,
+          attendance: current,
+          travelMode: current.travelMode,
+          payableKmAllowed: current.payableKmAllowed,
+          travelModeNote: current.travelModeNote,
+          metadata: current.metadata,
+        );
+        await _travelLegLifecycle.checkOut(
+          attendanceId: current.remoteId!,
+          employeeCode: widget.user.employeeCode,
+          mode: current.travelMode,
+          boundary: transitionBoundary,
+        );
+        rethrow;
+      }
       await LocalStore.saveAttendance(saved);
-      await TrackingService.flushForTransition('travel_mode_change');
       if (!mounted) return;
       setState(() {
         _attendance = saved;
@@ -936,6 +976,16 @@ class _HomeScreenState extends State<HomeScreen>
         step: 'attendance_local_save',
         stopwatch: perf,
       );
+      await _travelLegLifecycle.startDay(
+        attendanceId: attendance.remoteId!,
+        employeeCode: widget.user.employeeCode,
+        mode: attendance.travelMode,
+        boundary: TravelLegBoundary(
+          at: attendance.startTime.toUtc(),
+          latitude: attendance.startLat,
+          longitude: attendance.startLng,
+        ),
+      );
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
         screen: 'home',
@@ -1208,6 +1258,22 @@ class _HomeScreenState extends State<HomeScreen>
       attendanceId: reopened.remoteId,
       clearActiveSiteVisit: true,
     );
+    final restartPosition = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 15),
+      ),
+    );
+    await _travelLegLifecycle.reopen(
+      attendanceId: reopened.remoteId!,
+      employeeCode: widget.user.employeeCode,
+      mode: reopened.travelMode,
+      boundary: TravelLegBoundary(
+        at: DateTime.now().toUtc(),
+        latitude: restartPosition.latitude,
+        longitude: restartPosition.longitude,
+      ),
+    );
     await _resumeAttendance(reopened);
     _toast('Day restarted. Tracking resumed.');
   }
@@ -1432,6 +1498,14 @@ class _HomeScreenState extends State<HomeScreen>
           ..eligibleKm = resolvedAttendance.attendance.eligibleKm
           ..totalRouteKm = resolvedAttendance.attendance.totalRouteKm
           ..endRouteKm = resolvedAttendance.attendance.endRouteKm;
+        await _travelLegLifecycle.endDay(
+          attendanceId: attendance.remoteId!,
+          boundary: TravelLegBoundary(
+            at: attendance.endTime!.toUtc(),
+            latitude: attendance.endLat,
+            longitude: attendance.endLng,
+          ),
+        );
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'home',
@@ -1626,6 +1700,14 @@ class _HomeScreenState extends State<HomeScreen>
           ..endLat = completedAttendance.attendance.endLat ?? endLatitude
           ..endLng = completedAttendance.attendance.endLng ?? endLongitude
           ..metadata = completedAttendance.attendance.metadata;
+        await _travelLegLifecycle.endDay(
+          attendanceId: attendance.remoteId!,
+          boundary: TravelLegBoundary(
+            at: endTime.toUtc(),
+            latitude: endLatitude,
+            longitude: endLongitude,
+          ),
+        );
         await CrashLogService.record(
           employeeCode: widget.user.employeeCode,
           screen: 'home',

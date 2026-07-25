@@ -1028,11 +1028,31 @@ class SupabaseService {
     if (!isValidUuid(attendanceId)) {
       throw StateError('Travel leg requires a synced attendance_id.');
     }
-    final row = await client
+    final startedAt = travelLeg.startedAt.toUtc().toIso8601String();
+    final existing = await client
         .from('fo_travel_legs')
-        .insert(_travelLegPayload(travelLeg, user))
         .select('id')
+        .eq('attendance_id', attendanceId)
+        .eq('started_at', startedAt)
         .maybeSingle();
+    Map<String, dynamic>? row = existing;
+    if (row == null) {
+      try {
+        row = await client
+            .from('fo_travel_legs')
+            .insert(_travelLegPayload(travelLeg, user))
+            .select('id')
+            .maybeSingle();
+      } on PostgrestException catch (error) {
+        if (error.code != '23505') rethrow;
+        row = await client
+            .from('fo_travel_legs')
+            .select('id')
+            .eq('attendance_id', attendanceId)
+            .eq('started_at', startedAt)
+            .maybeSingle();
+      }
+    }
     await CrashLogService.record(
       employeeCode: user.employeeCode,
       screen: 'home',
@@ -1080,15 +1100,24 @@ class SupabaseService {
         .from('fo_travel_legs')
         .update(payload)
         .eq('id', id)
+        .eq('status', 'active')
+        .filter('ended_at', 'is', null)
         .select('*')
         .maybeSingle();
+    final persisted =
+        row ??
+        await client
+            .from('fo_travel_legs')
+            .select('*')
+            .eq('id', id)
+            .maybeSingle();
     await CrashLogService.record(
       employeeCode: user.employeeCode,
       screen: 'home',
       action: 'TRAVEL_LEG_CLOSED',
       error: 'travel_leg_id=$id status=$status',
     );
-    return row == null ? null : _travelLegFromRow(row);
+    return persisted == null ? null : _travelLegFromRow(persisted);
   }
 
   static Future<TravelLeg?> fetchActiveTravelLeg({
@@ -1584,9 +1613,7 @@ class SupabaseService {
             'end_latitude': attendance.endLat,
             'end_longitude': attendance.endLng,
             'end_battery_percentage': attendance.batteryEnd,
-            'actual_km': payableKm,
             'eligible_km': approvedKm,
-            'total_raw_km': attendance.actualKm,
             'total_route_km': payableKm,
             'total_approved_km': approvedKm,
             'rate_per_km': ratePerKm,
@@ -1675,9 +1702,7 @@ class SupabaseService {
           'end_latitude': attendance.endLat,
           'end_longitude': attendance.endLng,
           'end_battery_percentage': attendance.batteryEnd,
-          'actual_km': payableKm,
           'eligible_km': approvedKm,
-          'total_raw_km': attendance.actualKm,
           'total_route_km': payableKm,
           'total_approved_km': approvedKm,
           'rate_per_km': ratePerKm,
@@ -1802,9 +1827,7 @@ class SupabaseService {
       final approvedKm = _approvedKmForAttendance(attendance);
       final ratePerKm = travelModeRatePerKm(attendance.travelMode);
       final payload = {
-        'actual_km': payableKm,
         'eligible_km': approvedKm,
-        'total_raw_km': attendance.actualKm,
         'total_route_km': payableKm,
         'total_approved_km': approvedKm,
         'rate_per_km': ratePerKm,
