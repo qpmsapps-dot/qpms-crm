@@ -16,6 +16,7 @@ import '../services/performance_log_service.dart';
 import '../services/permission_service.dart';
 import '../services/route_distance_service.dart';
 import '../services/supabase_service.dart';
+import '../services/travel_leg_lifecycle_service.dart';
 import '../theme/app_theme.dart';
 import '../tracking/tracking_service.dart';
 import '../ui/fo_ui.dart';
@@ -62,6 +63,9 @@ class TasksScreen extends StatefulWidget {
 
 class _TasksScreenState extends State<TasksScreen>
     with AutomaticKeepAliveClientMixin<TasksScreen>, WidgetsBindingObserver {
+  TravelLegLifecycleService get _travelLegLifecycle =>
+      TravelLegLifecycleService(gateway: SupabaseTravelLegGateway(widget.user));
+
   Attendance? _attendance;
   SiteVisit? _activeVisit;
   bool _busy = false;
@@ -535,6 +539,14 @@ class _TasksScreenState extends State<TasksScreen>
       }
 
       final visit = await _createVisit(store, position, activeAttendance);
+      await _travelLegLifecycle.checkIn(
+        attendanceId: activeAttendance.remoteId!,
+        boundary: TravelLegBoundary(
+          at: visit.checkInTime.toUtc(),
+          latitude: position.latitude,
+          longitude: position.longitude,
+        ),
+      );
       PerformanceLogService.step(
         operation: 'check_in',
         step: 'visit_create',
@@ -654,6 +666,14 @@ class _TasksScreenState extends State<TasksScreen>
       );
       await _recordRepeatSiteAllowedIfNeeded(store, activeAttendance);
       final visit = await _createVisit(store, position, activeAttendance);
+      await _travelLegLifecycle.checkIn(
+        attendanceId: activeAttendance.remoteId!,
+        boundary: TravelLegBoundary(
+          at: visit.checkInTime.toUtc(),
+          latitude: position.latitude,
+          longitude: position.longitude,
+        ),
+      );
       await TrackingService.pauseForSiteVisit(
         user: widget.user,
         visit: visit,
@@ -1452,6 +1472,16 @@ class _TasksScreenState extends State<TasksScreen>
       }
       await LocalStore.saveVisit(visit);
       await _clearLocalActiveVisitCache(attendance!);
+      await _travelLegLifecycle.checkOut(
+        attendanceId: attendance.remoteId!,
+        employeeCode: widget.user.employeeCode,
+        mode: attendance.travelMode,
+        boundary: TravelLegBoundary(
+          at: visit.checkOutTime!.toUtc(),
+          latitude: position.latitude,
+          longitude: position.longitude,
+        ),
+      );
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,
         screen: 'tasks',

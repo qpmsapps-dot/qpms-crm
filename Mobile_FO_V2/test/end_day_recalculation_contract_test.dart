@@ -62,6 +62,41 @@ void main() {
       );
     });
 
+    test('End Day closes final travel leg before recalculation', () {
+      final body = endDayBody();
+      final attendanceClosure = body.indexOf(
+        'await SupabaseService.endCurrentActiveAttendance',
+      );
+      final finalLegClosure = body.indexOf(
+        'await _travelLegLifecycle.endDay',
+        attendanceClosure,
+      );
+      final recalculation = body.indexOf(
+        '_refreshEndDayKmFromBackend',
+        finalLegClosure,
+      );
+
+      expect(attendanceClosure, greaterThanOrEqualTo(0));
+      expect(finalLegClosure, greaterThan(attendanceClosure));
+      expect(recalculation, greaterThan(finalLegClosure));
+
+      final alreadyCompletedStart = body.indexOf(
+        'if (resolvedAttendance.alreadyCompleted)',
+      );
+      final alreadyCompletedEnd = body.indexOf(
+        'final openSiteVisit',
+        alreadyCompletedStart,
+      );
+      final alreadyCompleted = body.substring(
+        alreadyCompletedStart,
+        alreadyCompletedEnd,
+      );
+      expect(
+        alreadyCompleted.indexOf('await _travelLegLifecycle.endDay'),
+        lessThan(alreadyCompleted.indexOf('_refreshEndDayKmFromBackend')),
+      );
+    });
+
     test('attendance is refetched after successful recalculation', () {
       final refresh = refreshBody();
 
