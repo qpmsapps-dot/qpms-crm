@@ -144,10 +144,12 @@ class Attendance {
     this.endRouteKm = 0,
     this.petrolAmount,
     String travelMode = travelModeBike,
+    double? ratePerKm,
     bool? payableKmAllowed,
     this.travelModeNote,
     this.metadata = const {},
   }) : travelMode = normalizeTravelMode(travelMode),
+       ratePerKm = ratePerKm ?? travelModeRatePerKm(travelMode),
        payableKmAllowed =
            payableKmAllowed ?? payableKmAllowedForTravelMode(travelMode);
 
@@ -169,6 +171,7 @@ class Attendance {
   double endRouteKm;
   double? petrolAmount;
   final String travelMode;
+  final double ratePerKm;
   final bool payableKmAllowed;
   String? travelModeNote;
   Map<String, dynamic> metadata;
@@ -200,6 +203,7 @@ class Attendance {
       endRouteKm: endRouteKm,
       petrolAmount: petrolAmount,
       travelMode: travelMode,
+      ratePerKm: travelModeRatePerKm(travelMode),
       payableKmAllowed: payableKmAllowed,
       travelModeNote: travelModeNote,
       metadata: metadata ?? this.metadata,
@@ -225,6 +229,7 @@ class Attendance {
     'end_route_km': endRouteKm,
     if (petrolAmount != null) 'petrol_amount': petrolAmount,
     'travel_mode': travelMode,
+    'rate_per_km': ratePerKm,
     'payable_km_allowed': payableKmAllowed,
     'travel_mode_note': travelModeNote,
     'metadata': metadata,
@@ -256,6 +261,10 @@ class Attendance {
       endRouteKm: _double(json['end_route_km']) ?? 0,
       petrolAmount: _double(json['petrol_amount']),
       travelMode: travelMode,
+      ratePerKm:
+          _double(json['rate_per_km']) ??
+          _double(metadata['rate_per_km']) ??
+          travelModeRatePerKm(travelMode),
       payableKmAllowed:
           _bool(json['payable_km_allowed']) ??
           _bool(metadata['payable_km_allowed']) ??

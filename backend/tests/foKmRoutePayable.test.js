@@ -63,8 +63,13 @@ function gpsRows({ count = 12, start = '2026-07-16T12:41:20.000Z', accuracy = 10
 class Query {
   constructor(rows) {
     this.rows = [...rows];
+    this.updatePayload = null;
   }
   select() { return this; }
+  update(payload) {
+    this.updatePayload = payload;
+    return this;
+  }
   eq(column, value) { this.rows = this.rows.filter((row) => row[column] === value); return this; }
   gt(column, value) { this.rows = this.rows.filter((row) => new Date(row[column]) > new Date(value)); return this; }
   gte(column, value) { this.rows = this.rows.filter((row) => new Date(row[column]) >= new Date(value)); return this; }
@@ -73,6 +78,12 @@ class Query {
   limit(value) { this.rows = this.rows.slice(0, value); return Promise.resolve({ data: this.rows, error: null }); }
   single() { return Promise.resolve({ data: this.rows[0] || null, error: null }); }
   maybeSingle() { return Promise.resolve({ data: this.rows[0] || null, error: null }); }
+  then(resolve, reject) {
+    if (this.updatePayload) {
+      this.rows.forEach((row) => Object.assign(row, this.updatePayload));
+    }
+    return Promise.resolve({ data: this.rows, error: null }).then(resolve, reject);
+  }
 }
 
 function clientWith(rows, { attendanceRow = attendance(), visits = [], travelLegs = [] } = {}) {
@@ -521,6 +532,93 @@ test('travel-leg recalculation preserves persisted bike and car leg snapshots', 
     result.petrol_amount,
     Number(result.travel_legs.reduce((sum, leg) => sum + Number(leg.payable_amount || 0), 0).toFixed(2)),
   );
+});
+
+test('canonical_recalculation_persists_leg_payable_amount', async () => {
+  const rows = gpsRows();
+  const row = attendance({
+    travel_mode: 'car',
+    rate_per_km: 8,
+    login_time: rows[0].captured_at,
+    logout_time: rows.at(-1).captured_at,
+    start_latitude: rows[0].latitude,
+    start_longitude: rows[0].longitude,
+    end_latitude: rows.at(-1).latitude,
+    end_longitude: rows.at(-1).longitude,
+  });
+  const travelLegs = [{
+    id: 'leg-car-persisted',
+    attendance_id: row.id,
+    travel_mode: 'car',
+    payable_km_allowed: true,
+    started_at: row.login_time,
+    ended_at: row.logout_time,
+    start_lat: row.start_latitude,
+    start_lng: row.start_longitude,
+    end_lat: row.end_latitude,
+    end_lng: row.end_longitude,
+    rate_per_km: 8,
+    status: 'completed',
+  }];
+  const client = clientWith(rows, { attendanceRow: row, travelLegs });
+
+  const result = await recalculateAttendanceTravelLegs(client, row.id, {
+    persist: false,
+    persistLegResults: true,
+    auditDelayedCheckout: false,
+    maxGoogleDirectionsCalls: 0,
+  });
+
+  assert.equal(travelLegs[0].travel_mode, 'car');
+  assert.equal(travelLegs[0].rate_per_km, 8);
+  assert.equal(travelLegs[0].payable_amount, result.travel_legs[0].payable_amount);
+  assert.equal(
+    travelLegs[0].payable_amount,
+    Number((travelLegs[0].payable_km * 8).toFixed(2)),
+  );
+});
+
+test('recalculation_twice_updates_same_leg_rows_idempotently', async () => {
+  const rows = gpsRows();
+  const row = attendance({
+    travel_mode: 'car',
+    rate_per_km: 8,
+    login_time: rows[0].captured_at,
+    logout_time: rows.at(-1).captured_at,
+    start_latitude: rows[0].latitude,
+    start_longitude: rows[0].longitude,
+    end_latitude: rows.at(-1).latitude,
+    end_longitude: rows.at(-1).longitude,
+  });
+  const travelLegs = [{
+    id: 'leg-car-idempotent',
+    attendance_id: row.id,
+    travel_mode: 'car',
+    payable_km_allowed: true,
+    started_at: row.login_time,
+    ended_at: row.logout_time,
+    start_lat: row.start_latitude,
+    start_lng: row.start_longitude,
+    end_lat: row.end_latitude,
+    end_lng: row.end_longitude,
+    rate_per_km: 8,
+    status: 'completed',
+  }];
+  const client = clientWith(rows, { attendanceRow: row, travelLegs });
+  const options = {
+    persist: false,
+    persistLegResults: true,
+    auditDelayedCheckout: false,
+    maxGoogleDirectionsCalls: 0,
+  };
+
+  await recalculateAttendanceTravelLegs(client, row.id, options);
+  const first = { ...travelLegs[0] };
+  await recalculateAttendanceTravelLegs(client, row.id, options);
+
+  assert.equal(travelLegs.length, 1);
+  assert.equal(travelLegs[0].payable_km, first.payable_km);
+  assert.equal(travelLegs[0].payable_amount, first.payable_amount);
 });
 
 test('a GPS row on a shared travel-window boundary is counted only once', async () => {

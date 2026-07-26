@@ -74,5 +74,23 @@ void main() {
       expect(leg.ratePerKm, 8);
       expect(leg.payableAmount, 120);
     });
+
+    test('app_restart_restores_car_and_rate_8', () {
+      final attendance = Attendance.fromJson({
+        'id': 'attendance-car',
+        'employee_code': 'FO-CAR',
+        'start_time': '2026-07-26T08:00:00.000Z',
+        'travel_mode': 'car',
+        'rate_per_km': 8,
+      });
+
+      expect(attendance.travelMode, travelModeCar);
+      expect(attendance.ratePerKm, carTravelModeRatePerKm);
+      expect(attendance.toJson(), containsPair('rate_per_km', 8));
+    });
+
+    test('Car 20 KM equals 160 rupees', () {
+      expect(20 * travelModeRatePerKm(travelModeCar), 160);
+    });
   });
 }

@@ -1228,6 +1228,8 @@ function enrichOfficer({ officer, attendance, visits = [], live, profilesByCode 
     travelMode,
     live?.rate_per_km ?? attendance?.rate_per_km ?? officer.ratePerKm,
   );
+  const petrolAmountPending = isCanonicalPetrolPending(attendance);
+  const storedPetrolAmount = numberOrNull(attendance?.petrol_amount);
   const profileOnly = Boolean(
     profile &&
       !live &&
@@ -1292,7 +1294,10 @@ function enrichOfficer({ officer, attendance, visits = [], live, profilesByCode 
     travelMode,
     travelModeLabel: travelModeLabel(travelMode),
     ratePerKm,
-    petrolAmount: calculatePetrolAmount(eligibleKm, ratePerKm),
+    petrolAmount: petrolAmountPending
+      ? null
+      : storedPetrolAmount ?? calculatePetrolAmount(eligibleKm, ratePerKm),
+    petrolAmountPending,
     routeKmSource: kmSource,
     kmSource,
     dataSources,
@@ -1546,6 +1551,7 @@ function payableKmFromAttendance(row) {
 }
 
 function petrolAmountFromAttendance(row) {
+  if (isCanonicalPetrolPending(row)) return null;
   const stored = numberOrNull(row?.petrol_amount);
   if (stored !== null) return stored;
   return calculatePetrolAmount(
@@ -1555,7 +1561,28 @@ function petrolAmountFromAttendance(row) {
 }
 
 function sumAttendancePetrolAmount(rows = []) {
-  return rows.reduce((sum, row) => sum + petrolAmountFromAttendance(row), 0);
+  const values = rows.map(petrolAmountFromAttendance);
+  if (values.some((value) => value === null)) return null;
+  return values.reduce((sum, value) => sum + value, 0);
+}
+
+function isCanonicalPetrolPending(row) {
+  const metadata = attendanceMetadata(row);
+  return (
+    String(row?.route_sync_status || "").toLowerCase() ===
+      "pending_canonical_end_day_recalculation" ||
+    metadata.canonical_recalculation_pending === true ||
+    String(metadata.km_recalculation_status || "").toLowerCase() === "pending"
+  );
+}
+
+function officerPetrolDisplay(officer, provisionalKm = 0) {
+  if (officer?.petrolAmountPending) return "Pending";
+  const stored = numberOrNull(officer?.petrolAmount);
+  if (stored !== null) return formatCurrency(stored);
+  return `${formatCurrency(
+    calculatePetrolAmount(provisionalKm, officer?.ratePerKm),
+  )} provisional`;
 }
 
 function includedApprovedAdjustmentKmFromAttendance(row) {
@@ -1789,7 +1816,10 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
     live?.rate_per_km ?? record.rate_per_km,
   );
   const storedPetrolAmount = numberOrNull(record.petrol_amount);
-  const petrolAmount = storedPetrolAmount ?? calculatePetrolAmount(eligibleKm, ratePerKm);
+  const petrolAmountPending = isCanonicalPetrolPending(record);
+  const petrolAmount = petrolAmountPending
+    ? null
+    : storedPetrolAmount ?? calculatePetrolAmount(eligibleKm, ratePerKm);
   const reviewFlags = reviewFlagsForOfficer({
     systemKm: eligibleKm,
     attendance: record,
@@ -1846,6 +1876,7 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
     travelModeLabel: travelModeLabel(travelMode),
     ratePerKm,
     petrolAmount,
+    petrolAmountPending,
     routeKmToday: eligibleKm,
     routeKmSource: payableRouteKm.source,
     reviewFlags,
@@ -1997,10 +2028,8 @@ function buildLiveFoData({ attendance, visits, liveStatus, profiles, logs, statu
         : officer.routeKmToday,
       petrolAmount: rangeAttendances.length
         ? sumAttendancePetrolAmount(rangeAttendances)
-        : calculatePetrolAmount(
-            officer.eligibleKm ?? officer.routeKmToday,
-            officer.ratePerKm,
-          ),
+        : officer.petrolAmount,
+      petrolAmountPending: rangeAttendances.some(isCanonicalPetrolPending),
     };
   });
   const mergeDiagnostics = {
@@ -2080,7 +2109,10 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     travelMode,
     row?.rate_per_km ?? existing.attendance?.rate_per_km ?? existing.ratePerKm,
   );
-  const petrolAmount = calculatePetrolAmount(eligibleKm, ratePerKm);
+  const petrolAmount = existing.petrolAmountPending
+    ? null
+    : numberOrNull(existing.petrolAmount) ??
+      calculatePetrolAmount(eligibleKm, ratePerKm);
   const reviewFlags = reviewFlagsForOfficer({
     systemKm: eligibleKm,
     attendance: existing.attendance,
@@ -2124,6 +2156,7 @@ function officerFromLiveStatus(row, profilesByCode, existing = {}) {
     travelModeLabel: travelModeLabel(travelMode),
     ratePerKm,
     petrolAmount,
+    petrolAmountPending: existing.petrolAmountPending === true,
     reviewFlags,
     foSafeKm: existing.foSafeKm || emptyFoSafeKmMetrics(actualKm),
     foLatitude: coordinates?.[0] ?? null,
@@ -2365,7 +2398,6 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
   const distanceToday = Number(
     officer.eligibleKm ?? officer.routeKmToday ?? 0,
   );
-  const ratePerKm = travelModeRatePerKm(officer.travelMode, officer.ratePerKm);
   const hasReviewWarning =
     Boolean(officer.reviewFlags?.length) || officer.foSafeKm?.reviewRequired;
   const statusStyles =
@@ -2419,7 +2451,7 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
                 Petrol Amount
               </span>
               <strong className="mt-0.5 block text-xs text-slate-900 dark:text-white">
-                {formatCurrency(calculatePetrolAmount(distanceToday, ratePerKm))}
+                {officerPetrolDisplay(officer, distanceToday)}
               </strong>
             </div>
           </div>
@@ -2452,7 +2484,10 @@ function ExecutiveOfficerPanel({
   if (!officer) return null;
   const routeKm = Number(officer.eligibleKm ?? officer.routeKmToday ?? 0);
   const ratePerKm = travelModeRatePerKm(officer.travelMode, officer.ratePerKm);
-  const petrolAmount = calculatePetrolAmount(routeKm, ratePerKm);
+  const petrolAmount = officer.petrolAmountPending
+    ? null
+    : numberOrNull(officer.petrolAmount) ??
+      calculatePetrolAmount(routeKm, ratePerKm);
   const status = officerStatus(officer);
   const activeVisit = (officer.visits || []).find(isSiteVisitOpen);
   const coordinates = normalizeCoordinates(officer.coordinates);
@@ -2548,7 +2583,9 @@ function ExecutiveOfficerPanel({
                 Petrol
               </span>
               <strong className="mt-1 block text-sm text-amber-900">
-                {formatCurrency(petrolAmount)}
+                {officer.petrolAmountPending
+                  ? "Pending"
+                  : formatCurrency(petrolAmount)}
               </strong>
             </div>
             <div className="rounded-lg bg-violet-50 p-2 text-center">
@@ -2613,7 +2650,10 @@ function SelectedOfficerSummary({
     : "--";
   const claimKmLabel = hasClaimKm ? formatDisplayKm(claimKm) : "--";
   const ratePerKm = travelModeRatePerKm(officer.travelMode, officer.ratePerKm);
-  const claimPetrol = calculatePetrolAmount(claimKm, ratePerKm);
+  const claimPetrol = officer.petrolAmountPending
+    ? null
+    : numberOrNull(officer.petrolAmount) ??
+      calculatePetrolAmount(claimKm, ratePerKm);
   const statusText = status.label;
   const statusClass = isOperationallyActive(officer)
     ? "bg-emerald-50 text-emerald-700"
@@ -3472,7 +3512,9 @@ function exportFilteredOperationsDashboardExcel({
         "Approved Missing KM Adjustment": approvedMissingKm.toFixed(2),
         "Final Payable KM": finalPayableKm.toFixed(2),
         "Travel Mode": travelModeLabel(row?.travel_mode || officer.travelMode),
-        "Petrol Amount": petrolAmountFromAttendance(row).toFixed(2),
+        "Petrol Amount": isCanonicalPetrolPending(row)
+          ? "Pending canonical recalculation"
+          : Number(petrolAmountFromAttendance(row) || 0).toFixed(2),
         "Last Location Time": formatDateTime(lastLocationTime),
       });
     });
@@ -4090,10 +4132,7 @@ async function exportFoOperationsExcel({
       exportTravelMode,
       live?.rate_per_km ?? attendance?.rate_per_km ?? officer.ratePerKm,
     );
-    const petrolAmount = calculatePetrolAmount(
-      eligibleKm,
-      exportRatePerKm,
-    );
+    const petrolAmount = petrolAmountFromAttendance(attendance);
     if (Math.abs(payableRouteKm - calculatedKm) > 2 && calculatedKm > 0) {
       exceptionRows.push({
         "Employee ID": foId,
@@ -4122,7 +4161,9 @@ async function exportFoOperationsExcel({
       "Claim KM": eligibleKm.toFixed(2),
       "Travel Mode": travelModeLabel(exportTravelMode),
       "Rate Per KM": exportRatePerKm,
-      "Petrol Amount": petrolAmount.toFixed(2),
+      "Petrol Amount": petrolAmount === null
+        ? "Pending canonical recalculation"
+        : petrolAmount.toFixed(2),
       "KM Confidence": safeKm.kmConfidence,
       "Review Required": safeKm.reviewRequired ? "Yes" : "No",
       "GPS Logs Count": safeKm.gpsLogsCount,
@@ -7149,7 +7190,10 @@ function FieldOfficerDetailsView({
   const storedDetailPetrolAmount = attendances.length
     ? sumAttendancePetrolAmount(attendances)
     : null;
-  const petrolAmount = storedDetailPetrolAmount ?? calculatePetrolAmount(totalKm, ratePerKm);
+  const detailPetrolPending = attendances.some(isCanonicalPetrolPending);
+  const petrolAmount = detailPetrolPending
+    ? undefined
+    : storedDetailPetrolAmount ?? calculatePetrolAmount(totalKm, ratePerKm);
   const startPoint = pointFromAttendanceStart(firstAttendance);
   const endPoint = routePointFromAttendanceEnd(lastAttendance);
   const startBattery =
@@ -9549,7 +9593,10 @@ function FoSupportActionPanel({
     : "--";
   const claimKmLabel = hasClaimKm ? formatDisplayKm(claimKm) : "--";
   const ratePerKm = travelModeRatePerKm(officer.travelMode, officer.ratePerKm);
-  const claimPetrol = calculatePetrolAmount(claimKm, ratePerKm);
+  const claimPetrol = officer.petrolAmountPending
+    ? null
+    : numberOrNull(officer.petrolAmount) ??
+      calculatePetrolAmount(claimKm, ratePerKm);
   const statusText = status.label;
   const statusClass = isOperationallyActive(officer)
     ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
@@ -10744,11 +10791,8 @@ export default function FOActivities() {
         : selectedOfficerBase.routeKmToday,
       petrolAmount: rangeAttendances.length
         ? sumAttendancePetrolAmount(rangeAttendances)
-        : calculatePetrolAmount(
-            selectedOfficerBase.eligibleKm ??
-              selectedOfficerBase.routeKmToday,
-            selectedOfficerBase.ratePerKm,
-          ),
+        : selectedOfficerBase.petrolAmount,
+      petrolAmountPending: rangeAttendances.some(isCanonicalPetrolPending),
     };
   }, [selectedOfficerBase, visibleAttendanceKpiRows]);
   const mapRouteOfficer =
