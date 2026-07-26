@@ -169,6 +169,10 @@ class _TasksScreenState extends State<TasksScreen>
           remoteVisit.synced = true;
           await LocalStore.saveVisit(remoteVisit);
           activeVisit = remoteVisit;
+          await _closeTravelLegForCheckedInVisit(
+            attendance: remoteAttendance,
+            visit: remoteVisit,
+          );
           await TrackingService.pauseForSiteVisit(
             user: widget.user,
             visit: remoteVisit,
@@ -218,6 +222,10 @@ class _TasksScreenState extends State<TasksScreen>
     );
     remoteVisit.synced = true;
     await LocalStore.saveVisit(remoteVisit);
+    await _closeTravelLegForCheckedInVisit(
+      attendance: attendance,
+      visit: remoteVisit,
+    );
     await TrackingService.pauseForSiteVisit(
       user: widget.user,
       visit: remoteVisit,
@@ -539,13 +547,11 @@ class _TasksScreenState extends State<TasksScreen>
       }
 
       final visit = await _createVisit(store, position, activeAttendance);
-      await _travelLegLifecycle.checkIn(
-        attendanceId: activeAttendance.remoteId!,
-        boundary: TravelLegBoundary(
-          at: visit.checkInTime.toUtc(),
-          latitude: position.latitude,
-          longitude: position.longitude,
-        ),
+      await _closeTravelLegForCheckedInVisit(
+        attendance: activeAttendance,
+        visit: visit,
+        latitude: position.latitude,
+        longitude: position.longitude,
       );
       PerformanceLogService.step(
         operation: 'check_in',
@@ -666,13 +672,11 @@ class _TasksScreenState extends State<TasksScreen>
       );
       await _recordRepeatSiteAllowedIfNeeded(store, activeAttendance);
       final visit = await _createVisit(store, position, activeAttendance);
-      await _travelLegLifecycle.checkIn(
-        attendanceId: activeAttendance.remoteId!,
-        boundary: TravelLegBoundary(
-          at: visit.checkInTime.toUtc(),
-          latitude: position.latitude,
-          longitude: position.longitude,
-        ),
+      await _closeTravelLegForCheckedInVisit(
+        attendance: activeAttendance,
+        visit: visit,
+        latitude: position.latitude,
+        longitude: position.longitude,
       );
       await TrackingService.pauseForSiteVisit(
         user: widget.user,
@@ -866,6 +870,46 @@ class _TasksScreenState extends State<TasksScreen>
       );
     }
     return visit;
+  }
+
+  Future<bool> _closeTravelLegForCheckedInVisit({
+    required Attendance attendance,
+    required SiteVisit visit,
+    double? latitude,
+    double? longitude,
+  }) async {
+    final attendanceId = attendance.remoteId?.trim();
+    if (!SupabaseService.isValidUuid(attendanceId)) return false;
+    try {
+      await _travelLegLifecycle.checkIn(
+        attendanceId: attendanceId!,
+        boundary: TravelLegBoundary(
+          at: visit.checkInTime.toUtc(),
+          latitude: latitude ?? visit.currentLatitude,
+          longitude: longitude ?? visit.currentLongitude,
+        ),
+      );
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tasks',
+        action: 'CHECKIN_TRAVEL_LEG_BOUNDARY_SYNCED',
+        error:
+            'attendance_id=$attendanceId site_visit_id=${visit.remoteId ?? visit.id}',
+      );
+      return true;
+    } catch (error, stackTrace) {
+      // The persisted active visit is the durable retry marker. _load() and
+      // active-visit restoration retry this same idempotent leg boundary.
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tasks',
+        action: 'CHECKIN_TRAVEL_LEG_BOUNDARY_PENDING',
+        error:
+            'attendance_id=$attendanceId site_visit_id=${visit.remoteId ?? visit.id} error=$error',
+        stackTrace: stackTrace,
+      );
+      return false;
+    }
   }
 
   Future<void> _recordRepeatSiteAllowedIfNeeded(

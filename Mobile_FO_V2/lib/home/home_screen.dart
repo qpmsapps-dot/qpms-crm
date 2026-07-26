@@ -1249,15 +1249,6 @@ class _HomeScreenState extends State<HomeScreen>
       );
       if (!claimSaved) return;
     }
-    await SupabaseService.updateLiveStatus(
-      user: widget.user,
-      isTracking: true,
-      status: 'Active',
-      isOnline: true,
-      routeKm: reopened.eligibleKm,
-      attendanceId: reopened.remoteId,
-      clearActiveSiteVisit: true,
-    );
     final restartPosition = await Geolocator.getCurrentPosition(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
@@ -1273,6 +1264,17 @@ class _HomeScreenState extends State<HomeScreen>
         latitude: restartPosition.latitude,
         longitude: restartPosition.longitude,
       ),
+    );
+    await SupabaseService.updateLiveStatus(
+      user: widget.user,
+      isTracking: true,
+      status: 'Active',
+      isOnline: true,
+      routeKm: reopened.eligibleKm,
+      attendanceId: reopened.remoteId,
+      clearActiveSiteVisit: true,
+      travelMode: reopened.travelMode,
+      ratePerKm: reopened.ratePerKm,
     );
     await _resumeAttendance(reopened);
     _toast('Day restarted. Tracking resumed.');

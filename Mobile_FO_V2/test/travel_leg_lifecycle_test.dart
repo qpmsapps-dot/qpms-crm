@@ -46,6 +46,20 @@ class _FakeGateway implements TravelLegGateway {
   }
 }
 
+class _FailOnceCloseGateway extends _FakeGateway {
+  var closeAttempts = 0;
+
+  @override
+  Future<TravelLeg?> close(
+    TravelLeg leg, {
+    required TravelLegBoundary boundary,
+  }) async {
+    closeAttempts += 1;
+    if (closeAttempts == 1) throw StateError('temporary network failure');
+    return super.close(leg, boundary: boundary);
+  }
+}
+
 const attendanceId = '11111111-1111-4111-8111-111111111111';
 const employeeCode = 'FO-TEST-001';
 
@@ -297,5 +311,66 @@ void main() {
 
     expect(gateway.legs.map((leg) => leg.travelMode), ['bike', 'car', 'bike']);
     expect(gateway.legs.map((leg) => leg.ratePerKm), [4, 8, 4]);
+  });
+
+  test('bike_car_bike_car_preserves_all_four_boundaries', () async {
+    final gateway = _FakeGateway();
+    final lifecycle = _service(gateway);
+    await lifecycle.startDay(
+      attendanceId: attendanceId,
+      employeeCode: employeeCode,
+      mode: travelModeBike,
+      boundary: boundary(0),
+    );
+    await lifecycle.changeMode(
+      attendanceId: attendanceId,
+      employeeCode: employeeCode,
+      oldMode: travelModeBike,
+      newMode: travelModeCar,
+      boundary: boundary(10),
+    );
+    await lifecycle.changeMode(
+      attendanceId: attendanceId,
+      employeeCode: employeeCode,
+      oldMode: travelModeCar,
+      newMode: travelModeBike,
+      boundary: boundary(20),
+    );
+    await lifecycle.changeMode(
+      attendanceId: attendanceId,
+      employeeCode: employeeCode,
+      oldMode: travelModeBike,
+      newMode: travelModeCar,
+      boundary: boundary(30),
+    );
+
+    expect(gateway.legs.map((leg) => leg.travelMode), [
+      'bike',
+      'car',
+      'bike',
+      'car',
+    ]);
+    expect(gateway.legs.map((leg) => leg.ratePerKm), [4, 8, 4, 8]);
+  });
+
+  test('checkin_leg_closure_failure_is_retried', () async {
+    final gateway = _FailOnceCloseGateway();
+    final lifecycle = _service(gateway);
+    await lifecycle.startDay(
+      attendanceId: attendanceId,
+      employeeCode: employeeCode,
+      mode: travelModeCar,
+      boundary: boundary(0),
+    );
+
+    await expectLater(
+      lifecycle.checkIn(attendanceId: attendanceId, boundary: boundary(10)),
+      throwsStateError,
+    );
+    await lifecycle.checkIn(attendanceId: attendanceId, boundary: boundary(10));
+
+    expect(gateway.closeAttempts, 2);
+    expect(gateway.legs, hasLength(1));
+    expect(gateway.legs.single.isActive, isFalse);
   });
 }

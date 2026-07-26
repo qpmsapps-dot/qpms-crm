@@ -529,6 +529,7 @@ class SupabaseService {
             'start_longitude': attendance.startLng,
             'start_battery_percentage': attendance.batteryStart,
             'travel_mode': attendance.travelMode,
+            'rate_per_km': attendance.ratePerKm,
             'payable_km_allowed': attendance.payableKmAllowed,
             'travel_mode_note': attendance.travelModeNote,
             'status': 'Active',
@@ -536,6 +537,7 @@ class SupabaseService {
             'metadata': {
               ...attendance.metadata,
               'travel_mode': attendance.travelMode,
+              'rate_per_km': attendance.ratePerKm,
               'payable_km_allowed': attendance.payableKmAllowed,
               if (attendance.travelModeNote?.trim().isNotEmpty == true)
                 'travel_mode_note': attendance.travelModeNote!.trim(),
@@ -543,6 +545,31 @@ class SupabaseService {
           })
           .select('id')
           .maybeSingle();
+      final attendanceId = row?['id']?.toString();
+      if (isValidUuid(attendanceId)) {
+        try {
+          await client.from('fo_live_status').upsert({
+            'fo_user_id': employeeCode,
+            'username': employeeCode,
+            'display_name': user.fullName,
+            'attendance_id': attendanceId,
+            'travel_mode': attendance.travelMode,
+            'rate_per_km': attendance.ratePerKm,
+            'last_seen_at': DateTime.now().toUtc().toIso8601String(),
+            'source': 'mobile',
+            'sync_status': 'synced',
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          }, onConflict: 'fo_user_id');
+        } catch (error, stackTrace) {
+          await CrashLogService.record(
+            employeeCode: employeeCode,
+            screen: 'home',
+            action: 'START_DAY_LIVE_MODE_SYNC_PENDING',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
+      }
       await CrashLogService.record(
         employeeCode: user.employeeCode,
         screen: 'home',
@@ -583,6 +610,7 @@ class SupabaseService {
         .from('fo_attendance')
         .update({
           'travel_mode': cleanMode,
+          'rate_per_km': ratePerKm,
           'payable_km_allowed': payableKmAllowed,
           'travel_mode_note': cleanNote == null || cleanNote.isEmpty
               ? null
@@ -1535,6 +1563,7 @@ class SupabaseService {
     );
     final selectedPayableKmAllowed =
         payableKmAllowed ?? payableKmAllowedForTravelMode(selectedTravelMode);
+    final selectedRatePerKm = travelModeRatePerKm(selectedTravelMode);
     final selectedTravelModeNote = travelModeNote?.trim().isNotEmpty == true
         ? travelModeNote!.trim()
         : null;
@@ -1544,6 +1573,7 @@ class SupabaseService {
       reopenedAt: reopenedAt,
     );
     metadata['travel_mode'] = selectedTravelMode;
+    metadata['rate_per_km'] = selectedRatePerKm;
     metadata['payable_km_allowed'] = selectedPayableKmAllowed;
     if (selectedTravelModeNote != null) {
       metadata['travel_mode_note'] = selectedTravelModeNote;
@@ -1552,6 +1582,7 @@ class SupabaseService {
       'status': 'Active',
       'logout_time': null,
       'travel_mode': selectedTravelMode,
+      'rate_per_km': selectedRatePerKm,
       'payable_km_allowed': selectedPayableKmAllowed,
       'travel_mode_note': selectedTravelModeNote,
       'metadata': metadata,
@@ -1589,6 +1620,28 @@ class SupabaseService {
     if (records.length != 1) {
       throw StateError('Restart Day update affected ${records.length} rows.');
     }
+    try {
+      await client.from('fo_live_status').upsert({
+        'fo_user_id': user.employeeCode,
+        'username': user.employeeCode,
+        'display_name': user.fullName,
+        'attendance_id': id,
+        'travel_mode': selectedTravelMode,
+        'rate_per_km': selectedRatePerKm,
+        'last_seen_at': reopenedAt.toIso8601String(),
+        'source': 'mobile',
+        'sync_status': 'synced',
+        'updated_at': reopenedAt.toIso8601String(),
+      }, onConflict: 'fo_user_id');
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: user.employeeCode,
+        screen: 'home',
+        action: 'RESTART_DAY_LIVE_MODE_SYNC_PENDING',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
     await CrashLogService.record(
       employeeCode: user.employeeCode,
       screen: 'home',
@@ -1605,7 +1658,7 @@ class SupabaseService {
       await _syncAttendanceRouteKmFromVisits(attendance);
       final payableKm = _payableRouteKmForAttendance(attendance);
       final approvedKm = _approvedKmForAttendance(attendance);
-      final ratePerKm = travelModeRatePerKm(attendance.travelMode);
+      final ratePerKm = attendance.ratePerKm;
       await client
           .from('fo_attendance')
           .update({
@@ -1617,8 +1670,15 @@ class SupabaseService {
             'total_route_km': payableKm,
             'total_approved_km': approvedKm,
             'rate_per_km': ratePerKm,
-            'petrol_amount': approvedKm * ratePerKm,
+            'petrol_amount': 0,
+            'route_sync_status': 'pending_canonical_end_day_recalculation',
             'status': 'Completed',
+            'metadata': {
+              ...attendance.metadata,
+              'canonical_recalculation_pending': true,
+              'km_recalculation_status': 'pending',
+              'provisional_total_route_km': payableKm,
+            },
           })
           .eq('id', id);
       await CrashLogService.record(
@@ -1683,7 +1743,7 @@ class SupabaseService {
     final existingMetadata = _jsonMap(remoteActive.metadata);
     final payableKm = _payableRouteKmForAttendance(attendance);
     final approvedKm = _approvedKmForAttendance(attendance);
-    final ratePerKm = travelModeRatePerKm(attendance.travelMode);
+    final ratePerKm = attendance.ratePerKm;
     final metadata = {
       ...existingMetadata,
       ...endLocationMetadata,
@@ -1694,6 +1754,9 @@ class SupabaseService {
       if (endDayWithOpenSite) 'payable_km_after_site_checkin_added': false,
       if (autoClosedSiteVisitId?.trim().isNotEmpty == true)
         'auto_closed_site_visit_id': autoClosedSiteVisitId!.trim(),
+      'canonical_recalculation_pending': true,
+      'km_recalculation_status': 'pending',
+      'provisional_total_route_km': payableKm,
     };
     final rows = await client
         .from('fo_attendance')
@@ -1706,7 +1769,8 @@ class SupabaseService {
           'total_route_km': payableKm,
           'total_approved_km': approvedKm,
           'rate_per_km': ratePerKm,
-          'petrol_amount': approvedKm * ratePerKm,
+          'petrol_amount': 0,
+          'route_sync_status': 'pending_canonical_end_day_recalculation',
           'status': 'Completed',
           'metadata': metadata,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -1847,14 +1911,20 @@ class SupabaseService {
           .from('fo_attendance')
           .update(payload)
           .eq('id', id)
+          .eq('status', 'Active')
+          .filter('logout_time', 'is', null)
           .select(
             'id, actual_km, total_raw_km, total_route_km, total_approved_km, updated_at',
           );
       final rows = List<Map<String, dynamic>>.from(response);
       if (rows.isEmpty) {
-        throw StateError(
-          'fo_attendance KM update matched 0 rows for attendance_uuid=$id',
+        await CrashLogService.record(
+          employeeCode: attendance.employeeCode,
+          screen: 'tracking',
+          action: 'ATTENDANCE_PROVISIONAL_KM_UPDATE_SKIPPED_CLOSED',
+          error: 'attendance_uuid=$id',
         );
+        return;
       }
       final row = rows.first;
       await CrashLogService.record(
@@ -1972,6 +2042,10 @@ class SupabaseService {
           0,
       petrolAmount: _double(row['petrol_amount']),
       travelMode: travelMode,
+      ratePerKm:
+          _double(row['rate_per_km']) ??
+          _double(metadata['rate_per_km']) ??
+          travelModeRatePerKm(travelMode),
       payableKmAllowed:
           _bool(row['payable_km_allowed']) ??
           _bool(metadata['payable_km_allowed']) ??
@@ -2474,6 +2548,8 @@ class SupabaseService {
     String? attendanceId,
     String? activeSiteVisitId,
     bool clearActiveSiteVisit = false,
+    String? travelMode,
+    double? ratePerKm,
   }) async {
     await CrashLogService.record(
       employeeCode: user.employeeCode,
@@ -2494,6 +2570,24 @@ class SupabaseService {
         'sync_status': 'synced',
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       };
+      final localAttendance = await LocalStore.getAttendance();
+      final localAttendanceMatches =
+          localAttendance?.employeeCode.trim() == user.employeeCode.trim() &&
+          (attendanceId == null ||
+              attendanceId.trim().isEmpty ||
+              (localAttendance?.remoteId ?? localAttendance?.id ?? '').trim() ==
+                  attendanceId.trim());
+      final effectiveTravelMode =
+          travelMode ??
+          (localAttendanceMatches ? localAttendance?.travelMode : null);
+      final effectiveRatePerKm =
+          ratePerKm ??
+          (localAttendanceMatches ? localAttendance?.ratePerKm : null);
+      if (effectiveTravelMode != null) {
+        payload['travel_mode'] = normalizeTravelMode(effectiveTravelMode);
+        payload['rate_per_km'] =
+            effectiveRatePerKm ?? travelModeRatePerKm(effectiveTravelMode);
+      }
       if (latitude != null) payload['latitude'] = latitude;
       if (longitude != null) payload['longitude'] = longitude;
       if (accuracy != null) payload['accuracy'] = accuracy;

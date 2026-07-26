@@ -2397,6 +2397,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       : 0;
     const legPayableAmount = Number((legPayableKm * legRatePerKm).toFixed(2));
     legAudit.push({
+      persisted_travel_leg_id: persistedLegSnapshot?.id || null,
       type: leg.type,
       status: result.legSource === 'SKIPPED' ? 'skipped' : 'calculated',
       reason: result.fallbackReason || null,
@@ -2433,6 +2434,25 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       fare_amount: legPayableAmount,
       review_flags: [...new Set([...(leg.reviewFlags || []), ...(result.reviewFlags || [])])],
     });
+  }
+
+  if (options.persistLegResults === true) {
+    for (const leg of legAudit) {
+      if (!leg.persisted_travel_leg_id || leg.status !== 'calculated') continue;
+      const { error } = await client
+        .from('fo_travel_legs')
+        .update({
+          calculated_km: Number(Number(leg.km || 0).toFixed(2)),
+          payable_km: Number(Number(leg.payable_km || 0).toFixed(2)),
+          payable_amount: Number(Number(leg.payable_amount || 0).toFixed(2)),
+          fare_amount: Number(Number(leg.payable_amount || 0).toFixed(2)),
+          status: 'completed',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', leg.persisted_travel_leg_id)
+        .eq('attendance_id', attendance.id);
+      if (error) throw error;
+    }
   }
 
   const totalLegKmBeforePolicy = Number(legAudit.reduce((sum, leg) => (
@@ -2844,6 +2864,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   const legRecalculation = await recalculateAttendanceTravelLegs(client, attendance.id, {
     ...options,
     persist: false,
+    persistLegResults: true,
     auditDelayedCheckout: false,
   });
   const finalTravelLeg = (legRecalculation.travel_legs || []).find(
@@ -3148,6 +3169,8 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
       payable_km_allowed: travelPolicy.payableKmAllowed,
       recalculated_total_route_km: approvedKm,
       recalculated_petrol_amount: petrolAmount,
+      canonical_recalculation_pending: false,
+      km_recalculation_status: 'complete',
       ...switchFallbackMetadata,
       km_recalculated_at: new Date().toISOString(),
       checked_in_gps_excluded: true,
