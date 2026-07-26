@@ -50,6 +50,10 @@ import {
   normalizeOperationsSummaryFilters,
 } from './services/operationsSummaryService.js';
 import {
+  loadAuthorizedEmployeeRange,
+  recalculateEmployeeRange,
+} from './services/employeeRangeReportService.js';
+import {
   canAccessLeadModule,
   canCreateLead,
   canEditLead,
@@ -134,6 +138,7 @@ const apiDemoUsers = [
 const apiSessions = new Map();
 const foKmRecalculationLocks = new Set();
 const foKmRecalculateAllLocks = new Set();
+const foEmployeeRangeRecalculationLocks = new Set();
 const FO_KM_RECALCULATION_RUNNING_MESSAGE = 'Recalculation already running. Please wait.';
 const configuredFoKmRecalculationLockTtlMs = Number(process.env.FO_KM_RECALCULATION_LOCK_TTL_MS);
 const FO_KM_RECALCULATION_LOCK_TTL_MS =
@@ -7107,6 +7112,33 @@ app.get('/api/fo/operations/summary', requireSupabaseJwtOrDemoApiRead, async (re
   }
 });
 
+app.get('/api/fo/operations/employee-range', requireSupabaseJwt, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const dataset = await loadAuthorizedEmployeeRange(
+      client,
+      request.profile,
+      request.query || {},
+    );
+    response.json({ ok: true, ...dataset });
+  } catch (error) {
+    const status = Number(error?.statusCode || 500);
+    if (status >= 500) {
+      console.error(
+        '[myQPMS Employee Range] request failed',
+        sanitizeSupabaseDiagnosticError(error),
+      );
+    }
+    response.status(status).json({
+      ok: false,
+      message:
+        status >= 500
+          ? 'Employee period report is temporarily unavailable. Please retry.'
+          : error.message,
+    });
+  }
+});
+
 function demoMaskedFoRows({ profiles = [], attendances = [], siteVisits = [], liveStatus = [] }) {
   const map = new Map();
   let index = 1;
@@ -7385,6 +7417,55 @@ app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRec
     });
   } finally {
     releaseFoKmRecalculateAllLock(lockDate);
+  }
+});
+
+app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, async (request, response) => {
+  const payload = request.body || {};
+  const lockKey = [
+    String(payload.employee || payload.employee_code || payload.fo_user_id || '').trim().toUpperCase(),
+    String(payload.date_from || payload.from_date || '').slice(0, 10),
+    String(payload.date_to || payload.to_date || '').slice(0, 10),
+  ].join('|');
+  if (foEmployeeRangeRecalculationLocks.has(lockKey)) {
+    response.status(409).json({
+      ok: false,
+      message: FO_KM_RECALCULATION_RUNNING_MESSAGE,
+    });
+    return;
+  }
+  foEmployeeRangeRecalculationLocks.add(lockKey);
+  try {
+    const client = requireServiceRoleSupabase();
+    await assertServiceRoleAuthAdminAccess(client);
+    const dataset = await loadAuthorizedEmployeeRange(
+      client,
+      request.profile,
+      payload,
+    );
+    const result = await recalculateEmployeeRange({
+      attendances: dataset.attendance_days,
+      recalculate: (attendance) =>
+        recalculateFoKm(client, {
+          attendance_id: attendance.id,
+          employee_code:
+            attendance.employee_code || dataset.employee.employee_code,
+          date: attendance.attendance_date,
+        }),
+    });
+    response.json({ ok: true, ...result });
+  } catch (error) {
+    const status = Number(error?.statusCode || 500);
+    const safeError =
+      status >= 500
+        ? safeServiceRoleError(error, 'employee_range_recalculation_failed')
+        : { statusCode: status, message: error.message };
+    response.status(safeError.statusCode).json({
+      ok: false,
+      message: safeError.message,
+    });
+  } finally {
+    foEmployeeRangeRecalculationLocks.delete(lockKey);
   }
 });
 

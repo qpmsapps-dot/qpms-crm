@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Battery,
   Bike,
@@ -68,6 +68,11 @@ import {
   previewMenuState,
   shouldAcceptSummaryResponse,
 } from "../utils/operationsDashboard.js";
+import {
+  buildEmployeeRangeExcelRows,
+  employeeRangeQuery,
+  reportReadiness,
+} from "../utils/employeeRangeReport.js";
 
 const SOUTH_INDIA_CENTER = [13.0827, 80.2707];
 const INDIA_TIME_ZONE = "Asia/Kolkata";
@@ -3809,7 +3814,7 @@ async function exportHistoricalOperationsDashboardExcel({
   });
 }
 
-async function exportFoOperationsExcel({
+async function _exportFoOperationsExcel({
   officers,
   selectedOfficer,
   from,
@@ -4284,6 +4289,25 @@ async function exportFoOperationsExcel({
   XLSX.writeFile(
     workbook,
     `FO_Journey_Report_${selectedId}_${toDateInputValue(from)}_${toDateInputValue(to)}.xlsx`,
+  );
+}
+
+function exportEmployeeRangeExcel(dataset) {
+  const rows = buildEmployeeRangeExcelRows(dataset);
+  const workbook = XLSX.utils.book_new();
+  appendSheet(workbook, "Period Summary", rows.periodSummary);
+  appendSheet(workbook, "Daily Attendance", rows.dailyAttendance);
+  appendSheet(workbook, "Travel Legs or Legacy Evidence", rows.travelEvidence);
+  appendSheet(workbook, "Site Visits", rows.siteVisits);
+  appendSheet(workbook, "Exceptions and Adjustments", rows.exceptions);
+  const employeeCode = sanitizeReportFilenamePart(
+    dataset?.employee?.employee_code || "Employee",
+  );
+  const fromDate = sanitizeReportFilenamePart(dataset?.period?.from_date);
+  const toDate = sanitizeReportFilenamePart(dataset?.period?.to_date);
+  XLSX.writeFile(
+    workbook,
+    `${employeeCode}_Field_Activity_KM_Report_${fromDate}_to_${toDate}.xlsx`,
   );
 }
 
@@ -6403,6 +6427,9 @@ function PlusIcon() {
 
 function FieldOfficerDetailsView({
   officer,
+  rangeDataset,
+  rangeDatasetLoading = false,
+  rangeDatasetError = "",
   generatedByUser,
   routeLogs,
   activitySubmissions = [],
@@ -6462,6 +6489,7 @@ function FieldOfficerDetailsView({
   const [routeMapOpen, setRouteMapOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("activity");
   const [drillDownOpen, setDrillDownOpen] = useState(true);
+  const [printRequested, setPrintRequested] = useState(false);
   const [checkoutReviewPreview, setCheckoutReviewPreview] = useState(null);
   const activityMenuRef = useRef(null);
   const activityPreviewRequestRef = useRef(0);
@@ -7145,6 +7173,12 @@ function FieldOfficerDetailsView({
   };
   const status = officerStatus(officer);
   const isLive = isOperationallyActive(officer);
+  const periodSummary = rangeDataset?.period_summary || {};
+  const reportState = reportReadiness({
+    loading: rangeDatasetLoading,
+    dataset: rangeDataset,
+    error: rangeDatasetError,
+  });
   const workingMinutes = attendances.reduce(
     (sum, row) => sum + Number(attendanceWorkingMinutes(row) || 0),
     0,
@@ -7170,9 +7204,11 @@ function FieldOfficerDetailsView({
     [attendance, routeLogs, visits],
   );
   const gpsAuditKm = Number(
-    routeLogs.length
-      ? gpsMetrics.actualTravelKm
-      : officer?.actualTravelKm ?? gpsMetrics.actualTravelKm ?? officer?.actualKm,
+    rangeDataset
+      ? periodSummary.actual_travel_km
+      : routeLogs.length
+        ? gpsMetrics.actualTravelKm
+        : officer?.actualTravelKm ?? gpsMetrics.actualTravelKm ?? officer?.actualKm,
   );
   const kmDelta =
     Number.isFinite(totalKm) && Number.isFinite(gpsAuditKm)
@@ -7389,7 +7425,7 @@ function FieldOfficerDetailsView({
     onRouteGpsEvidenceActive?.(activeDetailTab === "route" || routeMapOpen ? officer?.id || null : null);
     return () => onRouteGpsEvidenceActive?.(null);
   }, [activeDetailTab, officer?.id, onRouteGpsEvidenceActive, routeMapOpen]);
-  const printReport = () => {
+  const printReport = useCallback(() => {
     const previousTitle = document.title;
     const reportTitle = buildFieldActivityReportFilename(
       officer,
@@ -7412,11 +7448,32 @@ function FieldOfficerDetailsView({
     window.addEventListener("focus", restoreTitle, { once: true });
     fallbackTimer = window.setTimeout(restoreTitle, 60000);
     window.print();
-  };
+  }, [fromDate, officer, toDate]);
+  useEffect(() => {
+    if (
+      !printRequested ||
+      activeDetailTab !== "report" ||
+      reportState !== "ready"
+    ) {
+      return undefined;
+    }
+    let secondFrame = null;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        setPrintRequested(false);
+        printReport();
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame !== null) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [activeDetailTab, printReport, printRequested, reportState]);
   const openPrintReport = () => {
+    if (reportState !== "ready") return;
     setDrillDownOpen(true);
     setActiveTab("report");
-    window.setTimeout(printReport, 120);
+    setPrintRequested(true);
   };
 
   if (!drillDownOpen) {
@@ -7482,13 +7539,13 @@ function FieldOfficerDetailsView({
         </header>
 
         <div className="grid grid-cols-2 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:grid-cols-3 xl:grid-cols-7">
-          <DetailSummaryCard icon={PlayCircle} label="Start Day" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
-          <DetailSummaryCard icon={Square} label="End Day" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
+          <DetailSummaryCard icon={PlayCircle} label="Period First Start" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
+          <DetailSummaryCard icon={Square} label="Period Last End" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
           <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Selected range" tone="purple" />
           <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint="Includes approved missing checkout adjustments" tone="green" />
           <DetailSummaryCard icon={Bike} label="Travel Mode" value={travelModeLabel(travelMode)} hint={`Current @ ${formatInr(ratePerKm)} / km`} tone="blue" />
-          <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`Final @ ${formatInr(ratePerKm)} / km`} tone="amber" />
-          <DetailSummaryCard icon={ShieldCheck} label="Status" value={displayValue(lastAttendance.status || status.label)} hint={attendances.length > 1 ? `${attendances.length} attendance days` : "--"} tone={isLive ? "green" : "blue"} />
+          <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint="Canonical stored total" tone="amber" />
+          <DetailSummaryCard icon={ShieldCheck} label="Period Attendance Status" value={displayValue(periodSummary.period_attendance_status || lastAttendance.status)} hint={attendances.length > 1 ? `${attendances.length} attendance records` : "--"} tone={periodSummary.incomplete_count > 0 ? "amber" : "blue"} />
         </div>
 
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -7604,7 +7661,7 @@ function FieldOfficerDetailsView({
                   {officer?.name || "--"}
                 </h1>
                 <span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${isLive ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                  {isLive ? "Active" : displayValue(status.label)}
+                  Today's Status: {isLive ? "Active" : displayValue(status.label)}
                 </span>
               </div>
               <p className="mt-1 text-sm font-semibold text-slate-500">
@@ -7647,14 +7704,16 @@ function FieldOfficerDetailsView({
             <button
               type="button"
               onClick={openPrintReport}
-              className="focus-ring inline-flex items-center gap-2 rounded-xl border border-qpms-200 bg-white px-3 py-2.5 text-xs font-black text-qpms-700 shadow-sm hover:bg-qpms-50"
+              disabled={reportState !== "ready"}
+              className="focus-ring inline-flex items-center gap-2 rounded-xl border border-qpms-200 bg-white px-3 py-2.5 text-xs font-black text-qpms-700 shadow-sm hover:bg-qpms-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Download className="h-4 w-4" /> Export PDF
             </button>
             <button
               type="button"
               onClick={onExport}
-              className="focus-ring inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2.5 text-xs font-black text-white shadow-sm hover:bg-emerald-700"
+              disabled={reportState !== "ready"}
+              className="focus-ring inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2.5 text-xs font-black text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <FileSpreadsheet className="h-4 w-4" /> Export Excel
             </button>
@@ -7669,14 +7728,14 @@ function FieldOfficerDetailsView({
         </div>
       </header>
       <div className="fo-screen-only grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <DetailSummaryCard icon={PlayCircle} label="Start Day" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
-        <DetailSummaryCard icon={Square} label="End Day" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
+        <DetailSummaryCard icon={PlayCircle} label="Period First Start" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
+        <DetailSummaryCard icon={Square} label="Period Last End" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
         <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Visited" tone="purple" />
         <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "Needs Review" : "Includes approved missing checkout adjustments"} tone={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "amber" : "green"} />
         <DetailSummaryCard icon={Navigation2} label="GPS Audit KM" value={Number.isFinite(gpsAuditKm) ? `${gpsAuditKm.toFixed(1)} km` : "--"} hint="Supporting evidence" tone="blue" />
         <DetailSummaryCard icon={CircleGauge} label="Delta" value={Number.isFinite(kmDelta) ? `${kmDelta.toFixed(1)} km` : "--"} hint={Number.isFinite(differencePercent) ? `${differencePercent.toFixed(1)}%` : "--"} tone={Math.abs(kmDelta || 0) > 2 ? "amber" : "green"} />
-        <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`Final @ ${formatInr(ratePerKm)} / km`} tone="amber" />
-        <DetailSummaryCard icon={ShieldCheck} label="Status" value={displayValue(lastAttendance.status || status.label)} hint={isLive ? "Active" : "--"} tone={isLive ? "green" : "red"} />
+        <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint="Canonical stored total" tone="amber" />
+        <DetailSummaryCard icon={ShieldCheck} label="Period Attendance Status" value={displayValue(periodSummary.period_attendance_status || lastAttendance.status)} hint={`${periodSummary.attendance_count || attendances.length} attendance record(s)`} tone={periodSummary.incomplete_count > 0 ? "amber" : "green"} />
       </div>
       <header className="fo-screen-only hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -7727,17 +7786,19 @@ function FieldOfficerDetailsView({
             >
               Apply
             </button>
-            <button
-              type="button"
-              onClick={openPrintReport}
-              className="focus-ring inline-flex items-center gap-2 rounded-lg border border-qpms-200 bg-white px-3 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50"
+              <button
+                type="button"
+                onClick={openPrintReport}
+                disabled={reportState !== "ready"}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-qpms-200 bg-white px-3 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Download className="h-4 w-4" /> Export PDF
             </button>
             <button
               type="button"
               onClick={onExport}
-              className="focus-ring inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700"
+              disabled={reportState !== "ready"}
+              className="focus-ring inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <FileSpreadsheet className="h-4 w-4" /> Export Excel
             </button>
@@ -7753,14 +7814,14 @@ function FieldOfficerDetailsView({
       </header>
 
       <div className="fo-screen-only hidden grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-3 shadow-sm sm:grid-cols-2 xl:grid-cols-4">
-        <DetailSummaryCard icon={PlayCircle} label="Start Day" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
-        <DetailSummaryCard icon={Square} label="End Day" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
+        <DetailSummaryCard icon={PlayCircle} label="Period First Start" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
+        <DetailSummaryCard icon={Square} label="Period Last End" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
         <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Visited" tone="purple" />
         <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "Needs Review" : "Includes approved missing checkout adjustments"} tone={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "amber" : "green"} />
         {fullTechnicalAccess ? <DetailSummaryCard icon={Navigation2} label="GPS Audit KM" value={Number.isFinite(gpsAuditKm) ? `${gpsAuditKm.toFixed(1)} km` : "--"} hint="Supporting evidence" tone="blue" /> : null}
         {fullTechnicalAccess ? <DetailSummaryCard icon={CircleGauge} label="Delta" value={Number.isFinite(kmDelta) ? `${kmDelta.toFixed(1)} km` : "--"} hint={Number.isFinite(differencePercent) ? `${differencePercent.toFixed(1)}%` : "--"} tone={Math.abs(kmDelta || 0) > 2 ? "amber" : "green"} /> : null}
-        <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint={`Final @ ${formatInr(ratePerKm)} / km`} tone="amber" />
-        <DetailSummaryCard icon={ShieldCheck} label="Status" value={displayValue(lastAttendance.status || status.label)} hint={isLive ? "Active" : "--"} tone={isLive ? "green" : "red"} />
+        <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint="Canonical stored total" tone="amber" />
+        <DetailSummaryCard icon={ShieldCheck} label="Period Attendance Status" value={displayValue(periodSummary.period_attendance_status || lastAttendance.status)} hint={`${periodSummary.attendance_count || attendances.length} attendance record(s)`} tone={periodSummary.incomplete_count > 0 ? "amber" : "green"} />
       </div>
 
       <nav className="fo-screen-only flex overflow-x-auto rounded-2xl border border-slate-200 bg-white px-2 shadow-sm">
@@ -9181,7 +9242,7 @@ function FieldOfficerDetailsView({
               </strong>
             </span>
             <span>
-              Petrol @ {formatInr(ratePerKm)}/km:{" "}
+              Canonical Petrol Amount:{" "}
               <strong className="text-slate-950">
                 {moneyLabel(petrolAmount)}
               </strong>
@@ -9201,7 +9262,9 @@ function FieldOfficerDetailsView({
               <div className="flex gap-2">
                 <button type="button" onClick={onRecalculateKm} disabled={recalculatingKm} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-qpms-200 px-4 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50 disabled:opacity-50">
                   <RefreshCw className={`h-4 w-4 ${recalculatingKm ? "animate-spin" : ""}`} />
-                  {recalculatingKm ? "Recalculating..." : "Recalculate KM"}
+                  {recalculatingKm
+                    ? "Recalculating Selected Period..."
+                    : "Recalculate Selected Period"}
                 </button>
                 {onTemporarySwitchKm ? (
                   <button type="button" onClick={onTemporarySwitchKm} disabled={recalculatingSwitchKm} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-2 text-xs font-black text-orange-800 hover:bg-orange-100 disabled:opacity-50">
@@ -9265,8 +9328,26 @@ function FieldOfficerDetailsView({
         <div className="fo-report-shell rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="fo-screen-only mb-4 flex items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50 p-3">
             <p className="text-xs font-semibold text-blue-800">This layout is optimized for print and PDF. Use Export PDF to generate a shareable report.</p>
-            <button type="button" onClick={printReport} className="focus-ring rounded-lg bg-qpms-700 px-4 py-2 text-xs font-black text-white">Export PDF</button>
+            <button
+              type="button"
+              onClick={openPrintReport}
+              disabled={reportState !== "ready"}
+              className="focus-ring rounded-lg bg-qpms-700 px-4 py-2 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {rangeDatasetLoading ? "Loading report..." : "Export PDF"}
+            </button>
           </div>
+          {rangeDatasetLoading ? (
+            <div className="rounded-xl border border-slate-200 p-8 text-center text-sm font-semibold text-slate-600">
+              Loading the complete selected-period report...
+            </div>
+          ) : null}
+          {rangeDatasetError ? (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm font-semibold text-red-700">
+              {rangeDatasetError}
+            </div>
+          ) : null}
+          {reportState === "ready" ? (
           <article className="fo-print-report mx-auto max-w-[980px] bg-white text-slate-900">
             <div className="fo-report-header flex items-start justify-between gap-6 border-b-2 border-qpms-700 pb-4">
               <div className="flex min-w-0 items-start gap-4">
@@ -9313,10 +9394,11 @@ function FieldOfficerDetailsView({
                 ["Role / Designation", officer?.designation || officer?.role],
                 ["State", officer?.state],
                 ["Mobile", officer?.phone],
-                ["Attendance Status", lastAttendance.status || status.label],
-                ["Start Day", formatDateTime(firstAttendance.login_time)],
+                ["Selected Period", `${rangeDataset?.period?.from_date || formatDateOnly(fromDate)} to ${rangeDataset?.period?.to_date || formatDateOnly(toDate)}`],
+                ["Period Attendance Status", periodSummary.period_attendance_status || lastAttendance.status],
+                ["Period First Start", formatDateTime(periodSummary.first_start || firstAttendance.login_time)],
                 ["Start Location", formatVisitCoordinates(pointFromAttendanceStart(firstAttendance))],
-                ["End Day", formatDateTime(lastAttendance.logout_time)],
+                ["Period Last End", formatDateTime(periodSummary.last_end || lastAttendance.logout_time)],
                 ["End Location", formatVisitCoordinates(attendanceEndCoordinates(lastAttendance))],
               ].map(([label, value]) => (
                 <div key={label}>
@@ -9353,7 +9435,7 @@ function FieldOfficerDetailsView({
                     {moneyLabel(petrolAmount)}
                   </p>
                   <p className="mt-1 text-xs font-semibold text-amber-700">
-                    @ {formatInr(ratePerKm)} / km
+                    Canonical stored attendance total
                   </p>
                 </div>
               </div>
@@ -9362,11 +9444,14 @@ function FieldOfficerDetailsView({
                   ["Base Payable KM", `${basePayableKm.toFixed(1)} km`],
                   ["Approved Missing KM Adjustment", `${approvedMissingCheckoutKm.toFixed(1)} km`],
                   ["Final Payable KM", Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"],
-                  [`Petrol Amount @ ${formatInr(ratePerKm)}/km`, moneyLabel(petrolAmount)],
-                  ["Google Direct Route KM", googleDirectRouteKm === null ? "--" : `${googleDirectRouteKm.toFixed(1)} km`],
-                  ["Raw GPS KM", `${Number(gpsMetrics.rawGpsKm || 0).toFixed(1)} km`],
-                  ["Filtered GPS KM", `${Number(gpsMetrics.filteredGpsKm || 0).toFixed(1)} km`],
-                  ["Payable Source", payableKmSourceReason],
+                  ["Canonical Petrol Amount", moneyLabel(petrolAmount)],
+                  ["Attendance Records", periodSummary.attendance_count || attendances.length],
+                  ["Completed Days", periodSummary.completed_count || 0],
+                  ["Incomplete / Stale Days", periodSummary.incomplete_count || 0],
+                  ["Raw GPS KM", `${Number(periodSummary.raw_gps_km || 0).toFixed(1)} km`],
+                  ["Filtered GPS KM", `${Number(periodSummary.filtered_gps_km || 0).toFixed(1)} km`],
+                  ["Actual Travel KM", `${Number(periodSummary.actual_travel_km || 0).toFixed(1)} km`],
+                  ["Total Visits", periodSummary.visit_count || visits.length],
                 ].map(([label, value]) => (
                   <div key={label}>
                     <p className="font-bold text-slate-400">{label}</p>
@@ -9377,11 +9462,91 @@ function FieldOfficerDetailsView({
             </section>
 
             <section className="fo-report-table-section mt-6">
+              <h2 className="text-base font-black">Daily Attendance Summary</h2>
+              <table className="mt-2 w-full border-collapse text-left text-[10px]">
+                <thead>
+                  <tr className="bg-slate-100">
+                    {["Date", "Start", "End", "Status", "Mode(s)", "Visits", "Raw GPS", "Filtered GPS", "Payable KM", "Petrol"].map((heading) => (
+                      <th key={heading} className="border border-slate-200 px-1.5 py-2">{heading}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(rangeDataset?.daily_summary || []).map((row) => (
+                    <tr key={row.attendance_id}>
+                      <td className="border border-slate-200 px-1.5 py-2">{row.attendance_date}</td>
+                      <td className="border border-slate-200 px-1.5 py-2">{formatTime(row.login_time)}</td>
+                      <td className="border border-slate-200 px-1.5 py-2">{formatTime(row.logout_time)}</td>
+                      <td className="border border-slate-200 px-1.5 py-2">{displayValue(row.status)}</td>
+                      <td className="border border-slate-200 px-1.5 py-2">{(row.modes || []).map(travelModeLabel).join(", ") || "Not selected"}</td>
+                      <td className="border border-slate-200 px-1.5 py-2">{row.visit_count}</td>
+                      <td className="border border-slate-200 px-1.5 py-2">{Number(row.raw_gps_km || 0).toFixed(2)}</td>
+                      <td className="border border-slate-200 px-1.5 py-2">{Number(row.filtered_gps_km || 0).toFixed(2)}</td>
+                      <td className="border border-slate-200 px-1.5 py-2">{Number(row.payable_km || 0).toFixed(2)}</td>
+                      <td className="border border-slate-200 px-1.5 py-2">{moneyLabel(row.petrol_amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+
+            <section className="fo-report-table-section mt-6">
+              <h2 className="text-base font-black">Daily Travel Evidence</h2>
+              <table className="mt-2 w-full border-collapse text-left text-[10px]">
+                  <thead>
+                    <tr className="bg-slate-100">
+                      {["Date", "From", "To", "Mode", "Rate", "Calculated KM", "Payable KM", "Amount", "Source"].map((heading) => (
+                        <th key={heading} className="border border-slate-200 px-1.5 py-2">{heading}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(rangeDataset?.travel_legs || []).map((leg) => (
+                      <tr key={leg.id}>
+                        <td className="border border-slate-200 px-1.5 py-2">{leg.attendance_date}</td>
+                        <td className="border border-slate-200 px-1.5 py-2">{formatDateTime(leg.started_at)}</td>
+                        <td className="border border-slate-200 px-1.5 py-2">{formatDateTime(leg.ended_at)}</td>
+                        <td className="border border-slate-200 px-1.5 py-2">{travelModeLabel(leg.travel_mode)}</td>
+                        <td className="border border-slate-200 px-1.5 py-2">{formatInr(leg.rate_per_km)}</td>
+                        <td className="border border-slate-200 px-1.5 py-2">{Number(leg.calculated_km || 0).toFixed(2)}</td>
+                        <td className="border border-slate-200 px-1.5 py-2">{Number(leg.payable_km || 0).toFixed(2)}</td>
+                        <td className="border border-slate-200 px-1.5 py-2">{moneyLabel(leg.payable_amount)}</td>
+                        <td className="border border-slate-200 px-1.5 py-2">{displayValue(leg.calculation_source)}</td>
+                      </tr>
+                    ))}
+                    {(rangeDataset?.daily_summary || [])
+                      .filter((row) => !row.travel_leg_count)
+                      .map((row) => (
+                        <tr key={`legacy-${row.attendance_id}`} className="bg-amber-50">
+                          <td className="border border-slate-200 px-1.5 py-2">{row.attendance_date}</td>
+                          <td className="border border-slate-200 px-1.5 py-2">{formatDateTime(row.login_time)}</td>
+                          <td className="border border-slate-200 px-1.5 py-2">{formatDateTime(row.logout_time)}</td>
+                          <td className="border border-slate-200 px-1.5 py-2">{(row.modes || []).map(travelModeLabel).join(", ") || "Not selected"}</td>
+                          <td className="border border-slate-200 px-1.5 py-2">--</td>
+                          <td className="border border-slate-200 px-1.5 py-2">{Number(row.actual_travel_km || 0).toFixed(2)}</td>
+                          <td className="border border-slate-200 px-1.5 py-2">{Number(row.payable_km || 0).toFixed(2)}</td>
+                          <td className="border border-slate-200 px-1.5 py-2">{moneyLabel(row.petrol_amount)}</td>
+                          <td className="border border-slate-200 px-1.5 py-2">Legacy reconstructed evidence</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              {(rangeDataset?.daily_summary || []).some((row) => !row.travel_leg_count) ? (
+                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900">
+                  <strong>Legacy attendance - persisted travel-leg snapshots are unavailable.</strong>
+                  <p className="mt-1">
+                    Daily attendance and site-visit evidence is shown for reconciliation. It is not a persisted travel-leg audit.
+                  </p>
+                </div>
+              ) : null}
+            </section>
+
+            <section className="fo-report-table-section mt-6">
               <h2 className="text-base font-black">Site Visit Summary</h2>
               <table className="mt-2 w-full border-collapse text-left text-xs">
                 <thead>
                   <tr className="bg-slate-100">
-                    {["#", "Site / Client", "Check-in", "Check-out", "Duration", "Route KM", "Missing KM Detected", "Approved Missing KM", "Final Payable KM", "Review Status / Remarks"].map((heading) => (
+                    {["Date", "#", "Site / Client", "Check-in", "Check-out", "Duration", "Route KM", "Missing KM", "Approved KM", "Review Status / Remarks"].map((heading) => (
                       <th key={heading} className="border border-slate-200 px-2 py-2">
                         {heading}
                       </th>
@@ -9391,57 +9556,71 @@ function FieldOfficerDetailsView({
                 <tbody>
                   {visits.map((visit, index) => {
                     const evidence = missingCheckoutEvidence(visit);
-                    const routeKm = Number(visit.route_km);
-                    const finalVisitPayableKm =
-                      (Number.isFinite(routeKm) && routeKm > 0 ? routeKm : 0) +
-                      evidence.approvedKm;
                     const exception = checkoutExceptionForVisit(visit);
+                    const visitDate =
+                      visit.attendance_date ||
+                      formatDateOnly(visit.check_in_time);
+                    const previousVisit = visits[index - 1];
+                    const previousVisitDate = previousVisit
+                      ? previousVisit.attendance_date ||
+                        formatDateOnly(previousVisit.check_in_time)
+                      : null;
                     return (
-                      <tr key={visit.id || index}>
-                        <td className="border border-slate-200 px-2 py-2">{index + 1}</td>
-                        <td className="border border-slate-200 px-2 py-2">
-                          {visitTitle(visit)} / {visitClient(visit)}
-                          <br />
-                          <span className="text-[10px] text-slate-500">
-                            Location:{" "}
-                            {formatVisitCoordinates(
-                              visitCheckInCoordinates(visit),
-                            )}
-                          </span>
-                        </td>
-                        <td className="border border-slate-200 px-2 py-2">
-                          {formatDateTime(visit.check_in_time)}
-                        </td>
-                        <td className="border border-slate-200 px-2 py-2">
-                          {formatDateTime(siteVisitCheckoutValue(visit))}
-                        </td>
-                        <td className="border border-slate-200 px-2 py-2">
-                          {durationMinutesLabel(visitMinutes(visit))}
-                        </td>
-                        <td className="border border-slate-200 px-2 py-2">
-                          {numberLabel(visit.route_km, " km")}
-                        </td>
-                        <td className="border border-slate-200 px-2 py-2">
-                          {exception.requiresReview ? missingCheckoutKmLabel(visit) : "--"}
-                        </td>
-                        <td className="border border-slate-200 px-2 py-2">
-                          {evidence.approvedKm.toFixed(1)} km
-                        </td>
-                        <td className="border border-slate-200 px-2 py-2">
-                          {finalVisitPayableKm > 0 ? `${finalVisitPayableKm.toFixed(1)} km` : "--"}
-                        </td>
-                        <td className="border border-slate-200 px-2 py-2">
-                          {exception.label}: {visitRemarks(visit)}
-                          {exception.requiresReview ? (
-                            <>
-                              <br />
-                              Review status: {checkoutReviewStatus(visit).label}
-                              <br />
-                              {missingCheckoutEvidenceLabel(visit)}
-                            </>
-                          ) : null}
-                        </td>
-                      </tr>
+                      <Fragment key={visit.id || index}>
+                        {visitDate !== previousVisitDate ? (
+                          <tr>
+                            <td
+                              colSpan={10}
+                              className="border border-slate-200 bg-slate-50 px-2 py-1.5 font-black text-slate-700"
+                            >
+                              Attendance date: {visitDate}
+                            </td>
+                          </tr>
+                        ) : null}
+                        <tr>
+                          <td className="border border-slate-200 px-2 py-2">{visitDate}</td>
+                          <td className="border border-slate-200 px-2 py-2">{index + 1}</td>
+                          <td className="border border-slate-200 px-2 py-2">
+                            {visitTitle(visit)} / {visitClient(visit)}
+                            <br />
+                            <span className="text-[10px] text-slate-500">
+                              Location:{" "}
+                              {formatVisitCoordinates(
+                                visitCheckInCoordinates(visit),
+                              )}
+                            </span>
+                          </td>
+                          <td className="border border-slate-200 px-2 py-2">
+                            {formatDateTime(visit.check_in_time)}
+                          </td>
+                          <td className="border border-slate-200 px-2 py-2">
+                            {formatDateTime(siteVisitCheckoutValue(visit))}
+                          </td>
+                          <td className="border border-slate-200 px-2 py-2">
+                            {durationMinutesLabel(visitMinutes(visit))}
+                          </td>
+                          <td className="border border-slate-200 px-2 py-2">
+                            {numberLabel(visit.route_km, " km")}
+                          </td>
+                          <td className="border border-slate-200 px-2 py-2">
+                            {exception.requiresReview ? missingCheckoutKmLabel(visit) : "--"}
+                          </td>
+                          <td className="border border-slate-200 px-2 py-2">
+                            {evidence.approvedKm.toFixed(1)} km
+                          </td>
+                          <td className="border border-slate-200 px-2 py-2">
+                            {exception.label}: {visitRemarks(visit)}
+                            {exception.requiresReview ? (
+                              <>
+                                <br />
+                                Review status: {checkoutReviewStatus(visit).label}
+                                <br />
+                                {missingCheckoutEvidenceLabel(visit)}
+                              </>
+                            ) : null}
+                          </td>
+                        </tr>
+                      </Fragment>
                     );
                   })}
                   {!visits.length ? (
@@ -9459,6 +9638,42 @@ function FieldOfficerDetailsView({
                   Head review where applicable.
                 </p>
               ) : null}
+            </section>
+
+            <section className="fo-report-table-section mt-6">
+              <h2 className="text-base font-black">Exceptions and Adjustments</h2>
+              <table className="mt-2 w-full border-collapse text-left text-xs">
+                <thead>
+                  <tr className="bg-slate-100">
+                    {["Date", "Type", "Detail"].map((heading) => (
+                      <th key={heading} className="border border-slate-200 px-2 py-2">{heading}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(rangeDataset?.data_quality_warnings || []).map((warning, index) => (
+                    <tr key={`${warning.code}-${warning.attendance_id || index}`}>
+                      <td className="border border-slate-200 px-2 py-2">{warning.attendance_date || "--"}</td>
+                      <td className="border border-slate-200 px-2 py-2">{warning.code}</td>
+                      <td className="border border-slate-200 px-2 py-2">{warning.message}</td>
+                    </tr>
+                  ))}
+                  {(rangeDataset?.recalculation_results || [])
+                    .filter((result) => result.outcome !== "updated")
+                    .map((result) => (
+                      <tr key={`recalc-${result.attendance_id}`}>
+                        <td className="border border-slate-200 px-2 py-2">{result.attendance_date}</td>
+                        <td className="border border-slate-200 px-2 py-2">RECALCULATION_{String(result.outcome || "").toUpperCase()}</td>
+                        <td className="border border-slate-200 px-2 py-2">{result.reason || "--"}</td>
+                      </tr>
+                    ))}
+                  {!rangeDataset?.data_quality_warnings?.length && !rangeDataset?.recalculation_results?.some((result) => result.outcome !== "updated") ? (
+                    <tr>
+                      <td colSpan={3} className="border border-slate-200 px-2 py-5 text-center">No exceptions recorded.</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
             </section>
 
             <section className="fo-report-acknowledgement mt-6 rounded-lg border border-slate-300 p-4">
@@ -9495,7 +9710,9 @@ function FieldOfficerDetailsView({
               Payable KM is based on approved route KM used for petrol
               reimbursement. Petrol amount is calculated at the selected travel-mode rate.
             </p>
+            <div className="fo-print-page-number" aria-hidden="true" />
           </article>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -10083,6 +10300,9 @@ export default function FOActivities() {
   const [search, setSearch] = useState("");
   const [expandedMap, setExpandedMap] = useState(false);
   const [selectedOfficerId, setSelectedOfficerId] = useState(null);
+  const [employeeRangeDataset, setEmployeeRangeDataset] = useState(null);
+  const [employeeRangeLoading, setEmployeeRangeLoading] = useState(false);
+  const [employeeRangeError, setEmployeeRangeError] = useState("");
   const [mapRouteOfficerId, setMapRouteOfficerId] = useState(null);
   const [supportOfficerId, setSupportOfficerId] = useState(null);
   const [supportContext, setSupportContext] = useState({ attendanceRows: [], visitRows: [] });
@@ -10135,6 +10355,7 @@ export default function FOActivities() {
   const kmRecalcCooldownRef = useRef(new Map());
   const kmRecalcInFlightRef = useRef(new Set());
   const summaryRequestSequenceRef = useRef(0);
+  const employeeRangeRequestSequenceRef = useRef(0);
 
   const selectedRange = useMemo(
     () => dateRangeForPreset("custom", customFromDate, customToDate),
@@ -10762,8 +10983,92 @@ export default function FOActivities() {
   const selectedOfficerBase =
     filteredOfficers.find((officer) => officer.id === selectedOfficerId) ||
     null;
+  const selectedEmployeeIdentifier =
+    selectedOfficerBase?.employeeCode || selectedOfficerBase?.foId || null;
+
+  const loadSelectedEmployeeRange = useCallback(async () => {
+    const requestSequence = employeeRangeRequestSequenceRef.current + 1;
+    employeeRangeRequestSequenceRef.current = requestSequence;
+
+    if (!selectedEmployeeIdentifier || !hasActiveSession) {
+      setEmployeeRangeDataset(null);
+      setEmployeeRangeError("");
+      setEmployeeRangeLoading(false);
+      return null;
+    }
+    if (hasDemoBackendReadSession) {
+      setEmployeeRangeDataset(null);
+      setEmployeeRangeError(
+        "Complete employee reports require an authenticated production session.",
+      );
+      setEmployeeRangeLoading(false);
+      return null;
+    }
+
+    setEmployeeRangeLoading(true);
+    setEmployeeRangeError("");
+    try {
+      const query = employeeRangeQuery({
+        employeeIdentifier: selectedEmployeeIdentifier,
+        fromDate: selectedRange.fromDate,
+        toDate: selectedRange.toDate,
+      });
+      const response = await authenticatedFetch(
+        `${API_BASE_URL}/api/fo/operations/employee-range?${query}`,
+      );
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.message || "Employee period report failed.");
+      }
+      if (requestSequence !== employeeRangeRequestSequenceRef.current) {
+        return null;
+      }
+      setEmployeeRangeDataset(payload);
+      return payload;
+    } catch (error) {
+      if (requestSequence === employeeRangeRequestSequenceRef.current) {
+        setEmployeeRangeError(
+          error?.message || "Employee period report could not be loaded.",
+        );
+      }
+      return null;
+    } finally {
+      if (requestSequence === employeeRangeRequestSequenceRef.current) {
+        setEmployeeRangeLoading(false);
+      }
+    }
+  }, [
+    hasActiveSession,
+    hasDemoBackendReadSession,
+    selectedEmployeeIdentifier,
+    selectedRange.fromDate,
+    selectedRange.toDate,
+  ]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      loadSelectedEmployeeRange();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [loadSelectedEmployeeRange]);
+
   const selectedOfficer = useMemo(() => {
     if (!selectedOfficerBase) return null;
+    if (employeeRangeDataset) {
+      const rangeAttendances = employeeRangeDataset.attendance_days || [];
+      const latestAttendance = rangeAttendances[rangeAttendances.length - 1] || null;
+      const summary = employeeRangeDataset.period_summary || {};
+      return {
+        ...selectedOfficerBase,
+        attendance: latestAttendance || selectedOfficerBase.attendance,
+        attendances: rangeAttendances,
+        visits: employeeRangeDataset.site_visits || [],
+        eligibleKm: Number(summary.canonical_payable_km || 0),
+        routeKmToday: Number(summary.canonical_payable_km || 0),
+        petrolAmount: Number(summary.canonical_petrol_amount || 0),
+        petrolAmountPending: Boolean(summary.canonical_pending_count),
+      };
+    }
     const selectedKey = normalizeFoKey(
       selectedOfficerBase.foId || selectedOfficerBase.employeeCode,
     );
@@ -10794,7 +11099,7 @@ export default function FOActivities() {
         : selectedOfficerBase.petrolAmount,
       petrolAmountPending: rangeAttendances.some(isCanonicalPetrolPending),
     };
-  }, [selectedOfficerBase, visibleAttendanceKpiRows]);
+  }, [employeeRangeDataset, selectedOfficerBase, visibleAttendanceKpiRows]);
   const mapRouteOfficer =
     filteredOfficers.find((officer) => officer.id === mapRouteOfficerId) ||
     officers.find((officer) => officer.id === mapRouteOfficerId) ||
@@ -11340,7 +11645,9 @@ export default function FOActivities() {
         selectedOfficer.attendance?.employee_code ||
         selectedOfficer.id,
     );
-    return foId ? `${foId}|${selectedRange.fromDate}` : null;
+    return foId
+      ? `${foId}|${selectedRange.fromDate}|${selectedRange.toDate}`
+      : null;
   }
 
   async function recalculateSelectedOfficerKm() {
@@ -11375,24 +11682,36 @@ export default function FOActivities() {
     setKmRecalcBusy(true);
     setKmRecalcResult(null);
     try {
-      const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/km/recalculate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fo_user_id: selectedOfficer.foId || selectedOfficer.employeeCode,
-          employee_code:
-            selectedOfficer.employeeCode ||
-            selectedOfficer.attendance?.employee_code ||
-            selectedOfficer.foId,
-          attendance_id: selectedOfficer.attendance?.id,
-          date: selectedRange.fromDate,
-        }),
-      });
+      const response = await authenticatedFetch(
+        `${API_BASE_URL}/api/fo/km/recalculate-employee-range`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            employee:
+              selectedOfficer.employeeCode ||
+              selectedOfficer.foId ||
+              selectedOfficer.attendance?.employee_code,
+            date_from: selectedRange.fromDate,
+            date_to: selectedRange.toDate,
+          }),
+        },
+      );
       const payload = await response.json();
       if (!response.ok || payload.ok === false) {
         throw new Error(payload.message || "KM recalculation failed.");
       }
-      setKmRecalcResult(payload);
+      const refreshedDataset = await loadSelectedEmployeeRange();
+      if (refreshedDataset) {
+        setEmployeeRangeDataset({
+          ...refreshedDataset,
+          recalculation_results: payload.results || [],
+        });
+      }
+      setKmRecalcResult({
+        ...payload,
+        message: `${payload.updated || 0} of ${payload.eligible || 0} eligible attendance records recalculated. ${payload.failed || 0} failed.`,
+      });
       setRefreshToken((value) => value + 1);
       setSummaryRefreshToken((value) => value + 1);
     } catch (error) {
@@ -11728,6 +12047,9 @@ export default function FOActivities() {
       <FieldOfficerDetailsView
         key={selectedOfficer.id}
         officer={selectedOfficer}
+        rangeDataset={employeeRangeDataset}
+        rangeDatasetLoading={employeeRangeLoading}
+        rangeDatasetError={employeeRangeError}
         generatedByUser={user}
         routeLogs={selectedRouteLogs}
         activitySubmissions={selectedActivitySubmissions}
@@ -11740,14 +12062,7 @@ export default function FOActivities() {
         onDraftToDate={setDetailDraftToDate}
         onApplyDate={applyDetailDateRange}
         onBack={() => setSelectedOfficerId(null)}
-        onExport={() =>
-          exportFoOperationsExcel({
-            officers: filteredOfficers,
-            selectedOfficer,
-            from: selectedRange.from,
-            to: selectedRange.to,
-          })
-        }
+        onExport={() => exportEmployeeRangeExcel(employeeRangeDataset)}
         onRecalculateKm={recalculateSelectedOfficerKm}
         onTemporarySwitchKm={
           canRunTemporarySwitchKm

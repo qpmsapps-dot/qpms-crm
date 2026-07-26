@@ -149,6 +149,6 @@ test('mobile and web callers send the current Supabase JWT', () => {
   );
   assert.match(
     webSource,
-    /authenticatedFetch\(`\$\{API_BASE_URL\}\/api\/fo\/km\/recalculate`/,
+    /authenticatedFetch\([\s\S]{0,120}`\$\{API_BASE_URL\}\/api\/fo\/km\/recalculate-employee-range`/,
   );
 });
