@@ -461,6 +461,10 @@
   filter: saturate(1.03) contrast(1.02);
 }
 
+.fo-print-page-number {
+  display: none;
+}
+
 @media print {
   @page {
     size: A4 portrait;
@@ -527,6 +531,19 @@
     border: 0 !important;
     padding: 0 !important;
     box-shadow: none !important;
+  }
+
+  .fo-print-page-number {
+    display: block;
+    position: fixed;
+    right: 0;
+    bottom: -7mm;
+    font-size: 9px;
+    color: #64748b;
+  }
+
+  .fo-print-page-number::after {
+    content: "Page " counter(page);
   }
 
   .fo-screen-only {
