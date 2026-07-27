@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   buildEmployeeRangeExcelRows,
   employeeRangeQuery,
+  employeeRangeMetric,
   reportReadiness,
 } from '../src/utils/employeeRangeReport.js';
 
@@ -82,4 +83,11 @@ test('pdf_waits_for_normalized_dataset', () => {
   assert.equal(reportReadiness({ loading: true, dataset }), 'loading');
   assert.equal(reportReadiness({ loading: false, dataset: null }), 'unavailable');
   assert.equal(reportReadiness({ loading: false, dataset }), 'ready');
+});
+
+test('failed_employee_range_request_does_not_create_false_zero_metrics', () => {
+  assert.equal(employeeRangeMetric(null, 'kilometer'), null);
+  assert.equal(employeeRangeMetric(undefined, 'total_amount'), null);
+  assert.equal(employeeRangeMetric(dataset, 'kilometer'), 15);
+  assert.equal(employeeRangeMetric(dataset, 'missing_metric'), null);
 });

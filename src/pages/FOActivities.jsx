@@ -71,6 +71,7 @@ import {
 import {
   buildEmployeeRangeExcelRows,
   employeeRangeQuery,
+  employeeRangeMetric,
   reportReadiness,
 } from "../utils/employeeRangeReport.js";
 
@@ -4371,6 +4372,7 @@ function moneyLabel(value) {
 }
 
 function reportMoneyLabel(value) {
+  if (value === null || value === undefined || value === "") return "--";
   const amount = Number(value);
   if (!Number.isFinite(amount)) return "--";
   return new Intl.NumberFormat("en-IN", {
@@ -4379,6 +4381,12 @@ function reportMoneyLabel(value) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(amount);
+}
+
+function reportKilometerLabel(value) {
+  if (value === null || value === undefined || value === "") return "--";
+  const kilometer = Number(value);
+  return Number.isFinite(kilometer) ? `${kilometer.toFixed(2)} km` : "--";
 }
 
 function durationMinutesLabel(minutes) {
@@ -7183,8 +7191,8 @@ function FieldOfficerDetailsView({
   const status = officerStatus(officer);
   const isLive = isOperationallyActive(officer);
   const periodSummary = rangeDataset?.period_summary || {};
-  const reportKilometer = Number(periodSummary.kilometer || 0);
-  const reportTotalAmount = Number(periodSummary.total_amount || 0);
+  const reportKilometer = employeeRangeMetric(rangeDataset, "kilometer");
+  const reportTotalAmount = employeeRangeMetric(rangeDataset, "total_amount");
   const reportState = reportReadiness({
     loading: rangeDatasetLoading,
     dataset: rangeDataset,
@@ -7553,7 +7561,7 @@ function FieldOfficerDetailsView({
           <DetailSummaryCard icon={PlayCircle} label="Period First Start" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
           <DetailSummaryCard icon={Square} label="Period Last End" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
           <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Selected range" tone="purple" />
-          <DetailSummaryCard icon={Route} label="Kilometer" value={`${reportKilometer.toFixed(2)} km`} hint="Bike and Car payable distance" tone="green" />
+          <DetailSummaryCard icon={Route} label="Kilometer" value={reportKilometerLabel(reportKilometer)} hint="Bike and Car payable distance" tone="green" />
           <DetailSummaryCard icon={Bike} label="Travel Mode" value={travelModeLabel(travelMode)} hint={`Current @ ${formatInr(ratePerKm)} / km`} tone="blue" />
           <DetailSummaryCard icon={Fuel} label="Total Amount" value={reportMoneyLabel(reportTotalAmount)} hint="Travel reimbursement total" tone="amber" />
           <DetailSummaryCard icon={ShieldCheck} label="Period Attendance Status" value={displayValue(periodSummary.period_attendance_status || lastAttendance.status)} hint={attendances.length > 1 ? `${attendances.length} attendance records` : "--"} tone={periodSummary.incomplete_count > 0 ? "amber" : "blue"} />
@@ -7742,7 +7750,7 @@ function FieldOfficerDetailsView({
         <DetailSummaryCard icon={PlayCircle} label="Period First Start" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
         <DetailSummaryCard icon={Square} label="Period Last End" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
         <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Visited" tone="purple" />
-        <DetailSummaryCard icon={Route} label="Kilometer" value={`${reportKilometer.toFixed(2)} km`} hint="Bike and Car payable distance" tone="green" />
+        <DetailSummaryCard icon={Route} label="Kilometer" value={reportKilometerLabel(reportKilometer)} hint="Bike and Car payable distance" tone="green" />
         <DetailSummaryCard icon={Navigation2} label="GPS Audit KM" value={Number.isFinite(gpsAuditKm) ? `${gpsAuditKm.toFixed(1)} km` : "--"} hint="Supporting evidence" tone="blue" />
         <DetailSummaryCard icon={CircleGauge} label="Delta" value={Number.isFinite(kmDelta) ? `${kmDelta.toFixed(1)} km` : "--"} hint={Number.isFinite(differencePercent) ? `${differencePercent.toFixed(1)}%` : "--"} tone={Math.abs(kmDelta || 0) > 2 ? "amber" : "green"} />
         <DetailSummaryCard icon={Fuel} label="Total Amount" value={reportMoneyLabel(reportTotalAmount)} hint="Travel reimbursement total" tone="amber" />
@@ -7828,7 +7836,7 @@ function FieldOfficerDetailsView({
         <DetailSummaryCard icon={PlayCircle} label="Period First Start" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
         <DetailSummaryCard icon={Square} label="Period Last End" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
         <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Visited" tone="purple" />
-        <DetailSummaryCard icon={Route} label="Kilometer" value={`${reportKilometer.toFixed(2)} km`} hint="Bike and Car payable distance" tone="green" />
+        <DetailSummaryCard icon={Route} label="Kilometer" value={reportKilometerLabel(reportKilometer)} hint="Bike and Car payable distance" tone="green" />
         {fullTechnicalAccess ? <DetailSummaryCard icon={Navigation2} label="GPS Audit KM" value={Number.isFinite(gpsAuditKm) ? `${gpsAuditKm.toFixed(1)} km` : "--"} hint="Supporting evidence" tone="blue" /> : null}
         {fullTechnicalAccess ? <DetailSummaryCard icon={CircleGauge} label="Delta" value={Number.isFinite(kmDelta) ? `${kmDelta.toFixed(1)} km` : "--"} hint={Number.isFinite(differencePercent) ? `${differencePercent.toFixed(1)}%` : "--"} tone={Math.abs(kmDelta || 0) > 2 ? "amber" : "green"} /> : null}
         <DetailSummaryCard icon={Fuel} label="Total Amount" value={reportMoneyLabel(reportTotalAmount)} hint="Travel reimbursement total" tone="amber" />
@@ -9430,7 +9438,7 @@ function FieldOfficerDetailsView({
                     Kilometer
                   </p>
                   <p className="mt-2 text-2xl font-black text-emerald-900">
-                    {Number.isFinite(reportKilometer) ? `${reportKilometer.toFixed(2)} km` : "--"}
+                    {reportKilometerLabel(reportKilometer)}
                   </p>
                   <p className="mt-1 text-xs font-semibold text-emerald-700">
                     Bike and Car payable distance only
@@ -9450,7 +9458,7 @@ function FieldOfficerDetailsView({
               </div>
               <div className="mt-4 grid grid-cols-2 gap-3 rounded-lg border border-slate-200 p-3 text-xs md:grid-cols-4">
                 {[
-                  ["Kilometer", `${reportKilometer.toFixed(2)} km`],
+                  ["Kilometer", reportKilometerLabel(reportKilometer)],
                   ["Distance Reimbursement", reportMoneyLabel(periodSummary.distance_amount)],
                   ["Eligible Ticket / Parking Amount", reportMoneyLabel(periodSummary.eligible_claim_amount)],
                   ["Total Amount", reportMoneyLabel(reportTotalAmount)],

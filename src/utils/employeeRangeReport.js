@@ -16,6 +16,14 @@ export function reportReadiness({ loading, dataset, error = "" }) {
   return "ready";
 }
 
+export function employeeRangeMetric(dataset, field) {
+  if (!dataset?.period_summary) return null;
+  const value = dataset.period_summary[field];
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function modesLabel(modes = []) {
   return modes.length ? modes.join(", ") : "Not selected";
 }

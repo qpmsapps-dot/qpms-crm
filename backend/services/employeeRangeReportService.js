@@ -134,6 +134,35 @@ async function fetchByAttendanceIds(client, table, attendanceIds, orderColumn) {
   return Array.from(unique.values());
 }
 
+function isOptionalExpenseClaimAccessError(error) {
+  return ['42501', '42P01', 'PGRST205'].includes(error?.code);
+}
+
+export async function loadOptionalExpenseClaims(client, attendanceIds = []) {
+  if (!attendanceIds.length) return { rows: [], warning: null };
+  try {
+    const rows = await fetchByAttendanceIds(
+      client,
+      'fo_travel_expense_claims',
+      attendanceIds,
+      'created_at',
+    );
+    return { rows, warning: null };
+  } catch (error) {
+    if (!isOptionalExpenseClaimAccessError(error)) throw error;
+    return {
+      rows: [],
+      warning: {
+        code: 'EXPENSE_CLAIMS_UNAVAILABLE',
+        attendance_id: null,
+        attendance_date: null,
+        message:
+          'Ticket and parking claims are temporarily unavailable; attendance reimbursement remains available.',
+      },
+    };
+  }
+}
+
 function profileEmployeeCode(profile = {}) {
   return key(profile.employee_code || profile.username);
 }
@@ -696,22 +725,18 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
       travelLegTableUnavailable = true;
     }
   }
-  const expenseClaims = attendanceIds.length
-    ? await fetchByAttendanceIds(
-      client,
-      'fo_travel_expense_claims',
-      attendanceIds,
-      'created_at',
-    )
-    : [];
+  const optionalClaims = await loadOptionalExpenseClaims(client, attendanceIds);
   const dataset = buildEmployeeRangeDataset({
     employee,
     period,
     attendances,
     visits,
     travelLegs,
-    expenseClaims,
+    expenseClaims: optionalClaims.rows,
   });
+  if (optionalClaims.warning) {
+    dataset.data_quality_warnings.unshift(optionalClaims.warning);
+  }
   if (travelLegTableUnavailable) {
     dataset.data_quality_warnings.unshift({
       code: 'TRAVEL_LEG_TABLE_UNAVAILABLE',

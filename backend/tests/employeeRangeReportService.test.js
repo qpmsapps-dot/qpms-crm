@@ -5,6 +5,7 @@ import {
   buildEmployeeRangeDataset,
   fetchEmployeeRangePages,
   kolkataPeriodBounds,
+  loadOptionalExpenseClaims,
   recalculateEmployeeRange,
 } from '../services/employeeRangeReportService.js';
 
@@ -56,6 +57,26 @@ function claim(attendanceId, mode, amount, overrides = {}) {
     claim_type: 'travel',
     created_at: '2026-07-01T06:00:00.000Z',
     ...overrides,
+  };
+}
+
+function claimsClient(rows = [], error = null) {
+  return {
+    from(table) {
+      assert.equal(table, 'fo_travel_expense_claims');
+      const query = {
+        select() { return query; },
+        in() { return query; },
+        order() { return query; },
+        async range(from, to) {
+          return {
+            data: error ? null : rows.slice(from, to + 1),
+            error,
+          };
+        },
+      };
+      return query;
+    },
   };
 }
 
@@ -226,6 +247,144 @@ test('parking_claim_contributes_amount_but_zero_kilometer', () => {
   });
   assert.equal(dataset.daily_summary[0].kilometer, 0);
   assert.equal(dataset.daily_summary[0].amount, 50);
+});
+
+test('attendance_with_no_expense_claims_returns_valid_report', () => {
+  const row = attendance('2026-07-01', 10);
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'FO-TEST' },
+    period: kolkataPeriodBounds('2026-07-01', '2026-07-01'),
+    attendances: [row],
+    visits: [],
+    travelLegs: [],
+    expenseClaims: [],
+  });
+  assert.equal(dataset.expense_claims.length, 0);
+  assert.equal(dataset.daily_summary[0].amount, 40);
+});
+
+test('null_optional_claim_fields_normalize_to_zero_without_crashing', () => {
+  const row = attendance('2026-07-01', 0, {
+    travel_mode: 'train',
+    rate_per_km: 0,
+    petrol_amount: 0,
+  });
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'FO-TEST' },
+    period: kolkataPeriodBounds('2026-07-01', '2026-07-01'),
+    attendances: [row],
+    visits: [],
+    travelLegs: [],
+    expenseClaims: [{
+      id: 'claim-null',
+      attendance_id: row.id,
+      employee_code: 'FO-TEST',
+      travel_mode: 'train',
+      claim_type: null,
+      fare_amount: null,
+      status: 'approved',
+      created_at: null,
+    }],
+  });
+  assert.equal(dataset.expense_claims[0].fare_amount, 0);
+  assert.equal(dataset.daily_summary[0].claim_amount, 0);
+});
+
+test('malformed_individual_claim_amount_does_not_crash_employee_report', () => {
+  const row = attendance('2026-07-01', 0, {
+    travel_mode: 'auto',
+    rate_per_km: 0,
+    petrol_amount: 0,
+  });
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'FO-TEST' },
+    period: kolkataPeriodBounds('2026-07-01', '2026-07-01'),
+    attendances: [row],
+    visits: [],
+    travelLegs: [],
+    expenseClaims: [{
+      id: 'claim-malformed',
+      attendance_id: row.id,
+      employee_code: 'FO-TEST',
+      travel_mode: 'auto',
+      claim_type: 'travel',
+      fare_amount: 'not-a-number',
+      status: 'approved',
+      created_at: '2026-07-01T06:00:00Z',
+    }],
+  });
+  assert.equal(dataset.expense_claims[0].fare_amount, 0);
+  assert.equal(dataset.daily_summary[0].amount, 0);
+});
+
+test('real_production_claim_columns_map_to_ticket_and_parking_amounts', () => {
+  const row = attendance('2026-07-01', 0, {
+    travel_mode: 'train',
+    rate_per_km: 0,
+    petrol_amount: 0,
+  });
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'FO-TEST' },
+    period: kolkataPeriodBounds('2026-07-01', '2026-07-01'),
+    attendances: [row],
+    visits: [],
+    travelLegs: [],
+    expenseClaims: [
+      {
+        id: 'claim-train',
+        attendance_id: row.id,
+        employee_code: 'FO-TEST',
+        fo_user_id: 'FO-TEST',
+        travel_mode: 'train',
+        claim_type: 'travel',
+        fare_amount: 250,
+        status: 'approved',
+        created_at: '2026-07-01T06:00:00Z',
+      },
+      {
+        id: 'claim-parking',
+        attendance_id: row.id,
+        employee_code: 'FO-TEST',
+        travel_mode: 'other',
+        claim_type: 'parking',
+        fare_amount: 50,
+        status: 'approved',
+        created_at: '2026-07-01T07:00:00Z',
+      },
+    ],
+  });
+  assert.equal(dataset.daily_summary[0].claim_amount, 300);
+  assert.equal(dataset.daily_summary[0].amount, 300);
+});
+
+test('optional_claim_permission_failure_does_not_fail_employee_report', async () => {
+  const result = await loadOptionalExpenseClaims(
+    claimsClient([], {
+      code: '42501',
+      message: 'permission denied for table fo_travel_expense_claims',
+    }),
+    ['attendance-1'],
+  );
+  assert.deepEqual(result.rows, []);
+  assert.equal(result.warning.code, 'EXPENSE_CLAIMS_UNAVAILABLE');
+});
+
+test('empty_claim_query_returns_empty_rows_without_warning', async () => {
+  const result = await loadOptionalExpenseClaims(
+    claimsClient([]),
+    ['attendance-1'],
+  );
+  assert.deepEqual(result, { rows: [], warning: null });
+});
+
+test('unexpected_claim_query_error_is_not_silently_hidden', async () => {
+  await assert.rejects(
+    loadOptionalExpenseClaims(
+      claimsClient([], { code: 'XX000', message: 'unexpected database error' }),
+      ['attendance-1'],
+    ),
+    (error) => error.code === 'XX000',
+  );
 });
 
 test('rejected_cancelled_and_duplicate_claims_are_excluded', () => {
