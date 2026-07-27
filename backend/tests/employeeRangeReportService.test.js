@@ -30,6 +30,35 @@ function attendance(date, km, overrides = {}) {
   };
 }
 
+function travelLeg(attendanceId, mode, payableKm, ratePerKm, overrides = {}) {
+  return {
+    id: `${attendanceId}-${mode}-${overrides.sequence || 1}`,
+    attendance_id: attendanceId,
+    started_at: '2026-07-01T04:00:00.000Z',
+    ended_at: '2026-07-01T05:00:00.000Z',
+    travel_mode: mode,
+    rate_per_km: ratePerKm,
+    calculated_km: payableKm,
+    payable_km: payableKm,
+    payable_amount: payableKm * ratePerKm,
+    status: 'completed',
+    ...overrides,
+  };
+}
+
+function claim(attendanceId, mode, amount, overrides = {}) {
+  return {
+    id: `${attendanceId}-${mode}-${overrides.sequence || 1}`,
+    attendance_id: attendanceId,
+    travel_mode: mode,
+    fare_amount: amount,
+    status: 'approved',
+    claim_type: 'travel',
+    created_at: '2026-07-01T06:00:00.000Z',
+    ...overrides,
+  };
+}
+
 test('employee_range_uses_inclusive_kolkata_boundaries', () => {
   assert.deepEqual(kolkataPeriodBounds('2026-07-01', '2026-07-26'), {
     from_date: '2026-07-01',
@@ -105,6 +134,159 @@ test('report_groups_visits_by_attendance_date', () => {
     travelLegs: [],
   });
   assert.deepEqual(dataset.daily_summary.map((row) => row.visit_count), [1, 1]);
+});
+
+test('bike_car_and_ticket_modes_use_their_eligible_reimbursement_rules', () => {
+  const row = attendance('2026-07-01', 8, { petrol_amount: 48 });
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'FO-TEST' },
+    period: kolkataPeriodBounds('2026-07-01', '2026-07-01'),
+    attendances: [row],
+    visits: [],
+    travelLegs: [
+      travelLeg(row.id, 'car', 4, 8),
+      travelLeg(row.id, 'bike', 4, 4, { sequence: 2 }),
+    ],
+    expenseClaims: [
+      claim(row.id, 'train', 100),
+      claim(row.id, 'other', 30, {
+        sequence: 2,
+        claim_type: 'parking',
+      }),
+    ],
+  });
+  assert.deepEqual(dataset.daily_summary[0].modes, ['Car', 'Bike', 'Train']);
+  assert.equal(dataset.daily_summary[0].kilometer, 8);
+  assert.equal(dataset.daily_summary[0].distance_amount, 48);
+  assert.equal(dataset.daily_summary[0].claim_amount, 130);
+  assert.equal(dataset.daily_summary[0].amount, 178);
+  assert.equal(dataset.period_summary.total_amount, 178);
+});
+
+for (const [mode, rate, expectedAmount] of [
+  ['bike', 4, 40],
+  ['car', 8, 80],
+]) {
+  test(`${mode}_only_10_km_uses_stored_rate_snapshot`, () => {
+    const row = attendance('2026-07-01', 10, {
+      travel_mode: mode,
+      rate_per_km: rate,
+      petrol_amount: expectedAmount,
+    });
+    const dataset = buildEmployeeRangeDataset({
+      employee: { employee_code: 'FO-TEST' },
+      period: kolkataPeriodBounds('2026-07-01', '2026-07-01'),
+      attendances: [row],
+      visits: [],
+      travelLegs: [travelLeg(row.id, mode, 10, rate)],
+    });
+    assert.equal(dataset.daily_summary[0].kilometer, 10);
+    assert.equal(dataset.daily_summary[0].amount, expectedAmount);
+  });
+}
+
+for (const [mode, amount] of [
+  ['train', 250],
+  ['bus', 60],
+  ['auto', 120],
+]) {
+  test(`${mode}_claim_contributes_amount_but_zero_kilometer`, () => {
+    const row = attendance('2026-07-01', 0, {
+      travel_mode: mode,
+      rate_per_km: 0,
+      petrol_amount: 0,
+    });
+    const dataset = buildEmployeeRangeDataset({
+      employee: { employee_code: 'FO-TEST' },
+      period: kolkataPeriodBounds('2026-07-01', '2026-07-01'),
+      attendances: [row],
+      visits: [],
+      travelLegs: [],
+      expenseClaims: [claim(row.id, mode, amount)],
+    });
+    assert.equal(dataset.daily_summary[0].kilometer, 0);
+    assert.equal(dataset.daily_summary[0].amount, amount);
+  });
+}
+
+test('parking_claim_contributes_amount_but_zero_kilometer', () => {
+  const row = attendance('2026-07-01', 0);
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'FO-TEST' },
+    period: kolkataPeriodBounds('2026-07-01', '2026-07-01'),
+    attendances: [row],
+    visits: [],
+    travelLegs: [],
+    expenseClaims: [
+      claim(row.id, 'other', 50, {
+        claim_type: 'parking',
+        remarks: 'Parking Claim',
+      }),
+    ],
+  });
+  assert.equal(dataset.daily_summary[0].kilometer, 0);
+  assert.equal(dataset.daily_summary[0].amount, 50);
+});
+
+test('rejected_cancelled_and_duplicate_claims_are_excluded', () => {
+  const row = attendance('2026-07-01', 0);
+  const approved = claim(row.id, 'train', 100);
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'FO-TEST' },
+    period: kolkataPeriodBounds('2026-07-01', '2026-07-01'),
+    attendances: [row],
+    visits: [],
+    travelLegs: [],
+    expenseClaims: [
+      approved,
+      { ...approved },
+      claim(row.id, 'bus', 60, { status: 'rejected', sequence: 2 }),
+      claim(row.id, 'auto', 120, { status: 'cancelled', sequence: 3 }),
+    ],
+  });
+  assert.equal(dataset.daily_summary[0].claim_amount, 100);
+  assert.equal(dataset.expense_claims.length, 1);
+});
+
+test('completed_day_keeps_canonical_distance_amount_with_approved_adjustment', () => {
+  const row = attendance('2026-07-01', 12, {
+    total_route_km: 12,
+    eligible_km: 12,
+    total_approved_km: 12,
+    petrol_amount: 48,
+  });
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'FO-TEST' },
+    period: kolkataPeriodBounds('2026-07-01', '2026-07-01'),
+    attendances: [row],
+    visits: [],
+    travelLegs: [travelLeg(row.id, 'bike', 10, 4)],
+  });
+  assert.equal(dataset.daily_summary[0].kilometer, 12);
+  assert.equal(dataset.daily_summary[0].distance_amount, 48);
+});
+
+test('site_summary_contains_start_visits_and_end_in_chronological_order', () => {
+  const row = attendance('2026-07-01', 10);
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'FO-TEST' },
+    period: kolkataPeriodBounds('2026-07-01', '2026-07-01'),
+    attendances: [row],
+    visits: [
+      { id: 'v2', attendance_id: row.id, store_name: 'Second', check_in_time: '2026-07-01T06:00:00Z' },
+      { id: 'v1', attendance_id: row.id, store_name: 'First', check_in_time: '2026-07-01T05:00:00Z' },
+    ],
+    travelLegs: [],
+  });
+  assert.deepEqual(
+    dataset.site_visit_summary.map((item) => item.row_type),
+    ['start_day', 'site_visit', 'site_visit', 'end_day'],
+  );
+  assert.deepEqual(
+    dataset.site_visit_summary.map((item) => item.site_name),
+    ['Start Day', 'First', 'Second', 'End Day'],
+  );
+  assert.equal(dataset.site_visit_summary.some((item) => 'latitude' in item), false);
 });
 
 test('legacy_attendance_displays_travel_leg_warning', () => {

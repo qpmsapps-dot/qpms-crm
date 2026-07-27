@@ -4297,9 +4297,7 @@ function exportEmployeeRangeExcel(dataset) {
   const workbook = XLSX.utils.book_new();
   appendSheet(workbook, "Period Summary", rows.periodSummary);
   appendSheet(workbook, "Daily Attendance", rows.dailyAttendance);
-  appendSheet(workbook, "Travel Legs or Legacy Evidence", rows.travelEvidence);
   appendSheet(workbook, "Site Visits", rows.siteVisits);
-  appendSheet(workbook, "Exceptions and Adjustments", rows.exceptions);
   const employeeCode = sanitizeReportFilenamePart(
     dataset?.employee?.employee_code || "Employee",
   );
@@ -4370,6 +4368,17 @@ function numberLabel(value, suffix = "") {
 
 function moneyLabel(value) {
   return formatCurrency(value);
+}
+
+function reportMoneyLabel(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "--";
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
 }
 
 function durationMinutesLabel(minutes) {
@@ -7174,6 +7183,8 @@ function FieldOfficerDetailsView({
   const status = officerStatus(officer);
   const isLive = isOperationallyActive(officer);
   const periodSummary = rangeDataset?.period_summary || {};
+  const reportKilometer = Number(periodSummary.kilometer || 0);
+  const reportTotalAmount = Number(periodSummary.total_amount || 0);
   const reportState = reportReadiness({
     loading: rangeDatasetLoading,
     dataset: rangeDataset,
@@ -7542,9 +7553,9 @@ function FieldOfficerDetailsView({
           <DetailSummaryCard icon={PlayCircle} label="Period First Start" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
           <DetailSummaryCard icon={Square} label="Period Last End" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
           <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Selected range" tone="purple" />
-          <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint="Includes approved missing checkout adjustments" tone="green" />
+          <DetailSummaryCard icon={Route} label="Kilometer" value={`${reportKilometer.toFixed(2)} km`} hint="Bike and Car payable distance" tone="green" />
           <DetailSummaryCard icon={Bike} label="Travel Mode" value={travelModeLabel(travelMode)} hint={`Current @ ${formatInr(ratePerKm)} / km`} tone="blue" />
-          <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint="Canonical stored total" tone="amber" />
+          <DetailSummaryCard icon={Fuel} label="Total Amount" value={reportMoneyLabel(reportTotalAmount)} hint="Travel reimbursement total" tone="amber" />
           <DetailSummaryCard icon={ShieldCheck} label="Period Attendance Status" value={displayValue(periodSummary.period_attendance_status || lastAttendance.status)} hint={attendances.length > 1 ? `${attendances.length} attendance records` : "--"} tone={periodSummary.incomplete_count > 0 ? "amber" : "blue"} />
         </div>
 
@@ -7731,10 +7742,10 @@ function FieldOfficerDetailsView({
         <DetailSummaryCard icon={PlayCircle} label="Period First Start" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
         <DetailSummaryCard icon={Square} label="Period Last End" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
         <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Visited" tone="purple" />
-        <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "Needs Review" : "Includes approved missing checkout adjustments"} tone={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "amber" : "green"} />
+        <DetailSummaryCard icon={Route} label="Kilometer" value={`${reportKilometer.toFixed(2)} km`} hint="Bike and Car payable distance" tone="green" />
         <DetailSummaryCard icon={Navigation2} label="GPS Audit KM" value={Number.isFinite(gpsAuditKm) ? `${gpsAuditKm.toFixed(1)} km` : "--"} hint="Supporting evidence" tone="blue" />
         <DetailSummaryCard icon={CircleGauge} label="Delta" value={Number.isFinite(kmDelta) ? `${kmDelta.toFixed(1)} km` : "--"} hint={Number.isFinite(differencePercent) ? `${differencePercent.toFixed(1)}%` : "--"} tone={Math.abs(kmDelta || 0) > 2 ? "amber" : "green"} />
-        <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint="Canonical stored total" tone="amber" />
+        <DetailSummaryCard icon={Fuel} label="Total Amount" value={reportMoneyLabel(reportTotalAmount)} hint="Travel reimbursement total" tone="amber" />
         <DetailSummaryCard icon={ShieldCheck} label="Period Attendance Status" value={displayValue(periodSummary.period_attendance_status || lastAttendance.status)} hint={`${periodSummary.attendance_count || attendances.length} attendance record(s)`} tone={periodSummary.incomplete_count > 0 ? "amber" : "green"} />
       </div>
       <header className="fo-screen-only hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
@@ -7817,10 +7828,10 @@ function FieldOfficerDetailsView({
         <DetailSummaryCard icon={PlayCircle} label="Period First Start" value={formatTime(firstAttendance.login_time)} hint={formatDateOnly(firstAttendance.login_time)} tone="green" />
         <DetailSummaryCard icon={Square} label="Period Last End" value={formatTime(lastAttendance.logout_time)} hint={formatDateOnly(lastAttendance.logout_time)} tone="red" />
         <DetailSummaryCard icon={MapPin} label="Total Sites" value={visits.length || "--"} hint="Visited" tone="purple" />
-        <DetailSummaryCard icon={Route} label="Payable KM" value={Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"} hint={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "Needs Review" : "Includes approved missing checkout adjustments"} tone={totalKm <= 0 && gpsFallbackReview.reviewRequired ? "amber" : "green"} />
+        <DetailSummaryCard icon={Route} label="Kilometer" value={`${reportKilometer.toFixed(2)} km`} hint="Bike and Car payable distance" tone="green" />
         {fullTechnicalAccess ? <DetailSummaryCard icon={Navigation2} label="GPS Audit KM" value={Number.isFinite(gpsAuditKm) ? `${gpsAuditKm.toFixed(1)} km` : "--"} hint="Supporting evidence" tone="blue" /> : null}
         {fullTechnicalAccess ? <DetailSummaryCard icon={CircleGauge} label="Delta" value={Number.isFinite(kmDelta) ? `${kmDelta.toFixed(1)} km` : "--"} hint={Number.isFinite(differencePercent) ? `${differencePercent.toFixed(1)}%` : "--"} tone={Math.abs(kmDelta || 0) > 2 ? "amber" : "green"} /> : null}
-        <DetailSummaryCard icon={Fuel} label="Petrol Amount" value={moneyLabel(petrolAmount)} hint="Canonical stored total" tone="amber" />
+        <DetailSummaryCard icon={Fuel} label="Total Amount" value={reportMoneyLabel(reportTotalAmount)} hint="Travel reimbursement total" tone="amber" />
         <DetailSummaryCard icon={ShieldCheck} label="Period Attendance Status" value={displayValue(periodSummary.period_attendance_status || lastAttendance.status)} hint={`${periodSummary.attendance_count || attendances.length} attendance record(s)`} tone={periodSummary.incomplete_count > 0 ? "amber" : "green"} />
       </div>
 
@@ -9385,7 +9396,7 @@ function FieldOfficerDetailsView({
 
             <section className="fo-report-section mt-5">
               <h2 className="mb-3 text-base font-black text-slate-900">
-                Employee & Attendance Details
+                Period Summary
               </h2>
               <div className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-lg border border-slate-200 p-4 text-sm md:grid-cols-4">
               {[
@@ -9397,9 +9408,7 @@ function FieldOfficerDetailsView({
                 ["Selected Period", `${rangeDataset?.period?.from_date || formatDateOnly(fromDate)} to ${rangeDataset?.period?.to_date || formatDateOnly(toDate)}`],
                 ["Period Attendance Status", periodSummary.period_attendance_status || lastAttendance.status],
                 ["Period First Start", formatDateTime(periodSummary.first_start || firstAttendance.login_time)],
-                ["Start Location", formatVisitCoordinates(pointFromAttendanceStart(firstAttendance))],
                 ["Period Last End", formatDateTime(periodSummary.last_end || lastAttendance.logout_time)],
-                ["End Location", formatVisitCoordinates(attendanceEndCoordinates(lastAttendance))],
               ].map(([label, value]) => (
                 <div key={label}>
                   <p className="text-xs font-bold text-slate-400">{label}</p>
@@ -9413,44 +9422,41 @@ function FieldOfficerDetailsView({
 
             <section className="fo-report-section mt-5">
               <h2 className="mb-3 text-base font-black text-slate-900">
-                KM & Petrol Summary
+                Travel Reimbursement Summary
               </h2>
               <div className="grid grid-cols-2 gap-4">
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
                   <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">
-                    Final Payable KM
+                    Kilometer
                   </p>
                   <p className="mt-2 text-2xl font-black text-emerald-900">
-                    {Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"}
+                    {Number.isFinite(reportKilometer) ? `${reportKilometer.toFixed(2)} km` : "--"}
                   </p>
                   <p className="mt-1 text-xs font-semibold text-emerald-700">
-                    Includes approved missing checkout adjustments
+                    Bike and Car payable distance only
                   </p>
                 </div>
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
                   <p className="text-xs font-bold uppercase tracking-wide text-amber-700">
-                    Petrol Amount
+                    Total Amount
                   </p>
                   <p className="mt-2 text-2xl font-black text-amber-950">
-                    {moneyLabel(petrolAmount)}
+                    {reportMoneyLabel(reportTotalAmount)}
                   </p>
                   <p className="mt-1 text-xs font-semibold text-amber-700">
-                    Canonical stored attendance total
+                    Travel reimbursement total
                   </p>
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-3 rounded-lg border border-slate-200 p-3 text-xs md:grid-cols-4">
                 {[
-                  ["Base Payable KM", `${basePayableKm.toFixed(1)} km`],
-                  ["Approved Missing KM Adjustment", `${approvedMissingCheckoutKm.toFixed(1)} km`],
-                  ["Final Payable KM", Number.isFinite(totalKm) ? `${totalKm.toFixed(1)} km` : "--"],
-                  ["Canonical Petrol Amount", moneyLabel(petrolAmount)],
+                  ["Kilometer", `${reportKilometer.toFixed(2)} km`],
+                  ["Distance Reimbursement", reportMoneyLabel(periodSummary.distance_amount)],
+                  ["Eligible Ticket / Parking Amount", reportMoneyLabel(periodSummary.eligible_claim_amount)],
+                  ["Total Amount", reportMoneyLabel(reportTotalAmount)],
                   ["Attendance Records", periodSummary.attendance_count || attendances.length],
                   ["Completed Days", periodSummary.completed_count || 0],
                   ["Incomplete / Stale Days", periodSummary.incomplete_count || 0],
-                  ["Raw GPS KM", `${Number(periodSummary.raw_gps_km || 0).toFixed(1)} km`],
-                  ["Filtered GPS KM", `${Number(periodSummary.filtered_gps_km || 0).toFixed(1)} km`],
-                  ["Actual Travel KM", `${Number(periodSummary.actual_travel_km || 0).toFixed(1)} km`],
                   ["Total Visits", periodSummary.visit_count || visits.length],
                 ].map(([label, value]) => (
                   <div key={label}>
@@ -9466,7 +9472,7 @@ function FieldOfficerDetailsView({
               <table className="mt-2 w-full border-collapse text-left text-[10px]">
                 <thead>
                   <tr className="bg-slate-100">
-                    {["Date", "Start", "End", "Status", "Mode(s)", "Visits", "Raw GPS", "Filtered GPS", "Payable KM", "Petrol"].map((heading) => (
+                    {["Date", "Start", "End", "Status", "Mode(s)", "Visits", "Kilometer", "Amount"].map((heading) => (
                       <th key={heading} className="border border-slate-200 px-1.5 py-2">{heading}</th>
                     ))}
                   </tr>
@@ -9480,10 +9486,8 @@ function FieldOfficerDetailsView({
                       <td className="border border-slate-200 px-1.5 py-2">{displayValue(row.status)}</td>
                       <td className="border border-slate-200 px-1.5 py-2">{(row.modes || []).map(travelModeLabel).join(", ") || "Not selected"}</td>
                       <td className="border border-slate-200 px-1.5 py-2">{row.visit_count}</td>
-                      <td className="border border-slate-200 px-1.5 py-2">{Number(row.raw_gps_km || 0).toFixed(2)}</td>
-                      <td className="border border-slate-200 px-1.5 py-2">{Number(row.filtered_gps_km || 0).toFixed(2)}</td>
-                      <td className="border border-slate-200 px-1.5 py-2">{Number(row.payable_km || 0).toFixed(2)}</td>
-                      <td className="border border-slate-200 px-1.5 py-2">{moneyLabel(row.petrol_amount)}</td>
+                      <td className="border border-slate-200 px-1.5 py-2">{Number(row.kilometer || 0).toFixed(2)}</td>
+                      <td className="border border-slate-200 px-1.5 py-2">{reportMoneyLabel(row.amount)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -9491,62 +9495,11 @@ function FieldOfficerDetailsView({
             </section>
 
             <section className="fo-report-table-section mt-6">
-              <h2 className="text-base font-black">Daily Travel Evidence</h2>
-              <table className="mt-2 w-full border-collapse text-left text-[10px]">
-                  <thead>
-                    <tr className="bg-slate-100">
-                      {["Date", "From", "To", "Mode", "Rate", "Calculated KM", "Payable KM", "Amount", "Source"].map((heading) => (
-                        <th key={heading} className="border border-slate-200 px-1.5 py-2">{heading}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(rangeDataset?.travel_legs || []).map((leg) => (
-                      <tr key={leg.id}>
-                        <td className="border border-slate-200 px-1.5 py-2">{leg.attendance_date}</td>
-                        <td className="border border-slate-200 px-1.5 py-2">{formatDateTime(leg.started_at)}</td>
-                        <td className="border border-slate-200 px-1.5 py-2">{formatDateTime(leg.ended_at)}</td>
-                        <td className="border border-slate-200 px-1.5 py-2">{travelModeLabel(leg.travel_mode)}</td>
-                        <td className="border border-slate-200 px-1.5 py-2">{formatInr(leg.rate_per_km)}</td>
-                        <td className="border border-slate-200 px-1.5 py-2">{Number(leg.calculated_km || 0).toFixed(2)}</td>
-                        <td className="border border-slate-200 px-1.5 py-2">{Number(leg.payable_km || 0).toFixed(2)}</td>
-                        <td className="border border-slate-200 px-1.5 py-2">{moneyLabel(leg.payable_amount)}</td>
-                        <td className="border border-slate-200 px-1.5 py-2">{displayValue(leg.calculation_source)}</td>
-                      </tr>
-                    ))}
-                    {(rangeDataset?.daily_summary || [])
-                      .filter((row) => !row.travel_leg_count)
-                      .map((row) => (
-                        <tr key={`legacy-${row.attendance_id}`} className="bg-amber-50">
-                          <td className="border border-slate-200 px-1.5 py-2">{row.attendance_date}</td>
-                          <td className="border border-slate-200 px-1.5 py-2">{formatDateTime(row.login_time)}</td>
-                          <td className="border border-slate-200 px-1.5 py-2">{formatDateTime(row.logout_time)}</td>
-                          <td className="border border-slate-200 px-1.5 py-2">{(row.modes || []).map(travelModeLabel).join(", ") || "Not selected"}</td>
-                          <td className="border border-slate-200 px-1.5 py-2">--</td>
-                          <td className="border border-slate-200 px-1.5 py-2">{Number(row.actual_travel_km || 0).toFixed(2)}</td>
-                          <td className="border border-slate-200 px-1.5 py-2">{Number(row.payable_km || 0).toFixed(2)}</td>
-                          <td className="border border-slate-200 px-1.5 py-2">{moneyLabel(row.petrol_amount)}</td>
-                          <td className="border border-slate-200 px-1.5 py-2">Legacy reconstructed evidence</td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              {(rangeDataset?.daily_summary || []).some((row) => !row.travel_leg_count) ? (
-                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900">
-                  <strong>Legacy attendance - persisted travel-leg snapshots are unavailable.</strong>
-                  <p className="mt-1">
-                    Daily attendance and site-visit evidence is shown for reconciliation. It is not a persisted travel-leg audit.
-                  </p>
-                </div>
-              ) : null}
-            </section>
-
-            <section className="fo-report-table-section mt-6">
               <h2 className="text-base font-black">Site Visit Summary</h2>
               <table className="mt-2 w-full border-collapse text-left text-xs">
                 <thead>
                   <tr className="bg-slate-100">
-                    {["Date", "#", "Site / Client", "Check-in", "Check-out", "Duration", "Route KM", "Missing KM", "Approved KM", "Review Status / Remarks"].map((heading) => (
+                    {["Date", "Site / Client", "Check-in", "Check-out", "Duration", "Approved KM", "Review Status / Remarks"].map((heading) => (
                       <th key={heading} className="border border-slate-200 px-2 py-2">
                         {heading}
                       </th>
@@ -9554,23 +9507,15 @@ function FieldOfficerDetailsView({
                   </tr>
                 </thead>
                 <tbody>
-                  {visits.map((visit, index) => {
-                    const evidence = missingCheckoutEvidence(visit);
-                    const exception = checkoutExceptionForVisit(visit);
-                    const visitDate =
-                      visit.attendance_date ||
-                      formatDateOnly(visit.check_in_time);
-                    const previousVisit = visits[index - 1];
-                    const previousVisitDate = previousVisit
-                      ? previousVisit.attendance_date ||
-                        formatDateOnly(previousVisit.check_in_time)
-                      : null;
+                  {(rangeDataset?.site_visit_summary || []).map((row, index, rows) => {
+                    const visitDate = row.attendance_date;
+                    const previousVisitDate = rows[index - 1]?.attendance_date;
                     return (
-                      <Fragment key={visit.id || index}>
+                      <Fragment key={`${row.attendance_id}-${row.row_type}-${index}`}>
                         {visitDate !== previousVisitDate ? (
                           <tr>
                             <td
-                              colSpan={10}
+                              colSpan={7}
                               className="border border-slate-200 bg-slate-50 px-2 py-1.5 font-black text-slate-700"
                             >
                               Attendance date: {visitDate}
@@ -9579,97 +9524,33 @@ function FieldOfficerDetailsView({
                         ) : null}
                         <tr>
                           <td className="border border-slate-200 px-2 py-2">{visitDate}</td>
-                          <td className="border border-slate-200 px-2 py-2">{index + 1}</td>
                           <td className="border border-slate-200 px-2 py-2">
-                            {visitTitle(visit)} / {visitClient(visit)}
-                            <br />
-                            <span className="text-[10px] text-slate-500">
-                              Location:{" "}
-                              {formatVisitCoordinates(
-                                visitCheckInCoordinates(visit),
-                              )}
-                            </span>
+                            {[row.site_name, row.client_name].filter(Boolean).join(" / ")}
                           </td>
                           <td className="border border-slate-200 px-2 py-2">
-                            {formatDateTime(visit.check_in_time)}
+                            {row.check_in_time ? formatDateTime(row.check_in_time) : "--"}
                           </td>
                           <td className="border border-slate-200 px-2 py-2">
-                            {formatDateTime(siteVisitCheckoutValue(visit))}
+                            {row.check_out_time ? formatDateTime(row.check_out_time) : "--"}
                           </td>
                           <td className="border border-slate-200 px-2 py-2">
-                            {durationMinutesLabel(visitMinutes(visit))}
+                            {durationMinutesLabel(row.visit_duration_minutes)}
                           </td>
                           <td className="border border-slate-200 px-2 py-2">
-                            {numberLabel(visit.route_km, " km")}
+                            {Number(row.approved_km || 0).toFixed(2)} km
                           </td>
                           <td className="border border-slate-200 px-2 py-2">
-                            {exception.requiresReview ? missingCheckoutKmLabel(visit) : "--"}
-                          </td>
-                          <td className="border border-slate-200 px-2 py-2">
-                            {evidence.approvedKm.toFixed(1)} km
-                          </td>
-                          <td className="border border-slate-200 px-2 py-2">
-                            {exception.label}: {visitRemarks(visit)}
-                            {exception.requiresReview ? (
-                              <>
-                                <br />
-                                Review status: {checkoutReviewStatus(visit).label}
-                                <br />
-                                {missingCheckoutEvidenceLabel(visit)}
-                              </>
-                            ) : null}
+                            {[row.review_status, row.remarks].filter(Boolean).join(": ") || "--"}
                           </td>
                         </tr>
                       </Fragment>
                     );
                   })}
-                  {!visits.length ? (
+                  {!rangeDataset?.site_visit_summary?.length ? (
                     <tr>
-                      <td colSpan={10} className="border border-slate-200 px-2 py-5 text-center">
-                        No site visits available.
+                      <td colSpan={7} className="border border-slate-200 px-2 py-5 text-center">
+                        No attendance sequence available.
                       </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-              {checkoutExceptions.length ? (
-                <p className="mt-2 text-[10px] font-semibold text-amber-800">
-                  Checkout exception rows require Operations Manager / Branch
-                  Head review where applicable.
-                </p>
-              ) : null}
-            </section>
-
-            <section className="fo-report-table-section mt-6">
-              <h2 className="text-base font-black">Exceptions and Adjustments</h2>
-              <table className="mt-2 w-full border-collapse text-left text-xs">
-                <thead>
-                  <tr className="bg-slate-100">
-                    {["Date", "Type", "Detail"].map((heading) => (
-                      <th key={heading} className="border border-slate-200 px-2 py-2">{heading}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(rangeDataset?.data_quality_warnings || []).map((warning, index) => (
-                    <tr key={`${warning.code}-${warning.attendance_id || index}`}>
-                      <td className="border border-slate-200 px-2 py-2">{warning.attendance_date || "--"}</td>
-                      <td className="border border-slate-200 px-2 py-2">{warning.code}</td>
-                      <td className="border border-slate-200 px-2 py-2">{warning.message}</td>
-                    </tr>
-                  ))}
-                  {(rangeDataset?.recalculation_results || [])
-                    .filter((result) => result.outcome !== "updated")
-                    .map((result) => (
-                      <tr key={`recalc-${result.attendance_id}`}>
-                        <td className="border border-slate-200 px-2 py-2">{result.attendance_date}</td>
-                        <td className="border border-slate-200 px-2 py-2">RECALCULATION_{String(result.outcome || "").toUpperCase()}</td>
-                        <td className="border border-slate-200 px-2 py-2">{result.reason || "--"}</td>
-                      </tr>
-                    ))}
-                  {!rangeDataset?.data_quality_warnings?.length && !rangeDataset?.recalculation_results?.some((result) => result.outcome !== "updated") ? (
-                    <tr>
-                      <td colSpan={3} className="border border-slate-200 px-2 py-5 text-center">No exceptions recorded.</td>
                     </tr>
                   ) : null}
                 </tbody>
@@ -9681,7 +9562,7 @@ function FieldOfficerDetailsView({
                 Employee Acknowledgement
               </h2>
               <p className="mt-2 text-xs leading-5 text-slate-600">
-                I confirm that the above site visit and payable KM details are
+                I confirm that the above site visit and travel reimbursement details are
                 verified for the selected period.
               </p>
               <div className="mt-5 grid grid-cols-2 gap-x-8 gap-y-5 text-xs">
@@ -9707,8 +9588,8 @@ function FieldOfficerDetailsView({
             </section>
 
             <p className="mt-5 border-t border-slate-200 pt-3 text-[11px] leading-5 text-slate-500">
-              Payable KM is based on approved route KM used for petrol
-              reimbursement. Petrol amount is calculated at the selected travel-mode rate.
+              Kilometer includes Bike and Car payable distance only. Amount includes
+              stored Bike/Car reimbursement plus eligible ticket and parking claims.
             </p>
             <div className="fo-print-page-number" aria-hidden="true" />
           </article>

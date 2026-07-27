@@ -17,6 +17,10 @@ const dataset = {
     canonical_payable_km: 15,
     approved_missing_km: 0,
     canonical_petrol_amount: 60,
+    kilometer: 15,
+    distance_amount: 60,
+    eligible_claim_amount: 0,
+    total_amount: 60,
     raw_gps_km: 17,
     filtered_gps_km: 14,
     actual_travel_km: 15,
@@ -26,13 +30,17 @@ const dataset = {
     { id: 'a2', attendance_date: '2026-07-02', status: 'Completed', total_approved_km: 5, petrol_amount: 20 },
   ],
   daily_summary: [
-    { attendance_date: '2026-07-01', attendance_ids: ['a1'], visit_count: 0, payable_km: 10, petrol_amount: 40 },
-    { attendance_date: '2026-07-02', attendance_ids: ['a2'], visit_count: 1, payable_km: 5, petrol_amount: 20 },
+    { attendance_date: '2026-07-01', attendance_ids: ['a1'], visit_count: 0, kilometer: 10, amount: 40 },
+    { attendance_date: '2026-07-02', attendance_ids: ['a2'], visit_count: 1, kilometer: 5, amount: 20 },
   ],
   site_visits: [{ id: 'v1', attendance_id: 'a2', attendance_date: '2026-07-02' }],
   travel_legs: [],
   missing_checkout_adjustments: [],
   data_quality_warnings: [{ code: 'LEGACY_TRAVEL_LEGS_UNAVAILABLE', attendance_date: '2026-07-01' }],
+  site_visit_summary: [
+    { attendance_date: '2026-07-01', row_type: 'start_day', site_name: 'Start Day' },
+    { attendance_date: '2026-07-01', row_type: 'end_day', site_name: 'End Day' },
+  ],
 };
 
 test('employee range request carries employee and date range', () => {
@@ -46,18 +54,28 @@ test('employee range request carries employee and date range', () => {
   assert.match(query, /date_to=2026-07-26/);
 });
 
-test('report_uses_range_gps_totals_not_latest_day', () => {
+test('daily report excludes gps audit columns', () => {
   const sheets = buildEmployeeRangeExcelRows(dataset);
-  assert.equal(sheets.periodSummary[0]['Raw GPS KM'], 17);
-  assert.equal(sheets.periodSummary[0]['Actual Travel KM'], 15);
+  assert.equal(Object.hasOwn(sheets.dailyAttendance[0], 'Raw GPS KM'), false);
+  assert.equal(Object.hasOwn(sheets.dailyAttendance[0], 'Filtered GPS KM'), false);
 });
 
 test('excel_and_pdf_have_identical_counts_and_totals', () => {
   const sheets = buildEmployeeRangeExcelRows(dataset);
   assert.equal(sheets.dailyAttendance.length, dataset.daily_summary.length);
-  assert.equal(sheets.siteVisits.length, dataset.site_visits.length);
-  assert.equal(sheets.periodSummary[0]['Canonical Payable KM'], dataset.period_summary.canonical_payable_km);
-  assert.equal(sheets.periodSummary[0]['Canonical Petrol Amount'], dataset.period_summary.canonical_petrol_amount);
+  assert.equal(sheets.siteVisits.length, dataset.site_visit_summary.length);
+  assert.equal(sheets.periodSummary[0]['Kilometer'], 15);
+  assert.equal(sheets.periodSummary[0]['Total Amount'], dataset.period_summary.total_amount);
+  assert.equal(
+    sheets.dailyAttendance.reduce((sum, row) => sum + row.Amount, 0),
+    sheets.periodSummary[0]['Total Amount'],
+  );
+});
+
+test('removed report sections are absent from excel data', () => {
+  const sheets = buildEmployeeRangeExcelRows(dataset);
+  assert.equal(Object.hasOwn(sheets, 'travelEvidence'), false);
+  assert.equal(Object.hasOwn(sheets, 'exceptions'), false);
 });
 
 test('pdf_waits_for_normalized_dataset', () => {
