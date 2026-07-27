@@ -50,12 +50,12 @@ const initialMomDraft = {
   sent: false,
 };
 
-const industryOptions = ['Healthcare', 'Airport', 'Commercial', 'Retail', 'Hospitality', 'Education', 'Industrial'];
+const industryOptions = ['Manufacturing', 'Educational', 'Retail', 'Commercial', 'Electronics', 'Hospital'];
 const sourceOptions = ['LinkedIn', 'Website', 'Campaign', 'Referral', 'Direct Visit', 'Email', 'Phone Enquiry'];
 const stateOptions = ['Tamil Nadu', 'Kerala', 'Karnataka', 'Telangana', 'Andhra Pradesh - 1', 'Andhra Pradesh - 2'];
 const priorityOptions = ['High', 'Medium', 'Low'];
 const statusOptions = ['Active', 'Pending', 'Escalated', 'Completed'];
-const serviceScopeOptions = ['Hard Services MEP', 'Soft Services Housekeeping', 'Security Services', 'Waste Management', 'Landscaping Irrigation', 'Pest Control', 'Helpdesk CAFM', 'Energy Management', 'Sustainability ESG', 'Other Services'];
+const serviceScopeOptions = ['Soft Services', 'Hard Services', 'Security Services', 'Pest Control Services', 'Landscaping Services', 'Waste Management', 'Other Services'];
 const schedulingValidationMessage = 'Please provide either Site Visit Schedule Date & Time or Next Follow-up Date before sending the Minutes of Meeting.';
 
 function normalizeContacts(contacts, lead = {}) {
@@ -85,16 +85,21 @@ function getPrimaryContact(lead) {
 }
 
 function normalizeServiceScope(scope) {
-  if (Array.isArray(scope)) return scope.filter(Boolean);
-  if (scope && typeof scope === 'object') {
-    return Object.entries(scope)
+  let items;
+  if (Array.isArray(scope)) {
+    items = scope;
+  } else if (scope && typeof scope === 'object') {
+    items = Object.entries(scope)
       .filter(([, value]) => value === true || value?.selected)
       .map(([key]) => key);
+  } else {
+    items = String(scope || '').split(',');
   }
-  return String(scope || '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
+  const unique = [...new Set(items.map((item) => String(item || '').trim()).filter(Boolean))];
+  return [
+    ...serviceScopeOptions.filter((service) => unique.includes(service)),
+    ...unique.filter((service) => !serviceScopeOptions.includes(service)),
+  ];
 }
 
 function formatServiceScope(scope) {
@@ -157,7 +162,7 @@ function TextField({ label, value, onChange, type = 'text', required = false, mu
   );
 }
 
-function SelectField({ label, value, onChange, options, required = false, disabled = false, error = '' }) {
+function SelectField({ label, value, onChange, options, placeholder, required = false, disabled = false, error = '' }) {
   return (
     <label className="block">
       <span className="text-sm font-semibold leading-5 text-slate-700 dark:text-slate-300">{label}</span>
@@ -169,12 +174,16 @@ function SelectField({ label, value, onChange, options, required = false, disabl
         disabled={disabled}
         aria-invalid={Boolean(error)}
       >
-        <option value="">Select {label.toLowerCase()}</option>
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
+        <option value="">{placeholder || `Select ${label.toLowerCase()}`}</option>
+        {options.map((option) => {
+          const optionValue = typeof option === 'string' ? option : option.value;
+          const optionLabel = typeof option === 'string' ? option : option.label;
+          return (
+            <option key={optionValue} value={optionValue}>
+              {optionLabel}
+            </option>
+          );
+        })}
       </select>
       {error ? <p className="field-error">{error}</p> : null}
     </label>
@@ -192,6 +201,8 @@ function FormSection({ title, children }) {
 
 function ServiceScopeSelector({ value, onChange, disabled = false }) {
   const selected = normalizeServiceScope(value);
+  const legacyOptions = selected.filter((item) => !serviceScopeOptions.includes(item));
+  const visibleOptions = [...serviceScopeOptions, ...legacyOptions];
 
   function toggle(item) {
     if (disabled) return;
@@ -204,24 +215,27 @@ function ServiceScopeSelector({ value, onChange, disabled = false }) {
   return (
     <div className="md:col-span-2">
       <div className="grid gap-3 sm:grid-cols-2">
-        {serviceScopeOptions.map((item) => {
+        {visibleOptions.map((item) => {
           const active = selected.includes(item);
+          const isLegacy = legacyOptions.includes(item);
           return (
-            <button
+            <label
               key={item}
-              type="button"
-              disabled={disabled}
-              onClick={() => toggle(item)}
-              className={`focus-ring flex min-h-12 items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left text-sm font-bold transition ${
+              className={`flex min-h-12 items-center gap-3 rounded-xl border px-4 py-3 text-left text-sm font-semibold transition ${
                 active
                   ? 'border-qpms-300 bg-qpms-50 text-qpms-800 shadow-sm dark:border-qpms-500/40 dark:bg-qpms-500/15 dark:text-qpms-100'
                   : 'border-slate-200 bg-white text-slate-600 hover:border-qpms-200 hover:text-slate-950 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-qpms-500/30'
-              } disabled:cursor-not-allowed disabled:opacity-75`}
-              aria-pressed={active}
+              } ${disabled ? 'cursor-default opacity-75' : 'cursor-pointer'}`}
             >
-              <span>{item}</span>
-              {active ? <Check className="h-4 w-4 shrink-0" /> : null}
-            </button>
+              <input
+                type="checkbox"
+                checked={active}
+                disabled={disabled}
+                onChange={() => toggle(item)}
+                className="h-5 w-5 shrink-0 accent-qpms-600"
+              />
+              <span>{item}{isLegacy ? ' (Legacy)' : ''}</span>
+            </label>
           );
         })}
       </div>
@@ -580,6 +594,11 @@ export default function CRM() {
     setDraftLead((current) => ({ ...current, [key]: value }));
   }
 
+  function cancelLeadChanges() {
+    setDraftLead({ ...selectedLead });
+    setIsEditingLead(false);
+  }
+
   function updateMomDraft(key, value) {
     setMomDraft((current) => {
       const next = { ...current, [key]: value };
@@ -852,7 +871,7 @@ export default function CRM() {
             <form className="mt-6 space-y-5" onSubmit={handleCreateLead} noValidate>
               <FormSection title="Client Details">
                 <TextField label="Client / Company Name" value={leadForm.company} onChange={(value) => updateLeadForm('company', value)} required error={leadFormErrors.company} />
-                <SelectField label="Industry Type" value={leadForm.industry} onChange={(value) => updateLeadForm('industry', value)} options={industryOptions} required error={leadFormErrors.industry} />
+                <SelectField label="Industry" value={leadForm.industry} onChange={(value) => updateLeadForm('industry', value)} options={industryOptions} placeholder="Select Industry" required error={leadFormErrors.industry} />
                 <TextField label="Site Location" value={leadForm.location} onChange={(value) => updateLeadForm('location', value)} required error={leadFormErrors.location} />
                 <SelectField label="State" value={leadForm.state} onChange={(value) => updateLeadForm('state', value)} options={stateOptions} required error={leadFormErrors.state} />
                 <TextField label="City" value={leadForm.city} onChange={(value) => updateLeadForm('city', value)} required error={leadFormErrors.city} />
@@ -871,7 +890,7 @@ export default function CRM() {
                 </div>
               </FormSection>
 
-              <FormSection title="Service Scope">
+              <FormSection title="Scope of Services">
                 <ServiceScopeSelector value={leadForm.serviceScope} onChange={(value) => updateLeadForm('serviceScope', value)} />
               </FormSection>
 
@@ -915,9 +934,14 @@ export default function CRM() {
                   </button>
                 ) : null}
                 {isEditingLead ? (
-                  <button type="button" onClick={saveLeadChanges} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-qpms-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-qpms-600/20 transition hover:bg-qpms-700">
-                    <Save className="h-4 w-4" /> Save Changes
-                  </button>
+                  <>
+                    <button type="button" onClick={cancelLeadChanges} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:text-slate-950 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:text-white">
+                      <X className="h-4 w-4" /> Cancel
+                    </button>
+                    <button type="button" onClick={saveLeadChanges} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-qpms-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-qpms-600/20 transition hover:bg-qpms-700">
+                      <Save className="h-4 w-4" /> Save Changes
+                    </button>
+                  </>
                 ) : null}
                 {canEditLeads && !isManagement(user) ? (
                   <button type="button" onClick={openMomEditor} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-950/20 transition hover:bg-slate-800 dark:bg-white dark:text-slate-950">
@@ -932,7 +956,16 @@ export default function CRM() {
 
               <FormSection title="Client Details">
                 <TextField label="Client / Company Name" value={draftLead.company} onChange={(value) => updateDraftLead('company', value)} disabled={!isEditingLead} />
-                <SelectField label="Industry Type" value={draftLead.industry} onChange={(value) => updateDraftLead('industry', value)} options={industryOptions} disabled={!isEditingLead} />
+                <SelectField
+                  label="Industry"
+                  value={draftLead.industry}
+                  onChange={(value) => updateDraftLead('industry', value)}
+                  options={!draftLead.industry || industryOptions.includes(draftLead.industry)
+                    ? industryOptions
+                    : [...industryOptions, { value: draftLead.industry, label: `${draftLead.industry} (Legacy)` }]}
+                  placeholder="Select Industry"
+                  disabled={!isEditingLead}
+                />
                 <TextField label="Site Location" value={draftLead.location} onChange={(value) => updateDraftLead('location', value)} disabled={!isEditingLead} />
                 <SelectField label="State" value={draftLead.state} onChange={(value) => updateDraftLead('state', value)} options={stateOptions} disabled={!isEditingLead} />
                 <TextField label="City" value={draftLead.city} onChange={(value) => updateDraftLead('city', value)} disabled={!isEditingLead} />
@@ -959,7 +992,7 @@ export default function CRM() {
                 </div>
               </FormSection>
 
-              <FormSection title="Service Scope">
+              <FormSection title="Scope of Services">
                 <ServiceScopeSelector value={draftLead.serviceScope || draftLead.service_scope} onChange={(value) => updateDraftLead('serviceScope', value)} disabled={!isEditingLead} />
               </FormSection>
 

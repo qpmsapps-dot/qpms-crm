@@ -58,6 +58,7 @@ import {
   canCreateLead,
   canEditLead,
   canViewLead,
+  cleanText,
   findDuplicateLeads,
   isActiveLeadProfile,
   leadActor,
@@ -5870,12 +5871,28 @@ async function updateLeadManagement(request, response) {
       email: contact.email_id,
       isPrimary: contact.is_primary,
     }));
+    const industryKeys = ['industry_type', 'industryType', 'industry'];
+    const serviceScopeKeys = ['service_scope', 'serviceScope'];
+    const suppliedIndustryKey = industryKeys.find((key) => Object.prototype.hasOwnProperty.call(request.body || {}, key));
+    const suppliedScopeKey = serviceScopeKeys.find((key) => Object.prototype.hasOwnProperty.call(request.body || {}, key));
+    const incomingIndustry = suppliedIndustryKey ? cleanText(request.body[suppliedIndustryKey]) : existing.industry_type;
+    const incomingScope = suppliedScopeKey
+      ? normalizeLeadPayload({ service_scope: request.body[suppliedScopeKey] }).service_scope
+      : existing.service_scope;
+    const existingScope = normalizeLeadPayload({ service_scope: existing.service_scope }).service_scope;
+    const industryChanged = Boolean(suppliedIndustryKey) && incomingIndustry !== cleanText(existing.industry_type);
+    const scopeChanged = Boolean(suppliedScopeKey)
+      && JSON.stringify(incomingScope) !== JSON.stringify(existingScope);
     const merged = normalizeLeadPayload({
       ...existing,
       ...request.body,
       contacts: Array.isArray(request.body?.contacts) ? request.body.contacts : existingContacts,
     });
-    const errors = validateLeadPayload(merged, { creating: false });
+    const errors = validateLeadPayload(merged, {
+      creating: false,
+      allowLegacyIndustry: !industryChanged,
+      allowLegacyServices: !scopeChanged,
+    });
     if (errors.length) {
       response.status(400).json({ ok: false, code: 'lead_validation_failed', message: errors.join(' '), errors });
       return;
@@ -6238,13 +6255,13 @@ app.post('/api/leads', requireApiAuth, requireRoles(['BD Executive', 'BD Head', 
     const leadPayload = {
       client_name: request.body?.company || request.body?.clientName || 'Postman Demo Client',
       company_name: request.body?.company || request.body?.clientName || 'Postman Demo Client',
-      industry_type: request.body?.industryType || 'Facility Management',
+      industry_type: request.body?.industryType || 'Commercial',
       lead_source: request.body?.leadSource || 'Postman Automation',
       site_location: request.body?.location || request.body?.siteLocation || '',
       state: request.body?.state || 'Tamil Nadu',
       city: request.body?.city || 'Chennai',
       lead_priority: request.body?.leadPriority || 'High',
-      service_scope: request.body?.serviceScope || ['Soft Services Housekeeping', 'Security Services'],
+      service_scope: request.body?.serviceScope || ['Soft Services', 'Security Services'],
       remarks: request.body?.remarks || 'Created from Postman approval matrix automation.',
       assigned_bd_executive: request.apiUser.name,
       assigned_bd_email: request.apiUser.email,

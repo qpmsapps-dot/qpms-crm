@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  approvedIndustries,
+  approvedServiceScopes,
   canAccessLeadModule,
   canCreateLead,
   canEditLead,
@@ -141,6 +143,106 @@ test('lead validation accepts multiple normalized contacts and rejects invalid d
 
   const invalid = normalizeLeadPayload({ ...valid, contacts: [{ name: '', phone: '12', email: 'bad' }] });
   assert.ok(validateLeadPayload(invalid).length >= 3);
+});
+
+test('approved industries are accepted in canonical order', () => {
+  assert.deepEqual(approvedIndustries, [
+    'Manufacturing',
+    'Educational',
+    'Retail',
+    'Commercial',
+    'Electronics',
+    'Hospital',
+  ]);
+  for (const industry of approvedIndustries) {
+    const lead = normalizeLeadPayload({
+      client_name: 'Acme India',
+      industry_type: industry,
+      lead_source: 'Referral',
+      site_location: 'Guindy',
+      state: 'Tamil Nadu',
+      city: 'Chennai',
+      lead_priority: 'High',
+      contacts: [{ name: 'Client', phone: '9876543210' }],
+    });
+    assert.deepEqual(validateLeadPayload(lead), [], industry);
+  }
+});
+
+test('new lead rejects missing and legacy industries with a clear allow-list error', () => {
+  const base = {
+    client_name: 'Acme India',
+    lead_source: 'Referral',
+    site_location: 'Guindy',
+    state: 'Tamil Nadu',
+    city: 'Chennai',
+    lead_priority: 'High',
+    contacts: [{ name: 'Client', phone: '9876543210' }],
+  };
+  for (const industry_type of ['', 'Healthcare', 'Airport', 'Education']) {
+    const errors = validateLeadPayload(normalizeLeadPayload({ ...base, industry_type }));
+    assert.ok(errors.includes(
+      'Industry must be one of: Manufacturing, Educational, Retail, Commercial, Electronics, Hospital',
+    ));
+  }
+});
+
+test('scope normalization trims, deduplicates, removes blanks, and applies approved order', () => {
+  assert.deepEqual(approvedServiceScopes, [
+    'Soft Services',
+    'Hard Services',
+    'Security Services',
+    'Pest Control Services',
+    'Landscaping Services',
+    'Waste Management',
+    'Other Services',
+  ]);
+  const lead = normalizeLeadPayload({
+    service_scope: [
+      ' Hard Services ',
+      ' Security Services ',
+      'Soft Services',
+      'Hard Services',
+      ' ',
+    ],
+  });
+  assert.deepEqual(lead.service_scope, [
+    'Soft Services',
+    'Hard Services',
+    'Security Services',
+  ]);
+});
+
+test('scope validation accepts empty arrays and rejects unknown or non-array values', () => {
+  const valid = normalizeLeadPayload({ service_scope: [] });
+  assert.deepEqual(valid.service_scope, []);
+  assert.equal(validateLeadPayload(valid, { creating: false }).some((error) => error.includes('Scope of Services')), false);
+
+  const unknown = normalizeLeadPayload({ service_scope: ['Soft Services', 'Legacy Service'] });
+  assert.ok(validateLeadPayload(unknown, { creating: false }).some((error) => error.includes('Scope of Services')));
+
+  const nonArray = normalizeLeadPayload({ service_scope: 'Soft Services, Hard Services' });
+  assert.ok(validateLeadPayload(nonArray, { creating: false }).includes('Scope of Services must be an array.'));
+});
+
+test('legacy values can be preserved for an unrelated patch but replacements stay strict', () => {
+  const legacy = normalizeLeadPayload({
+    client_name: 'Legacy Client',
+    industry_type: 'Airport',
+    lead_source: 'Referral',
+    site_location: 'Guindy',
+    state: 'Tamil Nadu',
+    city: 'Chennai',
+    lead_priority: 'High',
+    service_scope: ['Helpdesk CAFM'],
+    contacts: [{ name: 'Client', phone: '9876543210' }],
+  });
+  assert.deepEqual(validateLeadPayload(legacy, {
+    creating: false,
+    allowLegacyIndustry: true,
+    allowLegacyServices: true,
+  }), []);
+  assert.ok(validateLeadPayload(legacy, { creating: false }).length >= 2);
 });
 
 test('strong duplicate needs client, site, city, state, and matching contact', () => {

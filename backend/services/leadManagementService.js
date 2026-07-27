@@ -25,7 +25,25 @@ const CREATE_ROLES = new Set([
   'MD',
 ]);
 
-const INDUSTRIES = new Set(['Healthcare', 'Airport', 'Commercial', 'Retail', 'Hospitality', 'Education', 'Industrial']);
+export const approvedIndustries = [
+  'Manufacturing',
+  'Educational',
+  'Retail',
+  'Commercial',
+  'Electronics',
+  'Hospital',
+];
+export const approvedServiceScopes = [
+  'Soft Services',
+  'Hard Services',
+  'Security Services',
+  'Pest Control Services',
+  'Landscaping Services',
+  'Waste Management',
+  'Other Services',
+];
+const INDUSTRIES = new Set(approvedIndustries);
+const SERVICE_SCOPES = new Set(approvedServiceScopes);
 const SOURCES = new Set(['LinkedIn', 'Website', 'Campaign', 'Referral', 'Direct Visit', 'Email', 'Phone Enquiry']);
 const PRIORITIES = new Set(['High', 'Medium', 'Low']);
 const STATUSES = new Set(['Active', 'Pending', 'Escalated', 'Completed', 'MOM Sent', 'Converted to Assessment', 'Archived', 'Lost']);
@@ -156,7 +174,21 @@ export function normalizeContacts(value) {
   }));
 }
 
+function normalizeServiceScope(value) {
+  if (!Array.isArray(value)) return value;
+  const unique = [...new Set(value.map(cleanText).filter(Boolean))];
+  return [
+    ...approvedServiceScopes.filter((service) => unique.includes(service)),
+    ...unique.filter((service) => !SERVICE_SCOPES.has(service)),
+  ];
+}
+
 export function normalizeLeadPayload(body = {}) {
+  const hasServiceScope = Object.prototype.hasOwnProperty.call(body, 'service_scope')
+    || Object.prototype.hasOwnProperty.call(body, 'serviceScope');
+  const rawServiceScope = Object.prototype.hasOwnProperty.call(body, 'service_scope')
+    ? body.service_scope
+    : body.serviceScope;
   return {
     client_name: cleanText(body.client_name || body.clientName || body.company),
     industry_type: cleanText(body.industry_type || body.industryType || body.industry),
@@ -165,9 +197,7 @@ export function normalizeLeadPayload(body = {}) {
     state: cleanText(body.state),
     city: cleanText(body.city),
     lead_priority: cleanText(body.lead_priority || body.leadPriority || body.priority),
-    service_scope: Array.isArray(body.service_scope || body.serviceScope)
-      ? (body.service_scope || body.serviceScope).map(cleanText).filter(Boolean)
-      : [],
+    service_scope: hasServiceScope ? normalizeServiceScope(rawServiceScope) : [],
     remarks: cleanText(body.remarks),
     status: cleanText(body.status) || 'Active',
     lead_stage: cleanText(body.lead_stage || body.leadStage || body.stage) || 'New Lead',
@@ -184,10 +214,24 @@ export function normalizeLeadPayload(body = {}) {
   };
 }
 
-export function validateLeadPayload(lead, { creating = true } = {}) {
+export function validateLeadPayload(
+  lead,
+  {
+    creating = true,
+    allowLegacyIndustry = false,
+    allowLegacyServices = false,
+  } = {},
+) {
   const errors = [];
   if (!lead.client_name) errors.push('Client / company name is required.');
-  if (!lead.industry_type || !INDUSTRIES.has(lead.industry_type)) errors.push('Select a valid industry.');
+  if (!lead.industry_type || (!INDUSTRIES.has(lead.industry_type) && !allowLegacyIndustry)) {
+    errors.push(`Industry must be one of: ${approvedIndustries.join(', ')}`);
+  }
+  if (!Array.isArray(lead.service_scope)) {
+    errors.push('Scope of Services must be an array.');
+  } else if (!allowLegacyServices && lead.service_scope.some((service) => !SERVICE_SCOPES.has(service))) {
+    errors.push(`Scope of Services must contain only: ${approvedServiceScopes.join(', ')}`);
+  }
   if (!lead.lead_source || !SOURCES.has(lead.lead_source)) errors.push('Select a valid lead source.');
   if (!lead.site_location) errors.push('Site location is required.');
   if (!lead.state) errors.push('State is required.');
@@ -247,6 +291,7 @@ export function leadResponse(lead, relations = {}) {
   const primaryContact = contacts.find((contact) => contact.is_primary) || contacts[0] || null;
   return {
     ...lead,
+    service_scope: normalizeServiceScope(lead.service_scope),
     contacts,
     primary_contact: primaryContact,
     activity_logs: relations.activities?.[lead.id] || lead.activity_logs || [],

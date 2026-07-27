@@ -1,11 +1,10 @@
 const bdIndustryOptions = [
-  'Healthcare',
-  'Airport',
-  'Commercial',
+  'Manufacturing',
+  'Educational',
   'Retail',
-  'Hospitality',
-  'Education',
-  'Industrial',
+  'Commercial',
+  'Electronics',
+  'Hospital',
 ];
 
 const bdLeadSourceOptions = [
@@ -30,17 +29,26 @@ const bdStateOptions = [
 ];
 
 const bdServiceScopeOptions = [
-  'Hard Services MEP',
-  'Soft Services Housekeeping',
+  'Soft Services',
+  'Hard Services',
   'Security Services',
+  'Pest Control Services',
+  'Landscaping Services',
   'Waste Management',
-  'Landscaping Irrigation',
-  'Pest Control',
-  'Helpdesk CAFM',
-  'Energy Management',
-  'Sustainability ESG',
   'Other Services',
 ];
+
+String? validateBdIndustry(String? value) {
+  if (value == null || value.trim().isEmpty) {
+    return 'Please select an Industry';
+  }
+  return null;
+}
+
+List<String> orderedBdServiceScope(Iterable<String> selected) {
+  final values = selected.toSet();
+  return bdServiceScopeOptions.where(values.contains).toList();
+}
 
 const bdStatusOptions = [
   'Active',

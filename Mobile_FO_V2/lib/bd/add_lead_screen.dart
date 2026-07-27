@@ -23,7 +23,7 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
   final _contactPhone = TextEditingController();
   final _contactEmail = TextEditingController();
   final _remarks = TextEditingController();
-  String _industry = bdIndustryOptions.first;
+  String? _industry;
   String _state = bdStateOptions.first;
   String _source = bdLeadSourceOptions.first;
   String _priority = 'Medium';
@@ -58,7 +58,7 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
     try {
       final request = CreateBdLeadRequest(
         clientName: _clientName.text.trim(),
-        industryType: _industry,
+        industryType: _industry!,
         siteLocation: _siteLocation.text.trim(),
         state: _state,
         city: _city.text.trim(),
@@ -68,7 +68,7 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
         emailId: _contactEmail.text.trim(),
         leadSource: _source,
         leadPriority: _priority,
-        serviceScope: _serviceScope.toList(),
+        serviceScope: orderedBdServiceScope(_serviceScope),
         remarks: _remarks.text.trim(),
         idempotencyKey: _submissionKey,
       );
@@ -103,6 +103,8 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
     if (_clientName.text.trim().isEmpty) {
       return 'Client / Company Name is required.';
     }
+    final industryError = validateBdIndustry(_industry);
+    if (industryError != null) return industryError;
     if (_siteLocation.text.trim().isEmpty) return 'Site Location is required.';
     if (_state.trim().isEmpty) return 'State is required.';
     if (_city.text.trim().isEmpty) return 'City is required.';
@@ -141,7 +143,7 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
     _serviceScope.clear();
     _submissionKey = _newSubmissionKey();
     setState(() {
-      _industry = bdIndustryOptions.first;
+      _industry = null;
       _state = bdStateOptions.first;
       _source = bdLeadSourceOptions.first;
       _priority = 'Medium';
@@ -327,7 +329,7 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
 
   Widget _dropdown(
     String label,
-    String value,
+    String? value,
     List<String> options,
     ValueChanged<String> onChanged,
   ) {
