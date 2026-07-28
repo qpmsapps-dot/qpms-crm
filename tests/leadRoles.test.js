@@ -19,6 +19,8 @@ test('web canonical roles preserve BD and management distinctions', () => {
     qpms_admin: 'QPMS Admin',
     dev: 'Developer',
     coo: 'COO',
+    gm: 'GM',
+    general_manager: 'GM',
     md: 'MD',
   };
   Object.entries(cases).forEach(([input, expected]) => assert.equal(normalizeCanonicalRole(input), expected));
@@ -27,7 +29,7 @@ test('web canonical roles preserve BD and management distinctions', () => {
 test('route grouping keeps distinct canonical roles authorized for CRM', () => {
   assert.equal(normalizeAppRole('BD Executive'), 'BD');
   assert.equal(normalizeAppRole('BD Head'), 'BD');
-  for (const role of ['BD Executive', 'BD Head', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer', 'COO', 'MD']) {
+  for (const role of ['BD Executive', 'BD Head', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer', 'COO', 'GM', 'MD']) {
     assert.equal(canAccessRoute({ role, rawRole: role }, '/crm'), true, role);
   }
   assert.equal(canAccessRoute({ role: 'FO', rawRole: 'FO' }, '/crm'), false);

@@ -21,6 +21,18 @@ class BdLeadApiException implements Exception {
 }
 
 class BdLeadService {
+  static Future<List<BdLeadAssignee>> fetchAssignees() async {
+    final json = await _request('GET', '/api/lead-management/assignees');
+    final rows = json['assignees'] is List
+        ? json['assignees'] as List
+        : const [];
+    return rows
+        .whereType<Map>()
+        .map((row) => BdLeadAssignee.fromJson(Map<String, dynamic>.from(row)))
+        .where((assignee) => assignee.id.isNotEmpty)
+        .toList();
+  }
+
   static Future<List<BdLead>> fetchLeads({
     String? status,
     String? stage,
@@ -193,8 +205,12 @@ class BdLeadService {
   }
 
   static String _friendlyMessage(int statusCode, String message) {
-    if (statusCode == 401) return 'Session expired. Please login again.';
-    if (statusCode == 403) return 'You do not have access to this lead.';
+    if (statusCode == 401) {
+      return 'Your session has expired. Please sign in again.';
+    }
+    if (statusCode == 403) {
+      return 'You do not have permission to access Lead Management.';
+    }
     if (message.toLowerCase().contains('configured')) {
       return 'Backend connection is not configured. Please contact admin.';
     }

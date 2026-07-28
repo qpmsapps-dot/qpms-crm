@@ -10,6 +10,7 @@ import { canManageLeads, canViewBdTeam, isFinanceLeadership, isManagement } from
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { sendLeadMomEmail } from '../services/mailService.js';
 import { getLeadManagementAssignees } from '../services/api.js';
+import { canAssignLead, canCreateLead, normalizeCanonicalRole } from '../utils/authRoles.js';
 
 function formatContactSummary(lead) {
   const contacts = normalizeContacts(lead.contacts, lead);
@@ -32,6 +33,7 @@ const initialLeadForm = {
   serviceScope: [],
   remarks: '',
   assigned_bd_email: '',
+  assigned_bd_profile_id: '',
 };
 
 const initialMomDraft = {
@@ -426,10 +428,12 @@ function createLeadMomDraft(lead) {
 }
 
 export default function CRM() {
-  const { leads, siteVisits, addLead, updateLead, deleteLead, saveLeadMomDraft, sendLeadMom, workflowError } = useWorkflow();
+  const { leads, siteVisits, addLead, updateLead, deleteLead, saveLeadMomDraft, sendLeadMom, backendStatus, workflowError } = useWorkflow();
   const { user } = useAuth();
   const canEditLeads = canManageLeads(user);
-  const canCreateLeads = canEditLeads && !['Business Head', 'Branch Head'].includes(user?.role);
+  const canCreateLeads = canCreateLead(user);
+  const canAssignLeads = canAssignLead(user);
+  const isBdExecutive = normalizeCanonicalRole(user?.rawRole || user?.role) === 'BD Executive';
   const canDeleteLeads = Boolean(user?.metadata?.lead_delete_enabled)
     && ['Admin', 'QPMS Admin', 'Developer'].includes(user?.role);
   const canMonitorLeads = canEditLeads || isFinanceLeadership(user);
@@ -482,7 +486,7 @@ export default function CRM() {
       ].join(' ').toLowerCase().includes(query));
     }
     if (stateFilter) rows = rows.filter((lead) => lead.state === stateFilter);
-    if (assigneeFilter) rows = rows.filter((lead) => lead.assigned_bd_email === assigneeFilter);
+    if (assigneeFilter) rows = rows.filter((lead) => lead.assigned_bd_executive === assigneeFilter);
     if (priorityFilter) rows = rows.filter((lead) => lead.priority === priorityFilter);
     if (stageFilter) rows = rows.filter((lead) => lead.stage === stageFilter);
     if (statusFilter) rows = rows.filter((lead) => lead.status === statusFilter);
@@ -523,16 +527,19 @@ export default function CRM() {
 
   const stats = useMemo(
     () => [
-      ['Total leads', visibleLeads.length],
-      ['New leads', visibleLeads.filter((lead) => lead.stage === 'New Lead').length],
-      ['Converted leads', roleVisibleLeads.filter((lead) => ['Converted', 'Converted to Assessment'].includes(lead.status) || ['Converted', 'Site Visit Scheduled'].includes(lead.stage)).length],
-      ['Active leads', visibleLeads.filter((lead) => lead.status === 'Active').length],
+      ['Total leads', backendStatus === 'error' && leads.length === 0 ? '--' : visibleLeads.length],
+      ['New leads', backendStatus === 'error' && leads.length === 0 ? '--' : visibleLeads.filter((lead) => lead.stage === 'New Lead').length],
+      ['Converted leads', backendStatus === 'error' && leads.length === 0 ? '--' : roleVisibleLeads.filter((lead) => ['Converted', 'Converted to Assessment'].includes(lead.status) || ['Converted', 'Site Visit Scheduled'].includes(lead.stage)).length],
+      ['Active leads', backendStatus === 'error' && leads.length === 0 ? '--' : visibleLeads.filter((lead) => lead.status === 'Active').length],
     ],
-    [roleVisibleLeads, visibleLeads],
+    [backendStatus, leads.length, roleVisibleLeads, visibleLeads],
   );
 
   useEffect(() => {
-    if (!canEditLeads) return undefined;
+    if (!canAssignLeads) {
+      setLiveAssignees([]);
+      return undefined;
+    }
     let active = true;
     getLeadManagementAssignees()
       .then((result) => {
@@ -542,7 +549,7 @@ export default function CRM() {
         if (active) console.warn('[myQPMS Lead Management] Unable to load BD assignees', error.message);
       });
     return () => { active = false; };
-  }, [canEditLeads]);
+  }, [canAssignLeads]);
 
   useEffect(() => {
     if (!isFormOpen && !selectedLead && !leadPendingDelete) return undefined;
@@ -827,7 +834,7 @@ export default function CRM() {
         </select>
         <select aria-label="Filter by assigned BD" value={assigneeFilter} onChange={(event) => setAssigneeFilter(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">
           <option value="">All assignees</option>
-          {liveAssignees.map((assignee) => <option key={assignee.id} value={assignee.email}>{assignee.name}</option>)}
+          {liveAssignees.map((assignee) => <option key={assignee.id} value={assignee.full_name}>{assignee.full_name} — {assignee.employee_code}</option>)}
         </select>
         <select aria-label="Filter by priority" value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"><option value="">All priorities</option>{priorityOptions.map((value) => <option key={value}>{value}</option>)}</select>
         <select aria-label="Filter by stage" value={stageFilter} onChange={(event) => setStageFilter(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"><option value="">All stages</option>{[...new Set(roleVisibleLeads.map((lead) => lead.stage).filter(Boolean))].sort().map((value) => <option key={value}>{value}</option>)}</select>
@@ -884,7 +891,23 @@ export default function CRM() {
               <FormSection title="Lead Information">
                 <SelectField label="Lead Source" value={leadForm.source} onChange={(value) => updateLeadForm('source', value)} options={sourceOptions} required error={leadFormErrors.source} />
                 <SelectField label="Lead Priority" value={leadForm.priority} onChange={(value) => updateLeadForm('priority', value)} options={priorityOptions} required error={leadFormErrors.priority} />
-                {user?.role !== 'BD Executive' ? <SelectField label="Assign BD Executive" value={leadForm.assigned_bd_email} onChange={(value) => updateLeadForm('assigned_bd_email', value)} options={['', ...liveAssignees.map((assignee) => assignee.email)]} /> : null}
+                {isBdExecutive ? (
+                  <p className="rounded-lg bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-800 dark:bg-blue-500/10 dark:text-blue-200">
+                    This lead will be assigned to you.
+                  </p>
+                ) : null}
+                {canAssignLeads ? (
+                  <SelectField
+                    label="Assign to BD Executive"
+                    value={leadForm.assigned_bd_profile_id}
+                    onChange={(value) => updateLeadForm('assigned_bd_profile_id', value)}
+                    options={liveAssignees.map((assignee) => ({
+                      value: assignee.id,
+                      label: `${assignee.full_name} — ${assignee.employee_code}`,
+                    }))}
+                    placeholder="Unassigned"
+                  />
+                ) : null}
                 <div className="md:col-span-2">
                   <TextField label="Remarks" value={leadForm.remarks} onChange={(value) => updateLeadForm('remarks', value)} multiline />
                 </div>
@@ -984,7 +1007,25 @@ export default function CRM() {
               <FormSection title="Lead Information">
                 <SelectField label="Lead Source" value={draftLead.source} onChange={(value) => updateDraftLead('source', value)} options={sourceOptions} disabled={!isEditingLead} />
                 <SelectField label="Lead Priority" value={draftLead.priority} onChange={(value) => updateDraftLead('priority', value)} options={priorityOptions} disabled={!isEditingLead} />
-                <SelectField label="Assigned BD Executive" value={draftLead.assigned_bd_email || ''} onChange={(value) => updateDraftLead('assigned_bd_email', value)} options={['', ...liveAssignees.map((assignee) => assignee.email)]} disabled={!isEditingLead || user?.role === 'BD Executive'} />
+                {canAssignLeads ? (
+                  <SelectField
+                    label="Assigned BD Executive"
+                    value={draftLead.assigned_bd_profile_id || ''}
+                    onChange={(value) => setDraftLead((current) => ({
+                      ...current,
+                      assigned_bd_profile_id: value,
+                      ...(value ? {} : { assigned_bd_email: '', assigned_bd_executive: '', executive: 'Unassigned' }),
+                    }))}
+                    options={liveAssignees.map((assignee) => ({
+                      value: assignee.id,
+                      label: `${assignee.full_name} — ${assignee.employee_code}`,
+                    }))}
+                    placeholder={draftLead.assigned_bd_executive || 'Unassigned'}
+                    disabled={!isEditingLead}
+                  />
+                ) : (
+                  <TextField label="Assigned BD Executive" value={draftLead.assigned_bd_executive || 'Unassigned'} disabled />
+                )}
                 <SelectField label="Status" value={draftLead.status} onChange={(value) => updateDraftLead('status', value)} options={statusOptions} disabled={!isEditingLead} />
                 <TextField label="Created By" value={draftLead.created_by_name || '--'} onChange={() => {}} disabled />
                 <div className="md:col-span-2">

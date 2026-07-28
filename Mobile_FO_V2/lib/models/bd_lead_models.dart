@@ -177,6 +177,7 @@ class CreateBdLeadRequest {
     this.industryType = '',
     this.serviceScope = const [],
     this.remarks = '',
+    this.assignedBdProfileId = '',
   });
 
   final String clientName;
@@ -190,6 +191,7 @@ class CreateBdLeadRequest {
   final String idempotencyKey;
   final List<String> serviceScope;
   final String remarks;
+  final String assignedBdProfileId;
 
   Map<String, dynamic> toJson() => {
     'client_name': clientName,
@@ -202,7 +204,30 @@ class CreateBdLeadRequest {
     'lead_priority': leadPriority,
     'service_scope': serviceScope,
     'remarks': remarks,
+    if (assignedBdProfileId.trim().isNotEmpty)
+      'assigned_bd_profile_id': assignedBdProfileId.trim(),
   };
+}
+
+class BdLeadAssignee {
+  const BdLeadAssignee({
+    required this.id,
+    required this.employeeCode,
+    required this.fullName,
+  });
+
+  final String id;
+  final String employeeCode;
+  final String fullName;
+
+  String get label =>
+      employeeCode.isEmpty ? fullName : '$fullName — $employeeCode';
+
+  factory BdLeadAssignee.fromJson(Map<String, dynamic> json) => BdLeadAssignee(
+    id: _text(json['id']).trim(),
+    employeeCode: _text(json['employee_code']).trim(),
+    fullName: _text(json['full_name']).trim(),
+  );
 }
 
 String _text(Object? value) => value?.toString() ?? '';

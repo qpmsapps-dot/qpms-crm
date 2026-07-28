@@ -112,6 +112,22 @@ export function getAdminUserMe() {
   });
 }
 
+async function leadApiRequest(config) {
+  try {
+    const response = await authenticatedApiRequest(config);
+    return response.data;
+  } catch (requestError) {
+    const status = requestError.response?.status;
+    if (status === 401 || requestError.isAuthSessionError) {
+      throw new Error('Your session has expired. Please sign in again.');
+    }
+    if (status === 403) {
+      throw new Error('You do not have permission to access Lead Management.');
+    }
+    throw requestError;
+  }
+}
+
 export function getMyAccess(params = {}) {
   return adminApiRequest({
     method: 'GET',
@@ -313,7 +329,7 @@ export function updateStoreMasterRecord(id, payload) {
 }
 
 export function getLeadManagementLeads(params = {}) {
-  return adminApiRequest({
+  return leadApiRequest({
     method: 'GET',
     url: '/api/lead-management/leads',
     params,
@@ -321,14 +337,14 @@ export function getLeadManagementLeads(params = {}) {
 }
 
 export function getLeadManagementLead(leadId) {
-  return adminApiRequest({
+  return leadApiRequest({
     method: 'GET',
     url: `/api/lead-management/leads/${encodeURIComponent(leadId)}`,
   });
 }
 
 export function createLeadManagementLead(payload, idempotencyKey) {
-  return adminApiRequest({
+  return leadApiRequest({
     method: 'POST',
     url: '/api/lead-management/leads',
     data: payload,
@@ -337,7 +353,7 @@ export function createLeadManagementLead(payload, idempotencyKey) {
 }
 
 export function updateLeadManagementLead(leadId, payload) {
-  return adminApiRequest({
+  return leadApiRequest({
     method: 'PATCH',
     url: `/api/lead-management/leads/${encodeURIComponent(leadId)}`,
     data: payload,
@@ -353,7 +369,7 @@ export function sendAuthenticatedLeadMom(payload) {
 }
 
 export function getLeadManagementAssignees() {
-  return adminApiRequest({
+  return leadApiRequest({
     method: 'GET',
     url: '/api/lead-management/assignees',
   });

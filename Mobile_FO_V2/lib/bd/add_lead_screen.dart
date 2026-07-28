@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../models/bd_lead_models.dart';
+import '../models/fo_models.dart';
 import '../services/bd_lead_service.dart';
 import '../ui/fo_ui.dart';
+import '../utils/mobile_roles.dart';
 import 'bd_contact_draft.dart';
 import 'bd_lead_options.dart';
 
@@ -12,12 +14,21 @@ typedef BdLeadCreator =
       bool duplicateOverride,
       String duplicateOverrideReason,
     });
+typedef BdLeadAssigneeLoader = Future<List<BdLeadAssignee>> Function();
 
 class AddLeadScreen extends StatefulWidget {
-  const AddLeadScreen({required this.onCreated, this.createLead, super.key});
+  const AddLeadScreen({
+    required this.user,
+    required this.onCreated,
+    this.createLead,
+    this.loadAssignees,
+    super.key,
+  });
 
+  final FoUser user;
   final Future<void> Function(BdLead) onCreated;
   final BdLeadCreator? createLead;
+  final BdLeadAssigneeLoader? loadAssignees;
 
   @override
   State<AddLeadScreen> createState() => _AddLeadScreenState();
@@ -36,9 +47,21 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
   String _source = bdLeadSourceOptions.first;
   String _priority = 'Medium';
   final Set<String> _serviceScope = {};
+  List<BdLeadAssignee> _assignees = const [];
+  String _assigneeProfileId = '';
+  bool _loadingAssignees = false;
+  String? _assigneeError;
   bool _saving = false;
   String? _error;
   String _submissionKey = _newSubmissionKey();
+
+  @override
+  void initState() {
+    super.initState();
+    if (canAssignBusinessDevelopmentLead(widget.user.role)) {
+      _loadAssignees();
+    }
+  }
 
   @override
   void dispose() {
@@ -74,6 +97,7 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
         leadPriority: _priority,
         serviceScope: orderedBdServiceScope(_serviceScope),
         remarks: _remarks.text.trim(),
+        assignedBdProfileId: _assigneeProfileId,
         idempotencyKey: _submissionKey,
       );
       BdLead lead;
@@ -135,7 +159,27 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
       _state = bdStateOptions.first;
       _source = bdLeadSourceOptions.first;
       _priority = 'Medium';
+      _assigneeProfileId = '';
     });
+  }
+
+  Future<void> _loadAssignees() async {
+    if (_loadingAssignees) return;
+    setState(() {
+      _loadingAssignees = true;
+      _assigneeError = null;
+    });
+    try {
+      final loader = widget.loadAssignees ?? BdLeadService.fetchAssignees;
+      final assignees = await loader();
+      if (!mounted) return;
+      setState(() => _assignees = assignees);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _assigneeError = error.toString());
+    } finally {
+      if (mounted) setState(() => _loadingAssignees = false);
+    }
   }
 
   void _addContact() {
@@ -289,6 +333,20 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
                 bdPriorityOptions,
                 (value) => setState(() => _priority = value),
               ),
+              if (canonicalMobileRole(widget.user.role) == 'BD Executive')
+                const Padding(
+                  padding: EdgeInsets.only(top: 12),
+                  child: Text(
+                    'This lead will be assigned to you.',
+                    key: ValueKey('bd-self-assignment-message'),
+                    style: TextStyle(
+                      color: Color(0xFF174EA6),
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              if (canAssignBusinessDevelopmentLead(widget.user.role))
+                _assigneeDropdown(),
               _field(_remarks, 'Remarks', maxLines: 3),
               const SizedBox(height: 16),
               const FoSectionTitle(title: 'Service Scope'),
@@ -442,6 +500,65 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
         onChanged: (value) {
           if (value != null) onChanged(value);
         },
+      ),
+    );
+  }
+
+  Widget _assigneeDropdown() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          KeyedSubtree(
+            key: ValueKey(_submissionKey),
+            child: DropdownButtonFormField<String>(
+              key: const ValueKey('bd-assignee-dropdown'),
+              initialValue: _assigneeProfileId,
+              decoration: const InputDecoration(
+                labelText: 'Assign to BD Executive',
+              ),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('Unassigned')),
+                ..._assignees.map(
+                  (assignee) => DropdownMenuItem(
+                    value: assignee.id,
+                    child: Text(
+                      assignee.label,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+              ],
+              onChanged: _saving || _loadingAssignees
+                  ? null
+                  : (value) => setState(() => _assigneeProfileId = value ?? ''),
+            ),
+          ),
+          if (_loadingAssignees)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: LinearProgressIndicator(),
+            ),
+          if (_assigneeError != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _assigneeError!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _loadAssignees,
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }

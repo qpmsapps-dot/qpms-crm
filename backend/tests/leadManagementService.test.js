@@ -5,6 +5,7 @@ import {
   approvedIndustries,
   approvedServiceScopes,
   canAccessLeadModule,
+  canAssignLead,
   canCreateLead,
   canEditLead,
   canViewLead,
@@ -15,6 +16,7 @@ import {
   normalizeLeadPayload,
   normalizeLeadRole,
   resolveAssignee,
+  safeLeadAssignees,
   validateLeadPayload,
 } from '../services/leadManagementService.js';
 
@@ -44,13 +46,15 @@ test('canonical role aliases stay distinct', () => {
     qpms_admin: 'QPMS Admin',
     dev: 'Developer',
     COO: 'COO',
+    GM: 'GM',
+    general_manager: 'GM',
     md: 'MD',
   };
   Object.entries(cases).forEach(([input, expected]) => assert.equal(normalizeLeadRole(input), expected));
 });
 
 test('role access and creation matrix', () => {
-  for (const role of ['BD Executive', 'BD Head', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer', 'COO', 'MD']) {
+  for (const role of ['BD Executive', 'BD Head', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer', 'COO', 'GM', 'MD']) {
     const actor = leadActor(activeProfile(role));
     assert.equal(canAccessLeadModule(actor), true, role);
   }
@@ -58,22 +62,28 @@ test('role access and creation matrix', () => {
   assert.equal(isActiveLeadProfile(activeProfile('BD Executive', { is_active: false })), false);
   const creation = {
     'BD Executive': true,
-    'BD Head': true,
+    'BD Head': false,
     'Business Head': false,
     'Branch Head': false,
     Admin: true,
-    'QPMS Admin': true,
-    Developer: true,
+    'QPMS Admin': false,
+    Developer: false,
     COO: true,
+    GM: true,
     MD: true,
   };
   Object.entries(creation).forEach(([role, allowed]) => {
     assert.equal(canCreateLead(leadActor(activeProfile(role))), allowed, role);
   });
+  for (const role of ['Admin', 'COO', 'GM', 'MD']) {
+    assert.equal(canAssignLead(leadActor(activeProfile(role))), true, role);
+  }
+  for (const role of ['BD Executive', 'BD Head', 'QPMS Admin', 'Developer', 'Business Head', 'Branch Head']) {
+    assert.equal(canAssignLead(leadActor(activeProfile(role))), false, role);
+  }
 });
 
 test('creator identity stays independent from an explicitly selected active BD assignee', async () => {
-  const creator = leadActor(activeProfile('Admin', { full_name: 'Support Admin', email: 'admin@qpms.test' }));
   const assigneeProfile = activeProfile('BD Executive', {
     full_name: 'Pilot Executive',
     email: 'pilot.bd@qpms.test',
@@ -87,12 +97,79 @@ test('creator identity stays independent from an explicitly selected active BD a
       }),
     }),
   };
-  const assignee = await resolveAssignee(client, creator, assigneeProfile.email);
-  assert.equal(creator.name, 'Support Admin');
-  assert.equal(creator.authUserId, 'auth-Admin');
-  assert.equal(assignee.name, 'Pilot Executive');
-  assert.equal(assignee.email, 'pilot.bd@qpms.test');
-  assert.notEqual(creator.authUserId, assignee.authUserId);
+  for (const role of ['Admin', 'COO', 'GM', 'MD']) {
+    const creator = leadActor(activeProfile(role, {
+      full_name: `${role} Creator`,
+      email: `${role.toLowerCase()}@qpms.test`,
+    }));
+    const assignee = await resolveAssignee(client, creator, assigneeProfile.email);
+    assert.equal(creator.name, `${role} Creator`);
+    assert.equal(assignee.name, 'Pilot Executive');
+    assert.equal(assignee.email, 'pilot.bd@qpms.test');
+    assert.notEqual(creator.authUserId, assignee.authUserId);
+  }
+});
+
+test('management may create an unassigned lead', async () => {
+  for (const role of ['Admin', 'COO', 'GM', 'MD']) {
+    const actor = leadActor(activeProfile(role));
+    assert.equal(await resolveAssignee({}, actor, ''), null, role);
+  }
+});
+
+test('BD Executive assignment is forced to the authenticated actor', async () => {
+  const actor = leadActor(activeProfile('BD Executive', {
+    full_name: 'Authenticated BD',
+    email: 'authenticated.bd@qpms.test',
+  }));
+  const client = {
+    from: () => {
+      throw new Error('BD self-assignment must not query a client-supplied assignee.');
+    },
+  };
+  const assignee = await resolveAssignee(client, actor, 'different.bd@qpms.test');
+  assert.equal(assignee.name, 'Authenticated BD');
+  assert.equal(assignee.email, 'authenticated.bd@qpms.test');
+});
+
+test('management assignment rejects inactive, non-BD, and unknown profiles', async () => {
+  const actor = leadActor(activeProfile('Admin'));
+  for (const profile of [
+    activeProfile('BD Executive', { is_active: false }),
+    activeProfile('FO'),
+    null,
+  ]) {
+    const client = {
+      from: () => ({
+        select: () => ({
+          ilike: () => ({ maybeSingle: async () => ({ data: profile, error: null }) }),
+        }),
+      }),
+    };
+    await assert.rejects(
+      resolveAssignee(client, actor, 'candidate@qpms.test'),
+      /Selected assignee is not an active BD Executive/,
+    );
+  }
+});
+
+test('assignee lookup returns only safe fields for active BD Executives', () => {
+  const rows = safeLeadAssignees([
+    activeProfile('BD Executive', {
+      id: 'active-bd',
+      employee_code: 'QPMSBD001',
+      full_name: 'Active BD',
+      mobile: 'not-returned',
+      email: 'not-returned@qpms.test',
+    }),
+    activeProfile('BD Executive', { id: 'inactive-bd', is_active: false }),
+    activeProfile('FO', { id: 'active-fo' }),
+  ]);
+  assert.deepEqual(rows, [{
+    id: 'active-bd',
+    employee_code: 'QPMSBD001',
+    full_name: 'Active BD',
+  }]);
 });
 
 test('BD Executive sees and edits own lead only', () => {
@@ -112,6 +189,7 @@ test('management and scoped visibility rules', () => {
   assert.equal(canViewLead(leadActor(activeProfile('QPMS Admin')), lead), true);
   assert.equal(canViewLead(leadActor(activeProfile('Developer')), lead), true);
   assert.equal(canViewLead(leadActor(activeProfile('COO')), lead), true);
+  assert.equal(canViewLead(leadActor(activeProfile('GM')), lead), true);
   assert.equal(canViewLead(leadActor(activeProfile('MD')), lead), true);
   assert.equal(canViewLead(leadActor(activeProfile('Branch Head')), lead), true);
   assert.equal(canViewLead(leadActor(activeProfile('Branch Head', { state: 'Kerala' })), lead), false);

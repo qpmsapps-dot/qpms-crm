@@ -358,8 +358,6 @@ export function WorkflowProvider({ children }) {
       })
       .catch((error) => {
         console.error('[myQPMS Workflow] Supabase fetch failed; mock data disabled for remote mode', error);
-        setLeads([]);
-        setSiteVisits([]);
         setBackendStatus('error');
         setWorkflowError(`Supabase fetch failed: ${error.message}`);
         throw error;
@@ -382,6 +380,7 @@ export function WorkflowProvider({ children }) {
       executive: selfAssigned ? user.name : lead.executive || lead.assigned_bd_executive || 'Unassigned',
       assigned_bd_executive: selfAssigned ? user.name : lead.assigned_bd_executive || lead.executive || '',
       assigned_bd_email: selfAssigned ? user.email : lead.assigned_bd_email || '',
+      assigned_bd_profile_id: selfAssigned ? '' : lead.assigned_bd_profile_id || '',
       created_by_user_id: user?.id || '',
       created_by_name: user?.name || user?.email || '',
     };

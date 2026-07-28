@@ -4,6 +4,7 @@ const FULL_VISIBILITY_ROLES = new Set([
   'QPMS Admin',
   'Developer',
   'COO',
+  'GM',
   'MD',
 ]);
 
@@ -17,11 +18,16 @@ const LEAD_ACCESS_ROLES = new Set([
 
 const CREATE_ROLES = new Set([
   'BD Executive',
-  'BD Head',
   'Admin',
-  'QPMS Admin',
-  'Developer',
   'COO',
+  'GM',
+  'MD',
+]);
+
+const ASSIGNMENT_ROLES = new Set([
+  'Admin',
+  'COO',
+  'GM',
   'MD',
 ]);
 
@@ -69,6 +75,9 @@ export function normalizeLeadRole(value) {
     ITADMIN: 'Developer',
     MANAGEMENTITADMIN: 'Developer',
     COO: 'COO',
+    GM: 'GM',
+    GENERALMANAGER: 'GM',
+    GMTOPMANAGEMENT: 'GM',
     MD: 'MD',
   };
   return aliases[roleKey(value)] || String(value || '').trim();
@@ -99,6 +108,10 @@ export function canAccessLeadModule(actor) {
 
 export function canCreateLead(actor) {
   return CREATE_ROLES.has(actor?.role);
+}
+
+export function canAssignLead(actor) {
+  return ASSIGNMENT_ROLES.has(actor?.role);
 }
 
 export function canViewLead(actor, lead) {
@@ -202,6 +215,7 @@ export function normalizeLeadPayload(body = {}) {
     status: cleanText(body.status) || 'Active',
     lead_stage: cleanText(body.lead_stage || body.leadStage || body.stage) || 'New Lead',
     assigned_bd_email: normalizeEmail(body.assigned_bd_email || body.assignedBdEmail),
+    assigned_bd_profile_id: cleanText(body.assigned_bd_profile_id || body.assignedBdProfileId),
     duplicate_override: body.duplicate_override === true || body.duplicateOverride === true,
     duplicate_override_reason: cleanText(body.duplicate_override_reason || body.duplicateOverrideReason),
     contacts: normalizeContacts(body.contacts?.length ? body.contacts : [{
@@ -333,12 +347,29 @@ export async function findDuplicateLeads(client, actor, lead, candidates = null)
   });
 }
 
-export async function resolveAssignee(client, actor, requestedEmail) {
+export async function resolveAssignee(client, actor, requestedIdentifier) {
   if (actor.role === 'BD Executive') {
-    return { name: actor.name, email: actor.email, authUserId: actor.authUserId };
+    return {
+      id: actor.profileId,
+      name: actor.name,
+      email: actor.email,
+      authUserId: actor.authUserId,
+      employeeCode: actor.employeeCode,
+    };
   }
-  if (!requestedEmail) return null;
-  const result = await client.from('profiles').select('*').ilike('email', requestedEmail).maybeSingle();
+  if (!requestedIdentifier) return null;
+  if (!canAssignLead(actor)) {
+    const error = new Error('You do not have permission to assign BD leads.');
+    error.statusCode = 403;
+    error.code = 'lead_assignment_denied';
+    throw error;
+  }
+  const profiles = client.from('profiles').select('*');
+  const identifier = cleanText(requestedIdentifier);
+  const query = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(identifier)
+    ? profiles.eq('id', identifier)
+    : profiles.ilike('email', identifier);
+  const result = await query.maybeSingle();
   if (result.error) throw result.error;
   const profile = result.data;
   if (!profile || !isActiveLeadProfile(profile) || normalizeLeadRole(profile.role) !== 'BD Executive') {
@@ -347,13 +378,26 @@ export async function resolveAssignee(client, actor, requestedEmail) {
     throw error;
   }
   return {
+    id: String(profile.id || ''),
     name: cleanText(profile.full_name || profile.display_name || profile.employee_code || profile.email),
     email: normalizeEmail(profile.email),
     authUserId: String(profile.auth_user_id || ''),
+    employeeCode: cleanText(profile.employee_code),
     business: cleanText(profile.business),
     branch: cleanText(profile.branch),
     state: cleanText(profile.state),
   };
+}
+
+export function safeLeadAssignees(profiles = []) {
+  return profiles
+    .filter((profile) => normalizeLeadRole(profile?.role) === 'BD Executive' && isActiveLeadProfile(profile))
+    .map((profile) => ({
+      id: String(profile.id || ''),
+      full_name: cleanText(profile.full_name || profile.display_name || profile.employee_code),
+      employee_code: cleanText(profile.employee_code),
+    }))
+    .filter((profile) => profile.id && profile.full_name);
 }
 
 function groupBy(rows, key) {
@@ -369,4 +413,5 @@ export const leadRoleSets = {
   fullVisibility: FULL_VISIBILITY_ROLES,
   access: LEAD_ACCESS_ROLES,
   create: CREATE_ROLES,
+  assign: ASSIGNMENT_ROLES,
 };

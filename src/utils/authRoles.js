@@ -47,6 +47,9 @@ export function normalizeCanonicalRole(role = '') {
     TENDERDEMO: 'DEMO_ADMIN',
     READONLYADMIN: 'DEMO_ADMIN',
     COO: 'COO',
+    GM: 'GM',
+    GENERALMANAGER: 'GM',
+    GMTOPMANAGEMENT: 'GM',
     MD: 'MD',
   };
   return aliases[normalizedRoleKey(role)] || String(role || '').trim();
@@ -91,6 +94,18 @@ export function routeAllowedRoles(pathname = '') {
 
 function normalizeRawRole(role = '') {
   return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+function canonicalUserRole(user) {
+  return normalizeCanonicalRole(user?.rawRole || user?.role || user);
+}
+
+export function canCreateLead(user) {
+  return new Set(['BD Executive', 'Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
+}
+
+export function canAssignLead(user) {
+  return new Set(['Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
 }
 
 export function canAccessFaultTracker(user) {

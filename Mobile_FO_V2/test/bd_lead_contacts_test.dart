@@ -100,6 +100,51 @@ void main() {
     },
   );
 
+  test(
+    'create request serializes selected BD profile assignment only when set',
+    () {
+      const assigned = CreateBdLeadRequest(
+        clientName: 'Client',
+        siteLocation: 'Site',
+        state: 'Tamil Nadu',
+        city: 'Chennai',
+        contacts: [
+          BdLeadContactRequest(
+            name: 'Primary',
+            phone: '9000000001',
+            isPrimary: true,
+          ),
+        ],
+        leadSource: 'Referral',
+        leadPriority: 'High',
+        idempotencyKey: 'submission-1',
+        assignedBdProfileId: 'profile-bd-1',
+      );
+      expect(assigned.toJson()['assigned_bd_profile_id'], 'profile-bd-1');
+
+      const unassigned = CreateBdLeadRequest(
+        clientName: 'Client',
+        siteLocation: 'Site',
+        state: 'Tamil Nadu',
+        city: 'Chennai',
+        contacts: [
+          BdLeadContactRequest(
+            name: 'Primary',
+            phone: '9000000001',
+            isPrimary: true,
+          ),
+        ],
+        leadSource: 'Referral',
+        leadPriority: 'High',
+        idempotencyKey: 'submission-2',
+      );
+      expect(
+        unassigned.toJson().containsKey('assigned_bd_profile_id'),
+        isFalse,
+      );
+    },
+  );
+
   test('lead parses all contacts and derives primary contact', () {
     final lead = BdLead.fromJson({
       'id': 'lead-1',

@@ -3,12 +3,32 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:myqpms_fo_v2/bd/add_lead_screen.dart';
 import 'package:myqpms_fo_v2/bd/lead_details_screen.dart';
 import 'package:myqpms_fo_v2/models/bd_lead_models.dart';
+import 'package:myqpms_fo_v2/models/fo_models.dart';
 import 'package:myqpms_fo_v2/services/bd_lead_service.dart';
 
 void main() {
-  Widget app({BdLeadCreator? createLead}) => MaterialApp(
+  FoUser user(String role) => FoUser(
+    authUserId: 'auth-$role',
+    employeeCode: 'QPMS-$role',
+    fullName: '$role User',
+    mobile: '',
+    email: '${role.replaceAll(' ', '.').toLowerCase()}@qpms.test',
+    state: 'Tamil Nadu',
+    role: role,
+  );
+
+  Widget app({
+    BdLeadCreator? createLead,
+    String role = 'BD Executive',
+    BdLeadAssigneeLoader? loadAssignees,
+  }) => MaterialApp(
     home: Scaffold(
-      body: AddLeadScreen(onCreated: (_) async {}, createLead: createLead),
+      body: AddLeadScreen(
+        user: user(role),
+        onCreated: (_) async {},
+        createLead: createLead,
+        loadAssignees: loadAssignees,
+      ),
     ),
   );
 
@@ -19,6 +39,45 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
     await tester.pump();
+  }
+
+  Future<void> fillValidLead(WidgetTester tester) async {
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Client / Company Name *'),
+      'Example Client',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Site Location *'),
+      'Example Site',
+    );
+    await tester.enterText(find.widgetWithText(TextField, 'City *'), 'Chennai');
+    await scrollTo(tester, find.byType(DropdownButtonFormField<String>).first);
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Commercial').last);
+    await tester.pumpAndSettle();
+    await scrollTo(tester, find.byKey(const ValueKey('contact-name-0')));
+    await tester.enterText(
+      find.byKey(const ValueKey('contact-name-0')),
+      'Primary Contact',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('contact-phone-0')),
+      '9000000001',
+    );
+  }
+
+  Future<void> submitLead(WidgetTester tester) async {
+    await scrollTo(tester, find.byKey(const ValueKey('create-lead')));
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -120));
+    await tester.pump();
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey('create-lead')),
+        matching: find.byType(FilledButton),
+      ),
+    );
+    await tester.pumpAndSettle();
   }
 
   testWidgets('initial form has one primary contact and can add another', (
@@ -36,6 +95,114 @@ void main() {
 
     expect(find.text('Contact Person 2'), findsOneWidget);
     expect(find.text('Make Primary'), findsOneWidget);
+  });
+
+  testWidgets('BD Executive sees self-assignment message without dropdown', (
+    tester,
+  ) async {
+    await tester.pumpWidget(app());
+
+    expect(find.text('This lead will be assigned to you.'), findsOneWidget);
+    expect(find.byKey(const ValueKey('bd-assignee-dropdown')), findsNothing);
+  });
+
+  testWidgets('management sees active BD assignee dropdown and Unassigned', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      app(
+        role: 'Admin',
+        loadAssignees: () async => const [
+          BdLeadAssignee(
+            id: 'profile-bd-1',
+            employeeCode: 'QPMSBD001',
+            fullName: 'Active Executive',
+          ),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+    await scrollTo(tester, find.byKey(const ValueKey('bd-assignee-dropdown')));
+
+    expect(find.text('This lead will be assigned to you.'), findsNothing);
+    expect(find.byKey(const ValueKey('bd-assignee-dropdown')), findsOneWidget);
+    expect(find.text('Unassigned'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('bd-assignee-dropdown')));
+    await tester.pumpAndSettle();
+    expect(find.text('Active Executive — QPMSBD001'), findsOneWidget);
+  });
+
+  testWidgets('failed submission preserves selected BD assignee', (
+    tester,
+  ) async {
+    CreateBdLeadRequest? submitted;
+    await tester.pumpWidget(
+      app(
+        role: 'Admin',
+        loadAssignees: () async => const [
+          BdLeadAssignee(
+            id: 'profile-bd-1',
+            employeeCode: 'QPMSBD001',
+            fullName: 'Active Executive',
+          ),
+        ],
+        createLead:
+            (
+              request, {
+              duplicateOverride = false,
+              duplicateOverrideReason = '',
+            }) async {
+              submitted = request;
+              throw const BdLeadApiException('Unable to save lead.');
+            },
+      ),
+    );
+    await tester.pumpAndSettle();
+    await scrollTo(tester, find.byKey(const ValueKey('bd-assignee-dropdown')));
+    await tester.tap(find.byKey(const ValueKey('bd-assignee-dropdown')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Active Executive — QPMSBD001').last);
+    await tester.pumpAndSettle();
+    await fillValidLead(tester);
+    await submitLead(tester);
+
+    expect(submitted?.assignedBdProfileId, 'profile-bd-1');
+    expect(find.text('Active Executive — QPMSBD001'), findsOneWidget);
+  });
+
+  testWidgets('successful submission clears selected BD assignee', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      app(
+        role: 'Admin',
+        loadAssignees: () async => const [
+          BdLeadAssignee(
+            id: 'profile-bd-1',
+            employeeCode: 'QPMSBD001',
+            fullName: 'Active Executive',
+          ),
+        ],
+        createLead:
+            (
+              request, {
+              duplicateOverride = false,
+              duplicateOverrideReason = '',
+            }) async =>
+                const BdLead(id: 'lead-created', clientName: 'Example Client'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await scrollTo(tester, find.byKey(const ValueKey('bd-assignee-dropdown')));
+    await tester.tap(find.byKey(const ValueKey('bd-assignee-dropdown')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Active Executive — QPMSBD001').last);
+    await tester.pumpAndSettle();
+    await fillValidLead(tester);
+    await submitLead(tester);
+
+    expect(find.text('Unassigned'), findsOneWidget);
   });
 
   testWidgets('making and removing primary keeps exactly one primary', (

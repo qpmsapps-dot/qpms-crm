@@ -88,7 +88,8 @@ class _BdShellState extends State<BdShell> {
         onRefresh: _loadLeads,
         onOpenLead: _openLead,
       ),
-      if (canCreate) AddLeadScreen(onCreated: _onLeadCreated),
+      if (canCreate)
+        AddLeadScreen(user: widget.user, onCreated: _onLeadCreated),
       ProfileScreen(user: widget.user, onLogout: widget.onLogout),
     ];
     return Scaffold(

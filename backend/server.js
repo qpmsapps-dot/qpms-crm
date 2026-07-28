@@ -55,6 +55,7 @@ import {
 } from './services/employeeRangeReportService.js';
 import {
   canAccessLeadModule,
+  canAssignLead,
   canCreateLead,
   canEditLead,
   canViewLead,
@@ -67,6 +68,7 @@ import {
   normalizeLeadPayload,
   normalizeLeadRole,
   resolveAssignee,
+  safeLeadAssignees,
   validateLeadPayload,
 } from './services/leadManagementService.js';
 import {
@@ -5671,10 +5673,22 @@ function requireLeadManagementAccess(request, response, next) {
   }
   const actor = leadActor(request.profile, request.authUser);
   if (!canAccessLeadModule(actor)) {
-    response.status(403).json({ ok: false, code: 'lead_access_denied', message: 'Your role cannot access Lead Management.' });
+    response.status(403).json({ ok: false, code: 'lead_access_denied', message: 'You do not have permission to access Lead Management.' });
     return;
   }
   request.leadActor = actor;
+  next();
+}
+
+function requireLeadAssignmentAccess(request, response, next) {
+  if (!canAssignLead(request.leadActor)) {
+    response.status(403).json({
+      ok: false,
+      code: 'lead_assignment_denied',
+      message: 'You do not have permission to assign BD leads.',
+    });
+    return;
+  }
   next();
 }
 
@@ -5754,7 +5768,7 @@ async function createLeadManagement(request, response) {
   try {
     const actor = request.leadActor;
     if (!canCreateLead(actor)) {
-      response.status(403).json({ ok: false, code: 'lead_create_denied', message: 'Your role cannot create leads.' });
+      response.status(403).json({ ok: false, code: 'lead_create_denied', message: 'You do not have permission to create leads.' });
       return;
     }
     const idempotencyKey = String(request.headers['idempotency-key'] || request.body?.idempotency_key || request.body?.idempotencyKey || '').trim();
@@ -5786,7 +5800,11 @@ async function createLeadManagement(request, response) {
       });
       return;
     }
-    const assignee = await resolveAssignee(client, actor, lead.assigned_bd_email);
+    const assignee = await resolveAssignee(
+      client,
+      actor,
+      lead.assigned_bd_profile_id || lead.assigned_bd_email,
+    );
     const duplicates = await findDuplicateLeads(client, actor, lead);
     if (duplicates.length && !lead.duplicate_override) {
       response.status(409).json({
@@ -5897,10 +5915,24 @@ async function updateLeadManagement(request, response) {
       response.status(400).json({ ok: false, code: 'lead_validation_failed', message: errors.join(' '), errors });
       return;
     }
-    const requestedAssignee = Object.prototype.hasOwnProperty.call(request.body || {}, 'assigned_bd_email')
+    const suppliedAssigneeProfileId = cleanText(
+      request.body?.assigned_bd_profile_id || request.body?.assignedBdProfileId,
+    );
+    const suppliedAssigneeEmail = cleanText(
+      request.body?.assigned_bd_email || request.body?.assignedBdEmail,
+    ).toLowerCase();
+    const hasAssigneeProfileKey = Object.prototype.hasOwnProperty.call(request.body || {}, 'assigned_bd_profile_id')
+      || Object.prototype.hasOwnProperty.call(request.body || {}, 'assignedBdProfileId');
+    const hasAssigneeEmailKey = Object.prototype.hasOwnProperty.call(request.body || {}, 'assigned_bd_email')
       || Object.prototype.hasOwnProperty.call(request.body || {}, 'assignedBdEmail');
+    const requestedAssignee = hasAssigneeProfileKey
+      || (hasAssigneeEmailKey && suppliedAssigneeEmail !== String(existing.assigned_bd_email || '').trim().toLowerCase());
     const assignee = requestedAssignee
-      ? await resolveAssignee(client, request.leadActor, merged.assigned_bd_email)
+      ? await resolveAssignee(
+        client,
+        request.leadActor,
+        suppliedAssigneeProfileId || suppliedAssigneeEmail,
+      )
       : null;
     const patch = {
       client_name: merged.client_name,
@@ -5941,20 +5973,9 @@ async function updateLeadManagement(request, response) {
 async function listLeadAssignees(request, response) {
   try {
     const client = requireServiceRoleSupabase();
-    const result = await client.from('profiles').select('id,auth_user_id,full_name,display_name,employee_code,email,role,status,is_active,business,branch,state').eq('is_active', true);
+    const result = await client.from('profiles').select('id,full_name,display_name,employee_code,role,status,is_active').eq('is_active', true);
     if (result.error) throw result.error;
-    const assignees = (result.data || [])
-      .filter((profile) => normalizeLeadRole(profile.role) === 'BD Executive' && isActiveLeadProfile(profile))
-      .map((profile) => ({
-        id: profile.id,
-        auth_user_id: profile.auth_user_id,
-        name: profile.full_name || profile.display_name || profile.employee_code || profile.email,
-        email: String(profile.email || '').toLowerCase(),
-        employee_code: profile.employee_code,
-        business: profile.business,
-        branch: profile.branch,
-        state: profile.state,
-      }));
+    const assignees = safeLeadAssignees(result.data || []);
     response.json({ ok: true, assignees });
   } catch (error) {
     safeLeadError(response, error);
@@ -5965,7 +5986,7 @@ app.get('/api/lead-management/leads', requireSupabaseJwt, requireLeadManagementA
 app.get('/api/lead-management/leads/:leadId', requireSupabaseJwt, requireLeadManagementAccess, getLeadManagement);
 app.post('/api/lead-management/leads', requireSupabaseJwt, requireLeadManagementAccess, createLeadManagement);
 app.patch('/api/lead-management/leads/:leadId', requireSupabaseJwt, requireLeadManagementAccess, updateLeadManagement);
-app.get('/api/lead-management/assignees', requireSupabaseJwt, requireLeadManagementAccess, listLeadAssignees);
+app.get('/api/lead-management/assignees', requireSupabaseJwt, requireLeadManagementAccess, requireLeadAssignmentAccess, listLeadAssignees);
 
 // Backward-compatible mobile aliases use the same production authorization and
 // persistence handlers. The legacy declarations below are therefore unreachable

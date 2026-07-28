@@ -55,6 +55,8 @@ void main() {
       'Branch Head',
       'GM',
       'General Manager',
+      'COO',
+      'MD',
       'Admin',
       'QPMS Admin',
       'Developer',
@@ -79,6 +81,8 @@ void main() {
     expect(canonicalMobileRole('IT Admin'), 'Developer');
     expect(canonicalMobileRole('Management IT Admin'), 'Developer');
     expect(canonicalMobileRole('General Manager'), 'GM');
+    expect(canonicalMobileRole('COO'), 'COO');
+    expect(canonicalMobileRole('MD'), 'MD');
   });
 
   test('debug panels are visible only for admin and support roles', () {
@@ -128,6 +132,9 @@ void main() {
       'Admin',
       'QPMS Admin',
       'Developer',
+      'COO',
+      'GM',
+      'MD',
     ]) {
       expect(canAccessBusinessDevelopmentModule(role), isTrue, reason: role);
       expect(isBusinessDevelopmentRole(role), isFalse, reason: role);
@@ -136,17 +143,29 @@ void main() {
   });
 
   test('lead creation is restricted to approved mobile roles', () {
-    for (final role in [
-      'BD Executive',
-      'BD Head',
-      'Admin',
-      'QPMS Admin',
-      'Developer',
-    ]) {
+    for (final role in ['BD Executive', 'Admin', 'COO', 'GM', 'MD']) {
       expect(canCreateBusinessDevelopmentLead(role), isTrue, reason: role);
     }
+    expect(canCreateBusinessDevelopmentLead('BD Head'), isFalse);
+    expect(canCreateBusinessDevelopmentLead('QPMS Admin'), isFalse);
+    expect(canCreateBusinessDevelopmentLead('Developer'), isFalse);
     expect(canCreateBusinessDevelopmentLead('Business Head'), isFalse);
     expect(canCreateBusinessDevelopmentLead('Branch Head'), isFalse);
     expect(canCreateBusinessDevelopmentLead('FO'), isFalse);
+  });
+
+  test('only management creation roles may select a BD assignee', () {
+    for (final role in ['Admin', 'COO', 'GM', 'MD']) {
+      expect(canAssignBusinessDevelopmentLead(role), isTrue, reason: role);
+    }
+    for (final role in [
+      'BD Executive',
+      'BD Head',
+      'QPMS Admin',
+      'Developer',
+      'FO',
+    ]) {
+      expect(canAssignBusinessDevelopmentLead(role), isFalse, reason: role);
+    }
   });
 }

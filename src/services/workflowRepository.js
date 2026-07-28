@@ -217,6 +217,7 @@ export function appLeadToDbLead(lead) {
     remarks: lead.remarks,
     assigned_bd_executive: lead.assigned_bd_executive || lead.executive,
     assigned_bd_email: lead.assigned_bd_email,
+    assigned_bd_profile_id: lead.assigned_bd_profile_id,
     created_by_user_id: lead.created_by_user_id,
     created_by_name: lead.created_by_name,
     lead_stage: lead.stage || 'New Lead',

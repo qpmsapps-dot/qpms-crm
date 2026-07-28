@@ -4,6 +4,8 @@ const mobileRegistrationRoles = <String>{
   'Operations Manager',
   'Branch Head',
   'GM',
+  'COO',
+  'MD',
   'Admin',
   'BD Executive',
   'BD Head',
@@ -39,6 +41,8 @@ String canonicalMobileRole(String role) {
     'BH': 'Branch Head',
     'GM': 'GM',
     'GENERALMANAGER': 'GM',
+    'COO': 'COO',
+    'MD': 'MD',
     'ADMIN': 'Admin',
     'QPMSADMIN': 'QPMS Admin',
     'DEVELOPER': 'Developer',
@@ -148,6 +152,9 @@ bool canAccessBusinessDevelopmentModule(String role) {
       'Admin',
       'QPMS Admin',
       'Developer',
+      'COO',
+      'GM',
+      'MD',
     }.contains(canonicalRole);
   } catch (_) {
     return false;
@@ -158,10 +165,23 @@ bool canCreateBusinessDevelopmentLead(String role) {
   try {
     return const {
       'BD Executive',
-      'BD Head',
       'Admin',
-      'QPMS Admin',
-      'Developer',
+      'COO',
+      'GM',
+      'MD',
+    }.contains(canonicalMobileRole(role));
+  } catch (_) {
+    return false;
+  }
+}
+
+bool canAssignBusinessDevelopmentLead(String role) {
+  try {
+    return const {
+      'Admin',
+      'COO',
+      'GM',
+      'MD',
     }.contains(canonicalMobileRole(role));
   } catch (_) {
     return false;
