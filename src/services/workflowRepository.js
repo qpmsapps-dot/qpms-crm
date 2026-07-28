@@ -2,6 +2,7 @@ import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import {
   createLeadManagementLead,
   getLeadManagementLeads,
+  saveAuthenticatedLeadMomDraft,
   updateLeadManagementLead,
 } from './api.js';
 
@@ -992,17 +993,8 @@ export async function deleteLeadRemote(leadId, createdBy) {
 }
 
 export async function saveLeadMomRemote(leadId, mom, status = 'Draft') {
-  assertConfigured();
-  const payload = appLeadMomToDb(mom, leadId, status);
-  let { error } = await supabase.from('lead_mom').upsert(payload, { onConflict: 'lead_id' });
-  if (error && String(error.message || '').includes('calendar_invite_sent')) {
-    const retryPayload = { ...payload };
-    delete retryPayload.calendar_invite_sent;
-    const retry = await supabase.from('lead_mom').upsert(retryPayload, { onConflict: 'lead_id' });
-    error = retry.error;
-  }
-  if (error) throw error;
-  await logActivity({ leadId, type: status === 'Sent' ? 'Lead MOM Sent' : 'Lead MOM Drafted', message: status === 'Sent' ? 'Lead MOM Sent' : 'Lead MOM Drafted' });
+  if (status === 'Sent') return;
+  await saveAuthenticatedLeadMomDraft(leadId, { ...mom, status: 'Draft' });
 }
 
 export async function createSiteVisitRemote(lead) {

@@ -8,15 +8,18 @@ import {
   canAssignLead,
   canCreateLead,
   canEditLead,
+  canManageLeadMom,
   canViewLead,
   duplicateScore,
   isActiveLeadProfile,
   leadActor,
+  leadMomContactRecipients,
   normalizeContacts,
   normalizeLeadPayload,
   normalizeLeadRole,
   resolveAssignee,
   safeLeadAssignees,
+  safeLeadMomSender,
   validateLeadPayload,
 } from '../services/leadManagementService.js';
 
@@ -51,6 +54,45 @@ test('canonical role aliases stay distinct', () => {
     md: 'MD',
   };
   Object.entries(cases).forEach(([input, expected]) => assert.equal(normalizeLeadRole(input), expected));
+});
+
+test('approved roles may manage MOM only for a visible lead', () => {
+  const lead = {
+    id: 'lead-1',
+    assigned_bd_email: 'bdexecutive@qpms.test',
+    created_by_user_id: 'auth-BD Executive',
+  };
+  for (const role of ['BD Executive', 'Admin', 'COO', 'GM', 'MD']) {
+    const actor = leadActor(activeProfile(role));
+    assert.equal(canManageLeadMom(actor, lead), true, role);
+  }
+  assert.equal(canManageLeadMom(leadActor(activeProfile('Branch Head')), lead), false);
+  const otherBd = leadActor(activeProfile('BD Executive', {
+    id: 'profile-other',
+    auth_user_id: 'auth-other',
+    email: 'other@qpms.test',
+  }));
+  assert.equal(canManageLeadMom(otherBd, lead), false);
+});
+
+test('MOM sender identity is derived from the authenticated actor', () => {
+  const actor = leadActor(activeProfile('COO'));
+  assert.deepEqual(safeLeadMomSender(actor), {
+    profile_id: actor.profileId,
+    auth_user_id: actor.authUserId,
+    employee_code: actor.employeeCode,
+    name: actor.name,
+    role: 'COO',
+  });
+});
+
+test('MOM contact recipients prefer primary, deduplicate, and skip missing email', () => {
+  assert.deepEqual(leadMomContactRecipients([
+    { email_id: 'second@example.com', is_primary: false },
+    { email_id: '', is_primary: false },
+    { email_id: ' PRIMARY@example.com ', is_primary: true },
+    { email_id: 'second@example.com', is_primary: false },
+  ]), ['primary@example.com', 'second@example.com']);
 });
 
 test('role access and creation matrix', () => {

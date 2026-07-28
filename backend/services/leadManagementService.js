@@ -31,6 +31,14 @@ const ASSIGNMENT_ROLES = new Set([
   'MD',
 ]);
 
+const MOM_ROLES = new Set([
+  'BD Executive',
+  'Admin',
+  'COO',
+  'GM',
+  'MD',
+]);
+
 export const approvedIndustries = [
   'Manufacturing',
   'Educational',
@@ -112,6 +120,32 @@ export function canCreateLead(actor) {
 
 export function canAssignLead(actor) {
   return ASSIGNMENT_ROLES.has(actor?.role);
+}
+
+export function canManageLeadMom(actor, lead) {
+  return MOM_ROLES.has(actor?.role) && canViewLead(actor, lead);
+}
+
+export function safeLeadMomSender(actor) {
+  return {
+    profile_id: cleanText(actor?.profileId) || null,
+    auth_user_id: cleanText(actor?.authUserId) || null,
+    employee_code: cleanText(actor?.employeeCode) || null,
+    name: cleanText(actor?.name) || null,
+    role: normalizeLeadRole(actor?.role) || null,
+  };
+}
+
+export function leadMomContactRecipients(contacts = []) {
+  const ordered = [...contacts].sort((left, right) => {
+    if (Boolean(left?.is_primary) === Boolean(right?.is_primary)) return 0;
+    return left?.is_primary ? -1 : 1;
+  });
+  return [...new Set(
+    ordered
+      .map((contact) => normalizeEmail(contact?.email_id))
+      .filter(Boolean),
+  )];
 }
 
 export function canViewLead(actor, lead) {

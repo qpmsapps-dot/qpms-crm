@@ -58,10 +58,12 @@ import {
   canAssignLead,
   canCreateLead,
   canEditLead,
+  canManageLeadMom,
   canViewLead,
   cleanText,
   findDuplicateLeads,
   isActiveLeadProfile,
+  leadMomContactRecipients,
   leadActor,
   leadResponse,
   loadLeadRelations,
@@ -69,6 +71,7 @@ import {
   normalizeLeadRole,
   resolveAssignee,
   safeLeadAssignees,
+  safeLeadMomSender,
   validateLeadPayload,
 } from './services/leadManagementService.js';
 import {
@@ -2883,17 +2886,120 @@ function buildLeadMomHtml(payload, title) {
   `;
 }
 
+function authorizedLeadMomPayload(request, { requireRecipient = true } = {}) {
+  const payload = request.body || {};
+  const lead = request.authorizedLead || {};
+  const contactRecipients = leadMomContactRecipients(request.authorizedLeadContacts);
+  if (requireRecipient && !contactRecipients.length) {
+    const error = new Error('At least one lead contact with an email address is required.');
+    error.statusCode = 400;
+    error.code = 'lead_contact_email_required';
+    throw error;
+  }
+  const extraCc = normalizeRecipients(payload.cc || payload.ccEmails || payload.cc_emails)
+    .map((email) => String(email).trim().toLowerCase())
+    .filter(Boolean);
+  const to = contactRecipients.slice(0, 1);
+  const cc = [...new Set([...contactRecipients.slice(1), ...extraCc])]
+    .filter((email) => !to.includes(email));
+  return {
+    ...payload,
+    leadId: lead.id,
+    lead_id: lead.id,
+    clientName: lead.client_name,
+    company: lead.client_name,
+    location: lead.site_location,
+    serviceScope: normalizeServiceScope(payload.serviceScope || lead.service_scope || []),
+    to,
+    cc,
+    additionalRecipients: contactRecipients.slice(1),
+    sender: safeLeadMomSender(request.leadActor),
+  };
+}
+
+function leadMomRow(payload, request, status, existingMetadata = {}) {
+  const sent = status === 'Sent';
+  const sender = safeLeadMomSender(request.leadActor);
+  return {
+    lead_id: request.authorizedLead.id,
+    to_email: normalizeRecipients(payload.to).join(', '),
+    cc_emails: normalizeRecipients(payload.cc).join(', '),
+    subject: String(payload.subject || '').trim() || null,
+    discussion_summary: String(payload.discussionSummary || payload.discussion_summary || '').trim() || null,
+    service_scope_discussion: String(
+      payload.serviceScopeDiscussion
+      || payload.service_scope_discussion
+      || normalizeServiceScope(payload.serviceScope).join(', '),
+    ).trim() || null,
+    action_items: String(payload.actionItems || payload.action_items || '').trim() || null,
+    next_followup_date: payload.nextFollowUpDate || payload.next_followup_date || null,
+    scheduled_site_visit_date: payload.scheduledVisitDate || payload.scheduled_site_visit_date || null,
+    scheduled_site_visit_time: payload.scheduledVisitTime || payload.scheduled_site_visit_time || null,
+    site_visit_remarks: String(payload.siteVisitRemarks || payload.site_visit_remarks || '').trim() || null,
+    calendar_invite_sent: sent && Boolean(payload.calendarInviteSent),
+    mom_status: status,
+    sent_at: sent ? new Date().toISOString() : null,
+    metadata: {
+      ...(existingMetadata && typeof existingMetadata === 'object' ? existingMetadata : {}),
+      [sent ? 'sent_by' : 'updated_by']: sender,
+      ...(sent ? { sent_at: new Date().toISOString() } : {}),
+    },
+  };
+}
+
+async function persistAuthorizedLeadMom(request, payload, status) {
+  const client = requireServiceRoleSupabase();
+  const existing = await client
+    .from('lead_mom')
+    .select('metadata')
+    .eq('lead_id', request.authorizedLead.id)
+    .maybeSingle();
+  if (existing.error) throw existing.error;
+  const row = leadMomRow(payload, request, status, existing.data?.metadata);
+  const result = await client
+    .from('lead_mom')
+    .upsert(row, { onConflict: 'lead_id' })
+    .select('*')
+    .single();
+  if (result.error) throw result.error;
+  if (status === 'Sent') {
+    const leadUpdate = await client
+      .from('leads')
+      .update({
+        lead_stage: 'Lead MOM Sent',
+        status: 'MOM Sent',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', request.authorizedLead.id);
+    if (leadUpdate.error) throw leadUpdate.error;
+  }
+  await insertMobileLeadActivity(client, {
+    leadId: request.authorizedLead.id,
+    type: status === 'Sent' ? 'Lead MOM Sent' : 'Lead MOM Drafted',
+    message: status === 'Sent' ? 'Lead MOM sent' : 'Lead MOM draft saved',
+    createdBy: request.leadActor.employeeCode || request.leadActor.name,
+  });
+  return result.data;
+}
+
 function routeSendMom(type) {
   return async (request, response) => {
     try {
+      const payload = type === 'lead' ? authorizedLeadMomPayload(request) : request.body;
       if (type === 'lead') {
         console.log('[myQPMS Mail API] /send-lead-mom hit', {
-          leadId: request.body?.leadId || request.body?.lead_id || '',
+          leadId: request.authorizedLead?.id || '',
         });
       }
 
-      const result = await sendMomEmail(request.body, type);
-      response.json({ ok: true, ...result });
+      const result = await sendMomEmail(payload, type);
+      const mom = type === 'lead'
+        ? await persistAuthorizedLeadMom(request, {
+            ...payload,
+            calendarInviteSent: Boolean(result.calendarInviteSent),
+          }, 'Sent')
+        : null;
+      response.json({ ok: true, ...result, ...(mom ? { mom } : {}) });
     } catch (error) {
       response.status(error.statusCode || 500).json({
         ok: false,
@@ -3002,21 +3108,39 @@ function faultTrackerKey(value) {
   return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
 }
 
-async function requireVisibleLeadForMom(request, response, next) {
+async function requireLeadMomAccess(request, response, next) {
   try {
-    const leadId = String(request.body?.leadId || request.body?.lead_id || '').trim();
+    const leadId = String(
+      request.params?.leadId
+      || request.body?.leadId
+      || request.body?.lead_id
+      || '',
+    ).trim();
     if (!leadId) {
       response.status(400).json({ ok: false, code: 'lead_id_required', message: 'A lead reference is required.' });
       return;
     }
     const client = requireServiceRoleSupabase();
-    const result = await client.from('leads').select('*').eq('id', leadId).maybeSingle();
-    if (result.error) throw result.error;
-    if (!result.data || !canViewLead(request.leadActor, result.data)) {
-      response.status(403).json({ ok: false, code: 'lead_access_denied', message: 'You cannot access this lead.' });
+    const [leadResult, contactsResult] = await Promise.all([
+      client.from('leads').select('*').eq('id', leadId).maybeSingle(),
+      client.from('lead_contacts').select('*').eq('lead_id', leadId).order('created_at', { ascending: true }),
+    ]);
+    if (leadResult.error) throw leadResult.error;
+    if (!leadResult.data) {
+      response.status(404).json({ ok: false, code: 'lead_not_found', message: 'Lead not found.' });
       return;
     }
-    request.authorizedLead = result.data;
+    if (contactsResult.error) throw contactsResult.error;
+    if (!canManageLeadMom(request.leadActor, leadResult.data)) {
+      response.status(403).json({
+        ok: false,
+        code: 'lead_mom_access_denied',
+        message: 'You do not have permission to send MOM for this lead.',
+      });
+      return;
+    }
+    request.authorizedLead = leadResult.data;
+    request.authorizedLeadContacts = contactsResult.data || [];
     next();
   } catch (error) {
     safeLeadError(response, error);
@@ -5982,11 +6106,28 @@ async function listLeadAssignees(request, response) {
   }
 }
 
+async function saveLeadMomDraftManagement(request, response) {
+  try {
+    const payload = authorizedLeadMomPayload(request, { requireRecipient: false });
+    const mom = await persistAuthorizedLeadMom(request, payload, 'Draft');
+    response.json({ ok: true, mom });
+  } catch (error) {
+    safeLeadError(response, error);
+  }
+}
+
 app.get('/api/lead-management/leads', requireSupabaseJwt, requireLeadManagementAccess, listLeadManagement);
 app.get('/api/lead-management/leads/:leadId', requireSupabaseJwt, requireLeadManagementAccess, getLeadManagement);
 app.post('/api/lead-management/leads', requireSupabaseJwt, requireLeadManagementAccess, createLeadManagement);
 app.patch('/api/lead-management/leads/:leadId', requireSupabaseJwt, requireLeadManagementAccess, updateLeadManagement);
 app.get('/api/lead-management/assignees', requireSupabaseJwt, requireLeadManagementAccess, requireLeadAssignmentAccess, listLeadAssignees);
+app.post(
+  '/api/lead-management/leads/:leadId/mom',
+  requireSupabaseJwt,
+  requireLeadManagementAccess,
+  requireLeadMomAccess,
+  saveLeadMomDraftManagement,
+);
 
 // Backward-compatible mobile aliases use the same production authorization and
 // persistence handlers. The legacy declarations below are therefore unreachable
@@ -6325,40 +6466,38 @@ app.post('/api/leads', requireApiAuth, requireRoles(['BD Executive', 'BD Head', 
   }
 });
 
-app.post('/api/leads/:leadId/send-mom', requireApiAuth, requireRoles(['BD Executive', 'BD Head', 'Admin']), async (request, response) => {
+app.post('/api/leads/:leadId/send-mom', requireApiAuth, async (request, response) => {
   try {
-    const client = requireSupabase();
-    const { data: lead, error: leadError } = await client.from('leads').select('*').eq('id', request.params.leadId).single();
+    const client = requireServiceRoleSupabase();
+    const actor = leadActor({
+      ...request.apiUser,
+      is_active: true,
+      status: 'Active',
+    }, request.apiUser);
+    const [leadResult, contactsResult] = await Promise.all([
+      client.from('leads').select('*').eq('id', request.params.leadId).maybeSingle(),
+      client.from('lead_contacts').select('*').eq('lead_id', request.params.leadId).order('created_at', { ascending: true }),
+    ]);
+    const { data: lead, error: leadError } = leadResult;
     if (leadError) throw leadError;
-
-    const momPayload = {
-      lead_id: lead.id,
-      to_email: request.body?.to || request.body?.toEmail || request.body?.primaryContactEmail || '',
-      cc_emails: request.body?.cc || request.body?.ccEmails || '',
-      subject: request.body?.subject || `Lead Minutes of Meeting - ${lead.client_name} - myQPMS`,
-      discussion_summary: request.body?.discussionSummary || 'Lead MOM recorded from Postman approval matrix automation.',
-      service_scope_discussion: request.body?.serviceScopeDiscussion || (Array.isArray(lead.service_scope) ? lead.service_scope.join(', ') : ''),
-      action_items: request.body?.actionItems || '',
-      next_followup_date: request.body?.nextFollowUpDate || null,
-      scheduled_site_visit_date: request.body?.scheduledVisitDate || null,
-      scheduled_site_visit_time: request.body?.scheduledVisitTime || null,
-      site_visit_remarks: request.body?.remarks || '',
-      calendar_invite_sent: false,
-      mom_status: 'Sent',
-      sent_at: new Date().toISOString(),
-      metadata: { created_by: 'postman_automation', simulated: true },
-    };
-    const { data: mom, error: momError } = await client.from('lead_mom').upsert(momPayload, { onConflict: 'lead_id' }).select('*').single();
-    if (momError) throw momError;
-
-    await client.from('leads').update({ lead_stage: 'Lead MOM Sent', updated_at: new Date().toISOString() }).eq('id', lead.id);
-    await logActivity({
-      leadId: lead.id,
-      type: 'Lead MOM Sent',
-      message: 'Lead MOM Sent via Postman Automation',
-      createdBy: 'postman_automation',
-    });
-
+    if (!lead) {
+      response.status(404).json({ ok: false, code: 'lead_not_found', message: 'Lead not found.' });
+      return;
+    }
+    if (contactsResult.error) throw contactsResult.error;
+    if (!canManageLeadMom(actor, lead)) {
+      response.status(403).json({
+        ok: false,
+        code: 'lead_mom_access_denied',
+        message: 'You do not have permission to send MOM for this lead.',
+      });
+      return;
+    }
+    request.leadActor = actor;
+    request.authorizedLead = lead;
+    request.authorizedLeadContacts = contactsResult.data || [];
+    const payload = authorizedLeadMomPayload(request, { requireRecipient: false });
+    const mom = await persistAuthorizedLeadMom(request, payload, 'Sent');
     response.json({ ok: true, simulated: true, leadId: lead.id, mom });
   } catch (error) {
     response.status(error.statusCode || 500).json({ ok: false, message: error.message });
@@ -7720,7 +7859,7 @@ app.post(
   },
 );
 
-app.post('/send-lead-mom', requireSupabaseJwt, requireLeadManagementAccess, requireVisibleLeadForMom, routeSendMom('lead'));
+app.post('/send-lead-mom', requireSupabaseJwt, requireLeadManagementAccess, requireLeadMomAccess, routeSendMom('lead'));
 app.post('/send-sitevisit-mom', routeSendMom('sitevisit'));
 
 const REPORT_EMAIL_SCHEDULER_POLL_MS = 30 * 1000;

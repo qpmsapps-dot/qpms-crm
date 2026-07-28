@@ -6,11 +6,11 @@ import StatusBadge from '../components/StatusBadge.jsx';
 import Toast from '../components/Toast.jsx';
 import { useWorkflow } from '../context/workflow-context.js';
 import { useAuth } from '../context/auth-context.js';
-import { canManageLeads, canViewBdTeam, isFinanceLeadership, isManagement } from '../data/mockUsers.js';
+import { canManageLeads, canViewBdTeam, isFinanceLeadership } from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { sendLeadMomEmail } from '../services/mailService.js';
 import { getLeadManagementAssignees } from '../services/api.js';
-import { canAssignLead, canCreateLead, normalizeCanonicalRole } from '../utils/authRoles.js';
+import { canAssignLead, canCreateLead, canSendLeadMom, normalizeCanonicalRole } from '../utils/authRoles.js';
 
 function formatContactSummary(lead) {
   const contacts = normalizeContacts(lead.contacts, lead);
@@ -433,6 +433,7 @@ export default function CRM() {
   const canEditLeads = canManageLeads(user);
   const canCreateLeads = canCreateLead(user);
   const canAssignLeads = canAssignLead(user);
+  const canSendMom = canSendLeadMom(user);
   const isBdExecutive = normalizeCanonicalRole(user?.rawRole || user?.role) === 'BD Executive';
   const canDeleteLeads = Boolean(user?.metadata?.lead_delete_enabled)
     && ['Admin', 'QPMS Admin', 'Developer'].includes(user?.role);
@@ -705,6 +706,10 @@ export default function CRM() {
   }
 
   function openMomEditor() {
+    if (!canSendMom) {
+      showToast('You do not have permission to send MOM for this lead.', 'error');
+      return;
+    }
     const sourceLead = draftLead || selectedLead;
     const nextDraft = selectedLead?.mom
       ? {
@@ -720,6 +725,10 @@ export default function CRM() {
   }
 
   async function handleSaveMomDraft() {
+    if (!canSendMom) {
+      showToast('You do not have permission to send MOM for this lead.', 'error');
+      return;
+    }
     setPendingAction('saveMomDraft');
     try {
       showToast('Saving...', 'info');
@@ -733,6 +742,10 @@ export default function CRM() {
   }
 
   async function handleSendMom() {
+    if (!canSendMom) {
+      showToast('You do not have permission to send MOM for this lead.', 'error');
+      return;
+    }
     if (!hasSchedulingOrFollowUp(momDraft)) {
       showToast(schedulingValidationMessage, 'warning');
       return;
@@ -966,7 +979,7 @@ export default function CRM() {
                     </button>
                   </>
                 ) : null}
-                {canEditLeads && !isManagement(user) ? (
+                {canSendMom ? (
                   <button type="button" onClick={openMomEditor} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-950/20 transition hover:bg-slate-800 dark:bg-white dark:text-slate-950">
                     <FileText className="h-4 w-4" /> Create Lead MOM
                   </button>

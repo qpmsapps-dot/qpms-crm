@@ -119,10 +119,16 @@ async function leadApiRequest(config) {
   } catch (requestError) {
     const status = requestError.response?.status;
     if (status === 401 || requestError.isAuthSessionError) {
-      throw new Error('Your session has expired. Please sign in again.');
+      throw new Error(
+        requestError.response?.data?.message
+        || 'Your session has expired. Please sign in again.',
+      );
     }
     if (status === 403) {
-      throw new Error('You do not have permission to access Lead Management.');
+      throw new Error(
+        requestError.response?.data?.message
+        || 'You do not have permission to access Lead Management.',
+      );
     }
     throw requestError;
   }
@@ -361,9 +367,17 @@ export function updateLeadManagementLead(leadId, payload) {
 }
 
 export function sendAuthenticatedLeadMom(payload) {
-  return adminApiRequest({
+  return leadApiRequest({
     method: 'POST',
     url: '/send-lead-mom',
+    data: payload,
+  });
+}
+
+export function saveAuthenticatedLeadMomDraft(leadId, payload) {
+  return leadApiRequest({
+    method: 'POST',
+    url: `/api/lead-management/leads/${encodeURIComponent(leadId)}/mom`,
     data: payload,
   });
 }

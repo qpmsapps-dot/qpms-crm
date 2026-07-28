@@ -108,6 +108,10 @@ export function canAssignLead(user) {
   return new Set(['Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
 }
 
+export function canSendLeadMom(user) {
+  return new Set(['BD Executive', 'Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
+}
+
 export function canAccessFaultTracker(user) {
   if (!user) return false;
   return new Set([

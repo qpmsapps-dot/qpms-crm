@@ -472,16 +472,21 @@ export function WorkflowProvider({ children }) {
   }
 
   function saveLeadMomDraft(leadId, mom) {
-    void updateLead(leadId, (lead) => ({
+    const summaryUpdate = updateLead(leadId, (lead) => ({
       mom: { ...mom, sent: Boolean(mom.sent) },
       activity: ['Lead MOM draft saved', ...(lead.activity || [])].slice(0, 8),
-    })).catch((error) => console.warn('Lead MOM summary update failed:', error.message));
+    }));
     if (isRemoteWorkflowEnabled()) {
-      saveLeadMomRemote(leadId, mom, 'Draft').catch((error) => {
-        console.warn('Lead MOM Supabase save failed:', error.message);
-        setBackendStatus('fallback');
+      return Promise.all([
+        summaryUpdate,
+        saveLeadMomRemote(leadId, mom, 'Draft'),
+      ]).catch((error) => {
+        console.warn('Lead MOM save failed:', error.message);
+        setBackendStatus(isProductionWorkflowMode() ? 'error' : 'fallback');
+        throw error;
       });
     }
+    return summaryUpdate;
   }
 
   function sendLeadMom(leadId, mom) {

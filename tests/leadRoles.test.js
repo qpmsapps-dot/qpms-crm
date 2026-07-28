@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  canSendLeadMom,
   canAccessRoute,
   normalizeAppRole,
   normalizeCanonicalRole,
@@ -24,6 +25,15 @@ test('web canonical roles preserve BD and management distinctions', () => {
     md: 'MD',
   };
   Object.entries(cases).forEach(([input, expected]) => assert.equal(normalizeCanonicalRole(input), expected));
+});
+
+test('web MOM access uses the approved canonical roles only', () => {
+  for (const role of ['BD Executive', 'Admin', 'COO', 'GM', 'MD']) {
+    assert.equal(canSendLeadMom({ role, rawRole: role }), true, role);
+  }
+  for (const role of ['BD Head', 'Business Head', 'Branch Head', 'Finance GM', 'FO']) {
+    assert.equal(canSendLeadMom({ role, rawRole: role }), false, role);
+  }
 });
 
 test('route grouping keeps distinct canonical roles authorized for CRM', () => {
