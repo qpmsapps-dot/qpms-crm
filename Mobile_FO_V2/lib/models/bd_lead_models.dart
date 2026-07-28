@@ -4,12 +4,14 @@ class BdLeadContact {
     this.designation = '',
     this.phone = '',
     this.email = '',
+    this.isPrimary = false,
   });
 
   final String name;
   final String designation;
   final String phone;
   final String email;
+  final bool isPrimary;
 
   factory BdLeadContact.fromJson(Map<String, dynamic> json) => BdLeadContact(
     name: _text(json['contact_person_name'] ?? json['name']),
@@ -18,6 +20,7 @@ class BdLeadContact {
     ),
     phone: _text(json['contact_number'] ?? json['phone']),
     email: _text(json['email_id'] ?? json['email']),
+    isPrimary: json['is_primary'] == true || json['isPrimary'] == true,
   );
 }
 
@@ -41,7 +44,7 @@ class BdLead {
     this.status = '',
     this.createdAt,
     this.updatedAt,
-    this.primaryContact,
+    this.contacts = const [],
     this.nextFollowUpDate,
     this.latestMomSummary = '',
     this.activityLogs = const [],
@@ -65,10 +68,18 @@ class BdLead {
   final String status;
   final DateTime? createdAt;
   final DateTime? updatedAt;
-  final BdLeadContact? primaryContact;
+  final List<BdLeadContact> contacts;
   final String? nextFollowUpDate;
   final String latestMomSummary;
   final List<BdLeadActivity> activityLogs;
+
+  BdLeadContact? get primaryContact {
+    if (contacts.isEmpty) return null;
+    return contacts.firstWhere(
+      (contact) => contact.isPrimary,
+      orElse: () => contacts.first,
+    );
+  }
 
   factory BdLead.fromJson(Map<String, dynamic> json) => BdLead(
     id: _text(json['id']),
@@ -89,11 +100,7 @@ class BdLead {
     status: _text(json['status']),
     createdAt: DateTime.tryParse(_text(json['created_at'])),
     updatedAt: DateTime.tryParse(_text(json['updated_at'])),
-    primaryContact: json['primary_contact'] is Map
-        ? BdLeadContact.fromJson(
-            Map<String, dynamic>.from(json['primary_contact'] as Map),
-          )
-        : null,
+    contacts: _leadContacts(json),
     nextFollowUpDate: _nullableText(json['next_followup_date']),
     latestMomSummary: _text(
       json['latest_mom'] is Map
@@ -133,20 +140,41 @@ class BdLeadActivity {
   );
 }
 
+class BdLeadContactRequest {
+  const BdLeadContactRequest({
+    required this.name,
+    this.designation,
+    this.phone,
+    this.email,
+    this.isPrimary = false,
+  });
+
+  final String name;
+  final String? designation;
+  final String? phone;
+  final String? email;
+  final bool isPrimary;
+
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'designation': designation,
+    'phone': phone,
+    'email': email,
+    'isPrimary': isPrimary,
+  };
+}
+
 class CreateBdLeadRequest {
   const CreateBdLeadRequest({
     required this.clientName,
     required this.siteLocation,
     required this.state,
     required this.city,
-    required this.contactPersonName,
-    required this.contactNumber,
+    required this.contacts,
     required this.leadSource,
     required this.leadPriority,
     required this.idempotencyKey,
     this.industryType = '',
-    this.contactPersonDesignation = '',
-    this.emailId = '',
     this.serviceScope = const [],
     this.remarks = '',
   });
@@ -156,10 +184,7 @@ class CreateBdLeadRequest {
   final String siteLocation;
   final String state;
   final String city;
-  final String contactPersonName;
-  final String contactPersonDesignation;
-  final String contactNumber;
-  final String emailId;
+  final List<BdLeadContactRequest> contacts;
   final String leadSource;
   final String leadPriority;
   final String idempotencyKey;
@@ -172,10 +197,7 @@ class CreateBdLeadRequest {
     'site_location': siteLocation,
     'state': state,
     'city': city,
-    'contact_person_name': contactPersonName,
-    'contact_person_designation': contactPersonDesignation,
-    'contact_number': contactNumber,
-    'email_id': emailId,
+    'contacts': contacts.map((contact) => contact.toJson()).toList(),
     'lead_source': leadSource,
     'lead_priority': leadPriority,
     'service_scope': serviceScope,
@@ -198,4 +220,51 @@ List<String> _stringList(Object? value) {
         .toList();
   }
   return const [];
+}
+
+List<BdLeadContact> _leadContacts(Map<String, dynamic> json) {
+  final contacts = json['contacts'];
+  if (contacts is List) {
+    final parsed = contacts
+        .whereType<Map>()
+        .map(
+          (contact) =>
+              BdLeadContact.fromJson(Map<String, dynamic>.from(contact)),
+        )
+        .toList();
+    if (parsed.isNotEmpty) return parsed;
+  }
+
+  final primary = json['primary_contact'];
+  if (primary is Map) {
+    final parsed = BdLeadContact.fromJson(Map<String, dynamic>.from(primary));
+    return [
+      BdLeadContact(
+        name: parsed.name,
+        designation: parsed.designation,
+        phone: parsed.phone,
+        email: parsed.email,
+        isPrimary: true,
+      ),
+    ];
+  }
+
+  final legacy = BdLeadContact.fromJson(json);
+  if ([
+    legacy.name,
+    legacy.designation,
+    legacy.phone,
+    legacy.email,
+  ].every((value) => value.isEmpty)) {
+    return const [];
+  }
+  return [
+    BdLeadContact(
+      name: legacy.name,
+      designation: legacy.designation,
+      phone: legacy.phone,
+      email: legacy.email,
+      isPrimary: true,
+    ),
+  ];
 }

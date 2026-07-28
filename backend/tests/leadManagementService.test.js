@@ -145,6 +145,52 @@ test('lead validation accepts multiple normalized contacts and rejects invalid d
   assert.ok(validateLeadPayload(invalid).length >= 3);
 });
 
+test('contact normalization produces exactly one primary contact', () => {
+  const withoutPrimary = normalizeContacts([
+    { name: 'First', phone: '9000000001' },
+    { name: 'Second', email: 'second@example.com' },
+  ]);
+  assert.equal(withoutPrimary.filter((contact) => contact.is_primary).length, 1);
+  assert.equal(withoutPrimary[0].is_primary, true);
+
+  const multiplePrimary = normalizeContacts([
+    { name: 'First', phone: '9000000001', isPrimary: true },
+    { name: 'Second', email: 'second@example.com', isPrimary: true },
+  ]);
+  assert.equal(multiplePrimary.filter((contact) => contact.is_primary).length, 1);
+  assert.equal(multiplePrimary[0].is_primary, true);
+});
+
+test('lead validation rejects duplicate normalized contact phone and email', () => {
+  const duplicatePhone = normalizeLeadPayload({
+    contacts: [
+      { name: 'First', phone: '+91 90000 00001' },
+      { name: 'Second', phone: '9000000001' },
+    ],
+  });
+  assert.ok(validateLeadPayload(duplicatePhone, { creating: false })
+    .includes('Contact phone numbers must be unique within a lead.'));
+
+  const duplicateEmail = normalizeLeadPayload({
+    contacts: [
+      { name: 'First', email: 'CONTACT@EXAMPLE.COM' },
+      { name: 'Second', email: ' contact@example.com ' },
+    ],
+  });
+  assert.ok(validateLeadPayload(duplicateEmail, { creating: false })
+    .includes('Contact email addresses must be unique within a lead.'));
+});
+
+test('legacy scalar contact payload remains canonical', () => {
+  const lead = normalizeLeadPayload({
+    contact_person_name: 'Legacy Contact',
+    contact_number: '9000000001',
+  });
+  assert.equal(lead.contacts.length, 1);
+  assert.equal(lead.contacts[0].name, 'Legacy Contact');
+  assert.equal(lead.contacts[0].is_primary, true);
+});
+
 test('approved industries are accepted in canonical order', () => {
   assert.deepEqual(approvedIndustries, [
     'Manufacturing',

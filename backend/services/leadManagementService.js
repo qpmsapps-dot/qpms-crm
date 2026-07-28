@@ -246,6 +246,14 @@ export function validateLeadPayload(
     if (!validPhone(contact.phone)) errors.push(`Contact ${index + 1} phone is invalid.`);
     if (!validEmail(contact.email)) errors.push(`Contact ${index + 1} email is invalid.`);
   });
+  const phones = lead.contacts.map((contact) => contact.phone_normalized).filter(Boolean);
+  const emails = lead.contacts.map((contact) => contact.email).filter(Boolean);
+  if (new Set(phones).size !== phones.length) {
+    errors.push('Contact phone numbers must be unique within a lead.');
+  }
+  if (new Set(emails).size !== emails.length) {
+    errors.push('Contact email addresses must be unique within a lead.');
+  }
   if (lead.contacts.length && !lead.contacts.some((contact) => contact.is_primary)) {
     errors.push('One primary contact is required.');
   }

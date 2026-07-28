@@ -3,12 +3,21 @@ import 'package:flutter/material.dart';
 import '../models/bd_lead_models.dart';
 import '../services/bd_lead_service.dart';
 import '../ui/fo_ui.dart';
+import 'bd_contact_draft.dart';
 import 'bd_lead_options.dart';
 
+typedef BdLeadCreator =
+    Future<BdLead> Function(
+      CreateBdLeadRequest request, {
+      bool duplicateOverride,
+      String duplicateOverrideReason,
+    });
+
 class AddLeadScreen extends StatefulWidget {
-  const AddLeadScreen({required this.onCreated, super.key});
+  const AddLeadScreen({required this.onCreated, this.createLead, super.key});
 
   final Future<void> Function(BdLead) onCreated;
+  final BdLeadCreator? createLead;
 
   @override
   State<AddLeadScreen> createState() => _AddLeadScreenState();
@@ -18,11 +27,10 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
   final _clientName = TextEditingController();
   final _siteLocation = TextEditingController();
   final _city = TextEditingController();
-  final _contactName = TextEditingController();
-  final _contactDesignation = TextEditingController();
-  final _contactPhone = TextEditingController();
-  final _contactEmail = TextEditingController();
   final _remarks = TextEditingController();
+  final List<BdLeadContactDraft> _contacts = [
+    BdLeadContactDraft(isPrimary: true),
+  ];
   String? _industry;
   String _state = bdStateOptions.first;
   String _source = bdLeadSourceOptions.first;
@@ -37,10 +45,9 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
     _clientName.dispose();
     _siteLocation.dispose();
     _city.dispose();
-    _contactName.dispose();
-    _contactDesignation.dispose();
-    _contactPhone.dispose();
-    _contactEmail.dispose();
+    for (final contact in _contacts) {
+      contact.dispose();
+    }
     _remarks.dispose();
     super.dispose();
   }
@@ -62,10 +69,7 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
         siteLocation: _siteLocation.text.trim(),
         state: _state,
         city: _city.text.trim(),
-        contactPersonName: _contactName.text.trim(),
-        contactPersonDesignation: _contactDesignation.text.trim(),
-        contactNumber: _contactPhone.text.trim(),
-        emailId: _contactEmail.text.trim(),
+        contacts: _contacts.map((contact) => contact.toRequest()).toList(),
         leadSource: _source,
         leadPriority: _priority,
         serviceScope: orderedBdServiceScope(_serviceScope),
@@ -73,13 +77,14 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
         idempotencyKey: _submissionKey,
       );
       BdLead lead;
+      final createLead = widget.createLead ?? BdLeadService.createLead;
       try {
-        lead = await BdLeadService.createLead(request);
+        lead = await createLead(request);
       } on BdLeadApiException catch (error) {
         if (error.code != 'possible_duplicate_lead' || !mounted) rethrow;
         final reason = await _confirmDuplicate(error.duplicates);
         if (reason == null) return;
-        lead = await BdLeadService.createLead(
+        lead = await createLead(
           request,
           duplicateOverride: true,
           duplicateOverrideReason: reason,
@@ -109,44 +114,52 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
     if (_state.trim().isEmpty) return 'State is required.';
     if (_city.text.trim().isEmpty) return 'City is required.';
     if (_priority.trim().isEmpty) return 'Lead Priority is required.';
-    if (_contactName.text.trim().isEmpty) return 'Contact name is required.';
-    if (_contactPhone.text.trim().isEmpty &&
-        _contactEmail.text.trim().isEmpty) {
-      return 'Enter a contact phone or email.';
-    }
-    final email = _contactEmail.text.trim();
-    if (email.isNotEmpty &&
-        !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email)) {
-      return 'Enter a valid contact email.';
-    }
-    final phone = _contactPhone.text.trim();
-    if (phone.isNotEmpty) {
-      final digits = phone.replaceAll(RegExp(r'\D'), '');
-      if (!RegExp(r'^[+()\-\s0-9]+$').hasMatch(phone) ||
-          digits.length < 7 ||
-          digits.length > 15) {
-        return 'Enter a valid contact phone number.';
-      }
-    }
-    return null;
+    return validateBdContactDrafts(_contacts);
   }
 
   void _clearForm() {
     _clientName.clear();
     _siteLocation.clear();
     _city.clear();
-    _contactName.clear();
-    _contactDesignation.clear();
-    _contactPhone.clear();
-    _contactEmail.clear();
     _remarks.clear();
     _serviceScope.clear();
     _submissionKey = _newSubmissionKey();
+    for (final contact in _contacts) {
+      contact.dispose();
+    }
+    _contacts
+      ..clear()
+      ..add(BdLeadContactDraft(isPrimary: true));
     setState(() {
       _industry = null;
       _state = bdStateOptions.first;
       _source = bdLeadSourceOptions.first;
       _priority = 'Medium';
+    });
+  }
+
+  void _addContact() {
+    if (_saving) return;
+    setState(() => _contacts.add(BdLeadContactDraft()));
+  }
+
+  void _makePrimary(int selectedIndex) {
+    if (_saving) return;
+    setState(() {
+      for (var index = 0; index < _contacts.length; index += 1) {
+        _contacts[index].isPrimary = index == selectedIndex;
+      }
+    });
+  }
+
+  void _removeContact(int selectedIndex) {
+    if (_saving || _contacts.length == 1) return;
+    setState(() {
+      final removed = _contacts.removeAt(selectedIndex);
+      removed.dispose();
+      if (!_contacts.any((contact) => contact.isPrimary)) {
+        _contacts.first.isPrimary = true;
+      }
     });
   }
 
@@ -248,17 +261,19 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
               _field(_city, 'City', required: true),
               const SizedBox(height: 16),
               const FoSectionTitle(title: 'Contact Details'),
-              _field(_contactName, 'Contact Name'),
-              _field(_contactDesignation, 'Contact Designation'),
-              _field(
-                _contactPhone,
-                'Contact Phone',
-                keyboardType: TextInputType.phone,
+              const SizedBox(height: 10),
+              ...List.generate(
+                _contacts.length,
+                (index) => _contactCard(index),
               ),
-              _field(
-                _contactEmail,
-                'Contact Email',
-                keyboardType: TextInputType.emailAddress,
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  key: const ValueKey('add-contact'),
+                  onPressed: _saving ? null : _addContact,
+                  icon: const Icon(Icons.person_add_alt_1_rounded),
+                  label: const Text('Add Contact Person'),
+                ),
               ),
               const SizedBox(height: 16),
               const FoSectionTitle(title: 'Lead Information'),
@@ -278,26 +293,30 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
               const SizedBox(height: 16),
               const FoSectionTitle(title: 'Service Scope'),
               ...bdServiceScopeOptions.map(
-                (scope) => CheckboxListTile(
-                  value: _serviceScope.contains(scope),
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(
-                    scope,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
+                (scope) => Material(
+                  color: Colors.transparent,
+                  child: CheckboxListTile(
+                    value: _serviceScope.contains(scope),
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      scope,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    onChanged: (checked) {
+                      setState(() {
+                        if (checked == true) {
+                          _serviceScope.add(scope);
+                        } else {
+                          _serviceScope.remove(scope);
+                        }
+                      });
+                    },
                   ),
-                  onChanged: (checked) {
-                    setState(() {
-                      if (checked == true) {
-                        _serviceScope.add(scope);
-                      } else {
-                        _serviceScope.remove(scope);
-                      }
-                    });
-                  },
                 ),
               ),
               const SizedBox(height: 18),
               FoPrimaryButton(
+                key: const ValueKey('create-lead'),
                 label: _saving ? 'Creating Lead...' : 'Create Lead',
                 icon: Icons.save_rounded,
                 onPressed: _saving ? null : _submit,
@@ -312,6 +331,7 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
   Widget _field(
     TextEditingController controller,
     String label, {
+    Key? key,
     bool required = false,
     int maxLines = 1,
     TextInputType? keyboardType,
@@ -319,10 +339,88 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
     return Padding(
       padding: const EdgeInsets.only(top: 12),
       child: TextField(
+        key: key,
         controller: controller,
         maxLines: maxLines,
         keyboardType: keyboardType,
         decoration: InputDecoration(labelText: required ? '$label *' : label),
+      ),
+    );
+  }
+
+  Widget _contactCard(int index) {
+    final contact = _contacts[index];
+    return Container(
+      key: ValueKey(contact),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Contact Person ${index + 1}',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              if (contact.isPrimary)
+                const Chip(
+                  avatar: Icon(Icons.star_rounded, size: 17),
+                  label: Text('Primary'),
+                )
+              else
+                TextButton.icon(
+                  key: ValueKey('make-primary-$index'),
+                  onPressed: _saving ? null : () => _makePrimary(index),
+                  icon: const Icon(Icons.star_outline_rounded),
+                  label: const Text('Make Primary'),
+                ),
+            ],
+          ),
+          _field(
+            contact.nameController,
+            'Contact Person Name',
+            key: ValueKey('contact-name-$index'),
+            required: true,
+          ),
+          _field(
+            contact.designationController,
+            'Designation',
+            key: ValueKey('contact-designation-$index'),
+          ),
+          _field(
+            contact.phoneController,
+            'Contact Number',
+            key: ValueKey('contact-phone-$index'),
+            keyboardType: TextInputType.phone,
+          ),
+          _field(
+            contact.emailController,
+            'Email ID',
+            key: ValueKey('contact-email-$index'),
+            keyboardType: TextInputType.emailAddress,
+          ),
+          if (_contacts.length > 1)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                key: ValueKey('remove-contact-$index'),
+                onPressed: _saving ? null : () => _removeContact(index),
+                icon: const Icon(Icons.delete_outline_rounded),
+                label: const Text('Remove'),
+              ),
+            ),
+        ],
       ),
     );
   }

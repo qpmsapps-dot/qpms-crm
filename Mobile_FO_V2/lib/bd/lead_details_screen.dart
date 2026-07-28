@@ -64,7 +64,10 @@ class _LeadDetailsScreenState extends State<LeadDetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final contact = _lead.primaryContact;
+    final contacts = [
+      ..._lead.contacts.where((contact) => contact.isPrimary),
+      ..._lead.contacts.where((contact) => !contact.isPrimary),
+    ];
     return Scaffold(
       body: FoPage(
         children: [
@@ -123,10 +126,22 @@ class _LeadDetailsScreenState extends State<LeadDetailsScreen> {
               children: [
                 const FoSectionTitle(title: 'Contact Details'),
                 const SizedBox(height: 10),
-                _row('Name', contact?.name ?? '--'),
-                _row('Designation', contact?.designation ?? '--'),
-                _row('Phone', contact?.phone ?? '--'),
-                _row('Email', contact?.email ?? '--'),
+                if (contacts.isEmpty)
+                  const Text(
+                    'No contact details available.',
+                    style: TextStyle(
+                      color: Color(0xFF53607D),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  )
+                else
+                  ...contacts.indexed.map(
+                    (entry) => _contactCard(
+                      entry.$1,
+                      entry.$2,
+                      isLast: entry.$1 == contacts.length - 1,
+                    ),
+                  ),
               ],
             ),
           ),
@@ -199,6 +214,51 @@ class _LeadDetailsScreenState extends State<LeadDetailsScreen> {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _contactCard(
+    int index,
+    BdLeadContact contact, {
+    required bool isLast,
+  }) {
+    return Container(
+      margin: EdgeInsets.only(bottom: isLast ? 0 : 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Contact Person ${index + 1}',
+                  style: const TextStyle(
+                    color: foNavy,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              if (contact.isPrimary)
+                const Chip(
+                  avatar: Icon(Icons.star_rounded, size: 17),
+                  label: Text('Primary'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          _row('Name', contact.name),
+          if (contact.designation.isNotEmpty)
+            _row('Designation', contact.designation),
+          if (contact.phone.isNotEmpty) _row('Phone', contact.phone),
+          if (contact.email.isNotEmpty) _row('Email', contact.email),
         ],
       ),
     );
