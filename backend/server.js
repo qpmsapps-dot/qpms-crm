@@ -75,6 +75,10 @@ import {
   validateLeadPayload,
 } from './services/leadManagementService.js';
 import {
+  createPostmanTestResetHandler,
+  registerPostmanTestResetRoute,
+} from './services/postmanTestResetService.js';
+import {
   USER_MANAGEMENT_PROFILE_SELECT,
   assertUserManagementFoundation,
   attachOperationalCounts,
@@ -787,6 +791,17 @@ function normalizePermissionRole(role) {
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, '');
+}
+
+function requirePostmanTestResetAdmin(request, response, next) {
+  if (normalizePermissionRole(request.profile?.role) !== 'ADMIN') {
+    response.status(403).json({
+      ok: false,
+      message: 'Admin permission is required.',
+    });
+    return;
+  }
+  next();
 }
 
 function hasUserManagementPermission(profile) {
@@ -3024,54 +3039,14 @@ app.get('/health', (request, response) => {
   });
 });
 
-app.post('/api/test/reset', async (request, response) => {
-  try {
-    const client = requireSupabase();
-    apiSessions.clear();
-
-    const { data: testLeads, error: leadFetchError } = await client
-      .from('leads')
-      .select('id')
-      .eq('created_by_name', 'postman_automation');
-    if (leadFetchError) throw leadFetchError;
-
-    const leadIds = (testLeads || []).map((lead) => lead.id);
-    if (leadIds.length) {
-      const { data: visits } = await client.from('site_visits').select('id').in('lead_id', leadIds);
-      const siteVisitIds = (visits || []).map((visit) => visit.id);
-      if (siteVisitIds.length) {
-        await optionalSupabaseWrite('approval queue cleanup', async () => {
-          const { error } = await client.from('approval_queue').delete().in('site_visit_id', siteVisitIds);
-          if (error) throw error;
-        });
-        await optionalSupabaseWrite('workflow status cleanup', async () => {
-          const { error } = await client.from('workflow_status').delete().in('site_visit_id', siteVisitIds);
-          if (error) throw error;
-        });
-        await optionalSupabaseWrite('workflow events cleanup', async () => {
-          const { error } = await client.from('workflow_events').delete().in('site_visit_id', siteVisitIds);
-          if (error) throw error;
-        });
-        await optionalSupabaseWrite('workflow instances cleanup', async () => {
-          const { error } = await client.from('workflow_instances').delete().in('site_visit_id', siteVisitIds);
-          if (error) throw error;
-        });
-        await client.from('activity_logs').delete().in('site_visit_id', siteVisitIds);
-        await client.from('approval_requests').delete().in('site_visit_id', siteVisitIds);
-        await client.from('site_assessments').delete().in('site_visit_id', siteVisitIds);
-        await client.from('site_mom').delete().in('site_visit_id', siteVisitIds);
-        await client.from('site_visits').delete().in('id', siteVisitIds);
-      }
-      await client.from('activity_logs').delete().in('lead_id', leadIds);
-      await client.from('lead_mom').delete().in('lead_id', leadIds);
-      await client.from('lead_contacts').delete().in('lead_id', leadIds);
-      await client.from('leads').delete().in('id', leadIds);
-    }
-
-    response.json({ ok: true, message: 'Postman automation records cleaned from Supabase.', deletedLeadCount: leadIds.length });
-  } catch (error) {
-    response.status(error.statusCode || 500).json({ ok: false, message: error.message });
-  }
+registerPostmanTestResetRoute({
+  app,
+  env: process.env,
+  requireJwt: requireSupabaseJwt,
+  requireAdmin: requirePostmanTestResetAdmin,
+  resetHandler: createPostmanTestResetHandler({
+    getClient: requireServiceRoleSupabase,
+  }),
 });
 
 app.post('/api/auth/login', (request, response) => {

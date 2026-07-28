@@ -61,6 +61,10 @@ Additional helper variables:
 - `hrApprovalId`
 - `managementApprovalId`
 
+`adminToken` must be a valid Supabase access token for a profile whose
+canonical role is `Admin`. Do not place a hardcoded token in the collection or
+environment file.
+
 For local testing:
 
 ```text
@@ -98,6 +102,20 @@ Checks whether the backend is alive.
 `POST /api/test/reset`
 
 Deletes only Supabase records created by Postman automation. It targets leads stamped with `created_by_name = 'postman_automation'` and related site visits, assessments, MOMs, approvals, queue/status rows, contacts, and activity logs.
+
+The reset route is registered only when both conditions are satisfied:
+
+```text
+ENABLE_TEST_RESET=true
+NODE_ENV=development, staging, or test
+```
+
+It also requires `Authorization: Bearer {{adminToken}}`, where `adminToken` is
+a valid Supabase JWT for an `Admin` profile. Anonymous callers and all
+non-Admin roles are denied.
+
+**This reset endpoint must never be enabled in production.** Production does
+not register the route and returns `404 Not Found`.
 
 ### Login
 
@@ -503,7 +521,7 @@ Expected:
 ## Notes
 
 - These Postman APIs are no longer isolated from the UI. They write to Supabase so the created leads, site visits, approval requests, and workflow statuses are visible in the CRM frontend after refresh.
-- `/api/test/reset` is the only cleanup endpoint and should be used only for records stamped as `postman_automation`.
+- `/api/test/reset` is the only cleanup endpoint. It is available only in an explicitly enabled non-production environment, requires an authenticated Admin, and targets only records stamped as `postman_automation`.
 - Existing MOM mail routes remain unchanged.
 - Existing Supabase workflow logic remains unchanged.
 - Backend Supabase environment is required: `VITE_SUPABASE_URL` plus `VITE_SUPABASE_ANON_KEY`, or `SUPABASE_URL` plus `SUPABASE_ANON_KEY`.

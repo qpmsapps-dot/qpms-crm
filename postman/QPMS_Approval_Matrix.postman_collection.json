@@ -10,7 +10,14 @@
       "name": "00 Reset Postman Automation Records",
       "request": {
         "method": "POST",
-        "header": [],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{adminToken}}",
+            "type": "text"
+          }
+        ],
+        "description": "Available only when ENABLE_TEST_RESET=true in an explicitly non-production backend. Requires a valid Supabase JWT for an Admin profile. This endpoint must never be enabled in production.",
         "url": "{{baseUrl}}/api/test/reset"
       },
       "event": [
