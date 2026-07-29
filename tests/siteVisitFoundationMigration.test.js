@@ -71,7 +71,7 @@ test('preflight fails closed on missing or incompatible modern schema', () => {
   assert.match(migration, /public\.leads\.id must be uuid/i);
   assert.match(migration, /public\.profiles\.% must be boolean/i);
   assert.match(migration, /required Supabase Storage table storage\.% is missing/i);
-  for (const column of ['auth_user_id', 'employee_code', 'role', 'state', 'branch']) {
+  for (const column of ['auth_user_id', 'employee_code', 'full_name', 'role', 'state', 'branch']) {
     assert.match(migration, new RegExp(`'${column}'`));
   }
 });
@@ -182,6 +182,8 @@ test('preflight and postflight reports cover catalog grants RLS and unchanged mo
   assert.match(postflight, /site_survey_images_scoped_insert/i);
   assert.match(postflight, /activity_logs/i);
   assert.match(preflight, /column_definition_checksum/i);
+  assert.match(preflight, /full_name/i);
+  assert.match(postflight, /full_name/i);
   assert.match(postflight, /column_definition_checksum/i);
   assert.match(rollbackGuidance, /Do not bypass a failed preflight/i);
   assert.match(rollbackGuidance, /public\.activity_logs/i);

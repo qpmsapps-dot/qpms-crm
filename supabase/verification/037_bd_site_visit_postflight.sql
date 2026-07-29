@@ -70,7 +70,7 @@ where table_schema = 'public'
   and (
     (table_name = 'leads' and column_name = 'id')
     or (table_name = 'profiles' and column_name in (
-      'id', 'auth_user_id', 'employee_code', 'role', 'state', 'branch'
+      'id', 'auth_user_id', 'employee_code', 'full_name', 'role', 'state', 'branch'
     ))
     or table_name = 'activity_logs'
   )
