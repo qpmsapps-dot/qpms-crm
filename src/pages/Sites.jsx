@@ -37,6 +37,7 @@ import { sendProposalEmail, sendSiteVisitMomEmail } from '../services/mailServic
 import { logAssessmentAuditRemote } from '../services/workflowRepository.js';
 import { calculateManpowerCost } from '../services/costingEngine.js';
 import { buildProposalRows, exportProposalToExcel, exportProposalToPdf, getProposalTemplateMetadata } from '../services/proposalService.js';
+import { downloadSiteAssessmentWorkbook } from '../services/siteAssessmentWorkbookService.js';
 import {
   SURVEY_SECTION_LABELS,
   createV2Survey,
@@ -823,6 +824,7 @@ export default function Sites() {
   const [momComposerVisit, setMomComposerVisit] = useState(null);
   const [proposalPreviewVisit, setProposalPreviewVisit] = useState(null);
   const [proposalDraft, setProposalDraft] = useState(null);
+  const [workbookExporting, setWorkbookExporting] = useState(false);
   const [showWorkflowTimeline, setShowWorkflowTimeline] = useState(false);
   const [sectionsCollapsed, setSectionsCollapsed] = useState(false);
   const [validationErrors, setValidationErrors] = useState([]);
@@ -1194,6 +1196,28 @@ function duplicateRow(section, index) {
       showToast(`Failed to save: ${error.message}`, 'error');
     } finally {
       setPendingAction('');
+    }
+  }
+
+  async function handleExportSurveyWorkbook() {
+    if (!selectedVisit || !surveyDraft || workbookExporting) return;
+    setWorkbookExporting(true);
+    try {
+      await downloadSiteAssessmentWorkbook({
+        assessment: { id: selectedVisit.assessmentId, ...selectedVisit },
+        normalizedSurvey: surveyDraft,
+        lead: selectedVisit,
+        contacts: selectedVisit.contacts || [],
+        profile: user || {},
+        workflow: selectedVisit,
+        proposal: selectedVisit.proposal || null,
+      });
+      showToast('Survey workbook downloaded', 'success');
+    } catch (error) {
+      console.error('[myQPMS Survey Workbook] Export failed', error);
+      showToast('Unable to generate the survey workbook. Please retry.', 'error');
+    } finally {
+      setWorkbookExporting(false);
     }
   }
 
@@ -1902,6 +1926,9 @@ function duplicateRow(section, index) {
             <div className="flex flex-wrap justify-end gap-3">
               <button type="button" onClick={handleSaveDraft} disabled={pendingAction === 'saveSiteDraft'} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:text-slate-950 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
                 <ButtonContent loading={pendingAction === 'saveSiteDraft'} icon={Save}>Save Draft</ButtonContent>
+              </button>
+              <button type="button" onClick={handleExportSurveyWorkbook} disabled={workbookExporting} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-300">
+                <ButtonContent loading={workbookExporting} icon={Download}>Export Survey Workbook</ButtonContent>
               </button>
               {isFinalStep ? (
                 <button type="button" onClick={handleSubmitCommercialReview} disabled={pendingAction === 'submitReview'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-950/20 hover:bg-slate-800 dark:bg-white dark:text-slate-950">
