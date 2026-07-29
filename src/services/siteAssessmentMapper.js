@@ -1,3 +1,10 @@
+import {
+  SURVEY_SCHEMA_VERSION_V1,
+  SURVEY_SCHEMA_VERSION_V2,
+  flattenSurveyV2,
+  surveyToV2Envelope,
+} from './siteAssessmentV2.js';
+
 function objectOrEmpty(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
@@ -28,7 +35,10 @@ export function assessmentSectionOverlay(sections = []) {
 }
 
 export function surveyToDbAssessment(survey, visit, status = 'Draft', user) {
-  const normalizedSurvey = objectOrEmpty(survey);
+  const schemaVersion = Number(survey?.schema_version || SURVEY_SCHEMA_VERSION_V1);
+  const normalizedSurvey = schemaVersion === SURVEY_SCHEMA_VERSION_V2
+    ? flattenSurveyV2(survey)
+    : objectOrEmpty(survey);
   const monthlyBilling = Number(
     normalizedSurvey.commercial?.billingComponents?.reduce(
       (sum, item) => sum + Number(item.amount || 0),
@@ -132,10 +142,16 @@ export function surveyToDbAssessment(survey, visit, status = 'Draft', user) {
     assessment_status: status,
     final_remarks: normalizedSurvey.finalRemarks || '',
     created_by: user?.email || visit.assigned_bd_email || '',
+    survey_snapshot: schemaVersion === SURVEY_SCHEMA_VERSION_V2
+      ? surveyToV2Envelope(survey)
+      : surveySnapshot(normalizedSurvey),
+    schema_version: schemaVersion,
     metadata: {
       ...objectOrEmpty(visit.assessmentMetadata),
-      survey_schema_version: 1,
-      survey_state_v1: surveySnapshot(normalizedSurvey),
+      survey_schema_version: schemaVersion,
+      ...(schemaVersion === SURVEY_SCHEMA_VERSION_V2
+        ? { survey_state_v2: surveyToV2Envelope(survey) }
+        : { survey_state_v1: surveySnapshot(normalizedSurvey) }),
     },
     updated_at: new Date().toISOString(),
   };
@@ -145,6 +161,9 @@ export function dbAssessmentToSurvey(row = {}, sections) {
   const normalizedRow = objectOrEmpty(row);
   const currentSections = sections ?? normalizedRow.assessment_sections;
   const legacySnapshot = objectOrEmpty(normalizedRow.metadata?.survey_state_v1);
+  const v2Envelope = normalizedRow.metadata?.survey_state_v2
+    || (normalizedRow.survey_snapshot?.schema_version === SURVEY_SCHEMA_VERSION_V2 ? normalizedRow.survey_snapshot : null);
+  const v2Snapshot = v2Envelope ? flattenSurveyV2(v2Envelope) : {};
   const recoveryEnvelope = objectOrEmpty(normalizedRow.survey_snapshot);
   const recoverySnapshot = Object.values(recoveryEnvelope).every(
     (value) => value && typeof value === 'object' && !Array.isArray(value),
@@ -154,8 +173,22 @@ export function dbAssessmentToSurvey(row = {}, sections) {
       {},
     )
     : recoveryEnvelope;
-  const snapshot = { ...legacySnapshot, ...recoverySnapshot };
+  const snapshot = { ...legacySnapshot, ...v2Snapshot, ...recoverySnapshot };
   const sectionOverlay = assessmentSectionOverlay(currentSections);
+  const v2SectionEnvelope = v2Envelope
+    ? (Array.isArray(currentSections) ? currentSections : []).reduce((envelope, section) => {
+      const key = section?.section_key;
+      if (!['client_site', 'facility_requirements', 'equipment_manpower', 'commercial_inputs'].includes(key)) return envelope;
+      return {
+        ...envelope,
+        [key]: {
+          ...(envelope[key] || {}),
+          ...objectOrEmpty(section.section_data ?? section.sectionData),
+        },
+      };
+    }, v2Envelope)
+    : null;
+  const v2MergedFlat = v2SectionEnvelope ? flattenSurveyV2(v2SectionEnvelope) : {};
   const basic = objectOrEmpty(normalizedRow.basic_site_information);
   const manpower = objectOrEmpty(normalizedRow.manpower_requirement);
   const resources = objectOrEmpty(normalizedRow.tools_equipment_consumables);
@@ -315,5 +348,11 @@ export function dbAssessmentToSurvey(row = {}, sections) {
       snapshot.signaturePlaceholder,
     ),
   };
-  return { ...structuredSurvey, ...sectionOverlay };
+  return {
+    ...structuredSurvey,
+    ...sectionOverlay,
+    ...(v2SectionEnvelope ? v2MergedFlat : {}),
+    ...(v2SectionEnvelope ? { ...v2SectionEnvelope } : {}),
+    ...(v2Envelope ? { schema_version: SURVEY_SCHEMA_VERSION_V2 } : { schema_version: SURVEY_SCHEMA_VERSION_V1 }),
+  };
 }
