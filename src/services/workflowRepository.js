@@ -571,6 +571,7 @@ export async function saveAssessmentSection({
   saveMode = 'save',
   user,
   remarks,
+  idempotencyKey,
 }) {
   const actor = compactActor(user);
   return callWorkflowRpc(
@@ -586,6 +587,8 @@ export async function saveAssessmentSection({
       p_actor_name: actor.name,
       p_actor_role: actor.role,
       p_remarks: remarks || null,
+      p_idempotency_key:
+        idempotencyKey || createIdempotencyKey('assessment-section', `${visit.id}:${sectionCode}`),
     },
     'Assessment section save',
   );

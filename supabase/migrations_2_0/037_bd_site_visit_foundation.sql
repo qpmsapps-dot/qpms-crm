@@ -114,7 +114,7 @@ create table if not exists public.site_assessments (
   schema_version smallint not null default 1 check (schema_version >= 1),
   assessment_status text not null default 'Draft',
   status text not null default 'Draft',
-  current_stage text not null default 'BD Survey',
+  current_stage text not null default 'bd_survey',
   row_version bigint not null default 1 check (row_version >= 1),
   submitted_at timestamptz,
   submitted_by_profile_id uuid references public.profiles(id) on delete set null,
@@ -635,10 +635,37 @@ begin
   select * into strict v_lead from public.leads where id = p_lead_id for update;
   v_lead_json := to_jsonb(v_lead);
 
+  if v_actor.role_key = 'BD_EXECUTIVE' and not (
+    coalesce(v_lead_json->>'assigned_bd_executive', '') in (
+      v_actor.employee_code, v_actor.profile_id::text, v_actor.auth_user_id::text
+    )
+    or (
+      nullif(lower(coalesce(v_lead_json->>'assigned_bd_email', '')), '') is not null
+      and lower(v_lead_json->>'assigned_bd_email') = lower(coalesce(
+        (select p.email from public.profiles p where p.id = v_actor.profile_id), ''
+      ))
+    )
+    or coalesce(v_lead_json->>'created_by_user_id', '') in (
+      v_actor.employee_code, v_actor.profile_id::text, v_actor.auth_user_id::text
+    )
+  ) then
+    raise exception 'Lead is outside the BD Executive scope' using errcode = '42501';
+  end if;
+  if v_actor.role_key = 'BD_HEAD' and (
+    coalesce(v_lead_json->>'state', v_actor.actor_state) is distinct from v_actor.actor_state
+    or coalesce(v_lead_json->>'branch', v_actor.actor_branch) is distinct from v_actor.actor_branch
+  ) then
+    raise exception 'Lead is outside the BD Head scope' using errcode = '42501';
+  end if;
+
   if v_key is not null then
     select response_payload into v_existing from public.site_workflow_idempotency
-      where idempotency_key = v_key and operation = 'convert_lead';
+      where idempotency_key = v_key and operation = 'convert_lead'
+        and actor_profile_id = v_actor.profile_id;
     if found then return v_existing; end if;
+    if exists (select 1 from public.site_workflow_idempotency where idempotency_key = v_key) then
+      raise exception 'Idempotency key is already in use' using errcode = '22023';
+    end if;
   end if;
 
   if v_actor.role_key = 'BD_EXECUTIVE' then
@@ -671,9 +698,9 @@ begin
   returning * into v_visit;
 
   insert into public.site_assessments (
-    site_visit_id, lead_id, created_by_profile_id, created_by_auth_user_id, metadata
+    site_visit_id, lead_id, current_stage, created_by_profile_id, created_by_auth_user_id, metadata
   ) values (
-    v_visit.id, p_lead_id, v_actor.profile_id, v_actor.auth_user_id,
+    v_visit.id, p_lead_id, 'bd_survey', v_actor.profile_id, v_actor.auth_user_id,
     jsonb_build_object('primary_contact_snapshot', coalesce(p_primary_contact, '{}'::jsonb))
   )
   on conflict (site_visit_id) do update set updated_at = public.site_assessments.updated_at
@@ -718,7 +745,8 @@ create or replace function public.rpc_save_assessment_section(
   p_actor_user_id uuid default null,
   p_actor_name text default null,
   p_actor_role text default null,
-  p_remarks text default null
+  p_remarks text default null,
+  p_idempotency_key text default null
 )
 returns jsonb
 language plpgsql
@@ -730,6 +758,8 @@ declare
   v_assessment public.site_assessments%rowtype;
   v_section public.assessment_sections%rowtype;
   v_next_version bigint;
+  v_existing jsonb;
+  v_key text := nullif(trim(p_idempotency_key), '');
 begin
   select * into v_actor from public.site_workflow_current_actor();
   select * into strict v_assessment from public.site_assessments
@@ -743,6 +773,15 @@ begin
   end if;
   if nullif(trim(p_section_code), '') is null or jsonb_typeof(coalesce(p_section_data, '{}'::jsonb)) <> 'object' then
     raise exception 'Section key and object data are required' using errcode = '22023';
+  end if;
+  if v_key is not null then
+    select response_payload into v_existing from public.site_workflow_idempotency
+      where idempotency_key = v_key and operation = 'save_assessment_section'
+        and actor_profile_id = v_actor.profile_id;
+    if found then return v_existing; end if;
+    if exists (select 1 from public.site_workflow_idempotency where idempotency_key = v_key) then
+      raise exception 'Idempotency key is already in use' using errcode = '22023';
+    end if;
   end if;
 
   select * into v_section from public.assessment_sections
@@ -785,7 +824,15 @@ begin
       updated_at = now()
   where id = v_assessment.id;
 
-  return jsonb_build_object('assessment_id', v_assessment.id, 'section', to_jsonb(v_section));
+  v_existing := jsonb_build_object('assessment_id', v_assessment.id, 'section', to_jsonb(v_section));
+  if v_key is not null then
+    insert into public.site_workflow_idempotency(
+      idempotency_key, operation, actor_profile_id, resource_id, response_payload
+    ) values (
+      v_key, 'save_assessment_section', v_actor.profile_id, v_assessment.id, v_existing
+    );
+  end if;
+  return v_existing;
 end
 $$;
 
@@ -965,14 +1012,18 @@ begin
      or v_actor.role_key not in ('BD_EXECUTIVE', 'BD_HEAD', 'ADMIN') then
     raise exception 'Actor cannot submit this assessment' using errcode = '42501';
   end if;
+  if v_key is not null then
+    select response_payload into v_existing from public.site_workflow_idempotency
+      where idempotency_key = v_key and operation = 'submit_assessment'
+        and actor_profile_id = v_actor.profile_id;
+    if found then return v_existing; end if;
+    if exists (select 1 from public.site_workflow_idempotency where idempotency_key = v_key) then
+      raise exception 'Idempotency key is already in use' using errcode = '22023';
+    end if;
+  end if;
   if v_workflow.current_stage_code not in ('bd_survey', 'returned_to_bd')
      or p_target_stage_code <> 'operations_review' then
     raise exception 'Invalid assessment submit transition' using errcode = '22023';
-  end if;
-  if v_key is not null then
-    select response_payload into v_existing from public.site_workflow_idempotency
-      where idempotency_key = v_key and operation = 'submit_assessment';
-    if found then return v_existing; end if;
   end if;
 
   update public.workflow_instances set
@@ -1045,6 +1096,18 @@ begin
   select * into v_actor from public.site_workflow_current_actor();
   select * into strict v_workflow from public.workflow_instances where id = p_workflow_instance_id for update;
   v_current := v_workflow.current_stage_code;
+  if not public.site_workflow_actor_can_view(v_workflow.assessment_id) then
+    raise exception 'Assessment is outside the actor scope' using errcode = '42501';
+  end if;
+  if v_key is not null then
+    select response_payload into v_existing from public.site_workflow_idempotency
+      where idempotency_key = v_key and operation = 'review_decision'
+        and actor_profile_id = v_actor.profile_id;
+    if found then return v_existing; end if;
+    if exists (select 1 from public.site_workflow_idempotency where idempotency_key = v_key) then
+      raise exception 'Idempotency key is already in use' using errcode = '22023';
+    end if;
+  end if;
   if p_stage_code is not null and p_stage_code <> v_current then
     raise exception 'Stale or invalid workflow stage' using errcode = '40001';
   end if;
@@ -1052,21 +1115,12 @@ begin
   if v_actor.role_key <> 'ADMIN' and v_actor.role_key <> v_expected_role then
     raise exception 'Actor cannot decide the current workflow stage' using errcode = '42501';
   end if;
-  if not public.site_workflow_actor_can_view(v_workflow.assessment_id) then
-    raise exception 'Assessment is outside the actor scope' using errcode = '42501';
-  end if;
   if v_current not in ('operations_review', 'coordinator_costing', 'hr_validation', 'commercial_review', 'finance_review') then
     raise exception 'Current stage does not accept a review decision' using errcode = '22023';
   end if;
   if v_decision not in ('APPROVED', 'RETURNED', 'REWORK REQUESTED', 'REJECTED') then
     raise exception 'Unsupported review decision' using errcode = '22023';
   end if;
-  if v_key is not null then
-    select response_payload into v_existing from public.site_workflow_idempotency
-      where idempotency_key = v_key and operation = 'review_decision';
-    if found then return v_existing; end if;
-  end if;
-
   v_next := case when v_decision = 'APPROVED' then public.site_workflow_next_stage(v_current)
                  when v_decision in ('RETURNED', 'REWORK REQUESTED') then 'returned_to_bd'
                  else v_current end;
@@ -1183,15 +1237,21 @@ declare
 begin
   select * into v_actor from public.site_workflow_current_actor();
   select * into strict v_workflow from public.workflow_instances where id = p_workflow_instance_id for update;
-  if v_workflow.current_stage_code <> 'returned_to_bd'
-     or v_actor.role_key not in ('BD_EXECUTIVE', 'BD_HEAD', 'ADMIN')
+  if v_actor.role_key not in ('BD_EXECUTIVE', 'BD_HEAD', 'ADMIN')
      or not public.site_workflow_actor_can_view(v_workflow.assessment_id) then
     raise exception 'Proposal cannot be generated at the current stage or by this actor' using errcode = '42501';
   end if;
   if v_key is not null then
     select response_payload into v_existing from public.site_workflow_idempotency
-      where idempotency_key = v_key and operation = 'generate_proposal';
+      where idempotency_key = v_key and operation = 'generate_proposal'
+        and actor_profile_id = v_actor.profile_id;
     if found then return v_existing; end if;
+    if exists (select 1 from public.site_workflow_idempotency where idempotency_key = v_key) then
+      raise exception 'Idempotency key is already in use' using errcode = '22023';
+    end if;
+  end if;
+  if v_workflow.current_stage_code <> 'returned_to_bd' then
+    raise exception 'Proposal cannot be generated at the current stage or by this actor' using errcode = '42501';
   end if;
   insert into public.proposals(
     workflow_instance_id, lead_id, site_visit_id, assessment_id, proposal_number,
@@ -1245,16 +1305,24 @@ begin
   select * into v_actor from public.site_workflow_current_actor();
   select * into strict v_proposal from public.proposals where id = p_proposal_id for update;
   select * into strict v_workflow from public.workflow_instances where id = v_proposal.workflow_instance_id for update;
-  if v_proposal.proposal_status = 'Sent' then return to_jsonb(v_proposal); end if;
-  if v_workflow.current_stage_code <> 'proposal'
-     or v_actor.role_key not in ('BD_EXECUTIVE', 'BD_HEAD', 'ADMIN')
+  if v_actor.role_key not in ('BD_EXECUTIVE', 'BD_HEAD', 'ADMIN')
      or not public.site_workflow_actor_can_view(v_workflow.assessment_id) then
     raise exception 'Proposal cannot be sent by this actor or at this stage' using errcode = '42501';
   end if;
   if v_key is not null then
     select response_payload into v_existing from public.site_workflow_idempotency
-      where idempotency_key = v_key and operation = 'mark_proposal_sent';
+      where idempotency_key = v_key and operation = 'mark_proposal_sent'
+        and actor_profile_id = v_actor.profile_id;
     if found then return v_existing; end if;
+    if exists (select 1 from public.site_workflow_idempotency where idempotency_key = v_key) then
+      raise exception 'Idempotency key is already in use' using errcode = '22023';
+    end if;
+  end if;
+  if v_proposal.proposal_status = 'Sent' then
+    return jsonb_build_object('proposal', to_jsonb(v_proposal), 'workflow_instance', to_jsonb(v_workflow));
+  end if;
+  if v_workflow.current_stage_code <> 'proposal' then
+    raise exception 'Proposal cannot be sent by this actor or at this stage' using errcode = '42501';
   end if;
   update public.proposals set proposal_status = 'Sent', sent_at = now(),
     metadata = coalesce(metadata, '{}'::jsonb) || coalesce(p_metadata, '{}'::jsonb), updated_at = now()
@@ -1466,7 +1534,7 @@ revoke all on function public.site_workflow_actor_can_view(uuid) from public, an
 revoke all on function public.site_workflow_actor_can_edit(uuid) from public, anon;
 revoke all on function public.site_workflow_log_event(uuid,text,text,text,text,jsonb) from public, anon;
 revoke all on function public.rpc_convert_lead_to_assessment(uuid,uuid,text,text,text,date,time without time zone,text,jsonb,jsonb) from public, anon;
-revoke all on function public.rpc_save_assessment_section(uuid,text,text,jsonb,bigint,text,uuid,text,text,text) from public, anon;
+revoke all on function public.rpc_save_assessment_section(uuid,text,text,jsonb,bigint,text,uuid,text,text,text,text) from public, anon;
 revoke all on function public.rpc_save_assessment_draft(uuid,text,jsonb,bigint,bigint,timestamptz) from public, anon;
 revoke all on function public.rpc_save_site_mom(uuid,jsonb,text) from public, anon;
 revoke all on function public.rpc_register_site_image(uuid,uuid,text,text,text,text,bigint,text,jsonb) from public, anon;
@@ -1484,7 +1552,7 @@ grant execute on function public.site_workflow_next_stage(text) to authenticated
 grant execute on function public.site_workflow_actor_can_view(uuid) to authenticated;
 grant execute on function public.site_workflow_actor_can_edit(uuid) to authenticated;
 grant execute on function public.rpc_convert_lead_to_assessment(uuid,uuid,text,text,text,date,time without time zone,text,jsonb,jsonb) to authenticated;
-grant execute on function public.rpc_save_assessment_section(uuid,text,text,jsonb,bigint,text,uuid,text,text,text) to authenticated;
+grant execute on function public.rpc_save_assessment_section(uuid,text,text,jsonb,bigint,text,uuid,text,text,text,text) to authenticated;
 grant execute on function public.rpc_save_assessment_draft(uuid,text,jsonb,bigint,bigint,timestamptz) to authenticated;
 grant execute on function public.rpc_save_site_mom(uuid,jsonb,text) to authenticated;
 grant execute on function public.rpc_register_site_image(uuid,uuid,text,text,text,text,bigint,text,jsonb) to authenticated;

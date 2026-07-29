@@ -124,6 +124,8 @@ test('role matrix and exact workflow stage order are centralized', () => {
     /when 'bd_survey' then 'operations_review'[\s\S]*when 'operations_review' then 'coordinator_costing'[\s\S]*when 'coordinator_costing' then 'hr_validation'[\s\S]*when 'hr_validation' then 'commercial_review'[\s\S]*when 'commercial_review' then 'finance_review'[\s\S]*when 'finance_review' then 'returned_to_bd'/i,
   );
   assert.doesNotMatch(migration, /v_actor\.actor_(?:state|branch) is null/i);
+  assert.match(migration, /current_stage text not null default 'bd_survey'/i);
+  assert.match(migration, /site_visit_id, lead_id, current_stage, created_by_profile_id/i);
 });
 
 test('stage skipping stale writes and repeated boundaries are database-protected', () => {
@@ -132,6 +134,9 @@ test('stage skipping stale writes and repeated boundaries are database-protected
   assert.match(migration, /Assessment section version conflict/i);
   assert.match(migration, /Draft version conflict/i);
   assert.match(migration, /site_workflow_idempotency/i);
+  assert.match(migration, /operation = 'save_assessment_section'/i);
+  assert.match(migration, /actor_profile_id = v_actor\.profile_id/i);
+  assert.match(migration, /Lead is outside the BD Executive scope/i);
   assert.match(migration, /assessment_sections_current_unique/i);
   assert.match(migration, /workflow_assignments_one_pending_stage/i);
   assert.match(migration, /proposals_one_version/i);
@@ -169,11 +174,15 @@ test('preflight and postflight reports cover catalog grants RLS and unchanged mo
   assert.match(preflight, /routine_privileges/i);
   assert.match(postflight, /relrowsecurity/i);
   assert.match(postflight, /public_execute/i);
+  assert.doesNotMatch(postflight, /has_function_privilege\('PUBLIC'/i);
+  assert.match(postflight, /aclexplode/i);
   assert.match(postflight, /authenticated_execute/i);
   assert.match(postflight, /storage\.buckets/i);
   assert.match(postflight, /rpc_register_site_image/i);
   assert.match(postflight, /site_survey_images_scoped_insert/i);
   assert.match(postflight, /activity_logs/i);
+  assert.match(preflight, /column_definition_checksum/i);
+  assert.match(postflight, /column_definition_checksum/i);
   assert.match(rollbackGuidance, /Do not bypass a failed preflight/i);
   assert.match(rollbackGuidance, /public\.activity_logs/i);
   assert.match(rollbackGuidance, /forward migration/i);

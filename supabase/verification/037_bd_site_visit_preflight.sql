@@ -34,6 +34,17 @@ from (
 ) counts
 order by table_name;
 
+select table_name,
+  md5(string_agg(
+    concat_ws('|', ordinal_position, column_name, data_type, udt_name, is_nullable, column_default),
+    ';' order by ordinal_position
+  )) as column_definition_checksum
+from information_schema.columns
+where table_schema = 'public'
+  and table_name in ('leads', 'lead_contacts', 'profiles', 'activity_logs')
+group by table_name
+order by table_name;
+
 select n.nspname as function_schema, p.proname as function_name,
   pg_get_function_identity_arguments(p.oid) as arguments,
   p.prosecdef as security_definer,
