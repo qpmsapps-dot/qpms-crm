@@ -278,6 +278,7 @@ export function dbSiteVisitToApp(row) {
     email: primary.email || '',
     source: lead.lead_source || '',
     priority: lead.lead_priority || '',
+    serviceScope: normalizeJsonArray(lead.service_scope),
     executive: row.assigned_bd_executive,
     assigned_bd_executive: row.assigned_bd_executive,
     assigned_bd_email: row.assigned_bd_email,
