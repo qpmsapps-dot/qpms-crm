@@ -65,6 +65,7 @@ import {
   isActiveLeadProfile,
   leadMomContactRecipients,
   leadActor,
+  leadListResponse,
   leadResponse,
   loadLeadRelations,
   normalizeLeadPayload,
@@ -5831,13 +5832,10 @@ async function listLeadManagement(request, response) {
     const visible = (result.data || []).filter((lead) => canViewLead(request.leadActor, lead));
     const relations = await loadLeadRelations(client, visible.map((lead) => lead.id));
     const filtered = visible.filter((lead) => leadMatchesApiFilters(lead, relations.contacts[lead.id] || [], request.query));
-    response.json({
-      ok: true,
-      count: filtered.length,
-      role: request.leadActor.role,
-      scope: request.leadActor.role === 'BD Executive' ? 'own' : request.leadActor.role === 'Branch Head' ? 'state' : request.leadActor.role === 'Business Head' ? 'business' : 'all',
-      leads: filtered.map((lead) => leadResponse(lead, relations)),
-    });
+    response.json(leadListResponse(
+      request.leadActor,
+      filtered.map((lead) => leadResponse(lead, relations)),
+    ));
   } catch (error) {
     safeLeadError(response, error);
   }

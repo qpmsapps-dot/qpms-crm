@@ -122,6 +122,22 @@ export function canAssignLead(actor) {
   return ASSIGNMENT_ROLES.has(actor?.role);
 }
 
+export function leadListResponse(actor, leads = []) {
+  return {
+    ok: true,
+    count: leads.length,
+    role: actor?.role || null,
+    scope: actor?.role === 'BD Executive'
+      ? 'own'
+      : actor?.role === 'Branch Head'
+        ? 'state'
+        : actor?.role === 'Business Head'
+          ? 'business'
+          : 'all',
+    leads,
+  };
+}
+
 export function canManageLeadMom(actor, lead) {
   return MOM_ROLES.has(actor?.role) && canViewLead(actor, lead);
 }

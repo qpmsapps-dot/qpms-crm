@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { leadRows } from '../data/qpmsWorkflowData.js';
 import { bdExecutives, getExecutiveByName } from '../data/mockUsers.js';
 import {
@@ -25,6 +25,7 @@ import {
   updateLeadRemote,
   uploadSiteImageRemote,
 } from '../services/workflowRepository.js';
+import { useAuth } from './auth-context.js';
 import { WorkflowContext } from './workflow-context.js';
 
 const leadsStorageKey = 'qpms-crm-workflow-leads';
@@ -300,6 +301,7 @@ function inferSectionFromSurveyPatch(survey = {}) {
 }
 
 export function WorkflowProvider({ children }) {
+  const { authStatus, backendToken, session, user } = useAuth();
   const [leads, setLeads] = useState(() => (isRemoteWorkflowEnabled() ? [] : readStorage(leadsStorageKey, leadRows).map(normalizeLead)));
   const [siteVisits, setSiteVisits] = useState(() => (isRemoteWorkflowEnabled() ? [] : readStorage(siteVisitsStorageKey, [])));
   const [backendStatus, setBackendStatus] = useState(isRemoteWorkflowEnabled() ? 'connecting' : 'local');
@@ -312,6 +314,9 @@ export function WorkflowProvider({ children }) {
     postmanAutomationLeads: 0,
     approvalRequestsFetched: 0,
   });
+  const workflowRequestIdRef = useRef(0);
+  const workflowIdentity = String(user?.id || user?.email || '');
+  const hasRemoteCredential = Boolean(session?.access_token || backendToken);
 
   useEffect(() => {
     if (!isRemoteWorkflowEnabled()) {
@@ -319,27 +324,35 @@ export function WorkflowProvider({ children }) {
       return;
     }
 
-    let active = true;
+    if (authStatus !== 'ready') return undefined;
+    if (!user || !hasRemoteCredential) {
+      workflowRequestIdRef.current += 1;
+      setLeads([]);
+      setSiteVisits([]);
+      setBackendStatus('connecting');
+      setWorkflowError('');
+      return undefined;
+    }
+
     console.info('[myQPMS Workflow] Remote workflow mode active; loading Supabase workflow data', { appMode });
-    refreshWorkflowData()
-      .then(() => {
-        if (!active) return;
-      })
-      .catch(() => {
-        if (active) setBackendStatus('error');
-      });
+    void refreshWorkflowData({ requestKey: workflowIdentity }).catch(() => {
+      // The current request stores its scoped error; the mount effect has no caller to reject to.
+    });
 
     return () => {
-      active = false;
+      workflowRequestIdRef.current += 1;
     };
-  }, []);
+  }, [authStatus, hasRemoteCredential, workflowIdentity]);
 
-  async function refreshWorkflowData() {
+  async function refreshWorkflowData({ requestKey = workflowIdentity } = {}) {
     if (!isRemoteWorkflowEnabled()) return;
+    const requestId = workflowRequestIdRef.current + 1;
+    workflowRequestIdRef.current = requestId;
     setBackendStatus('connecting');
     setWorkflowError('');
-    return fetchWorkflowData()
+    return fetchWorkflowData({ requestKey })
       .then((data) => {
+        if (requestId !== workflowRequestIdRef.current) return;
         setLeads(data.leads.map(normalizeLead));
         setSiteVisits(data.siteVisits);
         setWorkflowDebug(data.debug || {
@@ -351,15 +364,25 @@ export function WorkflowProvider({ children }) {
           approvalRequestsFetched: data.siteVisits.reduce((sum, visit) => sum + (visit.approvals?.length || 0), 0),
         });
         setBackendStatus('connected');
+        setWorkflowError('');
         console.info('[myQPMS Workflow] Supabase workflow connected', {
           leads: data.leads.length,
           siteVisits: data.siteVisits.length,
         });
       })
       .catch((error) => {
-        console.error('[myQPMS Workflow] Supabase fetch failed; mock data disabled for remote mode', error);
+        if (requestId !== workflowRequestIdRef.current) return;
+        console.error('[myQPMS Lead Management] Workflow load failed', {
+          status: Number(error?.status || 0) || null,
+          code: error?.code || null,
+          message: error?.message || 'Unexpected Lead Management error',
+        });
         setBackendStatus('error');
-        setWorkflowError(`Supabase fetch failed: ${error.message}`);
+        setWorkflowError(
+          error?.isLeadManagementRequestError
+            ? error.message
+            : 'Unable to load Lead Management data. Please retry.',
+        );
         throw error;
       });
   }

@@ -507,7 +507,9 @@ function dbSiteMomToApp(row) {
   };
 }
 
-export async function fetchWorkflowData() {
+const workflowFetchesByIdentity = new Map();
+
+async function fetchWorkflowDataOnce() {
   assertConfigured();
   console.info('[myQPMS Lead Management] Fetching authorized leads through backend');
 
@@ -678,6 +680,20 @@ export async function fetchWorkflowData() {
       approvalRequestsFetched: Object.values(approvalsBySiteVisitId).reduce((sum, rows) => sum + rows.length, 0),
     },
   };
+}
+
+export function fetchWorkflowData({ requestKey = 'authenticated-user' } = {}) {
+  const key = String(requestKey || 'authenticated-user');
+  const existing = workflowFetchesByIdentity.get(key);
+  if (existing) return existing;
+
+  const request = fetchWorkflowDataOnce().finally(() => {
+    if (workflowFetchesByIdentity.get(key) === request) {
+      workflowFetchesByIdentity.delete(key);
+    }
+  });
+  workflowFetchesByIdentity.set(key, request);
+  return request;
 }
 
 export async function convertLeadToAssessment(lead, { user, idempotencyKey, metadata } = {}) {

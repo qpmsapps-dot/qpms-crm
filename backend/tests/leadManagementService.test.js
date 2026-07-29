@@ -13,6 +13,7 @@ import {
   duplicateScore,
   isActiveLeadProfile,
   leadActor,
+  leadListResponse,
   leadMomContactRecipients,
   normalizeContacts,
   normalizeLeadPayload,
@@ -22,6 +23,17 @@ import {
   safeLeadMomSender,
   validateLeadPayload,
 } from '../services/leadManagementService.js';
+
+test('authenticated Admin receives an empty successful lead-list response', () => {
+  const actor = leadActor(activeProfile('Admin'));
+  assert.deepEqual(leadListResponse(actor, []), {
+    ok: true,
+    count: 0,
+    role: 'Admin',
+    scope: 'all',
+    leads: [],
+  });
+});
 
 const activeProfile = (role, overrides = {}) => ({
   id: `profile-${role}`,

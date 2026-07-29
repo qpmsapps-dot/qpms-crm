@@ -118,19 +118,26 @@ async function leadApiRequest(config) {
     return response.data;
   } catch (requestError) {
     const status = requestError.response?.status;
-    if (status === 401 || requestError.isAuthSessionError) {
-      throw new Error(
-        requestError.response?.data?.message
-        || 'Your session has expired. Please sign in again.',
-      );
+    const authCode = String(requestError?.code || '');
+    let message = 'Unable to load Lead Management data. Please retry.';
+    if (
+      status === 401
+      || (requestError.isAuthSessionError
+        && ['SESSION_EXPIRED', 'REFRESH_FAILED'].includes(authCode))
+    ) {
+      message = 'Your session has expired. Please sign in again.';
     }
     if (status === 403) {
-      throw new Error(
-        requestError.response?.data?.message
-        || 'You do not have permission to access Lead Management.',
-      );
+      message = 'You do not have permission to access Lead Management.';
     }
-    throw requestError;
+    if (status === 404) {
+      message = 'Lead Management service is unavailable.';
+    }
+    const error = new Error(message);
+    error.status = Number(status || 0);
+    error.code = authCode || 'LEAD_MANAGEMENT_REQUEST_FAILED';
+    error.isLeadManagementRequestError = true;
+    throw error;
   }
 }
 
