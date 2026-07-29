@@ -1,5 +1,11 @@
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import {
+  dbAssessmentToSurvey,
+  surveyToDbAssessment,
+} from './siteAssessmentMapper.js';
+
+export { dbAssessmentToSurvey, surveyToDbAssessment } from './siteAssessmentMapper.js';
+import {
   createLeadManagementLead,
   getLeadManagementLeads,
   saveAuthenticatedLeadMomDraft,
@@ -306,133 +312,6 @@ export function dbSiteVisitToApp(row) {
     } : undefined,
     siteMom: row.site_mom?.[0] ? dbSiteMomToApp(row.site_mom[0]) : null,
     activity: (row.activity_logs || []).map((log) => log.activity_message || log.message || log.activity_type).filter(Boolean),
-  };
-}
-
-export function surveyToDbAssessment(survey, visit, status = 'Draft', user) {
-  const monthlyBilling = Number(survey.commercial?.billingComponents?.reduce((sum, item) => sum + Number(item.amount || 0), 0) || 0);
-
-  return {
-    site_visit_id: visit.id,
-    lead_id: visit.leadId,
-    basic_site_information: {
-      site_address: survey.siteAddress,
-      site_type: survey.siteType,
-      operating_hours: survey.operatingHours,
-      client_occupancy: survey.clientOccupancy,
-      building_age: survey.buildingAge,
-      takeover_complexity: survey.takeoverComplexity,
-      site_survey_date: survey.siteSurveyDate,
-      assessed_by: survey.assessedBy,
-      site_contact_person: survey.siteContactPerson,
-      contact_number: survey.contactNumber,
-      contact_email: survey.contactEmail,
-      total_site_area: survey.totalSiteArea,
-      contract_period: survey.contractPeriod,
-      margin_agreed: survey.marginAgreed,
-      margin_type: survey.marginType,
-      payment_terms: survey.paymentTerms,
-      group_or_sister_concern_business: survey.groupOrSisterConcernBusiness,
-      is_24_7_operation: survey.is247Operation,
-    },
-    ifm_service_scope: survey.ifmScope || {},
-    hard_services: survey.hardServices || {},
-    soft_services: survey.softServices || {},
-    landscaping_pest_control: survey.landscaping || {},
-    hse_compliance: survey.hseCompliance || [],
-    manpower_requirement: {
-      rows: survey.manpowerPlan || [],
-      minimum_wages_type: survey.minimumWagesType,
-      applicable_zone: survey.applicableZone,
-      wage_computation_notes: survey.wageComputationNotes,
-      reliever_cost_required: survey.relieverCostRequired,
-      budgeted_take_home_feasibility: survey.budgetedTakeHomeFeasibility,
-      local_workforce_availability: survey.localWorkforceAvailability,
-      transportation_impact: survey.transportationImpact,
-      bonus_payment_type: survey.bonusPaymentType,
-      leave_with_wages_days: survey.leaveWithWagesDays,
-      nfh_applicable: survey.nfhApplicable,
-      travel_accommodation_provided: survey.travelAccommodationProvided,
-      allowances: survey.allowances || {},
-    },
-    tools_equipment_consumables: {
-      equipment: survey.equipment || [],
-      chemicals: survey.chemicals || [],
-      tools: survey.tools || [],
-      ppe_uniforms: survey.ppeUniforms || [],
-      machinery: survey.machinery || [],
-      consumables: survey.consumables,
-      rental_machinery: survey.rentalMachinery,
-      non_billable_expenses: survey.nonBillableExpenses,
-      uniforms_shoes_accessories: survey.uniformsShoesAccessories,
-    },
-    client_kyc: survey.clientKyc || {},
-    risk_assessment: {
-      rows: survey.risks || [],
-      client_credit_rating: survey.clientCreditRating,
-      market_assessment: survey.marketAssessment,
-      good_paymaster: survey.goodPaymaster,
-      existing_vendor_change_reason: survey.existingVendorChangeReason,
-      mitigation_plan: survey.mitigationPlan,
-      remarks: survey.riskRemarks,
-    },
-    penalty_clauses: survey.penaltyClauses || {},
-    commercial_statement: {
-      ...(survey.commercial || {}),
-      estimated_monthly_billing: monthlyBilling,
-      approval_rules: {
-        coo_approval_required: monthlyBilling > 500000,
-        cfo_approval_required: monthlyBilling > 500000,
-        cmd_counter_approval_required: monthlyBilling > 2500000,
-      },
-    },
-    approval_mechanism: {
-      approvalWorkflow: survey.approvalWorkflow,
-      coo_approval_required: monthlyBilling > 500000,
-      cfo_approval_required: monthlyBilling > 500000,
-      cmd_counter_approval_required: monthlyBilling > 2500000,
-    },
-    final_remarks_signoff: {
-      finalRemarks: survey.finalRemarks,
-      signOffName: survey.signOffName,
-      project_remarks: survey.projectRemarks,
-      site_survey_done_by: survey.siteSurveyDoneBy,
-      signature_placeholder: survey.signaturePlaceholder,
-    },
-    assessment_status: status,
-    final_remarks: survey.finalRemarks || '',
-    created_by: user?.email || visit.assigned_bd_email || '',
-    updated_at: new Date().toISOString(),
-  };
-}
-
-export function dbAssessmentToSurvey(row) {
-  return {
-    siteAddress: row.basic_site_information?.site_address || '',
-    siteType: row.basic_site_information?.site_type || '',
-    operatingHours: row.basic_site_information?.operating_hours || '',
-    clientOccupancy: row.basic_site_information?.client_occupancy || '',
-    buildingAge: row.basic_site_information?.building_age || '',
-    takeoverComplexity: row.basic_site_information?.takeover_complexity || 'Medium',
-    ifmScope: row.ifm_service_scope || {},
-    hardServices: row.hard_services || {},
-    softServices: row.soft_services || {},
-    landscaping: row.landscaping_pest_control || {},
-    hseCompliance: row.hse_compliance || [],
-    manpowerPlan: row.manpower_requirement?.rows || [],
-    allowances: row.manpower_requirement?.allowances || undefined,
-    equipment: row.tools_equipment_consumables?.equipment || [],
-    chemicals: row.tools_equipment_consumables?.chemicals || [],
-    tools: row.tools_equipment_consumables?.tools || [],
-    ppeUniforms: row.tools_equipment_consumables?.ppe_uniforms || [],
-    machinery: row.tools_equipment_consumables?.machinery || [],
-    clientKyc: row.client_kyc || {},
-    risks: row.risk_assessment?.rows || [],
-    penaltyClauses: row.penalty_clauses || {},
-    commercial: row.commercial_statement || {},
-    approvalWorkflow: row.approval_mechanism?.approvalWorkflow || '',
-    finalRemarks: row.final_remarks_signoff?.finalRemarks || row.final_remarks || '',
-    signOffName: row.final_remarks_signoff?.signOffName || '',
   };
 }
 
