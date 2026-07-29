@@ -161,3 +161,41 @@ test('empty optional sections remain valid', () => {
   assert.deepEqual(restored.equipment, []);
   assert.deepEqual(restored.risks, []);
 });
+
+test('current section data overrides a stale recovery snapshot', () => {
+  const restored = dbAssessmentToSurvey({
+    survey_snapshot: {
+      commercial: { paymentTerms: 'Old terms', marginAgreed: '5' },
+    },
+    commercial_statement: {},
+    assessment_sections: [{
+      section_key: 'commercial',
+      section_data: { paymentTerms: '45 days', marginAgreed: '12' },
+      version: 3,
+    }],
+  });
+  assert.equal(restored.paymentTerms, '45 days');
+  assert.equal(restored.marginAgreed, '12');
+});
+
+test('new structured values remain authoritative over the legacy version-one snapshot', () => {
+  const restored = dbAssessmentToSurvey({
+    metadata: {
+      survey_state_v1: {
+        siteAddress: 'Stale address',
+        clientCreditRating: 'Poor',
+      },
+    },
+    basic_site_information: { site_address: 'Current address' },
+    risk_assessment: { client_credit_rating: 'Good' },
+  });
+  assert.equal(restored.siteAddress, 'Current address');
+  assert.equal(restored.clientCreditRating, 'Good');
+});
+
+test('null and partial legacy assessment records load safely', () => {
+  assert.doesNotThrow(() => dbAssessmentToSurvey(null));
+  const restored = dbAssessmentToSurvey({ metadata: null, survey_snapshot: null });
+  assert.equal(restored.siteAddress, '');
+  assert.deepEqual(restored.manpowerPlan, []);
+});

@@ -18,6 +18,15 @@ function surveySnapshot(survey) {
   );
 }
 
+export function assessmentSectionOverlay(sections = []) {
+  return [...(Array.isArray(sections) ? sections : [])]
+    .sort((left, right) => Number(left?.version || 0) - Number(right?.version || 0))
+    .reduce((overlay, section) => {
+      const data = objectOrEmpty(section?.section_data ?? section?.sectionData);
+      return { ...overlay, ...data };
+    }, {});
+}
+
 export function surveyToDbAssessment(survey, visit, status = 'Draft', user) {
   const normalizedSurvey = objectOrEmpty(survey);
   const monthlyBilling = Number(
@@ -132,16 +141,29 @@ export function surveyToDbAssessment(survey, visit, status = 'Draft', user) {
   };
 }
 
-export function dbAssessmentToSurvey(row = {}) {
-  const snapshot = objectOrEmpty(row.metadata?.survey_state_v1);
-  const basic = objectOrEmpty(row.basic_site_information);
-  const manpower = objectOrEmpty(row.manpower_requirement);
-  const resources = objectOrEmpty(row.tools_equipment_consumables);
-  const risk = objectOrEmpty(row.risk_assessment);
-  const approval = objectOrEmpty(row.approval_mechanism);
-  const signoff = objectOrEmpty(row.final_remarks_signoff);
+export function dbAssessmentToSurvey(row = {}, sections) {
+  const normalizedRow = objectOrEmpty(row);
+  const currentSections = sections ?? normalizedRow.assessment_sections;
+  const legacySnapshot = objectOrEmpty(normalizedRow.metadata?.survey_state_v1);
+  const recoveryEnvelope = objectOrEmpty(normalizedRow.survey_snapshot);
+  const recoverySnapshot = Object.values(recoveryEnvelope).every(
+    (value) => value && typeof value === 'object' && !Array.isArray(value),
+  )
+    ? Object.values(recoveryEnvelope).reduce(
+      (merged, value) => ({ ...merged, ...objectOrEmpty(value) }),
+      {},
+    )
+    : recoveryEnvelope;
+  const snapshot = { ...legacySnapshot, ...recoverySnapshot };
+  const sectionOverlay = assessmentSectionOverlay(currentSections);
+  const basic = objectOrEmpty(normalizedRow.basic_site_information);
+  const manpower = objectOrEmpty(normalizedRow.manpower_requirement);
+  const resources = objectOrEmpty(normalizedRow.tools_equipment_consumables);
+  const risk = objectOrEmpty(normalizedRow.risk_assessment);
+  const approval = objectOrEmpty(normalizedRow.approval_mechanism);
+  const signoff = objectOrEmpty(normalizedRow.final_remarks_signoff);
 
-  return {
+  const structuredSurvey = {
     ...snapshot,
     siteAddress: valueOrFallback(basic.site_address, snapshot.siteAddress || ''),
     siteType: valueOrFallback(basic.site_type, snapshot.siteType || ''),
@@ -173,15 +195,15 @@ export function dbAssessmentToSurvey(row = {}) {
       basic.is_24_7_operation,
       snapshot.is247Operation || 'No',
     ),
-    ifmScope: sectionOrSnapshot(row.ifm_service_scope, snapshot.ifmScope, {}),
-    hardServices: sectionOrSnapshot(row.hard_services, snapshot.hardServices, {}),
-    softServices: sectionOrSnapshot(row.soft_services, snapshot.softServices, {}),
+    ifmScope: sectionOrSnapshot(normalizedRow.ifm_service_scope, snapshot.ifmScope, {}),
+    hardServices: sectionOrSnapshot(normalizedRow.hard_services, snapshot.hardServices, {}),
+    softServices: sectionOrSnapshot(normalizedRow.soft_services, snapshot.softServices, {}),
     landscaping: sectionOrSnapshot(
-      row.landscaping_pest_control,
+      normalizedRow.landscaping_pest_control,
       snapshot.landscaping,
       {},
     ),
-    hseCompliance: valueOrFallback(row.hse_compliance, snapshot.hseCompliance || []),
+    hseCompliance: valueOrFallback(normalizedRow.hse_compliance, snapshot.hseCompliance || []),
     manpowerPlan: valueOrFallback(manpower.rows, snapshot.manpowerPlan || []),
     minimumWagesType: valueOrFallback(
       manpower.minimum_wages_type,
@@ -237,7 +259,7 @@ export function dbAssessmentToSurvey(row = {}) {
       resources.uniforms_shoes_accessories,
       snapshot.uniformsShoesAccessories,
     ),
-    clientKyc: sectionOrSnapshot(row.client_kyc, snapshot.clientKyc, {}),
+    clientKyc: sectionOrSnapshot(normalizedRow.client_kyc, snapshot.clientKyc, {}),
     risks: valueOrFallback(risk.rows, snapshot.risks || []),
     clientCreditRating: valueOrFallback(
       risk.client_credit_rating,
@@ -251,8 +273,8 @@ export function dbAssessmentToSurvey(row = {}) {
     ),
     mitigationPlan: valueOrFallback(risk.mitigation_plan, snapshot.mitigationPlan),
     riskRemarks: valueOrFallback(risk.remarks, snapshot.riskRemarks),
-    penaltyClauses: valueOrFallback(row.penalty_clauses, snapshot.penaltyClauses || {}),
-    commercial: sectionOrSnapshot(row.commercial_statement, snapshot.commercial, {}),
+    penaltyClauses: valueOrFallback(normalizedRow.penalty_clauses, snapshot.penaltyClauses || {}),
+    commercial: sectionOrSnapshot(normalizedRow.commercial_statement, snapshot.commercial, {}),
     approvalWorkflow: valueOrFallback(
       approval.approvalWorkflow,
       snapshot.approvalWorkflow || '',
@@ -280,7 +302,7 @@ export function dbAssessmentToSurvey(row = {}) {
     ),
     finalRemarks: valueOrFallback(
       signoff.finalRemarks,
-      valueOrFallback(row.final_remarks, snapshot.finalRemarks || ''),
+      valueOrFallback(normalizedRow.final_remarks, snapshot.finalRemarks || ''),
     ),
     signOffName: valueOrFallback(signoff.signOffName, snapshot.signOffName || ''),
     projectRemarks: valueOrFallback(signoff.project_remarks, snapshot.projectRemarks),
@@ -293,4 +315,5 @@ export function dbAssessmentToSurvey(row = {}) {
       snapshot.signaturePlaceholder,
     ),
   };
+  return { ...structuredSurvey, ...sectionOverlay };
 }
