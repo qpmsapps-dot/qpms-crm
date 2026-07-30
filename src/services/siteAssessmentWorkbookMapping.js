@@ -84,7 +84,11 @@ export function surveyReportRows(input) {
       address: client.site_address || client.address || '',
       contact: [primary.name || primary.contact_person_name, primary.designation || primary.contact_person_designation].filter(Boolean).join(' / '),
       phone: [primary.phone || primary.mobile || primary.contact_number, primary.fax].filter(Boolean).join(' / '),
-      surveyor: [surveyor.name || profile.name || profile.full_name, surveyor.designation || profile.designation || profile.role, surveyor.phone || profile.phone].filter(Boolean).join(' / '),
+      surveyor: [
+        surveyor.name || profile.full_name || profile.employee_code || profile.email || profile.id,
+        surveyor.designation || profile.designation || profile.role,
+        surveyor.phone || profile.phone,
+      ].filter(Boolean).join(' / '),
       location: [client.site_location, client.managed_from].filter(Boolean).join(' / '),
       industry: client.industry || input.lead.industry || '',
       zone: client.zone || facility.zone || commercial.zone || '',

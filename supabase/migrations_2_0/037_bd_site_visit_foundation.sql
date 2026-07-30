@@ -25,7 +25,7 @@ begin
   end loop;
 
   foreach v_column in array array[
-    'id', 'auth_user_id', 'employee_code', 'name', 'full_name', 'email', 'role', 'state', 'branch',
+    'id', 'auth_user_id', 'employee_code', 'full_name', 'email', 'role', 'state', 'branch',
     'status', 'is_active', 'web_access_enabled'
   ]
   loop
@@ -58,7 +58,7 @@ begin
     end if;
   end loop;
 
-  foreach v_column in array array['employee_code', 'name', 'full_name', 'email', 'role', 'state', 'branch']
+  foreach v_column in array array['employee_code', 'full_name', 'email', 'role', 'state', 'branch']
   loop
     select data_type into v_type
     from information_schema.columns
@@ -435,7 +435,14 @@ begin
   end if;
 
   return query
-  select p.id, p.auth_user_id, p.employee_code, coalesce(p.full_name, p.name), p.role,
+  select p.id, p.auth_user_id, p.employee_code,
+    coalesce(
+      nullif(btrim(p.full_name), ''),
+      nullif(btrim(p.employee_code), ''),
+      nullif(btrim(p.email), ''),
+      p.id::text
+    ),
+    p.role,
     public.normalize_site_workflow_role(p.role), p.state, p.branch
   from public.profiles p
   where p.auth_user_id = auth.uid()

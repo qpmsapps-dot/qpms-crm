@@ -7,7 +7,7 @@ where c.table_schema = 'public'
   and (
     (c.table_name = 'leads' and c.column_name = 'id')
     or (c.table_name = 'profiles' and c.column_name in (
-      'id', 'auth_user_id', 'employee_code', 'name', 'full_name', 'email', 'role', 'state', 'branch',
+      'id', 'auth_user_id', 'employee_code', 'full_name', 'email', 'role', 'state', 'branch',
       'status', 'is_active', 'web_access_enabled'
     ))
   )

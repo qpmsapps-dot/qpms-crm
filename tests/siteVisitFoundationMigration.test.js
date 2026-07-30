@@ -74,6 +74,16 @@ test('preflight fails closed on missing or incompatible modern schema', () => {
   for (const column of ['auth_user_id', 'employee_code', 'full_name', 'role', 'state', 'branch']) {
     assert.match(migration, new RegExp(`'${column}'`));
   }
+  assert.doesNotMatch(migration, /public\.profiles\.name|p\.name/i);
+  assert.doesNotMatch(preflight, /'name'/i);
+});
+
+test('profile actor display uses production full_name fallback chain', () => {
+  assert.match(migration, /nullif\(btrim\(p\.full_name\), ''\)/i);
+  assert.match(migration, /nullif\(btrim\(p\.employee_code\), ''\)/i);
+  assert.match(migration, /nullif\(btrim\(p\.email\), ''\)/i);
+  assert.match(migration, /p\.id::text/i);
+  assert.doesNotMatch(migration, /p\.name/i);
 });
 
 test('site evidence uses a private constrained bucket and scoped registration', () => {
