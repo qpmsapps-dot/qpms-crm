@@ -363,6 +363,18 @@ test('real_production_claim_columns_map_to_ticket_and_parking_amounts', () => {
   assert.equal(dataset.daily_summary[0].amount, 300);
 });
 
+test('claim_query_explicitly_includes_submitted_pending_and_approved_statuses', async () => {
+  const source = await readFile(
+    new URL('../services/employeeRangeReportService.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /const EXPENSE_CLAIM_QUERY_STATUSES = \[\.\.\.INCLUDED_EXPENSE_CLAIM_STATUSES\]/);
+  assert.match(source, /from\('fo_travel_expense_claims'\)[\s\S]*?\.in\('status', EXPENSE_CLAIM_QUERY_STATUSES\)/);
+  assert.match(source, /'submitted'/);
+  assert.match(source, /'pending_review'/);
+  assert.match(source, /'approved'/);
+});
+
 test('ticket_and_parking_amounts_are_separate_and_reconcile', () => {
   const row = attendance('2026-07-01', 4, { petrol_amount: 16 });
   const dataset = buildEmployeeRangeDataset({
@@ -385,6 +397,43 @@ test('ticket_and_parking_amounts_are_separate_and_reconcile', () => {
   assert.equal(daily.total_amount, 271);
   assert.equal(dataset.period_summary.total_amount, 271);
   assert.equal(dataset.period_summary.total_amount, dataset.period_summary.distance_amount + dataset.period_summary.other_transport_amount + dataset.period_summary.parking_amount);
+});
+
+test('azad_july_fixture_reconciles_submitted_ticket_claims', () => {
+  const rows = [
+    attendance('2026-07-17', 1604.78, { petrol_amount: 6419.12, travel_mode: 'bike' }),
+    attendance('2026-07-20', 0, { travel_mode: 'bike', sequence: 2 }),
+    attendance('2026-07-27', 0, { travel_mode: 'bike', sequence: 3 }),
+    attendance('2026-07-28', 0, { travel_mode: 'bike', sequence: 4 }),
+  ];
+  const claims = [
+    claim(rows[0].id, 'train', 80),
+    claim(rows[1].id, 'train', 80),
+    claim(rows[1].id, 'bus', 15, { sequence: 2 }),
+    claim(rows[2].id, 'train', 65),
+    claim(rows[2].id, 'bus', 28, { sequence: 2 }),
+    claim(rows[2].id, 'bus', 25, { sequence: 3 }),
+    claim(rows[2].id, 'auto', 50, { sequence: 4 }),
+    claim(rows[2].id, 'train', 65, { sequence: 2 }),
+    claim(rows[3].id, 'train', 80),
+  ];
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'QPMSKL1674', full_name: 'AZAD.H' },
+    period: kolkataPeriodBounds('2026-07-01', '2026-07-30'),
+    attendances: rows,
+    expenseClaims: claims,
+  });
+  const byDate = new Map(dataset.daily_summary.map((row) => [row.attendance_date, row]));
+  assert.equal(byDate.get('2026-07-17').other_transport_amount, 80);
+  assert.deepEqual(byDate.get('2026-07-17').modes, ['Bike', 'Train']);
+  assert.equal(byDate.get('2026-07-20').other_transport_amount, 95);
+  assert.equal(byDate.get('2026-07-27').other_transport_amount, 233);
+  assert.equal(byDate.get('2026-07-28').other_transport_amount, 80);
+  assert.equal(dataset.period_summary.other_transport_amount, 488);
+  assert.equal(dataset.period_summary.parking_amount, 0);
+  assert.equal(dataset.period_summary.distance_amount, 6419.12);
+  assert.equal(dataset.period_summary.total_amount, 6907.12);
+  assert.equal(dataset.period_summary.total_amount, dataset.daily_summary.reduce((sum, row) => sum + row.total_amount, 0));
 });
 
 test('site_visit_duration_is_derived_without_mutating_source', () => {

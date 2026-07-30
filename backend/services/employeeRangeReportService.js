@@ -12,6 +12,7 @@ const INCLUDED_EXPENSE_CLAIM_STATUSES = new Set([
   'pending_review',
   'approved',
 ]);
+const EXPENSE_CLAIM_QUERY_STATUSES = [...INCLUDED_EXPENSE_CLAIM_STATUSES];
 const DISTANCE_REIMBURSEMENT_MODES = new Set(['bike', 'own_vehicle', 'car']);
 const TICKET_REIMBURSEMENT_MODES = new Set(['auto', 'bus', 'train', 'other']);
 const COMPLETED_STATUS_PATTERN =
@@ -143,12 +144,19 @@ function isOptionalExpenseClaimAccessError(error) {
 export async function loadOptionalExpenseClaims(client, attendanceIds = [], options = {}) {
   if (!attendanceIds.length) return { rows: [], warning: null };
   try {
-    const rows = await fetchByAttendanceIds(
-      client,
-      'fo_travel_expense_claims',
-      attendanceIds,
-      'created_at',
-    );
+    const rows = [];
+    for (const attendanceIdsChunk of chunks(attendanceIds)) {
+      rows.push(
+        ...(await fetchEmployeeRangePages(() =>
+          client
+            .from('fo_travel_expense_claims')
+            .select('*')
+            .in('attendance_id', attendanceIdsChunk)
+            .in('status', EXPENSE_CLAIM_QUERY_STATUSES)
+            .order('created_at', { ascending: true })
+            .order('id', { ascending: true }))),
+      );
+    }
     const employeeCodes = [...new Set((options.employeeCodes || []).map(key).filter(Boolean))];
     if (employeeCodes.length && options.fromIso && options.toIso) {
       const fallbackRows = await fetchEmployeeRangePages(() =>
@@ -156,6 +164,7 @@ export async function loadOptionalExpenseClaims(client, attendanceIds = [], opti
           .from('fo_travel_expense_claims')
           .select('*')
           .in('employee_code', employeeCodes)
+          .in('status', EXPENSE_CLAIM_QUERY_STATUSES)
           .gte('created_at', options.fromIso)
           .lte('created_at', options.toIso)
           .order('created_at', { ascending: true })

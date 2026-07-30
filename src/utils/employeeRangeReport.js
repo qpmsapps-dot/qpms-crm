@@ -84,6 +84,7 @@ export function buildEmployeeRangeExcelRows(dataset) {
       "Duration": durationLabel(row.visit_duration_minutes),
     })),
     travelClaims: (dataset?.expense_claims || []).map((claim) => ({
+      "Claim ID": claim.id || "",
       "Attendance Date": claim.attendance_date,
       "Travel Mode": claim.travel_mode,
       "Claimed Amount": claim.claimed_amount ?? claim.fare_amount ?? 0,
