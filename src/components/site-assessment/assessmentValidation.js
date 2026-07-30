@@ -41,7 +41,9 @@ export function validateAssessmentSection(section, survey = {}, { role = '', isS
     }
     for (const row of [...(equipment.current_manpower || []), ...(equipment.suggested_manpower || [])]) {
       if (row.designation && Number(row.headCount ?? row.count ?? 0) <= 0) errors.push('Manpower head count must be greater than zero.');
-      if (row.startTime && row.endTime && row.startTime >= row.endTime) errors.push('Manpower shift end time must be after start time.');
+      // An end time before the start time represents an overnight shift; only
+      // identical times are invalid because they describe no shift duration.
+      if (row.startTime && row.endTime && row.startTime === row.endTime) errors.push('Manpower shift end time must differ from start time.');
       if (Number(row.monthlyTakeHomeSalary ?? row.salary ?? 0) < 0) errors.push('Manpower salary cannot be negative.');
     }
     const suggested = equipment.suggested_manpower || [];

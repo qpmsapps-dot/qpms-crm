@@ -80,13 +80,22 @@ test('hidden conditional fields do not block facility validation', () => {
   assert.deepEqual(errors, []);
 });
 
-test('equipment and manpower validation rejects negative values and invalid shifts', () => {
+test('equipment and manpower validation rejects negative values and zero-duration shifts', () => {
   const errors = validateAssessmentSection('Equipment, Manpower & MPD', {
     equipment_manpower: {
       suggested_equipment: [{ quantity: -1 }],
-      suggested_manpower: [{ designation: 'Supervisor', headCount: 1, startTime: '18:00', endTime: '09:00', monthlyTakeHomeSalary: 1000 }],
+      suggested_manpower: [{ designation: 'Supervisor', headCount: 1, startTime: '09:00', endTime: '09:00', monthlyTakeHomeSalary: 1000 }],
     },
   }, { isSubmission: true });
   assert.ok(errors.some((message) => message.includes('negative')));
   assert.ok(errors.some((message) => message.includes('end time')));
+});
+
+test('overnight manpower shifts are valid', () => {
+  const errors = validateAssessmentSection('Equipment, Manpower & MPD', {
+    equipment_manpower: {
+      suggested_manpower: [{ designation: 'Supervisor', headCount: 1, startTime: '18:00', endTime: '09:00', monthlyTakeHomeSalary: 1000 }],
+    },
+  }, { isSubmission: true });
+  assert.deepEqual(errors, []);
 });

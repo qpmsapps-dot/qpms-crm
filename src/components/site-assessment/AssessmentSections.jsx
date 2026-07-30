@@ -29,6 +29,17 @@ function SectionCard({ title, description, children }) {
   return <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-950/60"><div className="mb-4"><h4 className="text-sm font-bold text-slate-900 dark:text-white">{title}</h4>{description ? <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{description}</p> : null}</div>{children}</section>;
 }
 
+export function LegacyAssessmentDetails({ survey }) {
+  const legacy = survey?.legacy && typeof survey.legacy === 'object' ? survey.legacy : {};
+  if (survey?.schema_version !== 1 && !Object.keys(legacy).length) return null;
+  return <SectionCard title="Legacy Assessment Details" description="Preserved version-one fields remain available for review and are not rewritten by this form.">
+    <details>
+      <summary className="cursor-pointer text-sm font-semibold text-qpms-700 dark:text-qpms-300">View preserved legacy data</summary>
+      <pre className="mt-3 max-h-96 overflow-auto rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-700 dark:bg-slate-900 dark:text-slate-300">{JSON.stringify(legacy, null, 2)}</pre>
+    </details>
+  </SectionCard>;
+}
+
 function ContactFields({ contact, index, onChange, disabled }) {
   return <div className="grid gap-3 rounded-xl border border-slate-200 p-3 dark:border-slate-800 md:grid-cols-2">
     <div className="md:col-span-2"><p className="text-xs font-bold uppercase tracking-wide text-slate-500">Contact {index + 1}{index === 0 ? ' - Primary' : ''}</p></div>
@@ -185,6 +196,7 @@ export function CommercialReviewSection({ survey, onFieldChange, readOnly = fals
     </div></SectionCard>
     <SectionCard title="Read-only survey summary"><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3"><Field label="Client" value={survey.client_site?.client_name} disabled onChange={() => {}} /><Field label="Contacts" value={(survey.client_site?.contacts || []).map((contact) => contact.name).filter(Boolean).join(', ')} disabled onChange={() => {}} /><Field label="Area" value={survey.client_site?.built_up_area} disabled onChange={() => {}} /><Field label="Occupants" value={survey.client_site?.occupants_staff} disabled onChange={() => {}} /><Field label="Working Days" value={survey.client_site?.client_working_days} disabled onChange={() => {}} /><Field label="Suggested Manpower" value={(survey.equipment_manpower?.suggested_manpower || []).length} disabled onChange={() => {}} /></div></SectionCard>
     <SectionCard title="Review summary"><div className="grid gap-2 text-sm text-slate-600 dark:text-slate-300"><p>Client & Site: {survey.client_site?.client_name || 'Incomplete'}</p><p>Facility scope: {(survey.facility_requirements?.service_scope || []).join(', ') || 'Not selected'}</p><p>Current manpower rows: {(survey.equipment_manpower?.current_manpower || []).length}</p><p>Suggested manpower rows: {(survey.equipment_manpower?.suggested_manpower || []).length}</p><p>Missing information is shown in the section validation summary before submission.</p></div></SectionCard>
+    <LegacyAssessmentDetails survey={survey} />
     <SectionCard title="Document categories"><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{['Site Photograph', 'Machinery Photograph', 'Floor Plan', 'Existing Salary Payslip', 'Existing Salary Structure', 'Existing Vendor Document', 'PPE Document', 'Client Document', 'Other'].map((category) => <div key={category} className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600 dark:bg-slate-900 dark:text-slate-300">{category}<span className="mt-1 block font-normal text-slate-500">Coming in attachment phase</span></div>)}</div></SectionCard>
   </div>;
 }

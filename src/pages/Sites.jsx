@@ -1891,7 +1891,7 @@ function duplicateRow(section, index) {
           </div>
         </section>
 
-        <main className="mx-auto max-w-6xl space-y-4">
+        <main className="mx-auto max-w-6xl space-y-4 pb-28">
           <section className="enterprise-card-compact p-5">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2">
