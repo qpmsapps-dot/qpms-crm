@@ -87,6 +87,21 @@ test('removed report sections are absent from excel data', () => {
   assert.equal(Object.hasOwn(sheets, 'exceptions'), false);
 });
 
+test('excel_travel_claims_contains_each_eligible_claim_once', () => {
+  const expenseClaims = Array.from({ length: 9 }, (_, index) => ({
+    id: `claim-${index + 1}`,
+    attendance_date: '2026-07-27',
+    travel_mode: index % 2 ? 'bus' : 'train',
+    claimed_amount: index + 1,
+    eligible_amount: index + 1,
+    parking_amount: 0,
+    approval_status: 'submitted',
+  }));
+  const sheets = buildEmployeeRangeExcelRows({ ...dataset, expense_claims: expenseClaims });
+  assert.equal(sheets.travelClaims.length, 9);
+  assert.deepEqual(sheets.travelClaims.map((row) => row['Claim ID']), expenseClaims.map((claim) => claim.id));
+});
+
 test('pdf_waits_for_normalized_dataset', () => {
   assert.equal(reportReadiness({ loading: true, dataset }), 'loading');
   assert.equal(reportReadiness({ loading: false, dataset: null }), 'unavailable');
