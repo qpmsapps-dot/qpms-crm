@@ -33,6 +33,7 @@ import {
   loadSiteVisitWorkflowData,
   siteVisitWorkflowOperations,
 } from './services/siteVisitWorkflowService.js';
+import { isSiteVisitWorkflowEnabled } from './services/siteVisitFeatureFlag.js';
 import {
   accessResponseForClient,
   resolveCurrentUserAccess,
@@ -6103,6 +6104,14 @@ function siteVisitWorkflowClient(request) {
   });
 }
 
+function requireSiteVisitWorkflowEnabled(request, response, next) {
+  if (!isSiteVisitWorkflowEnabled()) {
+    response.status(404).json({ ok: false, message: 'Not found.' });
+    return;
+  }
+  next();
+}
+
 async function listSiteVisitWorkflow(request, response) {
   try {
     const result = await loadSiteVisitWorkflowData(siteVisitWorkflowClient(request));
@@ -6163,9 +6172,10 @@ app.post(
   requireLeadMomAccess,
   saveLeadMomDraftManagement,
 );
-app.get('/api/site-visit-workflow', requireSupabaseJwt, listSiteVisitWorkflow);
+app.get('/api/site-visit-workflow', requireSiteVisitWorkflowEnabled, requireSupabaseJwt, listSiteVisitWorkflow);
 app.post(
   '/api/site-visit-workflow/operations/:operation',
+  requireSiteVisitWorkflowEnabled,
   requireSupabaseJwt,
   runSiteVisitWorkflowOperation,
 );

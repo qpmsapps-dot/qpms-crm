@@ -12,7 +12,7 @@ const repository = await readFile(
 test('Site Visit backend routes require a verified Supabase JWT', () => {
   assert.match(
     server,
-    /app\.get\('\/api\/site-visit-workflow', requireSupabaseJwt, listSiteVisitWorkflow\)/,
+    /app\.get\('\/api\/site-visit-workflow', requireSiteVisitWorkflowEnabled, requireSupabaseJwt, listSiteVisitWorkflow\)/,
   );
   assert.match(
     server,
@@ -22,9 +22,11 @@ test('Site Visit backend routes require a verified Supabase JWT', () => {
 
 test('backend workflow operations use a caller-scoped Supabase client', () => {
   assert.match(server, /createSiteVisitUserClient\(\{[\s\S]*?accessToken: getBearerToken\(request\)/);
-  const handler = server.match(
-    /async function runSiteVisitWorkflowOperation[\s\S]*?\n\}\n\napp\.get\('\/api\/lead-management/,
-  )?.[0] || '';
+  const handlerStart = server.indexOf('async function runSiteVisitWorkflowOperation');
+  const routeStart = server.indexOf("app.get('/api/site-visit-workflow'", handlerStart);
+  const handler = handlerStart >= 0 && routeStart > handlerStart
+    ? server.slice(handlerStart, routeStart)
+    : '';
   assert.ok(handler);
   assert.doesNotMatch(handler, /requireServiceRoleSupabase|service_role/i);
 });
