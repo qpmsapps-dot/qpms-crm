@@ -70,6 +70,13 @@ export function surveyReportRows(input) {
   const specialized = yesNoNa(facility.specialized_cleaning_required);
   const retainStaff = yesNoNa(facility.retain_existing_staff);
   const specialPpe = yesNoNa(facility.special_ppe_required);
+  const condition = (value, fallback = '') => value === undefined || value === null || value === '' ? fallback : yesNoNa(value);
+  const pantryRequired = facility.pantry_service_required ?? (facility.number_of_pantries !== undefined && facility.number_of_pantries !== '' ? true : '');
+  const verificationRequired = facility.medical_verification_required === true || facility.police_verification_required === true
+    ? true
+    : facility.medical_verification_required === false && facility.police_verification_required === false
+      ? false
+      : '';
   return {
     header: {
       date: client.survey_date || '',
@@ -83,32 +90,32 @@ export function surveyReportRows(input) {
       zone: client.zone || facility.zone || commercial.zone || '',
     },
     facility: [
-      [14, client.client_working_timings],
-      [15, client.client_working_days],
-      [16, client.qpms_service_timings],
-      [17, numberOrBlank(client.built_up_area || client.floor_plate_area)],
-      [18, [numberOrBlank(client.number_of_floors), numberOrBlank(client.per_floor_area)].filter((value) => value !== '').join(' / ')],
-      [19, numberOrBlank(client.occupants_staff)],
-      [20, yesNoNa(facility.waste_segregation_required)],
-      [21, facility.waste_disposal_type || ''],
-      [22, yesNoNa(facility.designated_disposal_area)],
-      [23, externalWaste === 'No' ? 'N/A' : [facility.external_disposal_frequency, numberOrBlank(facility.external_contractor_rate)].filter((value) => value !== '').join(' / ') || ''],
-      [24, [numberOrBlank(facility.number_of_pantries), numberOrBlank(facility.total_pantry_area)].filter((value) => value !== '').join(' / ')],
-      [25, yesNoNa(facility.water_body_maintenance, { applicable: waterBodies !== 'No' })],
-      [26, conditionalValue(waterBodies, facility.water_body_details)],
-      [27, facade === 'No' ? 'N/A' : [numberOrBlank(facility.facade_glass_area), facility.facade_cleaning_frequency].filter((value) => value !== '').join(' / ') || ''],
-      [28, yesNoNa(facility.boom_lift_available, { applicable: facade !== 'No' })],
-      [29, pest === 'No' ? 'N/A' : [pest, facility.pest_control_service_type, facility.pest_control_frequency].filter(Boolean).join(' / ')],
-      [30, specialized === 'No' ? 'N/A' : [facility.specialized_cleaning_services, facility.specialized_cleaning_frequency].filter(Boolean).join(' / ')],
-      [31, yesNoNa(facility.neighbouring_manpower_availability)],
-      [32, [yesNoNa(facility.staff_transportation_required), numberOrBlank(facility.estimated_transport_cost)].filter((value) => value !== '').join(' / ')],
-      [33, yesNoNa(facility.union_activity)],
-      [34, retainStaff === 'No' ? 'N/A' : [retainStaff, facility.existing_salary_structure].filter(Boolean).join(' / ')],
-      [35, yesNoNa(facility.national_festival_holiday_service ?? facility.nfh_service_required)],
-      [36, yesNoNa(facility.nearby_recruitment_restrictions)],
-      [37, specialPpe === 'No' ? 'N/A' : [specialPpe, facility.ppe_details].filter(Boolean).join(' / ')],
-      [38, [yesNoNa(facility.medical_verification_required), yesNoNa(facility.police_verification_required)].join(' / ')],
-      [39, facility.wage_category || facility.minimum_wage_basis || commercial.minimum_wage_category || ''],
+      [14, client.client_working_timings, 'Mandatory'],
+      [15, client.client_working_days, 'Mandatory'],
+      [16, client.qpms_service_timings, 'Mandatory'],
+      [17, numberOrBlank(client.built_up_area || client.floor_plate_area), 'Mandatory'],
+      [18, [numberOrBlank(client.number_of_floors), numberOrBlank(client.per_floor_area)].filter((value) => value !== '').join(' / '), 'Mandatory'],
+      [19, numberOrBlank(client.occupants_staff), 'Mandatory'],
+      [20, yesNoNa(facility.waste_segregation_required), condition(facility.waste_segregation_required)],
+      [21, facility.waste_disposal_type || '', condition(facility.waste_disposal_required, facility.waste_disposal_type ? 'Yes' : '')],
+      [22, yesNoNa(facility.designated_disposal_area), condition(facility.designated_disposal_area)],
+      [23, externalWaste === 'No' ? 'N/A' : [facility.external_disposal_frequency, numberOrBlank(facility.external_contractor_rate)].filter((value) => value !== '').join(' / ') || '', externalWaste],
+      [24, [numberOrBlank(facility.number_of_pantries), numberOrBlank(facility.total_pantry_area)].filter((value) => value !== '').join(' / '), condition(pantryRequired)],
+      [25, yesNoNa(facility.water_body_maintenance, { applicable: waterBodies !== 'No' }), waterBodies],
+      [26, conditionalValue(waterBodies, facility.water_body_details), waterBodies],
+      [27, facade === 'No' ? 'N/A' : [numberOrBlank(facility.facade_glass_area), facility.facade_cleaning_frequency].filter((value) => value !== '').join(' / ') || '', facade],
+      [28, yesNoNa(facility.boom_lift_available, { applicable: facade !== 'No' }), facade],
+      [29, pest === 'No' ? 'N/A' : [pest, facility.pest_control_service_type, facility.pest_control_frequency].filter(Boolean).join(' / '), pest],
+      [30, specialized === 'No' ? 'N/A' : [facility.specialized_cleaning_services, facility.specialized_cleaning_frequency].filter(Boolean).join(' / '), specialized],
+      [31, yesNoNa(facility.neighbouring_manpower_availability), condition(facility.neighbouring_manpower_availability)],
+      [32, [yesNoNa(facility.staff_transportation_required), numberOrBlank(facility.estimated_transport_cost)].filter((value) => value !== '').join(' / '), condition(facility.staff_transportation_required)],
+      [33, yesNoNa(facility.union_activity), condition(facility.union_activity)],
+      [34, retainStaff === 'No' ? 'N/A' : [retainStaff, facility.existing_salary_structure].filter(Boolean).join(' / '), retainStaff],
+      [35, yesNoNa(facility.national_festival_holiday_service ?? facility.nfh_service_required), condition(facility.national_festival_holiday_service ?? facility.nfh_service_required)],
+      [36, yesNoNa(facility.nearby_recruitment_restrictions), condition(facility.nearby_recruitment_restrictions)],
+      [37, specialPpe === 'No' ? 'N/A' : [specialPpe, facility.ppe_details].filter(Boolean).join(' / '), specialPpe],
+      [38, [yesNoNa(facility.medical_verification_required), yesNoNa(facility.police_verification_required)].join(' / '), condition(verificationRequired)],
+      [39, facility.wage_category || facility.minimum_wage_basis || commercial.minimum_wage_category || '', ''],
     ],
     scope: SERVICE_SCOPE_OPTIONS.filter((option) => (facility.service_scope || []).includes(option)).join(', '),
   };

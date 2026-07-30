@@ -94,7 +94,12 @@ function writeSurveyReport(ws, input) {
   headerValues.forEach(([row, value, isDate]) => setCell(ws, row, 3, isDate ? dateCell(value) : value, { styleFrom: { row, col: 3 }, format: isDate ? 'dd-mmm-yyyy' : undefined, wrap: true }));
   setCell(ws, 10, 4, header.industry, { styleFrom: { row: 10, col: 4 }, wrap: true });
   setCell(ws, 10, 6, header.zone, { styleFrom: { row: 10, col: 6 }, wrap: true });
-  rows.facility.forEach(([row, value]) => setCell(ws, row, 4, value, { styleFrom: { row, col: 4 }, format: typeof value === 'number' ? '#,##0.00' : undefined, wrap: true }));
+  rows.facility.forEach(([row, value, applicability]) => {
+    if (row >= 20 && row <= 39) {
+      setCell(ws, row, 3, applicability, { styleFrom: { row, col: 3 }, wrap: true });
+    }
+    setCell(ws, row, 4, value, { styleFrom: { row, col: 4 }, format: typeof value === 'number' ? '#,##0.00' : undefined, wrap: true });
+  });
 
   const currentEquipment = equipmentRows(input.resources.current_equipment);
   const currentManpower = manpowerRows(input.resources.current_manpower);

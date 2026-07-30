@@ -101,6 +101,36 @@ test('minimal export removes template sample rows and handles empty MPD', () => 
   assert.equal(workbook.Sheets.MPD.B5.v, 'No proposed manpower deployment available');
 });
 
+test('large side-by-side blocks expand without retaining template answers', () => {
+  const survey = fullFixture();
+  survey.equipment_manpower.current_equipment = Array.from({ length: 6 }, (_, index) => ({ description: `Current expanded ${index + 1}`, quantity: index + 1 }));
+  survey.equipment_manpower.current_manpower = Array.from({ length: 6 }, (_, index) => ({ designation: `Current role ${index + 1}`, headCount: index + 1, monthlyTakeHomeSalary: 12000 + index }));
+  survey.equipment_manpower.suggested_equipment = Array.from({ length: 10 }, (_, index) => ({ description: `Suggested expanded ${index + 1}`, quantity: index + 1 }));
+  survey.equipment_manpower.suggested_manpower = Array.from({ length: 10 }, (_, index) => ({ location: `Zone ${index + 1}`, designation: `Suggested role ${index + 1}`, shiftName: 'Day', headCount: index + 1, monthlyTakeHomeSalary: 14000 + index }));
+  const workbook = roundTrip(build(survey));
+  const sheet = workbook.Sheets['Survey Report'];
+  const values = Object.values(sheet).map((cell) => cell?.v).filter(Boolean);
+  assert.ok(values.includes('Current expanded 6'));
+  assert.ok(values.includes('Suggested expanded 10'));
+  assert.ok(!values.includes('Single Disk'));
+  assert.ok(!values.includes('Vacuum Cleaner'));
+  assert.ok(!values.includes('HK Supervisor'));
+  assert.ok(!values.includes('HK Janitors'));
+});
+
+test('facility template Yes/No examples are replaced by actual applicability', () => {
+  const survey = createV2Survey({ visit: { company: 'Conditional Client', contacts: [{ name: 'Contact', isPrimary: true }] } });
+  survey.facility_requirements.water_bodies_present = 'No';
+  survey.facility_requirements.facade_glass_present = 'No';
+  const workbook = roundTrip(build(survey));
+  const sheet = workbook.Sheets['Survey Report'];
+  assert.equal(sheet.C25.v, 'No');
+  assert.equal(sheet.D26.v, 'N/A');
+  assert.equal(sheet.C27.v, 'No');
+  assert.equal(sheet.D27.v, 'N/A');
+  assert.equal(sheet.C39.v, '');
+});
+
 test('legacy normalized input exports without requiring a second exporter', () => {
   const survey = { schema_version: 1, siteSurveyDate: '2026-07-29', siteAddress: 'Legacy Site', siteType: 'Commercial', assessedBy: 'Legacy Surveyor', equipment: [], manpowerPlan: [], futureUnknownKey: { preserved: true } };
   const workbook = roundTrip(build(survey));
