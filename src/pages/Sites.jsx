@@ -37,6 +37,21 @@ import { sendProposalEmail, sendSiteVisitMomEmail } from '../services/mailServic
 import { logAssessmentAuditRemote } from '../services/workflowRepository.js';
 import { calculateManpowerCost } from '../services/costingEngine.js';
 import { buildProposalRows, exportProposalToExcel, exportProposalToPdf, getProposalTemplateMetadata } from '../services/proposalService.js';
+import { downloadSiteAssessmentWorkbook } from '../services/siteAssessmentWorkbookService.js';
+import {
+  SURVEY_SECTION_LABELS,
+  createV2Survey,
+  emptyEquipment,
+  emptyManpower,
+  updateV2Survey,
+} from '../services/siteAssessmentV2.js';
+import { validateAssessmentSection } from '../components/site-assessment/assessmentValidation.js';
+import {
+  ClientSiteSection,
+  CommercialReviewSection,
+  EquipmentManpowerSection,
+  FacilityRequirementsSection,
+} from '../components/site-assessment/AssessmentSections.jsx';
 
 const surveySections = [
   'Basic Site Information',
@@ -809,6 +824,7 @@ export default function Sites() {
   const [momComposerVisit, setMomComposerVisit] = useState(null);
   const [proposalPreviewVisit, setProposalPreviewVisit] = useState(null);
   const [proposalDraft, setProposalDraft] = useState(null);
+  const [workbookExporting, setWorkbookExporting] = useState(false);
   const [showWorkflowTimeline, setShowWorkflowTimeline] = useState(false);
   const [sectionsCollapsed, setSectionsCollapsed] = useState(false);
   const [validationErrors, setValidationErrors] = useState([]);
@@ -823,17 +839,12 @@ export default function Sites() {
   const selectedVisit = visibleSiteVisits.find((visit) => String(visit.id) === String(routeVisitId));
   const selectedStage = normalizeStage(selectedVisit?.currentStage || 'Pre-Operational Assessment');
   const roleVisibleSections = useMemo(() => {
-    if (isHrReviewer(user)) return ['Manpower Requirement'];
-    if (isOperationsTeam(user)) return ['Tools / Equipment / Consumables', 'Risk Assessment', 'Final Remarks & Sign-Off'];
-    if (isCoordinator(user)) return ['Manpower Requirement', 'Commercial Statement', 'Final Remarks & Sign-Off'];
-    return surveySections;
+    return SURVEY_SECTION_LABELS;
   }, [user]);
   const activeSection = roleVisibleSections[activeSectionIndex] || roleVisibleSections[0];
   const roleCanEditActiveSection = !isApprovalReviewer(user)
-    || ((isCommercialTeam(user) || isFinanceTeam(user)) && ['Commercial Statement', 'Risk Assessment', 'Approval Mechanism'].includes(activeSection))
-    || (isOperationsTeam(user) && ['Tools / Equipment / Consumables', 'Risk Assessment', 'Final Remarks & Sign-Off'].includes(activeSection))
-    || (isCoordinator(user) && ['Manpower Requirement', 'Commercial Statement', 'Final Remarks & Sign-Off'].includes(activeSection))
-    || (isHrReviewer(user) && activeSection === 'Manpower Requirement');
+    || ((isCommercialTeam(user) || isFinanceTeam(user)) && activeSection === 'Commercial Inputs & Review')
+    || ((isOperationsTeam(user) || isCoordinator(user) || isHrReviewer(user)) && activeSection === 'Equipment, Manpower & MPD');
   const activeSectionAudit = sectionAudit[activeSection];
   const isSectionSaved = Boolean(activeSectionAudit);
   const isEditingActiveSection = editingSection === activeSection;
@@ -934,6 +945,14 @@ export default function Sites() {
   }
 
   function validateSection(section = activeSection) {
+    if (SURVEY_SECTION_LABELS.includes(section)) {
+      const errors = validateAssessmentSection(section, surveyDraft, {
+        role: user?.role || '',
+        isSubmission: section === 'Commercial Inputs & Review',
+      });
+      setValidationErrors(errors);
+      return errors.length === 0;
+    }
     if (adminDemoAccess) {
       setValidationErrors([]);
       return true;
@@ -974,10 +993,26 @@ export default function Sites() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  function surveySavePayload() {
+    if (!surveyDraft || !SURVEY_SECTION_LABELS.includes(activeSection)) return surveyDraft;
+    const sectionKey = {
+      'Client & Site': 'client_site',
+      'Facility & Service Requirements': 'facility_requirements',
+      'Equipment, Manpower & MPD': 'equipment_manpower',
+      'Commercial Inputs & Review': 'commercial_inputs',
+    }[activeSection];
+    return {
+      ...surveyDraft,
+      __sectionCode: sectionKey,
+      __sectionName: activeSection,
+      __sectionData: surveyDraft[sectionKey] || {},
+    };
+  }
+
   useEffect(() => {
     if (!routeVisitId || !selectedVisit || !surveyDraft || autoSaveLabel !== 'Unsaved changes') return undefined;
     const timer = window.setInterval(() => {
-      saveSiteSurvey(selectedVisit.id, surveyDraft, 'Draft', user);
+      saveSiteSurvey(selectedVisit.id, surveySavePayload(), 'Draft', user);
       setAutoSaveLabel('Saved just now');
     }, 30000);
     return () => window.clearInterval(timer);
@@ -995,6 +1030,59 @@ export default function Sites() {
   function updateSurveyDraft(key, value) {
     markChanged();
     setSurveyDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateV2Field(section, key, value) {
+    markChanged();
+    setSurveyDraft((current) => updateV2Survey(current, section, key, value));
+  }
+
+  function updateV2Contact(index, patch) {
+    markChanged();
+    setSurveyDraft((current) => {
+      const contacts = [...(current.client_site?.contacts || [])];
+      if (patch?.add) contacts.push({ name: '', designation: '', phone: '', mobile: '', fax: '', email: '', isPrimary: false });
+      else contacts[index] = { ...contacts[index], ...patch };
+      return updateV2Survey(current, 'client_site', 'contacts', contacts.map((contact, contactIndex) => ({ ...contact, isPrimary: contactIndex === 0 ? true : Boolean(contact.isPrimary) })));
+    });
+  }
+
+  function updateV2Array(group, index, patch) {
+    markChanged();
+    setSurveyDraft((current) => {
+      const rows = [...(current.equipment_manpower?.[group] || [])];
+      rows[index] = { ...rows[index], ...patch };
+      return updateV2Survey(current, 'equipment_manpower', group, rows);
+    });
+  }
+
+  function addV2Row(group) {
+    markChanged();
+    setSurveyDraft((current) => updateV2Survey(current, 'equipment_manpower', group, [...(current.equipment_manpower?.[group] || []), group.includes('equipment') ? emptyEquipment() : emptyManpower()]));
+  }
+
+  function removeV2Row(group, index) {
+    markChanged();
+    setSurveyDraft((current) => updateV2Survey(current, 'equipment_manpower', group, (current.equipment_manpower?.[group] || []).filter((_, rowIndex) => rowIndex !== index)));
+  }
+
+  function duplicateV2Row(group, index) {
+    markChanged();
+    setSurveyDraft((current) => {
+      const rows = current.equipment_manpower?.[group] || [];
+      const copy = { ...rows[index], id: `${group}-${Date.now()}` };
+      return updateV2Survey(current, 'equipment_manpower', group, [...rows.slice(0, index + 1), copy, ...rows.slice(index + 1)]);
+    });
+  }
+
+  function copyV2Rows(kind) {
+    markChanged();
+    setSurveyDraft((current) => {
+      const data = current.equipment_manpower || {};
+      const source = kind === 'equipment' ? data.current_equipment : data.current_manpower;
+      const target = kind === 'equipment' ? 'suggested_equipment' : 'suggested_manpower';
+      return updateV2Survey(current, 'equipment_manpower', target, source.map((row) => ({ ...row, id: `${target}-${Date.now()}-${Math.random().toString(16).slice(2)}` })));
+    });
   }
 
   function updateNested(section, value) {
@@ -1068,7 +1156,7 @@ function duplicateRow(section, index) {
     setAutoSaveLabel('Saving...');
     showToast('Saving...', 'info');
     try {
-      await Promise.resolve(saveSiteSurvey(selectedVisit.id, surveyDraft, 'Draft', user));
+      await Promise.resolve(saveSiteSurvey(selectedVisit.id, surveySavePayload(), 'Draft', user));
       const actionType = isSectionSaved ? 'Section Resaved' : 'Section Saved';
       await logAssessmentAuditRemote({
         visit: selectedVisit,
@@ -1096,7 +1184,7 @@ function duplicateRow(section, index) {
     setAutoSaveLabel('Saving...');
     showToast('Saving...', 'info');
     try {
-      await Promise.resolve(saveSiteSurvey(selectedVisit.id, surveyDraft, 'Draft', user));
+      await Promise.resolve(saveSiteSurvey(selectedVisit.id, surveySavePayload(), 'Draft', user));
       const nextMom = buildSiteVisitMom(selectedVisit, surveyDraft);
       setSiteMomDraft(nextMom);
       await Promise.resolve(saveSiteVisitMom(selectedVisit.id, nextMom));
@@ -1108,6 +1196,28 @@ function duplicateRow(section, index) {
       showToast(`Failed to save: ${error.message}`, 'error');
     } finally {
       setPendingAction('');
+    }
+  }
+
+  async function handleExportSurveyWorkbook() {
+    if (!selectedVisit || !surveyDraft || workbookExporting) return;
+    setWorkbookExporting(true);
+    try {
+      await downloadSiteAssessmentWorkbook({
+        assessment: { id: selectedVisit.assessmentId, ...selectedVisit },
+        normalizedSurvey: surveyDraft,
+        lead: selectedVisit,
+        contacts: selectedVisit.contacts || [],
+        profile: user || {},
+        workflow: selectedVisit,
+        proposal: selectedVisit.proposal || null,
+      });
+      showToast('Survey workbook downloaded', 'success');
+    } catch (error) {
+      console.error('[myQPMS Survey Workbook] Export failed', error);
+      showToast('Unable to generate the survey workbook. Please retry.', 'error');
+    } finally {
+      setWorkbookExporting(false);
     }
   }
 
@@ -1133,7 +1243,16 @@ function duplicateRow(section, index) {
   }
 
   async function handleSubmitCommercialReview() {
-    if (!validateSection('Final Remarks & Sign-Off')) {
+    if (SURVEY_SECTION_LABELS.includes(activeSection)) {
+      const requiredSections = ['Client & Site', 'Facility & Service Requirements', 'Equipment, Manpower & MPD'];
+      const sectionErrors = requiredSections.flatMap((section) => validateAssessmentSection(section, surveyDraft, { role: user?.role || '', isSubmission: true }).map((message) => ({ section, message })));
+      if (sectionErrors.length) {
+        setValidationErrors(sectionErrors.map(({ section, message }) => `${section}: ${message}`));
+        setActiveSectionIndex(Math.max(0, roleVisibleSections.findIndex((section) => section === sectionErrors[0].section)));
+        showToast('Complete the required survey fields before submitting.', 'error');
+        return;
+      }
+    } else if (!validateSection('Final Remarks & Sign-Off')) {
       setActiveSectionIndex(roleVisibleSections.findIndex((section) => section === 'Final Remarks & Sign-Off'));
       showToast('Complete required final step fields before submitting.', 'error');
       return;
@@ -1142,7 +1261,7 @@ function duplicateRow(section, index) {
     setAutoSaveLabel('Saving...');
     showToast('Saving...', 'info');
     try {
-      await Promise.resolve(saveSiteSurvey(selectedVisit.id, surveyDraft, 'Submitted', user));
+      await Promise.resolve(saveSiteSurvey(selectedVisit.id, surveySavePayload(), 'Submitted', user));
       await Promise.resolve(submitCommercialReview(selectedVisit.id, adminDemoAccess
         ? { adminDemo: true, actorRole: user.role, targetStage: 'HR Validation' }
         : undefined));
@@ -1174,7 +1293,7 @@ function duplicateRow(section, index) {
     setPendingAction('generateProposal');
     try {
       if (targetVisit.id === selectedVisit?.id && surveyDraft) {
-        await Promise.resolve(saveSiteSurvey(targetVisit.id, surveyDraft, 'Proposal Ready', user));
+        await Promise.resolve(saveSiteSurvey(targetVisit.id, surveySavePayload(), 'Proposal Ready', user));
       }
       await Promise.resolve(generateProposal(targetVisit.id, nextProposal, user));
       setProposalDraft(nextProposal);
@@ -1323,6 +1442,20 @@ function duplicateRow(section, index) {
 
   function renderActiveSection() {
     if (!surveyDraft) return null;
+
+    if (SURVEY_SECTION_LABELS.includes(activeSection)) {
+      const readOnly = isActiveSectionLocked;
+      if (activeSection === 'Client & Site') {
+        return <ClientSiteSection survey={surveyDraft} readOnly={readOnly} photoEvidence={photoEvidence} onAddPhotos={addPhotos} onFieldChange={(key, value) => updateV2Field('client_site', key, value)} onContactChange={updateV2Contact} />;
+      }
+      if (activeSection === 'Facility & Service Requirements') {
+        return <FacilityRequirementsSection survey={surveyDraft} readOnly={readOnly} onFieldChange={(key, value) => updateV2Field('facility_requirements', key, value)} />;
+      }
+      if (activeSection === 'Equipment, Manpower & MPD') {
+        return <EquipmentManpowerSection survey={surveyDraft} readOnly={readOnly} onArrayChange={updateV2Array} onAdd={addV2Row} onRemove={removeV2Row} onDuplicate={duplicateV2Row} onCopy={copyV2Rows} />;
+      }
+      return <CommercialReviewSection survey={surveyDraft} readOnly={readOnly} onFieldChange={(key, value) => updateV2Field('commercial_inputs', key, value)} />;
+    }
 
     switch (activeSection) {
       case 'Basic Site Information':
@@ -1696,13 +1829,13 @@ function duplicateRow(section, index) {
 
   if (routeVisitId && selectedVisit && draftVisitId !== selectedVisit.id) {
     setDraftVisitId(selectedVisit.id);
-    setSurveyDraft(mergeSurvey(selectedVisit.survey));
+    setSurveyDraft(createV2Survey({ existing: selectedVisit.survey, visit: selectedVisit, user }));
     setPhotoEvidence({});
     setSiteMomDraft(selectedVisit.siteMom || null);
     setActiveSectionIndex(0);
     setAutoSaveLabel('Draft saved');
     setSectionAudit(selectedVisit.assessmentId || selectedVisit.assessmentStatus === 'Draft'
-      ? Object.fromEntries(surveySections.map((section) => [section, {
+      ? Object.fromEntries(SURVEY_SECTION_LABELS.map((section) => [section, {
           actionType: 'Section Saved',
           savedAt: selectedVisit.lastApprovalAt || new Date().toISOString(),
           savedBy: selectedVisit.created_by_name || selectedVisit.assigned_bd_executive || 'myQPMS user',
@@ -1758,7 +1891,7 @@ function duplicateRow(section, index) {
           </div>
         </section>
 
-        <main className="mx-auto max-w-6xl space-y-4">
+        <main className="mx-auto max-w-6xl space-y-4 pb-28">
           <section className="enterprise-card-compact p-5">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2">
@@ -1793,6 +1926,9 @@ function duplicateRow(section, index) {
             <div className="flex flex-wrap justify-end gap-3">
               <button type="button" onClick={handleSaveDraft} disabled={pendingAction === 'saveSiteDraft'} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:text-slate-950 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
                 <ButtonContent loading={pendingAction === 'saveSiteDraft'} icon={Save}>Save Draft</ButtonContent>
+              </button>
+              <button type="button" onClick={handleExportSurveyWorkbook} disabled={workbookExporting} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-300">
+                <ButtonContent loading={workbookExporting} icon={Download}>Export Survey Workbook</ButtonContent>
               </button>
               {isFinalStep ? (
                 <button type="button" onClick={handleSubmitCommercialReview} disabled={pendingAction === 'submitReview'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-950/20 hover:bg-slate-800 dark:bg-white dark:text-slate-950">

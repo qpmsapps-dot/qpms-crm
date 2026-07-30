@@ -373,6 +373,39 @@ export function updateLeadManagementLead(leadId, payload) {
   });
 }
 
+async function siteVisitWorkflowApiRequest(config) {
+  try {
+    const response = await authenticatedApiRequest(config);
+    return response.data;
+  } catch (requestError) {
+    const status = Number(requestError.response?.status || 0);
+    const message = status === 401
+      ? 'Your session has expired. Please sign in again.'
+      : status === 403
+        ? 'You do not have permission to access this Site Visit workflow.'
+        : requestError.response?.data?.message || 'Site Visit workflow is temporarily unavailable.';
+    const error = new Error(message);
+    error.status = status;
+    error.code = requestError.response?.data?.code || 'SITE_VISIT_WORKFLOW_REQUEST_FAILED';
+    throw error;
+  }
+}
+
+export function getSiteVisitWorkflowData() {
+  return siteVisitWorkflowApiRequest({
+    method: 'GET',
+    url: '/api/site-visit-workflow',
+  });
+}
+
+export function runSiteVisitWorkflowOperation(operation, payload) {
+  return siteVisitWorkflowApiRequest({
+    method: 'POST',
+    url: `/api/site-visit-workflow/operations/${encodeURIComponent(operation)}`,
+    data: payload,
+  });
+}
+
 export function sendAuthenticatedLeadMom(payload) {
   return leadApiRequest({
     method: 'POST',

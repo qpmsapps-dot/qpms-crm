@@ -28,6 +28,13 @@ import {
   sendDailyOperationsReports,
 } from './services/dailyOperationsReportService.js';
 import {
+  createSiteVisitUserClient,
+  executeSiteVisitWorkflowOperation,
+  loadSiteVisitWorkflowData,
+  siteVisitWorkflowOperations,
+} from './services/siteVisitWorkflowService.js';
+import { isSiteVisitWorkflowEnabled } from './services/siteVisitFeatureFlag.js';
+import {
   accessResponseForClient,
   resolveCurrentUserAccess,
 } from './services/accessControlService.js';
@@ -6089,6 +6096,70 @@ async function saveLeadMomDraftManagement(request, response) {
   }
 }
 
+function siteVisitWorkflowClient(request) {
+  return createSiteVisitUserClient({
+    supabaseUrl,
+    supabaseAnonKey,
+    accessToken: getBearerToken(request),
+  });
+}
+
+function requireSiteVisitWorkflowEnabled(request, response, next) {
+  if (!isSiteVisitWorkflowEnabled()) {
+    response.status(404).json({ ok: false, message: 'Not found.' });
+    return;
+  }
+  next();
+}
+
+async function listSiteVisitWorkflow(request, response) {
+  try {
+    const result = await loadSiteVisitWorkflowData(siteVisitWorkflowClient(request));
+    response.json({ ok: true, ...result });
+  } catch (error) {
+    console.error('[myQPMS Site Visit] workflow load failed', {
+      code: error.code || null,
+      message: error.message,
+    });
+    response.status(error.statusCode || 500).json({
+      ok: false,
+      message: error.statusCode === 403
+        ? 'You do not have permission to access this Site Visit workflow.'
+        : 'Site Visit workflow is temporarily unavailable.',
+    });
+  }
+}
+
+async function runSiteVisitWorkflowOperation(request, response) {
+  try {
+    const operation = String(request.params.operation || '');
+    if (!siteVisitWorkflowOperations.includes(operation)) {
+      response.status(404).json({ ok: false, message: 'Site Visit workflow operation not found.' });
+      return;
+    }
+    const result = await executeSiteVisitWorkflowOperation(
+      siteVisitWorkflowClient(request),
+      operation,
+      request.body || {},
+    );
+    response.json({ ok: true, result });
+  } catch (error) {
+    console.error('[myQPMS Site Visit] workflow operation failed', {
+      operation: request.params.operation,
+      code: error.code || null,
+      message: error.message,
+    });
+    response.status(error.statusCode || 500).json({
+      ok: false,
+      message: error.statusCode === 403
+        ? 'You do not have permission to perform this Site Visit action.'
+        : error.statusCode === 400
+          ? error.message
+          : 'Site Visit workflow action failed.',
+    });
+  }
+}
+
 app.get('/api/lead-management/leads', requireSupabaseJwt, requireLeadManagementAccess, listLeadManagement);
 app.get('/api/lead-management/leads/:leadId', requireSupabaseJwt, requireLeadManagementAccess, getLeadManagement);
 app.post('/api/lead-management/leads', requireSupabaseJwt, requireLeadManagementAccess, createLeadManagement);
@@ -6100,6 +6171,13 @@ app.post(
   requireLeadManagementAccess,
   requireLeadMomAccess,
   saveLeadMomDraftManagement,
+);
+app.get('/api/site-visit-workflow', requireSiteVisitWorkflowEnabled, requireSupabaseJwt, listSiteVisitWorkflow);
+app.post(
+  '/api/site-visit-workflow/operations/:operation',
+  requireSiteVisitWorkflowEnabled,
+  requireSupabaseJwt,
+  runSiteVisitWorkflowOperation,
 );
 
 // Backward-compatible mobile aliases use the same production authorization and

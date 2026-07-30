@@ -1,7 +1,15 @@
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 import {
+  dbAssessmentToSurvey,
+  surveyToDbAssessment,
+} from './siteAssessmentMapper.js';
+
+export { dbAssessmentToSurvey, surveyToDbAssessment } from './siteAssessmentMapper.js';
+import {
   createLeadManagementLead,
   getLeadManagementLeads,
+  getSiteVisitWorkflowData,
+  runSiteVisitWorkflowOperation,
   saveAuthenticatedLeadMomDraft,
   updateLeadManagementLead,
 } from './api.js';
@@ -52,13 +60,22 @@ function normalizeRpcError(error, label) {
 }
 
 async function callWorkflowRpc(functionName, params, label) {
-  assertConfigured();
-  const { data, error } = await supabase.rpc(functionName, params);
-  if (error) {
-    console.error(`[myQPMS Workflow RPC] ${label} failed`, error);
-    throw normalizeRpcError(error, label);
-  }
-  return data;
+  const operationByFunction = {
+    rpc_convert_lead_to_assessment: 'convert',
+    rpc_save_assessment_section: 'saveSection',
+    rpc_save_assessment_draft: 'saveDraft',
+    rpc_save_site_mom: 'saveMom',
+    rpc_register_site_image: 'registerImage',
+    rpc_submit_for_review: 'submit',
+    rpc_record_approval_decision: 'decide',
+    rpc_return_assessment_for_correction: 'returnForCorrection',
+    rpc_generate_proposal_record: 'generateProposal',
+    rpc_mark_proposal_sent: 'markProposalSent',
+  };
+  const operation = operationByFunction[functionName];
+  if (!operation) throw new Error(`Unsupported workflow operation: ${label}`);
+  const response = await runSiteVisitWorkflowOperation(operation, params);
+  return response.result;
 }
 
 function createIdempotencyKey(scope, entityId) {
@@ -71,7 +88,7 @@ const stageNameToCode = {
   'Site Visit Started': 'site_visit_started',
   'Pre-Operational Assessment': 'site_visit_started',
   'Operations Review': 'operations_review',
-  'Coordinator Costing Review': 'coordinator_costing_review',
+  'Coordinator Costing Review': 'coordinator_costing',
   'HR Validation': 'hr_validation',
   'Commercial Review': 'commercial_review',
   'Finance Review': 'finance_review',
@@ -261,6 +278,7 @@ export function dbSiteVisitToApp(row) {
     email: primary.email || '',
     source: lead.lead_source || '',
     priority: lead.lead_priority || '',
+    serviceScope: normalizeJsonArray(lead.service_scope),
     executive: row.assigned_bd_executive,
     assigned_bd_executive: row.assigned_bd_executive,
     assigned_bd_email: row.assigned_bd_email,
@@ -281,7 +299,9 @@ export function dbSiteVisitToApp(row) {
     workflowStageCode: workflowInstance.current_stage_code || '',
     workflowStatus: workflowInstance.status || '',
     createdFrom: 'Supabase',
-    survey: assessment ? dbAssessmentToSurvey(assessment) : undefined,
+    survey: assessment
+      ? dbAssessmentToSurvey(assessment, assessment.assessment_sections)
+      : undefined,
     assessmentId: assessment?.id,
     approvals,
     reviewStatus,
@@ -302,137 +322,10 @@ export function dbSiteVisitToApp(row) {
       sentAt: latestProposal.sent_at,
       proposalValue: latestProposal.proposal_value,
       marginPercent: latestProposal.margin_percent,
-      ...(latestProposal.metadata?.proposalPayload || {}),
+      ...(latestProposal.proposal_payload || latestProposal.metadata?.proposalPayload || {}),
     } : undefined,
     siteMom: row.site_mom?.[0] ? dbSiteMomToApp(row.site_mom[0]) : null,
     activity: (row.activity_logs || []).map((log) => log.activity_message || log.message || log.activity_type).filter(Boolean),
-  };
-}
-
-export function surveyToDbAssessment(survey, visit, status = 'Draft', user) {
-  const monthlyBilling = Number(survey.commercial?.billingComponents?.reduce((sum, item) => sum + Number(item.amount || 0), 0) || 0);
-
-  return {
-    site_visit_id: visit.id,
-    lead_id: visit.leadId,
-    basic_site_information: {
-      site_address: survey.siteAddress,
-      site_type: survey.siteType,
-      operating_hours: survey.operatingHours,
-      client_occupancy: survey.clientOccupancy,
-      building_age: survey.buildingAge,
-      takeover_complexity: survey.takeoverComplexity,
-      site_survey_date: survey.siteSurveyDate,
-      assessed_by: survey.assessedBy,
-      site_contact_person: survey.siteContactPerson,
-      contact_number: survey.contactNumber,
-      contact_email: survey.contactEmail,
-      total_site_area: survey.totalSiteArea,
-      contract_period: survey.contractPeriod,
-      margin_agreed: survey.marginAgreed,
-      margin_type: survey.marginType,
-      payment_terms: survey.paymentTerms,
-      group_or_sister_concern_business: survey.groupOrSisterConcernBusiness,
-      is_24_7_operation: survey.is247Operation,
-    },
-    ifm_service_scope: survey.ifmScope || {},
-    hard_services: survey.hardServices || {},
-    soft_services: survey.softServices || {},
-    landscaping_pest_control: survey.landscaping || {},
-    hse_compliance: survey.hseCompliance || [],
-    manpower_requirement: {
-      rows: survey.manpowerPlan || [],
-      minimum_wages_type: survey.minimumWagesType,
-      applicable_zone: survey.applicableZone,
-      wage_computation_notes: survey.wageComputationNotes,
-      reliever_cost_required: survey.relieverCostRequired,
-      budgeted_take_home_feasibility: survey.budgetedTakeHomeFeasibility,
-      local_workforce_availability: survey.localWorkforceAvailability,
-      transportation_impact: survey.transportationImpact,
-      bonus_payment_type: survey.bonusPaymentType,
-      leave_with_wages_days: survey.leaveWithWagesDays,
-      nfh_applicable: survey.nfhApplicable,
-      travel_accommodation_provided: survey.travelAccommodationProvided,
-      allowances: survey.allowances || {},
-    },
-    tools_equipment_consumables: {
-      equipment: survey.equipment || [],
-      chemicals: survey.chemicals || [],
-      tools: survey.tools || [],
-      ppe_uniforms: survey.ppeUniforms || [],
-      machinery: survey.machinery || [],
-      consumables: survey.consumables,
-      rental_machinery: survey.rentalMachinery,
-      non_billable_expenses: survey.nonBillableExpenses,
-      uniforms_shoes_accessories: survey.uniformsShoesAccessories,
-    },
-    client_kyc: survey.clientKyc || {},
-    risk_assessment: {
-      rows: survey.risks || [],
-      client_credit_rating: survey.clientCreditRating,
-      market_assessment: survey.marketAssessment,
-      good_paymaster: survey.goodPaymaster,
-      existing_vendor_change_reason: survey.existingVendorChangeReason,
-      mitigation_plan: survey.mitigationPlan,
-      remarks: survey.riskRemarks,
-    },
-    penalty_clauses: survey.penaltyClauses || {},
-    commercial_statement: {
-      ...(survey.commercial || {}),
-      estimated_monthly_billing: monthlyBilling,
-      approval_rules: {
-        coo_approval_required: monthlyBilling > 500000,
-        cfo_approval_required: monthlyBilling > 500000,
-        cmd_counter_approval_required: monthlyBilling > 2500000,
-      },
-    },
-    approval_mechanism: {
-      approvalWorkflow: survey.approvalWorkflow,
-      coo_approval_required: monthlyBilling > 500000,
-      cfo_approval_required: monthlyBilling > 500000,
-      cmd_counter_approval_required: monthlyBilling > 2500000,
-    },
-    final_remarks_signoff: {
-      finalRemarks: survey.finalRemarks,
-      signOffName: survey.signOffName,
-      project_remarks: survey.projectRemarks,
-      site_survey_done_by: survey.siteSurveyDoneBy,
-      signature_placeholder: survey.signaturePlaceholder,
-    },
-    assessment_status: status,
-    final_remarks: survey.finalRemarks || '',
-    created_by: user?.email || visit.assigned_bd_email || '',
-    updated_at: new Date().toISOString(),
-  };
-}
-
-export function dbAssessmentToSurvey(row) {
-  return {
-    siteAddress: row.basic_site_information?.site_address || '',
-    siteType: row.basic_site_information?.site_type || '',
-    operatingHours: row.basic_site_information?.operating_hours || '',
-    clientOccupancy: row.basic_site_information?.client_occupancy || '',
-    buildingAge: row.basic_site_information?.building_age || '',
-    takeoverComplexity: row.basic_site_information?.takeover_complexity || 'Medium',
-    ifmScope: row.ifm_service_scope || {},
-    hardServices: row.hard_services || {},
-    softServices: row.soft_services || {},
-    landscaping: row.landscaping_pest_control || {},
-    hseCompliance: row.hse_compliance || [],
-    manpowerPlan: row.manpower_requirement?.rows || [],
-    allowances: row.manpower_requirement?.allowances || undefined,
-    equipment: row.tools_equipment_consumables?.equipment || [],
-    chemicals: row.tools_equipment_consumables?.chemicals || [],
-    tools: row.tools_equipment_consumables?.tools || [],
-    ppeUniforms: row.tools_equipment_consumables?.ppe_uniforms || [],
-    machinery: row.tools_equipment_consumables?.machinery || [],
-    clientKyc: row.client_kyc || {},
-    risks: row.risk_assessment?.rows || [],
-    penaltyClauses: row.penalty_clauses || {},
-    commercial: row.commercial_statement || {},
-    approvalWorkflow: row.approval_mechanism?.approvalWorkflow || '',
-    finalRemarks: row.final_remarks_signoff?.finalRemarks || row.final_remarks || '',
-    signOffName: row.final_remarks_signoff?.signOffName || '',
   };
 }
 
@@ -544,17 +437,9 @@ async function fetchWorkflowDataOnce() {
     }
   }
 
-  const visitsResponse = await supabase
-    .from('site_visits')
-    .select('*')
-    .order('created_at', { ascending: false });
-
-  if (visitsResponse.error) {
-    console.warn('[myQPMS Supabase] Site visits fetch skipped/failed', visitsResponse.error);
-  }
-
-  const siteVisitRows = visitsResponse.error ? [] : visitsResponse.data || [];
-  const siteVisitIds = siteVisitRows.map((visit) => visit.id).filter(Boolean);
+  const siteWorkflowResponse = await getSiteVisitWorkflowData();
+  const visitsResponse = { data: siteWorkflowResponse.siteVisits || [], error: null };
+  const siteVisitRows = visitsResponse.data;
   const leadsById = (leadsResponse.data || []).reduce((mapped, lead) => {
     mapped[lead.id] = {
       ...lead,
@@ -563,87 +448,45 @@ async function fetchWorkflowDataOnce() {
     };
     return mapped;
   }, {});
-  let assessmentsBySiteVisitId = {};
-  let siteMomBySiteVisitId = {};
-  let approvalsBySiteVisitId = {};
-  let activityBySiteVisitId = {};
-  let workflowBySiteVisitId = {};
-  let proposalsBySiteVisitId = {};
-
-  if (siteVisitIds.length) {
-    const [assessmentResponse, siteMomResponse, approvalResponse, activityResponse] = await Promise.all([
-      supabase.from('site_assessments').select('*').in('site_visit_id', siteVisitIds),
-      supabase.from('site_mom').select('*').in('site_visit_id', siteVisitIds),
-      supabase.from('approval_requests').select('*').in('site_visit_id', siteVisitIds).order('created_at', { ascending: false }),
-      supabase.from('activity_logs').select('*').in('site_visit_id', siteVisitIds).order('created_at', { ascending: false }),
-    ]);
-
-    if (assessmentResponse.error) {
-      console.warn('[myQPMS Supabase] site_assessments fetch skipped/failed', assessmentResponse.error);
-    } else {
-      assessmentsBySiteVisitId = groupBy(assessmentResponse.data || [], 'site_visit_id');
-    }
-
-    if (siteMomResponse.error) {
-      console.warn('[myQPMS Supabase] site_mom fetch skipped/failed', siteMomResponse.error);
-    } else {
-      siteMomBySiteVisitId = groupBy(siteMomResponse.data || [], 'site_visit_id');
-    }
-
-    if (approvalResponse.error) {
-      console.warn('[myQPMS Supabase] approval_requests fetch skipped/failed', approvalResponse.error);
-    } else {
-      approvalsBySiteVisitId = groupBy(approvalResponse.data || [], 'site_visit_id');
-    }
-
-    if (activityResponse.error) {
-      console.warn('[myQPMS Supabase] activity_logs fetch skipped/failed', activityResponse.error);
-    } else {
-      activityBySiteVisitId = groupBy(activityResponse.data || [], 'site_visit_id');
-    }
-  }
-
-  if (siteVisitIds.length) {
-    const workflowResponse = await supabase
-      .from('workflow_instances')
-      .select('*, workflow_assignments(*)')
-      .in('site_visit_id', siteVisitIds);
-    if (workflowResponse.error) {
-      if (rpcMissing(workflowResponse.error)) {
-        console.info('[myQPMS Supabase] Workflow foundation tables unavailable; continuing with legacy workflow fetch');
-      } else {
-        console.warn('[myQPMS Supabase] workflow_instances fetch skipped/failed', workflowResponse.error);
-      }
-    } else {
-      workflowBySiteVisitId = (workflowResponse.data || []).reduce((grouped, workflow) => {
-        const activeAssignments = (workflow.workflow_assignments || [])
-          .filter((assignment) => assignment.status === 'Pending')
-          .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
-        grouped[workflow.site_visit_id] = {
-          ...workflow,
-          workflow_assignments: activeAssignments,
-        };
-        return grouped;
-      }, {});
-    }
-  }
-
-  if (siteVisitIds.length) {
-    const proposalsResponse = await supabase
-      .from('proposals')
-      .select('*')
-      .in('site_visit_id', siteVisitIds);
-    if (proposalsResponse.error) {
-      if (!tableMissing(proposalsResponse.error)) {
-        console.warn('[myQPMS Supabase] proposals fetch skipped/failed', proposalsResponse.error);
-      }
-    } else {
-      proposalsBySiteVisitId = (proposalsResponse.data || []).reduce((grouped, proposal) => {
-        grouped[proposal.site_visit_id] = [...(grouped[proposal.site_visit_id] || []), proposal];
-        return grouped;
-      }, {});
-    }
-  }
+  const assessmentsBySiteVisitId = siteVisitRows.reduce((grouped, visit) => {
+    grouped[visit.id] = visit.site_assessments || [];
+    return grouped;
+  }, {});
+  const sectionsByAssessmentId = Object.values(assessmentsBySiteVisitId)
+    .flat()
+    .reduce((grouped, assessment) => {
+      grouped[assessment.id] = assessment.assessment_sections || [];
+      return grouped;
+    }, {});
+  const siteMomBySiteVisitId = siteVisitRows.reduce((grouped, visit) => {
+    grouped[visit.id] = visit.site_mom || [];
+    return grouped;
+  }, {});
+  const approvalsBySiteVisitId = siteVisitRows.reduce((grouped, visit) => {
+    grouped[visit.id] = visit.approval_requests || [];
+    return grouped;
+  }, {});
+  const activityBySiteVisitId = siteVisitRows.reduce((grouped, visit) => {
+    grouped[visit.id] = (visit.workflow_events || []).map((event) => ({
+      ...event,
+      activity_message: event.action,
+    }));
+    return grouped;
+  }, {});
+  const workflowBySiteVisitId = siteVisitRows.reduce((grouped, visit) => {
+    const workflow = visit.workflow_instance;
+    if (!workflow) return grouped;
+    grouped[visit.id] = {
+      ...workflow,
+      workflow_assignments: (workflow.workflow_assignments || [])
+        .filter((assignment) => assignment.status === 'Pending'),
+    };
+    return grouped;
+  }, {});
+  const proposalsBySiteVisitId = siteVisitRows.reduce((grouped, visit) => {
+    grouped[visit.id] = visit.proposals || [];
+    return grouped;
+  }, {});
 
   const leadsWithContacts = (leadsResponse.data || []).map((lead) => ({
     ...lead,
@@ -654,7 +497,10 @@ async function fetchWorkflowDataOnce() {
   const visitsWithWorkflow = siteVisitRows.map((visit) => ({
     ...visit,
     leads: leadsById[visit.lead_id] || {},
-    site_assessments: assessmentsBySiteVisitId[visit.id] || [],
+    site_assessments: (assessmentsBySiteVisitId[visit.id] || []).map((assessment) => ({
+      ...assessment,
+      assessment_sections: sectionsByAssessmentId[assessment.id] || [],
+    })),
     site_mom: siteMomBySiteVisitId[visit.id] || [],
     approval_requests: approvalsBySiteVisitId[visit.id] || [],
     activity_logs: activityBySiteVisitId[visit.id] || [],
@@ -726,6 +572,7 @@ export async function saveAssessmentSection({
   saveMode = 'save',
   user,
   remarks,
+  idempotencyKey,
 }) {
   const actor = compactActor(user);
   return callWorkflowRpc(
@@ -741,6 +588,8 @@ export async function saveAssessmentSection({
       p_actor_name: actor.name,
       p_actor_role: actor.role,
       p_remarks: remarks || null,
+      p_idempotency_key:
+        idempotencyKey || createIdempotencyKey('assessment-section', `${visit.id}:${sectionCode}`),
     },
     'Assessment section save',
   );
@@ -1064,9 +913,15 @@ export async function saveSiteAssessmentRemote(visit, survey, status = 'Draft', 
 }
 
 export async function saveSiteMomRemote(siteVisitId, mom, status = 'Draft') {
-  assertConfigured();
-  const { error } = await supabase.from('site_mom').upsert(appSiteMomToDb(mom, siteVisitId, status), { onConflict: 'site_visit_id' });
-  if (error) throw error;
+  return callWorkflowRpc(
+    'rpc_save_site_mom',
+    {
+      p_site_visit_id: siteVisitId,
+      p_mom: appSiteMomToDb(mom, siteVisitId, status),
+      p_status: status,
+    },
+    'Site Visit MOM save',
+  );
 }
 
 export async function submitApprovalRemote(visit, assessmentId) {
@@ -1192,71 +1047,55 @@ export async function recordApprovalDecisionRemote({ visit, stage, status, pendi
 }
 
 export async function markProposalSentRemote(visit, proposal = {}) {
-  assertConfigured();
-  const sentAt = new Date().toISOString();
-  const siteVisitUpdate = await supabase
-    .from('site_visits')
-    .update({
-      current_stage: 'Proposal Sent',
-      pending_with: 'Existing Business Operations',
-      status: 'Proposal Sent',
-      updated_at: sentAt,
-    })
-    .eq('id', visit.id);
-  if (siteVisitUpdate.error) throw siteVisitUpdate.error;
-
-  if (visit.leadId) {
-    const leadUpdate = await supabase
-      .from('leads')
-      .update({ lead_stage: 'Proposal Sent', status: 'Converted to Existing Business', updated_at: sentAt })
-      .eq('id', visit.leadId);
-    if (leadUpdate.error && !tableMissing(leadUpdate.error)) throw leadUpdate.error;
-  }
-
   const proposalId = proposal.id || visit.proposal?.id;
-  if (proposalId) {
-    const proposalUpdate = await supabase
-      .from('proposals')
-      .update({
-        proposal_status: 'Sent',
-        sent_at: sentAt,
-        metadata: {
-          ...(visit.proposal?.metadata || {}),
-          ...(proposal.metadata || {}),
-          proposalPayload: proposal,
-        },
-      })
-      .eq('id', proposalId);
-    if (proposalUpdate.error && !tableMissing(proposalUpdate.error)) throw proposalUpdate.error;
-  }
-
-  await logActivity({
-    leadId: visit.leadId,
-    siteVisitId: visit.id,
-    type: 'Proposal Sent',
-    message: 'Proposal sent to client and moved to Existing Business Pipeline',
-    createdBy: proposal.sentBy || proposal.generatedByName || null,
-  });
+  if (!proposalId) throw new Error('Proposal record is required before it can be marked sent.');
+  return callWorkflowRpc(
+    'rpc_mark_proposal_sent',
+    {
+      p_proposal_id: proposalId,
+      p_idempotency_key: proposal.idempotencyKey || createIdempotencyKey('proposal-sent', proposalId),
+      p_metadata: proposal.metadata || {},
+    },
+    'Mark proposal sent',
+  );
 }
 
 export async function uploadSiteImageRemote({ visit, assessmentId, category, file, uploadedBy }) {
   assertConfigured();
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+    throw new Error('Site evidence must be a JPEG, PNG, or WebP image.');
+  }
+  if (!file.size || file.size > 10 * 1024 * 1024) {
+    throw new Error('Site evidence image must be 10 MB or smaller.');
+  }
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
   const path = `${visit.id}/${category}/${Date.now()}-${safeName}`;
   const upload = await supabase.storage.from('site-survey-images').upload(path, file, { upsert: false });
   if (upload.error) throw upload.error;
 
-  const { data: publicData } = supabase.storage.from('site-survey-images').getPublicUrl(path);
-  const imageUrl = publicData.publicUrl;
-  const { error } = await supabase.from('site_images').insert({
-    site_visit_id: visit.id,
-    assessment_id: assessmentId || null,
-    image_category: category,
-    image_url: imageUrl,
-    file_name: file.name,
-    uploaded_by: uploadedBy,
-  });
-  if (error) throw error;
+  try {
+    await callWorkflowRpc(
+      'rpc_register_site_image',
+      {
+        p_site_visit_id: visit.id,
+        p_assessment_id: assessmentId || null,
+        p_section_key: category,
+        p_storage_path: path,
+        p_original_filename: file.name,
+        p_mime_type: file.type,
+        p_size_bytes: file.size,
+        p_caption: null,
+        p_metadata: { uploaded_by_display: uploadedBy || null },
+      },
+      'Site evidence registration',
+    );
+  } catch (error) {
+    await supabase.storage.from('site-survey-images').remove([path]);
+    throw error;
+  }
+  const signed = await supabase.storage.from('site-survey-images').createSignedUrl(path, 3600);
+  if (signed.error) throw signed.error;
+  const imageUrl = signed.data.signedUrl;
   return { id: path, name: file.name, url: imageUrl };
 }
 

@@ -18,6 +18,7 @@ import FaultTracker from '../pages/FaultTracker.jsx';
 import DeepCleaning from '../pages/DeepCleaning.jsx';
 import UserManagement from '../pages/settings/UserManagement.jsx';
 import { isDemoMode } from '../config/demoMode.js';
+import { isSiteVisitV2Enabled } from '../config/siteVisitFeature.js';
 import {
   AssetCenterPage,
   ApprovalCenterPage,
@@ -43,8 +44,8 @@ export const router = createBrowserRouter([
         children: [
           { path: 'dashboard', element: <Dashboard /> },
           { path: 'crm', element: <CRM /> },
-          { path: 'sites', element: <Sites /> },
-          { path: 'site-visit/:id', element: <Sites /> },
+          { path: 'sites', element: isSiteVisitV2Enabled ? <Sites /> : <Navigate to="/dashboard" replace /> },
+          { path: 'site-visit/:id', element: isSiteVisitV2Enabled ? <Sites /> : <Navigate to="/dashboard" replace /> },
           { path: 'site-monitoring', element: <SiteMonitoringPage /> },
           { path: 'proposals', element: <ProposalCenterPage /> },
           { path: 'approvals', element: <ApprovalCenterPage /> },
