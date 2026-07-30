@@ -142,3 +142,8 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 .aider*
+
+# Local browser acceptance artifacts
+.phase4-test-output/
+test-results/
+playwright-report/

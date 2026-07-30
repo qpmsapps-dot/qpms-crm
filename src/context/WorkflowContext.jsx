@@ -274,6 +274,14 @@ function rpcIdempotencyKey(scope, id) {
 }
 
 function inferSectionFromSurveyPatch(survey = {}) {
+  if (survey.schema_version === 2 && survey.__sectionCode) {
+    return {
+      code: survey.__sectionCode,
+      name: survey.__sectionName || survey.__sectionCode,
+      data: survey.__sectionData || {},
+      baseVersionNumber: survey.__baseVersionNumber,
+    };
+  }
   const keys = Object.keys(survey || {}).filter((key) => !key.startsWith('__'));
   if (survey.__sectionCode) {
     return {
@@ -600,14 +608,22 @@ export function WorkflowProvider({ children }) {
       console.warn('[myQPMS Workflow] Blank assessment save skipped', { siteVisitId, status });
       return;
     }
-    const mergedSurvey = { ...(visit?.survey || {}), ...survey };
+    const { __sectionCode, __sectionName, __sectionData, __baseVersionNumber, ...surveyData } = survey || {};
+    const mergedSurvey = { ...(visit?.survey || {}), ...surveyData };
     console.info('[myQPMS Workflow] Saving site assessment', { siteVisitId, status, sectionCount: Object.keys(mergedSurvey || {}).length });
     updateSiteVisit(siteVisitId, (visit) => ({
       survey: { ...visit.survey, ...mergedSurvey },
       activity: ['Site survey draft saved', ...(visit.activity || [])].slice(0, 8),
     }));
     if (isRemoteWorkflowEnabled() && visit) {
-      const section = inferSectionFromSurveyPatch(survey);
+      const section = inferSectionFromSurveyPatch({
+        schema_version: mergedSurvey.schema_version,
+        __sectionCode,
+        __sectionName,
+        __sectionData,
+        __baseVersionNumber,
+        ...surveyData,
+      });
       saveAssessmentSection({
         visit,
         sectionCode: section.code,

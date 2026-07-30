@@ -19,7 +19,7 @@ test('valid authenticated workflow calls the secured lead-list endpoint once log
 
 test('remote lead loading never queries the leads table directly', () => {
   const loader = repository.match(
-    /async function fetchWorkflowDataOnce\(\) \{[\s\S]*?\n\}\n\nexport function fetchWorkflowData/,
+    /async function fetchWorkflowDataOnce\(\) \{[\s\S]*?\r?\n\}\r?\n\r?\nexport function fetchWorkflowData/,
   )?.[0] || '';
   assert.ok(loader);
   assert.doesNotMatch(loader, /\.from\(['"]leads['"]\)/);
