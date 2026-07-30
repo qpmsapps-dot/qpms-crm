@@ -20,6 +20,7 @@ export default defineConfig({
     reuseExistingServer: true,
     timeout: 30_000,
     env: {
+      VITE_SITE_VISIT_V2_ENABLED: 'true',
       VITE_ENABLE_DEMO_AUTH: 'true',
       VITE_APP_MODE: 'demo',
       VITE_SUPABASE_URL: '',
