@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   buildEmployeeRangeDataset,
+  attachFallbackClaimsToAttendance,
+  deriveVisitDurationMinutes,
   fetchEmployeeRangePages,
   kolkataPeriodBounds,
   loadOptionalExpenseClaims,
@@ -210,6 +212,7 @@ for (const [mode, amount] of [
   ['train', 250],
   ['bus', 60],
   ['auto', 120],
+  ['other', 75],
 ]) {
   test(`${mode}_claim_contributes_amount_but_zero_kilometer`, () => {
     const row = attendance('2026-07-01', 0, {
@@ -354,7 +357,57 @@ test('real_production_claim_columns_map_to_ticket_and_parking_amounts', () => {
     ],
   });
   assert.equal(dataset.daily_summary[0].claim_amount, 300);
+  assert.equal(dataset.daily_summary[0].other_transport_amount, 250);
+  assert.equal(dataset.daily_summary[0].parking_amount, 50);
+  assert.equal(dataset.daily_summary[0].total_amount, 300);
   assert.equal(dataset.daily_summary[0].amount, 300);
+});
+
+test('ticket_and_parking_amounts_are_separate_and_reconcile', () => {
+  const row = attendance('2026-07-01', 4, { petrol_amount: 16 });
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'FO-TEST' },
+    period: kolkataPeriodBounds('2026-07-01', '2026-07-01'),
+    attendances: [row],
+    expenseClaims: [
+      claim(row.id, 'train', 100),
+      claim(row.id, 'bus', 60, { sequence: 2 }),
+      claim(row.id, 'auto', 40, { sequence: 3 }),
+      claim(row.id, 'other', 25, { sequence: 4 }),
+      claim(row.id, 'other', 30, { sequence: 5, claim_type: 'parking' }),
+    ],
+  });
+  const daily = dataset.daily_summary[0];
+  assert.equal(daily.kilometer, 4);
+  assert.equal(daily.distance_amount, 16);
+  assert.equal(daily.other_transport_amount, 225);
+  assert.equal(daily.parking_amount, 30);
+  assert.equal(daily.total_amount, 271);
+  assert.equal(dataset.period_summary.total_amount, 271);
+  assert.equal(dataset.period_summary.total_amount, dataset.period_summary.distance_amount + dataset.period_summary.other_transport_amount + dataset.period_summary.parking_amount);
+});
+
+test('site_visit_duration_is_derived_without_mutating_source', () => {
+  assert.equal(deriveVisitDurationMinutes({ checkIn: '2026-07-01T23:50:00+05:30', checkOut: '2026-07-02T00:39:00+05:30' }), 49);
+  assert.equal(deriveVisitDurationMinutes({ checkIn: '2026-07-01T10:00:00Z', checkOut: '2026-07-01T10:00:30Z' }), 0);
+  assert.equal(deriveVisitDurationMinutes({ checkIn: '2026-07-01T10:00:00Z', checkOut: '2026-07-01T09:59:00Z' }), null);
+  assert.equal(deriveVisitDurationMinutes({ checkIn: '2026-07-01T10:00:00Z' }), null);
+  const visit = { id: 'visit-1', attendance_id: 'attendance-1', check_in_time: '2026-07-01T10:00:00Z', check_out_time: '2026-07-01T10:49:00Z', visit_duration_minutes: null };
+  const dataset = buildEmployeeRangeDataset({ employee: { employee_code: 'FO-TEST' }, period: kolkataPeriodBounds('2026-07-01', '2026-07-01'), attendances: [attendance('2026-07-01', 0, { id: 'attendance-1' })], visits: [visit] });
+  assert.equal(dataset.site_visits[0].visit_duration_minutes, 49);
+  assert.equal(visit.visit_duration_minutes, null);
+});
+
+test('claim_without_attendance_id_uses_only_unambiguous_employee_date_fallback', () => {
+  const rows = [attendance('2026-07-01', 0, { id: 'attendance-1' })];
+  const linked = attachFallbackClaimsToAttendance([
+    { id: 'claim-1', employee_code: 'FO-TEST', created_at: '2026-07-01T06:00:00Z' },
+  ], rows, 'FO-TEST');
+  assert.equal(linked[0].attendance_id, 'attendance-1');
+  const ambiguous = attachFallbackClaimsToAttendance([
+    { id: 'claim-2', employee_code: 'FO-TEST', created_at: '2026-07-01T06:00:00Z' },
+  ], [...rows, attendance('2026-07-01', 0, { id: 'attendance-2', sequence: 2 })], 'FO-TEST');
+  assert.equal(ambiguous[0].attendance_id, undefined);
 });
 
 test('optional_claim_permission_failure_does_not_fail_employee_report', async () => {

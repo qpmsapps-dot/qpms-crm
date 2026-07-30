@@ -21,6 +21,12 @@ const dataset = {
     kilometer: 15,
     distance_amount: 60,
     eligible_claim_amount: 0,
+    other_transport_amount: 0,
+    parking_amount: 0,
+    eligible_ticket_parking_amount: 0,
+    total_man_days: 2,
+    attendance_records: 2,
+    total_visits: 1,
     total_amount: 60,
     raw_gps_km: 17,
     filtered_gps_km: 14,
@@ -31,8 +37,8 @@ const dataset = {
     { id: 'a2', attendance_date: '2026-07-02', status: 'Completed', total_approved_km: 5, petrol_amount: 20 },
   ],
   daily_summary: [
-    { attendance_date: '2026-07-01', attendance_ids: ['a1'], visit_count: 0, kilometer: 10, amount: 40 },
-    { attendance_date: '2026-07-02', attendance_ids: ['a2'], visit_count: 1, kilometer: 5, amount: 20 },
+    { attendance_date: '2026-07-01', attendance_ids: ['a1'], visit_count: 0, kilometer: 10, distance_amount: 40, other_transport_amount: 0, parking_amount: 0, total_amount: 40 },
+    { attendance_date: '2026-07-02', attendance_ids: ['a2'], visit_count: 1, kilometer: 5, distance_amount: 20, other_transport_amount: 0, parking_amount: 0, total_amount: 20 },
   ],
   site_visits: [{ id: 'v1', attendance_id: 'a2', attendance_date: '2026-07-02' }],
   travel_legs: [],
@@ -68,9 +74,11 @@ test('excel_and_pdf_have_identical_counts_and_totals', () => {
   assert.equal(sheets.periodSummary[0]['Kilometer'], 15);
   assert.equal(sheets.periodSummary[0]['Total Amount'], dataset.period_summary.total_amount);
   assert.equal(
-    sheets.dailyAttendance.reduce((sum, row) => sum + row.Amount, 0),
+    sheets.dailyAttendance.reduce((sum, row) => sum + row['Total Amount'], 0),
     sheets.periodSummary[0]['Total Amount'],
   );
+  assert.deepEqual(Object.keys(sheets.siteVisits[0]), ['Attendance Date', 'Site / Client', 'Check-In', 'Check-Out', 'Duration']);
+  assert.equal(sheets.travelClaims.length, 0);
 });
 
 test('removed report sections are absent from excel data', () => {

@@ -13,7 +13,7 @@ const INCLUDED_EXPENSE_CLAIM_STATUSES = new Set([
   'approved',
 ]);
 const DISTANCE_REIMBURSEMENT_MODES = new Set(['bike', 'own_vehicle', 'car']);
-const TICKET_REIMBURSEMENT_MODES = new Set(['auto', 'bus', 'train']);
+const TICKET_REIMBURSEMENT_MODES = new Set(['auto', 'bus', 'train', 'other']);
 const COMPLETED_STATUS_PATTERN =
   /completed|ended|closed|logout|stale[\s_]*auto[\s_]*ended|auto[\s_]*ended/i;
 
@@ -51,6 +51,8 @@ function modeLabel(value) {
       return 'Bus';
     case 'train':
       return 'Train';
+    case 'other':
+      return 'Other';
     default:
       return null;
   }
@@ -138,7 +140,7 @@ function isOptionalExpenseClaimAccessError(error) {
   return ['42501', '42P01', 'PGRST205'].includes(error?.code);
 }
 
-export async function loadOptionalExpenseClaims(client, attendanceIds = []) {
+export async function loadOptionalExpenseClaims(client, attendanceIds = [], options = {}) {
   if (!attendanceIds.length) return { rows: [], warning: null };
   try {
     const rows = await fetchByAttendanceIds(
@@ -147,6 +149,24 @@ export async function loadOptionalExpenseClaims(client, attendanceIds = []) {
       attendanceIds,
       'created_at',
     );
+    const employeeCodes = [...new Set((options.employeeCodes || []).map(key).filter(Boolean))];
+    if (employeeCodes.length && options.fromIso && options.toIso) {
+      const fallbackRows = await fetchEmployeeRangePages(() =>
+        client
+          .from('fo_travel_expense_claims')
+          .select('*')
+          .in('employee_code', employeeCodes)
+          .gte('created_at', options.fromIso)
+          .lte('created_at', options.toIso)
+          .order('created_at', { ascending: true })
+          .order('id', { ascending: true }));
+      const byId = new Map(rows.map((row) => [text(row.id), row]));
+      for (const row of fallbackRows) {
+        const rowKey = text(row.id) || JSON.stringify(row);
+        if (!byId.has(rowKey)) byId.set(rowKey, row);
+      }
+      return { rows: [...byId.values()], warning: null };
+    }
     return { rows, warning: null };
   } catch (error) {
     if (!isOptionalExpenseClaimAccessError(error)) throw error;
@@ -273,6 +293,8 @@ const SAFE_VISIT_METADATA_KEYS = [
 ];
 
 function safeVisit(row = {}, attendanceDateById = new Map()) {
+  const checkIn = row.check_in_time || null;
+  const checkOut = row.check_out_time || row.checkout_time || null;
   return {
     id: row.id,
     attendance_id: row.attendance_id || null,
@@ -283,18 +305,63 @@ function safeVisit(row = {}, attendanceDateById = new Map()) {
     site_name: row.site_name || row.store_name || null,
     client_name: row.client_name || null,
     state: row.state || null,
-    check_in_time: row.check_in_time || null,
-    check_out_time: row.check_out_time || row.checkout_time || null,
+    check_in_time: checkIn,
+    check_out_time: checkOut,
     check_in_latitude: row.check_in_latitude ?? null,
     check_in_longitude: row.check_in_longitude ?? null,
     check_out_latitude: row.check_out_latitude ?? null,
     check_out_longitude: row.check_out_longitude ?? null,
     route_km: row.route_km ?? null,
-    visit_duration_minutes: row.visit_duration_minutes ?? null,
+    visit_duration_minutes: deriveVisitDurationMinutes({
+      storedMinutes: row.visit_duration_minutes,
+      checkIn,
+      checkOut,
+    }),
     status: row.status || row.visit_status || null,
     checkout_note: row.checkout_note || row.check_out_note || null,
     metadata: safeMetadata(row.metadata, SAFE_VISIT_METADATA_KEYS),
   };
+}
+
+function kolkataDateFromTimestamp(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return '';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(parsed);
+}
+
+export function attachFallbackClaimsToAttendance(claims = [], attendances = [], employeeCode = '') {
+  const targetCode = key(employeeCode);
+  const byDate = new Map();
+  for (const attendance of attendances) {
+    const list = byDate.get(text(attendance.attendance_date)) || [];
+    list.push(attendance);
+    byDate.set(text(attendance.attendance_date), list);
+  }
+  return claims.map((claim) => {
+    if (text(claim.attendance_id)) return claim;
+    const claimCode = key(claim.employee_code || claim.fo_user_id);
+    const candidates = byDate.get(kolkataDateFromTimestamp(claim.submitted_at || claim.created_at)) || [];
+    if (claimCode === targetCode && candidates.length === 1) {
+      return { ...claim, attendance_id: candidates[0].id };
+    }
+    return claim;
+  });
+}
+
+export function deriveVisitDurationMinutes({ storedMinutes, checkIn, checkOut } = {}) {
+  const stored = Number(storedMinutes);
+  if (Number.isFinite(stored) && stored > 0) return Math.round(stored);
+  if (!checkIn || !checkOut) return null;
+  const start = new Date(checkIn).getTime();
+  const end = new Date(checkOut).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+  return Math.max(0, Math.floor((end - start) / 60000));
 }
 
 function safeTravelLeg(row = {}, attendanceDateById = new Map()) {
@@ -334,13 +401,23 @@ function isEligibleExpenseClaim(row = {}) {
 }
 
 function safeExpenseClaim(row = {}, attendanceDateById = new Map()) {
+  const parking = isParkingClaim(row);
+  const amount = rounded(row.fare_amount);
   return {
+    id: row.id || null,
     attendance_id: row.attendance_id || null,
     attendance_date: attendanceDateById.get(text(row.attendance_id)) || null,
     travel_mode: normalizedMode(row.travel_mode) || null,
-    claim_type: isParkingClaim(row) ? 'parking' : normalizedMode(row.claim_type) || 'travel',
-    fare_amount: rounded(row.fare_amount),
+    claim_type: parking ? 'parking' : normalizedMode(row.claim_type) || 'travel',
+    claimed_amount: amount,
+    eligible_amount: amount,
+    fare_amount: amount,
+    ticket_amount: parking ? 0 : amount,
+    parking_amount: parking ? amount : 0,
     status: normalizedMode(row.status) || null,
+    approval_status: normalizedMode(row.status) || null,
+    proof_reference: row.proof_file_url || null,
+    remarks: row.remarks || null,
     submitted_at: row.submitted_at || row.created_at || null,
   };
 }
@@ -598,9 +675,13 @@ export function buildEmployeeRangeDataset({
     const rowLegs = legsByAttendance.get(row.id) || [];
     const rowClaims = claimsByAttendance.get(row.id) || [];
     const distance = distanceReimbursement(row, rowLegs);
-    const claimAmount = rounded(
-      rowClaims.reduce((sum, claim) => sum + number(claim.fare_amount), 0),
+    const otherTransportAmount = rounded(
+      rowClaims.reduce((sum, claim) => sum + number(claim.ticket_amount), 0),
     );
+    const parkingAmount = rounded(
+      rowClaims.reduce((sum, claim) => sum + number(claim.parking_amount), 0),
+    );
+    const eligibleTicketParkingAmount = rounded(otherTransportAmount + parkingAmount);
     return {
       attendance_id: row.id,
       attendance_ids: [row.id],
@@ -621,8 +702,14 @@ export function buildEmployeeRangeDataset({
       petrol_amount: rounded(storedAttendancePetrolAmount(row)),
       kilometer: distance.kilometer,
       distance_amount: distance.amount,
-      claim_amount: claimAmount,
-      amount: rounded(distance.amount + claimAmount),
+      claim_amount: eligibleTicketParkingAmount,
+      ticket_amount: otherTransportAmount,
+      other_transport_amount: otherTransportAmount,
+      parking_amount: parkingAmount,
+      eligible_ticket_amount: otherTransportAmount,
+      eligible_ticket_parking_amount: eligibleTicketParkingAmount,
+      total_amount: rounded(distance.amount + eligibleTicketParkingAmount),
+      amount: rounded(distance.amount + eligibleTicketParkingAmount),
       approved_missing_km: rounded(
         adjustments
           .filter((adjustment) => adjustment.attendance_id === row.id)
@@ -651,7 +738,13 @@ export function buildEmployeeRangeDataset({
     kilometer: sumDaily('kilometer'),
     distance_amount: sumDaily('distance_amount'),
     eligible_claim_amount: sumDaily('claim_amount'),
+    other_transport_amount: sumDaily('other_transport_amount'),
+    parking_amount: sumDaily('parking_amount'),
+    eligible_ticket_parking_amount: sumDaily('eligible_ticket_parking_amount'),
     total_amount: sumDaily('amount'),
+    total_man_days: new Set(sortedAttendances.map((row) => row.attendance_date).filter(Boolean)).size,
+    attendance_records: sortedAttendances.length,
+    total_visits: safeVisits.length,
     raw_gps_km: sumDaily('raw_gps_km'),
     filtered_gps_km: sumDaily('filtered_gps_km'),
     actual_travel_km: sumDaily('actual_travel_km'),
@@ -725,14 +818,23 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
       travelLegTableUnavailable = true;
     }
   }
-  const optionalClaims = await loadOptionalExpenseClaims(client, attendanceIds);
+  const optionalClaims = await loadOptionalExpenseClaims(client, attendanceIds, {
+    employeeCodes: [employee.employee_code],
+    fromIso: period.from_iso,
+    toIso: period.to_iso,
+  });
+  const linkedExpenseClaims = attachFallbackClaimsToAttendance(
+    optionalClaims.rows,
+    attendances,
+    employee.employee_code,
+  );
   const dataset = buildEmployeeRangeDataset({
     employee,
     period,
     attendances,
     visits,
     travelLegs,
-    expenseClaims: optionalClaims.rows,
+    expenseClaims: linkedExpenseClaims,
   });
   if (optionalClaims.warning) {
     dataset.data_quality_warnings.unshift(optionalClaims.warning);

@@ -44,7 +44,7 @@ test('exports_ignore_ui_pagination_limits', () => {
 });
 
 test('employee report uses reimbursement columns and removes audit sections', () => {
-  assert.match(page, /\["Date", "Start", "End", "Status", "Mode\(s\)", "Visits", "Kilometer", "Amount"\]/);
+  assert.match(page, /\["Date", "Start", "End", "Status", "Mode\(s\)", "Visits", "Kilometer", "Distance Reimbursement", "Ticket \/ Other Transport Amount", "Parking Amount", "Total Amount"\]/);
   assert.doesNotMatch(page, /<h2[^>]*>\s*Daily Travel Evidence/);
   assert.doesNotMatch(page, /<h2[^>]*>\s*Exceptions and Adjustments/);
   assert.match(page, /Travel reimbursement total/);
