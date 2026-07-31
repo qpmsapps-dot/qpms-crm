@@ -5401,13 +5401,21 @@ function attendanceMetadata(attendance) {
 
 function finalReturnLegKmFromAttendance(attendance) {
   const metadata = attendanceMetadata(attendance);
-  const finalLeg = Array.isArray(metadata.travel_legs)
-    ? metadata.travel_legs.find((leg) => leg?.type === "last_checkout_to_end_day")
-    : null;
+  const finalLegs = [
+    ...(Array.isArray(attendance?.travel_legs) ? attendance.travel_legs : []),
+    ...(Array.isArray(metadata.travel_legs) ? metadata.travel_legs : []),
+  ].filter((leg) =>
+    leg?.type === "last_checkout_to_end_day" ||
+    leg?.leg_type === "last_checkout_to_end_day" ||
+    leg?.is_final_return_leg === true,
+  );
+  const finalLegKm = finalLegs
+    .flatMap((leg) => [leg?.calculated_km, leg?.calculatedKm, leg?.km, leg?.payable_km])
+    .map(numberOrNull)
+    .find((value) => value !== null && value > 0);
+  if (finalLegKm !== undefined) return finalLegKm;
+
   return numberOrNull(
-    finalLeg?.km ??
-      finalLeg?.calculated_km ??
-      finalLeg?.payable_km ??
     metadata.final_return_leg_km ??
       metadata.finalReturnLegKm ??
       attendance?.final_return_leg_km,
