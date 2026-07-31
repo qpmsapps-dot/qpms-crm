@@ -916,6 +916,7 @@ export function calculateCanonicalRoutePayableKm({
     return {
       ...leg,
       travel_mode: legMode,
+      payable_km_allowed: legPolicy.payableKmAllowed,
       rate_per_km: legRatePerKm,
       payable,
       payable_km: payableKm,
@@ -1441,7 +1442,7 @@ async function hasTravelLegRows(client, attendance) {
 async function loadPersistedTravelLegSnapshots(client, attendance) {
   const { data, error } = await client
     .from('fo_travel_legs')
-    .select('id,attendance_id,travel_mode,payable_km_allowed,started_at,ended_at,start_lat,start_lng,end_lat,end_lng,payable_km,rate_per_km,payable_amount,fare_amount,status')
+    .select('id,attendance_id,travel_mode,payable_km_allowed,started_at,ended_at,start_lat,start_lng,end_lat,end_lng,calculated_km,payable_km,rate_per_km,payable_amount,fare_amount,status')
     .eq('attendance_id', attendance.id)
     .order('started_at', { ascending: true })
     .limit(1000);
@@ -1461,7 +1462,35 @@ async function loadPersistedTravelLegSnapshots(client, attendance) {
   return Array.isArray(data) ? data : [];
 }
 
-function completedPersistedTravelLegs(snapshots = []) {
+const PERSISTED_LEG_BOUNDARY_TOLERANCE_MS = 2 * 60 * 1000;
+
+function coordinatesMatch(left, right, toleranceMeters = 150) {
+  if (!left || !right) return false;
+  return haversineKm(left, right) * 1000 <= toleranceMeters;
+}
+
+function persistedLegMatchesExpected(snapshot, expectedLeg) {
+  if (!snapshot || snapshot.status === 'cancelled' || !expectedLeg) return false;
+  const startedAt = parseValidDate(snapshot.started_at);
+  const endedAt = parseValidDate(snapshot.ended_at);
+  const expectedStart = parseValidDate(expectedLeg.fromTime);
+  const expectedEnd = parseValidDate(expectedLeg.toTime);
+  if (!startedAt || !endedAt || !expectedStart || !expectedEnd) return false;
+  if (
+    Math.abs(startedAt.getTime() - expectedStart.getTime()) > PERSISTED_LEG_BOUNDARY_TOLERANCE_MS ||
+    Math.abs(endedAt.getTime() - expectedEnd.getTime()) > PERSISTED_LEG_BOUNDARY_TOLERANCE_MS
+  ) return false;
+  const snapshotFrom = coordinateFrom(snapshot, ['start_lat'], ['start_lng']);
+  const snapshotTo = coordinateFrom(snapshot, ['end_lat'], ['end_lng']);
+  return coordinatesMatch(snapshotFrom, expectedLeg.from) && coordinatesMatch(snapshotTo, expectedLeg.to);
+}
+
+export function classifyPersistedTravelLeg(snapshot, expectedLegs = []) {
+  const expected = expectedLegs.find((leg) => persistedLegMatchesExpected(snapshot, leg));
+  return expected?.type || 'persisted_travel_leg';
+}
+
+function completedPersistedTravelLegs(snapshots = [], expectedLegs = []) {
   return snapshots
     .map((snapshot) => {
       const from = coordinateFrom(snapshot, ['start_lat'], ['start_lng']);
@@ -1483,7 +1512,8 @@ function completedPersistedTravelLegs(snapshots = []) {
       toTime
     ))
     .map(({ snapshot, from, to, fromTime, toTime }) => ({
-      type: 'persisted_travel_leg',
+      type: classifyPersistedTravelLeg(snapshot, expectedLegs),
+      persisted_travel_leg_id: snapshot.id || null,
       fromTime,
       toTime,
       from,
@@ -1495,6 +1525,28 @@ function completedPersistedTravelLegs(snapshots = []) {
       persistedSnapshot: snapshot,
       reviewFlags: [],
     }));
+}
+
+export function reconcileTravelLegCandidates(expectedLegs = [], persistedSnapshots = []) {
+  const usedSnapshotIds = new Set();
+  const candidates = expectedLegs.map((expectedLeg) => {
+    const snapshot = persistedSnapshots.find((candidate) => (
+      !usedSnapshotIds.has(candidate?.id) && persistedLegMatchesExpected(candidate, expectedLeg)
+    ));
+    if (snapshot?.id) usedSnapshotIds.add(snapshot.id);
+    return snapshot
+      ? {
+          ...expectedLeg,
+          persistedSnapshot: snapshot,
+          persisted_travel_leg_id: snapshot.id,
+        }
+      : expectedLeg;
+  });
+  const unmatchedPersisted = completedPersistedTravelLegs(
+    persistedSnapshots.filter((snapshot) => !usedSnapshotIds.has(snapshot?.id)),
+    expectedLegs,
+  );
+  return [...candidates, ...unmatchedPersisted];
 }
 
 function persistedSnapshotForLeg(leg, snapshots = []) {
@@ -2311,10 +2363,9 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
     error.code = 'travel_leg_closure_pending';
     throw error;
   }
-  const persistedCandidateLegs = completedPersistedTravelLegs(persistedLegSnapshots);
-  const candidateLegs = persistedCandidateLegs.length > 0
-    ? persistedCandidateLegs
-    : buildCompletedTravelLegs(attendance, visits, effectiveEnd);
+  const expectedLegs = buildCompletedTravelLegs(attendance, visits, effectiveEnd);
+  const persistedCandidateLegs = completedPersistedTravelLegs(persistedLegSnapshots, expectedLegs);
+  const candidateLegs = reconcileTravelLegCandidates(expectedLegs, persistedLegSnapshots);
   const legAudit = [];
   const delayedCheckoutAudits = [];
 
@@ -2396,8 +2447,20 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       ? Number(Number(result.legKm).toFixed(2))
       : 0;
     const legPayableAmount = Number((legPayableKm * legRatePerKm).toFixed(2));
+    const roundedKm = Number(Number(result.legKm || 0).toFixed(2));
+    const roundedPayableKm = Number(Number(legPayableKm || 0).toFixed(2));
+    const roundedPayableAmount = Number(Number(legPayableAmount || 0).toFixed(2));
+    const persistenceAction = persistedLegSnapshot
+      ? Number(persistedLegSnapshot.calculated_km ?? 0) === roundedKm &&
+        Number(persistedLegSnapshot.payable_km ?? 0) === roundedPayableKm &&
+        Number(persistedLegSnapshot.payable_amount ?? persistedLegSnapshot.fare_amount ?? 0) === roundedPayableAmount
+        ? 'already_correct'
+        : 'update'
+      : 'insert';
     legAudit.push({
       persisted_travel_leg_id: persistedLegSnapshot?.id || null,
+      persistence_action: persistenceAction,
+      persisted_calculated_km: persistedLegSnapshot?.calculated_km ?? null,
       type: leg.type,
       status: result.legSource === 'SKIPPED' ? 'skipped' : 'calculated',
       reason: result.fallbackReason || null,
@@ -2413,7 +2476,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       to_visit_id: leg.toVisitId || null,
       from_site_name: leg.fromSiteName || null,
       to_site_name: leg.toSiteName || null,
-      km: result.legKm,
+      km: roundedKm,
       source,
       payable: result.payable === true && travelPolicy.payableKmAllowed,
       fallback_reason: result.fallbackReason || null,
@@ -2428,30 +2491,87 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       gps_log_binding_source: result.gpsLogBindingSource || 'none',
       payable_km_source_reason: result.payableKmSourceReason || null,
       travel_mode: legMode,
+      payable_km_allowed: legPolicy.payableKmAllowed,
       rate_per_km: legRatePerKm,
-      payable_km: legPayableKm,
-      payable_amount: legPayableAmount,
-      fare_amount: legPayableAmount,
+      payable_km: roundedPayableKm,
+      payable_amount: roundedPayableAmount,
+      fare_amount: roundedPayableAmount,
       review_flags: [...new Set([...(leg.reviewFlags || []), ...(result.reviewFlags || [])])],
     });
   }
 
   if (options.persistLegResults === true) {
     for (const leg of legAudit) {
-      if (!leg.persisted_travel_leg_id || leg.status !== 'calculated') continue;
-      const { error } = await client
+      if (leg.status !== 'calculated') continue;
+      const values = {
+        attendance_id: attendance.id,
+        employee_code: attendance.employee_code || null,
+        fo_user_id: attendance.fo_user_id || null,
+        travel_mode: leg.travel_mode || travelPolicy.travelMode || null,
+        payable_km_allowed: leg.payable_km_allowed === true,
+        started_at: leg.from_time,
+        ended_at: leg.to_time,
+        start_lat: leg.from_lat,
+        start_lng: leg.from_lng,
+        end_lat: leg.to_lat,
+        end_lng: leg.to_lng,
+        calculated_km: Number(Number(leg.km || 0).toFixed(2)),
+        payable_km: Number(Number(leg.payable_km || 0).toFixed(2)),
+        payable_amount: Number(Number(leg.payable_amount || 0).toFixed(2)),
+        fare_amount: Number(Number(leg.payable_amount || 0).toFixed(2)),
+        status: 'completed',
+        rate_per_km: leg.rate_per_km,
+        updated_at: new Date().toISOString(),
+      };
+      if (leg.persisted_travel_leg_id) {
+        const { error } = await client
+          .from('fo_travel_legs')
+          .update(values)
+          .eq('id', leg.persisted_travel_leg_id)
+          .eq('attendance_id', attendance.id);
+        if (error) throw error;
+        continue;
+      }
+      const { data: existing, error: lookupError } = await client
         .from('fo_travel_legs')
-        .update({
-          calculated_km: Number(Number(leg.km || 0).toFixed(2)),
-          payable_km: Number(Number(leg.payable_km || 0).toFixed(2)),
-          payable_amount: Number(Number(leg.payable_amount || 0).toFixed(2)),
-          fare_amount: Number(Number(leg.payable_amount || 0).toFixed(2)),
-          status: 'completed',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', leg.persisted_travel_leg_id)
-        .eq('attendance_id', attendance.id);
-      if (error) throw error;
+        .select('id')
+        .eq('attendance_id', attendance.id)
+        .eq('started_at', leg.from_time)
+        .maybeSingle();
+      if (lookupError) throw lookupError;
+      if (existing?.id) {
+        await client
+          .from('fo_travel_legs')
+          .update(values)
+          .eq('id', existing.id)
+          .eq('attendance_id', attendance.id);
+        leg.persisted_travel_leg_id = existing.id;
+        continue;
+      }
+      const { data: inserted, error: insertError } = await client
+        .from('fo_travel_legs')
+        .insert(values)
+        .select('id')
+        .single();
+      if (insertError) {
+        if (insertError.code !== '23505') throw insertError;
+        const { data: raced, error: raceLookupError } = await client
+          .from('fo_travel_legs')
+          .select('id')
+          .eq('attendance_id', attendance.id)
+          .eq('started_at', leg.from_time)
+          .maybeSingle();
+        if (raceLookupError) throw raceLookupError;
+        if (!raced?.id) throw insertError;
+        await client
+          .from('fo_travel_legs')
+          .update(values)
+          .eq('id', raced.id)
+          .eq('attendance_id', attendance.id);
+        leg.persisted_travel_leg_id = raced.id;
+      } else {
+        leg.persisted_travel_leg_id = inserted?.id || null;
+      }
     }
   }
 
@@ -2861,17 +2981,20 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   const actualTravelKm = Number(calculation.actualTravelKm.toFixed(2));
   const storedRouteKm = Number(sumStoredRouteKm(visits).toFixed(2));
   const existingMetadata = safeAttendanceMetadata(attendance);
+  const dryRun = payload.dry_run === true || payload.dryRun === true || options.persist === false;
   const legRecalculation = await recalculateAttendanceTravelLegs(client, attendance.id, {
     ...options,
     persist: false,
-    persistLegResults: true,
+    persistLegResults: !dryRun,
     auditDelayedCheckout: false,
   });
   const finalTravelLeg = (legRecalculation.travel_legs || []).find(
     (leg) => leg.type === 'last_checkout_to_end_day',
   ) || null;
   const finalReturnLeg = {
-    km: finalTravelLeg?.google_direct_route_km ?? null,
+    km: Number.isFinite(Number(finalTravelLeg?.km))
+      ? Number(Number(finalTravelLeg.km).toFixed(2))
+      : null,
     calculated: finalTravelLeg?.status === 'calculated',
     includedInPayable: finalTravelLeg?.payable === true,
     provider: finalTravelLeg?.source || null,
@@ -3216,7 +3339,6 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     },
     updated_at: new Date().toISOString(),
   };
-  const dryRun = payload.dry_run === true || payload.dryRun === true || options.persist === false;
   let liveStatusUpdated = false;
   if (!dryRun) {
     const { error: attendanceUpdateError } = await client
@@ -3380,6 +3502,295 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   return result;
 }
 
+function finalLegBoundaryMatches(snapshot, expectedLeg) {
+  if (!snapshot || !expectedLeg) return false;
+  const startedAt = parseValidDate(snapshot.started_at);
+  const expectedStart = parseValidDate(expectedLeg.fromTime);
+  if (!startedAt || !expectedStart) return false;
+  if (Math.abs(startedAt.getTime() - expectedStart.getTime()) > PERSISTED_LEG_BOUNDARY_TOLERANCE_MS) return false;
+  const snapshotFrom = coordinateFrom(snapshot, ['start_lat'], ['start_lng']);
+  if (!coordinatesMatch(snapshotFrom, expectedLeg.from)) return false;
+  const snapshotEnd = coordinateFrom(snapshot, ['end_lat'], ['end_lng']);
+  const expectedEnd = expectedLeg.to;
+  if (snapshotEnd && expectedEnd && !coordinatesMatch(snapshotEnd, expectedEnd)) return false;
+  const endedAt = parseValidDate(snapshot.ended_at);
+  const expectedEndTime = parseValidDate(expectedLeg.toTime);
+  return !endedAt || !expectedEndTime || Math.abs(endedAt.getTime() - expectedEndTime.getTime()) <= PERSISTED_LEG_BOUNDARY_TOLERANCE_MS;
+}
+
+export function previousFinalLegContribution(snapshot, metadata = {}) {
+  const persisted = normalizeNumber(snapshot?.calculated_km);
+  if (Number.isFinite(persisted) && persisted >= 0) return Number(persisted.toFixed(2));
+  const stored = normalizeNumber(metadata?.final_return_leg_km);
+  return Number.isFinite(stored) && stored >= 0 ? Number(stored.toFixed(2)) : 0;
+}
+
+function roundMoney(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
+async function persistFinalLegOnly(client, attendance, leg, snapshot, values) {
+  if (snapshot?.id) {
+    const { error } = await client
+      .from('fo_travel_legs')
+      .update(values)
+      .eq('id', snapshot.id)
+      .eq('attendance_id', attendance.id);
+    if (error) throw error;
+    return snapshot.id;
+  }
+
+  const { data: existing, error: lookupError } = await client
+    .from('fo_travel_legs')
+    .select('id')
+    .eq('attendance_id', attendance.id)
+    .eq('started_at', leg.fromTime.toISOString())
+    .maybeSingle();
+  if (lookupError) throw lookupError;
+  if (existing?.id) {
+    const { error } = await client
+      .from('fo_travel_legs')
+      .update(values)
+      .eq('id', existing.id)
+      .eq('attendance_id', attendance.id);
+    if (error) throw error;
+    return existing.id;
+  }
+
+  const { data: inserted, error: insertError } = await client
+    .from('fo_travel_legs')
+    .insert(values)
+    .select('id')
+    .single();
+  if (!insertError) return inserted?.id || null;
+  if (insertError.code !== '23505') throw insertError;
+  const { data: raced, error: raceError } = await client
+    .from('fo_travel_legs')
+    .select('id')
+    .eq('attendance_id', attendance.id)
+    .eq('started_at', leg.fromTime.toISOString())
+    .maybeSingle();
+  if (raceError) throw raceError;
+  if (!raced?.id) throw insertError;
+  const { error: updateError } = await client
+    .from('fo_travel_legs')
+    .update(values)
+    .eq('id', raced.id)
+    .eq('attendance_id', attendance.id);
+  if (updateError) throw updateError;
+  return raced.id;
+}
+
+export async function reconcileFinalLegOnly(serviceRoleClient, payload = {}, options = {}) {
+  const client = requireServiceRoleClient(serviceRoleClient);
+  const attendance = await findAttendance(client, {
+    attendance_id: payload.attendance_id || payload.id || null,
+    fo_user_id: payload.attendance_id || payload.id ? null : payload.fo_user_id || null,
+    employee_code: payload.attendance_id || payload.id ? null : payload.employee_code || null,
+    date: payload.date || payload.attendance_date || null,
+  });
+  const dryRun = payload.dry_run !== false && payload.dryRun !== false && options.persist !== true;
+  const visits = await loadSiteVisits(client, attendance);
+  const effectiveEnd = await resolveEffectiveAttendanceEnd(client, attendance, { includeEvidence: true });
+  const snapshots = await loadPersistedTravelLegSnapshots(client, attendance);
+  const expectedFinal = buildCompletedTravelLegs(attendance, visits, effectiveEnd)
+    .find((leg) => leg.type === 'last_checkout_to_end_day');
+  const matching = snapshots.filter((snapshot) => finalLegBoundaryMatches(snapshot, expectedFinal));
+  const activeMatch = matching.find((snapshot) => snapshot.status === 'active' || !snapshot.ended_at);
+  const oldTotal = normalizeNumber(attendance.total_route_km) || 0;
+  const metadata = safeAttendanceMetadata(attendance);
+
+  if (activeMatch) {
+    return {
+      ok: true,
+      skipped: true,
+      skip_reason: 'FINAL_LEG_CLOSURE_PENDING',
+      status: 'skipped',
+      attendance_id: attendance.id,
+      employee_code: attendance.employee_code,
+      old_total_route_km: roundMoney(oldTotal),
+      new_total_route_km: roundMoney(oldTotal),
+      final_leg_action: 'skipped',
+      final_leg_status: 'closure_pending',
+      final_leg_id: activeMatch.id || null,
+      final_leg_review_flags: ['FINAL_LEG_CLOSURE_PENDING'],
+    };
+  }
+  if (!expectedFinal || !expectedFinal.fromTime || !expectedFinal.toTime || !expectedFinal.from || !expectedFinal.to) {
+    return {
+      ok: true,
+      skipped: true,
+      skip_reason: !expectedFinal ? 'FINAL_LEG_NO_COMPLETED_SITE_VISIT' : 'FINAL_LEG_MISSING_ANCHORS',
+      status: 'skipped',
+      attendance_id: attendance.id,
+      employee_code: attendance.employee_code,
+      old_total_route_km: roundMoney(oldTotal),
+      new_total_route_km: roundMoney(oldTotal),
+      final_leg_action: 'skipped',
+      final_leg_status: 'skipped',
+      final_leg_id: matching[0]?.id || null,
+    };
+  }
+
+  const persisted = matching.find((snapshot) => snapshot.status !== 'cancelled') || null;
+  const calculation = await calculateTravelLegKm({
+    client,
+    attendance,
+    fromTime: expectedFinal.fromTime,
+    toTime: expectedFinal.toTime,
+    fromLat: expectedFinal.from.latitude,
+    fromLng: expectedFinal.from.longitude,
+    toLat: expectedFinal.to.latitude,
+    toLng: expectedFinal.to.longitude,
+    employeeCode: attendance.employee_code || attendance.fo_user_id,
+    attendanceId: attendance.id,
+    legType: 'last_checkout_to_end_day',
+    options,
+  });
+  const calculatedKm = roundMoney(calculation.legKm);
+  if (calculation.legSource === 'SKIPPED' || calculatedKm < MIN_MEANINGFUL_FINAL_RETURN_LEG_KM) {
+    return {
+      ok: true,
+      skipped: true,
+      skip_reason: calculation.fallbackReason || 'FINAL_LEG_IMMATERIAL_MOVEMENT',
+      status: 'skipped',
+      attendance_id: attendance.id,
+      employee_code: attendance.employee_code,
+      old_total_route_km: roundMoney(oldTotal),
+      new_total_route_km: roundMoney(oldTotal),
+      final_leg_action: 'skipped',
+      final_leg_status: 'skipped',
+      final_leg_id: persisted?.id || null,
+      final_return_leg_km: calculatedKm,
+      provider: calculation.legSource,
+      review_flags: calculation.reviewFlags || [],
+    };
+  }
+
+  const travelMode = normalizeTravelMode(persisted?.travel_mode || attendance.travel_mode);
+  const policy = travelModeAllowsPayableKm({
+    travel_mode: travelMode,
+    payable_km_allowed: persisted?.payable_km_allowed ?? attendance.payable_km_allowed,
+    metadata: {},
+  });
+  const rate = normalizeNumber(persisted?.rate_per_km) || ratePerKmForTravelMode(travelMode, attendance.rate_per_km);
+  const payableKm = calculation.payable === true && policy.payableKmAllowed ? calculatedKm : 0;
+  const payableAmount = roundMoney(payableKm * rate);
+  const previousCalculatedKm = previousFinalLegContribution(persisted, metadata);
+  const previousPayableKm = normalizeNumber(persisted?.payable_km) ?? 0;
+  const previousPayableAmount = normalizeNumber(persisted?.payable_amount ?? persisted?.fare_amount)
+    ?? roundMoney(previousPayableKm * rate);
+  const calculatedDelta = roundMoney(calculatedKm - previousCalculatedKm);
+  const payableDelta = roundMoney(payableKm - previousPayableKm);
+  const amountDelta = roundMoney(payableAmount - previousPayableAmount);
+  const reviewFlags = [...new Set(calculation.reviewFlags || [])];
+  const now = new Date().toISOString();
+  const finalLegValues = {
+    attendance_id: attendance.id,
+    employee_code: attendance.employee_code || null,
+    fo_user_id: attendance.fo_user_id || null,
+    travel_mode: travelMode || null,
+    payable_km_allowed: policy.payableKmAllowed,
+    started_at: expectedFinal.fromTime.toISOString(),
+    ended_at: expectedFinal.toTime.toISOString(),
+    start_lat: expectedFinal.from.latitude,
+    start_lng: expectedFinal.from.longitude,
+    end_lat: expectedFinal.to.latitude,
+    end_lng: expectedFinal.to.longitude,
+    calculated_km: calculatedKm,
+    payable_km: payableKm,
+    payable_amount: payableAmount,
+    fare_amount: payableAmount,
+    status: 'completed',
+    rate_per_km: rate,
+    updated_at: now,
+  };
+  const nextMetadata = {
+    ...metadata,
+    final_return_leg_km: calculatedKm,
+    final_return_leg_calculated_km: calculatedKm,
+    final_return_leg_provider: calculation.legSource,
+    final_return_leg_status: payableKm > 0 ? 'calculated' : 'review_required',
+    final_return_leg_reason: calculation.fallbackReason || null,
+    final_return_leg_review_flags: reviewFlags,
+    final_return_leg_from_site: expectedFinal.fromSiteName || null,
+    final_return_leg_from_visit_id: expectedFinal.fromVisitId || null,
+    final_return_leg_origin_lat: expectedFinal.from.latitude,
+    final_return_leg_origin_lng: expectedFinal.from.longitude,
+    final_return_leg_destination_lat: expectedFinal.to.latitude,
+    final_return_leg_destination_lng: expectedFinal.to.longitude,
+    final_return_leg_calculated_at: now,
+    final_return_leg_included_in_payable: payableKm > 0,
+    final_return_leg_only_reconciliation: true,
+  };
+  const attendanceUpdate = {
+    total_route_km: roundMoney(Math.max(0, oldTotal + calculatedDelta)),
+    eligible_km: roundMoney(Math.max(0, (normalizeNumber(attendance.eligible_km) || 0) + payableDelta)),
+    total_approved_km: roundMoney(Math.max(0, (normalizeNumber(attendance.total_approved_km) || 0) + payableDelta)),
+    petrol_amount: roundMoney(Math.max(0, (normalizeNumber(attendance.petrol_amount) || 0) + amountDelta)),
+    metadata: nextMetadata,
+    updated_at: now,
+  };
+  const action = persisted ? 'update' : 'insert';
+  let finalLegId = persisted?.id || null;
+  if (!dryRun) {
+    finalLegId = await persistFinalLegOnly(client, attendance, expectedFinal, persisted, finalLegValues);
+    const { error } = await client.from('fo_attendance').update(attendanceUpdate).eq('id', attendance.id);
+    if (error) throw error;
+  }
+  return {
+    ok: true,
+    skipped: false,
+    status: dryRun ? 'preview' : 'updated',
+    attendance_id: attendance.id,
+    employee_code: attendance.employee_code,
+    old_total_route_km: roundMoney(oldTotal),
+    new_total_route_km: attendanceUpdate.total_route_km,
+    final_leg_id: finalLegId,
+    final_leg_action: action,
+    final_leg_status: payableKm > 0 ? 'calculated' : 'review_required',
+    previous_final_leg_km: previousCalculatedKm,
+    final_return_leg_km: calculatedKm,
+    final_leg_delta_km: calculatedDelta,
+    previous_payable_km: previousPayableKm,
+    proposed_payable_km: payableKm,
+    proposed_payable_amount: payableAmount,
+    source: calculation.legSource,
+    provider: calculation.legSource,
+    reason: calculation.fallbackReason || null,
+    review_flags: reviewFlags,
+    final_leg_gps_log_count: calculation.gpsLogCount || 0,
+    final_leg_valid_points: calculation.validPoints || 0,
+    dry_run: dryRun,
+  };
+}
+
+export async function reconcileFinalLegOnlyBatch(serviceRoleClient, payload = {}, options = {}) {
+  const client = requireServiceRoleClient(serviceRoleClient);
+  const fromDate = normalizeDateInput(payload.fromDate || payload.from_date || payload.date);
+  const toDate = normalizeDateInput(payload.toDate || payload.to_date || payload.date || fromDate, fromDate);
+  let query = client.from('fo_attendance')
+    .select(ATTENDANCE_SELECT_COLUMNS)
+    .gte('attendance_date', fromDate)
+    .lte('attendance_date', toDate)
+    .not('logout_time', 'is', null)
+    .order('attendance_date', { ascending: true })
+    .order('id', { ascending: true })
+    .limit(1000);
+  if (payload.employee_code) query = query.eq('employee_code', payload.employee_code);
+  const { data, error } = await query;
+  if (error) throw error;
+  const results = [];
+  for (const row of data || []) {
+    try {
+      results.push(await reconcileFinalLegOnly(client, { attendance_id: row.id, dry_run: payload.dryRun !== false }, options));
+    } catch (failure) {
+      results.push({ attendance_id: row.id, employee_code: row.employee_code, status: 'failed', message: failure.message });
+    }
+  }
+  return { fromDate, toDate, processed: results.length, results };
+}
+
 export async function recalculateSwitchModeKmTemporary(serviceRoleClient, payload = {}, options = {}) {
   return recalculateFoKm(serviceRoleClient, payload, {
     ...options,
@@ -3524,6 +3935,7 @@ export async function recalculateFoKmBatch(serviceRoleClient, payload = {}, opti
         attendance_id: attendance.id,
         dry_run: payload.dryRun === true || payload.dry_run === true,
       }, options);
+      const finalLeg = result.travel_legs?.find((leg) => leg.type === 'last_checkout_to_end_day') || null;
       return {
         attendance_id: result.attendance_id,
         employee_code: result.employee_code,
@@ -3539,6 +3951,14 @@ export async function recalculateFoKmBatch(serviceRoleClient, payload = {}, opti
         route_sync_status: result.route_sync_status,
         gps_log_binding_source: result.gps_log_binding_source,
         effective_end_source: result.effective_end_source,
+        final_leg_id: finalLeg?.persisted_travel_leg_id || null,
+        final_leg_action: finalLeg?.status === 'calculated'
+          ? finalLeg.persistence_action || (finalLeg.persisted_travel_leg_id ? 'update' : 'insert')
+          : 'manual_review_or_skip',
+        final_leg_status: finalLeg?.status || null,
+        final_leg_gps_log_count: finalLeg?.gps_log_count || 0,
+        final_leg_valid_points: finalLeg?.valid_points || 0,
+        final_leg_review_flags: finalLeg?.review_flags || [],
         counters: {
           gps_recalculated: result.travel_legs?.some((leg) => ['GPS_BASED', 'FULL_DAY_GPS_NO_SITE'].includes(leg.source)) ? 1 : 0,
           google_fallback_used: Number(result.google_fallback_km || 0) > 0 ? 1 : 0,

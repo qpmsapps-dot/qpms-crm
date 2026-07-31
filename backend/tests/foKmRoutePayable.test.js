@@ -5,7 +5,11 @@ import {
   calculateCanonicalRoutePayableKm,
   calculateFoKmHistoricalImpact,
   calculateTravelLegKm,
+  classifyPersistedTravelLeg,
+  reconcileTravelLegCandidates,
   recalculateAttendanceTravelLegs,
+  reconcileFinalLegOnly,
+  previousFinalLegContribution,
   resolveEffectiveAttendanceEnd,
 } from '../foKmRecalculationService.js';
 
@@ -97,6 +101,79 @@ function clientWith(rows, { attendanceRow = attendance(), visits = [], travelLeg
     },
   };
 }
+
+test('persisted final travel-leg rows retain final semantic identity', () => {
+  const expected = {
+    type: 'last_checkout_to_end_day',
+    fromTime: new Date('2026-07-16T12:00:00.000Z'),
+    toTime: new Date('2026-07-16T13:00:00.000Z'),
+    from: { latitude: 13.08, longitude: 80.27 },
+    to: { latitude: 13.09, longitude: 80.28 },
+  };
+  const persisted = {
+    id: 'final-leg-1',
+    status: 'completed',
+    started_at: '2026-07-16T12:00:30.000Z',
+    ended_at: '2026-07-16T12:59:30.000Z',
+    start_lat: 13.0801,
+    start_lng: 80.2701,
+    end_lat: 13.0901,
+    end_lng: 80.2801,
+  };
+  assert.equal(classifyPersistedTravelLeg(persisted, [expected]), 'last_checkout_to_end_day');
+});
+
+test('reconciliation reconstructs a missing final leg beside persisted earlier legs', () => {
+  const expected = [
+    {
+      type: 'start_to_first_checkin',
+      fromTime: new Date('2026-07-16T04:30:00.000Z'),
+      toTime: new Date('2026-07-16T05:00:00.000Z'),
+      from: { latitude: 13.02, longitude: 80.24 },
+      to: { latitude: 13.03, longitude: 80.25 },
+    },
+    {
+      type: 'last_checkout_to_end_day',
+      fromTime: new Date('2026-07-16T12:00:00.000Z'),
+      toTime: new Date('2026-07-16T13:00:00.000Z'),
+      from: { latitude: 13.08, longitude: 80.27 },
+      to: { latitude: 13.09, longitude: 80.28 },
+    },
+  ];
+  const result = reconcileTravelLegCandidates(expected, [{
+    id: 'first-leg',
+    status: 'completed',
+    started_at: '2026-07-16T04:30:00.000Z',
+    ended_at: '2026-07-16T05:00:00.000Z',
+    start_lat: 13.02,
+    start_lng: 80.24,
+    end_lat: 13.03,
+    end_lng: 80.25,
+  }]);
+  assert.equal(result.length, 2);
+  assert.equal(result[0].persisted_travel_leg_id, 'first-leg');
+  assert.equal(result[1].type, 'last_checkout_to_end_day');
+  assert.equal(result[1].persisted_travel_leg_id, undefined);
+});
+
+test('unrelated persisted timestamps do not become a final leg', () => {
+  const expected = [{
+    type: 'last_checkout_to_end_day',
+    fromTime: new Date('2026-07-16T12:00:00.000Z'),
+    toTime: new Date('2026-07-16T13:00:00.000Z'),
+    from: { latitude: 13.08, longitude: 80.27 },
+    to: { latitude: 13.09, longitude: 80.28 },
+  }];
+  assert.equal(classifyPersistedTravelLeg({
+    status: 'completed',
+    started_at: '2026-07-16T08:00:00.000Z',
+    ended_at: '2026-07-16T09:00:00.000Z',
+    start_lat: 13.08,
+    start_lng: 80.27,
+    end_lat: 13.09,
+    end_lng: 80.28,
+  }, expected), 'persisted_travel_leg');
+});
 
 test('QPMSADMIN final sourcing detour keeps cleaned GPS instead of shorter direct route', () => {
   const result = calculateCanonicalRoutePayableKm({
@@ -619,6 +696,61 @@ test('recalculation_twice_updates_same_leg_rows_idempotently', async () => {
   assert.equal(travelLegs.length, 1);
   assert.equal(travelLegs[0].payable_km, first.payable_km);
   assert.equal(travelLegs[0].payable_amount, first.payable_amount);
+});
+
+test('final-leg-only contribution prefers persisted calculated km then metadata', () => {
+  assert.equal(
+    previousFinalLegContribution({ calculated_km: 2.12 }, { final_return_leg_km: 9.5 }),
+    2.12,
+  );
+  assert.equal(
+    previousFinalLegContribution({ calculated_km: null }, { final_return_leg_km: 8.62 }),
+    8.62,
+  );
+  assert.equal(previousFinalLegContribution({}, {}), 0);
+});
+
+test('final-leg-only skips an active matching final row without changing totals', async () => {
+  const row = attendance({
+    total_route_km: 31.88,
+    eligible_km: 31.88,
+    total_approved_km: 31.88,
+    petrol_amount: 127.52,
+    login_time: '2026-07-16T04:30:00.000Z',
+    logout_time: '2026-07-16T16:28:05.000Z',
+    end_latitude: 13.096,
+    end_longitude: 80.290,
+  });
+  const visits = [{
+    id: 'visit-final',
+    attendance_id: row.id,
+    site_name: 'Final Site',
+    check_in_time: '2026-07-16T12:00:00.000Z',
+    check_out_time: '2026-07-16T12:41:20.000Z',
+    check_in_latitude: 13.08,
+    check_in_longitude: 80.27,
+    check_out_latitude: 13.08,
+    check_out_longitude: 80.27,
+    status: 'completed',
+  }];
+  const finalLeg = {
+    id: 'final-active',
+    attendance_id: row.id,
+    started_at: '2026-07-16T12:41:20.000Z',
+    ended_at: null,
+    start_lat: 13.08,
+    start_lng: 80.27,
+    end_lat: 13.096,
+    end_lng: 80.290,
+    calculated_km: 0,
+    status: 'active',
+  };
+  const client = clientWith([], { attendanceRow: row, visits, travelLegs: [finalLeg] });
+  const result = await reconcileFinalLegOnly(client, { attendance_id: row.id, dry_run: true });
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.skip_reason, 'FINAL_LEG_CLOSURE_PENDING');
+  assert.equal(result.old_total_route_km, 31.88);
+  assert.equal(result.new_total_route_km, 31.88);
 });
 
 test('a GPS row on a shared travel-window boundary is counted only once', async () => {

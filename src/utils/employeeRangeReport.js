@@ -79,9 +79,11 @@ export function buildEmployeeRangeExcelRows(dataset) {
     siteVisits: (dataset?.site_visit_summary || []).map((row) => ({
       "Attendance Date": row.attendance_date,
       "Site / Client": [row.site_name, row.client_name].filter(Boolean).join(" / "),
+      "Travel From Previous": row.travel_from_previous || "",
       "Check-In": row.check_in_time,
       "Check-Out": row.check_out_time,
       "Duration": durationLabel(row.visit_duration_minutes),
+      "Route KM": row.route_km ?? 0,
     })),
     travelClaims: (dataset?.expense_claims || []).map((claim) => ({
       "Claim ID": claim.id || "",
