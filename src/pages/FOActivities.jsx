@@ -5401,13 +5401,21 @@ function attendanceMetadata(attendance) {
 
 function finalReturnLegKmFromAttendance(attendance) {
   const metadata = attendanceMetadata(attendance);
-  const finalLeg = Array.isArray(metadata.travel_legs)
-    ? metadata.travel_legs.find((leg) => leg?.type === "last_checkout_to_end_day")
-    : null;
+  const finalLegs = [
+    ...(Array.isArray(attendance?.travel_legs) ? attendance.travel_legs : []),
+    ...(Array.isArray(metadata.travel_legs) ? metadata.travel_legs : []),
+  ].filter((leg) =>
+    leg?.type === "last_checkout_to_end_day" ||
+    leg?.leg_type === "last_checkout_to_end_day" ||
+    leg?.is_final_return_leg === true,
+  );
+  const finalLegKm = finalLegs
+    .flatMap((leg) => [leg?.calculated_km, leg?.calculatedKm, leg?.km, leg?.payable_km])
+    .map(numberOrNull)
+    .find((value) => value !== null && value > 0);
+  if (finalLegKm !== undefined) return finalLegKm;
+
   return numberOrNull(
-    finalLeg?.km ??
-      finalLeg?.calculated_km ??
-      finalLeg?.payable_km ??
     metadata.final_return_leg_km ??
       metadata.finalReturnLegKm ??
       attendance?.final_return_leg_km,
@@ -5437,6 +5445,7 @@ function staleAutoEndReviewNote(attendance) {
 
 let googleMapsScriptPromise = null;
 const snapToRoadsCache = new Map();
+const reconstructedRouteGapCache = new Map();
 
 function loadGoogleMapsScript() {
   if (typeof window === "undefined") return Promise.reject(new Error("Google Maps requires a browser."));
@@ -5992,6 +6001,43 @@ function firstValidPointFromPaths(paths = []) {
   return null;
 }
 
+function routeGapBoundariesFromSegments(segments = []) {
+  return segments
+    .map((segment, index) => ({
+      index,
+      start: segment?.[segment.length - 1],
+      end: segments[index + 1]?.[0],
+    }))
+    .filter(({ start, end }) => hasFiniteCoordinates(start) && hasFiniteCoordinates(end));
+}
+
+function directionsRouteForGap(service, start, end, maps) {
+  return new Promise((resolve, reject) => {
+    service.route(
+      {
+        origin: googleLatLng(start),
+        destination: googleLatLng(end),
+        travelMode: maps.TravelMode?.DRIVING || "DRIVING",
+        provideRouteAlternatives: false,
+      },
+      (result, status) => {
+        if (status !== "OK" || !result?.routes?.[0]?.overview_path?.length) {
+          reject(new Error(`Directions unavailable (${status || "unknown status"})`));
+          return;
+        }
+        const path = result.routes[0].overview_path
+          .map((point) => [Number(point.lat()), Number(point.lng())])
+          .filter(hasFiniteCoordinates);
+        if (path.length < 2) {
+          reject(new Error("Directions returned an incomplete path."));
+          return;
+        }
+        resolve(path);
+      },
+    );
+  });
+}
+
 function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
   const points = useMemo(() => buildDetailMapPoints(officer, routeLogs), [officer, routeLogs]);
   const mapElementRef = useRef(null);
@@ -6008,6 +6054,11 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
     snappedPointsReturned: 0,
     snappedSegmentsCount: 0,
     failedSegmentsCount: 0,
+    errors: [],
+  });
+  const [reconstructedGaps, setReconstructedGaps] = useState({
+    status: "skipped",
+    segments: [],
     errors: [],
   });
   const snapCacheKey = [
@@ -6046,6 +6097,10 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
   }, [points.gpsSegments, points.routeSource, points.storedPolylines, routeViewMode, simplifiedGpsTrail, snapResult]);
   const renderedPolylinePointCount = selectedRoute.paths.reduce((sum, path) => sum + path.length, 0);
   const renderedSegmentsCreated = selectedRoute.paths.filter((path) => path.length > 1).length;
+  const routeGapBoundaries = useMemo(
+    () => routeGapBoundariesFromSegments(points.gpsSegments),
+    [points.gpsSegments],
+  );
   const routeTrailUnavailable =
     points.acceptedGpsPoints >= 2 &&
     points.gpsSegmentCount === 0 &&
@@ -6131,6 +6186,81 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
       cancelled = true;
     };
   }, [fromDate, officer?.employeeCode, officer?.foId, points.gpsSegments, points.routeSource, snapCacheKey, toDate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const cacheKey = [
+      officer?.foId || officer?.employeeCode || "unknown",
+      formatDateOnly(fromDate),
+      formatDateOnly(toDate),
+      routeGapBoundaries.map(({ start, end }) => `${start.join(",")}:${end.join(",")}`).join("|"),
+    ].join("|");
+
+    if (routeViewMode === "markers" || points.routeSource !== "gps-trail" || !routeGapBoundaries.length) {
+      setReconstructedGaps({ status: "skipped", segments: [], errors: [] });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const cached = reconstructedRouteGapCache.get(cacheKey);
+    if (cached) {
+      setReconstructedGaps(cached);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function reconstructGaps() {
+      const unavailable = (gap, error) => ({
+        ...gap,
+        path: [gap.start, gap.end],
+        source: "route_unavailable",
+        message: error?.message || "Directions unavailable",
+      });
+      try {
+        const maps = await loadGoogleMapsScript();
+        const service = new maps.DirectionsService();
+        const segments = await Promise.all(
+          routeGapBoundaries.map(async (gap) => {
+            try {
+              return {
+                ...gap,
+                path: await directionsRouteForGap(service, gap.start, gap.end, maps),
+                source: "google_directions",
+              };
+            } catch (error) {
+              return unavailable(gap, error);
+            }
+          }),
+        );
+        const result = {
+          status: segments.some((segment) => segment.source === "google_directions")
+            ? segments.some((segment) => segment.source === "route_unavailable") ? "partial" : "ready"
+            : "unavailable",
+          segments,
+          errors: segments.filter((segment) => segment.source === "route_unavailable").map((segment) => ({
+            index: segment.index,
+            message: segment.message,
+          })),
+        };
+        reconstructedRouteGapCache.set(cacheKey, result);
+        if (!cancelled) setReconstructedGaps(result);
+      } catch (error) {
+        const result = {
+          status: "unavailable",
+          segments: routeGapBoundaries.map((gap) => unavailable(gap, error)),
+          errors: [{ message: error?.message || String(error) }],
+        };
+        reconstructedRouteGapCache.set(cacheKey, result);
+        if (!cancelled) setReconstructedGaps(result);
+      }
+    }
+    reconstructGaps();
+    return () => {
+      cancelled = true;
+    };
+  }, [fromDate, officer?.employeeCode, officer?.foId, points.routeSource, routeGapBoundaries, routeViewMode, toDate]);
 
   useEffect(() => {
     const coordinateStats = points.coordinateStats || createRouteMapCoordinateStats();
@@ -6223,13 +6353,48 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
             const polyline = new maps.Polyline({
               path: googlePath,
               geodesic: true,
-              strokeColor: "#1557ff",
+              strokeColor: selectedRoute.source === "raw_gps" ? "#16a34a" : "#15803d",
               strokeOpacity: selectedRoute.source === "raw_gps" ? 0.42 : 0.68,
               strokeWeight: selectedRoute.source === "raw_gps" ? 2 : 3,
               map: mapRef.current,
             });
             overlaysRef.current.push(polyline);
           });
+
+        reconstructedGaps.segments.forEach((segment) => {
+          const googlePath = segment.path.map((point) => googleLatLng(point)).filter(Boolean);
+          if (googlePath.length < 2) return;
+          googlePath.forEach((latLng) => {
+            bounds.extend(latLng);
+            hasBounds = true;
+          });
+          const unavailable = segment.source === "route_unavailable";
+          const polyline = new maps.Polyline({
+            path: googlePath,
+            geodesic: true,
+            strokeColor: unavailable ? "#64748b" : "#f97316",
+            strokeOpacity: 0.95,
+            strokeWeight: 3,
+            clickable: true,
+            icons: [{
+              icon: { path: "M 0,-1 0,1", strokeOpacity: 1, scale: 3 },
+              offset: "0",
+              repeat: unavailable ? "8px" : "12px",
+            }],
+            map: mapRef.current,
+          });
+          polyline.addListener("click", (event) => {
+            const infoWindow = new maps.InfoWindow({
+              content: unavailable
+                ? "<strong>Route Unavailable</strong><br/>Source: No Google Directions route"
+                : "<strong>Estimated Route</strong><br/>Source: Google Directions<br/>This section was reconstructed because GPS data was unavailable.",
+              position: event.latLng,
+            });
+            infoWindow.open({ map: mapRef.current });
+            overlaysRef.current.push(infoWindow);
+          });
+          overlaysRef.current.push(polyline);
+        });
 
         points.markers.forEach((marker) => {
           const position = googleLatLng(marker.coordinates, marker.displayOffset);
@@ -6276,7 +6441,7 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
     return () => {
       cancelled = true;
     };
-  }, [points, selectedRoute]);
+  }, [points, reconstructedGaps, selectedRoute]);
 
   return (
     <div className="relative h-[340px] overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-inner">
@@ -6323,19 +6488,30 @@ function GoogleRouteMap({ officer, routeLogs, fromDate, toDate }) {
           </button>
         ))}
       </div>
-      <div className="absolute right-4 top-4 z-10 w-28 rounded-lg border border-slate-200 bg-white/95 p-3 text-xs font-semibold text-slate-600 shadow-sm">
+      <div className="absolute right-4 top-4 z-10 w-44 rounded-lg border border-slate-200 bg-white/95 p-3 text-xs font-semibold text-slate-600 shadow-sm">
         <p className="mb-2 font-black text-slate-900">Legend</p>
         <LegendDot color="bg-emerald-500" label="Start Day" />
         <LegendDot color="bg-blue-600" label="Site Visit" />
         <LegendDot color="bg-red-500" label="End Day" />
-        <div className="mt-2 flex items-center gap-2">
-          <span className="h-0.5 w-5 rounded-full bg-blue-600" />
-          <span>Route</span>
-        </div>
+        <RouteLegendLine color="#16a34a" label="Actual GPS" />
+        <RouteLegendLine color="#f97316" label="Estimated Route" dashed />
+        <RouteLegendLine color="#64748b" label="Route Unavailable" dotted />
         <p className="mt-2 text-[10px] font-bold uppercase text-slate-400">
           {selectedRoute.label}
         </p>
       </div>
+    </div>
+  );
+}
+
+function RouteLegendLine({ color, label, dashed = false, dotted = false }) {
+  return (
+    <div className="mt-2 flex items-center gap-2">
+      <span
+        className="w-5 border-t-2"
+        style={{ borderColor: color, borderStyle: dotted ? "dotted" : dashed ? "dashed" : "solid" }}
+      />
+      <span>{label}</span>
     </div>
   );
 }
