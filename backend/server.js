@@ -4,6 +4,10 @@ import dotenv from 'dotenv';
 import express from 'express';
 import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
+import {
+  createHospitalFeedbackQrRouter,
+  createPublicHospitalFeedbackQrRouter,
+} from './routes/hospitalFeedbackQrRoutes.js';
 import { createHospitalTicketRouter } from './routes/hospitalTicketRoutes.js';
 import {
   runHospitalSlaWorker,
@@ -354,6 +358,23 @@ app.post(
       });
     }
   },
+);
+
+app.use(
+  '/api/public/hospital-feedback',
+  createPublicHospitalFeedbackQrRouter({
+    serviceClient: serviceRoleSupabase,
+    environment: process.env,
+  }),
+);
+
+app.use(
+  '/api/hospital-feedback',
+  createHospitalFeedbackQrRouter({
+    serviceClient: serviceRoleSupabase,
+    requireAuth: requireSupabaseJwt,
+    environment: process.env,
+  }),
 );
 
 app.use(

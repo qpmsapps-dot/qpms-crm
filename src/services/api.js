@@ -36,6 +36,14 @@ export const api = axios.create({
   },
 });
 
+const publicApi = axios.create({
+  baseURL: API_BASE,
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
 export async function authenticatedApiRequest(config) {
   const backendToken = readBackendToken();
   if (backendToken) {
@@ -427,6 +435,50 @@ export function getLeadManagementAssignees() {
     method: 'GET',
     url: '/api/lead-management/assignees',
   });
+}
+
+async function hospitalFeedbackQrRequest(config) {
+  try {
+    const response = await authenticatedApiRequest(config);
+    return response.data;
+  } catch (requestError) {
+    const status = requestError.response?.status;
+    const serverMessage = requestError.response?.data?.message;
+    if (status === 401 || requestError.isAuthSessionError) {
+      throw new Error(serverMessage || 'Your session has expired. Please sign in again.');
+    }
+    if (status === 403) {
+      throw new Error(serverMessage || 'You do not have permission to generate Hospital Feedback QR codes.');
+    }
+    throw new Error(serverMessage || 'Unable to complete Hospital Feedback QR request.');
+  }
+}
+
+export async function getHospitalFeedbackQrLocations() {
+  const data = await hospitalFeedbackQrRequest({
+    method: 'GET',
+    url: '/api/hospital-feedback/qr/locations',
+  });
+  return data.locations || [];
+}
+
+export async function generateHospitalFeedbackQr(locationId) {
+  const data = await hospitalFeedbackQrRequest({
+    method: 'POST',
+    url: '/api/hospital-feedback/qr',
+    data: { location_id: locationId },
+  });
+  return data.qr;
+}
+
+export async function resolvePublicHospitalFeedbackQr(token) {
+  const response = await publicApi.get(`/api/public/hospital-feedback/qr/${encodeURIComponent(token)}`);
+  return response.data;
+}
+
+export async function verifyPublicHospitalFeedbackSession(sessionToken) {
+  const response = await publicApi.get(`/api/public/hospital-feedback/session/${encodeURIComponent(sessionToken)}`);
+  return response.data;
 }
 
 api.interceptors.request.use(async (config) => {
