@@ -22,7 +22,7 @@ export const roleGroups = {
   Admin: ['Admin', 'QPMS Admin', 'Developer', 'DEMO_ADMIN', 'Demo Admin', 'Read Only Admin', 'Read-Only Admin'],
 };
 
-export const protectedNavRoutes = ['/dashboard', '/crm', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/fault-tracker', '/deep-cleaning', '/assets', '/reports', '/employees', '/store-master', '/settings'];
+export const protectedNavRoutes = ['/dashboard', '/crm', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/fault-tracker', '/deep-cleaning', '/assets', '/reports', '/employees', '/store-master', '/settings', '/hospital-feedback'];
 
 function normalizedRoleKey(role = '') {
   return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
@@ -73,6 +73,9 @@ export function routeAllowedRoles(pathname = '') {
   if (pathname.startsWith('/store-master')) return ['StoreMasterAdmin'];
   if (pathname.startsWith('/settings/user-management')) {
     return ['Admin', 'Management', 'HR', 'FinanceLeadership'];
+  }
+  if (pathname.startsWith('/settings/hospital-feedback')) {
+    return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
   }
   if (pathname.startsWith('/settings')) return [];
   if (pathname.startsWith('/crm')) return ['Admin', 'Management', 'FinanceLeadership', 'BD'];

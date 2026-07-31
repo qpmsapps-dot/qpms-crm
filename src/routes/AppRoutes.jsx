@@ -17,6 +17,8 @@ import Tickets from '../pages/Tickets.jsx';
 import FaultTracker from '../pages/FaultTracker.jsx';
 import DeepCleaning from '../pages/DeepCleaning.jsx';
 import UserManagement from '../pages/settings/UserManagement.jsx';
+import HospitalFeedbackQrGenerator from '../pages/HospitalFeedbackQrGenerator.jsx';
+import PublicFeedbackQrPage, { PublicFeedbackScanInstruction } from '../pages/PublicFeedbackQrPage.jsx';
 import { isDemoMode } from '../config/demoMode.js';
 import {
   AssetCenterPage,
@@ -38,6 +40,8 @@ export const router = createBrowserRouter([
       { path: 'login', element: <Login /> },
       { path: 'set-password', element: <SetPassword /> },
       { path: 'account-deletion', element: <AccountDeletion /> },
+      { path: 'public-feedback', element: <PublicFeedbackScanInstruction /> },
+      { path: 'public-feedback/q/:token', element: <PublicFeedbackQrPage /> },
       {
         element: <MainLayout />,
         children: [
@@ -67,6 +71,7 @@ export const router = createBrowserRouter([
           { path: 'employees', element: isDemoMode ? <Navigate to="/dashboard" replace /> : <Employees /> },
           { path: 'settings', element: <Settings /> },
           { path: 'settings/user-management', element: <UserManagement /> },
+          { path: 'settings/hospital-feedback/qr-generator', element: <HospitalFeedbackQrGenerator /> },
           { path: 'profile', element: <Profile /> },
         ],
       },
