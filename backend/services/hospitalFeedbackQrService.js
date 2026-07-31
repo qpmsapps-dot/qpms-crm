@@ -1,11 +1,20 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
+import sharp from 'sharp';
 
 import { resolveCurrentUserAccess } from './accessControlService.js';
 import { scopeAllows } from './hospitalTicketAuthService.js';
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{22,160}$/;
 const DEFAULT_SESSION_TTL_MS = 12 * 60 * 1000;
+export const QR_PNG_WIDTH = 1000;
+export const QR_ERROR_CORRECTION_LEVEL = 'H';
+const QR_LOGO_RATIO = 0.16;
+const QR_LOGO_BACKGROUND_RATIO = 0.22;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_QPMS_LOGO_PATH = path.resolve(__dirname, '../../src/assets/qpms-logo.png');
 const sessionStore = new Map();
 
 function cleanText(value, max = 240) {
@@ -103,14 +112,53 @@ export function publicQrUrl(token, environment = process.env, request = null) {
   return `${publicFeedbackBaseUrl(environment, request)}/public-feedback/q/${encodeURIComponent(token)}`;
 }
 
-export async function generateQrPngDataUrl(url) {
-  return QRCode.toDataURL(url, {
-    type: 'image/png',
-    errorCorrectionLevel: 'H',
+export async function generatePlainQrPngBuffer(url) {
+  return QRCode.toBuffer(url, {
+    type: 'png',
+    errorCorrectionLevel: QR_ERROR_CORRECTION_LEVEL,
     margin: 4,
-    width: 1000,
+    width: QR_PNG_WIDTH,
     color: { dark: '#000000', light: '#ffffff' },
   });
+}
+
+function roundedLogoBackgroundSvg(size) {
+  const radius = Math.round(size * 0.18);
+  return Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><rect width="${size}" height="${size}" rx="${radius}" fill="#ffffff"/></svg>`,
+  );
+}
+
+export async function generateBrandedQrPngBuffer(url, { logoPath = DEFAULT_QPMS_LOGO_PATH } = {}) {
+  const qrBuffer = await generatePlainQrPngBuffer(url);
+  try {
+    const logoSize = Math.round(QR_PNG_WIDTH * QR_LOGO_RATIO);
+    const backgroundSize = Math.round(QR_PNG_WIDTH * QR_LOGO_BACKGROUND_RATIO);
+    const backgroundOffset = Math.round((QR_PNG_WIDTH - backgroundSize) / 2);
+    const logoOffset = Math.round((QR_PNG_WIDTH - logoSize) / 2);
+    const logoBuffer = await sharp(logoPath)
+      .resize({ width: logoSize, height: logoSize, fit: 'inside', withoutEnlargement: true })
+      .png()
+      .toBuffer();
+
+    return sharp(qrBuffer)
+      .composite([
+        { input: roundedLogoBackgroundSvg(backgroundSize), left: backgroundOffset, top: backgroundOffset },
+        { input: logoBuffer, left: logoOffset, top: logoOffset },
+      ])
+      .png()
+      .toBuffer();
+  } catch (error) {
+    console.warn('[hospital-feedback-qr] Unable to apply QPMS logo; generated plain QR.', {
+      reason: error?.code || error?.name || 'logo_composition_failed',
+    });
+    return qrBuffer;
+  }
+}
+
+export async function generateQrPngDataUrl(url, options = {}) {
+  const buffer = await generateBrandedQrPngBuffer(url, options);
+  return `data:image/png;base64,${buffer.toString('base64')}`;
 }
 
 function genericInvalidQr() {

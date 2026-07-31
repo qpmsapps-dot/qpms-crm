@@ -1,15 +1,21 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import sharp from 'sharp';
 
 import {
   assertHospitalFeedbackQrAccess,
   clearPublicFeedbackSessions,
   createPublicFeedbackSession,
+  encryptPublicQrToken,
+  generateBrandedQrPngBuffer,
   generateHospitalFeedbackQr,
+  generatePlainQrPngBuffer,
   generatePublicQrToken,
   hashPublicQrToken,
   invalidQrResponse,
+  QR_ERROR_CORRECTION_LEVEL,
+  QR_PNG_WIDTH,
   resolvePublicHospitalFeedbackQr,
   verifyPublicFeedbackSession,
 } from '../services/hospitalFeedbackQrService.js';
@@ -92,6 +98,39 @@ test('migration prevents duplicate active QR codes at database level', () => {
   assert.match(migration, /status in \('active', 'inactive', 'replaced', 'revoked'\)/);
   assert.match(migration, /public_token_hash text not null/);
   assert.doesNotMatch(migration, /grant\s+select[\s\S]{0,120}to anon/i);
+});
+
+
+test('branded QR PNG contains the canonical public URL contract and uses high error correction', async () => {
+  const publicUrl = 'https://myqpms.example/public-feedback/q/test-token-123';
+  const branded = await generateBrandedQrPngBuffer(publicUrl);
+  const plain = await generatePlainQrPngBuffer(publicUrl);
+  const metadata = await sharp(branded).metadata();
+
+  assert.equal(QR_ERROR_CORRECTION_LEVEL, 'H');
+  assert.equal(metadata.format, 'png');
+  assert.equal(metadata.width, QR_PNG_WIDTH);
+  assert.equal(metadata.height, QR_PNG_WIDTH);
+  assert.notEqual(Buffer.compare(branded, plain), 0);
+});
+
+test('QR generation falls back to a plain PNG when the QPMS logo cannot be loaded', async () => {
+  const publicUrl = 'https://myqpms.example/public-feedback/q/fallback-token-123';
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args);
+  try {
+    const fallback = await generateBrandedQrPngBuffer(publicUrl, { logoPath: 'missing-qpms-logo.png' });
+    const plain = await generatePlainQrPngBuffer(publicUrl);
+    const metadata = await sharp(fallback).metadata();
+
+    assert.equal(metadata.width, QR_PNG_WIDTH);
+    assert.equal(Buffer.compare(fallback, plain), 0);
+    assert.match(String(warnings[0]?.[0] || ''), /Unable to apply QPMS logo/);
+    assert.doesNotMatch(JSON.stringify(warnings), /fallback-token-123/);
+  } finally {
+    console.warn = originalWarn;
+  }
 });
 
 test('valid active token returns public-safe location data and a short session', async () => {
@@ -215,6 +254,52 @@ test('QR generation reuses existing active QR and QR PNG uses the canonical publ
   assert.equal(result.qr_png_data_url, 'data:image/png;base64,TEST');
 });
 
+
+test('existing active QR token is reused without changing token security fields', async () => {
+  const token = generatePublicQrToken();
+  const expectedPublicUrl = resultPublicUrl(token);
+  let insertAttempted = false;
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_locations') return { data: locationRow(), error: null };
+    if (table === 'hospital_feedback_qr_codes' && mode === 'maybeSingle') {
+      return {
+        data: {
+          id: 'qr-existing',
+          status: 'active',
+          version: 3,
+          generated_at: '2026-07-31T10:00:00.000Z',
+          public_token_hash: hashPublicQrToken(token, env),
+          public_token_encrypted: encryptPublicQrToken(token, env),
+        },
+        error: null,
+      };
+    }
+    if (table === 'hospital_feedback_qr_codes' && mode === 'single') insertAttempted = true;
+    return { data: [], error: null };
+  });
+
+  const result = await generateHospitalFeedbackQr({
+    client,
+    authUser: { id: 'auth-admin' },
+    profile: { id: 'profile-admin', role: 'Admin' },
+    locationId: locationRow().id,
+    environment: env,
+    createQrPng: async (url) => {
+      assert.equal(url, expectedPublicUrl);
+      return 'data:image/png;base64,EXISTING';
+    },
+  });
+
+  assert.equal(result.existing, true);
+  assert.equal(result.public_url, expectedPublicUrl);
+  assert.equal(result.qr_png_data_url, 'data:image/png;base64,EXISTING');
+  assert.equal(insertAttempted, false);
+});
+
+function resultPublicUrl(token) {
+  return `https://myqpms.example/public-feedback/q/${encodeURIComponent(token)}`;
+}
+
 test('public session is generated only after success and expired sessions are rejected', () => {
   clearPublicFeedbackSessions();
   const now = new Date('2026-07-31T10:00:00Z');
@@ -230,6 +315,52 @@ test('public frontend route has no directory, noindex meta and scan instruction'
   assert.match(publicPage, /Please scan the QR code displayed at the hospital location/);
   assert.match(publicPage, /noindex, nofollow/);
   assert.doesNotMatch(publicPage, /hospitalId|locationId|blockId/);
+});
+
+
+
+test('public Phase 2 demo flow is bilingual, local-only and starts at language selection', () => {
+  assert.ok(publicPage.includes('Welcome!'));
+  assert.ok(publicPage.includes('\u0bb5\u0bb0\u0bb5\u0bc7\u0bb1\u0bcd\u0b95\u0bbf\u0bb1\u0bcb\u0bae\u0bcd!'));
+  assert.ok(publicPage.includes("hospital-feedback-qr:${token || 'missing'}:language"));
+  assert.ok(publicPage.includes("setCurrentStep('language')"));
+  assert.ok(publicPage.includes("setCurrentStep('location')"));
+  assert.ok(publicPage.includes("setCurrentStep('rating')"));
+  assert.ok(publicPage.includes("setCurrentStep('thankYou')"));
+  assert.ok(publicPage.includes("setCurrentStep('complete')"));
+  assert.ok(publicPage.includes('Location identified successfully.'));
+  assert.ok(publicPage.includes('\u0b87\u0b9f\u0bae\u0bcd \u0bb5\u0bc6\u0bb1\u0bcd\u0bb1\u0bbf\u0b95\u0bb0\u0bae\u0bbe\u0b95 \u0b95\u0ba3\u0bcd\u0b9f\u0bb1\u0bbf\u0baf\u0baa\u0bcd\u0baa\u0b9f\u0bcd\u0b9f\u0ba4\u0bc1.'));
+  assert.ok(publicPage.includes('How was your experience?'));
+  assert.ok(publicPage.includes('\u0b89\u0b99\u0bcd\u0b95\u0bb3\u0bcd \u0b85\u0ba9\u0bc1\u0baa\u0bb5\u0bae\u0bcd \u0b8e\u0baa\u0bcd\u0baa\u0b9f\u0bbf \u0b87\u0bb0\u0bc1\u0ba8\u0bcd\u0ba4\u0ba4\u0bc1?'));
+  assert.ok(publicPage.includes('Thank you!'));
+  assert.ok(publicPage.includes('\u0ba8\u0ba9\u0bcd\u0bb1\u0bbf!'));
+  assert.ok(publicPage.includes('verifyPublicHospitalFeedbackSession'));
+  assert.ok(publicPage.includes('selectedRating ? ('));
+  assert.ok(publicPage.includes('Please select one rating to continue.'));
+  assert.ok(publicPage.includes('\u0bae\u0bbf\u0b95\u0bb5\u0bc1\u0bae\u0bcd \u0bae\u0bcb\u0b9a\u0bae\u0bcd'));
+  assert.doesNotMatch(publicPage, /createHospitalTicket|createTicket|ticket_number|ticketNumber|feedbackApi|api\.post|publicApi\.post/);
+});
+
+test('public QR page preserves safe error states and public-safe location rendering', () => {
+  assert.ok(publicPage.includes('Invalid QR Code'));
+  assert.ok(publicPage.includes('\u0ba4\u0bb5\u0bb1\u0bbe\u0ba9 QR \u0b95\u0bc1\u0bb1\u0bbf\u0baf\u0bc0\u0b9f\u0bc1'));
+  assert.ok(publicPage.includes('Session expired'));
+  assert.ok(publicPage.includes('\u0b85\u0bae\u0bb0\u0bcd\u0bb5\u0bc1 \u0b95\u0bbe\u0bb2\u0bbe\u0bb5\u0ba4\u0bbf\u0baf\u0bbe\u0ba9\u0ba4\u0bc1'));
+  assert.ok(publicPage.includes('onRetry={loadQr}'));
+  assert.ok(publicPage.includes('[t.department, location.departmentName]'));
+  assert.ok(publicPage.includes('.filter(([, value]) => Boolean(value))'));
+  assert.doesNotMatch(publicPage, /hospitalId|blockId|floorId|locationId|employee|supervisor|ticketConfig/);
+});
+
+test('internal QR generator preview and download use the same branded PNG data URL', () => {
+  const generatorPage = readFileSync(new URL('../../src/pages/HospitalFeedbackQrGenerator.jsx', import.meta.url), 'utf8');
+  assert.match(generatorPage, /<img src={qr.qr_png_data_url}/);
+  assert.match(generatorPage, /link.href = qr.qr_png_data_url/);
+  assert.match(generatorPage, /Active/);
+  assert.match(generatorPage, /Hospital/);
+  assert.match(generatorPage, /Block/);
+  assert.match(generatorPage, /Floor/);
+  assert.match(generatorPage, /Location/);
 });
 
 test('public API bypasses authenticated interceptor and client input cannot choose location', () => {

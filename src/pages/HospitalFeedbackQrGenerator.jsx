@@ -1,4 +1,4 @@
-import { Clipboard, Download, QrCode, RefreshCw } from 'lucide-react';
+﻿import { Clipboard, Download, QrCode, RefreshCw, CheckCircle2, Link as LinkIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import { generateHospitalFeedbackQr, getHospitalFeedbackQrLocations } from '../services/api.js';
@@ -24,7 +24,7 @@ function SelectField({ label, value, onChange, options, disabled = false }) {
         value={value}
         onChange={(event) => onChange(event.target.value)}
         disabled={disabled}
-        className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-800 outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100 disabled:bg-slate-100"
+        className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100 disabled:bg-slate-100 disabled:text-slate-400"
       >
         <option value="">Select {label.toLowerCase()}</option>
         {options.map((option) => (
@@ -144,99 +144,119 @@ export default function HospitalFeedbackQrGenerator() {
     <div className="space-y-6">
       <PageHeader title="Hospital Feedback QR Generator" />
 
-      <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
-        <div className="enterprise-card-compact space-y-5 p-5">
-          {loading ? (
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-500">
-              <span className="button-spinner" />
-              Loading hospital locations...
-            </div>
-          ) : loadingError ? (
-            <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
-              {loadingError}
-            </div>
-          ) : (
-            <>
-              <div className="grid gap-4 md:grid-cols-2">
-                <SelectField label="Hospital" value={selection.hospitalId} onChange={(value) => updateSelection('hospitalId', value)} options={hospitals} />
-                <SelectField label="Block" value={selection.blockId} onChange={(value) => updateSelection('blockId', value)} options={blocks} disabled={!selection.hospitalId} />
-                <SelectField label="Floor" value={selection.floorId} onChange={(value) => updateSelection('floorId', value)} options={floors} disabled={!selection.blockId} />
-                <SelectField label="Location" value={selection.locationId} onChange={(value) => updateSelection('locationId', value)} options={locationOptions} disabled={!selection.blockId} />
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="enterprise-card-compact overflow-hidden">
+          <div className="border-b border-slate-100 bg-slate-50/80 px-5 py-4">
+            <h2 className="text-base font-bold text-slate-950">Select feedback location</h2>
+            <p className="mt-1 text-sm leading-6 text-slate-500">Generate the secure public QR for one active hospital location.</p>
+          </div>
+          <div className="space-y-5 p-5">
+            {loading ? (
+              <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-500">
+                <span className="button-spinner" />
+                Loading hospital locations...
               </div>
-
-              {selectedLocation ? (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                  <div className="font-bold text-slate-900">{selectedLocation.hospitalName}</div>
-                  <div>{[selectedLocation.blockName, selectedLocation.floorName, selectedLocation.departmentName, selectedLocation.locationName].filter(Boolean).join(' / ')}</div>
+            ) : loadingError ? (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+                {loadingError}
+              </div>
+            ) : (
+              <>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <SelectField label="Hospital" value={selection.hospitalId} onChange={(value) => updateSelection('hospitalId', value)} options={hospitals} />
+                  <SelectField label="Block" value={selection.blockId} onChange={(value) => updateSelection('blockId', value)} options={blocks} disabled={!selection.hospitalId} />
+                  <SelectField label="Floor" value={selection.floorId} onChange={(value) => updateSelection('floorId', value)} options={floors} disabled={!selection.blockId} />
+                  <SelectField label="Location" value={selection.locationId} onChange={(value) => updateSelection('locationId', value)} options={locationOptions} disabled={!selection.blockId} />
                 </div>
-              ) : null}
 
-              <button
-                type="button"
-                onClick={onGenerate}
-                disabled={!selection.locationId || generating}
-                className="inline-flex items-center gap-2 rounded-lg bg-qpms-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-qpms-800 disabled:bg-slate-400"
-              >
-                {generating ? <span className="button-spinner" /> : <QrCode className="h-4 w-4" />}
-                Generate QR
-              </button>
-            </>
-          )}
+                {selectedLocation ? (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-slate-700">
+                    <div className="flex items-start gap-3">
+                      <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" />
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-950">{selectedLocation.hospitalName}</div>
+                        <div className="mt-1 leading-6">{[selectedLocation.blockName, selectedLocation.floorName, selectedLocation.departmentName, selectedLocation.locationName].filter(Boolean).join(' / ')}</div>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
-          {message ? (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
-              {message}
-            </div>
-          ) : null}
-          {error ? (
-            <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
-              {error}
-            </div>
-          ) : null}
+                <button
+                  type="button"
+                  onClick={onGenerate}
+                  disabled={!selection.locationId || generating}
+                  className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-qpms-700 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-qpms-800 disabled:bg-slate-400 md:w-auto"
+                >
+                  {generating ? <span className="button-spinner" /> : <QrCode className="h-4 w-4" />}
+                  Generate QR
+                </button>
+              </>
+            )}
+
+            {message ? (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+                {message}
+              </div>
+            ) : null}
+            {error ? (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+                {error}
+              </div>
+            ) : null}
+          </div>
         </div>
 
-        <aside className="enterprise-card-compact p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-bold text-slate-950">QR Preview</h2>
+        <aside className="enterprise-card-compact overflow-hidden">
+          <div className="flex items-center justify-between border-b border-slate-100 bg-white px-5 py-4">
+            <div>
+              <h2 className="text-base font-bold text-slate-950">QR Preview</h2>
+              <p className="mt-1 text-xs font-semibold text-slate-500">Preview and PNG download use the same image.</p>
+            </div>
             {qr?.active ? <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-700">Active</span> : null}
           </div>
 
-          <div className="mt-4 grid aspect-square place-items-center rounded-lg border border-slate-200 bg-white p-4">
-            {qr?.qr_png_data_url ? (
-              <img src={qr.qr_png_data_url} alt="Hospital Feedback QR" className="h-full w-full object-contain" />
-            ) : (
-              <div className="text-center text-sm font-semibold text-slate-400">
-                Select a location and generate a QR.
-              </div>
-            )}
-          </div>
-
-          {qr?.public_url ? (
-            <div className="mt-4 space-y-3">
-              <label className="block">
-                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Public URL</span>
-                <input
-                  readOnly
-                  value={qr.public_url}
-                  className="mt-2 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"
-                />
-              </label>
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={onCopy} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700">
-                  <Clipboard className="h-4 w-4" />
-                  {copied ? 'Copied' : 'Copy'}
-                </button>
-                <button type="button" onClick={onDownload} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-bold text-white">
-                  <Download className="h-4 w-4" />
-                  Download PNG
-                </button>
-                <button type="button" onClick={onGenerate} disabled={generating} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700">
-                  <RefreshCw className="h-4 w-4" />
-                  Refresh
-                </button>
-              </div>
+          <div className="p-5">
+            <div className="grid aspect-square place-items-center rounded-2xl border border-slate-200 bg-white p-4 shadow-inner">
+              {qr?.qr_png_data_url ? (
+                <img src={qr.qr_png_data_url} alt="Hospital Feedback QR" className="h-full w-full object-contain" />
+              ) : (
+                <div className="grid justify-items-center text-center text-sm font-semibold text-slate-400">
+                  <QrCode className="mb-3 h-12 w-12 text-slate-300" />
+                  Select a location and generate a QR.
+                </div>
+              )}
             </div>
-          ) : null}
+
+            {qr?.public_url ? (
+              <div className="mt-4 space-y-3">
+                <label className="block">
+                  <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Public URL</span>
+                  <div className="mt-2 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <LinkIcon className="h-4 w-4 shrink-0 text-slate-400" />
+                    <input
+                      readOnly
+                      value={qr.public_url}
+                      className="min-w-0 flex-1 bg-transparent text-xs font-semibold text-slate-700 outline-none"
+                    />
+                  </div>
+                </label>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <button type="button" onClick={onCopy} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700">
+                    <Clipboard className="h-4 w-4" />
+                    {copied ? 'Copied' : 'Copy'}
+                  </button>
+                  <button type="button" onClick={onDownload} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-bold text-white">
+                    <Download className="h-4 w-4" />
+                    Download PNG
+                  </button>
+                  <button type="button" onClick={onGenerate} disabled={generating} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 disabled:text-slate-400">
+                    <RefreshCw className="h-4 w-4" />
+                    Refresh
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
         </aside>
       </section>
     </div>
