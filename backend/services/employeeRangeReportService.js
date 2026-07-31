@@ -467,10 +467,10 @@ function reimbursementModes({ attendance, legs, claims }) {
     if (label && !modes.includes(label)) modes.push(label);
   };
   legs.forEach((leg) => addMode(leg.travel_mode));
+  addMode(attendance.travel_mode);
   claims
     .filter((claim) => claim.claim_type !== 'parking')
     .forEach((claim) => addMode(claim.travel_mode));
-  if (!modes.length) addMode(attendance.travel_mode);
   return modes;
 }
 
@@ -520,7 +520,24 @@ function distanceReimbursement(attendance, legs = []) {
   };
 }
 
-function buildSiteVisitSummary(attendances, visitsByAttendance) {
+function reportFinalLegForAttendance(attendance, visits = [], legs = []) {
+  const lastVisit = [...visits]
+    .filter((visit) => visit.check_out_time)
+    .sort((left, right) => text(left.check_out_time).localeCompare(text(right.check_out_time)))
+    .at(-1);
+  if (!lastVisit || !attendance.logout_time) return null;
+  const checkout = new Date(lastVisit.check_out_time).getTime();
+  const logout = new Date(attendance.logout_time).getTime();
+  if (!Number.isFinite(checkout) || !Number.isFinite(logout)) return null;
+  return legs.find((leg) => {
+    const started = new Date(leg.started_at).getTime();
+    const ended = new Date(leg.ended_at).getTime();
+    return Number.isFinite(started) && Number.isFinite(ended) &&
+      Math.abs(started - checkout) <= 120000 && Math.abs(ended - logout) <= 120000;
+  }) || null;
+}
+
+function buildSiteVisitSummary(attendances, visitsByAttendance, legsByAttendance = new Map()) {
   return attendances.flatMap((attendance) => {
     const visits = [...(visitsByAttendance.get(attendance.id) || [])]
       .sort((left, right) =>
@@ -535,6 +552,9 @@ function buildSiteVisitSummary(attendances, visitsByAttendance) {
       check_in_time: attendance.login_time,
       check_out_time: null,
       visit_duration_minutes: null,
+      travel_from_previous: null,
+      route_km: 0,
+      missing_km: 0,
       approved_km: 0,
       review_status: null,
       remarks: 'Start of day',
@@ -550,6 +570,9 @@ function buildSiteVisitSummary(attendances, visitsByAttendance) {
         check_in_time: visit.check_in_time,
         check_out_time: visit.check_out_time,
         visit_duration_minutes: visit.visit_duration_minutes,
+        travel_from_previous: null,
+        route_km: rounded(visit.route_km),
+        missing_km: 0,
         approved_km: adjustment?.approved_km || 0,
         review_status: visit.metadata?.checkout_review_status || visit.status || null,
         remarks:
@@ -570,9 +593,26 @@ function buildSiteVisitSummary(attendances, visitsByAttendance) {
       check_in_time: null,
       check_out_time: attendance.logout_time,
       visit_duration_minutes: null,
+      travel_from_previous: visits.at(-1)
+        ? [visits.at(-1).store_name || visits.at(-1).site_name, visits.at(-1).client_name].filter(Boolean).join(' / ')
+        : null,
+      route_km: rounded(reportFinalLegForAttendance(
+        attendance,
+        visits,
+        legsByAttendance.get(attendance.id) || [],
+      )?.calculated_km),
+      missing_km: 0,
       approved_km: 0,
-      review_status: null,
-      remarks: ended ? 'End of day' : 'Attendance is still active',
+      review_status: reportFinalLegForAttendance(
+        attendance,
+        visits,
+        legsByAttendance.get(attendance.id) || [],
+      )?.status || null,
+      remarks: reportFinalLegForAttendance(
+        attendance,
+        visits,
+        legsByAttendance.get(attendance.id) || [],
+      )?.remarks || (ended ? 'End of day' : 'Attendance is still active'),
     });
     return rows;
   });
@@ -774,7 +814,7 @@ export function buildEmployeeRangeDataset({
     period,
     attendance_days: sortedAttendances,
     site_visits: safeVisits,
-    site_visit_summary: buildSiteVisitSummary(sortedAttendances, visitsByAttendance),
+    site_visit_summary: buildSiteVisitSummary(sortedAttendances, visitsByAttendance, legsByAttendance),
     travel_legs: safeTravelLegs,
     expense_claims: safeExpenseClaims,
     missing_checkout_adjustments: adjustments,

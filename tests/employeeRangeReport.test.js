@@ -77,7 +77,9 @@ test('excel_and_pdf_have_identical_counts_and_totals', () => {
     sheets.dailyAttendance.reduce((sum, row) => sum + row['Total Amount'], 0),
     sheets.periodSummary[0]['Total Amount'],
   );
-  assert.deepEqual(Object.keys(sheets.siteVisits[0]), ['Attendance Date', 'Site / Client', 'Check-In', 'Check-Out', 'Duration']);
+  assert.deepEqual(Object.keys(sheets.siteVisits[0]), [
+    'Attendance Date', 'Site / Client', 'Travel From Previous', 'Check-In', 'Check-Out', 'Duration', 'Route KM',
+  ]);
   assert.equal(sheets.travelClaims.length, 0);
 });
 

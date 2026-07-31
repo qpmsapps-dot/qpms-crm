@@ -5401,7 +5401,13 @@ function attendanceMetadata(attendance) {
 
 function finalReturnLegKmFromAttendance(attendance) {
   const metadata = attendanceMetadata(attendance);
+  const finalLeg = Array.isArray(metadata.travel_legs)
+    ? metadata.travel_legs.find((leg) => leg?.type === "last_checkout_to_end_day")
+    : null;
   return numberOrNull(
+    finalLeg?.km ??
+      finalLeg?.calculated_km ??
+      finalLeg?.payable_km ??
     metadata.final_return_leg_km ??
       metadata.finalReturnLegKm ??
       attendance?.final_return_leg_km,
@@ -9512,7 +9518,7 @@ function FieldOfficerDetailsView({
               <table className="mt-2 w-full border-collapse text-left text-xs">
                 <thead>
                   <tr className="bg-slate-100">
-                    {["Date", "Site / Client", "Check-in", "Check-out", "Duration"].map((heading) => (
+                    {["Date", "Site / Client", "Check-in", "Check-out", "Duration", "Travel from Previous", "Route KM"].map((heading) => (
                       <th key={heading} className="border border-slate-200 px-2 py-2">
                         {heading}
                       </th>
@@ -9528,7 +9534,7 @@ function FieldOfficerDetailsView({
                         {visitDate !== previousVisitDate ? (
                           <tr>
                             <td
-                              colSpan={5}
+                              colSpan={7}
                               className="border border-slate-200 bg-slate-50 px-2 py-1.5 font-black text-slate-700"
                             >
                               Attendance date: {visitDate}
@@ -9549,13 +9555,21 @@ function FieldOfficerDetailsView({
                           <td className="border border-slate-200 px-2 py-2">
                             {durationMinutesLabel(row.visit_duration_minutes)}
                           </td>
+                          <td className="border border-slate-200 px-2 py-2">
+                            {row.travel_from_previous || "--"}
+                          </td>
+                          <td className="border border-slate-200 px-2 py-2">
+                            {Number.isFinite(Number(row.route_km)) && Number(row.route_km) > 0
+                              ? `${Number(row.route_km).toFixed(2)} km`
+                              : "--"}
+                          </td>
                         </tr>
                       </Fragment>
                     );
                   })}
                   {!rangeDataset?.site_visit_summary?.length ? (
                     <tr>
-                      <td colSpan={5} className="border border-slate-200 px-2 py-5 text-center">
+                      <td colSpan={7} className="border border-slate-200 px-2 py-5 text-center">
                         No attendance sequence available.
                       </td>
                     </tr>

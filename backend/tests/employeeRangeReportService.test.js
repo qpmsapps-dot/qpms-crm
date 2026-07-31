@@ -625,3 +625,33 @@ test('selected_period_recalculation_returns_partial_failures_by_day', async () =
   assert.deepEqual(result.results.map((row) => row.outcome), ['updated', 'failed']);
   assert.equal(result.results[1].reason, 'KM recalculation failed for this attendance.');
 });
+
+test('site_visit_summary exposes the resolved final leg on End Day', () => {
+  const row = attendance('2026-07-30', 10, {
+    id: 'attendance-final',
+    login_time: '2026-07-30T04:00:00.000Z',
+    logout_time: '2026-07-30T12:45:00.000Z',
+  });
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'FO-TEST' },
+    period: kolkataPeriodBounds('2026-07-30', '2026-07-30'),
+    attendances: [row],
+    visits: [{
+      id: 'visit-final',
+      attendance_id: row.id,
+      site_name: 'Synthetic Last Site',
+      check_in_time: '2026-07-30T11:00:00.000Z',
+      check_out_time: '2026-07-30T12:28:00.000Z',
+      route_km: 3,
+      status: 'Completed',
+    }],
+    travelLegs: [travelLeg(row.id, 'bike', 4.25, 4, {
+      started_at: '2026-07-30T12:28:00.000Z',
+      ended_at: '2026-07-30T12:45:00.000Z',
+      calculated_km: 4.25,
+    })],
+  });
+  const endDay = dataset.site_visit_summary.find((item) => item.row_type === 'end_day');
+  assert.equal(endDay.travel_from_previous, 'Synthetic Last Site');
+  assert.equal(endDay.route_km, 4.25);
+});
