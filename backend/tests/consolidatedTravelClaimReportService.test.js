@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { PDFParse } from 'pdf-parse';
 import {
   buildConsolidatedTravelClaimReport,
   buildConsolidatedTravelClaimReportDataset,
@@ -298,6 +299,29 @@ test('service loads authorized rows and generates a PDF buffer', async () => {
   assert.equal(result.filename, 'QPMS_Consolidated_Travel_Claims_2026_08_01_to_2026_08_31.pdf');
 });
 
+test('PDF text extraction preserves rupee symbol and does not render currency as ¹', async () => {
+  const client = mockClient({
+    profiles,
+    employee_hierarchy: hierarchyRows,
+    fo_live_status: [],
+    fo_attendance: [attendance('a-bike-1', 'BIKE1', '2026-08-01', 10, 40)],
+    fo_travel_expense_claims: [claim('c-bus', 'a-bike-1', 70, { travel_mode: 'bus' })],
+  });
+  const result = await buildConsolidatedTravelClaimPdf(client, admin, {
+    date_from: '2026-08-01',
+    date_to: '2026-08-31',
+    state: 'All States',
+    business: 'All Business',
+    status: 'All Status',
+  }, '2026-08-31');
+  const parser = new PDFParse({ data: result.buffer });
+  const extracted = await parser.getText();
+  await parser.destroy();
+  assert.match(extracted.text, /₹\s*40\.00/);
+  assert.match(extracted.text, /₹\s*110\.00/);
+  assert.doesNotMatch(extracted.text, /¹\s*(40|110)\.00/);
+});
+
 test('PDF creates one page per state section plus final all-state summary page', async () => {
   const source = await readFile(
     new URL('../services/consolidatedTravelClaimPdfService.js', import.meta.url),
@@ -328,7 +352,7 @@ test('PDF creates one page per state section plus final all-state summary page',
   }, '2026-08-31');
   assert.equal(result.dataset.state_sections.length, 2);
   assert.match(source, /dataset\.state_sections\.forEach\(\(section, index\) => \{[\s\S]*?if \(index > 0\) \{[\s\S]*?doc\.addPage\(\);/);
-  assert.match(source, /doc\.addPage\(\);\s*drawAllStateSummary\(doc, dataset, fontName\);/);
+  assert.match(source, /doc\.addPage\(\);\s*drawAllStateSummary\(doc, dataset, fontName, rupeeFontName\);/);
   assert.equal(result.buffer.subarray(0, 4).toString(), '%PDF');
   assert.equal(result.dataset.totals.total_claim, 188);
 });

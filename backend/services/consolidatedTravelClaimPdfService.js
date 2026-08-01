@@ -6,11 +6,12 @@ import {
 
 const INDIA_TIME_ZONE = 'Asia/Kolkata';
 const UNICODE_FONT_CANDIDATES = [
-  'C:/Windows/Fonts/Nirmala.ttf',
   'C:/Windows/Fonts/arial.ttf',
+  '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
   '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
   '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
 ];
+const RUPEE_FONT_NAME = 'ReportRupee';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -64,17 +65,29 @@ export function consolidatedTravelClaimPdfFilename(filters = {}) {
 
 function registerUnicodeFont(doc) {
   const fontPath = UNICODE_FONT_CANDIDATES.find((candidate) => existsSync(candidate));
-  if (!fontPath) return 'Helvetica';
-  try {
-    doc.registerFont('ReportUnicode', fontPath);
-    return 'ReportUnicode';
-  } catch (error) {
-    console.warn('[Travel Claim PDF] Unicode font registration failed', {
-      fontPath,
-      message: error?.message || String(error),
-    });
-    return 'Helvetica';
+  if (!fontPath) {
+    const error = new Error('A Unicode PDF font with Indian rupee support was not found on the server.');
+    error.code = 'TRAVEL_CLAIM_PDF_RUPEE_FONT_MISSING';
+    error.checkedFontPaths = UNICODE_FONT_CANDIDATES;
+    throw error;
   }
+  try {
+    doc.registerFont(RUPEE_FONT_NAME, fontPath);
+    return RUPEE_FONT_NAME;
+  } catch (error) {
+    error.message = `Unable to register rupee-capable PDF font at ${fontPath}: ${error.message}`;
+    error.code = error.code || 'TRAVEL_CLAIM_PDF_RUPEE_FONT_REGISTER_FAILED';
+    error.fontPath = fontPath;
+    throw error;
+  }
+}
+
+function isCurrencyColumn(column = {}) {
+  return column.format === money;
+}
+
+function columnFontName(column, baseFontName, rupeeFontName) {
+  return isCurrencyColumn(column) ? rupeeFontName : baseFontName;
 }
 
 function drawFooter(doc, fontName) {
@@ -149,17 +162,16 @@ function rowHeight(doc, columns, row, fontName) {
   }));
 }
 
-function drawTableRow(doc, columns, row, x, y, height, fontName, shaded = false, bold = false) {
+function drawTableRow(doc, columns, row, x, y, height, fontName, rupeeFontName, shaded = false, bold = false) {
   const width = columns.reduce((sum, column) => sum + column.width, 0);
   doc.save();
   doc.rect(x, y, width, height).fill(shaded ? '#f8fafc' : '#ffffff');
   doc.strokeColor('#e2e8f0').lineWidth(0.5).rect(x, y, width, height).stroke();
-  doc.font(fontName).fontSize(8).fillColor('#0f172a');
-  if (bold) doc.fontSize(8.5);
   let currentX = x;
   for (const column of columns) {
     const raw = column.key === 'serial' ? row.serial : row[column.key];
     const value = column.format ? column.format(raw) : text(raw);
+    doc.font(columnFontName(column, fontName, rupeeFontName)).fontSize(bold ? 8.5 : 8).fillColor('#0f172a');
     doc.text(value, currentX + 4, y + 6, {
       width: column.width - 8,
       align: column.align || 'left',
@@ -202,7 +214,7 @@ function drawStateTitle(doc, section, fontName, y) {
   return y + 30;
 }
 
-function drawStateSection(doc, dataset, section, columns, fontName) {
+function drawStateSection(doc, dataset, section, columns, fontName, rupeeFontName) {
   const tableX = doc.page.margins.left;
   const tableBottom = doc.page.height - doc.page.margins.bottom - 24;
   let y = drawReportHeader(doc, dataset, fontName);
@@ -219,7 +231,7 @@ function drawStateSection(doc, dataset, section, columns, fontName) {
       y = drawStateTitle(doc, section, fontName, y);
       y = drawTableHeader(doc, columns, tableX, y, fontName);
     }
-    drawTableRow(doc, columns, row, tableX, y, height, fontName, index % 2 === 1);
+    drawTableRow(doc, columns, row, tableX, y, height, fontName, rupeeFontName, index % 2 === 1);
     y += height;
   });
 
@@ -241,10 +253,10 @@ function drawStateSection(doc, dataset, section, columns, fontName) {
     y = drawStateTitle(doc, section, fontName, y);
     y = drawTableHeader(doc, columns, tableX, y, fontName);
   }
-  drawTableRow(doc, columns, totalRow, tableX, y, totalHeight, fontName, true, true);
+  drawTableRow(doc, columns, totalRow, tableX, y, totalHeight, fontName, rupeeFontName, true, true);
 }
 
-function drawAllStateSummary(doc, dataset, fontName) {
+function drawAllStateSummary(doc, dataset, fontName, rupeeFontName) {
   const columns = summaryColumnHeaders();
   const tableX = doc.page.margins.left;
   const tableBottom = doc.page.height - doc.page.margins.bottom - 24;
@@ -270,7 +282,7 @@ function drawAllStateSummary(doc, dataset, fontName) {
       y += 30;
       y = drawTableHeader(doc, columns, tableX, y, fontName);
     }
-    drawTableRow(doc, columns, row, tableX, y, height, fontName, index % 2 === 1);
+    drawTableRow(doc, columns, row, tableX, y, height, fontName, rupeeFontName, index % 2 === 1);
     y += height;
   });
 
@@ -289,7 +301,7 @@ function drawAllStateSummary(doc, dataset, fontName) {
     y += 30;
     y = drawTableHeader(doc, columns, tableX, y, fontName);
   }
-  drawTableRow(doc, columns, grandTotal, tableX, y, totalHeight, fontName, true, true);
+  drawTableRow(doc, columns, grandTotal, tableX, y, totalHeight, fontName, rupeeFontName, true, true);
 }
 
 function renderPdf(dataset) {
@@ -309,18 +321,19 @@ function renderPdf(dataset) {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    const fontName = registerUnicodeFont(doc);
+    const rupeeFontName = registerUnicodeFont(doc);
+    const fontName = rupeeFontName;
     const columns = columnHeaders();
     dataset.state_sections.forEach((section, index) => {
       if (index > 0) {
         drawFooter(doc, fontName);
         doc.addPage();
       }
-      drawStateSection(doc, dataset, section, columns, fontName);
+      drawStateSection(doc, dataset, section, columns, fontName, rupeeFontName);
     });
     drawFooter(doc, fontName);
     doc.addPage();
-    drawAllStateSummary(doc, dataset, fontName);
+    drawAllStateSummary(doc, dataset, fontName, rupeeFontName);
     drawFooter(doc, fontName);
     doc.end();
   });
