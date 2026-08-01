@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
@@ -14,7 +15,10 @@ export const QR_ERROR_CORRECTION_LEVEL = 'H';
 const QR_LOGO_RATIO = 0.16;
 const QR_LOGO_BACKGROUND_RATIO = 0.22;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_QPMS_LOGO_PATH = path.resolve(__dirname, '../../src/assets/qpms-logo.png');
+const QPMS_LOGO_PATHS = [
+  path.resolve(__dirname, '../assets/qpms-logo.png'),
+  path.resolve(__dirname, '../../src/assets/qpms-logo.png'),
+];
 const sessionStore = new Map();
 
 function cleanText(value, max = 240) {
@@ -129,14 +133,24 @@ function roundedLogoBackgroundSvg(size) {
   );
 }
 
-export async function generateBrandedQrPngBuffer(url, { logoPath = DEFAULT_QPMS_LOGO_PATH } = {}) {
+function resolveQpmsLogoPath(environment = process.env) {
+  const configuredPath = cleanText(environment.HOSPITAL_FEEDBACK_QR_LOGO_PATH, 1000);
+  const candidates = configuredPath ? [path.resolve(configuredPath), ...QPMS_LOGO_PATHS] : QPMS_LOGO_PATHS;
+  return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
+}
+
+export async function generateBrandedQrPngBuffer(url, {
+  environment = process.env,
+  logoPath = resolveQpmsLogoPath(environment),
+} = {}) {
   const qrBuffer = await generatePlainQrPngBuffer(url);
+  const resolvedLogoPath = path.resolve(logoPath);
   try {
     const logoSize = Math.round(QR_PNG_WIDTH * QR_LOGO_RATIO);
     const backgroundSize = Math.round(QR_PNG_WIDTH * QR_LOGO_BACKGROUND_RATIO);
     const backgroundOffset = Math.round((QR_PNG_WIDTH - backgroundSize) / 2);
     const logoOffset = Math.round((QR_PNG_WIDTH - logoSize) / 2);
-    const logoBuffer = await sharp(logoPath)
+    const logoBuffer = await sharp(resolvedLogoPath)
       .resize({ width: logoSize, height: logoSize, fit: 'inside', withoutEnlargement: true })
       .png()
       .toBuffer();
@@ -151,6 +165,8 @@ export async function generateBrandedQrPngBuffer(url, { logoPath = DEFAULT_QPMS_
   } catch (error) {
     console.warn('[hospital-feedback-qr] Unable to apply QPMS logo; generated plain QR.', {
       reason: error?.code || error?.name || 'logo_composition_failed',
+      logoPath: resolvedLogoPath,
+      logoExists: fs.existsSync(resolvedLogoPath),
     });
     return qrBuffer;
   }
