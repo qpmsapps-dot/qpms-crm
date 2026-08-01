@@ -1,8 +1,17 @@
-﻿import { Clipboard, Download, QrCode, RefreshCw, CheckCircle2, Link as LinkIcon } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+﻿import { CheckCircle2, ChevronLeft, ChevronRight, Clipboard, Download, Eye, Link as LinkIcon, QrCode, RefreshCw, Search, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
-import { generateHospitalFeedbackQr, getHospitalFeedbackQrLocations } from '../services/api.js';
+import {
+  generateHospitalFeedbackQr,
+  getHospitalFeedbackQrLocations,
+  listHospitalFeedbackQrs,
+  previewHospitalFeedbackQr,
+  reprintHospitalFeedbackQr,
+} from '../services/api.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
+
+const QR_PAGE_SIZE = 20;
+const STATUS_OPTIONS = ['', 'active', 'inactive', 'replaced', 'revoked'];
 
 function uniqueOptions(rows, key, labelKey) {
   const seen = new Map();
@@ -35,6 +44,304 @@ function SelectField({ label, value, onChange, options, disabled = false }) {
   );
 }
 
+function formatDateTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return new Intl.DateTimeFormat('en-IN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+function statusBadgeClass(status) {
+  switch (status) {
+    case 'active': return 'bg-emerald-100 text-emerald-700';
+    case 'inactive': return 'bg-slate-100 text-slate-600';
+    case 'replaced': return 'bg-amber-100 text-amber-700';
+    case 'revoked': return 'bg-rose-100 text-rose-700';
+    default: return 'bg-slate-100 text-slate-600';
+  }
+}
+
+function downloadQr(qr) {
+  if (!qr?.qrPngDataUrl) return;
+  const link = document.createElement('a');
+  link.href = qr.qrPngDataUrl;
+  link.download = qr.suggestedFilename || `hospital-feedback-qr-${qr.qrId || 'download'}.png`;
+  link.click();
+}
+
+function RegistryFilters({ filters, setFilter, hospitals, blocks, onRefresh, loading }) {
+  return (
+    <div className="grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(160px,1fr)_minmax(140px,0.8fr)_minmax(140px,0.8fr)_minmax(140px,0.8fr)_minmax(140px,0.8fr)_auto]">
+      <label className="block">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Search</span>
+        <div className="mt-2 flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3">
+          <Search className="h-4 w-4 shrink-0 text-slate-400" />
+          <input
+            value={filters.search}
+            onChange={(event) => setFilter('search', event.target.value)}
+            placeholder="Search hospital, block, floor, location..."
+            className="min-w-0 flex-1 text-sm font-semibold text-slate-700 outline-none"
+          />
+        </div>
+      </label>
+      <SelectField label="Hospital" value={filters.hospitalId} onChange={(value) => setFilter('hospitalId', value)} options={hospitals} />
+      <SelectField label="Block" value={filters.blockId} onChange={(value) => setFilter('blockId', value)} options={blocks} disabled={!filters.hospitalId} />
+      <label className="block">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Status</span>
+        <select value={filters.status} onChange={(event) => setFilter('status', event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100">
+          {STATUS_OPTIONS.map((status) => <option key={status || 'all'} value={status}>{status ? status[0].toUpperCase() + status.slice(1) : 'All statuses'}</option>)}
+        </select>
+      </label>
+      <label className="block">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Generated from</span>
+        <input type="date" value={filters.dateFrom} onChange={(event) => setFilter('dateFrom', event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100" />
+      </label>
+      <label className="block">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Generated to</span>
+        <input type="date" value={filters.dateTo} onChange={(event) => setFilter('dateTo', event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100" />
+      </label>
+      <button type="button" onClick={onRefresh} disabled={loading} className="mt-6 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 disabled:opacity-50">
+        <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+        Refresh
+      </button>
+    </div>
+  );
+}
+
+function QrPreviewModal({ qr, loading, error, copied, onClose, onCopy, onReprint }) {
+  if (!qr && !loading && !error) return null;
+  const active = qr?.status === 'active';
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/60 px-4 py-6">
+      <section className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+          <h2 className="text-lg font-bold text-slate-950">QR Preview</h2>
+          <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center rounded-full border border-slate-200 text-slate-600"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="p-5">
+          {loading ? <div className="py-10 text-center text-sm font-bold text-slate-500"><span className="button-spinner" /> Loading QR preview...</div> : null}
+          {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</div> : null}
+          {qr ? (
+            <div className="grid gap-5 md:grid-cols-[260px_minmax(0,1fr)]">
+              <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-inner">
+                <img src={qr.qrPngDataUrl} alt="Hospital Feedback QR preview" className="aspect-square w-full object-contain" />
+              </div>
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusBadgeClass(qr.status)}`}>{qr.status}</span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">Version {qr.version}</span>
+                </div>
+                {[
+                  ['Hospital', qr.hospitalName],
+                  ['Block', qr.blockName],
+                  ['Floor', qr.floorName],
+                  ['Department', qr.departmentName],
+                  ['Location', qr.locationName],
+                  ['Generated', formatDateTime(qr.generatedAt)],
+                  ['Print count', qr.printCount],
+                ].filter(([, value]) => value !== '' && value !== null && value !== undefined).map(([label, value]) => (
+                  <div key={label}>
+                    <div className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</div>
+                    <div className="mt-1 text-sm font-bold text-slate-900">{value}</div>
+                  </div>
+                ))}
+                <label className="block">
+                  <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Public URL</span>
+                  <input readOnly value={qr.publicUrl || ''} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700" />
+                </label>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button type="button" onClick={onCopy} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700"><Clipboard className="h-4 w-4" />{copied ? 'Copied' : 'Copy URL'}</button>
+                  <button type="button" onClick={() => onReprint(qr.qrId)} disabled={!active} title={active ? '' : 'Only active QR codes can be reprinted'} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:bg-slate-300"><Download className="h-4 w-4" />Reprint / Download</button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function QrRegistry({ locations, refreshVersion }) {
+  const [filters, setFilters] = useState({ search: '', hospitalId: '', blockId: '', status: '', dateFrom: '', dateTo: '' });
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [items, setItems] = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, pageSize: QR_PAGE_SIZE, total: 0, totalPages: 1 });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [localRefresh, setLocalRefresh] = useState(0);
+  const [previewState, setPreviewState] = useState({ open: false, loading: false, qr: null, error: '' });
+  const [copiedId, setCopiedId] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(filters.search.trim()), 350);
+    return () => clearTimeout(timer);
+  }, [filters.search]);
+
+  const hospitals = useMemo(() => uniqueOptions(locations, 'hospitalId', 'hospitalName'), [locations]);
+  const blocks = useMemo(
+    () => uniqueOptions(locations.filter((row) => row.hospitalId === filters.hospitalId), 'blockId', 'blockName'),
+    [locations, filters.hospitalId],
+  );
+
+  const loadRegistry = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const result = await listHospitalFeedbackQrs({
+        search: debouncedSearch || undefined,
+        hospitalId: filters.hospitalId || undefined,
+        blockId: filters.blockId || undefined,
+        status: filters.status || undefined,
+        dateFrom: filters.dateFrom || undefined,
+        dateTo: filters.dateTo || undefined,
+        page,
+        pageSize: QR_PAGE_SIZE,
+      });
+      setItems(result.items || []);
+      setPagination(result.pagination || { page, pageSize: QR_PAGE_SIZE, total: 0, totalPages: 1 });
+    } catch (loadError) {
+      setError(loadError.message || 'Unable to load generated QR codes.');
+    } finally {
+      setLoading(false);
+    }
+  }, [debouncedSearch, filters.blockId, filters.dateFrom, filters.dateTo, filters.hospitalId, filters.status, page]);
+
+  useEffect(() => {
+    void Promise.resolve().then(loadRegistry);
+  }, [loadRegistry, refreshVersion, localRefresh]);
+
+  function setFilter(key, value) {
+    setPage(1);
+    setFilters((current) => {
+      const next = { ...current, [key]: value };
+      if (key === 'hospitalId') next.blockId = '';
+      return next;
+    });
+  }
+
+  async function openPreview(qrId) {
+    setPreviewState({ open: true, loading: true, qr: null, error: '' });
+    try {
+      const qr = await previewHospitalFeedbackQr(qrId);
+      setPreviewState({ open: true, loading: false, qr, error: '' });
+    } catch (previewError) {
+      setPreviewState({ open: true, loading: false, qr: null, error: previewError.message || 'Unable to preview this QR.' });
+    }
+  }
+
+  async function copyFromQr(qr) {
+    if (!qr?.publicUrl || !navigator.clipboard) return;
+    await navigator.clipboard.writeText(qr.publicUrl);
+    setCopiedId(qr.qrId || 'preview');
+    setTimeout(() => setCopiedId(''), 1600);
+  }
+
+  async function copyFromRow(item) {
+    try {
+      const qr = await previewHospitalFeedbackQr(item.qrId);
+      await copyFromQr(qr);
+    } catch (copyError) {
+      setError(copyError.message || 'Unable to copy QR URL.');
+    }
+  }
+
+  async function reprint(qrId) {
+    try {
+      const qr = await reprintHospitalFeedbackQr(qrId);
+      downloadQr(qr);
+      setPreviewState((current) => current.open && current.qr?.qrId === qrId ? { ...current, qr } : current);
+      setLocalRefresh((value) => value + 1);
+    } catch (reprintError) {
+      const message = reprintError.message || 'Unable to reprint this QR.';
+      if (previewState.open) setPreviewState((current) => ({ ...current, error: message }));
+      else setError(message);
+    }
+  }
+
+  return (
+    <section className="enterprise-card-compact overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-white px-5 py-4">
+        <div>
+          <h2 className="text-base font-bold text-slate-950">Generated QR Codes</h2>
+          <p className="mt-1 text-sm text-slate-500">Search and reprint existing Hospital Feedback QR codes.</p>
+        </div>
+        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{pagination.total || 0} records</span>
+      </div>
+      <div className="space-y-4 p-5">
+        <RegistryFilters filters={filters} setFilter={setFilter} hospitals={hospitals} blocks={blocks} onRefresh={() => setLocalRefresh((value) => value + 1)} loading={loading} />
+        {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</div> : null}
+        <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="min-w-[980px] w-full divide-y divide-slate-200 text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-bold uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-4 py-3">QR</th>
+                <th className="px-4 py-3">Hospital</th>
+                <th className="px-4 py-3">Block / Floor</th>
+                <th className="px-4 py-3">Location</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Generated</th>
+                <th className="px-4 py-3">Print Count</th>
+                <th className="px-4 py-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {loading ? (
+                <tr><td colSpan="8" className="px-4 py-8 text-center text-sm font-bold text-slate-500"><span className="button-spinner" /> Loading generated QR codes...</td></tr>
+              ) : items.length ? items.map((item) => {
+                const active = item.status === 'active';
+                return (
+                  <tr key={item.qrId} className="align-top">
+                    <td className="px-4 py-3"><button type="button" onClick={() => openPreview(item.qrId)} className="grid h-12 w-12 place-items-center rounded-xl border border-slate-200 bg-slate-50 text-qpms-700"><QrCode className="h-6 w-6" /></button></td>
+                    <td className="px-4 py-3"><div className="font-bold text-slate-950">{item.hospitalName || '-'}</div><div className="mt-1 text-xs font-semibold text-slate-500">v{item.version}</div></td>
+                    <td className="px-4 py-3"><div className="font-semibold text-slate-800">{item.blockName || '-'}</div><div className="mt-1 text-xs text-slate-500">{item.floorName || '-'}</div></td>
+                    <td className="px-4 py-3"><div className="font-semibold text-slate-900">{item.locationName || '-'}</div>{item.departmentName ? <div className="mt-1 text-xs text-slate-500">{item.departmentName}</div> : null}{item.locationCode ? <div className="mt-1 text-xs font-bold text-slate-400">{item.locationCode}</div> : null}</td>
+                    <td className="px-4 py-3"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusBadgeClass(item.status)}`}>{item.status}</span></td>
+                    <td className="px-4 py-3"><div className="font-semibold text-slate-800">{formatDateTime(item.generatedAt)}</div>{item.generatedByName ? <div className="mt-1 text-xs text-slate-500">By {item.generatedByName}</div> : null}{item.lastPrintedAt ? <div className="mt-1 text-xs text-slate-500">Last: {formatDateTime(item.lastPrintedAt)}</div> : null}</td>
+                    <td className="px-4 py-3 font-bold text-slate-900">{item.printCount || 0}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" onClick={() => openPreview(item.qrId)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-bold text-slate-700"><Eye className="h-3.5 w-3.5" />Preview</button>
+                        <button type="button" onClick={() => copyFromRow(item)} disabled={!active} title={active ? '' : 'Only active QR URLs can be copied'} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-bold text-slate-700 disabled:opacity-40"><Clipboard className="h-3.5 w-3.5" />{copiedId === item.qrId ? 'Copied' : 'Copy'}</button>
+                        <button type="button" onClick={() => reprint(item.qrId)} disabled={!active} title={active ? '' : 'Only active QR codes can be reprinted'} className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-2 text-xs font-bold text-white disabled:bg-slate-300"><Download className="h-3.5 w-3.5" />Reprint / Download</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              }) : (
+                <tr><td colSpan="8" className="px-4 py-8 text-center text-sm font-bold text-slate-500">No generated QR codes found.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm font-semibold text-slate-500">
+          <span>Page {pagination.page || 1} of {pagination.totalPages || 1}</span>
+          <div className="flex items-center gap-2">
+            <button type="button" disabled={page <= 1 || loading} onClick={() => setPage((value) => Math.max(1, value - 1))} className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 disabled:opacity-40"><ChevronLeft className="h-4 w-4" /></button>
+            <span className="grid h-9 min-w-9 place-items-center rounded-lg bg-qpms-700 px-3 text-xs font-bold text-white">{pagination.page || page}</span>
+            <button type="button" disabled={page >= (pagination.totalPages || 1) || loading} onClick={() => setPage((value) => value + 1)} className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 disabled:opacity-40"><ChevronRight className="h-4 w-4" /></button>
+          </div>
+        </div>
+      </div>
+      {previewState.open ? (
+        <QrPreviewModal
+          qr={previewState.qr}
+          loading={previewState.loading}
+          error={previewState.error}
+          copied={copiedId === (previewState.qr?.qrId || 'preview')}
+          onClose={() => setPreviewState({ open: false, loading: false, qr: null, error: '' })}
+          onCopy={() => copyFromQr(previewState.qr)}
+          onReprint={reprint}
+        />
+      ) : null}
+    </section>
+  );
+}
+
 export default function HospitalFeedbackQrGenerator() {
   usePageTitle('Hospital Feedback QR Generator');
   const [locations, setLocations] = useState([]);
@@ -46,6 +353,7 @@ export default function HospitalFeedbackQrGenerator() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [registryRefresh, setRegistryRefresh] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -118,6 +426,7 @@ export default function HospitalFeedbackQrGenerator() {
       const result = await generateHospitalFeedbackQr(selection.locationId);
       setQr(result);
       setMessage(result.message || 'QR is ready.');
+      setRegistryRefresh((value) => value + 1);
     } catch (generateError) {
       setError(generateError.message || 'Unable to generate QR.');
     } finally {
@@ -259,6 +568,8 @@ export default function HospitalFeedbackQrGenerator() {
           </div>
         </aside>
       </section>
+
+      <QrRegistry locations={locations} refreshVersion={registryRefresh} />
     </div>
   );
 }

@@ -471,6 +471,34 @@ export async function generateHospitalFeedbackQr(locationId) {
   return data.qr;
 }
 
+export async function listHospitalFeedbackQrs(params = {}) {
+  const data = await hospitalFeedbackQrRequest({
+    method: 'GET',
+    url: '/api/hospital-feedback/qr',
+    params,
+  });
+  return {
+    items: data.items || [],
+    pagination: data.pagination || { page: 1, pageSize: 20, total: 0, totalPages: 1 },
+  };
+}
+
+export async function previewHospitalFeedbackQr(qrId) {
+  const data = await hospitalFeedbackQrRequest({
+    method: 'GET',
+    url: `/api/hospital-feedback/qr/${encodeURIComponent(qrId)}/preview`,
+  });
+  return data.qr;
+}
+
+export async function reprintHospitalFeedbackQr(qrId) {
+  const data = await hospitalFeedbackQrRequest({
+    method: 'POST',
+    url: `/api/hospital-feedback/qr/${encodeURIComponent(qrId)}/reprint`,
+  });
+  return data.qr;
+}
+
 export async function resolvePublicHospitalFeedbackQr(token) {
   const response = await publicApi.get(`/api/public/hospital-feedback/qr/${encodeURIComponent(token)}`);
   return response.data;

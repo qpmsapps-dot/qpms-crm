@@ -3,7 +3,10 @@ import express from 'express';
 import {
   generateHospitalFeedbackQr,
   invalidQrResponse,
+  listHospitalFeedbackQrs,
   loadQrLocationOptions,
+  previewHospitalFeedbackQr,
+  reprintHospitalFeedbackQr,
   resolvePublicHospitalFeedbackQr,
   verifyPublicFeedbackSession,
 } from '../services/hospitalFeedbackQrService.js';
@@ -84,6 +87,20 @@ export function createHospitalFeedbackQrRouter({
     }
   });
 
+  router.get('/qr', requireAuth, async (request, response) => {
+    try {
+      const result = await listHospitalFeedbackQrs({
+        client: serviceClient,
+        authUser: request.authUser,
+        profile: request.profile,
+        filters: request.query || {},
+      });
+      response.json({ ok: true, ...result });
+    } catch (error) {
+      safeInternalError(response, error);
+    }
+  });
+
   router.post('/qr', requireAuth, async (request, response) => {
     try {
       const result = await generateHospitalFeedbackQr({
@@ -95,6 +112,38 @@ export function createHospitalFeedbackQrRouter({
         request,
       });
       response.status(result.existing ? 200 : 201).json({ ok: true, qr: result });
+    } catch (error) {
+      safeInternalError(response, error);
+    }
+  });
+
+  router.get('/qr/:qrId/preview', requireAuth, async (request, response) => {
+    try {
+      const result = await previewHospitalFeedbackQr({
+        client: serviceClient,
+        authUser: request.authUser,
+        profile: request.profile,
+        qrId: request.params.qrId,
+        environment,
+        request,
+      });
+      response.json({ ok: true, ...result });
+    } catch (error) {
+      safeInternalError(response, error);
+    }
+  });
+
+  router.post('/qr/:qrId/reprint', requireAuth, async (request, response) => {
+    try {
+      const result = await reprintHospitalFeedbackQr({
+        client: serviceClient,
+        authUser: request.authUser,
+        profile: request.profile,
+        qrId: request.params.qrId,
+        environment,
+        request,
+      });
+      response.json({ ok: true, ...result });
     } catch (error) {
       safeInternalError(response, error);
     }

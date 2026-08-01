@@ -14,8 +14,11 @@ import {
   generatePublicQrToken,
   hashPublicQrToken,
   invalidQrResponse,
+  listHospitalFeedbackQrs,
+  previewHospitalFeedbackQr,
   QR_ERROR_CORRECTION_LEVEL,
   QR_PNG_WIDTH,
+  reprintHospitalFeedbackQr,
   resolvePublicHospitalFeedbackQr,
   verifyPublicFeedbackSession,
 } from '../services/hospitalFeedbackQrService.js';
@@ -43,6 +46,7 @@ function locationRow(overrides = {}) {
     floor_id: '44444444-4444-4444-8444-444444444444',
     department_id: '55555555-5555-4555-8555-555555555555',
     location_name: 'Public Bathroom - B2',
+    location_code: 'LOC-B2',
     location_type: 'Washroom',
     is_active: true,
     floor_name: 'Second Floor',
@@ -65,12 +69,15 @@ class FakeQuery {
   select() { return this; }
   order() { return this; }
   eq(key, value) { this.filters[key] = value; return this; }
+  gte(key, value) { this.filters[`${key}__gte`] = value; return this; }
+  lte(key, value) { this.filters[`${key}__lte`] = value; return this; }
   in() { return this; }
   or() { return this; }
   limit() { return this.client.resolve(this.table, this.filters, this.payload, 'limit'); }
   maybeSingle() { return this.client.resolve(this.table, this.filters, this.payload, 'maybeSingle'); }
   single() { return this.client.resolve(this.table, this.filters, this.payload, 'single'); }
   insert(payload) { this.payload = payload; return this; }
+  update(payload) { this.payload = payload; return this; }
 }
 
 function fakeClient(resolver) {
@@ -183,7 +190,10 @@ test('invalid, inactive, replaced and revoked tokens return the same generic err
 test('unauthenticated public resolution is routed without auth, but generation requires auth', () => {
   assert.match(routes, /router\.get\('\/public\/qr\/:token', noStoreNoIndex, publicQrRateLimit/);
   assert.match(routes, /router\.get\('\/qr\/:token', noStoreNoIndex, publicQrRateLimit/);
+  assert.match(routes, /router\.get\('\/qr', requireAuth/);
   assert.match(routes, /router\.post\('\/qr', requireAuth/);
+  assert.match(routes, /router\.get\('\/qr\/:qrId\/preview', requireAuth/);
+  assert.match(routes, /router\.post\('\/qr\/:qrId\/reprint', requireAuth/);
   assert.match(routes, /router\.get\('\/qr\/locations', requireAuth/);
 });
 
@@ -300,6 +310,185 @@ function resultPublicUrl(token) {
   return `https://myqpms.example/public-feedback/q/${encodeURIComponent(token)}`;
 }
 
+function qrRow(overrides = {}) {
+  return {
+    id: '77777777-7777-4777-8777-777777777777',
+    location_id: locationRow().id,
+    status: 'active',
+    version: 1,
+    generated_at: '2026-07-31T10:00:00.000Z',
+    last_printed_at: null,
+    print_count: 0,
+    public_token_encrypted: encryptPublicQrToken(generatePublicQrToken(), env),
+    location: locationRow(),
+    generated_by_profile: { full_name: 'QR Admin' },
+    ...overrides,
+  };
+}
+
+test('QR registry list returns authorized paginated records without token fields', async () => {
+  const rows = [
+    qrRow({ id: '77777777-7777-4777-8777-777777777777', generated_at: '2026-07-31T10:00:00.000Z' }),
+    qrRow({
+      id: '88888888-8888-4888-8888-888888888888',
+      generated_at: '2026-07-30T10:00:00.000Z',
+      location: locationRow({ location_name: 'Ward Lobby', location_code: 'LOBBY-1' }),
+    }),
+  ];
+  const client = fakeClient(async (table, filters) => {
+    assert.equal(table, 'hospital_feedback_qr_codes');
+    assert.equal(filters.status, 'active');
+    return { data: rows, error: null };
+  });
+
+  const result = await listHospitalFeedbackQrs({
+    client,
+    authUser: { id: 'auth-admin' },
+    profile: { id: 'profile-admin', role: 'Admin' },
+    filters: { search: 'bathroom', status: 'active', page: 1, pageSize: 1 },
+  });
+
+  assert.equal(result.items.length, 1);
+  assert.equal(result.pagination.total, 1);
+  assert.equal(result.pagination.pageSize, 1);
+  assert.equal(result.items[0].locationName, 'Public Bathroom - B2');
+  assert.equal(result.items[0].locationCode, 'LOC-B2');
+  assert.equal('public_token_encrypted' in result.items[0], false);
+  assert.equal('public_token_hash' in result.items[0], false);
+  assert.equal('token' in result.items[0], false);
+});
+
+test('QR registry list applies hospital and date filters', async () => {
+  const allowedLocation = locationRow();
+  const otherLocation = locationRow({
+    id: '99999999-9999-4999-8999-999999999999',
+    client_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    block_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    location_name: 'Other Ward',
+  });
+  const client = fakeClient(async (table, filters) => {
+    if (table === 'hospital_feedback_qr_codes') {
+      assert.equal(filters.generated_at__gte, '2026-07-01T00:00:00.000Z');
+      assert.equal(filters.generated_at__lte, '2026-07-31T23:59:59.999Z');
+      return {
+        data: [
+          qrRow({ id: '77777777-7777-4777-8777-777777777777', location: allowedLocation }),
+          qrRow({ id: '88888888-8888-4888-8888-888888888888', location: otherLocation }),
+        ],
+        error: null,
+      };
+    }
+    return { data: null, error: null };
+  });
+
+  const result = await listHospitalFeedbackQrs({
+    client,
+    authUser: { id: 'auth-admin' },
+    profile: { id: 'profile-admin', role: 'Admin' },
+    filters: { hospitalId: allowedLocation.client_id, dateFrom: '2026-07-01', dateTo: '2026-07-31' },
+  });
+
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].hospitalId, allowedLocation.client_id);
+});
+
+test('QR preview and reprint reuse the encrypted token and branded QR without inserting a row', async () => {
+  const token = generatePublicQrToken();
+  let insertAttempted = false;
+  let updatePayload = null;
+  const row = qrRow({
+    public_token_encrypted: encryptPublicQrToken(token, env),
+    print_count: 2,
+    last_printed_at: null,
+  });
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes' && mode === 'maybeSingle') {
+      assert.equal(filters.id, row.id);
+      return { data: row, error: null };
+    }
+    if (table === 'hospital_feedback_qr_codes' && mode === 'single') {
+      updatePayload = payload;
+      return { data: { ...row, ...payload }, error: null };
+    }
+    if (table === 'hospital_feedback_qr_codes' && payload?.location_id) insertAttempted = true;
+    return { data: null, error: null };
+  });
+
+  const preview = await previewHospitalFeedbackQr({
+    client,
+    authUser: { id: 'auth-admin' },
+    profile: { id: 'profile-admin', role: 'Admin' },
+    qrId: row.id,
+    environment: env,
+    createQrPng: async (url) => {
+      assert.equal(url, resultPublicUrl(token));
+      return 'data:image/png;base64,PREVIEW';
+    },
+  });
+  const reprint = await reprintHospitalFeedbackQr({
+    client,
+    authUser: { id: 'auth-admin' },
+    profile: { id: 'profile-admin', role: 'Admin' },
+    qrId: row.id,
+    environment: env,
+    now: new Date('2026-08-01T10:00:00.000Z'),
+    createQrPng: async (url) => {
+      assert.equal(url, resultPublicUrl(token));
+      return 'data:image/png;base64,REPRINT';
+    },
+  });
+
+  assert.equal(preview.qr.publicUrl, resultPublicUrl(token));
+  assert.equal(preview.qr.qrPngDataUrl, 'data:image/png;base64,PREVIEW');
+  assert.equal(reprint.qr.publicUrl, resultPublicUrl(token));
+  assert.equal(reprint.qr.printCount, 3);
+  assert.equal(updatePayload.print_count, 3);
+  assert.equal(updatePayload.last_printed_at, '2026-08-01T10:00:00.000Z');
+  assert.equal(insertAttempted, false);
+});
+
+test('QR reprint rejects inactive replaced and revoked QR codes', async () => {
+  for (const status of ['inactive', 'replaced', 'revoked']) {
+    const row = qrRow({ status, public_token_encrypted: encryptPublicQrToken(generatePublicQrToken(), env) });
+    const client = fakeClient(async () => ({ data: row, error: null }));
+    await assert.rejects(
+      () => reprintHospitalFeedbackQr({
+        client,
+        authUser: { id: 'auth-admin' },
+        profile: { id: 'profile-admin', role: 'Admin' },
+        qrId: row.id,
+        environment: env,
+      }),
+      /active/,
+    );
+  }
+});
+
+test('QR reprint rejects authenticated users without hospital QR scope', async () => {
+  const row = qrRow({ public_token_encrypted: encryptPublicQrToken(generatePublicQrToken(), env) });
+  const client = fakeClient(async (table, _filters, _payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes' && mode === 'maybeSingle') return { data: row, error: null };
+    if (table.startsWith('access_')) {
+      const error = new Error('missing table');
+      error.code = '42P01';
+      return { data: null, error };
+    }
+    if (table === 'hospital_ticket_users') return { data: null, error: null };
+    return { data: [], error: null };
+  });
+
+  await assert.rejects(
+    () => reprintHospitalFeedbackQr({
+      client,
+      authUser: { id: 'auth-denied' },
+      profile: { role: 'Operations' },
+      qrId: row.id,
+      environment: env,
+    }),
+    /permission/,
+  );
+});
+
 test('public session is generated only after success and expired sessions are rejected', () => {
   clearPublicFeedbackSessions();
   const now = new Date('2026-07-31T10:00:00Z');
@@ -363,10 +552,26 @@ test('internal QR generator preview and download use the same branded PNG data U
   assert.match(generatorPage, /Location/);
 });
 
+test('internal QR registry renders search filters empty state and reprint actions', () => {
+  const generatorPage = readFileSync(new URL('../../src/pages/HospitalFeedbackQrGenerator.jsx', import.meta.url), 'utf8');
+  assert.match(generatorPage, /Generated QR Codes/);
+  assert.match(generatorPage, /No generated QR codes found\./);
+  assert.match(generatorPage, /setTimeout\(\(\) => setDebouncedSearch/);
+  assert.match(generatorPage, /setPage\(1\)/);
+  assert.match(generatorPage, /listHospitalFeedbackQrs/);
+  assert.match(generatorPage, /previewHospitalFeedbackQr/);
+  assert.match(generatorPage, /reprintHospitalFeedbackQr/);
+  assert.match(generatorPage, /Reprint \/ Download/);
+  assert.match(generatorPage, /setRegistryRefresh/);
+});
+
 test('public API bypasses authenticated interceptor and client input cannot choose location', () => {
   assert.match(api, /const publicApi = axios\.create/);
   assert.match(api, /\/api\/public\/hospital-feedback\/qr\//);
   assert.match(api, /resolvePublicHospitalFeedbackQr\(token\)/);
+  assert.match(api, /listHospitalFeedbackQrs\(params/);
+  assert.match(api, /previewHospitalFeedbackQr\(qrId\)/);
+  assert.match(api, /reprintHospitalFeedbackQr\(qrId\)/);
   assert.doesNotMatch(api, /resolvePublicHospitalFeedbackQr\(token, .*location/i);
   assert.match(routes, /Cache-Control/);
   assert.match(routes, /X-Robots-Tag/);

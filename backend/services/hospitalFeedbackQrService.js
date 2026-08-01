@@ -36,6 +36,17 @@ function cleanUuid(value, fieldName = 'id') {
   throw error;
 }
 
+function optionalUuid(value, fieldName = 'id') {
+  const text = cleanText(value, 80);
+  return text ? cleanUuid(text, fieldName) : '';
+}
+
+function integerOption(value, fallback, min, max) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) return fallback;
+  return parsed;
+}
+
 export function generatePublicQrToken() {
   return crypto.randomBytes(32).toString('base64url');
 }
@@ -199,6 +210,90 @@ function safeLocationFromRow(qrRow) {
     locationName: cleanText(location.location_name),
     locationType: cleanText(location.location_type),
   };
+}
+
+function safeLocationListFromRow(qrRow) {
+  const location = qrRow?.location || {};
+  const safe = safeLocationFromRow(qrRow);
+  return {
+    ...safe,
+    hospitalId: cleanText(location.client_id, 80),
+    blockId: cleanText(location.block_id, 80),
+    floorId: cleanText(location.floor_id, 80),
+    departmentId: cleanText(location.department_id, 80),
+    locationCode: cleanText(location.location_code),
+  };
+}
+
+function generatedByName(profile = {}) {
+  return cleanText(
+    profile?.full_name ||
+      profile?.display_name ||
+      profile?.name ||
+      profile?.email ||
+      '',
+  );
+}
+
+function qrListItem(row) {
+  const location = safeLocationListFromRow(row);
+  return {
+    qrId: row.id,
+    hospitalId: location.hospitalId,
+    hospitalName: location.hospitalName,
+    blockId: location.blockId,
+    blockName: location.blockName,
+    floorId: location.floorId,
+    floorName: location.floorName,
+    departmentName: location.departmentName,
+    locationName: location.locationName,
+    locationCode: location.locationCode,
+    locationType: location.locationType,
+    status: cleanText(row.status, 40),
+    version: Number(row.version || 1),
+    generatedAt: row.generated_at || null,
+    generatedByName: generatedByName(row.generated_by_profile),
+    lastPrintedAt: row.last_printed_at || null,
+    printCount: Number(row.print_count || 0),
+  };
+}
+
+function qrFilenamePart(value, fallback) {
+  return cleanText(value || fallback, 80)
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || fallback;
+}
+
+function qrSuggestedFilename(row) {
+  const location = safeLocationListFromRow(row);
+  return [
+    qrFilenamePart(location.hospitalName, 'Hospital'),
+    qrFilenamePart(location.blockName, 'Block'),
+    qrFilenamePart(location.floorName, 'Floor'),
+    qrFilenamePart(location.locationName || location.locationCode, 'Location'),
+    `QR_v${Number(row.version || 1)}`,
+  ].join('_').replace(/_+/g, '_').concat('.png');
+}
+
+function matchesQrSearch(row, search) {
+  const query = cleanText(search).toLowerCase();
+  if (!query) return true;
+  const location = safeLocationListFromRow(row);
+  return [
+    location.hospitalName,
+    location.blockName,
+    location.floorName,
+    location.departmentName,
+    location.locationName,
+    location.locationCode,
+    location.locationType,
+  ].some((value) => String(value || '').toLowerCase().includes(query));
+}
+
+function dateBoundary(value, endOfDay = false) {
+  const text = cleanText(value, 40);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  return `${text}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`;
 }
 
 function roleKey(profile = {}) {
@@ -412,6 +507,176 @@ export async function generateHospitalFeedbackQr({
   const response = qrResponse(inserted.data, token, environment, request, 'QR generated successfully.', false);
   response.qr_png_data_url = await createQrPng(response.public_url);
   return response;
+}
+
+const QR_REGISTRY_SELECT = [
+  'id',
+  'location_id',
+  'status',
+  'version',
+  'generated_at',
+  'last_printed_at',
+  'print_count',
+  'public_token_encrypted',
+  'location:hospital_locations(id,client_id,block_id,floor_id,department_id,location_name,location_code,location_type,is_active,floor_name,department_name,client:hospital_clients(id,client_name,is_active),block:hospital_blocks(id,block_name,is_active),floor:hospital_floors(id,floor_name,is_active),department:hospital_departments(id,department_name,is_active))',
+  'generated_by_profile:profiles(id,full_name,display_name,email)',
+].join(',');
+
+function applyQrRegistryFilters(query, filters = {}) {
+  const status = cleanText(filters.status, 40).toLowerCase();
+  const dateFrom = dateBoundary(filters.dateFrom);
+  const dateTo = dateBoundary(filters.dateTo, true);
+  if (['active', 'inactive', 'replaced', 'revoked'].includes(status)) {
+    query = query.eq('status', status);
+  }
+  if (dateFrom) query = query.gte('generated_at', dateFrom);
+  if (dateTo) query = query.lte('generated_at', dateTo);
+  return query;
+}
+
+function matchesQrRegistryFilters(row, filters = {}) {
+  const location = safeLocationListFromRow(row);
+  const hospitalId = optionalUuid(filters.hospitalId || filters.clientId, 'hospitalId');
+  const blockId = optionalUuid(filters.blockId, 'blockId');
+  if (hospitalId && location.hospitalId !== hospitalId) return false;
+  if (blockId && location.blockId !== blockId) return false;
+  return matchesQrSearch(row, filters.search);
+}
+
+export async function listHospitalFeedbackQrs({
+  client,
+  authUser,
+  profile,
+  filters = {},
+}) {
+  const page = integerOption(filters.page, 1, 1, 100000);
+  const pageSize = integerOption(filters.pageSize, 20, 1, 100);
+  let query = client
+    .from('hospital_feedback_qr_codes')
+    .select(QR_REGISTRY_SELECT)
+    .order('generated_at', { ascending: false });
+  query = applyQrRegistryFilters(query, filters);
+  const result = await query.limit(1000);
+  if (result.error) throw result.error;
+
+  const authorizedRows = [];
+  for (const row of result.data || []) {
+    if (!row?.location) continue;
+    if (!matchesQrRegistryFilters(row, filters)) continue;
+    try {
+      await assertHospitalFeedbackQrAccess({ client, authUser, profile, location: row.location, permission: 'view' });
+      authorizedRows.push(row);
+    } catch (error) {
+      if (error.statusCode !== 403) throw error;
+    }
+  }
+
+  const total = authorizedRows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * pageSize;
+  return {
+    items: authorizedRows.slice(start, start + pageSize).map(qrListItem),
+    pagination: {
+      page: safePage,
+      pageSize,
+      total,
+      totalPages,
+    },
+  };
+}
+
+async function loadQrForAuthenticatedAction({
+  client,
+  authUser,
+  profile,
+  qrId,
+  permission = 'view',
+}) {
+  const result = await client
+    .from('hospital_feedback_qr_codes')
+    .select(QR_REGISTRY_SELECT)
+    .eq('id', cleanUuid(qrId, 'qrId'))
+    .maybeSingle();
+  if (result.error) throw result.error;
+  if (!result.data?.location) {
+    const error = new Error('Hospital Feedback QR was not found.');
+    error.statusCode = 404;
+    error.code = 'hospital_feedback_qr_not_found';
+    throw error;
+  }
+  await assertHospitalFeedbackQrAccess({ client, authUser, profile, location: result.data.location, permission });
+  return result.data;
+}
+
+function existingQrToken(row, environment = process.env) {
+  const token = decryptPublicQrToken(row.public_token_encrypted, environment);
+  if (!token) {
+    const error = new Error('Existing QR token is unavailable for reprint.');
+    error.statusCode = 409;
+    error.code = 'hospital_feedback_qr_token_unavailable';
+    throw error;
+  }
+  return token;
+}
+
+function qrPayload(row, token, environment, request, qrPngDataUrl = '') {
+  const publicUrl = publicQrUrl(token, environment, request);
+  return {
+    qr: {
+      ...qrListItem(row),
+      publicUrl,
+      qrPngDataUrl,
+      suggestedFilename: qrSuggestedFilename(row),
+    },
+  };
+}
+
+export async function previewHospitalFeedbackQr({
+  client,
+  authUser,
+  profile,
+  qrId,
+  environment = process.env,
+  request = null,
+  createQrPng = generateQrPngDataUrl,
+}) {
+  const row = await loadQrForAuthenticatedAction({ client, authUser, profile, qrId, permission: 'view' });
+  const token = existingQrToken(row, environment);
+  const publicUrl = publicQrUrl(token, environment, request);
+  return qrPayload(row, token, environment, request, await createQrPng(publicUrl));
+}
+
+export async function reprintHospitalFeedbackQr({
+  client,
+  authUser,
+  profile,
+  qrId,
+  environment = process.env,
+  request = null,
+  now = new Date(),
+  createQrPng = generateQrPngDataUrl,
+}) {
+  const row = await loadQrForAuthenticatedAction({ client, authUser, profile, qrId, permission: 'generate' });
+  if (row.status !== 'active') {
+    const error = new Error('Only active Hospital Feedback QR codes can be reprinted.');
+    error.statusCode = 409;
+    error.code = 'hospital_feedback_qr_not_active';
+    throw error;
+  }
+  const token = existingQrToken(row, environment);
+  const publicUrl = publicQrUrl(token, environment, request);
+  const lastPrintedAt = now.toISOString();
+  const printCount = Number(row.print_count || 0) + 1;
+  const updateResult = await client
+    .from('hospital_feedback_qr_codes')
+    .update({ last_printed_at: lastPrintedAt, print_count: printCount })
+    .eq('id', row.id)
+    .select(QR_REGISTRY_SELECT)
+    .single();
+  if (updateResult.error) throw updateResult.error;
+  const updatedRow = updateResult.data || { ...row, last_printed_at: lastPrintedAt, print_count: printCount };
+  return qrPayload(updatedRow, token, environment, request, await createQrPng(publicUrl));
 }
 
 function publicSessionTtlMs(environment = process.env) {
