@@ -1,5 +1,5 @@
 ﻿import { CheckCircle2, ChevronLeft, ChevronRight, Clipboard, Download, Eye, Link as LinkIcon, QrCode, RefreshCw, Search, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Component, useCallback, useEffect, useMemo, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import {
   generateHospitalFeedbackQr,
@@ -165,7 +165,37 @@ function QrPreviewModal({ qr, loading, error, copied, onClose, onCopy, onReprint
   );
 }
 
-function QrRegistry({ locations, refreshVersion }) {
+class QrRegistryErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error) {
+    console.error('[hospital-feedback-qr] Registry render failed.', {
+      reason: error?.message || error?.name || 'registry_render_failed',
+    });
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-5">
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">
+            Unable to render generated QR codes. Please refresh.
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function QrRegistryBody({ locations = [], refreshVersion }) {
   const [filters, setFilters] = useState({ search: '', hospitalId: '', blockId: '', status: '', dateFrom: '', dateTo: '' });
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -264,15 +294,11 @@ function QrRegistry({ locations, refreshVersion }) {
   }
 
   return (
-    <section className="enterprise-card-compact overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-white px-5 py-4">
-        <div>
-          <h2 className="text-base font-bold text-slate-950">Generated QR Codes</h2>
-          <p className="mt-1 text-sm text-slate-500">Search and reprint existing Hospital Feedback QR codes.</p>
-        </div>
-        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{pagination.total || 0} records</span>
-      </div>
+    <>
       <div className="space-y-4 p-5">
+        <div className="flex justify-end">
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{pagination.total || 0} records</span>
+        </div>
         <RegistryFilters filters={filters} setFilter={setFilter} hospitals={hospitals} blocks={blocks} onRefresh={() => setLocalRefresh((value) => value + 1)} loading={loading} />
         {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</div> : null}
         <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -338,6 +364,20 @@ function QrRegistry({ locations, refreshVersion }) {
           onReprint={reprint}
         />
       ) : null}
+    </>
+  );
+}
+
+function QrRegistry({ locations, refreshVersion }) {
+  return (
+    <section className="enterprise-card-compact overflow-hidden">
+      <div className="border-b border-slate-100 bg-white px-5 py-4">
+        <h2 className="text-base font-bold text-slate-950">Generated QR Codes</h2>
+        <p className="mt-1 text-sm text-slate-500">Search and reprint existing Hospital Feedback QR codes.</p>
+      </div>
+      <QrRegistryErrorBoundary>
+        <QrRegistryBody locations={locations} refreshVersion={refreshVersion} />
+      </QrRegistryErrorBoundary>
     </section>
   );
 }
