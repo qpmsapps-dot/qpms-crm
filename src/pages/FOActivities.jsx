@@ -951,6 +951,11 @@ function numberOrNull(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function formatNumber(value, decimals = 2) {
+  const parsed = Number(value ?? 0);
+  return (Number.isFinite(parsed) ? parsed : 0).toFixed(decimals);
+}
+
 function isValidLatLng(lat, lng) {
   if (
     lat === null ||
@@ -3514,13 +3519,13 @@ function exportFilteredOperationsDashboardExcel({
           ? operationalStatusLabel(operationalStatus)
           : "Not Started",
         "Total Visits": dateVisits.length,
-        "Base Payable KM": basePayableKm.toFixed(2),
-        "Approved Missing KM Adjustment": approvedMissingKm.toFixed(2),
-        "Final Payable KM": finalPayableKm.toFixed(2),
+        "Base Payable KM": formatNumber(basePayableKm),
+        "Approved Missing KM Adjustment": formatNumber(approvedMissingKm),
+        "Final Payable KM": formatNumber(finalPayableKm),
         "Travel Mode": travelModeLabel(row?.travel_mode || officer.travelMode),
         "Petrol Amount": isCanonicalPetrolPending(row)
           ? "Pending canonical recalculation"
-          : Number(petrolAmountFromAttendance(row) || 0).toFixed(2),
+          : formatNumber(petrolAmountFromAttendance(row)),
         "Last Location Time": formatDateTime(lastLocationTime),
       });
     });
@@ -3562,10 +3567,10 @@ function exportFilteredOperationsDashboardExcel({
         "Check-Out Time": formatDateTime(siteVisitCheckoutValue(visit)),
         "Visit Status": siteVisitStatus(visit),
         "Visit Duration": siteVisitDuration(visit),
-        "Route KM / Payable KM": Number.isFinite(routeKm) ? routeKm.toFixed(2) : "",
+        "Route KM / Payable KM": Number.isFinite(routeKm) ? formatNumber(routeKm) : "",
         "Missing KM Detected": missingCheckoutKmLabel(visit),
-        "Approved Missing KM": missingEvidence.approvedKm.toFixed(2),
-        "Final Payable KM": finalPayableKm.toFixed(2),
+        "Approved Missing KM": formatNumber(missingEvidence.approvedKm),
+        "Final Payable KM": formatNumber(finalPayableKm),
         "Checkout Review Status": reviewStatus.label,
         "Approval Remarks / Approved By": [
           metadata.checkout_review_approval_remarks,
@@ -3619,11 +3624,11 @@ function exportFilteredOperationsDashboardExcel({
         "Current Status": operationalStatusLabel(summaryStatus),
         "Attendance Records": officerAttendances.length,
         "Total Visits": officerVisits.length,
-        "Base Payable KM": basePayableKm.toFixed(2),
-        "Approved Missing KM Adjustment": approvedMissingKm.toFixed(2),
-        "Final Payable KM": finalPayableKm.toFixed(2),
+        "Base Payable KM": formatNumber(basePayableKm),
+        "Approved Missing KM Adjustment": formatNumber(approvedMissingKm),
+        "Final Payable KM": formatNumber(finalPayableKm),
         "Travel Mode": officer.travelModeLabel || travelModeLabel(officer.travelMode),
-        "Petrol Amount": sumAttendancePetrolAmount(officerAttendances).toFixed(2),
+        "Petrol Amount": formatNumber(sumAttendancePetrolAmount(officerAttendances)),
         "Last Location Time": formatDateTime(
           latestAttendance?.last_location_time ||
             latestAttendance?.updated_at ||
@@ -3965,8 +3970,8 @@ async function _exportFoOperationsExcel({
         Accuracy: log.accuracy ?? "",
         Speed: log.speed ?? "",
         Battery: log.battery_percentage ?? "",
-        "Segment Distance KM": segmentKm.toFixed(3),
-        "Running KM": runningKm.toFixed(3),
+        "Segment Distance KM": formatNumber(segmentKm, 3),
+        "Running KM": formatNumber(runningKm, 3),
       });
       if (index > 0) {
         const gapMinutes =
@@ -3982,7 +3987,7 @@ async function _exportFoOperationsExcel({
             "Employee ID": foId,
             "FO Name": foName,
             Type: "GPS gap above 10 minutes",
-            Detail: `${gapMinutes.toFixed(0)} minutes`,
+            Detail: `${formatNumber(gapMinutes, 0)} minutes`,
             Time: formatDateTime(log.captured_at || log.logged_at),
           });
         }
@@ -3992,7 +3997,7 @@ async function _exportFoOperationsExcel({
           "Employee ID": foId,
           "FO Name": foName,
           Type: "Low GPS accuracy",
-          Detail: `${Number(log.accuracy).toFixed(1)} m`,
+          Detail: `${formatNumber(log.accuracy, 1)} m`,
           Time: formatDateTime(log.captured_at || log.logged_at),
         });
       }
@@ -4048,16 +4053,16 @@ async function _exportFoOperationsExcel({
         "Check-Out Longitude": checkoutPoint?.longitude ?? "",
         "GPS Accuracy":
           visit.checkin_accuracy ?? visit.current_gps_accuracy ?? "",
-        "Distance From Previous Site KM": distanceFromPrevious.toFixed(3),
-        "Running KM After Visit": runningVisitKm.toFixed(3),
-        "Distance From Start KM": distanceFromStart.toFixed(3),
+        "Distance From Previous Site KM": formatNumber(distanceFromPrevious, 3),
+        "Running KM After Visit": formatNumber(runningVisitKm, 3),
+        "Distance From Start KM": formatNumber(distanceFromStart, 3),
         "Missing KM Detected": missingCheckoutKmLabel(visit),
-        "Approved Missing KM": missingCheckoutEvidence(visit).approvedKm.toFixed(2),
-        "Final Payable KM": (
+        "Approved Missing KM": formatNumber(missingCheckoutEvidence(visit).approvedKm),
+        "Final Payable KM": formatNumber(
           (Number.isFinite(Number(visit.route_km)) && Number(visit.route_km) > 0
             ? Number(visit.route_km)
             : 0) + missingCheckoutEvidence(visit).approvedKm
-        ).toFixed(2),
+        ),
         "Checkout Review Status": checkoutReviewStatus(visit).label,
         "Approval Remarks / Approved By": [
           visit?.metadata?.checkout_review_approval_remarks,
@@ -4144,7 +4149,7 @@ async function _exportFoOperationsExcel({
         "Employee ID": foId,
         "FO Name": foName,
         Type: "Route vs actual travel mismatch",
-        Detail: `Route ${payableRouteKm.toFixed(2)} km vs actual travel ${calculatedKm.toFixed(2)} km`,
+        Detail: `Route ${formatNumber(payableRouteKm)} km vs actual travel ${formatNumber(calculatedKm)} km`,
         Time: "",
       });
     }
@@ -4157,25 +4162,25 @@ async function _exportFoOperationsExcel({
       "Start Time": formatDateTime(attendance.login_time),
       "End Time": formatDateTime(attendance.logout_time),
       "Attendance Status": attendance.status || officer.operationalStatusLabel || "",
-      "Raw GPS KM": safeKm.rawGpsKm.toFixed(2),
-      "Filtered GPS KM": safeKm.filteredGpsKm.toFixed(2),
-      "Actual Travel KM": safeKm.actualTravelKm.toFixed(2),
-      "Base Payable KM": basePayableKm.toFixed(2),
-      "Approved Missing KM Adjustment": approvedMissingKm.toFixed(2),
-      "Final Payable KM": eligibleKm.toFixed(2),
-      "Route vs Actual KM": (eligibleKm - safeKm.actualTravelKm).toFixed(2),
-      "Claim KM": eligibleKm.toFixed(2),
+      "Raw GPS KM": formatNumber(safeKm.rawGpsKm),
+      "Filtered GPS KM": formatNumber(safeKm.filteredGpsKm),
+      "Actual Travel KM": formatNumber(safeKm.actualTravelKm),
+      "Base Payable KM": formatNumber(basePayableKm),
+      "Approved Missing KM Adjustment": formatNumber(approvedMissingKm),
+      "Final Payable KM": formatNumber(eligibleKm),
+      "Route vs Actual KM": formatNumber(eligibleKm - safeKm.actualTravelKm),
+      "Claim KM": formatNumber(eligibleKm),
       "Travel Mode": travelModeLabel(exportTravelMode),
       "Rate Per KM": exportRatePerKm,
       "Petrol Amount": petrolAmount === null
         ? "Pending canonical recalculation"
-        : petrolAmount.toFixed(2),
+        : formatNumber(petrolAmount),
       "KM Confidence": safeKm.kmConfidence,
       "Review Required": safeKm.reviewRequired ? "Yes" : "No",
       "GPS Logs Count": safeKm.gpsLogsCount,
-      "Logs Per KM": safeKm.logsPerKm.toFixed(2),
-      "Average GPS Gap Seconds": safeKm.averageGapSeconds.toFixed(2),
-      "Max GPS Gap Seconds": safeKm.maxGapSeconds.toFixed(2),
+      "Logs Per KM": formatNumber(safeKm.logsPerKm),
+      "Average GPS Gap Seconds": formatNumber(safeKm.averageGapSeconds),
+      "Max GPS Gap Seconds": formatNumber(safeKm.maxGapSeconds),
       "Rejected Points Count": safeKm.rejectedPointsCount,
       "Adjustment Applied": safeKm.adjustmentApplied,
       "Total Sites Visited": visits.length,
