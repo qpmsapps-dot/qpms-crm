@@ -7405,9 +7405,28 @@ app.get('/api/fo/reports/consolidated-travel-claims/pdf', requireSupabaseJwt, as
     response.send(report.buffer);
   } catch (error) {
     const status = Number(error?.statusCode || 500);
+    console.error('[myQPMS Consolidated Travel Claim PDF] request failed', {
+      message: error?.message || String(error),
+      stack: error?.stack || null,
+      code: error?.code || null,
+      status,
+      details: error?.details || null,
+      hint: error?.hint || null,
+      query: {
+        date_from: request.query?.date_from || request.query?.from_date || null,
+        date_to: request.query?.date_to || request.query?.to_date || null,
+        state: request.query?.state || null,
+        business: request.query?.business || null,
+        status: request.query?.status || null,
+      },
+      actor: {
+        employee_code: request.profile?.employee_code || null,
+        role: request.profile?.role || null,
+      },
+    });
     if (status >= 500) {
       console.error(
-        '[myQPMS Consolidated Travel Claim PDF] request failed',
+        '[myQPMS Consolidated Travel Claim PDF] sanitized diagnostic',
         sanitizeSupabaseDiagnosticError(error),
       );
     }
@@ -7415,9 +7434,16 @@ app.get('/api/fo/reports/consolidated-travel-claims/pdf', requireSupabaseJwt, as
       ok: false,
       code: error.code || 'CONSOLIDATED_TRAVEL_CLAIM_PDF_FAILED',
       message:
-        status >= 500
+        status >= 500 && process.env.NODE_ENV === 'production'
           ? 'Consolidated travel claim PDF is temporarily unavailable. Please retry.'
           : error.message,
+      ...(process.env.NODE_ENV !== 'production'
+        ? {
+            stack: error?.stack || null,
+            details: error?.details || null,
+            hint: error?.hint || null,
+          }
+        : {}),
     });
   }
 });

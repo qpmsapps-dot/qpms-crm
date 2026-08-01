@@ -22,7 +22,7 @@ function number(value) {
 }
 
 function money(value) {
-  return `₹${number(value).toLocaleString('en-IN', {
+  return `\u20B9${number(value).toLocaleString('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;

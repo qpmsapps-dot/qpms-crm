@@ -485,7 +485,7 @@ export async function buildConsolidatedTravelClaimReport(client, actor, query, t
     fetchPaged(() => client.from('employee_hierarchy').select('*').eq('is_active', true)),
     fetchPaged(() => client
       .from('fo_attendance')
-      .select('id,fo_user_id,employee_code,display_name,full_name,username,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,actual_km,petrol_amount,rate_per_km,travel_mode')
+      .select('id,fo_user_id,employee_code,display_name,username,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,actual_km,petrol_amount,rate_per_km,travel_mode')
       .gte('attendance_date', filters.date_from)
       .lte('attendance_date', filters.date_to)),
   ]);

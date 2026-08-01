@@ -247,6 +247,15 @@ test('PDF route requires Supabase authentication and Excel export remains in the
   assert.match(pageSource, /Export Travel Claim PDF/);
 });
 
+test('attendance query uses only real fo_attendance columns', async () => {
+  const source = await readFile(
+    new URL('../services/operationsSummaryService.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /from\('fo_attendance'\)[\s\S]*?\.select\('id,fo_user_id,employee_code,display_name,username,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,actual_km,petrol_amount,rate_per_km,travel_mode'\)/);
+  assert.doesNotMatch(source, /fo_attendance'[\s\S]*?\.select\('[^']*full_name/);
+});
+
 test('PDF filename uses the report period', () => {
   assert.equal(
     consolidatedTravelClaimPdfFilename({ date_from: '2026-08-01', date_to: '2026-08-31' }),
