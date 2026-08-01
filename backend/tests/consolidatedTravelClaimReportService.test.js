@@ -5,6 +5,7 @@ import {
   buildConsolidatedTravelClaimReport,
   buildConsolidatedTravelClaimReportDataset,
   classifyTravelClaim,
+  normalizeTravelClaimReportState,
 } from '../services/operationsSummaryService.js';
 import {
   buildConsolidatedTravelClaimPdf,
@@ -152,6 +153,93 @@ test('state and business restrictions are enforced by actor scope', () => {
   assert.equal(report.rows.some((row) => row.employee_code === 'BIKE1'), true);
 });
 
+test('state aliases normalize without splitting KL Kerala and preserve AP split conventions', () => {
+  assert.deepEqual(normalizeTravelClaimReportState('KL'), {
+    state_name: 'Kerala',
+    state_code: 'KL',
+    state_key: 'KL',
+  });
+  assert.deepEqual(normalizeTravelClaimReportState('Kerala'), {
+    state_name: 'Kerala',
+    state_code: 'KL',
+    state_key: 'KL',
+  });
+  assert.deepEqual(normalizeTravelClaimReportState('TG'), {
+    state_name: 'Telangana',
+    state_code: 'TG',
+    state_key: 'TG',
+  });
+  assert.deepEqual(normalizeTravelClaimReportState('AP-1'), {
+    state_name: 'AP-1',
+    state_code: 'AP-1',
+    state_key: 'AP-1',
+  });
+});
+
+test('multiple states produce sorted sections with one employee row per state employee', () => {
+  const report = buildConsolidatedTravelClaimReportDataset({
+    actor: admin,
+    profiles: [
+      { employee_code: 'KL-A', full_name: 'Able Kerala', role: 'FO', state: 'KL', business: 'HDFC', status: 'active', is_active: true },
+      { employee_code: 'KL-B', full_name: 'Beta Kerala', role: 'FO', state: 'Kerala', business: 'HDFC', status: 'active', is_active: true },
+      { employee_code: 'TN-A', full_name: 'Alpha Tamil', role: 'FO', state: 'Tamil Nadu', business: 'HDFC', status: 'active', is_active: true },
+      { employee_code: 'TG-A', full_name: 'Alpha Telangana', role: 'FO', state: 'TG', business: 'HDFC', status: 'active', is_active: true },
+    ],
+    hierarchyRows: [],
+    liveRows: [],
+    attendances: [
+      attendance('a-kl-a-1', 'KL-A', '2026-08-01', 10, 40),
+      attendance('a-kl-a-2', 'KL-A', '2026-08-02', 5, 20),
+      attendance('a-kl-b-1', 'KL-B', '2026-08-01', 3, 12),
+      attendance('a-tn-a-1', 'TN-A', '2026-08-01', 7, 28),
+      attendance('a-tg-a-1', 'TG-A', '2026-08-01', 4, 16),
+    ],
+    claims: [
+      claim('c-kl-a', 'a-kl-a-1', 50),
+      claim('c-kl-b', 'a-kl-b-1', 25, { claim_type: 'parking', remarks: 'parking' }),
+      claim('c-tn-a', 'a-tn-a-1', 70),
+      claim('c-tg-a', 'a-tg-a-1', 15),
+    ],
+    filters: { date_from: '2026-08-01', date_to: '2026-08-31', state: null, business: 'HDFC', status: null },
+    generatedBy: admin,
+    generatedAt: new Date('2026-08-31T10:00:00.000Z'),
+  });
+  assert.deepEqual(report.state_sections.map((section) => section.state_name), ['Kerala', 'Tamil Nadu', 'Telangana']);
+  const kerala = report.state_sections.find((section) => section.state_code === 'KL');
+  assert.deepEqual(kerala.rows.map((row) => row.employee_code), ['KL-A', 'KL-B']);
+  assert.equal(new Set(report.rows.map((row) => row.employee_code)).size, report.rows.length);
+  assert.equal(kerala.totals.employee_count, 2);
+  assert.equal(kerala.totals.total_km_travelled, 18);
+  assert.equal(kerala.totals.distance_reimbursement, 72);
+  assert.equal(kerala.totals.other_transport_mode_amount, 50);
+  assert.equal(kerala.totals.parking_amount, 25);
+  assert.equal(kerala.totals.total_claim, 147);
+  const sectionTotalClaim = report.state_sections.reduce((sum, section) => sum + section.totals.total_claim, 0);
+  assert.equal(report.totals.total_claim, sectionTotalClaim);
+});
+
+test('selected state filter uses normalized state convention', () => {
+  const report = buildConsolidatedTravelClaimReportDataset({
+    actor: admin,
+    profiles: [
+      { employee_code: 'KL-A', full_name: 'Able Kerala', role: 'FO', state: 'Kerala', business: 'HDFC', status: 'active', is_active: true },
+      { employee_code: 'TN-A', full_name: 'Alpha Tamil', role: 'FO', state: 'TN', business: 'HDFC', status: 'active', is_active: true },
+    ],
+    hierarchyRows: [],
+    liveRows: [],
+    attendances: [
+      attendance('a-kl-a-1', 'KL-A', '2026-08-01', 10, 40),
+      attendance('a-tn-a-1', 'TN-A', '2026-08-01', 7, 28),
+    ],
+    claims: [],
+    filters: { date_from: '2026-08-01', date_to: '2026-08-31', state: 'KL', business: null, status: null },
+    generatedBy: admin,
+    generatedAt: new Date('2026-08-31T10:00:00.000Z'),
+  });
+  assert.deepEqual(report.state_sections.map((section) => section.state_code), ['KL']);
+  assert.deepEqual(report.rows.map((row) => row.employee_code), ['KL-A']);
+});
+
 test('empty result and grand totals are safe', () => {
   const report = dataset({
     filters: { date_from: '2026-08-01', date_to: '2026-08-31', state: 'KA', business: null, status: null },
@@ -208,6 +296,41 @@ test('service loads authorized rows and generates a PDF buffer', async () => {
   assert.equal(result.dataset.rows[0].total_claim, 110);
   assert.equal(result.buffer.subarray(0, 4).toString(), '%PDF');
   assert.equal(result.filename, 'QPMS_Consolidated_Travel_Claims_2026_08_01_to_2026_08_31.pdf');
+});
+
+test('PDF creates one page per state section plus final all-state summary page', async () => {
+  const source = await readFile(
+    new URL('../services/consolidatedTravelClaimPdfService.js', import.meta.url),
+    'utf8',
+  );
+  const client = mockClient({
+    profiles: [
+      { id: 'p-kl', employee_code: 'KL-A', full_name: 'Able Kerala', role: 'FO', state: 'KL', business: 'HDFC', status: 'active', is_active: true },
+      { id: 'p-tn', employee_code: 'TN-A', full_name: 'Alpha Tamil', role: 'FO', state: 'TN', business: 'HDFC', status: 'active', is_active: true },
+    ],
+    employee_hierarchy: [],
+    fo_live_status: [],
+    fo_attendance: [
+      attendance('a-kl-a-1', 'KL-A', '2026-08-01', 10, 40),
+      attendance('a-tn-a-1', 'TN-A', '2026-08-01', 7, 28),
+    ],
+    fo_travel_expense_claims: [
+      claim('c-kl-a', 'a-kl-a-1', 50),
+      claim('c-tn-a', 'a-tn-a-1', 70),
+    ],
+  });
+  const result = await buildConsolidatedTravelClaimPdf(client, admin, {
+    date_from: '2026-08-01',
+    date_to: '2026-08-31',
+    state: 'All States',
+    business: 'All Business',
+    status: 'All Status',
+  }, '2026-08-31');
+  assert.equal(result.dataset.state_sections.length, 2);
+  assert.match(source, /dataset\.state_sections\.forEach\(\(section, index\) => \{[\s\S]*?if \(index > 0\) \{[\s\S]*?doc\.addPage\(\);/);
+  assert.match(source, /doc\.addPage\(\);\s*drawAllStateSummary\(doc, dataset, fontName\);/);
+  assert.equal(result.buffer.subarray(0, 4).toString(), '%PDF');
+  assert.equal(result.dataset.totals.total_claim, 188);
 });
 
 test('empty PDF endpoint result rejects with structured no-data error', async () => {

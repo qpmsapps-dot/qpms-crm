@@ -16,6 +16,22 @@ export const TRAVEL_CLAIM_REPORT_INCLUDED_STATUSES = Object.freeze([
   'approved',
 ]);
 
+const STATE_ALIASES = new Map([
+  ['KL', { state_name: 'Kerala', state_code: 'KL' }],
+  ['KERALA', { state_name: 'Kerala', state_code: 'KL' }],
+  ['KA', { state_name: 'Karnataka', state_code: 'KA' }],
+  ['KARNATAKA', { state_name: 'Karnataka', state_code: 'KA' }],
+  ['TN', { state_name: 'Tamil Nadu', state_code: 'TN' }],
+  ['TAMILNADU', { state_name: 'Tamil Nadu', state_code: 'TN' }],
+  ['TAMIL NADU', { state_name: 'Tamil Nadu', state_code: 'TN' }],
+  ['TG', { state_name: 'Telangana', state_code: 'TG' }],
+  ['TS', { state_name: 'Telangana', state_code: 'TG' }],
+  ['TELANGANA', { state_name: 'Telangana', state_code: 'TG' }],
+  ['AP', { state_name: 'Andhra Pradesh', state_code: 'AP' }],
+  ['ANDHRAPRADESH', { state_name: 'Andhra Pradesh', state_code: 'AP' }],
+  ['ANDHRA PRADESH', { state_name: 'Andhra Pradesh', state_code: 'AP' }],
+]);
+
 function roleKey(value) {
   return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
 }
@@ -39,6 +55,62 @@ function number(value) {
 
 function rounded(value) {
   return Number(number(value).toFixed(2));
+}
+
+export function normalizeTravelClaimReportState(value) {
+  const raw = text(value);
+  if (!raw) return { state_name: 'Unknown', state_code: 'Unknown', state_key: 'UNKNOWN' };
+  const upper = raw.toUpperCase().replace(/\s+/g, ' ');
+  const compact = upper.replace(/[^A-Z0-9]+/g, '');
+  const apSplit = upper.match(/^AP[\s-]*(\d+)$/);
+  if (apSplit) {
+    const code = `AP-${apSplit[1]}`;
+    return { state_name: code, state_code: code, state_key: code };
+  }
+  const alias = STATE_ALIASES.get(upper) || STATE_ALIASES.get(compact);
+  if (alias) {
+    return { ...alias, state_key: alias.state_code };
+  }
+  return { state_name: raw, state_code: raw, state_key: raw.toUpperCase() };
+}
+
+function stateMatchesFilter(profile, filterState) {
+  if (!filterState) return true;
+  return normalizeTravelClaimReportState(profileValue(profile, 'state')).state_key ===
+    normalizeTravelClaimReportState(filterState).state_key;
+}
+
+function emptyTravelClaimTotals() {
+  return {
+    employee_count: 0,
+    total_km_travelled: 0,
+    distance_reimbursement: 0,
+    other_transport_mode_amount: 0,
+    parking_amount: 0,
+    total_claim: 0,
+  };
+}
+
+function addTravelClaimTotals(summary, row) {
+  return {
+    employee_count: summary.employee_count + 1,
+    total_km_travelled: rounded(summary.total_km_travelled + row.total_km_travelled),
+    distance_reimbursement: rounded(summary.distance_reimbursement + row.distance_reimbursement),
+    other_transport_mode_amount: rounded(summary.other_transport_mode_amount + row.other_transport_mode_amount),
+    parking_amount: rounded(summary.parking_amount + row.parking_amount),
+    total_claim: rounded(summary.total_claim + row.total_claim),
+  };
+}
+
+function finalizeTravelClaimTotals(totals) {
+  return {
+    ...totals,
+    total_claim: rounded(
+      totals.distance_reimbursement +
+      totals.other_transport_mode_amount +
+      totals.parking_amount,
+    ),
+  };
 }
 
 function profileValue(profile = {}, field) {
@@ -358,15 +430,19 @@ export function buildConsolidatedTravelClaimReportDataset({
     const date = text(attendance.attendance_date).slice(0, 10);
     if (date < filters.date_from || date > filters.date_to) continue;
     const profile = profilesByCode.get(code) || {};
-    if (filters.state && comparable(profileValue(profile, 'state')) !== comparable(filters.state)) continue;
+    if (filters.state && !stateMatchesFilter(profile, filters.state)) continue;
     if (filters.business && comparable(profileValue(profile, 'business')) !== comparable(filters.business)) continue;
     if (!statusMatches(attendance, filters.status, liveByEmployee)) continue;
 
     const payableKm = storedAttendancePayableKm(attendance);
     const distanceReimbursement = storedAttendancePetrolAmount(attendance, payableKm);
+    const normalizedState = normalizeTravelClaimReportState(profileValue(profile, 'state'));
     const row = rowsByEmployee.get(code) || {
       employee_code: code,
       employee_name: displayNameForEmployee(attendance, profile),
+      state_name: normalizedState.state_name,
+      state_code: normalizedState.state_code,
+      state_key: normalizedState.state_key,
       total_km_travelled: 0,
       distance_reimbursement: 0,
       other_transport_mode_amount: 0,
@@ -415,33 +491,41 @@ export function buildConsolidatedTravelClaimReportDataset({
       };
     })
     .sort((left, right) =>
+      comparable(left.state_name).localeCompare(comparable(right.state_name)) ||
+      comparable(left.state_code).localeCompare(comparable(right.state_code)) ||
       comparable(left.employee_name).localeCompare(comparable(right.employee_name)) ||
       comparable(left.employee_code).localeCompare(comparable(right.employee_code)));
 
-  const totals = rows.reduce((summary, row) => ({
-    employee_count: summary.employee_count + 1,
-    total_km_travelled: rounded(summary.total_km_travelled + row.total_km_travelled),
-    distance_reimbursement: rounded(summary.distance_reimbursement + row.distance_reimbursement),
-    other_transport_mode_amount: rounded(summary.other_transport_mode_amount + row.other_transport_mode_amount),
-    parking_amount: rounded(summary.parking_amount + row.parking_amount),
-    total_claim: rounded(summary.total_claim + row.total_claim),
-  }), {
-    employee_count: 0,
-    total_km_travelled: 0,
-    distance_reimbursement: 0,
-    other_transport_mode_amount: 0,
-    parking_amount: 0,
-    total_claim: 0,
-  });
+  const sectionsByState = new Map();
+  for (const row of rows) {
+    const section = sectionsByState.get(row.state_key) || {
+      state_name: row.state_name,
+      state_code: row.state_code,
+      state_key: row.state_key,
+      rows: [],
+      totals: emptyTravelClaimTotals(),
+    };
+    section.rows.push(row);
+    section.totals = addTravelClaimTotals(section.totals, row);
+    sectionsByState.set(row.state_key, section);
+  }
 
-  totals.total_claim = rounded(
-    totals.distance_reimbursement +
-    totals.other_transport_mode_amount +
-    totals.parking_amount,
+  const state_sections = [...sectionsByState.values()]
+    .map((section) => ({
+      ...section,
+      totals: finalizeTravelClaimTotals(section.totals),
+    }))
+    .sort((left, right) =>
+      comparable(left.state_name).localeCompare(comparable(right.state_name)) ||
+      comparable(left.state_code).localeCompare(comparable(right.state_code)));
+
+  const totals = finalizeTravelClaimTotals(
+    rows.reduce((summary, row) => addTravelClaimTotals(summary, row), emptyTravelClaimTotals()),
   );
 
   return {
     rows,
+    state_sections,
     totals,
     applied_filters: {
       ...filters,
