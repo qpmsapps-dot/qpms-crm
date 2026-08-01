@@ -1,17 +1,31 @@
 import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import PDFDocument from 'pdfkit';
 import {
   buildConsolidatedTravelClaimReport,
 } from './operationsSummaryService.js';
 
 const INDIA_TIME_ZONE = 'Asia/Kolkata';
-const UNICODE_FONT_CANDIDATES = [
-  'C:/Windows/Fonts/arial.ttf',
-  '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
-  '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-  '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-];
+const SERVICE_DIR = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT_FROM_SERVICE = resolve(SERVICE_DIR, '..', '..');
+const RUPEE_FONT_PATH = resolve(SERVICE_DIR, '..', 'assets', 'fonts', 'NotoSans-Regular.ttf');
+const CWD_RUPEE_FONT_PATH = resolve(process.cwd(), 'assets', 'fonts', 'NotoSans-Regular.ttf');
+const UNICODE_FONT_CANDIDATES = [...new Set([
+  RUPEE_FONT_PATH,
+  CWD_RUPEE_FONT_PATH,
+  resolve(REPO_ROOT_FROM_SERVICE, 'backend', 'assets', 'fonts', 'NotoSans-Regular.ttf'),
+])];
 const RUPEE_FONT_NAME = 'ReportRupee';
+
+console.info('[Travel Claim PDF] Rupee font startup lookup', {
+  serviceDir: SERVICE_DIR,
+  processCwd: process.cwd(),
+  candidates: UNICODE_FONT_CANDIDATES.map((fontPath) => ({
+    fontPath,
+    exists: existsSync(fontPath),
+  })),
+});
 
 function text(value) {
   return String(value ?? '').trim();
@@ -65,10 +79,20 @@ export function consolidatedTravelClaimPdfFilename(filters = {}) {
 
 function registerUnicodeFont(doc) {
   const fontPath = UNICODE_FONT_CANDIDATES.find((candidate) => existsSync(candidate));
+  console.info('[Travel Claim PDF] Rupee font generation lookup', {
+    selectedFontPath: fontPath || null,
+    candidates: UNICODE_FONT_CANDIDATES.map((candidate) => ({
+      fontPath: candidate,
+      exists: existsSync(candidate),
+    })),
+  });
   if (!fontPath) {
     const error = new Error('A Unicode PDF font with Indian rupee support was not found on the server.');
     error.code = 'TRAVEL_CLAIM_PDF_RUPEE_FONT_MISSING';
     error.checkedFontPaths = UNICODE_FONT_CANDIDATES;
+    console.error('[Travel Claim PDF] Rupee font missing', {
+      attemptedFontPaths: UNICODE_FONT_CANDIDATES,
+    });
     throw error;
   }
   try {
