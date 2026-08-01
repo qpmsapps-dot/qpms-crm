@@ -679,6 +679,41 @@ export async function reprintHospitalFeedbackQr({
   return qrPayload(updatedRow, token, environment, request, await createQrPng(publicUrl));
 }
 
+export async function deleteHospitalFeedbackQr({
+  client,
+  authUser,
+  profile,
+  qrId,
+}) {
+  const row = await loadQrForAuthenticatedAction({ client, authUser, profile, qrId, permission: 'generate' });
+  const deleted = await client
+    .from('hospital_feedback_qr_codes')
+    .delete()
+    .eq('id', row.id)
+    .select('id')
+    .maybeSingle();
+  if (deleted.error) {
+    if (deleted.error.code === '23503') {
+      const error = new Error('QR deletion is blocked by linked records.');
+      error.statusCode = 409;
+      error.code = 'hospital_feedback_qr_delete_blocked';
+      throw error;
+    }
+    throw deleted.error;
+  }
+  if (!deleted.data) {
+    const error = new Error('Hospital Feedback QR was not found.');
+    error.statusCode = 404;
+    error.code = 'hospital_feedback_qr_not_found';
+    throw error;
+  }
+  return {
+    success: true,
+    message: 'QR deleted successfully.',
+    deletedQrId: row.id,
+  };
+}
+
 function publicSessionTtlMs(environment = process.env) {
   const minutes = Number(environment.HOSPITAL_FEEDBACK_PUBLIC_SESSION_MINUTES || 12);
   if (!Number.isFinite(minutes) || minutes < 1 || minutes > 30) return DEFAULT_SESSION_TTL_MS;

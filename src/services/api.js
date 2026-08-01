@@ -499,6 +499,13 @@ export async function reprintHospitalFeedbackQr(qrId) {
   return data.qr;
 }
 
+export async function deleteHospitalFeedbackQr(qrId) {
+  return hospitalFeedbackQrRequest({
+    method: 'DELETE',
+    url: `/api/hospital-feedback/qr/${encodeURIComponent(qrId)}`,
+  });
+}
+
 export async function resolvePublicHospitalFeedbackQr(token) {
   const response = await publicApi.get(`/api/public/hospital-feedback/qr/${encodeURIComponent(token)}`);
   return response.data;

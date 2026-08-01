@@ -1,7 +1,8 @@
-﻿import { CheckCircle2, ChevronLeft, ChevronRight, Clipboard, Download, Eye, Link as LinkIcon, QrCode, RefreshCw, Search, X } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, Clipboard, Download, Eye, Link as LinkIcon, QrCode, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { Component, useCallback, useEffect, useMemo, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import {
+  deleteHospitalFeedbackQr,
   generateHospitalFeedbackQr,
   getHospitalFeedbackQrLocations,
   listHospitalFeedbackQrs,
@@ -165,6 +166,54 @@ function QrPreviewModal({ qr, loading, error, copied, onClose, onCopy, onReprint
   );
 }
 
+function DeleteQrModal({ qr, deleting, error, onCancel, onConfirm }) {
+  if (!qr) return null;
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/60 px-4 py-6">
+      <section className="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
+        <div className="border-b border-rose-100 px-5 py-4">
+          <div className="flex items-start gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-rose-50 text-rose-700">
+              <Trash2 className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-slate-950">Delete QR?</h2>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                This will permanently delete this QR record. The existing printed QR will stop working. You can generate a new QR for this location afterward.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="space-y-4 p-5">
+          <div className="divide-y divide-slate-200 rounded-xl border border-slate-200 bg-slate-50">
+            {[
+              ['Hospital', qr.hospitalName],
+              ['Block', qr.blockName],
+              ['Floor', qr.floorName],
+              ['Location', qr.locationName],
+            ].map(([label, value]) => (
+              <div key={label} className="px-4 py-3">
+                <div className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</div>
+                <div className="mt-1 text-sm font-bold text-slate-950">{value || '-'}</div>
+              </div>
+            ))}
+          </div>
+          {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</div> : null}
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={onCancel} disabled={deleting} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-50">
+              Cancel
+            </button>
+            <button type="button" onClick={onConfirm} disabled={deleting} className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm disabled:bg-rose-300">
+              {deleting ? <span className="button-spinner" /> : <Trash2 className="h-4 w-4" />}
+              {deleting ? 'Deleting...' : 'Delete QR'}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 class QrRegistryErrorBoundary extends Component {
   constructor(props) {
     super(props);
@@ -195,7 +244,7 @@ class QrRegistryErrorBoundary extends Component {
   }
 }
 
-function QrRegistryBody({ locations = [], refreshVersion }) {
+function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
   const [filters, setFilters] = useState({ search: '', hospitalId: '', blockId: '', status: '', dateFrom: '', dateTo: '' });
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -203,8 +252,10 @@ function QrRegistryBody({ locations = [], refreshVersion }) {
   const [pagination, setPagination] = useState({ page: 1, pageSize: QR_PAGE_SIZE, total: 0, totalPages: 1 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [localRefresh, setLocalRefresh] = useState(0);
   const [previewState, setPreviewState] = useState({ open: false, loading: false, qr: null, error: '' });
+  const [deleteState, setDeleteState] = useState({ qr: null, deleting: false, error: '' });
   const [copiedId, setCopiedId] = useState('');
 
   useEffect(() => {
@@ -221,6 +272,7 @@ function QrRegistryBody({ locations = [], refreshVersion }) {
   const loadRegistry = useCallback(async () => {
     setLoading(true);
     setError('');
+    setNotice('');
     try {
       const result = await listHospitalFeedbackQrs({
         search: debouncedSearch || undefined,
@@ -277,6 +329,7 @@ function QrRegistryBody({ locations = [], refreshVersion }) {
       await copyFromQr(qr);
     } catch (copyError) {
       setError(copyError.message || 'Unable to copy QR URL.');
+      setNotice('');
     }
   }
 
@@ -289,7 +342,31 @@ function QrRegistryBody({ locations = [], refreshVersion }) {
     } catch (reprintError) {
       const message = reprintError.message || 'Unable to reprint this QR.';
       if (previewState.open) setPreviewState((current) => ({ ...current, error: message }));
-      else setError(message);
+      else {
+        setError(message);
+        setNotice('');
+      }
+    }
+  }
+
+  async function confirmDelete() {
+    const target = deleteState.qr;
+    if (!target) return;
+    setDeleteState((current) => ({ ...current, deleting: true, error: '' }));
+    try {
+      const result = await deleteHospitalFeedbackQr(target.qrId);
+      setDeleteState({ qr: null, deleting: false, error: '' });
+      setPreviewState((current) => current.qr?.qrId === target.qrId ? { open: false, loading: false, qr: null, error: '' } : current);
+      setError('');
+      setNotice(result.message || 'QR deleted successfully.');
+      setLocalRefresh((value) => value + 1);
+      onQrDeleted?.(target.qrId);
+    } catch (deleteError) {
+      setDeleteState((current) => ({
+        ...current,
+        deleting: false,
+        error: deleteError.message || 'Unable to delete this QR.',
+      }));
     }
   }
 
@@ -301,6 +378,7 @@ function QrRegistryBody({ locations = [], refreshVersion }) {
         </div>
         <RegistryFilters filters={filters} setFilter={setFilter} hospitals={hospitals} blocks={blocks} onRefresh={() => setLocalRefresh((value) => value + 1)} loading={loading} />
         {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</div> : null}
+        {notice ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800">{notice}</div> : null}
         <div className="overflow-x-auto rounded-xl border border-slate-200">
           <table className="min-w-[980px] w-full divide-y divide-slate-200 text-left text-sm">
             <thead className="bg-slate-50 text-xs font-bold uppercase tracking-wide text-slate-500">
@@ -334,6 +412,7 @@ function QrRegistryBody({ locations = [], refreshVersion }) {
                         <button type="button" onClick={() => openPreview(item.qrId)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-bold text-slate-700"><Eye className="h-3.5 w-3.5" />Preview</button>
                         <button type="button" onClick={() => copyFromRow(item)} disabled={!active} title={active ? '' : 'Only active QR URLs can be copied'} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-bold text-slate-700 disabled:opacity-40"><Clipboard className="h-3.5 w-3.5" />{copiedId === item.qrId ? 'Copied' : 'Copy'}</button>
                         <button type="button" onClick={() => reprint(item.qrId)} disabled={!active} title={active ? '' : 'Only active QR codes can be reprinted'} className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-2 text-xs font-bold text-white disabled:bg-slate-300"><Download className="h-3.5 w-3.5" />Reprint / Download</button>
+                        <button type="button" onClick={() => setDeleteState({ qr: item, deleting: false, error: '' })} className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs font-bold text-rose-700"><Trash2 className="h-3.5 w-3.5" />Delete</button>
                       </div>
                     </td>
                   </tr>
@@ -364,11 +443,20 @@ function QrRegistryBody({ locations = [], refreshVersion }) {
           onReprint={reprint}
         />
       ) : null}
+      <DeleteQrModal
+        qr={deleteState.qr}
+        deleting={deleteState.deleting}
+        error={deleteState.error}
+        onCancel={() => {
+          if (!deleteState.deleting) setDeleteState({ qr: null, deleting: false, error: '' });
+        }}
+        onConfirm={confirmDelete}
+      />
     </>
   );
 }
 
-function QrRegistry({ locations, refreshVersion }) {
+function QrRegistry({ locations, refreshVersion, onQrDeleted }) {
   return (
     <section className="enterprise-card-compact overflow-hidden">
       <div className="border-b border-slate-100 bg-white px-5 py-4">
@@ -376,7 +464,7 @@ function QrRegistry({ locations, refreshVersion }) {
         <p className="mt-1 text-sm text-slate-500">Search and reprint existing Hospital Feedback QR codes.</p>
       </div>
       <QrRegistryErrorBoundary>
-        <QrRegistryBody locations={locations} refreshVersion={refreshVersion} />
+        <QrRegistryBody locations={locations} refreshVersion={refreshVersion} onQrDeleted={onQrDeleted} />
       </QrRegistryErrorBoundary>
     </section>
   );
@@ -487,6 +575,15 @@ export default function HospitalFeedbackQrGenerator() {
     link.href = qr.qr_png_data_url;
     link.download = `hospital-feedback-qr-${selection.locationId}.png`;
     link.click();
+  }
+
+  function onRegistryQrDeleted(deletedQrId) {
+    if (qr?.id === deletedQrId) {
+      setQr(null);
+      setCopied(false);
+    }
+    setMessage('QR deleted successfully.');
+    setRegistryRefresh((value) => value + 1);
   }
 
   return (
@@ -609,7 +706,7 @@ export default function HospitalFeedbackQrGenerator() {
         </aside>
       </section>
 
-      <QrRegistry locations={locations} refreshVersion={registryRefresh} />
+      <QrRegistry locations={locations} refreshVersion={registryRefresh} onQrDeleted={onRegistryQrDeleted} />
     </div>
   );
 }

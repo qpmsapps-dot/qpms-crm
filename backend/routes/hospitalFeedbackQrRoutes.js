@@ -1,6 +1,7 @@
 import express from 'express';
 
 import {
+  deleteHospitalFeedbackQr,
   generateHospitalFeedbackQr,
   invalidQrResponse,
   listHospitalFeedbackQrs,
@@ -144,6 +145,20 @@ export function createHospitalFeedbackQrRouter({
         request,
       });
       response.json({ ok: true, ...result });
+    } catch (error) {
+      safeInternalError(response, error);
+    }
+  });
+
+  router.delete('/qr/:qrId', requireAuth, async (request, response) => {
+    try {
+      const result = await deleteHospitalFeedbackQr({
+        client: serviceClient,
+        authUser: request.authUser,
+        profile: request.profile,
+        qrId: request.params.qrId,
+      });
+      response.json(result);
     } catch (error) {
       safeInternalError(response, error);
     }

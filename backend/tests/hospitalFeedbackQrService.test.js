@@ -7,6 +7,7 @@ import {
   assertHospitalFeedbackQrAccess,
   clearPublicFeedbackSessions,
   createPublicFeedbackSession,
+  deleteHospitalFeedbackQr,
   encryptPublicQrToken,
   generateBrandedQrPngBuffer,
   generateHospitalFeedbackQr,
@@ -78,6 +79,7 @@ class FakeQuery {
   single() { return this.client.resolve(this.table, this.filters, this.payload, 'single'); }
   insert(payload) { this.payload = payload; return this; }
   update(payload) { this.payload = payload; return this; }
+  delete() { this.payload = { __delete: true }; return this; }
 }
 
 function fakeClient(resolver) {
@@ -194,6 +196,7 @@ test('unauthenticated public resolution is routed without auth, but generation r
   assert.match(routes, /router\.post\('\/qr', requireAuth/);
   assert.match(routes, /router\.get\('\/qr\/:qrId\/preview', requireAuth/);
   assert.match(routes, /router\.post\('\/qr\/:qrId\/reprint', requireAuth/);
+  assert.match(routes, /router\.delete\('\/qr\/:qrId', requireAuth/);
   assert.match(routes, /router\.get\('\/qr\/locations', requireAuth/);
 });
 
@@ -489,6 +492,174 @@ test('QR reprint rejects authenticated users without hospital QR scope', async (
   );
 });
 
+test('authorized user can delete exactly one QR without returning token fields', async () => {
+  const row = qrRow();
+  let deleteCount = 0;
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes' && mode === 'maybeSingle' && !payload) {
+      assert.equal(filters.id, row.id);
+      return { data: row, error: null };
+    }
+    if (table === 'hospital_feedback_qr_codes' && mode === 'maybeSingle' && payload?.__delete) {
+      deleteCount += 1;
+      assert.equal(filters.id, row.id);
+      return { data: { id: row.id }, error: null };
+    }
+    return { data: null, error: null };
+  });
+
+  const result = await deleteHospitalFeedbackQr({
+    client,
+    authUser: { id: 'auth-admin' },
+    profile: { id: 'profile-admin', role: 'Admin' },
+    qrId: row.id,
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.deletedQrId, row.id);
+  assert.equal(deleteCount, 1);
+  assert.equal('public_token_encrypted' in result, false);
+  assert.equal('public_token_hash' in result, false);
+  assert.equal('token' in result, false);
+});
+
+test('QR delete rejects unauthorized users and other hospital scope', async () => {
+  const row = qrRow();
+  const client = fakeClient(async (table, _filters, _payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes' && mode === 'maybeSingle') return { data: row, error: null };
+    if (table.startsWith('access_')) {
+      const error = new Error('missing table');
+      error.code = '42P01';
+      return { data: null, error };
+    }
+    if (table === 'hospital_ticket_users') {
+      return { data: { id: 'hospital-user-b', client_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', role_code: 'operations_executive', is_active: true }, error: null };
+    }
+    if (table === 'hospital_ticket_user_scopes') {
+      return {
+        data: [{
+          client_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          scope_type: 'client',
+          can_view: true,
+          can_create: true,
+          can_update: true,
+        }],
+        error: null,
+      };
+    }
+    return { data: null, error: null };
+  });
+
+  await assert.rejects(
+    () => deleteHospitalFeedbackQr({
+      client,
+      authUser: { id: 'auth-other' },
+      profile: { role: 'Operations' },
+      qrId: row.id,
+    }),
+    /permission/,
+  );
+});
+
+test('QR delete returns not found invalid id and conflict safely', async () => {
+  const missingClient = fakeClient(async () => ({ data: null, error: null }));
+  await assert.rejects(
+    () => deleteHospitalFeedbackQr({
+      client: missingClient,
+      authUser: { id: 'auth-admin' },
+      profile: { id: 'profile-admin', role: 'Admin' },
+      qrId: '77777777-7777-4777-8777-777777777777',
+    }),
+    /not found/i,
+  );
+  await assert.rejects(
+    () => deleteHospitalFeedbackQr({
+      client: missingClient,
+      authUser: { id: 'auth-admin' },
+      profile: { id: 'profile-admin', role: 'Admin' },
+      qrId: 'not-a-uuid',
+    }),
+    /valid UUID/,
+  );
+
+  const row = qrRow();
+  const conflictClient = fakeClient(async (table, _filters, payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes' && mode === 'maybeSingle' && !payload) return { data: row, error: null };
+    if (table === 'hospital_feedback_qr_codes' && mode === 'maybeSingle' && payload?.__delete) {
+      const error = new Error('foreign key violation');
+      error.code = '23503';
+      return { data: null, error };
+    }
+    return { data: null, error: null };
+  });
+  await assert.rejects(
+    () => deleteHospitalFeedbackQr({
+      client: conflictClient,
+      authUser: { id: 'auth-admin' },
+      profile: { id: 'profile-admin', role: 'Admin' },
+      qrId: row.id,
+    }),
+    /blocked/,
+  );
+});
+
+test('deleted QR leaves registry and public token resolution unavailable while location can generate again', async () => {
+  const token = generatePublicQrToken();
+  let deleted = false;
+  let inserted = false;
+  const row = qrRow({ public_token_encrypted: encryptPublicQrToken(token, env) });
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes' && mode === 'maybeSingle' && payload?.__delete) {
+      deleted = true;
+      return { data: { id: row.id }, error: null };
+    }
+    if (table === 'hospital_feedback_qr_codes' && mode === 'maybeSingle' && filters.id) {
+      return { data: deleted ? null : row, error: null };
+    }
+    if (table === 'hospital_feedback_qr_codes' && mode === 'maybeSingle' && filters.public_token_hash) {
+      return { data: deleted ? null : row, error: null };
+    }
+    if (table === 'hospital_feedback_qr_codes' && mode === 'maybeSingle' && filters.location_id) {
+      return { data: deleted ? null : row, error: null };
+    }
+    if (table === 'hospital_feedback_qr_codes' && mode === 'limit') {
+      return { data: deleted ? [] : [row], error: null };
+    }
+    if (table === 'hospital_locations') return { data: locationRow(), error: null };
+    if (table === 'hospital_feedback_qr_codes' && mode === 'single' && payload?.location_id) {
+      inserted = true;
+      return { data: { id: 'new-qr', status: 'active', version: 1, generated_at: payload.generated_at }, error: null };
+    }
+    return { data: null, error: null };
+  });
+
+  await deleteHospitalFeedbackQr({
+    client,
+    authUser: { id: 'auth-admin' },
+    profile: { id: 'profile-admin', role: 'Admin' },
+    qrId: row.id,
+  });
+  const registry = await listHospitalFeedbackQrs({
+    client,
+    authUser: { id: 'auth-admin' },
+    profile: { id: 'profile-admin', role: 'Admin' },
+  });
+  const publicResult = await resolvePublicHospitalFeedbackQr({ client, token, environment: env });
+  const generated = await generateHospitalFeedbackQr({
+    client,
+    authUser: { id: 'auth-admin' },
+    profile: { id: 'profile-admin', role: 'Admin' },
+    locationId: locationRow().id,
+    environment: env,
+    createQrPng: async () => 'data:image/png;base64,NEW',
+  });
+
+  assert.equal(registry.items.length, 0);
+  assert.deepEqual(publicResult, invalidQrResponse());
+  assert.equal(inserted, true);
+  assert.equal(generated.existing, false);
+});
+
 test('public session is generated only after success and expired sessions are rejected', () => {
   clearPublicFeedbackSessions();
   const now = new Date('2026-07-31T10:00:00Z');
@@ -562,6 +733,10 @@ test('internal QR registry renders search filters empty state and reprint action
   assert.match(generatorPage, /previewHospitalFeedbackQr/);
   assert.match(generatorPage, /reprintHospitalFeedbackQr/);
   assert.match(generatorPage, /Reprint \/ Download/);
+  assert.match(generatorPage, /Delete QR\?/);
+  assert.match(generatorPage, /This will permanently delete this QR record/);
+  assert.match(generatorPage, /deleteHospitalFeedbackQr/);
+  assert.match(generatorPage, /onQrDeleted/);
   assert.match(generatorPage, /setRegistryRefresh/);
 });
 
@@ -572,6 +747,7 @@ test('public API bypasses authenticated interceptor and client input cannot choo
   assert.match(api, /listHospitalFeedbackQrs\(params/);
   assert.match(api, /previewHospitalFeedbackQr\(qrId\)/);
   assert.match(api, /reprintHospitalFeedbackQr\(qrId\)/);
+  assert.match(api, /deleteHospitalFeedbackQr\(qrId\)/);
   assert.doesNotMatch(api, /resolvePublicHospitalFeedbackQr\(token, .*location/i);
   assert.match(routes, /Cache-Control/);
   assert.match(routes, /X-Robots-Tag/);
