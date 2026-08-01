@@ -10415,6 +10415,8 @@ export default function FOActivities() {
   const [batchKmRecalcProgress, setBatchKmRecalcProgress] = useState(null);
   const [batchKmRecalcResume, setBatchKmRecalcResume] = useState(null);
   const [dashboardExportBusy, setDashboardExportBusy] = useState(false);
+  const [travelClaimPdfExportBusy, setTravelClaimPdfExportBusy] = useState(false);
+  const [travelClaimPdfExportError, setTravelClaimPdfExportError] = useState("");
   const [customFromDate, setCustomFromDate] = useState(
     toDateInputValue(new Date()),
   );
@@ -10863,6 +10865,57 @@ export default function FOActivities() {
       window.alert("Unable to export Operations report for the selected date range. Please retry.");
     } finally {
       setDashboardExportBusy(false);
+    }
+  }
+
+  async function exportTravelClaimPdf() {
+    if (travelClaimPdfExportBusy) return;
+    setTravelClaimPdfExportBusy(true);
+    setTravelClaimPdfExportError("");
+    try {
+      await authSessionManager().requireSession();
+      const query = operationsSummaryQuery({
+        dateFrom: selectedRange.fromDate,
+        dateTo: selectedRange.toDate,
+        state: stateFilter,
+        business: businessFilter,
+        status: statusFilter,
+      });
+      const response = await authenticatedFetch(
+        `${API_BASE_URL}/api/fo/reports/consolidated-travel-claims/pdf?${query}`,
+      );
+      const contentType = response.headers.get("content-type") || "";
+      if (!response.ok) {
+        let message = "Unable to export Travel Claim PDF for the selected filters.";
+        if (contentType.includes("application/json")) {
+          const payload = await response.json();
+          message = payload.message || message;
+        }
+        throw new Error(message);
+      }
+      const blob = await response.blob();
+      if (!blob.size) {
+        throw new Error("The generated Travel Claim PDF was empty. Please retry.");
+      }
+      const disposition = response.headers.get("content-disposition") || "";
+      const filenameMatch = /filename="?([^";]+)"?/i.exec(disposition);
+      const filename = filenameMatch?.[1] ||
+        `QPMS_Consolidated_Travel_Claims_${selectedRange.fromDate}_to_${selectedRange.toDate}.pdf`;
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      const message = error.message || "Unable to export Travel Claim PDF for the selected filters.";
+      console.warn("[myQPMS FO] Travel claim PDF export failed.", error);
+      setTravelClaimPdfExportError(message);
+      window.alert(message);
+    } finally {
+      setTravelClaimPdfExportBusy(false);
     }
   }
 
@@ -12197,7 +12250,7 @@ export default function FOActivities() {
       ) : null}
 
       <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-[0_10px_28px_rgba(15,23,42,0.05)] dark:border-slate-800 dark:bg-slate-900">
-        <div className="grid items-end gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto_auto]">
+        <div className="grid items-end gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto_auto_auto]">
           <label>
             <span className="text-[11px] font-bold uppercase text-slate-500">
               From Date
@@ -12301,6 +12354,16 @@ export default function FOActivities() {
               <FileSpreadsheet className="h-4 w-4" /> {dashboardExportBusy ? "Exporting..." : "Export Excel"}
             </button>
           </div>
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={exportTravelClaimPdf}
+              disabled={travelClaimPdfExportBusy}
+              className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-3 text-sm font-black text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Download className="h-4 w-4" /> {travelClaimPdfExportBusy ? "Generating..." : "Export Travel Claim PDF"}
+            </button>
+          </div>
           {canRunBatchKmRecalculation ? (
             <div className="flex items-end">
               <button
@@ -12331,6 +12394,11 @@ export default function FOActivities() {
             </div>
           ) : null}
         </div>
+        {travelClaimPdfExportError ? (
+          <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">
+            {travelClaimPdfExportError}
+          </div>
+        ) : null}
       </section>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">

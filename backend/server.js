@@ -61,6 +61,9 @@ import {
   normalizeOperationsSummaryFilters,
 } from './services/operationsSummaryService.js';
 import {
+  buildConsolidatedTravelClaimPdf,
+} from './services/consolidatedTravelClaimPdfService.js';
+import {
   loadAuthorizedEmployeeRange,
   recalculateEmployeeRange,
 } from './services/employeeRangeReportService.js';
@@ -80,7 +83,6 @@ import {
   leadResponse,
   loadLeadRelations,
   normalizeLeadPayload,
-  normalizeLeadRole,
   resolveAssignee,
   safeLeadAssignees,
   safeLeadMomSender,
@@ -7383,6 +7385,38 @@ app.get('/api/fo/operations/employee-range', requireSupabaseJwt, async (request,
       message:
         status >= 500
           ? 'Employee period report is temporarily unavailable. Please retry.'
+          : error.message,
+    });
+  }
+});
+
+app.get('/api/fo/reports/consolidated-travel-claims/pdf', requireSupabaseJwt, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const report = await buildConsolidatedTravelClaimPdf(
+      client,
+      request.profile,
+      request.query || {},
+      currentIndiaDateInput(),
+    );
+    response.setHeader('Content-Type', 'application/pdf');
+    response.setHeader('Content-Disposition', `attachment; filename="${report.filename}"`);
+    response.setHeader('Content-Length', String(report.buffer.length));
+    response.send(report.buffer);
+  } catch (error) {
+    const status = Number(error?.statusCode || 500);
+    if (status >= 500) {
+      console.error(
+        '[myQPMS Consolidated Travel Claim PDF] request failed',
+        sanitizeSupabaseDiagnosticError(error),
+      );
+    }
+    response.status(status).json({
+      ok: false,
+      code: error.code || 'CONSOLIDATED_TRAVEL_CLAIM_PDF_FAILED',
+      message:
+        status >= 500
+          ? 'Consolidated travel claim PDF is temporarily unavailable. Please retry.'
           : error.message,
     });
   }

@@ -10,6 +10,12 @@ const OPERATIONS_ROLES = new Set([
   'BUSINESSHEAD', 'KAM', 'KEYACCOUNTMANAGER', 'FO', 'FIELDOFFICER',
 ]);
 
+export const TRAVEL_CLAIM_REPORT_INCLUDED_STATUSES = Object.freeze([
+  'submitted',
+  'pending_review',
+  'approved',
+]);
+
 function roleKey(value) {
   return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
 }
@@ -24,6 +30,15 @@ function comparable(value) {
 
 function employeeKey(row = {}) {
   return text(row.employee_code || row.fo_user_id || row.username).toUpperCase();
+}
+
+function number(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function rounded(value) {
+  return Number(number(value).toFixed(2));
 }
 
 function profileValue(profile = {}, field) {
@@ -283,6 +298,232 @@ async function fetchAuthorizedLiveStatusRows(client, identifiers, chunkSize = 20
       .in('fo_user_id', chunk)));
   }
   return rows;
+}
+
+function chunks(values, size = 100) {
+  const result = [];
+  for (let index = 0; index < values.length; index += size) {
+    result.push(values.slice(index, index + size));
+  }
+  return result;
+}
+
+export function classifyTravelClaim(row = {}) {
+  const claimType = comparable(row.claim_type);
+  if (claimType === 'parking') return 'parking';
+  if (claimType === 'transport') return 'transport';
+  if (comparable(row.remarks).includes('parking')) return 'parking';
+  return 'transport';
+}
+
+function displayNameForEmployee(attendance = {}, profile = {}) {
+  return text(
+    profile.full_name ||
+    profile.display_name ||
+    attendance.display_name ||
+    attendance.full_name ||
+    attendance.employee_name ||
+    attendance.username ||
+    attendance.employee_code,
+  );
+}
+
+export function buildConsolidatedTravelClaimReportDataset({
+  attendances = [],
+  profiles = [],
+  hierarchyRows = [],
+  liveRows = [],
+  claims = [],
+  actor,
+  filters,
+  generatedBy = {},
+  generatedAt = new Date(),
+}) {
+  const allowedCodes = operationsSummaryAllowedEmployeeCodes(actor, profiles, hierarchyRows);
+  const profilesByCode = new Map(profiles.map((profile) => [employeeKey(profile), profile]));
+  const employeeCodeByProfileId = new Map(
+    profiles
+      .map((profile) => [text(profile.id), employeeKey(profile)])
+      .filter(([profileId, employeeCode]) => profileId && employeeCode),
+  );
+  const liveByEmployee = new Map(
+    liveRows.map((row) => [liveStatusKey(row, employeeCodeByProfileId), row]),
+  );
+  const attendanceIdToEmployeeCode = new Map();
+  const rowsByEmployee = new Map();
+
+  for (const attendance of attendances) {
+    const code = employeeKey(attendance);
+    if (!code || !allowedCodes.has(code)) continue;
+    const date = text(attendance.attendance_date).slice(0, 10);
+    if (date < filters.date_from || date > filters.date_to) continue;
+    const profile = profilesByCode.get(code) || {};
+    if (filters.state && comparable(profileValue(profile, 'state')) !== comparable(filters.state)) continue;
+    if (filters.business && comparable(profileValue(profile, 'business')) !== comparable(filters.business)) continue;
+    if (!statusMatches(attendance, filters.status, liveByEmployee)) continue;
+
+    const payableKm = storedAttendancePayableKm(attendance);
+    const distanceReimbursement = storedAttendancePetrolAmount(attendance, payableKm);
+    const row = rowsByEmployee.get(code) || {
+      employee_code: code,
+      employee_name: displayNameForEmployee(attendance, profile),
+      total_km_travelled: 0,
+      distance_reimbursement: 0,
+      other_transport_mode_amount: 0,
+      parking_amount: 0,
+      total_claim: 0,
+      attendance_count: 0,
+    };
+    if (!row.employee_name) row.employee_name = displayNameForEmployee(attendance, profile);
+    row.total_km_travelled += payableKm;
+    row.distance_reimbursement += distanceReimbursement;
+    row.attendance_count += 1;
+    rowsByEmployee.set(code, row);
+    if (attendance.id) attendanceIdToEmployeeCode.set(text(attendance.id), code);
+  }
+
+  const seenClaimIds = new Set();
+  for (const claim of claims) {
+    const claimId = text(claim.id);
+    if (claimId && seenClaimIds.has(claimId)) continue;
+    if (claimId) seenClaimIds.add(claimId);
+    const code = attendanceIdToEmployeeCode.get(text(claim.attendance_id));
+    if (!code) continue;
+    const row = rowsByEmployee.get(code);
+    if (!row) continue;
+    const amount = Math.max(0, number(claim.fare_amount));
+    if (classifyTravelClaim(claim) === 'parking') {
+      row.parking_amount += amount;
+    } else {
+      row.other_transport_mode_amount += amount;
+    }
+  }
+
+  const rows = [...rowsByEmployee.values()]
+    .map((row) => {
+      const distance = rounded(row.distance_reimbursement);
+      const transport = rounded(row.other_transport_mode_amount);
+      const parking = rounded(row.parking_amount);
+      return {
+        ...row,
+        employee_name: row.employee_name || row.employee_code,
+        total_km_travelled: rounded(row.total_km_travelled),
+        distance_reimbursement: distance,
+        other_transport_mode_amount: transport,
+        parking_amount: parking,
+        total_claim: rounded(distance + transport + parking),
+      };
+    })
+    .sort((left, right) =>
+      comparable(left.employee_name).localeCompare(comparable(right.employee_name)) ||
+      comparable(left.employee_code).localeCompare(comparable(right.employee_code)));
+
+  const totals = rows.reduce((summary, row) => ({
+    employee_count: summary.employee_count + 1,
+    total_km_travelled: rounded(summary.total_km_travelled + row.total_km_travelled),
+    distance_reimbursement: rounded(summary.distance_reimbursement + row.distance_reimbursement),
+    other_transport_mode_amount: rounded(summary.other_transport_mode_amount + row.other_transport_mode_amount),
+    parking_amount: rounded(summary.parking_amount + row.parking_amount),
+    total_claim: rounded(summary.total_claim + row.total_claim),
+  }), {
+    employee_count: 0,
+    total_km_travelled: 0,
+    distance_reimbursement: 0,
+    other_transport_mode_amount: 0,
+    parking_amount: 0,
+    total_claim: 0,
+  });
+
+  totals.total_claim = rounded(
+    totals.distance_reimbursement +
+    totals.other_transport_mode_amount +
+    totals.parking_amount,
+  );
+
+  return {
+    rows,
+    totals,
+    applied_filters: {
+      ...filters,
+      state: filters.state || 'All States',
+      business: filters.business || 'All Business',
+      status: filters.status || 'All Status',
+      timezone: 'Asia/Kolkata',
+    },
+    claim_statuses_included: TRAVEL_CLAIM_REPORT_INCLUDED_STATUSES,
+    generated_by: {
+      name: text(generatedBy.full_name || generatedBy.display_name || generatedBy.email || generatedBy.employee_code) || 'Authenticated user',
+      employee_code: text(generatedBy.employee_code) || null,
+    },
+    generated_at: generatedAt.toISOString(),
+  };
+}
+
+async function fetchClaimsForAttendanceIds(client, attendanceIds) {
+  const rows = [];
+  for (const attendanceIdChunk of chunks(attendanceIds)) {
+    rows.push(...await fetchPaged(() => client
+      .from('fo_travel_expense_claims')
+      .select('id,attendance_id,employee_code,travel_mode,fare_amount,remarks,status,claim_type,created_at,reviewed_at,metadata')
+      .in('attendance_id', attendanceIdChunk)
+      .in('status', TRAVEL_CLAIM_REPORT_INCLUDED_STATUSES)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })));
+  }
+  return rows;
+}
+
+export async function buildConsolidatedTravelClaimReport(client, actor, query, today, generatedAt = new Date()) {
+  if (!canAccessOperationsSummary(actor)) {
+    const error = new Error('Your role cannot access Operations travel claim reports.');
+    error.statusCode = 403;
+    throw error;
+  }
+  const filters = normalizeOperationsSummaryFilters(query, today);
+  const [profiles, hierarchyRows, attendances] = await Promise.all([
+    fetchPaged(() => client.from('profiles').select('*').eq('is_active', true)),
+    fetchPaged(() => client.from('employee_hierarchy').select('*').eq('is_active', true)),
+    fetchPaged(() => client
+      .from('fo_attendance')
+      .select('id,fo_user_id,employee_code,display_name,full_name,username,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,actual_km,petrol_amount,rate_per_km,travel_mode')
+      .gte('attendance_date', filters.date_from)
+      .lte('attendance_date', filters.date_to)),
+  ]);
+  const allowedCodes = operationsSummaryAllowedEmployeeCodes(actor, profiles, hierarchyRows);
+  const authorizedLiveIdentifiers = profiles.flatMap((profile) => {
+    const code = employeeKey(profile);
+    if (!code || !allowedCodes.has(code)) return [];
+    return [profile.id, code];
+  });
+  const liveRows = await fetchAuthorizedLiveStatusRows(client, authorizedLiveIdentifiers);
+  const prelim = buildConsolidatedTravelClaimReportDataset({
+    attendances,
+    profiles,
+    hierarchyRows,
+    liveRows,
+    claims: [],
+    actor,
+    filters,
+    generatedBy: actor,
+    generatedAt,
+  });
+  const includedEmployeeCodes = new Set(prelim.rows.map((row) => row.employee_code));
+  const attendanceIds = attendances
+    .filter((attendance) => includedEmployeeCodes.has(employeeKey(attendance)))
+    .map((attendance) => text(attendance.id))
+    .filter(Boolean);
+  const claims = attendanceIds.length ? await fetchClaimsForAttendanceIds(client, attendanceIds) : [];
+  return buildConsolidatedTravelClaimReportDataset({
+    attendances,
+    profiles,
+    hierarchyRows,
+    liveRows,
+    claims,
+    actor,
+    filters,
+    generatedBy: actor,
+    generatedAt,
+  });
 }
 
 export async function buildOperationsSummary(client, actor, query, today) {
