@@ -1499,16 +1499,28 @@ function siteVisitStatus(visit) {
   return isSiteVisitOpen(visit) ? "Checked In" : "Checked Out";
 }
 
-function siteVisitDuration(visit) {
-  const explicit = Number(visit?.visit_duration_minutes);
-  if (Number.isFinite(explicit)) return `${Math.round(explicit)} min`;
-  const checkOut = siteVisitCheckoutValue(visit);
-  if (!visit?.check_in_time || !checkOut) return "--";
-  const minutes = Math.max(
+function parseDate(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function siteVisitDurationMinutes(visit) {
+  const storedDuration = Number(visit?.visit_duration_minutes);
+  if (Number.isFinite(storedDuration) && storedDuration > 0) {
+    return Math.round(storedDuration);
+  }
+  const checkIn = parseDate(visit?.check_in_time);
+  const checkOut = parseDate(visit?.check_out_time ?? visit?.checkout_time);
+  if (!checkIn || !checkOut || checkOut < checkIn) return 0;
+  return Math.max(
     0,
-    Math.round((new Date(checkOut) - new Date(visit.check_in_time)) / 60000),
+    Math.round((checkOut.getTime() - checkIn.getTime()) / 60000),
   );
-  return `${minutes} min`;
+}
+
+function siteVisitDuration(visit) {
+  return `${siteVisitDurationMinutes(visit)} min`;
 }
 
 function buildSiteVisitPin(visit, officersByFoId, index) {
@@ -4066,9 +4078,7 @@ async function _exportFoOperationsExcel({
         State: visit.state || store?.state || "",
         "Check-In Time": formatDateTime(visit.check_in_time),
         "Check-Out Time": formatDateTime(siteVisitCheckoutValue(visit)),
-        "Visit Duration Minutes":
-          visit.visit_duration_minutes ??
-          minutesBetween(visit.check_in_time, siteVisitCheckoutValue(visit)),
+        "Visit Duration Minutes": siteVisitDurationMinutes(visit),
         "Check-In Latitude": checkInPoint?.latitude ?? "",
         "Check-In Longitude": checkInPoint?.longitude ?? "",
         "Check-Out Latitude": checkoutPoint?.latitude ?? "",

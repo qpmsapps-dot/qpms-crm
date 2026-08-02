@@ -73,3 +73,35 @@ test('historical Operations Excel export paginates site visits and large source 
   assert.match(historicalExport, /fetchFoSiteVisitRows\(fromIso, toIso\)/);
   assert.doesNotMatch(historicalExport, /\.limit\(/);
 });
+
+test('historical Operations Excel export falls back from zero visit duration to checkout timestamps', () => {
+  const durationHelper = source.slice(
+    source.indexOf('function siteVisitDurationMinutes'),
+    source.indexOf('\nfunction siteVisitDuration', source.indexOf('function siteVisitDurationMinutes')),
+  );
+  assert.match(durationHelper, /const storedDuration = Number\(visit\?\.visit_duration_minutes\)/);
+  assert.match(durationHelper, /Number\.isFinite\(storedDuration\) && storedDuration > 0/);
+  assert.match(durationHelper, /parseDate\(visit\?\.check_in_time\)/);
+  assert.match(durationHelper, /parseDate\(visit\?\.check_out_time \?\? visit\?\.checkout_time\)/);
+  assert.match(durationHelper, /checkOut < checkIn/);
+  assert.match(durationHelper, /Math\.round\(\(checkOut\.getTime\(\) - checkIn\.getTime\(\)\) \/ 60000\)/);
+
+  const durationLabel = source.slice(
+    source.indexOf('function siteVisitDuration(visit)'),
+    source.indexOf('\nfunction buildSiteVisitPin', source.indexOf('function siteVisitDuration(visit)')),
+  );
+  assert.match(durationLabel, /`\$\{siteVisitDurationMinutes\(visit\)\} min`/);
+
+  const historicalExport = source.slice(
+    source.indexOf('function exportFilteredOperationsDashboardExcel'),
+    source.indexOf('\nasync function exportHistoricalOperationsDashboardExcel', source.indexOf('function exportFilteredOperationsDashboardExcel')),
+  );
+  assert.match(historicalExport, /"Visit Duration": siteVisitDuration\(visit\)/);
+
+  const legacyExport = source.slice(
+    source.indexOf('async function _exportFoOperationsExcel'),
+    source.indexOf('\nfunction appendSheet', source.indexOf('async function _exportFoOperationsExcel')),
+  );
+  assert.match(legacyExport, /"Visit Duration Minutes": siteVisitDurationMinutes\(visit\)/);
+  assert.doesNotMatch(legacyExport, /visit\.visit_duration_minutes \?\?/);
+});
