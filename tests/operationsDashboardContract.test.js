@@ -41,3 +41,35 @@ test('Operations dashboard requests and displays current travel mode', () => {
   assert.match(source, /<DetailSummaryCard icon=\{Bike\} label="Travel Mode"/);
   assert.match(source, /sumAttendancePetrolAmount\(rangeAttendances\)/);
 });
+
+test('historical Operations Excel export paginates site visits and large source tables', () => {
+  const pagedHelper = source.slice(
+    source.indexOf('async function fetchPagedSupabaseRows'),
+    source.indexOf('\nasync function fetchFoSiteVisitRows', source.indexOf('async function fetchPagedSupabaseRows')),
+  );
+  assert.match(pagedHelper, /batchSize = 1000/);
+  assert.match(pagedHelper, /\.range\(from, to\)/);
+  assert.match(pagedHelper, /batch\.length < batchSize/);
+  assert.match(pagedHelper, /seen\.has\(key\)/);
+
+  const siteVisitHelper = source.slice(
+    source.indexOf('async function fetchFoSiteVisitRows'),
+    source.indexOf('\nfunction siteVisitFoId', source.indexOf('async function fetchFoSiteVisitRows')),
+  );
+  assert.match(siteVisitHelper, /\.from\("fo_site_visits"\)/);
+  assert.match(siteVisitHelper, /\.gte\("check_in_time", fromIso\)/);
+  assert.match(siteVisitHelper, /\.lte\("check_in_time", toIso\)/);
+  assert.match(siteVisitHelper, /\.order\("check_in_time", \{ ascending: false \}\)/);
+  assert.match(siteVisitHelper, /\.order\("id", \{ ascending: false \}\)/);
+  assert.match(siteVisitHelper, /fetchPagedSupabaseRows\(buildPrimaryQuery\)/);
+  assert.doesNotMatch(siteVisitHelper, /\.limit\(/);
+
+  const historicalExport = source.slice(
+    source.indexOf('async function exportHistoricalOperationsDashboardExcel'),
+    source.indexOf('\nasync function _exportFoOperationsExcel', source.indexOf('async function exportHistoricalOperationsDashboardExcel')),
+  );
+  assert.match(historicalExport, /fetchPagedSupabaseRows\(\(\) => supabase[\s\S]*?\.from\("profiles"\)/);
+  assert.match(historicalExport, /fetchPagedSupabaseRows\(\(\) => supabase[\s\S]*?\.from\("fo_attendance"\)/);
+  assert.match(historicalExport, /fetchFoSiteVisitRows\(fromIso, toIso\)/);
+  assert.doesNotMatch(historicalExport, /\.limit\(/);
+});

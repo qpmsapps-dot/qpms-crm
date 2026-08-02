@@ -1357,37 +1357,65 @@ async function fetchFoLiveStatusRows() {
   return rows;
 }
 
+async function fetchPagedSupabaseRows(buildQuery, {
+  batchSize = 1000,
+  dedupeKey = "id",
+} = {}) {
+  const rows = [];
+  const seen = new Set();
+  for (let from = 0; ; from += batchSize) {
+    const to = from + batchSize - 1;
+    const response = await buildQuery().range(from, to);
+    if (response.error) throw response.error;
+    const batch = response.data || [];
+    batch.forEach((row) => {
+      const key = row?.[dedupeKey];
+      if (key === null || key === undefined || key === "") {
+        rows.push(row);
+        return;
+      }
+      if (seen.has(key)) return;
+      seen.add(key);
+      rows.push(row);
+    });
+    if (batch.length < batchSize) break;
+  }
+  return rows;
+}
+
 async function fetchFoSiteVisitRows(fromIso, toIso) {
-  let query = supabase
+  const buildPrimaryQuery = () => supabase
     .from("fo_site_visits")
     .select(FO_SITE_VISIT_SELECT)
     .gte("check_in_time", fromIso)
     .lte("check_in_time", toIso)
     .order("check_in_time", { ascending: false })
-    .limit(5000);
-  let response = await query;
-  if (response.error) {
-    logSupabaseError("[myQPMS FO] fo_site_visits select failed.", response.error);
-    const message = String(response.error.message || "").toLowerCase();
+    .order("id", { ascending: false });
+  try {
+    return await fetchPagedSupabaseRows(buildPrimaryQuery);
+  } catch (error) {
+    logSupabaseError("[myQPMS FO] fo_site_visits select failed.", error);
+    const message = String(error.message || "").toLowerCase();
     const missingColumn =
-      response.error.code === "42703" ||
-      response.error.code === "PGRST204" ||
+      error.code === "42703" ||
+      error.code === "PGRST204" ||
       message.includes("column") ||
       message.includes("could not find");
-    if (!missingColumn) throw response.error;
-    response = await supabase
+    if (!missingColumn) throw error;
+    const buildFallbackQuery = () => supabase
       .from("fo_site_visits")
       .select("*")
       .gte("check_in_time", fromIso)
       .lte("check_in_time", toIso)
       .order("check_in_time", { ascending: false })
-      .limit(5000);
-    if (response.error) {
-      logSupabaseError("[myQPMS FO] fo_site_visits fallback select failed.", response.error);
-      throw response.error;
+      .order("id", { ascending: false });
+    try {
+      return await fetchPagedSupabaseRows(buildFallbackQuery);
+    } catch (fallbackError) {
+      logSupabaseError("[myQPMS FO] fo_site_visits fallback select failed.", fallbackError);
+      throw fallbackError;
     }
   }
-  return response.data || [];
 }
 
 function siteVisitFoId(visit) {
@@ -3746,29 +3774,24 @@ async function exportHistoricalOperationsDashboardExcel({
     });
   }
 
-  const [profilesRes, attendanceRes, siteVisits] = await Promise.all([
-    supabase
+  const [profiles, attendanceData, siteVisits] = await Promise.all([
+    fetchPagedSupabaseRows(() => supabase
       .from("profiles")
       .select(
         "id, full_name, display_name, employee_code, username, mobile, email, role, department, designation, business, state, status, is_active, metadata",
       )
       .eq("is_active", true)
-      .limit(5000),
-    supabase
+      .order("id", { ascending: true })),
+    fetchPagedSupabaseRows(() => supabase
       .from("fo_attendance")
       .select("*")
       .gte("attendance_date", fromDate)
       .lte("attendance_date", toDate)
       .order("attendance_date", { ascending: true })
-      .limit(20000),
+      .order("id", { ascending: true })),
     fetchFoSiteVisitRows(fromIso, toIso),
   ]);
-  const errors = [profilesRes, attendanceRes]
-    .map((res) => res?.error)
-    .filter(Boolean);
-  if (errors.length) throw errors[0];
 
-  const profiles = profilesRes.data || [];
   const exportOfficers = profiles
     .filter(
       (profile) =>
@@ -3790,7 +3813,7 @@ async function exportHistoricalOperationsDashboardExcel({
       .map(normalizeFoKey)
       .filter(Boolean),
   );
-  const attendanceRows = (attendanceRes.data || []).filter((row) =>
+  const attendanceRows = (attendanceData || []).filter((row) =>
     recordMatchesOfficerKeys(row, officerKeys),
   );
   const siteVisitRows = (siteVisits || []).filter((visit) =>
@@ -3841,44 +3864,44 @@ async function _exportFoOperationsExcel({
 
   const fromIso = formatDateForDb(from);
   const toIso = formatDateForDb(to);
-  const [attendanceRes, liveRes, logsRes, visitsRes] = await Promise.all([
-    supabase
+  const [attendanceData, liveData, logData, visitData] = await Promise.all([
+    fetchPagedSupabaseRows(() => supabase
       .from("fo_attendance")
       .select("*")
       .gte("login_time", fromIso)
       .lte("login_time", toIso)
-      .limit(5000),
-    supabase.from("fo_live_status").select("*").limit(1000),
-    supabase
+      .order("login_time", { ascending: true })
+      .order("id", { ascending: true })),
+    fetchPagedSupabaseRows(() => supabase
+      .from("fo_live_status")
+      .select("*")
+      .order("fo_user_id", { ascending: true })),
+    fetchPagedSupabaseRows(() => supabase
       .from("fo_location_logs")
       .select("*")
       .gte("captured_at", fromIso)
       .lte("captured_at", toIso)
       .order("captured_at", { ascending: true })
-      .limit(20000),
-    supabase
+      .order("id", { ascending: true })),
+    fetchPagedSupabaseRows(() => supabase
       .from("fo_site_visits")
       .select("*")
       .gte("check_in_time", fromIso)
       .lte("check_in_time", toIso)
       .order("check_in_time", { ascending: true })
-      .limit(10000),
+      .order("id", { ascending: true })),
   ]);
-  const errors = [attendanceRes, liveRes, logsRes, visitsRes]
-    .map((res) => res?.error)
-    .filter(Boolean);
-  if (errors.length) throw errors[0];
 
-  const attendanceRows = (attendanceRes.data || []).filter((row) =>
+  const attendanceRows = (attendanceData || []).filter((row) =>
     officerIds.includes(normalizeFoKey(row.fo_user_id || row.employee_code)),
   );
-  const liveRows = (liveRes.data || []).filter((row) =>
+  const liveRows = (liveData || []).filter((row) =>
     officerIds.includes(normalizeFoKey(row.fo_user_id)),
   );
-  const logRows = (logsRes.data || []).filter((row) =>
+  const logRows = (logData || []).filter((row) =>
     officerIds.includes(normalizeFoKey(row.fo_user_id || row.employee_code)),
   );
-  const visitRows = (visitsRes.data || []).filter((row) =>
+  const visitRows = (visitData || []).filter((row) =>
     officerIds.includes(normalizeFoKey(row.fo_user_id || row.employee_code)),
   );
   const storeIds = Array.from(
@@ -3886,12 +3909,11 @@ async function _exportFoOperationsExcel({
   );
   let storesById = new Map();
   if (storeIds.length) {
-    const { data: storesData, error: storesError } = await supabase
+    const storesData = await fetchPagedSupabaseRows(() => supabase
       .from("store_master")
       .select("*")
       .in("id", storeIds)
-      .limit(10000);
-    if (storesError) throw storesError;
+      .order("id", { ascending: true }));
     storesById = new Map((storesData || []).map((store) => [store.id, store]));
   }
 
