@@ -162,6 +162,7 @@ test('live status query uses fo_user_id and never selects missing employee_code 
         eq() { return queryBuilder; },
         gte() { return queryBuilder; },
         lte() { return queryBuilder; },
+        order() { return queryBuilder; },
         in(column, values) {
           inFilters.set(table, { column, values });
           return queryBuilder;

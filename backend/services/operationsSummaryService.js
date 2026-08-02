@@ -571,7 +571,9 @@ export async function buildConsolidatedTravelClaimReport(client, actor, query, t
       .from('fo_attendance')
       .select('id,fo_user_id,employee_code,display_name,username,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,actual_km,petrol_amount,rate_per_km,travel_mode')
       .gte('attendance_date', filters.date_from)
-      .lte('attendance_date', filters.date_to)),
+      .lte('attendance_date', filters.date_to)
+      .order('attendance_date', { ascending: true })
+      .order('id', { ascending: true })),
   ]);
   const allowedCodes = operationsSummaryAllowedEmployeeCodes(actor, profiles, hierarchyRows);
   const authorizedLiveIdentifiers = profiles.flatMap((profile) => {
@@ -624,7 +626,9 @@ export async function buildOperationsSummary(client, actor, query, today) {
       .from('fo_attendance')
       .select('id,fo_user_id,employee_code,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,petrol_amount,rate_per_km')
       .gte('attendance_date', filters.date_from)
-      .lte('attendance_date', filters.date_to)),
+      .lte('attendance_date', filters.date_to)
+      .order('attendance_date', { ascending: true })
+      .order('id', { ascending: true })),
   ]);
   const allowedCodes = operationsSummaryAllowedEmployeeCodes(actor, profiles, hierarchyRows);
   const authorizedLiveIdentifiers = profiles.flatMap((profile) => {

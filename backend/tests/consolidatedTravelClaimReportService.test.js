@@ -261,15 +261,18 @@ test('grand totals match row totals', () => {
 });
 
 function mockClient(rowsByTable) {
-  return {
+  const calls = [];
+  const client = {
+    calls,
     from(table) {
       const query = {
+        table,
         select() { return query; },
-        eq() { return query; },
-        gte() { return query; },
-        lte() { return query; },
+        eq(column, value) { calls.push({ table, method: 'eq', column, value }); return query; },
+        gte(column, value) { calls.push({ table, method: 'gte', column, value }); return query; },
+        lte(column, value) { calls.push({ table, method: 'lte', column, value }); return query; },
         in() { return query; },
-        order() { return query; },
+        order(column, options) { calls.push({ table, method: 'order', column, options }); return query; },
         async range(from, to) {
           return { data: (rowsByTable[table] || []).slice(from, to + 1), error: null };
         },
@@ -277,6 +280,7 @@ function mockClient(rowsByTable) {
       return query;
     },
   };
+  return client;
 }
 
 async function extractPdfPages(buffer) {
@@ -334,6 +338,38 @@ test('service loads authorized rows and generates a PDF buffer', async () => {
   assert.equal(result.dataset.rows[0].total_claim, 110);
   assert.equal(result.buffer.subarray(0, 4).toString(), '%PDF');
   assert.equal(result.filename, 'QPMS_Consolidated_Travel_Claims_2026_08_01_to_2026_08_31.pdf');
+});
+
+test('PDF report query includes the full selected July attendance_date range before grouping', async () => {
+  const julyAttendances = Array.from({ length: 31 }, (_, index) => {
+    const day = String(index + 1).padStart(2, '0');
+    return attendance(`a-july-${day}`, 'BIKE1', `2026-07-${day}`, 1, 4);
+  });
+  const client = mockClient({
+    profiles,
+    employee_hierarchy: hierarchyRows,
+    fo_live_status: [],
+    fo_attendance: julyAttendances,
+    fo_travel_expense_claims: [],
+  });
+  const result = await buildConsolidatedTravelClaimPdf(client, admin, {
+    date_from: '2026-07-01',
+    date_to: '2026-07-31',
+    state: 'All States',
+    business: 'All Business',
+    status: 'All Status',
+  }, '2026-07-31');
+  const row = result.dataset.rows.find((item) => item.employee_code === 'BIKE1');
+  assert.equal(row.attendance_count, 31);
+  assert.equal(row.total_km_travelled, 31);
+  assert.equal(row.distance_reimbursement, 124);
+
+  const attendanceCalls = client.calls.filter((call) => call.table === 'fo_attendance');
+  assert.ok(attendanceCalls.some((call) => call.method === 'gte' && call.column === 'attendance_date' && call.value === '2026-07-01'));
+  assert.ok(attendanceCalls.some((call) => call.method === 'lte' && call.column === 'attendance_date' && call.value === '2026-07-31'));
+  assert.ok(attendanceCalls.some((call) => call.method === 'order' && call.column === 'attendance_date'));
+  assert.ok(attendanceCalls.some((call) => call.method === 'order' && call.column === 'id'));
+  assert.equal(attendanceCalls.some((call) => ['login_time', 'created_at', 'updated_at', 'reviewed_at'].includes(call.column)), false);
 });
 
 test('PDF text extraction preserves rupee symbol and does not render currency as ¹', async () => {
@@ -490,7 +526,10 @@ test('attendance query uses only real fo_attendance columns', async () => {
     'utf8',
   );
   assert.match(source, /from\('fo_attendance'\)[\s\S]*?\.select\('id,fo_user_id,employee_code,display_name,username,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,actual_km,petrol_amount,rate_per_km,travel_mode'\)/);
+  assert.match(source, /from\('fo_attendance'\)[\s\S]*?\.gte\('attendance_date', filters\.date_from\)[\s\S]*?\.lte\('attendance_date', filters\.date_to\)[\s\S]*?\.order\('attendance_date', \{ ascending: true \}\)[\s\S]*?\.order\('id', \{ ascending: true \}\)/);
   assert.doesNotMatch(source, /fo_attendance'[\s\S]*?\.select\('[^']*full_name/);
+  assert.doesNotMatch(source, /from\('fo_attendance'\)[\s\S]*?\.gte\('(?:login_time|created_at|updated_at|reviewed_at)'/);
+  assert.doesNotMatch(source, /from\('fo_attendance'\)[\s\S]*?\.lte\('(?:login_time|created_at|updated_at|reviewed_at)'/);
 });
 
 test('PDF filename uses the report period', () => {
