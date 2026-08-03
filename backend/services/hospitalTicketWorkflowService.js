@@ -1,5 +1,17 @@
-const ACTIVE_STATUSES = new Set(['open', 'assigned', 'accepted', 'in_progress', 'reopened']);
+const ACTIVE_STATUSES = new Set(['open', 'awaiting_supervisor_acceptance', 'assigned', 'accepted', 'in_progress', 'reopened']);
 const PRIORITIES = new Set(['low', 'medium', 'high', 'critical']);
+const PRIORITY_SLA_MINUTES = {
+  critical: 10,
+  high: 10,
+  medium: 15,
+  low: 20,
+};
+const ESCALATION_LEVELS = [
+  { level: 1, code: 'supervisor', role: 'housekeeping_supervisor', label: 'Supervisor' },
+  { level: 2, code: 'operations_executive', role: 'operations_executive', label: 'Operations Executive' },
+  { level: 3, code: 'facility_manager', role: 'facility_manager', label: 'Facility Manager' },
+  { level: 4, code: 'project_head', role: 'project_head', label: 'Project Head' },
+];
 
 export function cleanHospitalText(value, maxLength = 500) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
@@ -35,18 +47,20 @@ export function validateHospitalTicketCreate(payload) {
 
 export function validateHospitalAction({ role, status, action, payload = {} }) {
   const allowed = {
-    accept: role === 'housekeeping_supervisor' && ['open', 'assigned', 'reopened'].includes(status),
+    accept: role === 'housekeeping_supervisor' && ['awaiting_supervisor_acceptance', 'open', 'assigned', 'reopened'].includes(status),
     start_work: role === 'housekeeping_supervisor' && ['accepted', 'reopened'].includes(status),
     progress:
-      (role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status))
+      (role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status) && status !== 'awaiting_supervisor_acceptance')
       || (role === 'operations_executive' && status === 'escalated_operations_executive')
-      || (role === 'facility_manager' && ['escalated_facility_manager', 'reopened'].includes(status)),
-    request_assistance: role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status),
-    manual_escalation: role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status),
+      || (role === 'facility_manager' && ['escalated_facility_manager', 'reopened'].includes(status))
+      || (role === 'project_head' && status === 'escalated_project_head'),
+    request_assistance: role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status) && status !== 'awaiting_supervisor_acceptance',
+    manual_escalation: role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status) && status !== 'awaiting_supervisor_acceptance',
     escalate_facility: role === 'operations_executive' && status === 'escalated_operations_executive',
     take_over:
       (role === 'operations_executive' && status === 'escalated_operations_executive')
-      || (role === 'facility_manager' && status === 'escalated_facility_manager'),
+      || (role === 'facility_manager' && status === 'escalated_facility_manager')
+      || (role === 'project_head' && status === 'escalated_project_head'),
     reassign_supervisor: role === 'operations_executive'
       && !['closed', 'cancelled', 'resolved_awaiting_confirmation'].includes(status),
     assign_support: role === 'facility_manager'
@@ -54,7 +68,8 @@ export function validateHospitalAction({ role, status, action, payload = {} }) {
     resolve:
       (role === 'housekeeping_supervisor' && ['accepted', 'in_progress', 'reopened'].includes(status))
       || (role === 'operations_executive' && status === 'escalated_operations_executive')
-      || (role === 'facility_manager' && ['escalated_facility_manager', 'reopened'].includes(status)),
+      || (role === 'facility_manager' && ['escalated_facility_manager', 'reopened'].includes(status))
+      || (role === 'project_head' && status === 'escalated_project_head'),
     feedback: ['doctor', 'hospital_management'].includes(role) && status === 'resolved_awaiting_confirmation',
   };
   if (!allowed[action]) return ['This status transition is not allowed.'];
@@ -74,12 +89,37 @@ export function validateHospitalAction({ role, status, action, payload = {} }) {
 }
 
 export function slaMinutes(environment = process.env) {
-  const supervisor = Number(environment.HOSPITAL_SUPERVISOR_SLA_MINUTES || 20);
-  const operations = Number(environment.HOSPITAL_OPERATIONS_SLA_MINUTES || 30);
+  const supervisor = Number(environment.HOSPITAL_SUPERVISOR_SLA_MINUTES || PRIORITY_SLA_MINUTES.low);
+  const operations = Number(environment.HOSPITAL_OPERATIONS_SLA_MINUTES || PRIORITY_SLA_MINUTES.medium);
   return {
-    supervisor: Number.isInteger(supervisor) && supervisor > 0 ? supervisor : 20,
-    operations: Number.isInteger(operations) && operations > 0 ? operations : 30,
+    supervisor: Number.isInteger(supervisor) && supervisor > 0 ? supervisor : PRIORITY_SLA_MINUTES.low,
+    operations: Number.isInteger(operations) && operations > 0 ? operations : PRIORITY_SLA_MINUTES.medium,
+    matrix: {
+      critical: PRIORITY_SLA_MINUTES.critical,
+      high: PRIORITY_SLA_MINUTES.high,
+      medium: PRIORITY_SLA_MINUTES.medium,
+      low: PRIORITY_SLA_MINUTES.low,
+    },
   };
+}
+
+export function normalizedHospitalSlaPriority(priority) {
+  const value = cleanHospitalText(priority || 'medium', 20).toLowerCase();
+  if (value === 'high') return 'critical';
+  if (value === 'critical' || value === 'medium' || value === 'low') return value;
+  return 'medium';
+}
+
+export function prioritySlaMinutes(priority) {
+  return PRIORITY_SLA_MINUTES[cleanHospitalText(priority || 'medium', 20).toLowerCase()] || PRIORITY_SLA_MINUTES.medium;
+}
+
+export function hospitalEscalationLevels() {
+  return ESCALATION_LEVELS.map((level) => ({ ...level }));
+}
+
+export function hospitalEscalationRoleForLevel(level) {
+  return ESCALATION_LEVELS.find((item) => item.level === Number(level)) || ESCALATION_LEVELS[0];
 }
 
 export function safeHospitalError(response, error) {

@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app/app.dart';
 import 'services/app_config.dart';
+import 'services/client_push_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -11,6 +12,7 @@ Future<void> main() async {
       url: ClientAppConfig.supabaseUrl,
       publishableKey: ClientAppConfig.supabaseAnonKey,
     );
+    await ClientPushService.configure();
   }
   runApp(const QpmsClientTicketingApp());
 }

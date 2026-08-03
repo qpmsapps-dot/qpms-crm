@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'auth/login_screen.dart';
 import 'hospital_housekeeping/hospital_models.dart';
+import 'hospital_housekeeping/hospital_push_service.dart';
 import 'hospital_housekeeping/hospital_shell.dart';
 import 'hospital_housekeeping/hospital_ticket_api.dart';
 import 'home/home_shell.dart';
@@ -192,10 +195,14 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
       _hospitalDemoSession = session;
       _user = null;
     });
+    if (!session.isDemo) {
+      unawaited(HospitalPushService.registerAuthenticatedDevice());
+    }
   }
 
   Future<void> _logoutHospitalDemo() async {
     if (_hospitalDemoSession?.isDemo == false && SupabaseService.isReady) {
+      await HospitalPushService.unregisterAuthenticatedDevice();
       await HospitalTicketApi.closeSession();
     }
     if (mounted) setState(() => _hospitalDemoSession = null);

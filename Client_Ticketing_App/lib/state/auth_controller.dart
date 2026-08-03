@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/app_config.dart';
+import '../services/client_push_service.dart';
 import '../services/hospital_ticket_api.dart';
 
 class AuthController extends ChangeNotifier {
@@ -53,6 +54,8 @@ class AuthController extends ChangeNotifier {
             _errorMessage =
                 'This account is not authorised for Client Ticketing.';
             await auth.signOut();
+          } else {
+            unawaited(ClientPushService.registerAuthenticatedDevice());
           }
         } catch (error) {
           _isAuthenticated = false;
@@ -121,6 +124,7 @@ class AuthController extends ChangeNotifier {
       ok = isAllowedClientProfile(_profile);
       if (!ok) await Supabase.instance.client.auth.signOut();
       _isAuthenticated = ok;
+      if (ok) unawaited(ClientPushService.registerAuthenticatedDevice());
       if (!ok) {
         _errorMessage = 'This account is not authorised for Client Ticketing.';
       }
@@ -137,6 +141,7 @@ class AuthController extends ChangeNotifier {
     _isAuthenticated = false;
     _profile = null;
     if (!demoMode && ClientAppConfig.isConfigured) {
+      await ClientPushService.unregisterAuthenticatedDevice();
       await Supabase.instance.client.auth.signOut();
     }
     final prefs = preferences ?? await SharedPreferences.getInstance();

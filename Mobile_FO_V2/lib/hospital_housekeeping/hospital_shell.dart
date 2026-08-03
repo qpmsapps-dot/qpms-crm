@@ -8,6 +8,8 @@ import 'hospital_dashboard_screen.dart';
 import 'hospital_demo_tools_screen.dart';
 import 'hospital_models.dart';
 import 'hospital_notifications_screen.dart';
+import 'hospital_push_service.dart';
+import 'hospital_ticket_detail_screen.dart';
 import 'hospital_tickets_screen.dart';
 import 'hospital_ticket_card.dart';
 
@@ -31,6 +33,7 @@ class _HospitalHousekeepingShellState extends State<HospitalHousekeepingShell>
   late final HospitalController _controller;
   Timer? _clock;
   Timer? _refreshTimer;
+  StreamSubscription<HospitalPushMessage>? _pushSubscription;
   int _index = 0;
 
   @override
@@ -41,6 +44,13 @@ class _HospitalHousekeepingShellState extends State<HospitalHousekeepingShell>
       ..addListener(_refresh);
     if (!widget.session.isDemo) {
       unawaited(_controller.load());
+      unawaited(HospitalPushService.registerAuthenticatedDevice());
+      _pushSubscription = HospitalPushService.foregroundMessages.listen(
+        _handlePush,
+      );
+      for (final message in HospitalPushService.takePendingMessages()) {
+        unawaited(Future<void>(() => _handlePush(message)));
+      }
       _startRefreshTimer();
     }
     _clock = Timer.periodic(
@@ -57,6 +67,7 @@ class _HospitalHousekeepingShellState extends State<HospitalHousekeepingShell>
     WidgetsBinding.instance.removeObserver(this);
     _clock?.cancel();
     _refreshTimer?.cancel();
+    _pushSubscription?.cancel();
     _controller.removeListener(_refresh);
     _controller.dispose();
     super.dispose();
@@ -82,6 +93,45 @@ class _HospitalHousekeepingShellState extends State<HospitalHousekeepingShell>
 
   void _refresh() {
     if (mounted) setState(() {});
+  }
+
+  void _handlePush(HospitalPushMessage message) {
+    if (!mounted) return;
+    unawaited(_controller.load());
+    if (message.openImmediately) {
+      _openPushTicket(message);
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message.body.isEmpty
+              ? message.title
+              : '${message.title}\n${message.body}',
+        ),
+        action: SnackBarAction(
+          label: 'Open',
+          onPressed: () => _openPushTicket(message),
+        ),
+      ),
+    );
+  }
+
+  void _openPushTicket(HospitalPushMessage message) {
+    final ticketId = message.ticketId.isNotEmpty
+        ? message.ticketId
+        : message.ticketNumber;
+    if (ticketId.isEmpty) return;
+    setState(() => _index = message.targetScreen == 'incoming_ticket' ? 0 : 1);
+    unawaited(_controller.loadDetail(ticketId, force: true));
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => HospitalTicketDetailScreen(
+          controller: _controller,
+          ticketId: ticketId,
+        ),
+      ),
+    );
   }
 
   @override

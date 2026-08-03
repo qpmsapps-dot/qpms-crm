@@ -19,32 +19,51 @@ class HospitalSlaSnapshot {
 class HospitalSlaPolicy {
   const HospitalSlaPolicy();
 
-  static const supervisorSla = Duration(minutes: 20);
-  static const operationsSla = Duration(minutes: 30);
+  static const criticalSla = Duration(minutes: 10);
+  static const mediumSla = Duration(minutes: 15);
+  static const lowSla = Duration(minutes: 20);
   static const nearBreachWindow = Duration(minutes: 5);
 
   DateTime? dueAt(HospitalTicket ticket) {
     if (ticket.isFinal || ticket.isAwaitingClient) return null;
+    if (ticket.escalationDueAt != null) return ticket.escalationDueAt;
     if (ticket.status == HospitalTicketStatus.escalatedOperationsExecutive) {
-      return ticket.operationsDueAt;
+      return ticket.operationsDueAt ??
+          (ticket.operationsEscalatedAt ?? ticket.raisedAt).add(
+            priorityWindow(ticket.priority),
+          );
     }
     if (ticket.status == HospitalTicketStatus.escalatedFacilityManager) {
-      return null;
+      return ticket.operationsDueAt ??
+          (ticket.facilityEscalatedAt ?? ticket.raisedAt).add(
+            priorityWindow(ticket.priority),
+          );
     }
-    return ticket.supervisorDueAt;
+    if (ticket.status == HospitalTicketStatus.escalatedProjectHead) {
+      return ticket.operationsDueAt ??
+          (ticket.facilityEscalatedAt ?? ticket.raisedAt).add(
+            priorityWindow(ticket.priority),
+          );
+    }
+    if (_isUnassigned(ticket)) return null;
+    return ticket.supervisorDueAt ??
+        ticket.raisedAt.add(priorityWindow(ticket.priority));
   }
+
+  Duration priorityWindow(HospitalPriority priority) => switch (priority) {
+    HospitalPriority.high => criticalSla,
+    HospitalPriority.medium => mediumSla,
+    HospitalPriority.low => lowSla,
+  };
 
   HospitalSlaSnapshot snapshot(HospitalTicket ticket, DateTime now) {
     final due = dueAt(ticket);
     if (due == null) {
-      final unassigned =
-          ticket.responsiblePerson == 'Assignment pending' ||
-          ticket.responsibleRole.trim().isEmpty;
       return HospitalSlaSnapshot(
         state: HospitalSlaState.notApplicable,
         referenceTime: null,
         remaining: Duration.zero,
-        label: unassigned
+        label: _isUnassigned(ticket)
             ? 'No supervisor SLA - unassigned'
             : 'Operational oversight',
       );
@@ -74,6 +93,10 @@ class HospitalSlaPolicy {
     );
   }
 
+  bool _isUnassigned(HospitalTicket ticket) =>
+      ticket.responsiblePerson == 'Assignment pending' ||
+      ticket.responsibleRole.trim().isEmpty;
+
   HospitalTicket escalateSupervisorBreach(
     HospitalTicket ticket,
     DateTime escalatedAt, {
@@ -85,7 +108,7 @@ class HospitalSlaPolicy {
       responsiblePerson: 'Arun P.',
       responsibleRole: HospitalDemoRole.operationsExecutive.label,
       operationsEscalatedAt: escalatedAt,
-      operationsDueAt: escalatedAt.add(operationsSla),
+      operationsDueAt: escalatedAt.add(priorityWindow(ticket.priority)),
       events: [
         ...ticket.events,
         HospitalTicketEvent(
@@ -110,6 +133,7 @@ class HospitalSlaPolicy {
       responsiblePerson: 'Priya N.',
       responsibleRole: HospitalDemoRole.facilityManager.label,
       facilityEscalatedAt: escalatedAt,
+      operationsDueAt: escalatedAt.add(priorityWindow(ticket.priority)),
       events: [
         ...ticket.events,
         HospitalTicketEvent(

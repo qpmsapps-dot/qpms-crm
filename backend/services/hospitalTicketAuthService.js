@@ -4,6 +4,7 @@ const ROLE_CODES = new Set([
   'housekeeping_supervisor',
   'operations_executive',
   'facility_manager',
+  'project_head',
 ]);
 
 export function normalizeHospitalRole(value) {
@@ -16,6 +17,8 @@ export function normalizeHospitalRole(value) {
     supervisor: 'housekeeping_supervisor',
     operations_executive: 'operations_executive',
     facility_manager: 'facility_manager',
+    project_head: 'project_head',
+    projecthead: 'project_head',
   };
   return aliases[key] || key;
 }
@@ -38,6 +41,9 @@ export function hospitalAllowedActions(actor) {
   }
   if (role === 'facility_manager') {
     return ['view_ticket', 'take_over', 'assign_support', 'progress', 'resolve'];
+  }
+  if (role === 'project_head') {
+    return ['view_ticket', 'take_over', 'progress', 'resolve'];
   }
   return [];
 }

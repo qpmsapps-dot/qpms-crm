@@ -47,6 +47,7 @@ class HospitalTicketApi {
       'housekeeping_supervisor' => HospitalDemoRole.supervisor,
       'operations_executive' => HospitalDemoRole.operationsExecutive,
       'facility_manager' => HospitalDemoRole.facilityManager,
+      'project_head' => HospitalDemoRole.projectHead,
       _ => throw const HospitalTicketApiException(
         'This account cannot use the internal housekeeping module.',
       ),
@@ -106,6 +107,34 @@ class HospitalTicketApi {
     return rows
         .whereType<Map>()
         .map((row) => Map<String, dynamic>.from(row))
+        .toList();
+  }
+
+  static Future<Map<String, dynamic>> fetchDutyStatus() =>
+      request('GET', '/api/hospital-tickets/me/duty');
+
+  static Future<Map<String, dynamic>> startDuty({String? cugNumber}) {
+    final body = <String, dynamic>{};
+    if (cugNumber != null) body['cug_number'] = cugNumber;
+    return request('POST', '/api/hospital-tickets/me/duty/start', body: body);
+  }
+
+  static Future<Map<String, dynamic>> endDuty() =>
+      request('POST', '/api/hospital-tickets/me/duty/end');
+
+  static Future<List<HospitalTicket>> fetchIncomingTickets() async {
+    final response = await request(
+      'GET',
+      '/api/hospital-tickets/supervisor/incoming',
+    );
+    final rows = response['incoming'] is List
+        ? response['incoming'] as List
+        : const [];
+    return rows
+        .whereType<Map>()
+        .map((row) => row['ticket'] is Map ? row['ticket'] as Map : const {})
+        .whereType<Map>()
+        .map((row) => HospitalTicket.fromApi(Map<String, dynamic>.from(row)))
         .toList();
   }
 

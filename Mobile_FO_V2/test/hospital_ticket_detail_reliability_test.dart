@@ -231,6 +231,21 @@ class _FakeHospitalTicketGateway implements HospitalTicketGateway {
   Future<List<Map<String, dynamic>>> fetchNotifications() async => const [];
 
   @override
+  Future<Map<String, dynamic>> fetchDutyStatus() async => const {
+    'duty': {'duty_status': 'off_duty'},
+  };
+
+  @override
+  Future<Map<String, dynamic>> startDuty({String? cugNumber}) async => const {
+    'duty': {'duty_status': 'on_duty'},
+  };
+
+  @override
+  Future<Map<String, dynamic>> endDuty() async => const {
+    'duty': {'duty_status': 'off_duty'},
+  };
+
+  @override
   Future<void> markNotificationRead(String id) async {}
 
   @override

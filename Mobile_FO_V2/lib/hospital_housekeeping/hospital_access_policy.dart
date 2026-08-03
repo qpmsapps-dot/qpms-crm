@@ -32,6 +32,9 @@ class HospitalAccessPolicy {
             HospitalTicketAction.simulateClientNotSatisfied,
           };
         }
+        if (ticket.status == HospitalTicketStatus.awaitingSupervisorAcceptance) {
+          return {HospitalTicketAction.accept};
+        }
         return {
           ...common,
           if (ticket.status == HospitalTicketStatus.open ||
@@ -47,11 +50,13 @@ class HospitalAccessPolicy {
           HospitalTicketAction.requestAssistance,
           if (ticket.status !=
                   HospitalTicketStatus.escalatedOperationsExecutive &&
-              ticket.status != HospitalTicketStatus.escalatedFacilityManager)
+              ticket.status != HospitalTicketStatus.escalatedFacilityManager &&
+              ticket.status != HospitalTicketStatus.escalatedProjectHead)
             HospitalTicketAction.escalateManually,
           if (ticket.status !=
                   HospitalTicketStatus.escalatedOperationsExecutive &&
-              ticket.status != HospitalTicketStatus.escalatedFacilityManager)
+              ticket.status != HospitalTicketStatus.escalatedFacilityManager &&
+              ticket.status != HospitalTicketStatus.escalatedProjectHead)
             HospitalTicketAction.simulateSupervisorBreach,
         };
       case HospitalDemoRole.operationsExecutive:
@@ -86,6 +91,18 @@ class HospitalAccessPolicy {
           if (ticket.status ==
               HospitalTicketStatus.escalatedOperationsExecutive)
             HospitalTicketAction.simulateOperationsBreach,
+        };
+      case HospitalDemoRole.projectHead:
+        if (ticket.isAwaitingClient) {
+          return {
+            HospitalTicketAction.simulateClientSatisfied,
+            HospitalTicketAction.simulateClientNotSatisfied,
+          };
+        }
+        return {
+          ...common,
+          HospitalTicketAction.takeOver,
+          HospitalTicketAction.resolve,
         };
     }
   }
