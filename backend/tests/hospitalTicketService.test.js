@@ -9,7 +9,11 @@ import {
   scopeAllows,
 } from '../services/hospitalTicketAuthService.js';
 import {
+  hospitalEscalationRoleForLevel,
+  hospitalEscalationLevels,
   normalizeHospitalTicketCreate,
+  normalizedHospitalSlaPriority,
+  prioritySlaMinutes,
   slaMinutes,
   validateHospitalAction,
   validateHospitalTicketCreate,
@@ -43,10 +47,12 @@ test('role normalization preserves distinct hospital roles', () => {
   assert.equal(normalizeHospitalRole('Housekeeping Supervisor'), 'housekeeping_supervisor');
   assert.equal(normalizeHospitalRole('Operations Executive'), 'operations_executive');
   assert.equal(normalizeHospitalRole('Facility Manager'), 'facility_manager');
+  assert.equal(normalizeHospitalRole('Project Head'), 'project_head');
 });
 
 test('inactive or unknown hospital users are rejected', () => {
   assert.equal(isActiveHospitalUser(activeUser('doctor')), true);
+  assert.equal(isActiveHospitalUser(activeUser('project_head')), true);
   assert.equal(isActiveHospitalUser({ ...activeUser('doctor'), is_active: false }), false);
   assert.equal(isActiveHospitalUser(activeUser('admin')), false);
 });
@@ -152,11 +158,13 @@ test('client responses omit internal identifiers and internal-only timeline upda
 });
 
 test('status transitions reject arbitrary frontend statuses', () => {
+  assert.deepEqual(validateHospitalAction({ role: 'housekeeping_supervisor', status: 'awaiting_supervisor_acceptance', action: 'accept' }), []);
   assert.deepEqual(validateHospitalAction({ role: 'housekeeping_supervisor', status: 'assigned', action: 'accept' }), []);
   assert.ok(validateHospitalAction({ role: 'doctor', status: 'assigned', action: 'accept' }).length > 0);
   assert.ok(validateHospitalAction({ role: 'housekeeping_supervisor', status: 'closed', action: 'progress', payload: { remarks: 'x' } }).length > 0);
   assert.ok(validateHospitalAction({ role: 'doctor', status: 'assigned', action: 'progress', payload: { remarks: 'x' } }).length > 0);
   assert.deepEqual(validateHospitalAction({ role: 'operations_executive', status: 'escalated_operations_executive', action: 'progress', payload: { remarks: 'x' } }), []);
+  assert.ok(validateHospitalAction({ role: 'housekeeping_supervisor', status: 'awaiting_supervisor_acceptance', action: 'progress', payload: { remarks: 'x' } }).length > 0);
 });
 
 test('resolution and feedback validation enforce production requirements', () => {
@@ -165,9 +173,28 @@ test('resolution and feedback validation enforce production requirements', () =>
   assert.ok(validateHospitalAction({ role: 'doctor', status: 'resolved_awaiting_confirmation', action: 'feedback', payload: { rating: 2, satisfaction_status: 'not_satisfied', comments: '' } }).length > 0);
 });
 
-test('SLA configuration defaults safely and supports UAT overrides', () => {
-  assert.deepEqual(slaMinutes({}), { supervisor: 20, operations: 30 });
-  assert.deepEqual(slaMinutes({ HOSPITAL_SUPERVISOR_SLA_MINUTES: '1', HOSPITAL_OPERATIONS_SLA_MINUTES: '2' }), { supervisor: 1, operations: 2 });
+test('SLA configuration exposes the priority escalation matrix', () => {
+  assert.deepEqual(slaMinutes({}), {
+    supervisor: 20,
+    operations: 15,
+    matrix: { critical: 10, high: 10, medium: 15, low: 20 },
+  });
+  assert.deepEqual(slaMinutes({ HOSPITAL_SUPERVISOR_SLA_MINUTES: '1', HOSPITAL_OPERATIONS_SLA_MINUTES: '2' }), {
+    supervisor: 1,
+    operations: 2,
+    matrix: { critical: 10, high: 10, medium: 15, low: 20 },
+  });
+  assert.equal(normalizedHospitalSlaPriority('high'), 'critical');
+  assert.equal(prioritySlaMinutes('critical'), 10);
+  assert.equal(prioritySlaMinutes('medium'), 15);
+  assert.equal(prioritySlaMinutes('low'), 20);
+  assert.deepEqual(hospitalEscalationLevels().map((level) => level.role), [
+    'housekeeping_supervisor',
+    'operations_executive',
+    'facility_manager',
+    'project_head',
+  ]);
+  assert.equal(hospitalEscalationRoleForLevel(4).label, 'Project Head');
 });
 
 test('SLA state is server-derived', () => {
@@ -175,6 +202,8 @@ test('SLA state is server-derived', () => {
   assert.equal(hospitalSlaState({ status_code: 'assigned', supervisor_sla_due_at: '2026-07-16T10:04:00Z' }, now).state, 'near_breach');
   assert.equal(hospitalSlaState({ status_code: 'assigned', supervisor_sla_due_at: '2026-07-16T09:59:00Z' }, now).state, 'breached');
   assert.equal(hospitalSlaState({ status_code: 'reopened', supervisor_sla_due_at: '2026-07-16T09:59:00Z' }, now).state, 'breached');
+  assert.equal(hospitalSlaState({ status_code: 'escalated_facility_manager', escalation_due_at: '2026-07-16T10:10:00Z' }, now).state, 'healthy');
+  assert.equal(hospitalSlaState({ status_code: 'escalated_project_head', project_head_sla_due_at: '2026-07-16T09:59:00Z', final_escalation: true }, now).final_escalation, true);
 });
 
 test('client and internal action lists stay separated', () => {

@@ -9,7 +9,8 @@ const TICKET_SELECT = `
   block:hospital_blocks(id,block_code,block_name),
   location:hospital_locations(id,floor_name,department_name,location_name,location_code,room_number,area_name,ward_name),
   category:hospital_ticket_categories(id,category_code,category_name),
-  assignee:hospital_ticket_users!hospital_tickets_current_assignee_user_id_fkey(id,display_name,role_code)
+  assignee:hospital_ticket_users!hospital_tickets_current_assignee_user_id_fkey(id,display_name,role_code),
+  accepted_by:hospital_ticket_users!hospital_tickets_accepted_by_user_id_fkey(id,display_name,role_code)
 `;
 
 export async function loadHospitalMasters(client, actor) {
@@ -163,10 +164,74 @@ function applyTicketFilters(query, filters = {}) {
   if (filters.date_from) query = query.gte('raised_at', `${filters.date_from}T00:00:00+05:30`);
   if (filters.date_to) query = query.lte('raised_at', `${filters.date_to}T23:59:59.999+05:30`);
   if (filters.assigned_to_me === 'true') query = query.eq('current_assignee_user_id', filters.actorUserId);
-  if (filters.escalated === 'true') query = query.in('status_code', ['escalated_operations_executive', 'escalated_facility_manager']);
+  if (filters.escalated === 'true') query = query.in('status_code', ['escalated_operations_executive', 'escalated_facility_manager', 'escalated_project_head']);
   if (filters.awaiting_confirmation === 'true') query = query.eq('status_code', 'resolved_awaiting_confirmation');
   if (filters.reopened === 'true') query = query.eq('status_code', 'reopened');
   return query;
+}
+
+function requireSupervisor(actor) {
+  if (actor?.user?.profile_type !== 'internal' || actor.user.role_code !== 'housekeeping_supervisor') {
+    const error = new Error('Active Supervisor profile required.');
+    error.code = '42501';
+    throw error;
+  }
+}
+
+export async function getSupervisorDutyStatus(client, actor) {
+  requireSupervisor(actor);
+  const result = await client
+    .from('hospital_ticket_users')
+    .select('id,duty_status,duty_started_at,duty_ended_at,last_seen_at,cug_number,cug_number_display')
+    .eq('id', actor.user.id)
+    .maybeSingle();
+  if (result.error) throw result.error;
+  return result.data || {
+    id: actor.user.id,
+    duty_status: 'off_duty',
+    duty_started_at: null,
+    duty_ended_at: null,
+    last_seen_at: null,
+    cug_number: null,
+    cug_number_display: null,
+  };
+}
+
+export async function setSupervisorDuty(client, actor, onDuty, body = {}) {
+  requireSupervisor(actor);
+  const result = await client.rpc('rpc_set_hospital_supervisor_duty', {
+    p_actor_user_id: actor.user.id,
+    p_on_duty: Boolean(onDuty),
+    p_cug_number: body.cug_number || body.cugNumber || null,
+  });
+  if (result.error) throw result.error;
+  return result.data;
+}
+
+export async function listIncomingSupervisorTickets(client, actor) {
+  requireSupervisor(actor);
+  const notifications = await client
+    .from('hospital_ticket_notifications')
+    .select('id,notification_type,title,body,action_status,action_expires_at,metadata,created_at,ticket:hospital_tickets(' + TICKET_SELECT + ')')
+    .eq('recipient_user_id', actor.user.id)
+    .eq('notification_type', 'incoming_supervisor_ticket')
+    .eq('action_status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(100);
+  if (notifications.error) throw notifications.error;
+  const now = new Date();
+  return (notifications.data || [])
+    .filter((row) => row.ticket?.status_code === 'awaiting_supervisor_acceptance'
+      && row.ticket?.acceptance_status === 'awaiting'
+      && row.ticket?.acceptance_due_at
+      && new Date(row.ticket.acceptance_due_at) > now
+      && canViewHospitalTicket(actor, row.ticket))
+    .map((row) => ({
+      notification_id: row.id,
+      action_expires_at: row.action_expires_at,
+      metadata: row.metadata || {},
+      ticket: hospitalTicketForActor(actor, row.ticket),
+    }));
 }
 
 export async function listHospitalTickets(client, actor, filters = {}) {
@@ -215,17 +280,20 @@ export function hospitalTicketForActor(actor, ticket) {
   if (actor?.user?.profile_type !== 'client') {
     return { ...ticket, assignment_state: assignmentState, assignment_failure_reason: assignmentFailureReason };
   }
-  const {
-    idempotency_key: _idempotencyKey,
-    metadata: _metadata,
-    raised_by_user_id: _raisedByUserId,
-    current_assignee_user_id: _currentAssigneeUserId,
-    supervisor_user_id: _supervisorUserId,
-    operations_executive_user_id: _operationsExecutiveUserId,
-    facility_manager_user_id: _facilityManagerUserId,
-    resolved_by_user_id: _resolvedByUserId,
-    ...safeTicket
-  } = ticket;
+  const safeTicket = { ...ticket };
+  for (const key of [
+    'idempotency_key',
+    'metadata',
+    'raised_by_user_id',
+    'current_assignee_user_id',
+    'supervisor_user_id',
+    'operations_executive_user_id',
+    'facility_manager_user_id',
+    'project_head_user_id',
+    'resolved_by_user_id',
+  ]) {
+    delete safeTicket[key];
+  }
   if (safeTicket.assignee && typeof safeTicket.assignee === 'object') {
     safeTicket.assignee = {
       display_name: safeTicket.assignee.display_name || '',
@@ -244,7 +312,9 @@ export function clientCanSeeHospitalEvent(event) {
 }
 
 export function clientHospitalEventView(event) {
-  const { actor_user_id: _actorUserId, event_data: _eventData, ...safeEvent } = event;
+  const safeEvent = { ...event };
+  delete safeEvent.actor_user_id;
+  delete safeEvent.event_data;
   if (safeEvent.event_type === 'manual_escalation') safeEvent.remarks = 'Ticket escalated for operational support.';
   return safeEvent;
 }
@@ -424,6 +494,16 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
   const errors = validateHospitalAction({ role: actor.user.role_code, status: current.ticket.status_code, action, payload });
   if (errors.length) { const error = new Error(errors.join(' ')); error.code = '42501'; throw error; }
   if (!Number.isInteger(Number(expectedVersion))) { const error = new Error('Ticket version is required.'); error.code = '22023'; throw error; }
+  if (action === 'accept' && current.ticket.status_code === 'awaiting_supervisor_acceptance') {
+    const result = await client.rpc('rpc_accept_hospital_supervisor_ticket', {
+      p_ticket_id: current.ticket.id,
+      p_actor_user_id: actor.user.id,
+      p_expected_version: Number(expectedVersion),
+      p_confirmed_location: payload.confirmed_location === true || payload.confirmedLocation === true,
+    });
+    if (result.error) throw result.error;
+    return getHospitalTicket(client, actor, current.ticket.id);
+  }
   const requiredRole = ['manual_escalation', 'escalate_operations'].includes(action)
     ? 'operations_executive'
     : action === 'escalate_facility'
@@ -460,12 +540,20 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
 }
 
 export function hospitalSlaState(ticket, now = new Date()) {
-  let dueAt = null;
-  if (['open', 'assigned', 'accepted', 'in_progress', 'reopened'].includes(ticket.status_code)) dueAt = ticket.supervisor_sla_due_at;
-  if (ticket.status_code === 'escalated_operations_executive') dueAt = ticket.operations_sla_due_at;
+  let dueAt = ticket.escalation_due_at || null;
+  if (!dueAt && ['open', 'awaiting_supervisor_acceptance', 'assigned', 'accepted', 'in_progress', 'reopened'].includes(ticket.status_code)) dueAt = ticket.supervisor_sla_due_at;
+  if (!dueAt && ticket.status_code === 'escalated_operations_executive') dueAt = ticket.operations_sla_due_at;
+  if (!dueAt && ticket.status_code === 'escalated_project_head') dueAt = ticket.project_head_sla_due_at;
   if (!dueAt) return { state: 'not_applicable', due_at: null, remaining_seconds: 0 };
   const remaining = Math.floor((new Date(dueAt).getTime() - now.getTime()) / 1000);
-  return { state: remaining < 0 ? 'breached' : remaining <= 300 ? 'near_breach' : 'healthy', due_at: dueAt, remaining_seconds: remaining };
+  return {
+    state: remaining < 0 ? 'breached' : remaining <= 300 ? 'near_breach' : 'healthy',
+    due_at: dueAt,
+    remaining_seconds: remaining,
+    current_owner_role: ticket.current_assignee_role || null,
+    escalation_level: ticket.current_escalation_level_no || null,
+    final_escalation: ticket.final_escalation === true,
+  };
 }
 
 export function allowedActionsForTicket(actor, ticket) {
@@ -487,10 +575,11 @@ export async function hospitalDashboard(client, actor) {
   return {
     counts: {
       new_complaints: tickets.filter((row) => row.status_code === 'open' && now - new Date(row.raised_at) <= 10 * 60 * 1000).length,
+      awaiting_supervisor_acceptance: count('awaiting_supervisor_acceptance'),
       open: count('open'), assigned: count('assigned'),
       in_progress: count('accepted') + count('in_progress'),
       near_sla_breach: urgent.filter((row) => row.sla.state === 'near_breach').length,
-      escalated: count('escalated_operations_executive') + count('escalated_facility_manager'),
+      escalated: count('escalated_operations_executive') + count('escalated_facility_manager') + count('escalated_project_head'),
       resolved_awaiting_confirmation: count('resolved_awaiting_confirmation'),
       reopened: count('reopened'),
       closed_today: tickets.filter((row) => row.status_code === 'closed' && row.closed_at && new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(row.closed_at)) === today).length,

@@ -1,12 +1,14 @@
-enum HospitalDemoRole { supervisor, operationsExecutive, facilityManager }
+enum HospitalDemoRole { supervisor, operationsExecutive, facilityManager, projectHead }
 
 enum HospitalTicketStatus {
   open,
+  awaitingSupervisorAcceptance,
   assigned,
   accepted,
   inProgress,
   escalatedOperationsExecutive,
   escalatedFacilityManager,
+  escalatedProjectHead,
   resolvedAwaitingConfirmation,
   reopened,
   closed,
@@ -98,6 +100,10 @@ class HospitalTicket {
     required this.supervisorName,
     required this.supervisorDueAt,
     required this.events,
+    this.escalationDueAt,
+    this.acceptanceDueAt,
+    this.acceptanceStatus = '',
+    this.acceptedByName = '',
     this.site = '',
     this.department = '',
     this.ward = '',
@@ -150,6 +156,10 @@ class HospitalTicket {
   final String responsibleRole;
   final String supervisorName;
   final DateTime? supervisorDueAt;
+  final DateTime? escalationDueAt;
+  final DateTime? acceptanceDueAt;
+  final String acceptanceStatus;
+  final String acceptedByName;
   final DateTime? operationsEscalatedAt;
   final DateTime? operationsDueAt;
   final DateTime? facilityEscalatedAt;
@@ -182,6 +192,10 @@ class HospitalTicket {
     DateTime? acceptedAt,
     DateTime? workStartedAt,
     DateTime? supervisorDueAt,
+    DateTime? escalationDueAt,
+    DateTime? acceptanceDueAt,
+    String? acceptanceStatus,
+    String? acceptedByName,
     DateTime? operationsEscalatedAt,
     DateTime? operationsDueAt,
     DateTime? facilityEscalatedAt,
@@ -225,6 +239,10 @@ class HospitalTicket {
       responsibleRole: responsibleRole ?? this.responsibleRole,
       supervisorName: supervisorName,
       supervisorDueAt: supervisorDueAt ?? this.supervisorDueAt,
+      escalationDueAt: escalationDueAt ?? this.escalationDueAt,
+      acceptanceDueAt: acceptanceDueAt ?? this.acceptanceDueAt,
+      acceptanceStatus: acceptanceStatus ?? this.acceptanceStatus,
+      acceptedByName: acceptedByName ?? this.acceptedByName,
       operationsEscalatedAt:
           operationsEscalatedAt ?? this.operationsEscalatedAt,
       operationsDueAt: operationsDueAt ?? this.operationsDueAt,
@@ -250,6 +268,7 @@ class HospitalTicket {
     final location = row['location'] is Map ? row['location'] as Map : const {};
     final category = row['category'] is Map ? row['category'] as Map : const {};
     final assignee = row['assignee'] is Map ? row['assignee'] as Map : const {};
+    final acceptedBy = row['accepted_by'] is Map ? row['accepted_by'] as Map : const {};
     final floorName = _firstText([
       row['floor_name_snapshot'],
       row['floor_name'],
@@ -322,6 +341,14 @@ class HospitalTicket {
       supervisorDueAt: DateTime.tryParse(
         '${row['supervisor_sla_due_at'] ?? ''}',
       )?.toLocal(),
+      escalationDueAt: DateTime.tryParse(
+        '${row['escalation_due_at'] ?? ''}',
+      )?.toLocal(),
+      acceptanceDueAt: DateTime.tryParse(
+        '${row['acceptance_due_at'] ?? ''}',
+      )?.toLocal(),
+      acceptanceStatus: '${row['acceptance_status'] ?? ''}',
+      acceptedByName: '${acceptedBy['display_name'] ?? ''}',
       operationsEscalatedAt: DateTime.tryParse(
         '${row['supervisor_escalated_at'] ?? ''}',
       )?.toLocal(),
@@ -419,12 +446,15 @@ bool _isMissingLocationPlaceholder(String value) {
 }
 
 HospitalTicketStatus _hospitalStatusFromCode(String value) => switch (value) {
+  'awaiting_supervisor_acceptance' =>
+    HospitalTicketStatus.awaitingSupervisorAcceptance,
   'assigned' => HospitalTicketStatus.assigned,
   'accepted' => HospitalTicketStatus.accepted,
   'in_progress' => HospitalTicketStatus.inProgress,
   'escalated_operations_executive' =>
     HospitalTicketStatus.escalatedOperationsExecutive,
   'escalated_facility_manager' => HospitalTicketStatus.escalatedFacilityManager,
+  'escalated_project_head' => HospitalTicketStatus.escalatedProjectHead,
   'resolved_awaiting_confirmation' =>
     HospitalTicketStatus.resolvedAwaitingConfirmation,
   'reopened' => HospitalTicketStatus.reopened,
@@ -451,12 +481,15 @@ extension HospitalDemoRoleLabels on HospitalDemoRole {
     HospitalDemoRole.supervisor => 'Housekeeping Supervisor',
     HospitalDemoRole.operationsExecutive => 'Operations Executive',
     HospitalDemoRole.facilityManager => 'Facility Manager',
+    HospitalDemoRole.projectHead => 'Project Head',
   };
 }
 
 extension HospitalStatusLabels on HospitalTicketStatus {
   String get code => switch (this) {
     HospitalTicketStatus.open => 'open',
+    HospitalTicketStatus.awaitingSupervisorAcceptance =>
+      'awaiting_supervisor_acceptance',
     HospitalTicketStatus.assigned => 'assigned',
     HospitalTicketStatus.accepted => 'accepted',
     HospitalTicketStatus.inProgress => 'in_progress',
@@ -464,6 +497,7 @@ extension HospitalStatusLabels on HospitalTicketStatus {
       'escalated_operations_executive',
     HospitalTicketStatus.escalatedFacilityManager =>
       'escalated_facility_manager',
+    HospitalTicketStatus.escalatedProjectHead => 'escalated_project_head',
     HospitalTicketStatus.resolvedAwaitingConfirmation =>
       'resolved_awaiting_confirmation',
     HospitalTicketStatus.reopened => 'reopened',
@@ -473,6 +507,8 @@ extension HospitalStatusLabels on HospitalTicketStatus {
 
   String get label => switch (this) {
     HospitalTicketStatus.open => 'Open',
+    HospitalTicketStatus.awaitingSupervisorAcceptance =>
+      'Waiting for QPMS response',
     HospitalTicketStatus.assigned => 'Assigned',
     HospitalTicketStatus.accepted => 'Accepted',
     HospitalTicketStatus.inProgress => 'In Progress',
@@ -480,6 +516,7 @@ extension HospitalStatusLabels on HospitalTicketStatus {
       'Escalated to Operations Executive',
     HospitalTicketStatus.escalatedFacilityManager =>
       'Escalated to Facility Manager',
+    HospitalTicketStatus.escalatedProjectHead => 'Escalated to Project Head',
     HospitalTicketStatus.resolvedAwaitingConfirmation =>
       'Resolved - Awaiting Client Confirmation',
     HospitalTicketStatus.reopened => 'Reopened',

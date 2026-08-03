@@ -26,6 +26,7 @@ class HospitalTicketCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sla = controller.slaFor(ticket);
+    final acceptanceRemaining = ticket.acceptanceDueAt?.difference(controller.now);
     final slaColor = switch (sla.state) {
       HospitalSlaState.breached => hospitalRed,
       HospitalSlaState.nearBreach => hospitalAmber,
@@ -72,6 +73,18 @@ class HospitalTicketCard extends StatelessWidget {
                 runSpacing: 8,
                 children: [
                   _Badge(label: ticket.status.label, color: _statusColor()),
+                  if (ticket.status ==
+                          HospitalTicketStatus.awaitingSupervisorAcceptance &&
+                      acceptanceRemaining != null)
+                    _Badge(
+                      label: acceptanceRemaining.isNegative
+                          ? 'Acceptance expired'
+                          : 'Accept in ${HospitalSlaPolicy.formatDuration(acceptanceRemaining)}',
+                      color: acceptanceRemaining.isNegative
+                          ? hospitalRed
+                          : hospitalAmber,
+                      prominent: true,
+                    ),
                   _Badge(label: sla.label, color: slaColor, prominent: true),
                 ],
               ),
@@ -111,8 +124,10 @@ class HospitalTicketCard extends StatelessWidget {
   Color _statusColor() => switch (ticket.status) {
     HospitalTicketStatus.closed ||
     HospitalTicketStatus.resolvedAwaitingConfirmation => hospitalGreen,
+    HospitalTicketStatus.awaitingSupervisorAcceptance => hospitalAmber,
     HospitalTicketStatus.escalatedOperationsExecutive ||
     HospitalTicketStatus.escalatedFacilityManager ||
+    HospitalTicketStatus.escalatedProjectHead ||
     HospitalTicketStatus.reopened => hospitalRed,
     HospitalTicketStatus.inProgress ||
     HospitalTicketStatus.accepted => hospitalTeal,

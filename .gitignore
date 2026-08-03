@@ -118,6 +118,8 @@ dist
 
 # Firebase cache directory
 .firebase/
+**/android/app/google-services.json
+**/ios/Runner/GoogleService-Info.plist
 
 # TernJS port file
 .tern-port

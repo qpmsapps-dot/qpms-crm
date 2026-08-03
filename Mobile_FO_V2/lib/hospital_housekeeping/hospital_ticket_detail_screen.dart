@@ -165,7 +165,8 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
       );
     }
     if (actions.contains(HospitalTicketAction.accept) &&
-        (ticket.status == HospitalTicketStatus.open ||
+        (ticket.status == HospitalTicketStatus.awaitingSupervisorAcceptance ||
+            ticket.status == HospitalTicketStatus.open ||
             ticket.status == HospitalTicketStatus.assigned ||
             ticket.status == HospitalTicketStatus.reopened)) {
       return const _PrimaryAction(
@@ -184,7 +185,8 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
     }
     if (actions.contains(HospitalTicketAction.takeOver) &&
         (ticket.status == HospitalTicketStatus.escalatedOperationsExecutive ||
-            ticket.status == HospitalTicketStatus.escalatedFacilityManager)) {
+            ticket.status == HospitalTicketStatus.escalatedFacilityManager ||
+            ticket.status == HospitalTicketStatus.escalatedProjectHead)) {
       return const _PrimaryAction(
         HospitalTicketAction.takeOver,
         'Take Over',
@@ -195,7 +197,8 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
         (ticket.status == HospitalTicketStatus.inProgress ||
             ticket.status ==
                 HospitalTicketStatus.escalatedOperationsExecutive ||
-            ticket.status == HospitalTicketStatus.escalatedFacilityManager)) {
+            ticket.status == HospitalTicketStatus.escalatedFacilityManager ||
+            ticket.status == HospitalTicketStatus.escalatedProjectHead)) {
       return const _PrimaryAction(
         HospitalTicketAction.resolve,
         'Resolve Ticket',
@@ -211,7 +214,9 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
   ]) async {
     final ticket = widget.controller.ticketById(widget.ticketId);
     final actionLabel = label ?? _actionLabel(action);
-    final confirmed = await _confirm(actionLabel);
+    final confirmed = action == HospitalTicketAction.accept
+        ? await _confirmAccept(ticket)
+        : await _confirm(actionLabel);
     if (confirmed != true || !mounted) return;
     try {
       switch (action) {
@@ -294,6 +299,32 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
         FilledButton(
           onPressed: () => Navigator.pop(context, true),
           child: const Text('Confirm'),
+        ),
+      ],
+    ),
+  );
+
+  Future<bool?> _confirmAccept(HospitalTicket ticket) => showDialog<bool>(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('Accept this ticket?'),
+      content: Text(
+        [
+          'Block: ${ticket.block}',
+          'Floor: ${ticket.floor}',
+          'Area: ${ticket.conciseLocation}',
+          '',
+          'Confirm that this location is under your responsibility.',
+        ].join('\n'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Accept Ticket'),
         ),
       ],
     ),
@@ -1214,9 +1245,11 @@ Color _slaColor(HospitalSlaState state) => switch (state) {
 Color _statusColor(HospitalTicketStatus status) => switch (status) {
   HospitalTicketStatus.closed ||
   HospitalTicketStatus.resolvedAwaitingConfirmation => hospitalGreen,
-  HospitalTicketStatus.escalatedOperationsExecutive ||
-  HospitalTicketStatus.escalatedFacilityManager ||
-  HospitalTicketStatus.reopened => hospitalRed,
+  HospitalTicketStatus.awaitingSupervisorAcceptance => hospitalAmber,
+    HospitalTicketStatus.escalatedOperationsExecutive ||
+    HospitalTicketStatus.escalatedFacilityManager ||
+    HospitalTicketStatus.escalatedProjectHead ||
+    HospitalTicketStatus.reopened => hospitalRed,
   HospitalTicketStatus.inProgress ||
   HospitalTicketStatus.accepted => hospitalTeal,
   _ => qpmsBlue,

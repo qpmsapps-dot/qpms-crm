@@ -120,6 +120,10 @@ class HospitalDashboardScreen extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
+        if (controller.session.role == HospitalDemoRole.supervisor) ...[
+          _DutyControl(controller: controller),
+          const SizedBox(height: 16),
+        ],
         GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
@@ -176,6 +180,37 @@ class HospitalDashboardScreen extends StatelessWidget {
           },
         ),
         const SizedBox(height: 22),
+        if (controller.session.role == HospitalDemoRole.supervisor &&
+            controller.incomingTickets.isNotEmpty) ...[
+          const Text(
+            'Incoming tickets',
+            style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Review the block, floor and area. Accept only if it is under your responsibility.',
+            style: TextStyle(color: qpmsMuted, fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          ...controller.incomingTickets.take(4).map(
+                (ticket) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: HospitalTicketCard(
+                    ticket: ticket,
+                    controller: controller,
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => HospitalTicketDetailScreen(
+                          controller: controller,
+                          ticketId: ticket.id,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          const SizedBox(height: 12),
+        ],
         const Text(
           'Urgent tickets',
           style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
@@ -211,6 +246,51 @@ class HospitalDashboardScreen extends StatelessWidget {
       ],
     );
   }
+}
+
+class _DutyControl extends StatelessWidget {
+  const _DutyControl({required this.controller});
+
+  final HospitalController controller;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          Icon(
+            controller.isOnDuty
+                ? Icons.verified_user_outlined
+                : Icons.pause_circle_outline,
+            color: controller.isOnDuty ? hospitalGreen : hospitalAmber,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  controller.isOnDuty ? 'On Duty' : 'Off Duty',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const Text(
+                  'On-Duty Supervisors receive incoming NIMS housekeeping tickets.',
+                  style: TextStyle(color: qpmsMuted, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          FilledButton.tonal(
+            onPressed: controller.isOnDuty
+                ? controller.endDuty
+                : controller.startDuty,
+            child: Text(controller.isOnDuty ? 'End Duty' : 'Start Duty'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _EmptyState extends StatelessWidget {

@@ -5,8 +5,10 @@ import {
   completeAttachment,
   createAttachmentUpload,
   createHospitalTicket,
+  getSupervisorDutyStatus,
   getHospitalTicket,
   hospitalDashboard,
+  listIncomingSupervisorTickets,
   listHospitalTickets,
   listHospitalRoutingAssignments,
   listHospitalRoutingShifts,
@@ -17,8 +19,15 @@ import {
   loadHospitalLocationHierarchy,
   nimsSupervisorCoverageReport,
   performHospitalAction,
+  setSupervisorDuty,
   signedAttachmentDownload,
 } from '../services/hospitalTicketService.js';
+import {
+  disableHospitalPushDevice,
+  dispatchHospitalNotificationPushes,
+  listHospitalPushDevices,
+  registerHospitalPushDevice,
+} from '../services/hospitalTicketPushService.js';
 import { safeHospitalError } from '../services/hospitalTicketWorkflowService.js';
 
 const ACTION_ROUTES = {
@@ -34,7 +43,7 @@ const ACTION_ROUTES = {
   feedback: 'feedback',
 };
 
-export function createHospitalTicketRouter({ anonClient, serviceClient, environment = process.env }) {
+export function createHospitalTicketRouter({ anonClient, serviceClient }) {
   const router = express.Router();
   router.use(createHospitalAuthMiddleware({ anonClient, serviceClient }));
 
@@ -44,6 +53,31 @@ export function createHospitalTicketRouter({ anonClient, serviceClient, environm
     scopes: request.hospitalActor.scopes,
     allowed_actions: hospitalAllowedActions(request.hospitalActor.user),
   }));
+
+  router.get('/me/duty', async (request, response) => {
+    try { response.json({ ok: true, duty: await getSupervisorDutyStatus(serviceClient, request.hospitalActor) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
+  router.post('/me/duty/start', async (request, response) => {
+    try { response.json({ ok: true, duty: await setSupervisorDuty(serviceClient, request.hospitalActor, true, request.body || {}) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
+  router.post('/me/duty/end', async (request, response) => {
+    try { response.json({ ok: true, duty: await setSupervisorDuty(serviceClient, request.hospitalActor, false, request.body || {}) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
+  router.get('/me/push-devices', async (request, response) => {
+    try { response.json({ ok: true, devices: await listHospitalPushDevices(serviceClient, request.hospitalActor) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
+  router.post('/me/push-devices', async (request, response) => {
+    try { response.status(201).json({ ok: true, device: await registerHospitalPushDevice(serviceClient, request.hospitalActor, request.body || {}) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
+  router.delete('/me/push-devices/:deviceId', async (request, response) => {
+    try { response.json({ ok: true, device: await disableHospitalPushDevice(serviceClient, request.hospitalActor, request.params.deviceId) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
 
   router.get('/blocks', masterHandler('blocks'));
   router.get('/locations', masterHandler('locations'));
@@ -88,10 +122,16 @@ export function createHospitalTicketRouter({ anonClient, serviceClient, environm
     catch (error) { safeHospitalError(response, error); }
   });
 
+  router.get('/supervisor/incoming', async (request, response) => {
+    try { response.json({ ok: true, incoming: await listIncomingSupervisorTickets(serviceClient, request.hospitalActor) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
+
   router.post('/', async (request, response) => {
     try {
       const result = await createHospitalTicket(serviceClient, request.hospitalActor, request.body, request.headers['idempotency-key']);
       const detail = await getHospitalTicket(serviceClient, request.hospitalActor, result.ticket.id);
+      runHospitalPushDispatch(serviceClient, 'ticket_created');
       response.status(result.idempotent_replay ? 200 : 201).json({ ok: true, ...detail, idempotent_replay: result.idempotent_replay });
     } catch (error) { safeHospitalError(response, error); }
   });
@@ -106,7 +146,7 @@ export function createHospitalTicketRouter({ anonClient, serviceClient, environm
 
   router.post('/notifications/:notificationId/read', async (request, response) => {
     try {
-      const result = await serviceClient.from('hospital_ticket_notifications').update({ read_at: new Date().toISOString(), delivery_status: 'read' }).eq('id', request.params.notificationId).eq('recipient_user_id', request.hospitalActor.user.id).select('id').maybeSingle();
+      const result = await serviceClient.from('hospital_ticket_notifications').update({ read_at: new Date().toISOString(), delivery_status: 'read', read_status: true }).eq('id', request.params.notificationId).eq('recipient_user_id', request.hospitalActor.user.id).select('id').maybeSingle();
       if (result.error) throw result.error;
       if (!result.data) { const error = new Error('Notification was not found.'); error.code = '42501'; throw error; }
       response.json({ ok: true });
@@ -125,6 +165,7 @@ export function createHospitalTicketRouter({ anonClient, serviceClient, environm
           ? request.hospitalActor.user.role_code === 'operations_executive' ? 'escalate_facility' : 'manual_escalation'
           : action;
         const result = await performHospitalAction(serviceClient, request.hospitalActor, request.params.ticketId, effectiveAction, request.body?.version, request.body || {});
+        runHospitalPushDispatch(serviceClient, `ticket_action_${path}`);
         response.json({ ok: true, ...result });
       } catch (error) { safeHospitalError(response, error); }
     });
@@ -151,4 +192,15 @@ export function createHospitalTicketRouter({ anonClient, serviceClient, environm
   }
 
   return router;
+}
+
+function runHospitalPushDispatch(serviceClient, source) {
+  setImmediate(() => {
+    dispatchHospitalNotificationPushes(serviceClient)
+      .catch((error) => console.warn('[Hospital Push] dispatch failed after route action', {
+        source,
+        code: error?.code || null,
+        message: error?.message || 'unknown',
+      }));
+  });
 }

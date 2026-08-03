@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -15,11 +17,39 @@ import '../features/tickets/feedback_screen.dart';
 import '../state/auth_controller.dart';
 import '../state/notification_controller.dart';
 import '../state/ticket_controller.dart';
+import '../services/client_push_service.dart';
 import 'routes.dart';
 import 'theme.dart';
 
-class QpmsClientTicketingApp extends StatelessWidget {
+class QpmsClientTicketingApp extends StatefulWidget {
   const QpmsClientTicketingApp({super.key});
+
+  @override
+  State<QpmsClientTicketingApp> createState() => _QpmsClientTicketingAppState();
+}
+
+class _QpmsClientTicketingAppState extends State<QpmsClientTicketingApp> {
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  StreamSubscription<ClientPushMessage>? _pushSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _pushSubscription = ClientPushService.foregroundMessages.listen(
+      _handlePush,
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      for (final message in ClientPushService.takePendingMessages()) {
+        _handlePush(message);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _pushSubscription?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -30,6 +60,7 @@ class QpmsClientTicketingApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => NotificationController()),
       ],
       child: MaterialApp(
+        navigatorKey: _navigatorKey,
         title: 'QPMS Client Ticketing',
         debugShowCheckedModeBanner: false,
         theme: buildQpmsTheme(),
@@ -69,6 +100,43 @@ class QpmsClientTicketingApp extends StatelessWidget {
           return null;
         },
       ),
+    );
+  }
+
+  void _handlePush(ClientPushMessage message) {
+    final context = _navigatorKey.currentContext;
+    if (context == null) return;
+    final ticketNumber = message.ticketNumber.isNotEmpty
+        ? message.ticketNumber
+        : message.ticketId;
+    if (ticketNumber.isEmpty) return;
+    unawaited(context.read<TicketController>().loadDetail(ticketNumber));
+    unawaited(context.read<NotificationController>().load());
+    if (message.openImmediately) {
+      _openPushTicket(message, ticketNumber);
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message.body.isEmpty
+              ? message.title
+              : '${message.title}\n${message.body}',
+        ),
+        action: SnackBarAction(
+          label: 'Open',
+          onPressed: () => _openPushTicket(message, ticketNumber),
+        ),
+      ),
+    );
+  }
+
+  void _openPushTicket(ClientPushMessage message, String ticketNumber) {
+    _navigatorKey.currentState?.pushNamed(
+      message.targetScreen == 'ticket_feedback'
+          ? AppRoutes.feedback
+          : AppRoutes.ticketDetails,
+      arguments: ticketNumber,
     );
   }
 }

@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import 'app.dart';
+import 'hospital_housekeeping/hospital_push_service.dart';
 import 'services/background_tracking_service.dart';
 import 'services/crash_log_service.dart';
 import 'tracking/tracking_flags.dart';
@@ -16,6 +17,7 @@ Future<void> main() async {
         // Configure only; GPS starts after login + Start Day.
         await BackgroundTrackingService.configure();
       }
+      await HospitalPushService.configure();
       FlutterError.onError = (details) {
         FlutterError.presentError(details);
         unawaited(

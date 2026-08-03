@@ -17,12 +17,13 @@ const WEB_ROLE_KEYS = new Set([
   'OPERATIONS',
   'OPERATIONSEXECUTIVE',
   'FACILITYMANAGER',
+  'PROJECTHEAD',
   'EXISTINGBUSINESSOPERATIONSTEAM',
 ]);
 
 const SAFE_PAGE_SIZE_MAX = 100;
-const ACTIVE_SUPERVISOR_SLA_STATUSES = ['open', 'assigned', 'accepted', 'in_progress', 'reopened'];
-const ESCALATED_STATUSES = ['escalated_operations_executive', 'escalated_facility_manager'];
+const ACTIVE_SUPERVISOR_SLA_STATUSES = ['open', 'awaiting_supervisor_acceptance', 'assigned', 'accepted', 'in_progress', 'reopened'];
+const ESCALATED_STATUSES = ['escalated_operations_executive', 'escalated_facility_manager', 'escalated_project_head'];
 const CLOSED_STATUSES = ['closed', 'cancelled'];
 
 const TICKET_WEB_SELECT = `
@@ -32,7 +33,8 @@ const TICKET_WEB_SELECT = `
   category:hospital_ticket_categories(id,category_code,category_name),
   assignee:hospital_ticket_users!hospital_tickets_current_assignee_user_id_fkey(id,display_name,role_code),
   supervisor:hospital_ticket_users!hospital_tickets_supervisor_user_id_fkey(id,display_name,role_code),
-  resolved_by:hospital_ticket_users!hospital_tickets_resolved_by_user_id_fkey(id,display_name,role_code)
+  resolved_by:hospital_ticket_users!hospital_tickets_resolved_by_user_id_fkey(id,display_name,role_code),
+  accepted_by:hospital_ticket_users!hospital_tickets_accepted_by_user_id_fkey(id,display_name,role_code)
 `;
 
 function clean(value, maxLength = 160) {
@@ -185,8 +187,10 @@ function applyFilters(query, filters = {}, { includePaginationFilters = true } =
   if (includePaginationFilters && truthy(filters.overdue)) {
     const nowIso = new Date().toISOString();
     query = query.or([
+      `and(status_code.not.in.(resolved_awaiting_confirmation,closed,cancelled),escalation_due_at.lt.${nowIso})`,
       `and(status_code.in.(${ACTIVE_SUPERVISOR_SLA_STATUSES.join(',')}),supervisor_sla_due_at.lt.${nowIso})`,
       `and(status_code.eq.escalated_operations_executive,operations_sla_due_at.lt.${nowIso})`,
+      `and(status_code.eq.escalated_project_head,project_head_sla_due_at.lt.${nowIso})`,
     ].join(','));
   }
   return query;
@@ -244,8 +248,14 @@ function listRow(ticket, attachmentCount = 0) {
     priority: ticket.priority,
     status_code: ticket.status_code,
     current_assignee: safeUser(ticket.assignee),
+    accepted_by: safeUser(ticket.accepted_by),
     supervisor: safeUser(ticket.supervisor),
     current_escalation_level: ticket.current_escalation_level,
+    current_escalation_level_no: ticket.current_escalation_level_no,
+    acceptance_status: ticket.acceptance_status,
+    acceptance_due_at: ticket.acceptance_due_at,
+    acceptance_timeout_at: ticket.acceptance_timeout_at,
+    broadcasted_at: ticket.broadcasted_at,
     raised_at: ticket.raised_at,
     updated_at: ticket.updated_at,
     assigned_at: ticket.assigned_at,
@@ -255,6 +265,9 @@ function listRow(ticket, attachmentCount = 0) {
     closed_at: ticket.closed_at,
     supervisor_sla_due_at: ticket.supervisor_sla_due_at,
     operations_sla_due_at: ticket.operations_sla_due_at,
+    escalation_due_at: ticket.escalation_due_at,
+    project_head_sla_due_at: ticket.project_head_sla_due_at,
+    final_escalation: ticket.final_escalation === true,
     sla,
     rating: ticket.client_rating,
     satisfaction_status: ticket.client_satisfaction_status,
@@ -352,12 +365,22 @@ export async function listWebHospitalTickets(client, access, filters = {}) {
 }
 
 export async function summarizeWebHospitalTickets(client, access, filters = {}) {
-  let query = client.from('hospital_tickets').select('id,status_code,current_assignee_user_id,supervisor_sla_due_at,operations_sla_due_at,reopen_count', { count: 'exact' });
+  let query = client.from('hospital_tickets').select('id,status_code,current_assignee_user_id,current_assignee_role,current_escalation_level_no,supervisor_sla_due_at,operations_sla_due_at,project_head_sla_due_at,escalation_due_at,final_escalation,reopen_count,acceptance_status,acceptance_due_at', { count: 'exact' });
   query = applyAccessScope(query, access);
   query = applyFilters(query, filters, { includePaginationFilters: false });
   const { data, error } = await query.limit(10000);
   if (error) throw error;
   const rows = data || [];
+  let onDutyQuery = client
+    .from('hospital_ticket_users')
+    .select('id', { count: 'exact', head: true })
+    .eq('role_code', 'housekeeping_supervisor')
+    .eq('profile_type', 'internal')
+    .eq('is_active', true)
+    .eq('duty_status', 'on_duty');
+  if (!access.broad && access.clientIds?.length) onDutyQuery = onDutyQuery.in('client_id', access.clientIds);
+  const onDutyResult = await onDutyQuery;
+  if (onDutyResult.error && onDutyResult.error.code !== '42703') throw onDutyResult.error;
   const now = new Date();
   const isOverdue = (ticket) => hospitalSlaState(ticket, now).state === 'breached';
   const countStatus = (status) => rows.filter((ticket) => ticket.status_code === status).length;
@@ -365,6 +388,7 @@ export async function summarizeWebHospitalTickets(client, access, filters = {}) 
     total: rows.length,
     open: countStatus('open'),
     assigned: countStatus('assigned'),
+    awaiting_supervisor_acceptance: countStatus('awaiting_supervisor_acceptance'),
     accepted: countStatus('accepted'),
     in_progress: countStatus('in_progress'),
     escalated: rows.filter((ticket) => ESCALATED_STATUSES.includes(ticket.status_code)).length,
@@ -373,6 +397,7 @@ export async function summarizeWebHospitalTickets(client, access, filters = {}) 
     reopened: rows.filter((ticket) => ticket.status_code === 'reopened' || Number(ticket.reopen_count || 0) > 0).length,
     overdue: rows.filter(isOverdue).length,
     unassigned: rows.filter((ticket) => !ticket.current_assignee_user_id && !CLOSED_STATUSES.includes(ticket.status_code)).length,
+    on_duty_supervisors: onDutyResult.count || 0,
   };
 }
 

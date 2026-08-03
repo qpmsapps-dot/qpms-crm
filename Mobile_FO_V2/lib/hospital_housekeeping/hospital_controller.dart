@@ -56,6 +56,9 @@ enum HospitalTicketListFilter {
 abstract class HospitalTicketGateway {
   Future<List<HospitalTicket>> fetchTickets();
   Future<List<Map<String, dynamic>>> fetchNotifications();
+  Future<Map<String, dynamic>> fetchDutyStatus();
+  Future<Map<String, dynamic>> startDuty({String? cugNumber});
+  Future<Map<String, dynamic>> endDuty();
   Future<void> markNotificationRead(String id);
   Future<Map<String, dynamic>> fetchDetail(String ticketId);
   Future<String> signedDownload(String ticketId, String attachmentId);
@@ -78,6 +81,17 @@ class LiveHospitalTicketGateway implements HospitalTicketGateway {
   @override
   Future<List<Map<String, dynamic>>> fetchNotifications() =>
       HospitalTicketApi.fetchNotifications();
+
+  @override
+  Future<Map<String, dynamic>> fetchDutyStatus() =>
+      HospitalTicketApi.fetchDutyStatus();
+
+  @override
+  Future<Map<String, dynamic>> startDuty({String? cugNumber}) =>
+      HospitalTicketApi.startDuty(cugNumber: cugNumber);
+
+  @override
+  Future<Map<String, dynamic>> endDuty() => HospitalTicketApi.endDuty();
 
   @override
   Future<void> markNotificationRead(String id) =>
@@ -147,9 +161,12 @@ class HospitalController extends ChangeNotifier {
   String? get error => _error;
   List<HospitalTicket> get allTickets => List.unmodifiable(_tickets);
   List<Map<String, dynamic>> _notifications = [];
+  String _dutyStatus = 'off_duty';
   final Set<String> _busyTicketIds = {};
   List<Map<String, dynamic>> get notifications =>
       List.unmodifiable(_notifications);
+  String get dutyStatus => _dutyStatus;
+  bool get isOnDuty => _dutyStatus == 'on_duty';
   bool isTicketBusy(String ticketId) => _busyTicketIds.contains(ticketId);
   bool isDetailLoading(String ticketId) =>
       _detailLoadingTicketIds.contains(ticketId);
@@ -166,6 +183,26 @@ class HospitalController extends ChangeNotifier {
 
   List<HospitalTicket> get urgentTickets => visibleTickets
       .where((ticket) => !ticket.isFinal && !ticket.isAwaitingClient)
+      .toList();
+
+  List<HospitalTicket> get incomingTickets => visibleTickets
+      .where(
+        (ticket) =>
+            ticket.status ==
+                HospitalTicketStatus.awaitingSupervisorAcceptance &&
+            ticket.acceptanceStatus == 'awaiting' &&
+            ticket.acceptanceDueAt != null &&
+            ticket.acceptanceDueAt!.isAfter(_now),
+      )
+      .toList();
+
+  List<HospitalTicket> get myAcceptedTickets => visibleTickets
+      .where(
+        (ticket) =>
+            ticket.responsiblePerson.trim().toLowerCase() ==
+                session.displayName.trim().toLowerCase() &&
+            ticket.status != HospitalTicketStatus.awaitingSupervisorAcceptance,
+      )
       .toList();
 
   List<HospitalTicket> filteredTickets({
@@ -217,9 +254,16 @@ class HospitalController extends ChangeNotifier {
       final results = await Future.wait([
         _api.fetchTickets(),
         _api.fetchNotifications(),
+        if (session.role == HospitalDemoRole.supervisor)
+          _api.fetchDutyStatus()
+        else
+          Future.value(<String, dynamic>{}),
       ]);
       _tickets = _mergeListRefresh(results[0] as List<HospitalTicket>);
       _notifications = results[1] as List<Map<String, dynamic>>;
+      final duty = results[2] is Map ? results[2] as Map : const {};
+      final dutyBody = duty['duty'] is Map ? duty['duty'] as Map : duty;
+      _dutyStatus = '${dutyBody['duty_status'] ?? _dutyStatus}';
       _now = DateTime.now();
     } catch (error) {
       _error = error.toString();
@@ -248,6 +292,30 @@ class HospitalController extends ChangeNotifier {
         )
         .toList();
     notifyListeners();
+  }
+
+  Future<void> startDuty({String? cugNumber}) async {
+    if (!productionMode) {
+      _dutyStatus = 'on_duty';
+      notifyListeners();
+      return;
+    }
+    final response = await _api.startDuty(cugNumber: cugNumber);
+    final duty = response['duty'] is Map ? response['duty'] as Map : response;
+    _dutyStatus = '${duty['duty_status'] ?? 'on_duty'}';
+    await load();
+  }
+
+  Future<void> endDuty() async {
+    if (!productionMode) {
+      _dutyStatus = 'off_duty';
+      notifyListeners();
+      return;
+    }
+    final response = await _api.endDuty();
+    final duty = response['duty'] is Map ? response['duty'] as Map : response;
+    _dutyStatus = '${duty['duty_status'] ?? 'off_duty'}';
+    await load();
   }
 
   Future<void> loadDetail(
@@ -363,8 +431,8 @@ class HospitalController extends ChangeNotifier {
       awaitingAcceptance: rows
           .where(
             (ticket) =>
-                ticket.status == HospitalTicketStatus.assigned ||
-                ticket.status == HospitalTicketStatus.open,
+                ticket.status ==
+                HospitalTicketStatus.awaitingSupervisorAcceptance,
           )
           .length,
       open: count(HospitalTicketStatus.open),
@@ -387,7 +455,8 @@ class HospitalController extends ChangeNotifier {
           .length,
       escalated:
           count(HospitalTicketStatus.escalatedOperationsExecutive) +
-          count(HospitalTicketStatus.escalatedFacilityManager),
+          count(HospitalTicketStatus.escalatedFacilityManager) +
+          count(HospitalTicketStatus.escalatedProjectHead),
       awaitingConfirmation: count(
         HospitalTicketStatus.resolvedAwaitingConfirmation,
       ),
@@ -429,7 +498,7 @@ class HospitalController extends ChangeNotifier {
     final ticket = ticketById(ticketId);
     _requireAction(ticket, HospitalTicketAction.accept);
     if (productionMode) {
-      return _remoteAction(ticket, 'accept');
+      return _remoteAction(ticket, 'accept', {'confirmed_location': true});
     }
     _replace(
       ticket.copyWith(
@@ -739,7 +808,9 @@ class HospitalController extends ChangeNotifier {
       responsiblePerson: 'Supervisor - $targetBlock',
       responsibleRole: HospitalDemoRole.supervisor.label,
       supervisorName: 'Supervisor - $targetBlock',
-      supervisorDueAt: _now.add(HospitalSlaPolicy.supervisorSla),
+      supervisorDueAt: _now.add(
+        slaPolicy.priorityWindow(HospitalPriority.high),
+      ),
       complaintPhotoPaths: const ['demo://new-complaint'],
       events: [
         HospitalTicketEvent(
@@ -773,7 +844,8 @@ class HospitalController extends ChangeNotifier {
       if (ticket.status == HospitalTicketStatus.escalatedOperationsExecutive) {
         return slaPolicy.escalateOperationsBreach(ticket, _now);
       }
-      if (ticket.status != HospitalTicketStatus.escalatedFacilityManager) {
+      if (ticket.status != HospitalTicketStatus.escalatedFacilityManager &&
+          ticket.status != HospitalTicketStatus.escalatedProjectHead) {
         return slaPolicy.escalateSupervisorBreach(ticket, _now);
       }
       return ticket;
@@ -1028,8 +1100,8 @@ class HospitalController extends ChangeNotifier {
         return true;
       case HospitalTicketListFilter.newAssignments:
       case HospitalTicketListFilter.awaitingAcceptance:
-        return ticket.status == HospitalTicketStatus.open ||
-            ticket.status == HospitalTicketStatus.assigned;
+        return ticket.status ==
+            HospitalTicketStatus.awaitingSupervisorAcceptance;
       case HospitalTicketListFilter.inProgress:
         return ticket.status == HospitalTicketStatus.accepted ||
             ticket.status == HospitalTicketStatus.inProgress;
@@ -1040,7 +1112,8 @@ class HospitalController extends ChangeNotifier {
       case HospitalTicketListFilter.escalated:
         return ticket.status ==
                 HospitalTicketStatus.escalatedOperationsExecutive ||
-            ticket.status == HospitalTicketStatus.escalatedFacilityManager;
+            ticket.status == HospitalTicketStatus.escalatedFacilityManager ||
+            ticket.status == HospitalTicketStatus.escalatedProjectHead;
       case HospitalTicketListFilter.reopened:
         return ticket.status == HospitalTicketStatus.reopened;
       case HospitalTicketListFilter.resolvedToday:

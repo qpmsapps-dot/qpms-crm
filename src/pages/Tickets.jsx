@@ -28,11 +28,13 @@ import { usePageTitle } from '../hooks/usePageTitle.js';
 
 const statusStyles = {
   open: 'bg-blue-50 text-blue-700 ring-blue-200',
+  awaiting_supervisor_acceptance: 'bg-amber-50 text-amber-700 ring-amber-200',
   assigned: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
   accepted: 'bg-cyan-50 text-cyan-700 ring-cyan-200',
   in_progress: 'bg-sky-50 text-sky-700 ring-sky-200',
   escalated_operations_executive: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
   escalated_facility_manager: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
+  escalated_project_head: 'bg-rose-50 text-rose-700 ring-rose-200',
   resolved_awaiting_confirmation: 'bg-amber-50 text-amber-700 ring-amber-200',
   reopened: 'bg-rose-50 text-rose-700 ring-rose-200',
   closed: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
@@ -49,6 +51,7 @@ const priorityStyles = {
 const kpiMeta = [
   ['total', 'Total', TicketCheck, 'blue'],
   ['open', 'Open', FolderOpen, 'orange'],
+  ['awaiting_supervisor_acceptance', 'Awaiting Supervisor', Clock3, 'orange'],
   ['assigned', 'Assigned', CircleUserRound, 'purple'],
   ['in_progress', 'In Progress', Clock3, 'blue'],
   ['escalated', 'Escalated', AlertTriangle, 'orange'],
@@ -56,17 +59,20 @@ const kpiMeta = [
   ['closed', 'Closed', CheckCircle2, 'green'],
   ['unassigned', 'Unassigned', ShieldAlert, 'orange'],
   ['overdue', 'Overdue', AlertTriangle, 'red'],
+  ['on_duty_supervisors', 'On-Duty Supervisors', UserRound, 'green'],
   ['reopened', 'Reopened', RefreshCw, 'red'],
 ];
 
 const statusOptions = [
   ['all', 'All Statuses'],
   ['open', 'Open'],
+  ['awaiting_supervisor_acceptance', 'Awaiting Supervisor'],
   ['assigned', 'Assigned'],
   ['accepted', 'Accepted'],
   ['in_progress', 'In Progress'],
   ['escalated_operations_executive', 'Escalated - Operations'],
   ['escalated_facility_manager', 'Escalated - Facility'],
+  ['escalated_project_head', 'Escalated - Project Head'],
   ['resolved_awaiting_confirmation', 'Awaiting Client Confirmation'],
   ['reopened', 'Reopened'],
   ['closed', 'Closed'],
@@ -89,8 +95,10 @@ function titleCase(value) {
 
 function statusLabel(value) {
   if (value === 'resolved_awaiting_confirmation') return 'Awaiting Client Confirmation';
+  if (value === 'awaiting_supervisor_acceptance') return 'Waiting for QPMS Response';
   if (value === 'escalated_operations_executive') return 'Escalated to Operations';
   if (value === 'escalated_facility_manager') return 'Escalated to Facility Manager';
+  if (value === 'escalated_project_head') return 'Escalated to Project Head';
   return titleCase(value);
 }
 
@@ -275,6 +283,9 @@ function TicketDrawer({ ticket, detail, loading, error, onClose }) {
                   ['Raised By', `${data?.raised_by?.name || '-'}\n${titleCase(data?.raised_by?.role || '')}`, UserRound],
                   ['Created On', formatDate(data?.raised_at), Clock3],
                   ['SLA Due', formatDate(data?.sla?.due_at), AlertTriangle],
+                  ['Acceptance Due', formatDate(data?.acceptance_due_at), Clock3],
+                  ['Acceptance Status', titleCase(data?.acceptance_status), CheckCircle2],
+                  ['Accepted By', data?.accepted_by?.display_name || '-', UserRound],
                   ['Category', data?.category?.name, Tag],
                   ['Assigned To', data?.current_assignee?.display_name || 'Unassigned', UserRound],
                   ['Escalation Level', titleCase(data?.current_escalation_level), AlertTriangle],
