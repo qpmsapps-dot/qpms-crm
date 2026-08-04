@@ -483,6 +483,24 @@ export async function listHospitalFeedbackQrs(params = {}) {
   };
 }
 
+export async function getHospitalFeedbackDashboard(params = {}) {
+  const data = await hospitalFeedbackQrRequest({
+    method: 'GET',
+    url: '/api/hospital-feedback/dashboard/summary',
+    params,
+  });
+  return data;
+}
+
+export async function getHospitalFeedbackRecentNeedsAttention(params = {}) {
+  const data = await hospitalFeedbackQrRequest({
+    method: 'GET',
+    url: '/api/hospital-feedback/dashboard/recent',
+    params,
+  });
+  return data.recentNeedsAttention || [];
+}
+
 export async function previewHospitalFeedbackQr(qrId) {
   const data = await hospitalFeedbackQrRequest({
     method: 'GET',
@@ -513,6 +531,11 @@ export async function resolvePublicHospitalFeedbackQr(token) {
 
 export async function verifyPublicHospitalFeedbackSession(sessionToken) {
   const response = await publicApi.get(`/api/public/hospital-feedback/session/${encodeURIComponent(sessionToken)}`);
+  return response.data;
+}
+
+export async function submitPublicHospitalFeedback(payload) {
+  const response = await publicApi.post('/api/public/hospital-feedback/submissions', payload);
   return response.data;
 }
 

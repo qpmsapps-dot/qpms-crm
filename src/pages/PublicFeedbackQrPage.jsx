@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import qpmsLogo from '../assets/qpms-logo.png';
-import { resolvePublicHospitalFeedbackQr, verifyPublicHospitalFeedbackSession } from '../services/api.js';
+import { resolvePublicHospitalFeedbackQr, submitPublicHospitalFeedback, verifyPublicHospitalFeedbackSession } from '../services/api.js';
 
 const TEXT = {
   en: {
@@ -23,6 +23,7 @@ const TEXT = {
     networkBody: 'Unable to validate this QR right now. Please retry.',
     retry: 'Retry',
     locationTitle: 'Location identified successfully.',
+    client: 'Client',
     hospital: 'Hospital',
     block: 'Block',
     floor: 'Floor',
@@ -33,6 +34,8 @@ const TEXT = {
     ratingBody: 'Please rate your experience.',
     ratingHelper: 'Your feedback is valuable to us.',
     submit: 'Submit Feedback',
+    submitting: 'Submitting...',
+    submitFailed: 'Unable to submit feedback. Please retry.',
     selectRating: 'Please select one rating to continue.',
     thankTitle: 'Thank you!',
     thankBody: 'Your feedback has been submitted successfully.',
@@ -65,6 +68,7 @@ const TEXT = {
     networkBody: 'இந்த QR குறியீட்டை இப்போது சரிபார்க்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.',
     retry: 'மீண்டும் முயற்சி',
     locationTitle: 'இடம் வெற்றிகரமாக கண்டறியப்பட்டது.',
+    client: 'வாடிக்கையாளர்',
     hospital: 'மருத்துவமனை',
     block: 'பிளாக்',
     floor: 'தளம்',
@@ -75,6 +79,8 @@ const TEXT = {
     ratingBody: 'உங்கள் அனுபவத்தை மதிப்பிடவும்.',
     ratingHelper: 'உங்கள் கருத்து எங்களுக்கு மிகவும் முக்கியமானது.',
     submit: 'கருத்தை சமர்ப்பிக்கவும்',
+    submitting: 'சமர்ப்பிக்கிறது...',
+    submitFailed: 'கருத்தை சமர்ப்பிக்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.',
     selectRating: 'தொடர ஒரு மதிப்பீட்டைத் தேர்வு செய்யவும்.',
     thankTitle: 'நன்றி!',
     thankBody: 'உங்கள் கருத்து வெற்றிகரமாக பதிவு செய்யப்பட்டது.',
@@ -233,6 +239,7 @@ function LanguageSelection({ onSelect }) {
 function LocationPage({ language, location, onLanguageChange, onContinue }) {
   const t = TEXT[language];
   const rows = [
+    [t.client, location.clientName],
     [t.hospital, location.hospitalName],
     [t.block, location.blockName],
     [t.floor, location.floorName],
@@ -264,7 +271,7 @@ function LocationPage({ language, location, onLanguageChange, onContinue }) {
   );
 }
 
-function RatingPage({ language, selectedRating, onSelectRating, onLanguageChange, onSubmit, submitAttempted }) {
+function RatingPage({ language, selectedRating, onSelectRating, onLanguageChange, onSubmit, submitAttempted, submitting, submitError }) {
   const t = TEXT[language];
   return (
     <PublicShell>
@@ -297,10 +304,11 @@ function RatingPage({ language, selectedRating, onSelectRating, onLanguageChange
         </div>
         <p className="mt-4 text-center text-sm font-semibold leading-6 text-slate-500">{t.ratingHelper}</p>
         {submitAttempted && !selectedRating ? <p className="mt-3 text-center text-sm font-bold text-rose-600">{t.selectRating}</p> : null}
+        {submitError ? <p className="mt-3 text-center text-sm font-bold text-rose-600">{submitError}</p> : null}
         {selectedRating ? (
-          <button type="button" onClick={onSubmit} className="mt-6 inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-qpms-700 px-4 py-3 text-lg font-bold text-white shadow-sm">
-            <Send className="h-5 w-5" />
-            {t.submit}
+          <button type="button" onClick={onSubmit} disabled={submitting} className="mt-6 inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-qpms-700 px-4 py-3 text-lg font-bold text-white shadow-sm disabled:bg-slate-400">
+            {submitting ? <span className="button-spinner" /> : <Send className="h-5 w-5" />}
+            {submitting ? t.submitting : t.submit}
           </button>
         ) : null}
       </FeedbackCard>
@@ -344,6 +352,19 @@ function CompletePage({ language, onLanguageChange }) {
   );
 }
 
+function newSubmissionKey() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  const segment = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).slice(1);
+  return `${segment()}${segment()}-${segment()}-4${segment().slice(1)}-8${segment().slice(1)}-${segment()}${segment()}${segment()}`;
+}
+
 export default function PublicFeedbackQrPage() {
   useNoIndex();
   const { token } = useParams();
@@ -352,6 +373,9 @@ export default function PublicFeedbackQrPage() {
   const [currentStep, setCurrentStep] = useState('language');
   const [selectedRating, setSelectedRating] = useState(null);
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const [submissionKey, setSubmissionKey] = useState(() => newSubmissionKey());
 
   const languageStorageKey = useMemo(() => `hospital-feedback-qr:${token || 'missing'}:language`, [token]);
 
@@ -360,6 +384,9 @@ export default function PublicFeedbackQrPage() {
     setLanguage('');
     setSelectedRating(null);
     setSubmitAttempted(false);
+    setSubmitting(false);
+    setSubmitError('');
+    setSubmissionKey(newSubmissionKey());
     setCurrentStep('language');
     try {
       const data = await resolvePublicHospitalFeedbackQr(token);
@@ -412,9 +439,27 @@ export default function PublicFeedbackQrPage() {
   }
 
   async function submitDemoFeedback() {
+    if (submitting) return;
     setSubmitAttempted(true);
+    setSubmitError('');
     if (!selectedRating) return;
-    if (await ensureSessionActive()) setCurrentStep('thankYou');
+    if (!(await ensureSessionActive())) return;
+    setSubmitting(true);
+    try {
+      await submitPublicHospitalFeedback({
+        session_token: state.data?.session?.token,
+        submission_key: submissionKey,
+        rating: selectedRating,
+        language,
+        comments: null,
+        answers: {},
+      });
+      setCurrentStep('thankYou');
+    } catch (error) {
+      setSubmitError(error.response?.data?.message || TEXT[language || 'en'].submitFailed);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   if (state.status === 'loading') {
@@ -459,10 +504,12 @@ export default function PublicFeedbackQrPage() {
       <RatingPage
         language={language}
         selectedRating={selectedRating}
-        onSelectRating={(value) => { setSelectedRating(value); setSubmitAttempted(false); }}
+        onSelectRating={(value) => { setSelectedRating(value); setSubmitAttempted(false); setSubmitError(''); }}
         onLanguageChange={updateLanguage}
         onSubmit={submitDemoFeedback}
         submitAttempted={submitAttempted}
+        submitting={submitting}
+        submitError={submitError}
       />
     );
   }

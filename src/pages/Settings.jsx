@@ -7,7 +7,7 @@ const settings = [
   { title: 'Company profile', description: 'Manage myQPMS identity, logo, address, and workspace details.', icon: Building },
   { title: 'User roles', description: 'Configure access levels for administrators, managers, and agents.', icon: UserCog },
   { title: 'User Management', description: 'Preview employee hierarchy, HOD mapping, imports, and app account onboarding.', icon: Users, to: '/settings/user-management' },
-  { title: 'Hospital Feedback QR', description: 'Generate secure public QR codes for existing hospital locations.', icon: QrCode, to: '/settings/hospital-feedback/qr-generator' },
+  { title: 'Client Feedback QR', description: 'Generate secure public QR codes for client hospital locations.', icon: QrCode, to: '/settings/hospital-feedback/qr-generator' },
   { title: 'Notifications', description: 'Set ticket, task, SLA, and approval notification preferences.', icon: Bell },
   { title: 'Security', description: 'Prepare authentication, session, and audit settings for backend integration.', icon: ShieldCheck },
 ];
