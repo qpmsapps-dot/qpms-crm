@@ -12,6 +12,7 @@ test('Hospital Feedback QR public flow starts at language selection and submits 
   assert.ok(publicPage.includes('\u0bb5\u0bb0\u0bb5\u0bc7\u0bb1\u0bcd\u0b95\u0bbf\u0bb1\u0bcb\u0bae\u0bcd!'));
   assert.ok(publicPage.includes("setCurrentStep('language')"));
   assert.ok(publicPage.includes("setCurrentStep('location')"));
+  assert.ok(publicPage.includes("setCurrentStep('details')"));
   assert.ok(publicPage.includes("setCurrentStep('rating')"));
   assert.ok(publicPage.includes("setCurrentStep('thankYou')"));
   assert.ok(publicPage.includes("setCurrentStep('complete')"));
@@ -22,11 +23,37 @@ test('Hospital Feedback QR public flow starts at language selection and submits 
   assert.ok(publicPage.includes('if (submitting) return;'));
   assert.ok(api.includes("publicApi.post('/api/public/hospital-feedback/submissions'"));
   assert.ok(publicPage.includes('submission_key: submissionKey'));
+  assert.ok(publicPage.includes('respondent_name'));
+  assert.ok(publicPage.includes('comments: comment || null'));
   assert.ok(publicPage.includes('setSubmissionKey(newSubmissionKey())'));
   assert.ok(publicPage.includes("setCurrentStep('thankYou')"));
   assert.match(publicPage, /await submitPublicHospitalFeedback\([\s\S]*setCurrentStep\('thankYou'\)/);
   assert.doesNotMatch(publicPage, /createHospitalTicket|createTicket|ticket_number|ticketNumber|feedbackApi/);
   assert.doesNotMatch(api, /createHospitalTicketFromFeedback/);
+});
+
+test('Hospital Feedback QR public flow collects optional name and comment before rating', () => {
+  assert.ok(publicPage.includes('function RespondentDetailsPage'));
+  assert.ok(publicPage.includes('Tell us more'));
+  assert.ok(publicPage.includes('Your name is optional. You can also share a comment or suggestion.'));
+  assert.ok(publicPage.includes('Enter your name (optional)'));
+  assert.ok(publicPage.includes('Share your feedback or suggestion (optional)'));
+  assert.ok(publicPage.includes('details.comment.length} / 2000'));
+  assert.ok(publicPage.includes('Name must be 120 characters or fewer.'));
+  assert.ok(publicPage.includes('Comment must be 2000 characters or fewer.'));
+  assert.match(publicPage, /currentStep === 'location'[\s\S]*onContinue=\{goToDetails\}/);
+  assert.match(publicPage, /currentStep === 'details'[\s\S]*RespondentDetailsPage/);
+  assert.match(publicPage, /currentStep === 'rating'[\s\S]*details=\{respondentDetails\}/);
+  assert.ok(publicPage.includes("onEditDetails={() => setCurrentStep('details')}"));
+  assert.ok(publicPage.includes("onBack={() => setCurrentStep('location')}"));
+});
+
+test('Hospital Feedback QR public flow preserves entered name and comment across language changes and failed submissions', () => {
+  assert.ok(publicPage.includes("const [respondentDetails, setRespondentDetails] = useState({ name: '', comment: '' })"));
+  assert.ok(publicPage.includes('setRespondentDetails((current) => ({ ...current, [field]: value }))'));
+  assert.ok(publicPage.includes('onLanguageChange={updateLanguage}'));
+  assert.ok(publicPage.includes("setSubmitError(error.response?.data?.message || TEXT[language || 'en'].submitFailed)"));
+  assert.doesNotMatch(publicPage, /setRespondentDetails\(\{ name: '', comment: '' \}\)[\s\S]{0,160}catch/);
 });
 
 test('Hospital Feedback QR public flow has English and Tamil location, rating and completion copy', () => {

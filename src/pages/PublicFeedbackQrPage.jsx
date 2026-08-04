@@ -30,6 +30,18 @@ const TEXT = {
     department: 'Department',
     location: 'Location',
     continue: 'Continue',
+    detailsTitle: 'Tell us more',
+    detailsBody: 'Your name is optional. You can also share a comment or suggestion.',
+    nameLabel: 'Your Name',
+    namePlaceholder: 'Enter your name (optional)',
+    commentLabel: 'Comment',
+    commentPlaceholder: 'Share your feedback or suggestion (optional)',
+    back: 'Back',
+    edit: 'Edit',
+    nameTooLong: 'Name must be 120 characters or fewer.',
+    commentTooLong: 'Comment must be 2000 characters or fewer.',
+    nameNotProvided: 'Name not provided',
+    noCommentProvided: 'No comment provided',
     ratingTitle: 'How was your experience?',
     ratingBody: 'Please rate your experience.',
     ratingHelper: 'Your feedback is valuable to us.',
@@ -75,6 +87,18 @@ const TEXT = {
     department: 'துறை',
     location: 'இடம்',
     continue: 'தொடரவும்',
+    detailsTitle: 'மேலும் தெரிவிக்கவும்',
+    detailsBody: 'உங்கள் பெயர் விருப்பமானது. கருத்து அல்லது பரிந்துரையையும் பகிரலாம்.',
+    nameLabel: 'உங்கள் பெயர்',
+    namePlaceholder: 'உங்கள் பெயரை உள்ளிடவும் (விருப்பம்)',
+    commentLabel: 'கருத்து',
+    commentPlaceholder: 'உங்கள் கருத்து அல்லது பரிந்துரையை பகிரவும் (விருப்பம்)',
+    back: 'பின்செல்',
+    edit: 'திருத்து',
+    nameTooLong: 'பெயர் 120 எழுத்துகளுக்குள் இருக்க வேண்டும்.',
+    commentTooLong: 'கருத்து 2000 எழுத்துகளுக்குள் இருக்க வேண்டும்.',
+    nameNotProvided: 'பெயர் வழங்கப்படவில்லை',
+    noCommentProvided: 'கருத்து வழங்கப்படவில்லை',
     ratingTitle: 'உங்கள் அனுபவம் எப்படி இருந்தது?',
     ratingBody: 'உங்கள் அனுபவத்தை மதிப்பிடவும்.',
     ratingHelper: 'உங்கள் கருத்து எங்களுக்கு மிகவும் முக்கியமானது.',
@@ -271,8 +295,77 @@ function LocationPage({ language, location, onLanguageChange, onContinue }) {
   );
 }
 
-function RatingPage({ language, selectedRating, onSelectRating, onLanguageChange, onSubmit, submitAttempted, submitting, submitError }) {
+function RespondentDetailsPage({
+  language,
+  details,
+  onChange,
+  onContinue,
+  onBack,
+  onLanguageChange,
+}) {
   const t = TEXT[language];
+  const nameError = details.name.length > 120 ? t.nameTooLong : '';
+  const commentError = details.comment.length > 2000 ? t.commentTooLong : '';
+  return (
+    <PublicShell>
+      <LanguageSwitch language={language} onChange={onLanguageChange} />
+      <FeedbackCard>
+        <div className="text-center">
+          <QpmsLogo className="mx-auto h-14 w-14" />
+          <h1 className="mt-5 text-2xl font-bold leading-tight text-slate-950">{t.detailsTitle}</h1>
+          <p className="mt-2 text-base leading-7 text-slate-600">{t.detailsBody}</p>
+        </div>
+        <div className="mt-6 space-y-4">
+          <label className="block">
+            <span className="text-sm font-bold text-slate-700">{t.nameLabel}</span>
+            <input
+              value={details.name}
+              onChange={(event) => onChange('name', event.target.value)}
+              placeholder={t.namePlaceholder}
+              maxLength={140}
+              className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 px-4 py-3 text-base font-semibold outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
+            />
+            {nameError ? <span className="mt-1 block text-xs font-bold text-rose-600">{nameError}</span> : null}
+          </label>
+          <label className="block">
+            <span className="text-sm font-bold text-slate-700">{t.commentLabel}</span>
+            <textarea
+              value={details.comment}
+              onChange={(event) => onChange('comment', event.target.value)}
+              placeholder={t.commentPlaceholder}
+              maxLength={2050}
+              rows={5}
+              className="mt-2 w-full resize-none rounded-xl border border-slate-200 px-4 py-3 text-base font-semibold outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
+            />
+            <div className="mt-1 flex items-center justify-between text-xs font-bold">
+              <span className={commentError ? 'text-rose-600' : 'text-slate-400'}>{commentError}</span>
+              <span className={details.comment.length > 2000 ? 'text-rose-600' : 'text-slate-400'}>{details.comment.length} / 2000</span>
+            </div>
+          </label>
+        </div>
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          <button type="button" onClick={onBack} className="min-h-14 rounded-xl border border-slate-200 px-4 py-3 text-lg font-bold text-slate-700">
+            {t.back}
+          </button>
+          <button type="button" onClick={onContinue} disabled={Boolean(nameError || commentError)} className="min-h-14 rounded-xl bg-qpms-700 px-4 py-3 text-lg font-bold text-white shadow-sm disabled:bg-slate-400">
+            {t.continue}
+          </button>
+        </div>
+      </FeedbackCard>
+    </PublicShell>
+  );
+}
+
+function previewText(value, fallback, max = 90) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return fallback;
+  return text.length > max ? `${text.slice(0, max - 1).trim()}...` : text;
+}
+
+function RatingPage({ language, selectedRating, onSelectRating, onLanguageChange, onSubmit, onEditDetails, details, submitAttempted, submitting, submitError }) {
+  const t = TEXT[language];
+  const name = previewText(details.name, t.nameNotProvided, 64);
+  const comment = previewText(details.comment, '', 110);
   return (
     <PublicShell>
       <LanguageSwitch language={language} onChange={onLanguageChange} />
@@ -281,6 +374,16 @@ function RatingPage({ language, selectedRating, onSelectRating, onLanguageChange
           <QpmsLogo className="mx-auto h-14 w-14" />
           <h1 className="mt-5 text-2xl font-bold leading-tight text-slate-950">{t.ratingTitle}</h1>
           <p className="mt-2 text-base leading-7 text-slate-600">{t.ratingBody}</p>
+        </div>
+        <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{t.nameLabel}</p>
+              <p className="mt-1 text-sm font-bold text-slate-800">{name}</p>
+              {comment ? <p className="mt-2 text-sm font-semibold leading-6 text-slate-600">{comment}</p> : null}
+            </div>
+            <button type="button" onClick={onEditDetails} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-qpms-700">{t.edit}</button>
+          </div>
         </div>
         <div className="mt-6 grid gap-3">
           {t.ratings.map((rating) => {
@@ -376,6 +479,7 @@ export default function PublicFeedbackQrPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [submissionKey, setSubmissionKey] = useState(() => newSubmissionKey());
+  const [respondentDetails, setRespondentDetails] = useState({ name: '', comment: '' });
 
   const languageStorageKey = useMemo(() => `hospital-feedback-qr:${token || 'missing'}:language`, [token]);
 
@@ -387,6 +491,7 @@ export default function PublicFeedbackQrPage() {
     setSubmitting(false);
     setSubmitError('');
     setSubmissionKey(newSubmissionKey());
+    setRespondentDetails({ name: '', comment: '' });
     setCurrentStep('language');
     try {
       const data = await resolvePublicHospitalFeedbackQr(token);
@@ -438,6 +543,23 @@ export default function PublicFeedbackQrPage() {
     if (await ensureSessionActive()) setCurrentStep('rating');
   }
 
+  async function goToDetails() {
+    if (await ensureSessionActive()) setCurrentStep('details');
+  }
+
+  function updateRespondentDetails(field, value) {
+    setRespondentDetails((current) => ({ ...current, [field]: value }));
+  }
+
+  function normalizedDetails() {
+    const name = respondentDetails.name.trim();
+    const comment = respondentDetails.comment.trim();
+    return {
+      respondent_name: name || null,
+      comments: comment || null,
+    };
+  }
+
   async function submitDemoFeedback() {
     if (submitting) return;
     setSubmitAttempted(true);
@@ -451,7 +573,7 @@ export default function PublicFeedbackQrPage() {
         submission_key: submissionKey,
         rating: selectedRating,
         language,
-        comments: null,
+        ...normalizedDetails(),
         answers: {},
       });
       setCurrentStep('thankYou');
@@ -496,7 +618,20 @@ export default function PublicFeedbackQrPage() {
   }
 
   if (currentStep === 'location') {
-    return <LocationPage language={language} location={location} onLanguageChange={updateLanguage} onContinue={goToRating} />;
+    return <LocationPage language={language} location={location} onLanguageChange={updateLanguage} onContinue={goToDetails} />;
+  }
+
+  if (currentStep === 'details') {
+    return (
+      <RespondentDetailsPage
+        language={language}
+        details={respondentDetails}
+        onChange={updateRespondentDetails}
+        onContinue={goToRating}
+        onBack={() => setCurrentStep('location')}
+        onLanguageChange={updateLanguage}
+      />
+    );
   }
 
   if (currentStep === 'rating') {
@@ -507,6 +642,8 @@ export default function PublicFeedbackQrPage() {
         onSelectRating={(value) => { setSelectedRating(value); setSubmitAttempted(false); setSubmitError(''); }}
         onLanguageChange={updateLanguage}
         onSubmit={submitDemoFeedback}
+        onEditDetails={() => setCurrentStep('details')}
+        details={respondentDetails}
         submitAttempted={submitAttempted}
         submitting={submitting}
         submitError={submitError}
