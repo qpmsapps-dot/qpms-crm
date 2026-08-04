@@ -20,6 +20,7 @@ import { useAuth } from '../context/auth-context.js';
 import { useWorkflow } from '../context/workflow-context.js';
 import { isAdmin, isCoordinator, isFinanceTeam, isHrReviewer, isOperationsTeam } from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
+import { isReadOnlyUser } from '../utils/demoAccess.js';
 
 function serviceScope(visit) {
   const scope = visit.serviceScope || visit.survey?.serviceScope || visit.survey?.ifmScope;
@@ -202,10 +203,11 @@ export default function Tasks() {
   const hrMode = isHrReviewer(user);
   const operationsMode = isOperationsTeam(user);
   const coordinatorMode = isCoordinator(user);
+  const readOnlyDemo = isReadOnlyUser(user);
   const adminReviewStage = ['HR Validation', 'Commercial Review', 'Finance Review'].includes(searchParams.get('stage'))
     ? searchParams.get('stage')
     : 'HR Validation';
-  const stage = isAdmin(user)
+  const stage = isAdmin(user) || readOnlyDemo
     ? adminReviewStage
     : operationsMode
       ? 'Operations Review'
@@ -352,33 +354,41 @@ export default function Tasks() {
           <aside className="enterprise-card-compact h-fit space-y-4 p-4">
             <div>
               <p className="text-sm font-semibold text-slate-950 dark:text-white">{meta.panelTitle}</p>
-              <p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Decision applies only to this review stage.</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">{readOnlyDemo ? 'Decision actions are hidden for demonstration viewers.' : 'Decision applies only to this review stage.'}</p>
             </div>
-            <textarea
-              value={remarks[selectedVisit.id] || ''}
-              onChange={(event) => setRemarks((current) => ({ ...current, [selectedVisit.id]: event.target.value }))}
-              placeholder={meta.remark}
-              className="focus-ring min-h-28 w-full rounded-2xl border border-slate-200 bg-white px-3.5 py-3 text-sm text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white"
-            />
-            <div className={isFinanceStage ? 'grid gap-2' : 'grid grid-cols-2 gap-2'}>
-              <button type="button" disabled={Boolean(pendingDecision)} onClick={() => handleDecision(selectedVisit, 'approve')} className="focus-ring inline-flex items-center justify-center gap-1 rounded-xl bg-emerald-600 px-3 py-2.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
-                <CheckCircle2 className="h-4 w-4" /> Approve
-              </button>
-              <button type="button" disabled={Boolean(pendingDecision)} onClick={() => handleDecision(selectedVisit, 'rework')} className="focus-ring inline-flex items-center justify-center gap-1 rounded-xl bg-amber-500 px-3 py-2.5 text-xs font-bold text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60">
-                <RotateCcw className="h-4 w-4" /> Request Rework
-              </button>
-              <button type="button" disabled={Boolean(pendingDecision)} onClick={() => handleDecision(selectedVisit, 'reject')} className="focus-ring inline-flex items-center justify-center gap-1 rounded-xl border border-rose-200 bg-white px-3 py-2.5 text-xs font-bold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-500/30 dark:bg-slate-950 dark:text-rose-300 dark:hover:bg-rose-500/10">
-                <AlertTriangle className="h-4 w-4" /> Reject
-              </button>
-              {isFinanceStage ? (
-                <button type="button" disabled={Boolean(pendingDecision)} onClick={() => handleDecision(selectedVisit, 'return')} className="focus-ring inline-flex items-center justify-center gap-1 rounded-xl bg-qpms-600 px-3 py-2.5 text-xs font-bold text-white hover:bg-qpms-700 disabled:cursor-not-allowed disabled:opacity-60">
-                  <CheckCircle2 className="h-4 w-4" /> Return to BD
-                </button>
-              ) : null}
-              <button type="button" disabled className="focus-ring inline-flex cursor-not-allowed items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-bold text-slate-400 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-500">
-                Escalate
-              </button>
-            </div>
+            {readOnlyDemo ? (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900">
+                Read-only demonstration access. Approve, reject, rework and escalation controls are disabled.
+              </div>
+            ) : (
+              <>
+                <textarea
+                  value={remarks[selectedVisit.id] || ''}
+                  onChange={(event) => setRemarks((current) => ({ ...current, [selectedVisit.id]: event.target.value }))}
+                  placeholder={meta.remark}
+                  className="focus-ring min-h-28 w-full rounded-2xl border border-slate-200 bg-white px-3.5 py-3 text-sm text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-950 dark:text-white"
+                />
+                <div className={isFinanceStage ? 'grid gap-2' : 'grid grid-cols-2 gap-2'}>
+                  <button type="button" disabled={Boolean(pendingDecision)} onClick={() => handleDecision(selectedVisit, 'approve')} className="focus-ring inline-flex items-center justify-center gap-1 rounded-xl bg-emerald-600 px-3 py-2.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+                    <CheckCircle2 className="h-4 w-4" /> Approve
+                  </button>
+                  <button type="button" disabled={Boolean(pendingDecision)} onClick={() => handleDecision(selectedVisit, 'rework')} className="focus-ring inline-flex items-center justify-center gap-1 rounded-xl bg-amber-500 px-3 py-2.5 text-xs font-bold text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60">
+                    <RotateCcw className="h-4 w-4" /> Request Rework
+                  </button>
+                  <button type="button" disabled={Boolean(pendingDecision)} onClick={() => handleDecision(selectedVisit, 'reject')} className="focus-ring inline-flex items-center justify-center gap-1 rounded-xl border border-rose-200 bg-white px-3 py-2.5 text-xs font-bold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-500/30 dark:bg-slate-950 dark:text-rose-300 dark:hover:bg-rose-500/10">
+                    <AlertTriangle className="h-4 w-4" /> Reject
+                  </button>
+                  {isFinanceStage ? (
+                    <button type="button" disabled={Boolean(pendingDecision)} onClick={() => handleDecision(selectedVisit, 'return')} className="focus-ring inline-flex items-center justify-center gap-1 rounded-xl bg-qpms-600 px-3 py-2.5 text-xs font-bold text-white hover:bg-qpms-700 disabled:cursor-not-allowed disabled:opacity-60">
+                      <CheckCircle2 className="h-4 w-4" /> Return to BD
+                    </button>
+                  ) : null}
+                  <button type="button" disabled className="focus-ring inline-flex cursor-not-allowed items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-bold text-slate-400 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-500">
+                    Escalate
+                  </button>
+                </div>
+              </>
+            )}
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/55">
               <p className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Approval History</p>
               <div className="mt-3 space-y-2">

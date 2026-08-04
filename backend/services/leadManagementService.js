@@ -13,6 +13,7 @@ const LEAD_ACCESS_ROLES = new Set([
   'BD Head',
   'Business Head',
   'Branch Head',
+  'DEMO_VIEWER',
   ...FULL_VISIBILITY_ROLES,
 ]);
 
@@ -82,6 +83,7 @@ export function normalizeLeadRole(value) {
     DEV: 'Developer',
     ITADMIN: 'Developer',
     MANAGEMENTITADMIN: 'Developer',
+    DEMOVIEWER: 'DEMO_VIEWER',
     COO: 'COO',
     GM: 'GM',
     GENERALMANAGER: 'GM',
@@ -115,10 +117,12 @@ export function canAccessLeadModule(actor) {
 }
 
 export function canCreateLead(actor) {
+  if (actor?.role === 'DEMO_VIEWER') return false;
   return CREATE_ROLES.has(actor?.role);
 }
 
 export function canAssignLead(actor) {
+  if (actor?.role === 'DEMO_VIEWER') return false;
   return ASSIGNMENT_ROLES.has(actor?.role);
 }
 
@@ -139,6 +143,7 @@ export function leadListResponse(actor, leads = []) {
 }
 
 export function canManageLeadMom(actor, lead) {
+  if (actor?.role === 'DEMO_VIEWER') return false;
   return MOM_ROLES.has(actor?.role) && canViewLead(actor, lead);
 }
 
@@ -166,6 +171,7 @@ export function leadMomContactRecipients(contacts = []) {
 
 export function canViewLead(actor, lead) {
   if (!actor || !lead) return false;
+  if (actor.role === 'DEMO_VIEWER') return true;
   if (FULL_VISIBILITY_ROLES.has(actor.role)) return true;
   if (actor.role === 'BD Executive') {
     return normalizeEmail(lead.assigned_bd_email) === actor.email
@@ -187,6 +193,7 @@ export function canViewLead(actor, lead) {
 }
 
 export function canEditLead(actor, lead) {
+  if (actor?.role === 'DEMO_VIEWER') return false;
   if (!canViewLead(actor, lead)) return false;
   if (actor.role === 'BD Executive') return true;
   return FULL_VISIBILITY_ROLES.has(actor.role) || actor.role === 'Business Head' || actor.role === 'Branch Head';

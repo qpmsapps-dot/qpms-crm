@@ -353,7 +353,7 @@ function roleKey(profile = {}) {
 }
 
 function isPlatformQrAdmin(profile = {}) {
-  return new Set(['ADMIN', 'QPMSADMIN', 'DEVELOPER', 'DEV', 'MD', 'COO', 'GM', 'GMTOPMANAGEMENT']).has(roleKey(profile));
+  return new Set(['ADMIN', 'QPMSADMIN', 'DEVELOPER', 'DEV', 'MD', 'COO', 'GM', 'GMTOPMANAGEMENT', 'DEMOVIEWER']).has(roleKey(profile));
 }
 
 function scopeAllowsQr(scopes, location, permission) {

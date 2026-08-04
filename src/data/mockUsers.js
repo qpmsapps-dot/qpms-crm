@@ -233,7 +233,7 @@ export function canManageLeads(user) {
 }
 
 export function canViewBdTeam(user) {
-  return ['BD Head', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer'].includes(user?.role) || isManagement(user) || isFinanceLeadership(user);
+  return ['BD Head', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer', 'DEMO_VIEWER'].includes(user?.role) || isManagement(user) || isFinanceLeadership(user);
 }
 
 export function findMockUser(email, password) {

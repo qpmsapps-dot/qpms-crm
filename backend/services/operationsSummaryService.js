@@ -1,6 +1,7 @@
 const FULL_VISIBILITY_ROLES = new Set([
   'ADMIN', 'QPMSADMIN', 'DEVELOPER', 'DEV', 'ITADMIN', 'MD', 'COO',
   'DEMOADMIN', 'TENDERDEMO',
+  'DEMOVIEWER',
 ]);
 
 const OPERATIONS_ROLES = new Set([

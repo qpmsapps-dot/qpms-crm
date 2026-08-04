@@ -26,7 +26,9 @@ import {
   YAxis,
 } from 'recharts';
 import { usePageTitle } from '../hooks/usePageTitle.js';
+import { useAuth } from '../context/auth-context.js';
 import { getHospitalFeedbackDashboard, getHospitalFeedbackQrLocations } from '../services/api.js';
+import { isReadOnlyUser } from '../utils/demoAccess.js';
 import { naturalOptionCompare } from '../utils/naturalSort.js';
 import {
   checklistRowsFromResponses,
@@ -345,6 +347,8 @@ function NeedsAttentionCard({ rows, onOpen }) {
 }
 
 export default function HospitalFeedbackDashboard() {
+  const { user } = useAuth();
+  const readOnlyDemo = isReadOnlyUser(user);
   usePageTitle('Soft Services Feedback Report');
   const [locations, setLocations] = useState([]);
   const [filters, setFilters] = useState({ dateFrom: monthStart(), dateTo: today(), clientKey: '', hospitalId: '', blockId: '', floorId: '', locationId: '', rating: '', needsAttention: '' });
@@ -515,9 +519,11 @@ export default function HospitalFeedbackDashboard() {
             <div className="rounded-xl bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-900 ring-1 ring-blue-100">
               <div className="flex gap-2"><Info className="h-4 w-4 shrink-0 text-blue-700" />This report includes optional respondent names, comments and checklist answers captured from public feedback.</div>
             </div>
-            <button type="button" onClick={() => window.print()} className="no-print inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border border-qpms-300 bg-white px-5 py-2 text-sm font-black text-qpms-700 shadow-sm hover:bg-qpms-50" title="Opens the browser print dialog so you can save this report as PDF.">
-              <Download className="h-4 w-4" />Export PDF
-            </button>
+            {!readOnlyDemo ? (
+              <button type="button" onClick={() => window.print()} className="no-print inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border border-qpms-300 bg-white px-5 py-2 text-sm font-black text-qpms-700 shadow-sm hover:bg-qpms-50" title="Opens the browser print dialog so you can save this report as PDF.">
+                <Download className="h-4 w-4" />Export PDF
+              </button>
+            ) : null}
           </div>
         </div>
       </header>

@@ -148,27 +148,24 @@ const operationsNavGroups = [
 
 const tenderDemoNavGroups = [
   {
-    title: 'Tender Demo',
+    title: 'Read-Only Demo',
     items: [
       { label: 'Dashboard', to: '/dashboard', icon: Home },
-      { label: 'Field Operations', to: '/fo-activities', icon: MapPinned },
-      { label: 'Client Ticketing', to: '/tickets', icon: FileText },
-      { label: 'Reports and Analytics', to: '/reports', icon: BarChart3 },
-    ],
-  },
-  {
-    title: 'Reliance Retail',
-    items: [
-      { label: 'Deep Cleaning', to: '/deep-cleaning', icon: Sparkles },
-      { label: 'Fault Tracker', to: '/fault-tracker', icon: ClipboardList },
-      { label: 'Store Master', to: '/store-master', icon: Store },
-    ],
-  },
-  {
-    title: 'Workflow Demo',
-    items: [
       { label: 'Lead Management', to: '/crm', icon: Workflow },
+      { label: 'Site Visit + Estimation', to: '/sites', icon: ClipboardCheck },
+      { label: 'HR Review', to: '/tasks?stage=HR%20Validation', icon: ShieldCheck },
+      { label: 'Commercial Review', to: '/tasks?stage=Commercial%20Review', icon: ShieldCheck },
+      { label: 'Finance Review', to: '/tasks?stage=Finance%20Review', icon: ShieldCheck },
+      { label: 'Proposals', to: '/proposals', icon: FileText },
       { label: 'Approvals', to: '/approvals', icon: ShieldCheck },
+      { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
+      { label: 'Operations', to: '/fo-activities', icon: MapPinned },
+      { label: 'Tickets', to: '/tickets', icon: FileText },
+      { label: 'Soft Services Feedback', to: '/operations/hospital-feedback/dashboard', icon: BarChart3 },
+      { label: 'Fault Tracker', to: '/fault-tracker', icon: ClipboardList },
+      { label: 'Deep Cleaning', to: '/deep-cleaning', icon: Sparkles },
+      { label: 'Asset Management', to: '/assets', icon: Wrench },
+      { label: 'Reports', to: '/reports', icon: BarChart3 },
     ],
   },
 ];
@@ -245,7 +242,7 @@ export default function Sidebar({ isOpen, onClose }) {
           </div>
           {isDemoUser(user) ? (
             <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-black uppercase tracking-wide text-amber-800">
-              Tender Demo - Read-Only Access
+              Read-only demonstration access
             </div>
           ) : null}
         </div>

@@ -33,6 +33,7 @@ import { useAuth } from '../context/auth-context.js';
 import { useWorkflow } from '../context/workflow-context.js';
 import { canViewBdTeam, isAdmin, isApprovalReviewer, isCommercialTeam, isCoordinator, isFinanceTeam, isHrReviewer, isOperationsTeam } from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
+import { isReadOnlyUser } from '../utils/demoAccess.js';
 import { sendProposalEmail, sendSiteVisitMomEmail } from '../services/mailService.js';
 import { logAssessmentAuditRemote } from '../services/workflowRepository.js';
 import { calculateManpowerCost } from '../services/costingEngine.js';
@@ -829,6 +830,7 @@ export default function Sites() {
   const [sectionsCollapsed, setSectionsCollapsed] = useState(false);
   const [validationErrors, setValidationErrors] = useState([]);
   const adminDemoAccess = isAdmin(user);
+  const readOnlyDemo = isReadOnlyUser(user);
   usePageTitle('Site Visit & Estimation');
 
   const visibleSiteVisits = useMemo(() => {
@@ -842,9 +844,9 @@ export default function Sites() {
     return SURVEY_SECTION_LABELS;
   }, [user]);
   const activeSection = roleVisibleSections[activeSectionIndex] || roleVisibleSections[0];
-  const roleCanEditActiveSection = !isApprovalReviewer(user)
+  const roleCanEditActiveSection = !readOnlyDemo && (!isApprovalReviewer(user)
     || ((isCommercialTeam(user) || isFinanceTeam(user)) && activeSection === 'Commercial Inputs & Review')
-    || ((isOperationsTeam(user) || isCoordinator(user) || isHrReviewer(user)) && activeSection === 'Equipment, Manpower & MPD');
+    || ((isOperationsTeam(user) || isCoordinator(user) || isHrReviewer(user)) && activeSection === 'Equipment, Manpower & MPD'));
   const activeSectionAudit = sectionAudit[activeSection];
   const isSectionSaved = Boolean(activeSectionAudit);
   const isEditingActiveSection = editingSection === activeSection;
@@ -1423,17 +1425,23 @@ function duplicateRow(section, index) {
 
           <div className="mt-6 flex flex-wrap justify-end gap-3">
             <button type="button" onClick={() => setProposalPreviewVisit(null)} className="focus-ring rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:text-slate-950 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">Cancel</button>
-            <button type="button" onClick={() => handleExportProposal('excel')} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200">
-              <Download className="h-4 w-4" />
-              Export Excel
-            </button>
-            <button type="button" onClick={() => handleExportProposal('pdf')} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-qpms-200 bg-qpms-50 px-4 py-2.5 text-sm font-semibold text-qpms-700 shadow-sm hover:bg-qpms-100 dark:border-qpms-500/25 dark:bg-qpms-500/10 dark:text-qpms-200">
-              <FileText className="h-4 w-4" />
-              Export PDF
-            </button>
-            <button type="button" onClick={handleSendProposal} disabled={pendingAction === 'sendProposal'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-qpms-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-qpms-600/20 hover:bg-qpms-700">
-              <ButtonContent loading={pendingAction === 'sendProposal'} icon={Send}>Send Proposal Mail</ButtonContent>
-            </button>
+            {!readOnlyDemo ? (
+              <>
+                <button type="button" onClick={() => handleExportProposal('excel')} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200">
+                  <Download className="h-4 w-4" />
+                  Export Excel
+                </button>
+                <button type="button" onClick={() => handleExportProposal('pdf')} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-qpms-200 bg-qpms-50 px-4 py-2.5 text-sm font-semibold text-qpms-700 shadow-sm hover:bg-qpms-100 dark:border-qpms-500/25 dark:bg-qpms-500/10 dark:text-qpms-200">
+                  <FileText className="h-4 w-4" />
+                  Export PDF
+                </button>
+              </>
+            ) : null}
+            {!readOnlyDemo ? (
+              <button type="button" onClick={handleSendProposal} disabled={pendingAction === 'sendProposal'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-qpms-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-qpms-600/20 hover:bg-qpms-700">
+                <ButtonContent loading={pendingAction === 'sendProposal'} icon={Send}>Send Proposal Mail</ButtonContent>
+              </button>
+            ) : null}
           </div>
         </Motion.section>
       </div>
@@ -1924,16 +1932,22 @@ function duplicateRow(section, index) {
               Previous
             </button>
             <div className="flex flex-wrap justify-end gap-3">
-              <button type="button" onClick={handleSaveDraft} disabled={pendingAction === 'saveSiteDraft'} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:text-slate-950 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
-                <ButtonContent loading={pendingAction === 'saveSiteDraft'} icon={Save}>Save Draft</ButtonContent>
-              </button>
-              <button type="button" onClick={handleExportSurveyWorkbook} disabled={workbookExporting} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-300">
-                <ButtonContent loading={workbookExporting} icon={Download}>Export Survey Workbook</ButtonContent>
-              </button>
+              {!readOnlyDemo ? (
+                <>
+                  <button type="button" onClick={handleSaveDraft} disabled={pendingAction === 'saveSiteDraft'} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:text-slate-950 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
+                    <ButtonContent loading={pendingAction === 'saveSiteDraft'} icon={Save}>Save Draft</ButtonContent>
+                  </button>
+                  <button type="button" onClick={handleExportSurveyWorkbook} disabled={workbookExporting} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-300">
+                    <ButtonContent loading={workbookExporting} icon={Download}>Export Survey Workbook</ButtonContent>
+                  </button>
+                </>
+              ) : null}
               {isFinalStep ? (
-                <button type="button" onClick={handleSubmitCommercialReview} disabled={pendingAction === 'submitReview'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-950/20 hover:bg-slate-800 dark:bg-white dark:text-slate-950">
-                  <ButtonContent loading={pendingAction === 'submitReview'}>Submit for Reviews</ButtonContent>
-                </button>
+                !readOnlyDemo ? (
+                  <button type="button" onClick={handleSubmitCommercialReview} disabled={pendingAction === 'submitReview'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-950/20 hover:bg-slate-800 dark:bg-white dark:text-slate-950">
+                    <ButtonContent loading={pendingAction === 'submitReview'}>Submit for Reviews</ButtonContent>
+                  </button>
+                ) : null
               ) : (
                 <button type="button" onClick={handleNextStep} className="focus-ring inline-flex items-center justify-center gap-2 rounded-xl bg-qpms-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-qpms-600/20 hover:bg-qpms-700">
                   Next
@@ -1980,9 +1994,11 @@ function duplicateRow(section, index) {
               </div>
               <div className="mt-6 flex flex-wrap justify-end gap-3">
                 <button type="button" onClick={() => setMomComposerVisit(null)} className="focus-ring rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:text-slate-950 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">Cancel</button>
-                <button type="button" onClick={handleSendMom} disabled={pendingAction === 'sendSiteMom'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-qpms-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-qpms-600/20 hover:bg-qpms-700">
-                  <ButtonContent loading={pendingAction === 'sendSiteMom'} icon={Send}>Send MOM</ButtonContent>
-                </button>
+                {!readOnlyDemo ? (
+                  <button type="button" onClick={handleSendMom} disabled={pendingAction === 'sendSiteMom'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-qpms-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-qpms-600/20 hover:bg-qpms-700">
+                    <ButtonContent loading={pendingAction === 'sendSiteMom'} icon={Send}>Send MOM</ButtonContent>
+                  </button>
+                ) : null}
               </div>
             </Motion.section>
           </div>
@@ -2135,9 +2151,11 @@ function duplicateRow(section, index) {
             </div>
             <div className="mt-6 flex flex-wrap justify-end gap-3">
               <button type="button" onClick={() => setMomComposerVisit(null)} className="focus-ring rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:text-slate-950 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">Cancel</button>
-              <button type="button" onClick={handleSendMom} disabled={pendingAction === 'sendSiteMom'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-qpms-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-qpms-600/20 hover:bg-qpms-700">
-                <ButtonContent loading={pendingAction === 'sendSiteMom'} icon={Send}>Send MOM</ButtonContent>
-              </button>
+              {!readOnlyDemo ? (
+                <button type="button" onClick={handleSendMom} disabled={pendingAction === 'sendSiteMom'} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-qpms-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-qpms-600/20 hover:bg-qpms-700">
+                  <ButtonContent loading={pendingAction === 'sendSiteMom'} icon={Send}>Send MOM</ButtonContent>
+                </button>
+              ) : null}
             </div>
           </Motion.section>
         </div>

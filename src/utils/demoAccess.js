@@ -1,8 +1,9 @@
 export const demoReadOnlyMessage =
-  'This action is disabled for the tender demo account.';
+  'This action is disabled for read-only demonstration access.';
 
 export const demoReadOnlyEmails = new Set(['admin@qpms.co.in']);
-export const demoReadOnlyRoles = new Set(['DEMOADMIN', 'TENDERDEMO', 'READONLYADMIN']);
+export const demoViewerRole = 'DEMO_VIEWER';
+export const demoReadOnlyRoles = new Set(['DEMOADMIN', 'TENDERDEMO', 'READONLYADMIN', 'DEMOVIEWER']);
 export const demoReadOnlyPassword = '123456';
 export const demoLabel = 'Tender Demo';
 export const demoAllowedStates = ['TN', 'KL', 'KA', 'TG', 'AP-1', 'AP-2'];
@@ -35,13 +36,18 @@ export function isDemoReadOnlyUser(user = {}) {
     demoReadOnlyRoles.has(role);
 }
 
+export function isReadOnlyDemoUser(profile = {}) {
+  return normalizeDemoRole(profile?.rawRole || profile?.role) === 'DEMOVIEWER';
+}
+
 export function isDemoUser(user = {}) {
-  return isDemoReadOnlyUser(user);
+  return isReadOnlyDemoUser(user) || isDemoReadOnlyUser(user);
 }
 
 export function isReadOnlyUser(user = {}) {
   const metadata = user?.metadata && typeof user.metadata === 'object' ? user.metadata : {};
-  return isDemoUser(user) && user?.read_only !== false && user?.readOnly !== false && metadata.read_only !== false;
+  if (isReadOnlyDemoUser(user)) return true;
+  return isDemoReadOnlyUser(user) && user?.read_only !== false && user?.readOnly !== false && metadata.read_only !== false;
 }
 
 export function getDemoAccessScope(user = {}) {
@@ -54,7 +60,7 @@ export function getDemoAccessScope(user = {}) {
     businesses: Array.isArray(metadata.permitted_businesses) ? metadata.permitted_businesses : demoAllowedBusinesses,
     modules: Array.isArray(metadata.permitted_modules)
       ? metadata.permitted_modules
-      : ['field_operations', 'deep_cleaning', 'fault_tracker', 'store_master', 'client_ticketing', 'reports'],
+      : ['dashboard', 'lead_management', 'site_visit', 'reviews', 'operations', 'client_ticketing', 'hospital_feedback', 'fault_tracker', 'deep_cleaning', 'assets', 'reports'],
   };
 }
 

@@ -59,7 +59,7 @@ import { usePageTitle } from "../hooks/usePageTitle.js";
 import { isSupabaseConfigured, supabase } from "../lib/supabase.js";
 import { authenticatedApiRequest, authenticatedFetch } from "../services/api.js";
 import { authSessionManager, invalidateAuthOnUnauthorized, isAuthSessionError, SESSION_EXPIRED_MESSAGE } from "../services/authSession.js";
-import { assertDemoWriteAllowed, isDemoUser } from "../utils/demoAccess.js";
+import { assertDemoWriteAllowed, isDemoUser, isReadOnlyUser } from "../utils/demoAccess.js";
 import {
   EMPTY_OPERATIONS_SUMMARY,
   activityPreviewFileKind,
@@ -7941,22 +7941,26 @@ function FieldOfficerDetailsView({
             >
               Apply
             </button>
-            <button
-              type="button"
-              onClick={openPrintReport}
-              disabled={reportState !== "ready"}
-              className="focus-ring inline-flex items-center gap-2 rounded-xl border border-qpms-200 bg-white px-3 py-2.5 text-xs font-black text-qpms-700 shadow-sm hover:bg-qpms-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Download className="h-4 w-4" /> Export PDF
-            </button>
-            <button
-              type="button"
-              onClick={onExport}
-              disabled={reportState !== "ready"}
-              className="focus-ring inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2.5 text-xs font-black text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <FileSpreadsheet className="h-4 w-4" /> Export Excel
-            </button>
+            {onExport ? (
+              <>
+                <button
+                  type="button"
+                  onClick={openPrintReport}
+                  disabled={reportState !== "ready"}
+                  className="focus-ring inline-flex items-center gap-2 rounded-xl border border-qpms-200 bg-white px-3 py-2.5 text-xs font-black text-qpms-700 shadow-sm hover:bg-qpms-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Download className="h-4 w-4" /> Export PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={onExport}
+                  disabled={reportState !== "ready"}
+                  className="focus-ring inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2.5 text-xs font-black text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FileSpreadsheet className="h-4 w-4" /> Export Excel
+                </button>
+              </>
+            ) : null}
             <button
               type="button"
               className="focus-ring grid h-10 w-10 place-items-center rounded-xl border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-50"
@@ -8026,22 +8030,26 @@ function FieldOfficerDetailsView({
             >
               Apply
             </button>
-              <button
-                type="button"
-                onClick={openPrintReport}
-                disabled={reportState !== "ready"}
-                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-qpms-200 bg-white px-3 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Download className="h-4 w-4" /> Export PDF
-            </button>
-            <button
-              type="button"
-              onClick={onExport}
-              disabled={reportState !== "ready"}
-              className="focus-ring inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <FileSpreadsheet className="h-4 w-4" /> Export Excel
-            </button>
+            {onExport ? (
+              <>
+                <button
+                  type="button"
+                  onClick={openPrintReport}
+                  disabled={reportState !== "ready"}
+                  className="focus-ring inline-flex items-center gap-2 rounded-lg border border-qpms-200 bg-white px-3 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Download className="h-4 w-4" /> Export PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={onExport}
+                  disabled={reportState !== "ready"}
+                  className="focus-ring inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FileSpreadsheet className="h-4 w-4" /> Export Excel
+                </button>
+              </>
+            ) : null}
             <button
               type="button"
               onClick={onBack}
@@ -10396,18 +10404,19 @@ function useAnimatedOfficerMarkers(officers, selectedOfficerId, selectedRouteLog
 export default function FOActivities() {
   usePageTitle("FO Activities");
   const { user, session, authStatus, authError } = useAuth();
+  const readOnlyDemo = isReadOnlyUser(user);
   const hasDemoBackendReadSession = authStatus === "ready" && isDemoUser(user);
   const hasActiveSession = authStatus === "ready" && (Boolean(session?.access_token) || hasDemoBackendReadSession);
   const currentRole = normalizeRoleKey(generatedUserRole(user));
   const fullTechnicalAccess = hasTechnicalKmAccess(user);
-  const canRunBatchKmRecalculation = ["admin", "developer", "qpmsadmin", "md", "coo"].includes(currentRole);
+  const canRunBatchKmRecalculation = !readOnlyDemo && ["admin", "developer", "qpmsadmin", "md", "coo"].includes(currentRole);
   const temporarySwitchNormalizedRole = resolveTemporarySwitchRole(user);
   const canUseTemporarySwitchKm = temporarySwitchAllowedRoles.has(temporarySwitchNormalizedRole);
-  const canRunTemporarySwitchKm = canUseTemporarySwitchKm;
+  const canRunTemporarySwitchKm = !readOnlyDemo && canUseTemporarySwitchKm;
   const canReviewCheckoutExceptions =
     canReviewCheckoutException(currentRole);
   const canApproveCheckoutMissingKmReviews =
-    canApproveCheckoutMissingKm(currentRole);
+    !readOnlyDemo && canApproveCheckoutMissingKm(currentRole);
   const [stateFilter, setStateFilter] = useState("All States");
   const [statusFilter, setStatusFilter] = useState("All Status");
   const [businessFilter, setBusinessFilter] = useState("All Business");
@@ -12232,7 +12241,7 @@ export default function FOActivities() {
         onDraftToDate={setDetailDraftToDate}
         onApplyDate={applyDetailDateRange}
         onBack={() => setSelectedOfficerId(null)}
-        onExport={() => exportEmployeeRangeExcel(employeeRangeDataset)}
+        onExport={readOnlyDemo ? null : () => exportEmployeeRangeExcel(employeeRangeDataset)}
         onRecalculateKm={recalculateSelectedOfficerKm}
         onTemporarySwitchKm={
           canRunTemporarySwitchKm
@@ -12381,26 +12390,30 @@ export default function FOActivities() {
               Reset
             </button>
           </div>
-          <div className="flex items-end">
-            <button
-              type="button"
-              onClick={exportDashboardExcel}
-              disabled={dashboardExportBusy}
-              className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-sm font-black text-emerald-700 hover:bg-emerald-100"
-            >
-              <FileSpreadsheet className="h-4 w-4" /> {dashboardExportBusy ? "Exporting..." : "Export Excel"}
-            </button>
-          </div>
-          <div className="flex items-end">
-            <button
-              type="button"
-              onClick={exportTravelClaimPdf}
-              disabled={travelClaimPdfExportBusy}
-              className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-3 text-sm font-black text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <Download className="h-4 w-4" /> {travelClaimPdfExportBusy ? "Generating..." : "Export Travel Claim PDF"}
-            </button>
-          </div>
+          {!readOnlyDemo ? (
+            <>
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  onClick={exportDashboardExcel}
+                  disabled={dashboardExportBusy}
+                  className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-sm font-black text-emerald-700 hover:bg-emerald-100"
+                >
+                  <FileSpreadsheet className="h-4 w-4" /> {dashboardExportBusy ? "Exporting..." : "Export Excel"}
+                </button>
+              </div>
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  onClick={exportTravelClaimPdf}
+                  disabled={travelClaimPdfExportBusy}
+                  className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-3 text-sm font-black text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Download className="h-4 w-4" /> {travelClaimPdfExportBusy ? "Generating..." : "Export Travel Claim PDF"}
+                </button>
+              </div>
+            </>
+          ) : null}
           {canRunBatchKmRecalculation ? (
             <div className="flex items-end">
               <button

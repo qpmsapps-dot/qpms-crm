@@ -53,7 +53,7 @@ import {
   getDemoAccessScope,
   isDemoUser,
   isReadOnlyUser,
-  rejectDemoMutation,
+  rejectReadOnlyDemoRequest,
   sanitizeDemoRecord,
 } from './services/demoAccessService.js';
 import {
@@ -518,7 +518,7 @@ function isDemoReadOnlyIdentity(identity = {}, authUser = {}) {
 }
 
 function blockDemoReadOnlyMutation(request, response, identity = {}, authUser = {}) {
-  return rejectDemoMutation(request, response, identity, authUser);
+  return rejectReadOnlyDemoRequest(request, response, identity, authUser);
 }
 
 function requireApiAuth(request, response, next) {
@@ -3168,6 +3168,7 @@ const FAULT_TRACKER_MANAGE_ROLE_KEYS = new Set([
 
 const FAULT_TRACKER_READ_ALL_ROLE_KEYS = new Set([
   ...FAULT_TRACKER_MANAGE_ROLE_KEYS,
+  'DEMOVIEWER',
   'COO',
   'IFMSSOUTHHEAD',
   'SOUTHHEAD',

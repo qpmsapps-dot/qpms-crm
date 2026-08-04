@@ -20,6 +20,7 @@ export const roleGroups = {
   FieldOfficer: ['Field Officer', 'FO'],
   Client: ['Client', 'Client Login'],
   Admin: ['Admin', 'QPMS Admin', 'Developer', 'DEMO_ADMIN', 'Demo Admin', 'Read Only Admin', 'Read-Only Admin'],
+  DemoViewer: ['DEMO_VIEWER'],
 };
 
 export const protectedNavRoutes = ['/dashboard', '/crm', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/fault-tracker', '/deep-cleaning', '/assets', '/reports', '/employees', '/store-master', '/settings', '/hospital-feedback', '/operations/hospital-feedback'];
@@ -46,6 +47,7 @@ export function normalizeCanonicalRole(role = '') {
     DEMOADMIN: 'DEMO_ADMIN',
     TENDERDEMO: 'DEMO_ADMIN',
     READONLYADMIN: 'DEMO_ADMIN',
+    DEMOVIEWER: 'DEMO_VIEWER',
     COO: 'COO',
     GM: 'GM',
     GENERALMANAGER: 'GM',
@@ -78,23 +80,23 @@ export function routeAllowedRoles(pathname = '') {
     return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
   }
   if (pathname.startsWith('/operations/hospital-feedback')) {
-    return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
+    return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'DemoViewer'];
   }
   if (pathname.startsWith('/settings')) return [];
-  if (pathname.startsWith('/crm')) return ['Admin', 'Management', 'FinanceLeadership', 'BD'];
-  if (pathname.startsWith('/sites') || pathname.startsWith('/site-visit')) return ['Admin', 'BD'];
-  if (pathname.startsWith('/site-monitoring')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
-  if (pathname.startsWith('/proposals')) return ['Admin', 'Management', 'FinanceLeadership', 'BD'];
-  if (pathname.startsWith('/approvals')) return ['Admin', 'Management', 'FinanceLeadership'];
-  if (pathname.startsWith('/tasks')) return ['Admin', 'Management', 'FinanceLeadership', 'Operations', 'Coordinator', 'HR', 'Commercial', 'Finance'];
-  if (pathname.startsWith('/existing-business')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
-  if (pathname.startsWith('/fo-activities')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'FieldOfficer'];
-  if (pathname.startsWith('/fault-tracker')) return ['FaultTracker'];
-  if (pathname.startsWith('/deep-cleaning')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
-  if (pathname.startsWith('/assets')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
+  if (pathname.startsWith('/crm')) return ['Admin', 'Management', 'FinanceLeadership', 'BD', 'DemoViewer'];
+  if (pathname.startsWith('/sites') || pathname.startsWith('/site-visit')) return ['Admin', 'BD', 'DemoViewer'];
+  if (pathname.startsWith('/site-monitoring')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'DemoViewer'];
+  if (pathname.startsWith('/proposals')) return ['Admin', 'Management', 'FinanceLeadership', 'BD', 'DemoViewer'];
+  if (pathname.startsWith('/approvals')) return ['Admin', 'Management', 'FinanceLeadership', 'DemoViewer'];
+  if (pathname.startsWith('/tasks')) return ['Admin', 'Management', 'FinanceLeadership', 'Operations', 'Coordinator', 'HR', 'Commercial', 'Finance', 'DemoViewer'];
+  if (pathname.startsWith('/existing-business')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'DemoViewer'];
+  if (pathname.startsWith('/fo-activities')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'FieldOfficer', 'DemoViewer'];
+  if (pathname.startsWith('/fault-tracker')) return ['FaultTracker', 'DemoViewer'];
+  if (pathname.startsWith('/deep-cleaning')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'DemoViewer'];
+  if (pathname.startsWith('/assets')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'DemoViewer'];
   if (pathname.startsWith('/employees')) return ['Admin', 'Management'];
-  if (pathname.startsWith('/reports')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations'];
-  if (pathname.startsWith('/tickets')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'FieldOfficer'];
+  if (pathname.startsWith('/reports')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'DemoViewer'];
+  if (pathname.startsWith('/tickets')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'FieldOfficer', 'DemoViewer'];
   return [];
 }
 
@@ -107,14 +109,17 @@ function canonicalUserRole(user) {
 }
 
 export function canCreateLead(user) {
+  if (normalizeAppRole(user?.rawRole || user?.role) === 'DemoViewer') return false;
   return new Set(['BD Executive', 'Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
 }
 
 export function canAssignLead(user) {
+  if (normalizeAppRole(user?.rawRole || user?.role) === 'DemoViewer') return false;
   return new Set(['Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
 }
 
 export function canSendLeadMom(user) {
+  if (normalizeAppRole(user?.rawRole || user?.role) === 'DemoViewer') return false;
   return new Set(['BD Executive', 'Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
 }
 
@@ -127,6 +132,7 @@ export function canAccessFaultTracker(user) {
     'DEMOADMIN',
     'TENDERDEMO',
     'READONLYADMIN',
+    'DEMOVIEWER',
     'COO',
     'IFMSSOUTHHEAD',
     'SOUTHHEAD',
@@ -141,12 +147,16 @@ export function canAccessFaultTracker(user) {
 
 export function canAccessStoreMaster(user) {
   if (!user) return false;
+  if (normalizeAppRole(user.rawRole || user.role) === 'DemoViewer') return false;
   return new Set(['DEVELOPER', 'ADMIN', 'QPMSADMIN', 'MD', 'COO', 'DEMOADMIN', 'TENDERDEMO', 'READONLYADMIN']).has(
     normalizeRawRole(user.rawRole || user.role),
   );
 }
 
 export function canAccessRoute(user, pathname) {
+  if (normalizeAppRole(user?.rawRole || user?.role) === 'DemoViewer') {
+    if (pathname.startsWith('/store-master') || pathname.startsWith('/settings') || pathname.startsWith('/employees')) return false;
+  }
   if (pathname.startsWith('/store-master')) return canAccessStoreMaster(user);
   if (pathname.startsWith('/fault-tracker')) return canAccessFaultTracker(user);
   if (pathname.startsWith('/crm') && ['Business Head', 'Branch Head'].includes(normalizeCanonicalRole(user?.rawRole || user?.role))) return true;

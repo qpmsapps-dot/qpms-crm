@@ -1,9 +1,21 @@
 export const DEMO_READ_ONLY_CODE = 'READ_ONLY_DEMO';
 export const DEMO_READ_ONLY_MESSAGE =
-  'This action is disabled for the tender demo account.';
+  'This action is disabled for read-only demonstration access.';
 
 const DEMO_EMAILS = new Set(['admin@qpms.co.in']);
-const DEMO_ROLES = new Set(['DEMOADMIN', 'TENDERDEMO', 'READONLYADMIN']);
+const DEMO_ROLES = new Set(['DEMOADMIN', 'TENDERDEMO', 'READONLYADMIN', 'DEMOVIEWER']);
+const DEMO_VIEWER_ROLE = 'DEMOVIEWER';
+
+const SENSITIVE_DEMO_GET_PATTERNS = [
+  /^\/api\/admin(?:\/|$)/i,
+  /^\/api\/access\/foundation(?:\/|$)/i,
+  /^\/api\/access\/scope-options(?:\/|$)/i,
+  /^\/api\/store-master(?:\/|$)/i,
+  /^\/api\/profile\/avatar(?:\/|$)/i,
+  /^\/api\/profile\/password/i,
+  /^\/api\/fo\/reports(?:\/|$)/i,
+  /\/(?:export|download|pdf|upload|import|reset|recalculate|sync-auth|hard-delete|repair-employee-code|enable-login|reset-password)(?:\/|$|\?)/i,
+];
 
 export const DEMO_ALLOWED_STATES = ['TN', 'KL', 'KA', 'TG', 'AP-1', 'AP-2'];
 export const DEMO_ALLOWED_BUSINESSES = [
@@ -38,10 +50,15 @@ export function isDemoUser(identity = {}, authUser = {}) {
     DEMO_ROLES.has(role);
 }
 
+export function isReadOnlyDemoUser(identity = {}) {
+  return normalizeDemoAccessRole(identity.rawRole || identity.role) === DEMO_VIEWER_ROLE;
+}
+
 export function isReadOnlyUser(identity = {}, authUser = {}) {
   const metadata = identity.metadata && typeof identity.metadata === 'object'
     ? identity.metadata
     : {};
+  if (isReadOnlyDemoUser(identity)) return true;
   return isDemoUser(identity, authUser) &&
     (
       identity.read_only !== false ||
@@ -58,6 +75,9 @@ export function getDemoAccessScope(identity = {}) {
   const metadata = identity.metadata && typeof identity.metadata === 'object'
     ? identity.metadata
     : {};
+  const defaultModules = isReadOnlyDemoUser(identity)
+    ? ['dashboard', 'lead_management', 'site_visit', 'reviews', 'operations', 'client_ticketing', 'hospital_feedback', 'fault_tracker', 'deep_cleaning', 'assets', 'reports']
+    : ['field_operations', 'deep_cleaning', 'fault_tracker', 'store_master', 'client_ticketing', 'reports'];
   return {
     is_demo: isDemoUser(identity),
     read_only: isReadOnlyUser(identity),
@@ -66,8 +86,14 @@ export function getDemoAccessScope(identity = {}) {
     businesses: Array.isArray(metadata.permitted_businesses) ? metadata.permitted_businesses : DEMO_ALLOWED_BUSINESSES,
     modules: Array.isArray(metadata.permitted_modules)
       ? metadata.permitted_modules
-      : ['field_operations', 'deep_cleaning', 'fault_tracker', 'store_master', 'client_ticketing', 'reports'],
+      : defaultModules,
   };
+}
+
+export function isSensitiveReadOnlyDemoGet(request) {
+  if (isMutationRequest(request)) return false;
+  const path = String(request.originalUrl || request.url || request.path || '').split('#')[0];
+  return SENSITIVE_DEMO_GET_PATTERNS.some((pattern) => pattern.test(path));
 }
 
 export function rejectDemoMutation(request, response, identity = {}, authUser = {}) {
@@ -78,6 +104,19 @@ export function rejectDemoMutation(request, response, identity = {}, authUser = 
     error: DEMO_READ_ONLY_CODE,
     code: DEMO_READ_ONLY_CODE,
     message: DEMO_READ_ONLY_MESSAGE,
+  });
+  return true;
+}
+
+export function rejectReadOnlyDemoRequest(request, response, identity = {}, authUser = {}) {
+  if (!isReadOnlyUser(identity, authUser)) return false;
+  if (rejectDemoMutation(request, response, identity, authUser)) return true;
+  if (!isSensitiveReadOnlyDemoGet(request)) return false;
+  response.status(403).json({
+    ok: false,
+    error: DEMO_READ_ONLY_CODE,
+    code: DEMO_READ_ONLY_CODE,
+    message: 'This read-only demonstration account cannot access sensitive administration, export, import, upload or system endpoints.',
   });
   return true;
 }

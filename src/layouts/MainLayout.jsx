@@ -44,9 +44,9 @@ export default function MainLayout() {
             {isDemoUser(user) ? (
               <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900 shadow-sm">
                 <span className="mr-2 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-black uppercase tracking-wide text-amber-800">
-                  Tender Demo
+                  Demo Viewer
                 </span>
-                Read-Only Access
+                Read-only demonstration access
               </div>
             ) : null}
             <Outlet />
