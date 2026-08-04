@@ -2,6 +2,7 @@ import express from 'express';
 
 import {
   deleteHospitalFeedbackQr,
+  getHospitalFeedbackDashboard,
   generateHospitalFeedbackQr,
   invalidQrResponse,
   listHospitalFeedbackQrs,
@@ -9,6 +10,7 @@ import {
   previewHospitalFeedbackQr,
   reprintHospitalFeedbackQr,
   resolvePublicHospitalFeedbackQr,
+  submitPublicHospitalFeedback,
   verifyPublicFeedbackSession,
 } from '../services/hospitalFeedbackQrService.js';
 
@@ -164,6 +166,48 @@ export function createHospitalFeedbackQrRouter({
     }
   });
 
+  router.get('/dashboard/summary', requireAuth, async (request, response) => {
+    try {
+      const result = await getHospitalFeedbackDashboard({
+        client: serviceClient,
+        authUser: request.authUser,
+        profile: request.profile,
+        filters: request.query || {},
+      });
+      response.json(result);
+    } catch (error) {
+      safeInternalError(response, error);
+    }
+  });
+
+  router.get('/dashboard/breakdown', requireAuth, async (request, response) => {
+    try {
+      const result = await getHospitalFeedbackDashboard({
+        client: serviceClient,
+        authUser: request.authUser,
+        profile: request.profile,
+        filters: request.query || {},
+      });
+      response.json(result);
+    } catch (error) {
+      safeInternalError(response, error);
+    }
+  });
+
+  router.get('/dashboard/recent', requireAuth, async (request, response) => {
+    try {
+      const result = await getHospitalFeedbackDashboard({
+        client: serviceClient,
+        authUser: request.authUser,
+        profile: request.profile,
+        filters: { ...(request.query || {}), needsAttention: 'true' },
+      });
+      response.json({ ok: true, recentNeedsAttention: result.recentNeedsAttention || [] });
+    } catch (error) {
+      safeInternalError(response, error);
+    }
+  });
+
   router.get('/public/qr/:token', noStoreNoIndex, publicQrRateLimit, async (request, response) => {
     try {
       const result = await resolvePublicHospitalFeedbackQr({
@@ -224,6 +268,25 @@ export function createPublicHospitalFeedbackQrRouter({
       return;
     }
     response.json({ valid: true, expiresAt: result.expiresAt });
+  });
+
+  router.post('/submissions', noStoreNoIndex, publicQrRateLimit, async (request, response) => {
+    try {
+      const result = await submitPublicHospitalFeedback({
+        client: serviceClient,
+        payload: request.body || {},
+      });
+      response.status(201).json(result);
+    } catch (error) {
+      const status = Number(error?.statusCode || 500);
+      response.status(status >= 500 ? 503 : status).json({
+        ok: false,
+        code: status >= 500 ? 'hospital_feedback_submission_failed' : error?.code || 'hospital_feedback_submission_error',
+        message: status >= 500
+          ? 'Feedback submission is unavailable.'
+          : error?.message || 'Unable to submit feedback.',
+      });
+    }
   });
 
   return router;

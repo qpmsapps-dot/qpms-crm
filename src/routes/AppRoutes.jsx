@@ -18,6 +18,7 @@ import FaultTracker from '../pages/FaultTracker.jsx';
 import DeepCleaning from '../pages/DeepCleaning.jsx';
 import UserManagement from '../pages/settings/UserManagement.jsx';
 import HospitalFeedbackQrGenerator from '../pages/HospitalFeedbackQrGenerator.jsx';
+import HospitalFeedbackDashboard from '../pages/HospitalFeedbackDashboard.jsx';
 import PublicFeedbackQrPage, { PublicFeedbackScanInstruction } from '../pages/PublicFeedbackQrPage.jsx';
 import { isDemoMode } from '../config/demoMode.js';
 import { isSiteVisitV2Enabled } from '../config/siteVisitFeature.js';
@@ -73,6 +74,7 @@ export const router = createBrowserRouter([
           { path: 'settings', element: <Settings /> },
           { path: 'settings/user-management', element: <UserManagement /> },
           { path: 'settings/hospital-feedback/qr-generator', element: <HospitalFeedbackQrGenerator /> },
+          { path: 'operations/hospital-feedback/dashboard', element: <HospitalFeedbackDashboard /> },
           { path: 'profile', element: <Profile /> },
         ],
       },

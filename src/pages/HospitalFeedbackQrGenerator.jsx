@@ -10,9 +10,13 @@ import {
   reprintHospitalFeedbackQr,
 } from '../services/api.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
+import { naturalOptionCompare } from '../utils/naturalSort.js';
 
 const QR_PAGE_SIZE = 20;
 const STATUS_OPTIONS = ['', 'active', 'inactive', 'replaced', 'revoked'];
+const LEGACY_CLIENT_KEY = '__legacy__';
+const LEGACY_NOT_SPECIFIED_FLOOR = 'Not Specified';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function uniqueOptions(rows, key, labelKey) {
   const seen = new Map();
@@ -23,7 +27,58 @@ function uniqueOptions(rows, key, labelKey) {
   });
   return Array.from(seen.entries())
     .map(([value, label]) => ({ value, label }))
-    .sort((a, b) => a.label.localeCompare(b.label));
+    .sort(naturalOptionCompare);
+}
+
+function clientKey(row) {
+  return row.parentClientId || LEGACY_CLIENT_KEY;
+}
+
+function normalizeLegacyFloorName(value) {
+  return String(value || LEGACY_NOT_SPECIFIED_FLOOR).replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+export function floorKey(row) {
+  if (row.floorId) return row.floorId;
+  if (clientKey(row) !== LEGACY_CLIENT_KEY) return '';
+  return [
+    'legacy-floor',
+    row.hospitalId || 'hospital',
+    row.blockId || 'block',
+    normalizeLegacyFloorName(row.floorName),
+  ].join(':');
+}
+
+function floorLabel(row) {
+  return row.floorName || LEGACY_NOT_SPECIFIED_FLOOR;
+}
+
+function floorOptions(rows) {
+  const seen = new Map();
+  rows.forEach((row) => {
+    const value = floorKey(row);
+    const label = floorLabel(row);
+    if (value && label && !seen.has(value)) seen.set(value, label);
+  });
+  return Array.from(seen.entries())
+    .map(([value, label]) => ({ value, label }))
+    .sort(naturalOptionCompare);
+}
+
+function realUuid(value) {
+  return UUID_PATTERN.test(String(value || '')) ? value : '';
+}
+
+function clientOptions(rows) {
+  const seen = new Map();
+  rows.forEach((row) => {
+    const key = clientKey(row);
+    const label = row.parentClientName || 'Legacy / Not Assigned';
+    if (!seen.has(key)) seen.set(key, label);
+  });
+  return Array.from(seen.entries())
+    .map(([value, label]) => ({ value, label }))
+    .sort(naturalOptionCompare);
 }
 
 function SelectField({ label, value, onChange, options, disabled = false }) {
@@ -73,9 +128,9 @@ function downloadQr(qr) {
   link.click();
 }
 
-function RegistryFilters({ filters, setFilter, hospitals, blocks, onRefresh, loading }) {
+function RegistryFilters({ filters, setFilter, clients, hospitals, blocks, floors, locations, onRefresh, loading }) {
   return (
-    <div className="grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(160px,1fr)_minmax(140px,0.8fr)_minmax(140px,0.8fr)_minmax(140px,0.8fr)_minmax(140px,0.8fr)_auto]">
+    <div className="grid gap-3 xl:grid-cols-[minmax(0,1.4fr)_repeat(7,minmax(120px,0.8fr))_auto]">
       <label className="block">
         <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Search</span>
         <div className="mt-2 flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3">
@@ -83,13 +138,16 @@ function RegistryFilters({ filters, setFilter, hospitals, blocks, onRefresh, loa
           <input
             value={filters.search}
             onChange={(event) => setFilter('search', event.target.value)}
-            placeholder="Search hospital, block, floor, location..."
+            placeholder="Search client, hospital, block, floor, location..."
             className="min-w-0 flex-1 text-sm font-semibold text-slate-700 outline-none"
           />
         </div>
       </label>
-      <SelectField label="Hospital" value={filters.hospitalId} onChange={(value) => setFilter('hospitalId', value)} options={hospitals} />
+      <SelectField label="Client" value={filters.clientKey} onChange={(value) => setFilter('clientKey', value)} options={clients} />
+      <SelectField label="Hospital" value={filters.hospitalId} onChange={(value) => setFilter('hospitalId', value)} options={hospitals} disabled={!filters.clientKey} />
       <SelectField label="Block" value={filters.blockId} onChange={(value) => setFilter('blockId', value)} options={blocks} disabled={!filters.hospitalId} />
+      <SelectField label="Floor" value={filters.floorId} onChange={(value) => setFilter('floorId', value)} options={floors} disabled={!filters.blockId} />
+      <SelectField label="Location" value={filters.locationId} onChange={(value) => setFilter('locationId', value)} options={locations} disabled={!filters.floorId} />
       <label className="block">
         <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Status</span>
         <select value={filters.status} onChange={(event) => setFilter('status', event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100">
@@ -136,6 +194,7 @@ function QrPreviewModal({ qr, loading, error, copied, onClose, onCopy, onReprint
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">Version {qr.version}</span>
                 </div>
                 {[
+                  ['Client', qr.parentClientName || 'Legacy / Not Assigned'],
                   ['Hospital', qr.hospitalName],
                   ['Block', qr.blockName],
                   ['Floor', qr.floorName],
@@ -187,6 +246,7 @@ function DeleteQrModal({ qr, deleting, error, onCancel, onConfirm }) {
         <div className="space-y-4 p-5">
           <div className="divide-y divide-slate-200 rounded-xl border border-slate-200 bg-slate-50">
             {[
+              ['Client', qr.parentClientName || 'Legacy / Not Assigned'],
               ['Hospital', qr.hospitalName],
               ['Block', qr.blockName],
               ['Floor', qr.floorName],
@@ -245,7 +305,7 @@ class QrRegistryErrorBoundary extends Component {
 }
 
 function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
-  const [filters, setFilters] = useState({ search: '', hospitalId: '', blockId: '', status: '', dateFrom: '', dateTo: '' });
+  const [filters, setFilters] = useState({ search: '', clientKey: '', hospitalId: '', blockId: '', floorId: '', locationId: '', status: '', dateFrom: '', dateTo: '' });
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
   const [items, setItems] = useState([]);
@@ -263,10 +323,32 @@ function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
     return () => clearTimeout(timer);
   }, [filters.search]);
 
-  const hospitals = useMemo(() => uniqueOptions(locations, 'hospitalId', 'hospitalName'), [locations]);
+  const clients = useMemo(() => clientOptions(locations), [locations]);
+  const clientFilteredLocations = useMemo(
+    () => locations.filter((row) => !filters.clientKey || clientKey(row) === filters.clientKey),
+    [locations, filters.clientKey],
+  );
+  const hospitals = useMemo(() => uniqueOptions(clientFilteredLocations, 'hospitalId', 'hospitalName'), [clientFilteredLocations]);
+  const hospitalFilteredLocations = useMemo(
+    () => clientFilteredLocations.filter((row) => !filters.hospitalId || row.hospitalId === filters.hospitalId),
+    [clientFilteredLocations, filters.hospitalId],
+  );
   const blocks = useMemo(
-    () => uniqueOptions(locations.filter((row) => row.hospitalId === filters.hospitalId), 'blockId', 'blockName'),
-    [locations, filters.hospitalId],
+    () => uniqueOptions(hospitalFilteredLocations, 'blockId', 'blockName'),
+    [hospitalFilteredLocations],
+  );
+  const blockFilteredLocations = useMemo(
+    () => hospitalFilteredLocations.filter((row) => !filters.blockId || row.blockId === filters.blockId),
+    [hospitalFilteredLocations, filters.blockId],
+  );
+  const floors = useMemo(() => floorOptions(blockFilteredLocations), [blockFilteredLocations]);
+  const floorFilteredLocations = useMemo(
+    () => blockFilteredLocations.filter((row) => !filters.floorId || floorKey(row) === filters.floorId),
+    [blockFilteredLocations, filters.floorId],
+  );
+  const locationFilterOptions = useMemo(
+    () => floorFilteredLocations.map((row) => ({ value: row.id, label: row.locationName || row.locationCode || row.id })).sort(naturalOptionCompare),
+    [floorFilteredLocations],
   );
 
   const loadRegistry = useCallback(async () => {
@@ -276,8 +358,11 @@ function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
     try {
       const result = await listHospitalFeedbackQrs({
         search: debouncedSearch || undefined,
+        parentClientId: filters.clientKey && filters.clientKey !== LEGACY_CLIENT_KEY ? filters.clientKey : undefined,
         hospitalId: filters.hospitalId || undefined,
         blockId: filters.blockId || undefined,
+        floorId: realUuid(filters.floorId) || undefined,
+        locationId: filters.locationId || undefined,
         status: filters.status || undefined,
         dateFrom: filters.dateFrom || undefined,
         dateTo: filters.dateTo || undefined,
@@ -291,7 +376,7 @@ function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, filters.blockId, filters.dateFrom, filters.dateTo, filters.hospitalId, filters.status, page]);
+  }, [debouncedSearch, filters.blockId, filters.clientKey, filters.dateFrom, filters.dateTo, filters.floorId, filters.hospitalId, filters.locationId, filters.status, page]);
 
   useEffect(() => {
     void Promise.resolve().then(loadRegistry);
@@ -301,7 +386,22 @@ function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
     setPage(1);
     setFilters((current) => {
       const next = { ...current, [key]: value };
-      if (key === 'hospitalId') next.blockId = '';
+      if (key === 'clientKey') {
+        next.hospitalId = '';
+        next.blockId = '';
+        next.floorId = '';
+        next.locationId = '';
+      }
+      if (key === 'hospitalId') {
+        next.blockId = '';
+        next.floorId = '';
+        next.locationId = '';
+      }
+      if (key === 'blockId') {
+        next.floorId = '';
+        next.locationId = '';
+      }
+      if (key === 'floorId') next.locationId = '';
       return next;
     });
   }
@@ -376,7 +476,7 @@ function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
         <div className="flex justify-end">
           <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{pagination.total || 0} records</span>
         </div>
-        <RegistryFilters filters={filters} setFilter={setFilter} hospitals={hospitals} blocks={blocks} onRefresh={() => setLocalRefresh((value) => value + 1)} loading={loading} />
+        <RegistryFilters filters={filters} setFilter={setFilter} clients={clients} hospitals={hospitals} blocks={blocks} floors={floors} locations={locationFilterOptions} onRefresh={() => setLocalRefresh((value) => value + 1)} loading={loading} />
         {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</div> : null}
         {notice ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800">{notice}</div> : null}
         <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -384,6 +484,7 @@ function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
             <thead className="bg-slate-50 text-xs font-bold uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-3">QR</th>
+                <th className="px-4 py-3">Client</th>
                 <th className="px-4 py-3">Hospital</th>
                 <th className="px-4 py-3">Block / Floor</th>
                 <th className="px-4 py-3">Location</th>
@@ -395,13 +496,14 @@ function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
               {loading ? (
-                <tr><td colSpan="8" className="px-4 py-8 text-center text-sm font-bold text-slate-500"><span className="button-spinner" /> Loading generated QR codes...</td></tr>
+                <tr><td colSpan="9" className="px-4 py-8 text-center text-sm font-bold text-slate-500"><span className="button-spinner" /> Loading generated QR codes...</td></tr>
               ) : items.length ? items.map((item) => {
                 const active = item.status === 'active';
                 return (
                   <tr key={item.qrId} className="align-top">
                     <td className="px-4 py-3"><button type="button" onClick={() => openPreview(item.qrId)} className="grid h-12 w-12 place-items-center rounded-xl border border-slate-200 bg-slate-50 text-qpms-700"><QrCode className="h-6 w-6" /></button></td>
-                    <td className="px-4 py-3"><div className="font-bold text-slate-950">{item.hospitalName || '-'}</div><div className="mt-1 text-xs font-semibold text-slate-500">v{item.version}</div></td>
+                    <td className="px-4 py-3"><div className="font-bold text-slate-950">{item.parentClientName || 'Legacy / Not Assigned'}</div><div className="mt-1 text-xs font-semibold text-slate-500">v{item.version}</div></td>
+                    <td className="px-4 py-3"><div className="font-bold text-slate-950">{item.hospitalName || '-'}</div>{item.hospitalCode ? <div className="mt-1 text-xs font-semibold text-slate-500">{item.hospitalCode}</div> : null}</td>
                     <td className="px-4 py-3"><div className="font-semibold text-slate-800">{item.blockName || '-'}</div><div className="mt-1 text-xs text-slate-500">{item.floorName || '-'}</div></td>
                     <td className="px-4 py-3"><div className="font-semibold text-slate-900">{item.locationName || '-'}</div>{item.departmentName ? <div className="mt-1 text-xs text-slate-500">{item.departmentName}</div> : null}{item.locationCode ? <div className="mt-1 text-xs font-bold text-slate-400">{item.locationCode}</div> : null}</td>
                     <td className="px-4 py-3"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusBadgeClass(item.status)}`}>{item.status}</span></td>
@@ -418,7 +520,7 @@ function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
                   </tr>
                 );
               }) : (
-                <tr><td colSpan="8" className="px-4 py-8 text-center text-sm font-bold text-slate-500">No generated QR codes found.</td></tr>
+                <tr><td colSpan="9" className="px-4 py-8 text-center text-sm font-bold text-slate-500">No generated QR codes found.</td></tr>
               )}
             </tbody>
           </table>
@@ -461,7 +563,7 @@ function QrRegistry({ locations, refreshVersion, onQrDeleted }) {
     <section className="enterprise-card-compact overflow-hidden">
       <div className="border-b border-slate-100 bg-white px-5 py-4">
         <h2 className="text-base font-bold text-slate-950">Generated QR Codes</h2>
-        <p className="mt-1 text-sm text-slate-500">Search and reprint existing Hospital Feedback QR codes.</p>
+        <p className="mt-1 text-sm text-slate-500">Search and reprint existing Client Feedback QR codes.</p>
       </div>
       <QrRegistryErrorBoundary>
         <QrRegistryBody locations={locations} refreshVersion={refreshVersion} onQrDeleted={onQrDeleted} />
@@ -471,11 +573,11 @@ function QrRegistry({ locations, refreshVersion, onQrDeleted }) {
 }
 
 export default function HospitalFeedbackQrGenerator() {
-  usePageTitle('Hospital Feedback QR Generator');
+  usePageTitle('Client Feedback QR Generator');
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingError, setLoadingError] = useState('');
-  const [selection, setSelection] = useState({ hospitalId: '', blockId: '', floorId: '', locationId: '' });
+  const [selection, setSelection] = useState({ clientKey: '', hospitalId: '', blockId: '', floorId: '', locationId: '' });
   const [generating, setGenerating] = useState(false);
   const [qr, setQr] = useState(null);
   const [message, setMessage] = useState('');
@@ -501,25 +603,30 @@ export default function HospitalFeedbackQrGenerator() {
     return () => { active = false; };
   }, []);
 
-  const hospitals = useMemo(() => uniqueOptions(locations, 'hospitalId', 'hospitalName'), [locations]);
+  const clients = useMemo(() => clientOptions(locations), [locations]);
+  const clientLocations = useMemo(
+    () => locations.filter((row) => !selection.clientKey || clientKey(row) === selection.clientKey),
+    [locations, selection.clientKey],
+  );
+  const hospitals = useMemo(() => uniqueOptions(clientLocations, 'hospitalId', 'hospitalName'), [clientLocations]);
   const hospitalLocations = useMemo(
-    () => locations.filter((row) => !selection.hospitalId || row.hospitalId === selection.hospitalId),
-    [locations, selection.hospitalId],
+    () => clientLocations.filter((row) => !selection.hospitalId || row.hospitalId === selection.hospitalId),
+    [clientLocations, selection.hospitalId],
   );
   const blocks = useMemo(() => uniqueOptions(hospitalLocations, 'blockId', 'blockName'), [hospitalLocations]);
   const blockLocations = useMemo(
     () => hospitalLocations.filter((row) => !selection.blockId || row.blockId === selection.blockId),
     [hospitalLocations, selection.blockId],
   );
-  const floors = useMemo(() => uniqueOptions(blockLocations, 'floorId', 'floorName'), [blockLocations]);
+  const floors = useMemo(() => floorOptions(blockLocations), [blockLocations]);
   const floorLocations = useMemo(
-    () => blockLocations.filter((row) => !selection.floorId || row.floorId === selection.floorId),
+    () => blockLocations.filter((row) => !selection.floorId || floorKey(row) === selection.floorId),
     [blockLocations, selection.floorId],
   );
   const locationOptions = useMemo(
     () => floorLocations
       .map((row) => ({ value: row.id, label: [row.locationName, row.locationType].filter(Boolean).join(' - ') }))
-      .sort((a, b) => a.label.localeCompare(b.label)),
+      .sort(naturalOptionCompare),
     [floorLocations],
   );
   const selectedLocation = locations.find((row) => row.id === selection.locationId);
@@ -530,6 +637,12 @@ export default function HospitalFeedbackQrGenerator() {
     setError('');
     setSelection((current) => {
       const next = { ...current, [key]: value };
+      if (key === 'clientKey') {
+        next.hospitalId = '';
+        next.blockId = '';
+        next.floorId = '';
+        next.locationId = '';
+      }
       if (key === 'hospitalId') {
         next.blockId = '';
         next.floorId = '';
@@ -588,19 +701,19 @@ export default function HospitalFeedbackQrGenerator() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Hospital Feedback QR Generator" />
+      <PageHeader title="Client Feedback QR Generator" />
 
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="enterprise-card-compact overflow-hidden">
           <div className="border-b border-slate-100 bg-slate-50/80 px-5 py-4">
             <h2 className="text-base font-bold text-slate-950">Select feedback location</h2>
-            <p className="mt-1 text-sm leading-6 text-slate-500">Generate the secure public QR for one active hospital location.</p>
+            <p className="mt-1 text-sm leading-6 text-slate-500">Generate the secure public QR for one active client hospital location.</p>
           </div>
           <div className="space-y-5 p-5">
             {loading ? (
               <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-500">
                 <span className="button-spinner" />
-                Loading hospital locations...
+                Loading client hospital locations...
               </div>
             ) : loadingError ? (
               <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
@@ -609,10 +722,11 @@ export default function HospitalFeedbackQrGenerator() {
             ) : (
               <>
                 <div className="grid gap-4 md:grid-cols-2">
-                  <SelectField label="Hospital" value={selection.hospitalId} onChange={(value) => updateSelection('hospitalId', value)} options={hospitals} />
+                  <SelectField label="Client" value={selection.clientKey} onChange={(value) => updateSelection('clientKey', value)} options={clients} />
+                  <SelectField label="Hospital" value={selection.hospitalId} onChange={(value) => updateSelection('hospitalId', value)} options={hospitals} disabled={!selection.clientKey} />
                   <SelectField label="Block" value={selection.blockId} onChange={(value) => updateSelection('blockId', value)} options={blocks} disabled={!selection.hospitalId} />
                   <SelectField label="Floor" value={selection.floorId} onChange={(value) => updateSelection('floorId', value)} options={floors} disabled={!selection.blockId} />
-                  <SelectField label="Location" value={selection.locationId} onChange={(value) => updateSelection('locationId', value)} options={locationOptions} disabled={!selection.blockId} />
+                  <SelectField label="Location" value={selection.locationId} onChange={(value) => updateSelection('locationId', value)} options={locationOptions} disabled={!selection.floorId} />
                 </div>
 
                 {selectedLocation ? (
@@ -620,8 +734,8 @@ export default function HospitalFeedbackQrGenerator() {
                     <div className="flex items-start gap-3">
                       <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" />
                       <div className="min-w-0">
-                        <div className="font-bold text-slate-950">{selectedLocation.hospitalName}</div>
-                        <div className="mt-1 leading-6">{[selectedLocation.blockName, selectedLocation.floorName, selectedLocation.departmentName, selectedLocation.locationName].filter(Boolean).join(' / ')}</div>
+                        <div className="font-bold text-slate-950">{selectedLocation.parentClientName || 'Legacy / Not Assigned'}</div>
+                        <div className="mt-1 leading-6">{[selectedLocation.hospitalName, selectedLocation.blockName, selectedLocation.floorName, selectedLocation.locationName].filter(Boolean).join(' / ')}</div>
                       </div>
                     </div>
                   </div>
@@ -630,7 +744,7 @@ export default function HospitalFeedbackQrGenerator() {
                 <button
                   type="button"
                   onClick={onGenerate}
-                  disabled={!selection.locationId || generating}
+                  disabled={!selection.clientKey || !selection.hospitalId || !selection.blockId || !selection.floorId || !selection.locationId || generating}
                   className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-qpms-700 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-qpms-800 disabled:bg-slate-400 md:w-auto"
                 >
                   {generating ? <span className="button-spinner" /> : <QrCode className="h-4 w-4" />}

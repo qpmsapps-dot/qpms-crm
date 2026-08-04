@@ -21,6 +21,7 @@ import {
   QR_PNG_WIDTH,
   reprintHospitalFeedbackQr,
   resolvePublicHospitalFeedbackQr,
+  submitPublicHospitalFeedback,
   verifyPublicFeedbackSession,
 } from '../services/hospitalFeedbackQrService.js';
 
@@ -28,9 +29,14 @@ const migration = readFileSync(
   new URL('../../supabase/migrations_2_0/039_hospital_feedback_qr_foundation.sql', import.meta.url),
   'utf8',
 );
+const dmeMigration = readFileSync(
+  new URL('../../supabase/migrations_2_0/044_dme_hospital_feedback_hierarchy_submissions.sql', import.meta.url),
+  'utf8',
+);
 const routes = readFileSync(new URL('../routes/hospitalFeedbackQrRoutes.js', import.meta.url), 'utf8');
 const appRoutes = readFileSync(new URL('../../src/routes/AppRoutes.jsx', import.meta.url), 'utf8');
 const publicPage = readFileSync(new URL('../../src/pages/PublicFeedbackQrPage.jsx', import.meta.url), 'utf8');
+const dashboardPage = readFileSync(new URL('../../src/pages/HospitalFeedbackDashboard.jsx', import.meta.url), 'utf8');
 const api = readFileSync(new URL('../../src/services/api.js', import.meta.url), 'utf8');
 
 const env = {
@@ -72,6 +78,7 @@ class FakeQuery {
   eq(key, value) { this.filters[key] = value; return this; }
   gte(key, value) { this.filters[`${key}__gte`] = value; return this; }
   lte(key, value) { this.filters[`${key}__lte`] = value; return this; }
+  lt(key, value) { this.filters[`${key}__lt`] = value; return this; }
   in() { return this; }
   or() { return this; }
   limit() { return this.client.resolve(this.table, this.filters, this.payload, 'limit'); }
@@ -163,6 +170,11 @@ test('valid active token returns public-safe location data and a short session',
   const result = await resolvePublicHospitalFeedbackQr({ client, token, environment: env });
   assert.equal(result.valid, true);
   assert.deepEqual(result.location, {
+    clientName: null,
+    parentClientId: null,
+    parentClientCode: null,
+    parentClientName: null,
+    hospitalCode: '',
     hospitalName: 'Chengalpattu Medical College Hospital',
     blockName: 'Block B',
     floorName: 'Second Floor',
@@ -198,6 +210,22 @@ test('unauthenticated public resolution is routed without auth, but generation r
   assert.match(routes, /router\.post\('\/qr\/:qrId\/reprint', requireAuth/);
   assert.match(routes, /router\.delete\('\/qr\/:qrId', requireAuth/);
   assert.match(routes, /router\.get\('\/qr\/locations', requireAuth/);
+});
+
+test('DME hierarchy migration creates parent client RGGH blocks floors toilets and submissions table', () => {
+  assert.match(dmeMigration, /create table if not exists public\.hospital_parent_clients/);
+  assert.match(dmeMigration, /add column if not exists parent_client_id uuid/);
+  assert.match(dmeMigration, /create table if not exists public\.hospital_feedback_submissions/);
+  assert.match(dmeMigration, /client_code,\s*client_name,[\s\S]*'DME'/);
+  assert.match(dmeMigration, /'RGGH'/);
+  assert.match(dmeMigration, /generate_series\(1, 10\)/);
+  assert.match(dmeMigration, /generate_series\(1, 6\)/);
+  assert.match(dmeMigration, /v_block_count <> 3/);
+  assert.match(dmeMigration, /v_floor_count <> 30/);
+  assert.match(dmeMigration, /v_location_count <> 180/);
+  assert.match(dmeMigration, /rating between 1 and 5/);
+  assert.match(dmeMigration, /language in \('en', 'ta'\)/);
+  assert.match(dmeMigration, /submission_key/);
 });
 
 test('unauthorized authenticated users and out-of-scope hospital users cannot generate QR codes', async () => {
@@ -370,6 +398,10 @@ test('QR registry list applies hospital and date filters', async () => {
     location_name: 'Other Ward',
   });
   const client = fakeClient(async (table, filters) => {
+    if (table === 'hospital_locations') {
+      assert.equal(filters.client_id, allowedLocation.client_id);
+      return { data: [allowedLocation], error: null };
+    }
     if (table === 'hospital_feedback_qr_codes') {
       assert.equal(filters.generated_at__gte, '2026-07-01T00:00:00.000Z');
       assert.equal(filters.generated_at__lte, '2026-07-31T23:59:59.999Z');
@@ -695,6 +727,7 @@ test('public Phase 2 demo flow is bilingual, local-only and starts at language s
   assert.ok(publicPage.includes('Thank you!'));
   assert.ok(publicPage.includes('\u0ba8\u0ba9\u0bcd\u0bb1\u0bbf!'));
   assert.ok(publicPage.includes('verifyPublicHospitalFeedbackSession'));
+  assert.ok(publicPage.includes('submitPublicHospitalFeedback'));
   assert.ok(publicPage.includes('selectedRating ? ('));
   assert.ok(publicPage.includes('Please select one rating to continue.'));
   assert.ok(publicPage.includes('\u0bae\u0bbf\u0b95\u0bb5\u0bc1\u0bae\u0bcd \u0bae\u0bcb\u0b9a\u0bae\u0bcd'));
@@ -717,10 +750,362 @@ test('internal QR generator preview and download use the same branded PNG data U
   assert.match(generatorPage, /<img src={qr.qr_png_data_url}/);
   assert.match(generatorPage, /link.href = qr.qr_png_data_url/);
   assert.match(generatorPage, /Active/);
+  assert.match(generatorPage, /Client Feedback QR Generator/);
+  assert.match(generatorPage, /Client/);
   assert.match(generatorPage, /Hospital/);
   assert.match(generatorPage, /Block/);
   assert.match(generatorPage, /Floor/);
   assert.match(generatorPage, /Location/);
+});
+
+test('public feedback submission stores rating idempotently and flags below four', async () => {
+  clearPublicFeedbackSessions();
+  const session = createPublicFeedbackSession({ qrId: '66666666-6666-4666-8666-666666666666', locationId: locationRow().id }, env, new Date('2026-07-31T10:00:00Z'));
+  let insertedPayload = null;
+  const dmeLocation = locationRow({
+    client: {
+      id: locationRow().client_id,
+      client_code: 'RGGH',
+      client_name: 'RGGH',
+      parent_client_id: '99999999-9999-4999-8999-999999999999',
+      is_active: true,
+      parent_client: { id: '99999999-9999-4999-8999-999999999999', client_code: 'DME', client_name: 'DME', is_active: true },
+    },
+  });
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_feedback_submissions' && mode === 'maybeSingle') return { data: null, error: null };
+    if (table === 'hospital_feedback_qr_codes') {
+      assert.equal(filters.id, '66666666-6666-4666-8666-666666666666');
+      assert.equal(filters.location_id, dmeLocation.id);
+      assert.equal(filters.status, 'active');
+      return { data: { id: filters.id, status: 'active', location_id: dmeLocation.id, location: dmeLocation }, error: null };
+    }
+    if (table === 'hospital_feedback_submissions' && mode === 'single') {
+      insertedPayload = payload;
+      return { data: { rating: payload.rating, needs_attention: payload.needs_attention, submitted_at: payload.submitted_at }, error: null };
+    }
+    return { data: null, error: null };
+  });
+
+  const result = await submitPublicHospitalFeedback({
+    client,
+    now: new Date('2026-07-31T10:01:00Z'),
+    payload: {
+      session_token: session.token,
+      submission_key: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      rating: 2,
+      language: 'en',
+      answers: {},
+    },
+  });
+
+  assert.equal(result.submission.submitted, true);
+  assert.equal(result.submission.rating, 2);
+  assert.equal(result.submission.needsAttention, true);
+  assert.equal(insertedPayload.parent_client_id, '99999999-9999-4999-8999-999999999999');
+  assert.equal(insertedPayload.hospital_id, dmeLocation.client_id);
+  assert.equal(insertedPayload.location_id, dmeLocation.id);
+});
+
+test('public feedback submission returns existing row only for an identical retry', async () => {
+  clearPublicFeedbackSessions();
+  const qrId = '66666666-6666-4666-8666-666666666666';
+  const submissionKey = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const session = createPublicFeedbackSession({ qrId, locationId: locationRow().id }, env, new Date('2026-07-31T10:00:00Z'));
+  let insertCount = 0;
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes') {
+      return { data: { id: qrId, status: 'active', location_id: locationRow().id, location: locationRow() }, error: null };
+    }
+    if (table === 'hospital_feedback_submissions' && mode === 'maybeSingle') {
+      assert.equal(filters.submission_key, submissionKey);
+      return {
+        data: {
+          qr_code_id: qrId,
+          location_id: locationRow().id,
+          rating: 4,
+          language: 'en',
+          comments: 'Clean',
+          answers: { b: 2, a: 1 },
+          needs_attention: false,
+          submitted_at: '2026-07-31T10:01:00.000Z',
+        },
+        error: null,
+      };
+    }
+    if (table === 'hospital_feedback_submissions' && mode === 'single') insertCount += 1;
+    return { data: null, error: null };
+  });
+
+  const result = await submitPublicHospitalFeedback({
+    client,
+    now: new Date('2026-07-31T10:01:00Z'),
+    payload: {
+      session_token: session.token,
+      submission_key: submissionKey,
+      rating: 4,
+      language: 'en',
+      comments: '  Clean  ',
+      answers: { a: 1, b: 2 },
+    },
+  });
+
+  assert.equal(result.submission.rating, 4);
+  assert.equal(result.submission.needsAttention, false);
+  assert.equal(insertCount, 0);
+});
+
+test('public feedback submission blocks reused key across locations without leaking details', async () => {
+  clearPublicFeedbackSessions();
+  const qrId = '66666666-6666-4666-8666-666666666666';
+  const session = createPublicFeedbackSession({ qrId, locationId: locationRow().id }, env, new Date('2026-07-31T10:00:00Z'));
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes') {
+      return { data: { id: qrId, status: 'active', location_id: locationRow().id, location: locationRow() }, error: null };
+    }
+    if (table === 'hospital_feedback_submissions' && mode === 'maybeSingle') {
+      return {
+        data: {
+          qr_code_id: '77777777-7777-4777-8777-777777777777',
+          location_id: '88888888-8888-4888-8888-888888888888',
+          rating: 1,
+          language: 'ta',
+          comments: 'private',
+          answers: { private: true },
+          needs_attention: true,
+          submitted_at: '2026-07-31T10:01:00.000Z',
+        },
+        error: null,
+      };
+    }
+    return { data: null, error: null };
+  });
+
+  await assert.rejects(
+    () => submitPublicHospitalFeedback({
+      client,
+      now: new Date('2026-07-31T10:01:00Z'),
+      payload: {
+        session_token: session.token,
+        submission_key: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        rating: 5,
+        language: 'en',
+        answers: {},
+      },
+    }),
+    (error) => error.statusCode === 409 && error.code === 'SUBMISSION_KEY_REUSED' && !/private|rating/i.test(error.message),
+  );
+});
+
+test('public feedback submission blocks same-location payload mismatch', async () => {
+  clearPublicFeedbackSessions();
+  const qrId = '66666666-6666-4666-8666-666666666666';
+  const session = createPublicFeedbackSession({ qrId, locationId: locationRow().id }, env, new Date('2026-07-31T10:00:00Z'));
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes') {
+      return { data: { id: qrId, status: 'active', location_id: locationRow().id, location: locationRow() }, error: null };
+    }
+    if (table === 'hospital_feedback_submissions' && mode === 'maybeSingle') {
+      return {
+        data: {
+          qr_code_id: qrId,
+          location_id: locationRow().id,
+          rating: 5,
+          language: 'en',
+          comments: null,
+          answers: {},
+          needs_attention: false,
+          submitted_at: '2026-07-31T10:01:00.000Z',
+        },
+        error: null,
+      };
+    }
+    return { data: null, error: null };
+  });
+
+  await assert.rejects(
+    () => submitPublicHospitalFeedback({
+      client,
+      now: new Date('2026-07-31T10:01:00Z'),
+      payload: {
+        session_token: session.token,
+        submission_key: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        rating: 4,
+        language: 'en',
+        answers: {},
+      },
+    }),
+    (error) => error.statusCode === 409 && error.code === 'IDEMPOTENCY_PAYLOAD_MISMATCH',
+  );
+});
+
+test('public feedback submission safely handles concurrent 23505 retries and collisions', async () => {
+  clearPublicFeedbackSessions();
+  const qrId = '66666666-6666-4666-8666-666666666666';
+  const submissionKey = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const session = createPublicFeedbackSession({ qrId, locationId: locationRow().id }, env, new Date('2026-07-31T10:00:00Z'));
+  let submissionLookupCount = 0;
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes') {
+      return { data: { id: qrId, status: 'active', location_id: locationRow().id, location: locationRow() }, error: null };
+    }
+    if (table === 'hospital_feedback_submissions' && mode === 'maybeSingle') {
+      submissionLookupCount += 1;
+      if (submissionLookupCount === 1) return { data: null, error: null };
+      return {
+        data: {
+          qr_code_id: qrId,
+          location_id: locationRow().id,
+          rating: 3,
+          language: 'ta',
+          comments: null,
+          answers: {},
+          needs_attention: true,
+          submitted_at: '2026-07-31T10:01:00.000Z',
+        },
+        error: null,
+      };
+    }
+    if (table === 'hospital_feedback_submissions' && mode === 'single') {
+      assert.equal(payload.needs_attention, true);
+      return { data: null, error: { code: '23505', message: 'duplicate key' } };
+    }
+    return { data: null, error: null };
+  });
+
+  const result = await submitPublicHospitalFeedback({
+    client,
+    now: new Date('2026-07-31T10:01:00Z'),
+    payload: {
+      session_token: session.token,
+      submission_key: submissionKey,
+      rating: 3,
+      language: 'ta',
+      needs_attention: false,
+      answers: {},
+    },
+  });
+
+  assert.equal(result.submission.rating, 3);
+  assert.equal(result.submission.needsAttention, true);
+  assert.equal(submissionLookupCount, 2);
+});
+
+test('public feedback submission blocks concurrent 23505 collision from another location', async () => {
+  clearPublicFeedbackSessions();
+  const qrId = '66666666-6666-4666-8666-666666666666';
+  const session = createPublicFeedbackSession({ qrId, locationId: locationRow().id }, env, new Date('2026-07-31T10:00:00Z'));
+  let submissionLookupCount = 0;
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes') {
+      return { data: { id: qrId, status: 'active', location_id: locationRow().id, location: locationRow() }, error: null };
+    }
+    if (table === 'hospital_feedback_submissions' && mode === 'maybeSingle') {
+      submissionLookupCount += 1;
+      if (submissionLookupCount === 1) return { data: null, error: null };
+      return {
+        data: {
+          qr_code_id: '77777777-7777-4777-8777-777777777777',
+          location_id: '88888888-8888-4888-8888-888888888888',
+          rating: 1,
+          language: 'en',
+          comments: 'do not leak',
+          answers: { secret: true },
+          needs_attention: true,
+          submitted_at: '2026-07-31T10:01:00.000Z',
+        },
+        error: null,
+      };
+    }
+    if (table === 'hospital_feedback_submissions' && mode === 'single') {
+      return { data: null, error: { code: '23505', message: 'duplicate key' } };
+    }
+    return { data: null, error: null };
+  });
+
+  await assert.rejects(
+    () => submitPublicHospitalFeedback({
+      client,
+      now: new Date('2026-07-31T10:01:00Z'),
+      payload: {
+        session_token: session.token,
+        submission_key: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        rating: 5,
+        language: 'en',
+        answers: {},
+      },
+    }),
+    (error) => error.statusCode === 409 && error.code === 'SUBMISSION_KEY_REUSED' && !/secret|leak|rating/i.test(error.message),
+  );
+});
+
+test('public feedback submission rejects unsafe and oversized payloads', async () => {
+  clearPublicFeedbackSessions();
+  const qrId = '66666666-6666-4666-8666-666666666666';
+  const session = createPublicFeedbackSession({ qrId, locationId: locationRow().id }, env, new Date('2026-07-31T10:00:00Z'));
+  const client = fakeClient(async (table) => {
+    if (table === 'hospital_feedback_qr_codes') {
+      return { data: { id: qrId, status: 'active', location_id: locationRow().id, location: locationRow() }, error: null };
+    }
+    return { data: null, error: null };
+  });
+  const basePayload = {
+    session_token: session.token,
+    submission_key: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    rating: 5,
+    language: 'en',
+    answers: {},
+  };
+
+  const now = new Date('2026-07-31T10:01:00Z');
+  await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, submission_key: 'bad' } }), /valid UUID/);
+  await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, rating: 0 } }), /Rating/);
+  await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, rating: 6 } }), /Rating/);
+  await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, rating: 4.5 } }), /Rating/);
+  await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, rating: '5' } }), /Rating/);
+  await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, comments: 'x'.repeat(2001) } }), /large/);
+  await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, answers: { safe: { constructor: true } } } }), /unsupported/);
+  await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, answers: { text: 'x'.repeat(16 * 1024) } } }), /too large/);
+});
+
+test('public feedback submission rejects invalid rating and expired session', async () => {
+  clearPublicFeedbackSessions();
+  const client = fakeClient(async () => ({ data: null, error: null }));
+  await assert.rejects(
+    () => submitPublicHospitalFeedback({
+      client,
+      payload: {
+        session_token: 'missing',
+        submission_key: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        rating: 5,
+        language: 'en',
+      },
+    }),
+    /expired/,
+  );
+  const session = createPublicFeedbackSession({ qrId: '66666666-6666-4666-8666-666666666666', locationId: locationRow().id }, env, new Date('2026-07-31T10:00:00Z'));
+  const activeClient = fakeClient(async (table) => {
+    if (table === 'hospital_feedback_qr_codes') {
+      return {
+        data: { id: '66666666-6666-4666-8666-666666666666', status: 'active', location_id: locationRow().id, location: locationRow() },
+        error: null,
+      };
+    }
+    return { data: null, error: null };
+  });
+  await assert.rejects(
+    () => submitPublicHospitalFeedback({
+      client: activeClient,
+      now: new Date('2026-07-31T10:01:00Z'),
+      payload: {
+        session_token: session.token,
+        submission_key: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        rating: 6,
+        language: 'en',
+      },
+    }),
+    /Rating/,
+  );
 });
 
 test('internal QR registry renders search filters empty state and reprint actions', () => {
@@ -752,4 +1137,20 @@ test('public API bypasses authenticated interceptor and client input cannot choo
   assert.match(routes, /Cache-Control/);
   assert.match(routes, /X-Robots-Tag/);
   assert.match(routes, /HOSPITAL_FEEDBACK_QR_RATE_LIMIT_MAX/);
+  assert.match(routes, /router\.post\('\/submissions'/);
+  assert.match(api, /submitPublicHospitalFeedback/);
+});
+
+test('Soft Services dashboard route API and page contracts are present', () => {
+  assert.match(appRoutes, /operations\/hospital-feedback\/dashboard/);
+  assert.match(routes, /\/dashboard\/summary/);
+  assert.match(routes, /getHospitalFeedbackDashboard/);
+  assert.match(api, /getHospitalFeedbackDashboard/);
+  assert.match(dashboardPage, /Soft Services Feedback Dashboard/);
+  assert.match(dashboardPage, /Total Feedback/);
+  assert.match(dashboardPage, /Average Rating/);
+  assert.match(dashboardPage, /Five-Star Percentage/);
+  assert.match(dashboardPage, /Below-4 Feedback/);
+  assert.match(dashboardPage, /Block-wise Performance/);
+  assert.match(dashboardPage, /Recent Needs Attention/);
 });
