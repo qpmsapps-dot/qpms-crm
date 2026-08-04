@@ -38,12 +38,20 @@ import {
   pct,
   ratingDistributionFromBlocks,
   reportMetrics,
+  hasProvidedName,
   respondentName,
 } from '../utils/hospitalFeedbackReport.js';
 
 const LEGACY_CLIENT_KEY = '__legacy__';
 const tabs = ['Overview', 'Floor-wise Report', 'Location-wise Report', 'Comments & Names', 'Checklist Summary'];
 const ratingOptions = ['', '5', '4', '3', '2', '1'];
+const responseFilterOptions = [
+  { value: 'all', label: 'All responses' },
+  { value: 'named', label: 'Named responses' },
+  { value: 'anonymous', label: 'Anonymous responses' },
+  { value: 'hasComment', label: 'Has comment' },
+  { value: 'noComment', label: 'No comment' },
+];
 
 function monthStart() {
   const now = new Date();
@@ -347,6 +355,7 @@ export default function HospitalFeedbackDashboard() {
   const [activeTab, setActiveTab] = useState('Overview');
   const [locationSearch, setLocationSearch] = useState('');
   const [locationPage, setLocationPage] = useState(1);
+  const [responseFilter, setResponseFilter] = useState('all');
   const locationPageSize = 12;
 
   useEffect(() => {
@@ -416,6 +425,15 @@ export default function HospitalFeedbackDashboard() {
     return Array.from(new Map(rows.map((row, index) => [row.id || `${row.submittedAt || index}-${row.locationId || index}`, row])).values())
       .sort((a, b) => new Date(b.submittedAt || b.submitted_at || 0) - new Date(a.submittedAt || a.submitted_at || 0));
   }, [data]);
+  const commentsTabRows = useMemo(() => responseRows.filter((row) => {
+    if (filters.needsAttention === 'true' && Number(row.rating) >= 4) return false;
+    if (filters.needsAttention === 'false' && Number(row.rating) < 4) return false;
+    if (responseFilter === 'named') return hasProvidedName(row);
+    if (responseFilter === 'anonymous') return !hasProvidedName(row);
+    if (responseFilter === 'hasComment') return Boolean(String(row.comments || '').trim());
+    if (responseFilter === 'noComment') return !String(row.comments || '').trim();
+    return true;
+  }), [responseRows, filters.needsAttention, responseFilter]);
   const checklistRows = checklistRowsFromResponses(responseRows);
   const filteredLocationRows = locationRows.filter((row) => {
     const query = locationSearch.trim().toLowerCase();
@@ -486,9 +504,9 @@ export default function HospitalFeedbackDashboard() {
             <p className="mt-1 max-w-3xl text-sm font-semibold text-slate-500">Consolidated public feedback insights including ratings, names, comments and checklist responses.</p>
             <div className="mt-4 flex flex-wrap items-center gap-3 text-sm font-black text-qpms-700">
               <span className="inline-flex items-center gap-1"><MapPin className="h-4 w-4" />{contextParts[0]}</span>
-              <span>•</span>
+              <span aria-hidden="true">&bull;</span>
               <span className="inline-flex items-center gap-1"><Building2 className="h-4 w-4" />{contextParts[1]}</span>
-              <span>•</span>
+              <span aria-hidden="true">&bull;</span>
               <span className="inline-flex items-center gap-1"><CalendarDays className="h-4 w-4" />{contextParts[2]}</span>
             </div>
             {activeChips.length ? <div className="mt-3 flex flex-wrap gap-2">{activeChips.map((chip) => <span key={chip} className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-600 ring-1 ring-slate-200">{chip}</span>)}</div> : null}
@@ -565,12 +583,20 @@ export default function HospitalFeedbackDashboard() {
         ) : null}
 
         {activeTab === 'Comments & Names' ? (
-          <ReportCard title="Comments & Names" subtitle="Full authenticated response list available from the current report payload">
-            <CommentsTable rows={responseRows.filter((row) => {
-              if (filters.needsAttention === 'true') return Number(row.rating) < 4;
-              if (filters.needsAttention === 'false') return Number(row.rating) >= 4;
-              return true;
-            })} />
+          <ReportCard
+            title="Comments & Names"
+            subtitle="Full authenticated response list available from the current report payload"
+            action={(
+              <select
+                value={responseFilter}
+                onChange={(event) => setResponseFilter(event.target.value)}
+                className="no-print rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700"
+              >
+                {responseFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            )}
+          >
+            <CommentsTable rows={commentsTabRows} />
           </ReportCard>
         ) : null}
 

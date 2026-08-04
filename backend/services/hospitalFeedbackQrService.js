@@ -45,6 +45,17 @@ function normalizeText(value, max = 240) {
   return text;
 }
 
+function normalizeRespondentName(value) {
+  const text = normalizeText(value, 120);
+  if (text && /[\u0000-\u001f\u007f]/.test(text)) {
+    const error = new Error('Respondent name contains unsupported characters.');
+    error.statusCode = 400;
+    error.code = 'invalid_respondent_name';
+    throw error;
+  }
+  return text;
+}
+
 function cleanUuid(value, fieldName = 'id') {
   const text = cleanText(value, 80);
   if (UUID_PATTERN.test(text)) {
@@ -966,6 +977,7 @@ function sameNormalizedSubmission(existing = {}, expected = {}) {
     existing.location_id === expected.locationId &&
     Number(existing.rating) === expected.rating &&
     cleanLanguage(existing.language) === expected.language &&
+    (normalizeRespondentName(existing.respondent_name) || null) === expected.respondentName &&
     (normalizeText(existing.comments, 2000) || null) === expected.comments &&
     normalizedAnswersText(existing.answers || {}) === normalizedAnswersText(expected.answers)
   );
@@ -991,7 +1003,7 @@ function assertExistingSubmissionMatches(existing, expected) {
 async function findSubmissionByKey(client, submissionKey) {
   const existing = await client
     .from('hospital_feedback_submissions')
-    .select('qr_code_id,location_id,rating,language,comments,answers,needs_attention,submitted_at,created_at')
+    .select('qr_code_id,location_id,rating,language,respondent_name,comments,answers,needs_attention,submitted_at,created_at')
     .eq('submission_key', submissionKey)
     .maybeSingle();
   if (existing.error) throw existing.error;
@@ -1002,6 +1014,7 @@ function normalizeSubmissionPayload(payload = {}, qr) {
   const location = qr.location;
   const rating = cleanRating(payload.rating);
   const language = cleanLanguage(payload.language);
+  const respondentName = normalizeRespondentName(payload.respondent_name);
   const comments = normalizeText(payload.comments, 2000);
   const answers = cleanSubmissionAnswers(payload.answers);
   return {
@@ -1012,6 +1025,7 @@ function normalizeSubmissionPayload(payload = {}, qr) {
     blockId: location.block_id || null,
     floorId: location.floor_id || null,
     departmentId: location.department_id || null,
+    respondentName,
     rating,
     language,
     comments,
@@ -1081,6 +1095,7 @@ export async function submitPublicHospitalFeedback({
       block_id: normalized.blockId,
       floor_id: normalized.floorId,
       department_id: normalized.departmentId,
+      respondent_name: normalized.respondentName,
       rating: normalized.rating,
       language: normalized.language,
       comments: normalized.comments,
@@ -1172,7 +1187,9 @@ const DASHBOARD_SELECT = [
   'id',
   'rating',
   'language',
+  'respondent_name',
   'comments',
+  'answers',
   'needs_attention',
   'submitted_at',
   'parent_client_id',
@@ -1352,10 +1369,26 @@ export function aggregateHospitalFeedbackDashboardRows(rows = []) {
     .filter((row) => row.needs_attention)
     .slice(0, 25)
     .map((row) => ({
+      id: row.id,
       submittedAt: row.submitted_at,
       rating: Number(row.rating || 0),
       language: row.language,
-      comments: cleanText(row.comments, 1000),
+      respondentName: cleanText(row.respondent_name, 120) || null,
+      comments: cleanText(row.comments, 2000) || null,
+      answers: row.answers && typeof row.answers === 'object' && !Array.isArray(row.answers) ? row.answers : {},
+      ...submissionLabel(row),
+    }));
+  const recentFeedback = rows
+    .slice(0, 100)
+    .map((row) => ({
+      id: row.id,
+      submittedAt: row.submitted_at,
+      rating: Number(row.rating || 0),
+      language: row.language,
+      respondentName: cleanText(row.respondent_name, 120) || null,
+      comments: cleanText(row.comments, 2000) || null,
+      answers: row.answers && typeof row.answers === 'object' && !Array.isArray(row.answers) ? row.answers : {},
+      needsAttention: row.needs_attention === true,
       ...submissionLabel(row),
     }));
   return {
@@ -1373,6 +1406,7 @@ export function aggregateHospitalFeedbackDashboardRows(rows = []) {
     dailyTrend,
     floorPerformance,
     locationPerformance,
+    recentFeedback,
     recentNeedsAttention,
   };
 }

@@ -49,10 +49,10 @@ export function compareHierarchy(a = {}, b = {}) {
 }
 
 export function respondentName(row = {}) {
+  // Legacy fallback supports pre-column demo payloads that stored names in JSON.
   const candidates = [
     row.respondentName,
     row.respondent_name,
-    row.name,
     row.metadata?.respondentName,
     row.metadata?.respondent_name,
     row.answers?.respondentName,

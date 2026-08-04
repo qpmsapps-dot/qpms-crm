@@ -5,6 +5,7 @@ import sharp from 'sharp';
 
 import {
   assertHospitalFeedbackQrAccess,
+  aggregateHospitalFeedbackDashboardRows,
   clearPublicFeedbackSessions,
   createPublicFeedbackSession,
   deleteHospitalFeedbackQr,
@@ -31,6 +32,10 @@ const migration = readFileSync(
 );
 const dmeMigration = readFileSync(
   new URL('../../supabase/migrations_2_0/044_dme_hospital_feedback_hierarchy_submissions.sql', import.meta.url),
+  'utf8',
+);
+const nameCommentMigration = readFileSync(
+  new URL('../../supabase/migrations_2_0/045_hospital_feedback_respondent_name_comments.sql', import.meta.url),
   'utf8',
 );
 const routes = readFileSync(new URL('../routes/hospitalFeedbackQrRoutes.js', import.meta.url), 'utf8');
@@ -795,6 +800,9 @@ test('public feedback submission stores rating idempotently and flags below four
       submission_key: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       rating: 2,
       language: 'en',
+      respondent_name: '  Lakshmi  ',
+      comments: '  Needs cleaning near entrance.  ',
+      needs_attention: false,
       answers: {},
     },
   });
@@ -802,6 +810,11 @@ test('public feedback submission stores rating idempotently and flags below four
   assert.equal(result.submission.submitted, true);
   assert.equal(result.submission.rating, 2);
   assert.equal(result.submission.needsAttention, true);
+  assert.equal(result.submission.respondentName, undefined);
+  assert.equal(result.submission.comments, undefined);
+  assert.equal(insertedPayload.respondent_name, 'Lakshmi');
+  assert.equal(insertedPayload.comments, 'Needs cleaning near entrance.');
+  assert.equal(insertedPayload.needs_attention, true);
   assert.equal(insertedPayload.parent_client_id, '99999999-9999-4999-8999-999999999999');
   assert.equal(insertedPayload.hospital_id, dmeLocation.client_id);
   assert.equal(insertedPayload.location_id, dmeLocation.id);
@@ -825,6 +838,7 @@ test('public feedback submission returns existing row only for an identical retr
           location_id: locationRow().id,
           rating: 4,
           language: 'en',
+          respondent_name: 'Ravi',
           comments: 'Clean',
           answers: { b: 2, a: 1 },
           needs_attention: false,
@@ -845,6 +859,7 @@ test('public feedback submission returns existing row only for an identical retr
       submission_key: submissionKey,
       rating: 4,
       language: 'en',
+      respondent_name: '  Ravi  ',
       comments: '  Clean  ',
       answers: { a: 1, b: 2 },
     },
@@ -939,6 +954,53 @@ test('public feedback submission blocks same-location payload mismatch', async (
   );
 });
 
+test('public feedback submission treats changed respondent name or comment as idempotency mismatch', async () => {
+  clearPublicFeedbackSessions();
+  const qrId = '66666666-6666-4666-8666-666666666666';
+  const submissionKey = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const session = createPublicFeedbackSession({ qrId, locationId: locationRow().id }, env, new Date('2026-07-31T10:00:00Z'));
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes') {
+      return { data: { id: qrId, status: 'active', location_id: locationRow().id, location: locationRow() }, error: null };
+    }
+    if (table === 'hospital_feedback_submissions' && mode === 'maybeSingle') {
+      return {
+        data: {
+          qr_code_id: qrId,
+          location_id: locationRow().id,
+          rating: 5,
+          language: 'en',
+          respondent_name: 'Lakshmi',
+          comments: 'Clean area',
+          answers: {},
+          needs_attention: false,
+          submitted_at: '2026-07-31T10:01:00.000Z',
+        },
+        error: null,
+      };
+    }
+    return { data: null, error: null };
+  });
+
+  for (const payloadPatch of [{ respondent_name: 'Ravi', comments: 'Clean area' }, { respondent_name: 'Lakshmi', comments: 'Different comment' }]) {
+    await assert.rejects(
+      () => submitPublicHospitalFeedback({
+        client,
+        now: new Date('2026-07-31T10:01:00Z'),
+        payload: {
+          session_token: session.token,
+          submission_key: submissionKey,
+          rating: 5,
+          language: 'en',
+          answers: {},
+          ...payloadPatch,
+        },
+      }),
+      (error) => error.statusCode === 409 && error.code === 'IDEMPOTENCY_PAYLOAD_MISMATCH' && !/Lakshmi|Clean area|Ravi/i.test(error.message),
+    );
+  }
+});
+
 test('public feedback submission safely handles concurrent 23505 retries and collisions', async () => {
   clearPublicFeedbackSessions();
   const qrId = '66666666-6666-4666-8666-666666666666';
@@ -989,6 +1051,41 @@ test('public feedback submission safely handles concurrent 23505 retries and col
   assert.equal(result.submission.rating, 3);
   assert.equal(result.submission.needsAttention, true);
   assert.equal(submissionLookupCount, 2);
+});
+
+test('public feedback submission normalizes optional empty respondent name and comment to null', async () => {
+  clearPublicFeedbackSessions();
+  const qrId = '66666666-6666-4666-8666-666666666666';
+  const session = createPublicFeedbackSession({ qrId, locationId: locationRow().id }, env, new Date('2026-07-31T10:00:00Z'));
+  let insertedPayload = null;
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes') {
+      return { data: { id: qrId, status: 'active', location_id: locationRow().id, location: locationRow() }, error: null };
+    }
+    if (table === 'hospital_feedback_submissions' && mode === 'maybeSingle') return { data: null, error: null };
+    if (table === 'hospital_feedback_submissions' && mode === 'single') {
+      insertedPayload = payload;
+      return { data: { rating: payload.rating, needs_attention: payload.needs_attention, submitted_at: payload.submitted_at }, error: null };
+    }
+    return { data: null, error: null };
+  });
+
+  await submitPublicHospitalFeedback({
+    client,
+    now: new Date('2026-07-31T10:01:00Z'),
+    payload: {
+      session_token: session.token,
+      submission_key: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      rating: 5,
+      language: 'en',
+      respondent_name: '   ',
+      comments: '\n\t ',
+      answers: {},
+    },
+  });
+
+  assert.equal(insertedPayload.respondent_name, null);
+  assert.equal(insertedPayload.comments, null);
 });
 
 test('public feedback submission blocks concurrent 23505 collision from another location', async () => {
@@ -1063,6 +1160,10 @@ test('public feedback submission rejects unsafe and oversized payloads', async (
   await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, rating: 6 } }), /Rating/);
   await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, rating: 4.5 } }), /Rating/);
   await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, rating: '5' } }), /Rating/);
+  await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, respondent_name: 123 } }), /Text fields/);
+  await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, respondent_name: 'x'.repeat(121) } }), /large/);
+  await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, respondent_name: 'Bad\u0001Name' } }), /unsupported characters/);
+  await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, comments: { text: 'bad' } } }), /Text fields/);
   await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, comments: 'x'.repeat(2001) } }), /large/);
   await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, answers: { safe: { constructor: true } } } }), /unsupported/);
   await assert.rejects(() => submitPublicHospitalFeedback({ client, now, payload: { ...basePayload, answers: { text: 'x'.repeat(16 * 1024) } } }), /too large/);
@@ -1108,6 +1209,36 @@ test('public feedback submission rejects invalid rating and expired session', as
   );
 });
 
+test('authenticated feedback dashboard response includes respondent name and comments', () => {
+  const result = aggregateHospitalFeedbackDashboardRows([
+    {
+      id: 'sub-1',
+      rating: 5,
+      language: 'en',
+      respondent_name: 'Lakshmi',
+      comments: 'Clean and well maintained.',
+      answers: {},
+      needs_attention: false,
+      submitted_at: '2026-08-04T03:30:00.000Z',
+      parent_client_id: 'parent-1',
+      hospital_id: 'hospital-1',
+      block_id: 'block-1',
+      floor_id: 'floor-1',
+      location_id: 'location-1',
+      parent_client: { client_name: 'DME' },
+      hospital: { client_name: 'RGGH' },
+      block: { block_name: 'Block 1' },
+      floor: { floor_name: 'Floor 1' },
+      location: { location_name: 'Toilet 1', location_type: 'Toilet' },
+    },
+  ]);
+
+  assert.equal(result.recentFeedback[0].respondentName, 'Lakshmi');
+  assert.equal(result.recentFeedback[0].comments, 'Clean and well maintained.');
+  assert.equal(result.recentFeedback[0].parentClientName, 'DME');
+  assert.equal(result.recentFeedback[0].hospitalName, 'RGGH');
+});
+
 test('internal QR registry renders search filters empty state and reprint actions', () => {
   const generatorPage = readFileSync(new URL('../../src/pages/HospitalFeedbackQrGenerator.jsx', import.meta.url), 'utf8');
   assert.match(generatorPage, /Generated QR Codes/);
@@ -1146,11 +1277,22 @@ test('Soft Services dashboard route API and page contracts are present', () => {
   assert.match(routes, /\/dashboard\/summary/);
   assert.match(routes, /getHospitalFeedbackDashboard/);
   assert.match(api, /getHospitalFeedbackDashboard/);
-  assert.match(dashboardPage, /Soft Services Feedback Dashboard/);
+  assert.match(dashboardPage, /Soft Services Feedback Report/);
   assert.match(dashboardPage, /Total Feedback/);
   assert.match(dashboardPage, /Average Rating/);
-  assert.match(dashboardPage, /Five-Star Percentage/);
-  assert.match(dashboardPage, /Below-4 Feedback/);
-  assert.match(dashboardPage, /Block-wise Performance/);
-  assert.match(dashboardPage, /Recent Needs Attention/);
+  assert.match(dashboardPage, /Five-Star %/);
+  assert.match(dashboardPage, /Needs Attention/);
+  assert.match(dashboardPage, /Named Responses/);
+  assert.match(dashboardPage, /Checklist Completion Rate/);
+  assert.match(dashboardPage, /Block \/ Location Performance/);
+  assert.match(dashboardPage, /Comments & Names/);
+});
+
+test('respondent name/comment migration adds only nullable respondent field and safe constraints', () => {
+  assert.match(nameCommentMigration, /add column if not exists respondent_name text/i);
+  assert.doesNotMatch(nameCommentMigration, /respondent_name text not null/i);
+  assert.match(nameCommentMigration, /char_length\(respondent_name\) <= 120/i);
+  assert.match(nameCommentMigration, /char_length\(comments\) <= 2000/i);
+  assert.match(nameCommentMigration, /not valid/i);
+  assert.doesNotMatch(nameCommentMigration, /grant\s+insert[\s\S]{0,120}to anon/i);
 });

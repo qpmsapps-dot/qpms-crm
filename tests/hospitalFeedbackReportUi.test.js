@@ -29,13 +29,22 @@ test('Soft Services Feedback Report contains the required KPI cards and no fake 
   assert.doesNotMatch(dashboardPage, /'Open'|"Open"|'In Progress'|"In Progress"|ticket_number|ticketNumber|createHospitalTicket/);
 });
 
+test('Comments and Names tab exposes real response filters without internal IDs', () => {
+  for (const label of ['All responses', 'Named responses', 'Anonymous responses', 'Has comment', 'No comment']) {
+    assert.match(dashboardPage, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  assert.match(dashboardPage, /commentsTabRows/);
+  assert.match(dashboardPage, /hasProvidedName\(row\)/);
+  assert.doesNotMatch(dashboardPage, /session_token|public_token_hash|tokenHash/);
+});
+
 test('report metrics calculate named responses and checklist completion from real response data', () => {
   const metrics = reportMetrics({
     summary: { totalResponses: 4, averageRating: 4.25, fiveStarPercentage: 50, fiveStarCount: 2, belowFourCount: 1 },
     recentFeedback: [
       { id: '1', respondentName: 'Lakshmi', answers: { toilet_cleanliness: 'yes' } },
       { id: '2', answers: { water_available: 'no' } },
-      { id: '3', name: 'Ravi', answers: {} },
+      { id: '3', respondentName: 'Ravi', answers: {} },
     ],
     recentNeedsAttention: [
       { id: '4', answers: null },
@@ -49,6 +58,7 @@ test('report metrics calculate named responses and checklist completion from rea
 
 test('anonymous names and safe comment excerpts are rendered without HTML interpretation', () => {
   assert.equal(respondentName({}), 'Anonymous');
+  assert.equal(respondentName({ respondentName: '  Anita  ' }), 'Anita');
   assert.equal(respondentName({ answers: { name: '  Anita  ' } }), 'Anita');
   assert.equal(commentExcerpt('<img src=x onerror=alert(1)> Clean area', 20), '<img src=x onerror=...');
 });
