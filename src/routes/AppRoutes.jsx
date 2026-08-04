@@ -2,10 +2,13 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { lazy, Suspense } from 'react';
 import App from '../App.jsx';
 import MainLayout from '../layouts/MainLayout.jsx';
+import TenderDemoLayout from '../layouts/TenderDemoLayout.jsx';
 import AccountDeletion from '../pages/AccountDeletion.jsx';
 import Login from '../pages/Login.jsx';
 import Profile from '../pages/Profile.jsx';
 import SetPassword from '../pages/SetPassword.jsx';
+import TenderDemoLogin from '../pages/TenderDemoLogin.jsx';
+import TenderDemoWorkspace from '../pages/TenderDemoWorkspace.jsx';
 import Dashboard from '../pages/Dashboard.jsx';
 import CRM from '../pages/CRM.jsx';
 import Sites from '../pages/Sites.jsx';
@@ -22,6 +25,7 @@ import HospitalFeedbackDashboard from '../pages/HospitalFeedbackDashboard.jsx';
 import PublicFeedbackQrPage, { PublicFeedbackScanInstruction } from '../pages/PublicFeedbackQrPage.jsx';
 import { isDemoMode } from '../config/demoMode.js';
 import { isSiteVisitV2Enabled } from '../config/siteVisitFeature.js';
+import { isTenderDemoModeEnabled } from '../config/tenderDemo.js';
 import {
   AssetCenterPage,
   ApprovalCenterPage,
@@ -33,13 +37,42 @@ import {
 
 const FOActivities = lazy(() => import('../pages/FOActivities.jsx'));
 
-export const router = createBrowserRouter([
+const tenderDemoRoutes = [
+  {
+    path: '/',
+    element: <App />,
+    children: [
+      { index: true, element: <Navigate to="/demo-login" replace /> },
+      { path: 'demo-login', element: <TenderDemoLogin /> },
+      {
+        path: 'demo',
+        element: <TenderDemoLayout />,
+        children: [
+          { index: true, element: <Navigate to="/demo/dashboard" replace /> },
+          { path: ':moduleKey', element: <TenderDemoWorkspace /> },
+        ],
+      },
+      { path: '*', element: <Navigate to="/demo-login" replace /> },
+    ],
+  },
+];
+
+const productionRoutes = [
   {
     path: '/',
     element: <App />,
     children: [
       { index: true, element: <Navigate to="/login" replace /> },
       { path: 'login', element: <Login /> },
+      { path: 'demo-login', element: <TenderDemoLogin /> },
+      {
+        path: 'demo',
+        element: <TenderDemoLayout />,
+        children: [
+          { index: true, element: <Navigate to="/demo/dashboard" replace /> },
+          { path: ':moduleKey', element: <TenderDemoWorkspace /> },
+        ],
+      },
       { path: 'set-password', element: <SetPassword /> },
       { path: 'account-deletion', element: <AccountDeletion /> },
       { path: 'public-feedback', element: <PublicFeedbackScanInstruction /> },
@@ -81,4 +114,6 @@ export const router = createBrowserRouter([
       { path: '*', element: <Navigate to="/login" replace /> },
     ],
   },
-]);
+];
+
+export const router = createBrowserRouter(isTenderDemoModeEnabled() ? tenderDemoRoutes : productionRoutes);
