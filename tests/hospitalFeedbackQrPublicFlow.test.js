@@ -87,16 +87,17 @@ test('Client Feedback QR generator uses five-level cascading hierarchy', () => {
 });
 
 test('Soft Services dashboard contains required filters KPI cards and drill-down sections', () => {
-  assert.ok(dashboardPage.includes('Soft Services Feedback Dashboard'));
-  assert.ok(dashboardPage.includes('Monitor public feedback ratings by client, hospital, block, floor and location.'));
+  assert.ok(dashboardPage.includes('Soft Services Feedback Report'));
+  assert.ok(dashboardPage.includes('Consolidated public feedback insights including ratings, names, comments and checklist responses.'));
   for (const label of ['Date From', 'Date To', 'Client', 'Hospital', 'Block', 'Floor', 'Location', 'Rating', 'Needs Attention']) {
     assert.ok(dashboardPage.includes(label));
   }
-  for (const label of ['Total Feedback', 'Average Rating', 'Five-Star Percentage', 'Below-4 Feedback', 'Best Performing Block', 'Lowest Performing Block']) {
+  for (const label of ['Total Feedback', 'Average Rating', 'Five-Star %', 'Needs Attention', 'Named Responses', 'Checklist Completion Rate']) {
     assert.ok(dashboardPage.includes(label));
   }
-  assert.ok(dashboardPage.includes('Block-wise Performance'));
-  assert.ok(dashboardPage.includes('Floor Drill-down'));
-  assert.ok(dashboardPage.includes('Location Drill-down'));
-  assert.ok(dashboardPage.includes('Recent Needs Attention'));
+  assert.ok(dashboardPage.includes('Block / Location Performance'));
+  assert.ok(dashboardPage.includes('Floor-wise Report'));
+  assert.ok(dashboardPage.includes('Location-wise Report'));
+  assert.ok(dashboardPage.includes('Comments & Names'));
+  assert.ok(dashboardPage.includes('Checklist Summary'));
 });
