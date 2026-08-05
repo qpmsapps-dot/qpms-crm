@@ -911,6 +911,40 @@ function cleanRating(value) {
   throw error;
 }
 
+function cleanOptionalRating(value) {
+  if (value == null || value === '') return null;
+  return cleanRating(value);
+}
+
+function cleanCleanlinessStatus(value) {
+  const text = cleanText(value, 40).toLowerCase();
+  if (text === 'clean' || text === 'not_clean') return text;
+  const error = new Error('Select whether the toilet is clean.');
+  error.statusCode = 400;
+  error.code = 'invalid_cleanliness_status';
+  throw error;
+}
+
+function normalizeIndianMobile(value) {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string') {
+    const error = new Error('Mobile number must be text.');
+    error.statusCode = 400;
+    error.code = 'invalid_mobile';
+    throw error;
+  }
+  const digits = value.replace(/\D+/g, '');
+  const mobile = digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
+  if (!mobile) return null;
+  if (!/^[6-9][0-9]{9}$/.test(mobile)) {
+    const error = new Error('Enter a valid 10-digit Indian mobile number.');
+    error.statusCode = 400;
+    error.code = 'invalid_mobile';
+    throw error;
+  }
+  return mobile;
+}
+
 const DANGEROUS_JSON_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 function assertSafeJsonKeys(value, pathPrefix = 'answers') {
@@ -972,12 +1006,16 @@ function idempotencyConflict(code, message) {
 }
 
 function sameNormalizedSubmission(existing = {}, expected = {}) {
+  const existingCleanlinessStatus = cleanText(existing.cleanliness_status, 40).toLowerCase()
+    || (existing.rating != null ? 'clean' : '');
   return (
     existing.qr_code_id === expected.qrCodeId &&
     existing.location_id === expected.locationId &&
-    Number(existing.rating) === expected.rating &&
+    (existing.rating == null ? null : Number(existing.rating)) === expected.rating &&
     cleanLanguage(existing.language) === expected.language &&
+    existingCleanlinessStatus === expected.cleanlinessStatus &&
     (normalizeRespondentName(existing.respondent_name) || null) === expected.respondentName &&
+    (normalizeIndianMobile(existing.respondent_mobile) || null) === expected.respondentMobile &&
     (normalizeText(existing.comments, 2000) || null) === expected.comments &&
     normalizedAnswersText(existing.answers || {}) === normalizedAnswersText(expected.answers)
   );
@@ -1003,7 +1041,7 @@ function assertExistingSubmissionMatches(existing, expected) {
 async function findSubmissionByKey(client, submissionKey) {
   const existing = await client
     .from('hospital_feedback_submissions')
-    .select('qr_code_id,location_id,rating,language,respondent_name,comments,answers,needs_attention,submitted_at,created_at')
+    .select('qr_code_id,location_id,rating,language,cleanliness_status,respondent_name,respondent_mobile,comments,answers,needs_attention,linked_ticket_id,ticket_creation_status,submitted_at,created_at')
     .eq('submission_key', submissionKey)
     .maybeSingle();
   if (existing.error) throw existing.error;
@@ -1012,11 +1050,19 @@ async function findSubmissionByKey(client, submissionKey) {
 
 function normalizeSubmissionPayload(payload = {}, qr) {
   const location = qr.location;
-  const rating = cleanRating(payload.rating);
+  const cleanlinessStatus = cleanCleanlinessStatus(payload.cleanliness_status || payload.cleanlinessStatus || (payload.rating != null ? 'clean' : ''));
+  const rating = cleanlinessStatus === 'clean' ? cleanRating(payload.rating) : cleanOptionalRating(payload.rating);
   const language = cleanLanguage(payload.language);
   const respondentName = normalizeRespondentName(payload.respondent_name);
+  const respondentMobile = normalizeIndianMobile(payload.respondent_mobile);
   const comments = normalizeText(payload.comments, 2000);
   const answers = cleanSubmissionAnswers(payload.answers);
+  if (cleanlinessStatus === 'not_clean' && !comments) {
+    const error = new Error('Complaint details are required for a Not Clean report.');
+    error.statusCode = 400;
+    error.code = 'complaint_details_required';
+    throw error;
+  }
   return {
     qrCodeId: qr.id,
     locationId: location.id,
@@ -1026,11 +1072,13 @@ function normalizeSubmissionPayload(payload = {}, qr) {
     floorId: location.floor_id || null,
     departmentId: location.department_id || null,
     respondentName,
+    respondentMobile,
+    cleanlinessStatus,
     rating,
     language,
     comments,
     answers,
-    needsAttention: rating < 4,
+    needsAttention: cleanlinessStatus === 'not_clean' || (rating != null && rating < 4),
   };
 }
 
@@ -1039,11 +1087,71 @@ function publicSubmissionResponse(row) {
     ok: true,
     submission: {
       submitted: true,
-      rating: Number(row.rating || 0),
+      cleanlinessStatus: row.cleanliness_status || null,
+      rating: row.rating == null ? null : Number(row.rating || 0),
       needsAttention: row.needs_attention === true,
       submittedAt: row.submitted_at || row.created_at || null,
     },
   };
+}
+
+function publicComplaintResponse(row = {}, ticket = {}) {
+  return {
+    ok: true,
+    submission: {
+      submitted: true,
+      cleanlinessStatus: 'not_clean',
+      needsAttention: true,
+      submittedAt: row.submitted_at || row.created_at || null,
+      ticketCreated: true,
+    },
+    complaint: {
+      submitted: true,
+      ticketNumber: ticket.ticket_no || ticket.ticketNumber || null,
+      message: 'The hospital team has been notified. Role-based escalation is currently under configuration.',
+    },
+  };
+}
+
+function mapTicketCreationError(error) {
+  if (!error) return error;
+  if (error.code === '23505' || /already been used/i.test(error.message || '')) {
+    return idempotencyConflict('SUBMISSION_KEY_REUSED', 'This submission reference has already been used.');
+  }
+  if (error.code === '55000') {
+    const mapped = new Error('Complaint could not be submitted right now. Please try again.');
+    mapped.statusCode = 503;
+    mapped.code = 'complaint_ticket_creation_failed';
+    return mapped;
+  }
+  return error;
+}
+
+async function submitPublicCleanlinessComplaint(client, normalized, submissionKey, now) {
+  const result = await client.rpc('rpc_submit_public_cleanliness_complaint', {
+    p_qr_code_id: normalized.qrCodeId,
+    p_location_id: normalized.locationId,
+    p_submission_key: submissionKey,
+    p_language: normalized.language,
+    p_respondent_name: normalized.respondentName,
+    p_respondent_mobile: normalized.respondentMobile,
+    p_comments: normalized.comments,
+    p_answers: normalized.answers,
+    p_submitted_at: now.toISOString(),
+  });
+  if (result.error) throw mapTicketCreationError(result.error);
+  return publicComplaintResponse(result.data?.submission, result.data?.ticket);
+}
+
+async function publicComplaintRetryResponse(client, existing) {
+  if (!existing?.linked_ticket_id) return publicSubmissionResponse(existing);
+  const ticket = await client
+    .from('hospital_tickets')
+    .select('id,ticket_no,status_code')
+    .eq('id', existing.linked_ticket_id)
+    .maybeSingle();
+  if (ticket.error) throw ticket.error;
+  return publicComplaintResponse(existing, ticket.data || {});
 }
 
 async function loadActiveQrForSession(client, qrId, locationId) {
@@ -1082,8 +1190,16 @@ export async function submitPublicHospitalFeedback({
   const qr = await loadActiveQrForSession(client, session.qrId, session.locationId);
   const normalized = normalizeSubmissionPayload(payload, qr);
   const existing = await findSubmissionByKey(client, submissionKey);
-  const retryResponse = assertExistingSubmissionMatches(existing, normalized);
-  if (retryResponse) return retryResponse;
+  if (existing) {
+    assertExistingSubmissionMatches(existing, normalized);
+    return normalized.cleanlinessStatus === 'not_clean'
+      ? publicComplaintRetryResponse(client, existing)
+      : publicSubmissionResponse(existing);
+  }
+
+  if (normalized.cleanlinessStatus === 'not_clean') {
+    return submitPublicCleanlinessComplaint(client, normalized, submissionKey, now);
+  }
 
   const insertResult = await client
     .from('hospital_feedback_submissions')
@@ -1096,16 +1212,19 @@ export async function submitPublicHospitalFeedback({
       floor_id: normalized.floorId,
       department_id: normalized.departmentId,
       respondent_name: normalized.respondentName,
+      respondent_mobile: normalized.respondentMobile,
       rating: normalized.rating,
       language: normalized.language,
       comments: normalized.comments,
       answers: normalized.answers,
       needs_attention: normalized.needsAttention,
+      cleanliness_status: normalized.cleanlinessStatus,
+      ticket_creation_status: 'not_required',
       submission_key: submissionKey,
       submitted_at: now.toISOString(),
-      metadata: { source: 'public_feedback_qr' },
+      metadata: { source: 'public_feedback_qr', workflow: 'cleanliness_survey' },
     })
-    .select('rating,needs_attention,submitted_at,created_at')
+    .select('rating,cleanliness_status,needs_attention,submitted_at,created_at')
     .single();
   if (insertResult.error) {
     if (insertResult.error.code === '23505') {
@@ -1188,9 +1307,13 @@ const DASHBOARD_SELECT = [
   'rating',
   'language',
   'respondent_name',
+  'respondent_mobile',
   'comments',
   'answers',
   'needs_attention',
+  'cleanliness_status',
+  'linked_ticket_id',
+  'ticket_creation_status',
   'submitted_at',
   'parent_client_id',
   'hospital_id',
@@ -1203,6 +1326,7 @@ const DASHBOARD_SELECT = [
   'floor:hospital_floors(id,floor_name)',
   'location:hospital_locations(id,location_code,location_name,location_type)',
   'department:hospital_departments(id,department_name)',
+  'ticket:hospital_tickets!hospital_feedback_submissions_linked_ticket_id_fkey(id,ticket_no,status_code,current_escalation_level,current_escalation_level_no,current_assignee_role,current_assignee_user_id,raised_at,resolved_at,closed_at,escalation_count,final_escalation,dean_escalated_at,sla_status,escalation_status,metadata)',
 ].join(',');
 
 function applySubmissionFilters(query, filters = {}, now = new Date()) {
@@ -1374,8 +1498,29 @@ export function aggregateHospitalFeedbackDashboardRows(rows = []) {
       rating: Number(row.rating || 0),
       language: row.language,
       respondentName: cleanText(row.respondent_name, 120) || null,
+      respondentMobile: cleanText(row.respondent_mobile, 20) || null,
       comments: cleanText(row.comments, 2000) || null,
       answers: row.answers && typeof row.answers === 'object' && !Array.isArray(row.answers) ? row.answers : {},
+      cleanlinessStatus: cleanText(row.cleanliness_status, 40) || null,
+      linkedTicketId: row.linked_ticket_id || null,
+      ticketCreationStatus: row.ticket_creation_status || null,
+      ticket: row.ticket ? {
+        ticketNumber: row.ticket.ticket_no || null,
+        status: row.ticket.status_code || null,
+        currentEscalationLevel: row.ticket.current_escalation_level || null,
+        currentEscalationLevelNo: row.ticket.current_escalation_level_no || null,
+        currentOwnerRole: row.ticket.current_assignee_role || null,
+        currentOwnerUserId: row.ticket.current_assignee_user_id || null,
+        assignmentRequired: !row.ticket.current_assignee_user_id,
+        raisedAt: row.ticket.raised_at || null,
+        resolvedAt: row.ticket.resolved_at || null,
+        closedAt: row.ticket.closed_at || null,
+        escalationCount: Number(row.ticket.escalation_count || 0),
+        finalEscalation: row.ticket.final_escalation === true,
+        deanEscalatedAt: row.ticket.dean_escalated_at || null,
+        slaStatus: row.ticket.sla_status || null,
+        escalationStatus: row.ticket.escalation_status || null,
+      } : null,
       ...submissionLabel(row),
     }));
   const recentFeedback = rows
@@ -1386,11 +1531,71 @@ export function aggregateHospitalFeedbackDashboardRows(rows = []) {
       rating: Number(row.rating || 0),
       language: row.language,
       respondentName: cleanText(row.respondent_name, 120) || null,
+      respondentMobile: cleanText(row.respondent_mobile, 20) || null,
       comments: cleanText(row.comments, 2000) || null,
       answers: row.answers && typeof row.answers === 'object' && !Array.isArray(row.answers) ? row.answers : {},
       needsAttention: row.needs_attention === true,
+      cleanlinessStatus: cleanText(row.cleanliness_status, 40) || null,
+      linkedTicketId: row.linked_ticket_id || null,
+      ticketCreationStatus: row.ticket_creation_status || null,
+      ticket: row.ticket ? {
+        ticketNumber: row.ticket.ticket_no || null,
+        status: row.ticket.status_code || null,
+        currentEscalationLevel: row.ticket.current_escalation_level || null,
+        currentEscalationLevelNo: row.ticket.current_escalation_level_no || null,
+        currentOwnerRole: row.ticket.current_assignee_role || null,
+        currentOwnerUserId: row.ticket.current_assignee_user_id || null,
+        assignmentRequired: !row.ticket.current_assignee_user_id,
+        raisedAt: row.ticket.raised_at || null,
+        resolvedAt: row.ticket.resolved_at || null,
+        closedAt: row.ticket.closed_at || null,
+        escalationCount: Number(row.ticket.escalation_count || 0),
+        finalEscalation: row.ticket.final_escalation === true,
+        deanEscalatedAt: row.ticket.dean_escalated_at || null,
+        slaStatus: row.ticket.sla_status || null,
+        escalationStatus: row.ticket.escalation_status || null,
+      } : null,
       ...submissionLabel(row),
     }));
+  const cleanCount = rows.filter((row) => row.cleanliness_status === 'clean').length;
+  const notCleanCount = rows.filter((row) => row.cleanliness_status === 'not_clean').length;
+  const complaintRows = rows.filter((row) => row.cleanliness_status === 'not_clean' || row.linked_ticket_id);
+  const complaintTicketCount = complaintRows.filter((row) => row.linked_ticket_id).length;
+  const openComplaintCount = complaintRows.filter((row) => !['resolved_awaiting_confirmation', 'closed', 'cancelled'].includes(row.ticket?.status_code)).length;
+  const resolvedComplaintCount = complaintRows.filter((row) => ['resolved_awaiting_confirmation', 'closed'].includes(row.ticket?.status_code)).length;
+  const assignmentRequiredComplaintCount = complaintRows.filter((row) => row.linked_ticket_id && !row.ticket?.current_assignee_user_id).length;
+  const slaBreachedComplaintCount = complaintRows.filter((row) => row.ticket?.sla_status === 'breached' || Number(row.ticket?.escalation_count || 0) > 0).length;
+  const deanEscalatedComplaintCount = complaintRows.filter((row) => row.ticket?.dean_escalated_at || row.ticket?.current_escalation_level === 'hospital_dean' || row.ticket?.current_escalation_level_no === 5).length;
+  const resolutionDurations = complaintRows
+    .map((row) => {
+      const start = row.ticket?.raised_at ? new Date(row.ticket.raised_at).getTime() : 0;
+      const endValue = row.ticket?.closed_at || row.ticket?.resolved_at;
+      const end = endValue ? new Date(endValue).getTime() : 0;
+      return start && end && end >= start ? Math.round((end - start) / 60000) : null;
+    })
+    .filter((value) => value != null);
+  const publicCleanlinessComplaints = complaintRows.slice(0, 100).map((row) => ({
+    id: row.id,
+    ticketNumber: row.ticket?.ticket_no || null,
+    rating: row.rating == null ? null : Number(row.rating),
+    comment: cleanText(row.comments, 2000) || null,
+    createdAt: row.ticket?.raised_at || row.submitted_at,
+    currentStatus: row.ticket?.status_code || row.ticket_creation_status || null,
+    currentEscalationLevel: row.ticket?.current_escalation_level || null,
+    currentOwnerRole: row.ticket?.current_assignee_role || null,
+    assignmentRequired: Boolean(row.linked_ticket_id && !row.ticket?.current_assignee_user_id),
+    assignmentStatus: row.linked_ticket_id && !row.ticket?.current_assignee_user_id ? 'Assignment Required' : 'Assigned',
+    escalationStatus: row.ticket?.escalation_status || (row.linked_ticket_id && !row.ticket?.current_assignee_user_id ? 'not_started' : null),
+    respondentName: cleanText(row.respondent_name, 120) || null,
+    respondentMobile: cleanText(row.respondent_mobile, 20) || null,
+    resolutionTimeMinutes: (() => {
+      const start = row.ticket?.raised_at ? new Date(row.ticket.raised_at).getTime() : 0;
+      const endValue = row.ticket?.closed_at || row.ticket?.resolved_at;
+      const end = endValue ? new Date(endValue).getTime() : 0;
+      return start && end && end >= start ? Math.round((end - start) / 60000) : null;
+    })(),
+    ...submissionLabel(row),
+  }));
   return {
     ok: true,
     summary: {
@@ -1399,6 +1604,18 @@ export function aggregateHospitalFeedbackDashboardRows(rows = []) {
       fiveStarCount,
       fiveStarPercentage: totalResponses ? Number(((fiveStarCount / totalResponses) * 100).toFixed(2)) : 0,
       belowFourCount,
+      cleanCount,
+      notCleanCount,
+      cleanlinessPercentage: totalResponses ? Number(((cleanCount / totalResponses) * 100).toFixed(2)) : 0,
+      complaintTicketCount,
+      openComplaintCount,
+      resolvedComplaintCount,
+      assignmentRequiredComplaintCount,
+      slaBreachedComplaintCount,
+      deanEscalatedComplaintCount,
+      averageComplaintResolutionMinutes: resolutionDurations.length
+        ? Number((resolutionDurations.reduce((sum, value) => sum + value, 0) / resolutionDurations.length).toFixed(2))
+        : 0,
       bestBlock,
       lowestBlock,
     },
@@ -1408,6 +1625,7 @@ export function aggregateHospitalFeedbackDashboardRows(rows = []) {
     locationPerformance,
     recentFeedback,
     recentNeedsAttention,
+    publicCleanlinessComplaints,
   };
 }
 

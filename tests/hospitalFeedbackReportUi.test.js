@@ -15,18 +15,22 @@ const dashboardPage = await readFile(new URL('../src/pages/HospitalFeedbackDashb
 test('Soft Services Feedback Report title tabs and export control are present', () => {
   assert.match(dashboardPage, /Soft Services Feedback Report/);
   assert.match(dashboardPage, /Consolidated public feedback insights including ratings, names, comments and checklist responses\./);
-  for (const tab of ['Overview', 'Floor-wise Report', 'Location-wise Report', 'Comments & Names', 'Checklist Summary']) {
+  for (const tab of ['Overview', 'Floor-wise Report', 'Location-wise Report', 'Comments & Names', 'Checklist Summary', 'Tickets']) {
     assert.match(dashboardPage, new RegExp(tab.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(dashboardPage, /window\.print\(\)/);
   assert.match(dashboardPage, /Export PDF/);
 });
 
-test('Soft Services Feedback Report contains the required KPI cards and no fake ticket status', () => {
-  for (const label of ['Total Feedback', 'Average Rating', 'Five-Star %', 'Needs Attention', 'Named Responses', 'Checklist Completion Rate']) {
+test('Soft Services Feedback Report contains demo-safe KPI cards and no fake ticket status', () => {
+  for (const label of ['Total Feedback', 'Average Rating', 'Five-Star %', 'Needs Attention', 'Named Responses', 'Checklist Completion Rate', 'Clean Responses', 'Not Clean Responses', 'Cleanliness Percentage', 'Complaint Tickets', 'Assignment Required']) {
     assert.match(dashboardPage, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
-  assert.doesNotMatch(dashboardPage, /'Open'|"Open"|'In Progress'|"In Progress"|ticket_number|ticketNumber|createHospitalTicket/);
+  assert.match(dashboardPage, /Recent Public Complaints/);
+  assert.match(dashboardPage, /Ticket Number/);
+  assert.doesNotMatch(dashboardPage, /ticket_number|createHospitalTicket/);
+  assert.doesNotMatch(dashboardPage, /Dean Escalations/);
+  assert.doesNotMatch(dashboardPage, /SLA Breaches/);
 });
 
 test('Comments and Names tab exposes real response filters without internal IDs', () => {
@@ -40,7 +44,7 @@ test('Comments and Names tab exposes real response filters without internal IDs'
 
 test('report metrics calculate named responses and checklist completion from real response data', () => {
   const metrics = reportMetrics({
-    summary: { totalResponses: 4, averageRating: 4.25, fiveStarPercentage: 50, fiveStarCount: 2, belowFourCount: 1 },
+    summary: { totalResponses: 4, averageRating: 4.25, fiveStarPercentage: 50, fiveStarCount: 2, belowFourCount: 1, cleanCount: 3, notCleanCount: 1, complaintTicketCount: 1, assignmentRequiredComplaintCount: 1 },
     recentFeedback: [
       { id: '1', respondentName: 'Lakshmi', answers: { toilet_cleanliness: 'yes' } },
       { id: '2', answers: { water_available: 'no' } },
@@ -54,6 +58,22 @@ test('report metrics calculate named responses and checklist completion from rea
   assert.equal(metrics.namedPercentage, 50);
   assert.equal(metrics.checklistAnswered, 2);
   assert.equal(metrics.checklistCompletion, 50);
+  assert.equal(metrics.cleanCount, 3);
+  assert.equal(metrics.notCleanCount, 1);
+  assert.equal(metrics.complaintTicketCount, 1);
+  assert.equal(metrics.assignmentRequiredComplaintCount, 1);
+});
+
+test('Tickets tab renders actual public ticket fields and planned escalation notice', () => {
+  for (const label of ['Tickets', 'Total Tickets', 'Current Status', 'Assignment', 'Current Escalation Level', 'Current Owner Role', 'Planned Escalation Workflow', 'Under Configuration']) {
+    assert.match(dashboardPage, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  for (const label of ['Supervisor', 'Facility Manager', 'Zonal Head', 'Project Head', 'Hospital Dean', 'after 60 minutes']) {
+    assert.match(dashboardPage, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  assert.match(dashboardPage, /maskIndianMobile\(row\.respondentMobile\)/);
+  assert.match(dashboardPage, /row\.assignmentRequired \? 'Unassigned'/);
+  assert.match(dashboardPage, /row\.assignmentRequired \? 'Not Started'/);
 });
 
 test('anonymous names and safe comment excerpts are rendered without HTML interpretation', () => {

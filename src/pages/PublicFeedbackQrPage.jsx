@@ -30,15 +30,26 @@ const TEXT = {
     department: 'Department',
     location: 'Location',
     continue: 'Continue',
+    cleanlinessTitle: 'Is the toilet clean?',
+    cleanlinessBody: 'Please choose one option.',
+    cleanOption: 'Yes, Clean',
+    notCleanOption: 'No, Not Clean',
     detailsTitle: 'Tell us more',
     detailsBody: 'Your name is optional. You can also share a comment or suggestion.',
+    complaintTitle: 'Tell us what is wrong',
+    complaintBody: 'Please share the issue so the hospital team can resolve it quickly.',
     nameLabel: 'Your Name',
     namePlaceholder: 'Enter your name (optional)',
+    mobileLabel: 'Mobile Number',
+    mobilePlaceholder: 'Enter mobile number (optional)',
     commentLabel: 'Comment',
     commentPlaceholder: 'Share your feedback or suggestion (optional)',
+    complaintPlaceholder: 'Clearly explain what is not clean',
     back: 'Back',
     edit: 'Edit',
     nameTooLong: 'Name must be 120 characters or fewer.',
+    invalidMobile: 'Enter a valid 10-digit Indian mobile number.',
+    complaintRequired: 'Complaint details are required.',
     commentTooLong: 'Comment must be 2000 characters or fewer.',
     nameNotProvided: 'Name not provided',
     noCommentProvided: 'No comment provided',
@@ -51,6 +62,9 @@ const TEXT = {
     selectRating: 'Please select one rating to continue.',
     thankTitle: 'Thank you!',
     thankBody: 'Your feedback has been submitted successfully.',
+    complaintThankBody: 'Complaint submitted successfully',
+    ticketNumber: 'Ticket number',
+    notifiedMessage: 'The hospital team has been notified. Role-based escalation is currently under configuration.',
     thankSubtext: 'We appreciate your time.',
     done: 'Done',
     complete: 'You may now close this page.',
@@ -87,15 +101,26 @@ const TEXT = {
     department: 'துறை',
     location: 'இடம்',
     continue: 'தொடரவும்',
+    cleanlinessTitle: 'கழிப்பறை சுத்தமாக உள்ளதா?',
+    cleanlinessBody: 'ஒரு விருப்பத்தைத் தேர்வு செய்யவும்.',
+    cleanOption: 'ஆம், சுத்தமாக உள்ளது',
+    notCleanOption: 'இல்லை, சுத்தமாக இல்லை',
     detailsTitle: 'மேலும் தெரிவிக்கவும்',
     detailsBody: 'உங்கள் பெயர் விருப்பமானது. கருத்து அல்லது பரிந்துரையையும் பகிரலாம்.',
+    complaintTitle: 'என்ன பிரச்சனை என்பதை தெரிவிக்கவும்',
+    complaintBody: 'மருத்துவமனை குழு விரைவாக சரிசெய்ய பிரச்சனையை பகிரவும்.',
     nameLabel: 'உங்கள் பெயர்',
     namePlaceholder: 'உங்கள் பெயரை உள்ளிடவும் (விருப்பம்)',
+    mobileLabel: 'மொபைல் எண்',
+    mobilePlaceholder: 'மொபைல் எண்ணை உள்ளிடவும் (விருப்பம்)',
     commentLabel: 'கருத்து',
     commentPlaceholder: 'உங்கள் கருத்து அல்லது பரிந்துரையை பகிரவும் (விருப்பம்)',
+    complaintPlaceholder: 'சுத்தமாக இல்லாததை தெளிவாக விளக்கவும்',
     back: 'பின்செல்',
     edit: 'திருத்து',
     nameTooLong: 'பெயர் 120 எழுத்துகளுக்குள் இருக்க வேண்டும்.',
+    invalidMobile: 'சரியான 10 இலக்க இந்திய மொபைல் எண்ணை உள்ளிடவும்.',
+    complaintRequired: 'புகார் விவரங்கள் அவசியம்.',
     commentTooLong: 'கருத்து 2000 எழுத்துகளுக்குள் இருக்க வேண்டும்.',
     nameNotProvided: 'பெயர் வழங்கப்படவில்லை',
     noCommentProvided: 'கருத்து வழங்கப்படவில்லை',
@@ -108,6 +133,9 @@ const TEXT = {
     selectRating: 'தொடர ஒரு மதிப்பீட்டைத் தேர்வு செய்யவும்.',
     thankTitle: 'நன்றி!',
     thankBody: 'உங்கள் கருத்து வெற்றிகரமாக பதிவு செய்யப்பட்டது.',
+    complaintThankBody: 'புகார் வெற்றிகரமாக சமர்ப்பிக்கப்பட்டது',
+    ticketNumber: 'டிக்கெட் எண்',
+    notifiedMessage: 'மருத்துவமனை குழுவிற்கு அறிவிக்கப்பட்டுள்ளது. பங்கு அடிப்படையிலான உயர்த்தல் தற்போது உள்ளமைப்பில் உள்ளது.',
     thankSubtext: 'உங்கள் நேரத்திற்கு நன்றி.',
     done: 'முடிக்கவும்',
     complete: 'இப்போது இந்தப் பக்கத்தை மூடலாம்.',
@@ -295,6 +323,53 @@ function LocationPage({ language, location, onLanguageChange, onContinue }) {
   );
 }
 
+function CleanlinessPage({ language, selected, onSelect, onBack, onContinue, onLanguageChange }) {
+  const t = TEXT[language];
+  const options = [
+    { value: 'clean', label: t.cleanOption, tone: 'emerald' },
+    { value: 'not_clean', label: t.notCleanOption, tone: 'rose' },
+  ];
+  return (
+    <PublicShell>
+      <LanguageSwitch language={language} onChange={onLanguageChange} />
+      <FeedbackCard>
+        <div className="text-center">
+          <QpmsLogo className="mx-auto h-14 w-14" />
+          <h1 className="mt-5 text-2xl font-bold leading-tight text-slate-950">{t.cleanlinessTitle}</h1>
+          <p className="mt-2 text-base leading-7 text-slate-600">{t.cleanlinessBody}</p>
+        </div>
+        <div className="mt-6 grid gap-3">
+          {options.map((option) => {
+            const active = selected === option.value;
+            const activeClass = option.tone === 'emerald'
+              ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-100'
+              : 'border-rose-500 bg-rose-50 ring-2 ring-rose-100';
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => onSelect(option.value)}
+                aria-pressed={active}
+                className={`min-h-16 rounded-xl border px-4 py-3 text-lg font-black shadow-sm ${active ? activeClass : 'border-slate-200 bg-white text-slate-800'}`}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          <button type="button" onClick={onBack} className="min-h-14 rounded-xl border border-slate-200 px-4 py-3 text-lg font-bold text-slate-700">
+            {t.back}
+          </button>
+          <button type="button" onClick={onContinue} disabled={!selected} className="min-h-14 rounded-xl bg-qpms-700 px-4 py-3 text-lg font-bold text-white shadow-sm disabled:bg-slate-400">
+            {t.continue}
+          </button>
+        </div>
+      </FeedbackCard>
+    </PublicShell>
+  );
+}
+
 function RespondentDetailsPage({
   language,
   details,
@@ -302,18 +377,25 @@ function RespondentDetailsPage({
   onContinue,
   onBack,
   onLanguageChange,
+  complaint = false,
+  submitting = false,
+  submitError = '',
 }) {
   const t = TEXT[language];
   const nameError = details.name.length > 120 ? t.nameTooLong : '';
+  const mobileDigits = details.mobile.replace(/\D+/g, '');
+  const normalizedMobile = mobileDigits.length === 12 && mobileDigits.startsWith('91') ? mobileDigits.slice(2) : mobileDigits;
+  const mobileError = normalizedMobile && !/^[6-9][0-9]{9}$/.test(normalizedMobile) ? t.invalidMobile : '';
   const commentError = details.comment.length > 2000 ? t.commentTooLong : '';
+  const requiredError = complaint && !details.comment.trim() ? t.complaintRequired : '';
   return (
     <PublicShell>
       <LanguageSwitch language={language} onChange={onLanguageChange} />
       <FeedbackCard>
         <div className="text-center">
           <QpmsLogo className="mx-auto h-14 w-14" />
-          <h1 className="mt-5 text-2xl font-bold leading-tight text-slate-950">{t.detailsTitle}</h1>
-          <p className="mt-2 text-base leading-7 text-slate-600">{t.detailsBody}</p>
+          <h1 className="mt-5 text-2xl font-bold leading-tight text-slate-950">{complaint ? t.complaintTitle : t.detailsTitle}</h1>
+          <p className="mt-2 text-base leading-7 text-slate-600">{complaint ? t.complaintBody : t.detailsBody}</p>
         </div>
         <div className="mt-6 space-y-4">
           <label className="block">
@@ -327,18 +409,31 @@ function RespondentDetailsPage({
             />
             {nameError ? <span className="mt-1 block text-xs font-bold text-rose-600">{nameError}</span> : null}
           </label>
+          {complaint ? (
+            <label className="block">
+              <span className="text-sm font-bold text-slate-700">{t.mobileLabel}</span>
+              <input
+                value={details.mobile}
+                onChange={(event) => onChange('mobile', event.target.value)}
+                placeholder={t.mobilePlaceholder}
+                inputMode="tel"
+                className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 px-4 py-3 text-base font-semibold outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
+              />
+              {mobileError ? <span className="mt-1 block text-xs font-bold text-rose-600">{mobileError}</span> : null}
+            </label>
+          ) : null}
           <label className="block">
             <span className="text-sm font-bold text-slate-700">{t.commentLabel}</span>
             <textarea
               value={details.comment}
               onChange={(event) => onChange('comment', event.target.value)}
-              placeholder={t.commentPlaceholder}
+              placeholder={complaint ? t.complaintPlaceholder : t.commentPlaceholder}
               maxLength={2050}
               rows={5}
               className="mt-2 w-full resize-none rounded-xl border border-slate-200 px-4 py-3 text-base font-semibold outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             />
             <div className="mt-1 flex items-center justify-between text-xs font-bold">
-              <span className={commentError ? 'text-rose-600' : 'text-slate-400'}>{commentError}</span>
+              <span className={(commentError || requiredError) ? 'text-rose-600' : 'text-slate-400'}>{commentError || requiredError}</span>
               <span className={details.comment.length > 2000 ? 'text-rose-600' : 'text-slate-400'}>{details.comment.length} / 2000</span>
             </div>
           </label>
@@ -347,10 +442,12 @@ function RespondentDetailsPage({
           <button type="button" onClick={onBack} className="min-h-14 rounded-xl border border-slate-200 px-4 py-3 text-lg font-bold text-slate-700">
             {t.back}
           </button>
-          <button type="button" onClick={onContinue} disabled={Boolean(nameError || commentError)} className="min-h-14 rounded-xl bg-qpms-700 px-4 py-3 text-lg font-bold text-white shadow-sm disabled:bg-slate-400">
-            {t.continue}
+          <button type="button" onClick={onContinue} disabled={submitting || Boolean(nameError || mobileError || commentError || requiredError)} className="inline-flex min-h-14 items-center justify-center gap-2 rounded-xl bg-qpms-700 px-4 py-3 text-lg font-bold text-white shadow-sm disabled:bg-slate-400">
+            {submitting ? <span className="button-spinner" /> : null}
+            {submitting ? t.submitting : complaint ? t.submit : t.continue}
           </button>
         </div>
+        {submitError ? <p className="mt-3 text-center text-sm font-bold text-rose-600">{submitError}</p> : null}
       </FeedbackCard>
     </PublicShell>
   );
@@ -362,7 +459,19 @@ function previewText(value, fallback, max = 90) {
   return text.length > max ? `${text.slice(0, max - 1).trim()}...` : text;
 }
 
-function RatingPage({ language, selectedRating, onSelectRating, onLanguageChange, onSubmit, onEditDetails, details, submitAttempted, submitting, submitError }) {
+function RatingPage({
+  language,
+  selectedRating,
+  onSelectRating,
+  onLanguageChange,
+  onSubmit,
+  onEditDetails,
+  details,
+  onDetailsChange,
+  submitAttempted,
+  submitting,
+  submitError,
+}) {
   const t = TEXT[language];
   const name = previewText(details.name, t.nameNotProvided, 64);
   const comment = previewText(details.comment, '', 110);
@@ -375,16 +484,18 @@ function RatingPage({ language, selectedRating, onSelectRating, onLanguageChange
           <h1 className="mt-5 text-2xl font-bold leading-tight text-slate-950">{t.ratingTitle}</h1>
           <p className="mt-2 text-base leading-7 text-slate-600">{t.ratingBody}</p>
         </div>
-        <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{t.nameLabel}</p>
-              <p className="mt-1 text-sm font-bold text-slate-800">{name}</p>
-              {comment ? <p className="mt-2 text-sm font-semibold leading-6 text-slate-600">{comment}</p> : null}
+        {details.name || details.comment ? (
+          <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{t.nameLabel}</p>
+                <p className="mt-1 text-sm font-bold text-slate-800">{name}</p>
+                {comment ? <p className="mt-2 text-sm font-semibold leading-6 text-slate-600">{comment}</p> : null}
+              </div>
+              <button type="button" onClick={onEditDetails} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-qpms-700">{t.edit}</button>
             </div>
-            <button type="button" onClick={onEditDetails} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-qpms-700">{t.edit}</button>
           </div>
-        </div>
+        ) : null}
         <div className="mt-6 grid gap-3">
           {t.ratings.map((rating) => {
             const active = selectedRating === rating.value;
@@ -406,6 +517,23 @@ function RatingPage({ language, selectedRating, onSelectRating, onLanguageChange
           })}
         </div>
         <p className="mt-4 text-center text-sm font-semibold leading-6 text-slate-500">{t.ratingHelper}</p>
+        <label className="mt-5 block">
+          <span className="text-sm font-bold text-slate-700">{t.commentLabel}</span>
+          <textarea
+            value={details.comment}
+            onChange={(event) => onDetailsChange('comment', event.target.value)}
+            placeholder={t.commentPlaceholder}
+            maxLength={2050}
+            rows={4}
+            className="mt-2 w-full resize-none rounded-xl border border-slate-200 px-4 py-3 text-base font-semibold outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
+          />
+          <div className="mt-1 flex items-center justify-between text-xs font-bold">
+            <span className={details.comment.length > 2000 ? 'text-rose-600' : 'text-slate-400'}>
+              {details.comment.length > 2000 ? t.commentTooLong : ''}
+            </span>
+            <span className={details.comment.length > 2000 ? 'text-rose-600' : 'text-slate-400'}>{details.comment.length} / 2000</span>
+          </div>
+        </label>
         {submitAttempted && !selectedRating ? <p className="mt-3 text-center text-sm font-bold text-rose-600">{t.selectRating}</p> : null}
         {submitError ? <p className="mt-3 text-center text-sm font-bold text-rose-600">{submitError}</p> : null}
         {selectedRating ? (
@@ -419,7 +547,7 @@ function RatingPage({ language, selectedRating, onSelectRating, onLanguageChange
   );
 }
 
-function ThankYouPage({ language, onLanguageChange, onDone }) {
+function ThankYouPage({ language, onLanguageChange, onDone, complaint = null }) {
   const t = TEXT[language];
   return (
     <PublicShell>
@@ -430,8 +558,14 @@ function ThankYouPage({ language, onLanguageChange, onDone }) {
             <Star className="h-8 w-8 fill-current" />
           </div>
           <h1 className="mt-5 text-3xl font-bold leading-tight text-slate-950">{t.thankTitle}</h1>
-          <p className="mt-3 text-lg font-semibold leading-8 text-slate-700">{t.thankBody}</p>
-          <p className="mt-2 text-base leading-7 text-slate-500">{t.thankSubtext}</p>
+          <p className="mt-3 text-lg font-semibold leading-8 text-slate-700">{complaint ? t.complaintThankBody : t.thankBody}</p>
+          {complaint?.ticketNumber ? (
+            <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+              <p className="text-sm font-black text-emerald-700">{t.ticketNumber}</p>
+              <p className="mt-1 text-2xl font-black text-emerald-950">{complaint.ticketNumber}</p>
+            </div>
+          ) : null}
+          <p className="mt-2 text-base leading-7 text-slate-500">{complaint ? t.notifiedMessage : t.thankSubtext}</p>
           <button type="button" onClick={onDone} className="mt-7 min-h-14 w-full rounded-xl bg-slate-900 px-4 py-3 text-lg font-bold text-white">
             {t.done}
           </button>
@@ -479,7 +613,9 @@ export default function PublicFeedbackQrPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [submissionKey, setSubmissionKey] = useState(() => newSubmissionKey());
-  const [respondentDetails, setRespondentDetails] = useState({ name: '', comment: '' });
+  const [respondentDetails, setRespondentDetails] = useState({ name: '', mobile: '', comment: '' });
+  const [cleanlinessStatus, setCleanlinessStatus] = useState('');
+  const [complaintConfirmation, setComplaintConfirmation] = useState(null);
 
   const languageStorageKey = useMemo(() => `hospital-feedback-qr:${token || 'missing'}:language`, [token]);
 
@@ -491,7 +627,9 @@ export default function PublicFeedbackQrPage() {
     setSubmitting(false);
     setSubmitError('');
     setSubmissionKey(newSubmissionKey());
-    setRespondentDetails({ name: '', comment: '' });
+    setRespondentDetails({ name: '', mobile: '', comment: '' });
+    setCleanlinessStatus('');
+    setComplaintConfirmation(null);
     setCurrentStep('language');
     try {
       const data = await resolvePublicHospitalFeedbackQr(token);
@@ -539,8 +677,16 @@ export default function PublicFeedbackQrPage() {
     }
   }
 
-  async function goToRating() {
-    if (await ensureSessionActive()) setCurrentStep('rating');
+  async function goToCleanliness() {
+    if (await ensureSessionActive()) setCurrentStep('cleanliness');
+  }
+
+  async function continueFromCleanliness() {
+    if (!cleanlinessStatus) return;
+    if (!(await ensureSessionActive())) return;
+    setSubmitError('');
+    if (cleanlinessStatus === 'clean') setCurrentStep('rating');
+    else setCurrentStep('details');
   }
 
   async function goToDetails() {
@@ -553,9 +699,12 @@ export default function PublicFeedbackQrPage() {
 
   function normalizedDetails() {
     const name = respondentDetails.name.trim();
+    const digits = respondentDetails.mobile.replace(/\D+/g, '');
+    const mobile = digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
     const comment = respondentDetails.comment.trim();
     return {
       respondent_name: name || null,
+      respondent_mobile: mobile || null,
       comments: comment || null,
     };
   }
@@ -564,18 +713,24 @@ export default function PublicFeedbackQrPage() {
     if (submitting) return;
     setSubmitAttempted(true);
     setSubmitError('');
-    if (!selectedRating) return;
+    if (cleanlinessStatus === 'clean' && !selectedRating) return;
+    if (cleanlinessStatus === 'clean' && respondentDetails.comment.length > 2000) {
+      setSubmitError(TEXT[language || 'en'].commentTooLong);
+      return;
+    }
     if (!(await ensureSessionActive())) return;
     setSubmitting(true);
     try {
-      await submitPublicHospitalFeedback({
+      const result = await submitPublicHospitalFeedback({
         session_token: state.data?.session?.token,
         submission_key: submissionKey,
-        rating: selectedRating,
+        cleanliness_status: cleanlinessStatus,
+        rating: cleanlinessStatus === 'clean' ? selectedRating : null,
         language,
         ...normalizedDetails(),
         answers: {},
       });
+      setComplaintConfirmation(result?.complaint || null);
       setCurrentStep('thankYou');
     } catch (error) {
       setSubmitError(error.response?.data?.message || TEXT[language || 'en'].submitFailed);
@@ -618,7 +773,20 @@ export default function PublicFeedbackQrPage() {
   }
 
   if (currentStep === 'location') {
-    return <LocationPage language={language} location={location} onLanguageChange={updateLanguage} onContinue={goToDetails} />;
+    return <LocationPage language={language} location={location} onLanguageChange={updateLanguage} onContinue={goToCleanliness} />;
+  }
+
+  if (currentStep === 'cleanliness') {
+    return (
+      <CleanlinessPage
+        language={language}
+        selected={cleanlinessStatus}
+        onSelect={(value) => { setCleanlinessStatus(value); setSubmitError(''); }}
+        onBack={() => setCurrentStep('location')}
+        onContinue={continueFromCleanliness}
+        onLanguageChange={updateLanguage}
+      />
+    );
   }
 
   if (currentStep === 'details') {
@@ -627,9 +795,12 @@ export default function PublicFeedbackQrPage() {
         language={language}
         details={respondentDetails}
         onChange={updateRespondentDetails}
-        onContinue={goToRating}
-        onBack={() => setCurrentStep('location')}
+        onContinue={submitDemoFeedback}
+        onBack={() => setCurrentStep('cleanliness')}
         onLanguageChange={updateLanguage}
+        complaint={cleanlinessStatus === 'not_clean'}
+        submitting={submitting}
+        submitError={submitError}
       />
     );
   }
@@ -642,8 +813,9 @@ export default function PublicFeedbackQrPage() {
         onSelectRating={(value) => { setSelectedRating(value); setSubmitAttempted(false); setSubmitError(''); }}
         onLanguageChange={updateLanguage}
         onSubmit={submitDemoFeedback}
-        onEditDetails={() => setCurrentStep('details')}
+        onEditDetails={goToDetails}
         details={respondentDetails}
+        onDetailsChange={updateRespondentDetails}
         submitAttempted={submitAttempted}
         submitting={submitting}
         submitError={submitError}
@@ -652,7 +824,7 @@ export default function PublicFeedbackQrPage() {
   }
 
   if (currentStep === 'thankYou') {
-    return <ThankYouPage language={language} onLanguageChange={updateLanguage} onDone={() => setCurrentStep('complete')} />;
+    return <ThankYouPage language={language} onLanguageChange={updateLanguage} onDone={() => setCurrentStep('complete')} complaint={complaintConfirmation} />;
   }
 
   return <CompletePage language={language} onLanguageChange={updateLanguage} />;

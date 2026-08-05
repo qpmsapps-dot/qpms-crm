@@ -32,6 +32,13 @@ export function formatIndiaDateTime(value) {
   }).format(date);
 }
 
+export function maskIndianMobile(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '-';
+  if (digits.length !== 10) return 'Masked';
+  return `******${digits.slice(-4)}`;
+}
+
 export function performanceClassName(value) {
   if (value === 'Excellent') return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
   if (value === 'Good') return 'bg-sky-50 text-sky-700 ring-sky-200';
@@ -146,5 +153,15 @@ export function reportMetrics(data = {}) {
     checklistRows,
     checklistAnswered: answeredChecklistResponses,
     checklistCompletion: pct(answeredChecklistResponses, total, 1),
+    cleanCount: Number(summary.cleanCount || 0),
+    notCleanCount: Number(summary.notCleanCount || 0),
+    cleanlinessPercentage: Number(summary.cleanlinessPercentage || 0),
+    complaintTicketCount: Number(summary.complaintTicketCount || 0),
+    openComplaintCount: Number(summary.openComplaintCount || 0),
+    resolvedComplaintCount: Number(summary.resolvedComplaintCount || 0),
+    assignmentRequiredComplaintCount: Number(summary.assignmentRequiredComplaintCount || 0),
+    slaBreachedComplaintCount: Number(summary.slaBreachedComplaintCount || 0),
+    deanEscalatedComplaintCount: Number(summary.deanEscalatedComplaintCount || 0),
+    averageComplaintResolutionMinutes: Number(summary.averageComplaintResolutionMinutes || 0),
   };
 }

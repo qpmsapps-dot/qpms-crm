@@ -38,6 +38,10 @@ const nameCommentMigration = readFileSync(
   new URL('../../supabase/migrations_2_0/045_hospital_feedback_respondent_name_comments.sql', import.meta.url),
   'utf8',
 );
+const cleanlinessMigration = readFileSync(
+  new URL('../../supabase/migrations_2_0/047_public_cleanliness_feedback_ticket_workflow.sql', import.meta.url),
+  'utf8',
+);
 const routes = readFileSync(new URL('../routes/hospitalFeedbackQrRoutes.js', import.meta.url), 'utf8');
 const appRoutes = readFileSync(new URL('../../src/routes/AppRoutes.jsx', import.meta.url), 'utf8');
 const publicPage = readFileSync(new URL('../../src/pages/PublicFeedbackQrPage.jsx', import.meta.url), 'utf8');
@@ -99,6 +103,9 @@ function fakeClient(resolver) {
     from(table) {
       return new FakeQuery({ resolve: resolver }, table);
     },
+    rpc(name, params) {
+      return resolver(`rpc:${name}`, params, null, 'rpc');
+    },
   };
 }
 
@@ -119,6 +126,24 @@ test('migration prevents duplicate active QR codes at database level', () => {
   assert.match(migration, /status in \('active', 'inactive', 'replaced', 'revoked'\)/);
   assert.match(migration, /public_token_hash text not null/);
   assert.doesNotMatch(migration, /grant\s+select[\s\S]{0,120}to anon/i);
+});
+
+test('cleanliness workflow migration adds public complaint linkage and Dean escalation contract', () => {
+  assert.match(cleanlinessMigration, /add column if not exists cleanliness_status text/i);
+  assert.match(cleanlinessMigration, /cleanliness_status is null or cleanliness_status in \('clean', 'not_clean'\)/i);
+  assert.match(cleanlinessMigration, /add column if not exists respondent_mobile text/i);
+  assert.match(cleanlinessMigration, /add column if not exists linked_ticket_id uuid references public\.hospital_tickets\(id\) on delete set null/i);
+  assert.match(cleanlinessMigration, /add column if not exists ticket_creation_status text/i);
+  assert.match(cleanlinessMigration, /alter column rating drop not null/i);
+  assert.match(cleanlinessMigration, /linked_public_feedback_submission_id uuid references public\.hospital_feedback_submissions\(id\) on delete set null/i);
+  assert.match(cleanlinessMigration, /public_feedback_qr_id uuid references public\.hospital_feedback_qr_codes\(id\) on delete set null/i);
+  assert.match(cleanlinessMigration, /'hospital_dean'/i);
+  assert.match(cleanlinessMigration, /current_escalation_level_no between 1 and 5/i);
+  assert.match(cleanlinessMigration, /create or replace function public\.rpc_submit_public_cleanliness_complaint/i);
+  assert.match(cleanlinessMigration, /hospital_ticket_on_duty_supervisors\(v_location\.client_id, v_location\.block_id, v_location\.id\)/i);
+  assert.match(cleanlinessMigration, /dean_escalated_at/i);
+  assert.match(cleanlinessMigration, /interval '15 minutes'/i);
+  assert.doesNotMatch(cleanlinessMigration, /drop table|delete from public\.hospital_feedback_submissions|delete from public\.hospital_tickets/i);
 });
 
 
@@ -733,10 +758,13 @@ test('public Phase 2 demo flow is bilingual, local-only and starts at language s
   assert.ok(publicPage.includes('\u0ba8\u0ba9\u0bcd\u0bb1\u0bbf!'));
   assert.ok(publicPage.includes('verifyPublicHospitalFeedbackSession'));
   assert.ok(publicPage.includes('submitPublicHospitalFeedback'));
+  assert.ok(publicPage.includes('Is the toilet clean?'));
+  assert.ok(publicPage.includes('No, Not Clean'));
+  assert.ok(publicPage.includes('ticketNumber'));
   assert.ok(publicPage.includes('selectedRating ? ('));
   assert.ok(publicPage.includes('Please select one rating to continue.'));
   assert.ok(publicPage.includes('\u0bae\u0bbf\u0b95\u0bb5\u0bc1\u0bae\u0bcd \u0bae\u0bcb\u0b9a\u0bae\u0bcd'));
-  assert.doesNotMatch(publicPage, /createHospitalTicket|createTicket|ticket_number|ticketNumber|feedbackApi|api\.post|publicApi\.post/);
+  assert.doesNotMatch(publicPage, /createHospitalTicket|createTicket|ticket_number|feedbackApi|api\.post|publicApi\.post/);
 });
 
 test('public QR page preserves safe error states and public-safe location rendering', () => {
@@ -815,6 +843,9 @@ test('public feedback submission stores rating idempotently and flags below four
   assert.equal(insertedPayload.respondent_name, 'Lakshmi');
   assert.equal(insertedPayload.comments, 'Needs cleaning near entrance.');
   assert.equal(insertedPayload.needs_attention, true);
+  assert.equal(insertedPayload.cleanliness_status, 'clean');
+  assert.equal(insertedPayload.ticket_creation_status, 'not_required');
+  assert.equal(insertedPayload.respondent_mobile, null);
   assert.equal(insertedPayload.parent_client_id, '99999999-9999-4999-8999-999999999999');
   assert.equal(insertedPayload.hospital_id, dmeLocation.client_id);
   assert.equal(insertedPayload.location_id, dmeLocation.id);
@@ -868,6 +899,135 @@ test('public feedback submission returns existing row only for an identical retr
   assert.equal(result.submission.rating, 4);
   assert.equal(result.submission.needsAttention, false);
   assert.equal(insertCount, 0);
+});
+
+test('not clean public submission requires comments and creates one linked ticket through RPC', async () => {
+  clearPublicFeedbackSessions();
+  const qrId = '66666666-6666-4666-8666-666666666666';
+  const submissionKey = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const session = createPublicFeedbackSession({ qrId, locationId: locationRow().id }, env, new Date('2026-07-31T10:00:00Z'));
+  let rpcCalls = 0;
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes') {
+      return { data: { id: qrId, status: 'active', location_id: locationRow().id, location: locationRow() }, error: null };
+    }
+    if (table === 'hospital_feedback_submissions' && mode === 'maybeSingle') return { data: null, error: null };
+    if (table === 'rpc:rpc_submit_public_cleanliness_complaint') {
+      rpcCalls += 1;
+      assert.equal(filters.p_qr_code_id, qrId);
+      assert.equal(filters.p_location_id, locationRow().id);
+      assert.equal(filters.p_submission_key, submissionKey);
+      assert.equal(filters.p_language, 'ta');
+      assert.equal(filters.p_respondent_name, 'Ravi');
+      assert.equal(filters.p_respondent_mobile, '9876543210');
+      assert.equal(filters.p_comments, 'Toilet is not clean near the entrance.');
+      return {
+        data: {
+          submission: {
+            cleanliness_status: 'not_clean',
+            needs_attention: true,
+            submitted_at: '2026-07-31T10:01:00.000Z',
+          },
+          ticket: { ticket_no: 'QPMS-HK-2026-000777' },
+        },
+        error: null,
+      };
+    }
+    return { data: null, error: null };
+  });
+
+  await assert.rejects(() => submitPublicHospitalFeedback({
+    client,
+    now: new Date('2026-07-31T10:01:00Z'),
+    payload: {
+      session_token: session.token,
+      submission_key: submissionKey,
+      cleanliness_status: 'not_clean',
+      language: 'ta',
+      comments: '   ',
+      answers: {},
+    },
+  }), /Complaint details/);
+
+  const result = await submitPublicHospitalFeedback({
+    client,
+    now: new Date('2026-07-31T10:01:00Z'),
+    payload: {
+      session_token: session.token,
+      submission_key: submissionKey,
+      cleanliness_status: 'not_clean',
+      language: 'ta',
+      respondent_name: ' Ravi ',
+      respondent_mobile: '+91 98765 43210',
+      comments: ' Toilet is not clean near the entrance. ',
+      rating: null,
+      answers: {},
+      assigned_user_id: 'should-not-be-used',
+    },
+  });
+
+  assert.equal(result.submission.cleanlinessStatus, 'not_clean');
+  assert.equal(result.submission.needsAttention, true);
+  assert.equal(result.complaint.ticketNumber, 'QPMS-HK-2026-000777');
+  assert.equal(result.complaint.message, 'The hospital team has been notified. Role-based escalation is currently under configuration.');
+  assert.equal(rpcCalls, 1);
+});
+
+test('not clean identical retry returns existing safe ticket number without duplicate ticket RPC', async () => {
+  clearPublicFeedbackSessions();
+  const qrId = '66666666-6666-4666-8666-666666666666';
+  const submissionKey = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const linkedTicketId = '99999999-9999-4999-8999-999999999999';
+  const session = createPublicFeedbackSession({ qrId, locationId: locationRow().id }, env, new Date('2026-07-31T10:00:00Z'));
+  let rpcCalls = 0;
+  const client = fakeClient(async (table, filters, payload, mode) => {
+    if (table === 'hospital_feedback_qr_codes') {
+      return { data: { id: qrId, status: 'active', location_id: locationRow().id, location: locationRow() }, error: null };
+    }
+    if (table === 'hospital_feedback_submissions' && mode === 'maybeSingle') {
+      return {
+        data: {
+          qr_code_id: qrId,
+          location_id: locationRow().id,
+          cleanliness_status: 'not_clean',
+          rating: null,
+          language: 'en',
+          respondent_name: 'Lakshmi',
+          respondent_mobile: '9876543210',
+          comments: 'Needs cleaning',
+          answers: {},
+          needs_attention: true,
+          linked_ticket_id: linkedTicketId,
+          submitted_at: '2026-07-31T10:01:00.000Z',
+        },
+        error: null,
+      };
+    }
+    if (table === 'hospital_tickets' && mode === 'maybeSingle') {
+      assert.equal(filters.id, linkedTicketId);
+      return { data: { ticket_no: 'QPMS-HK-2026-000778', status_code: 'awaiting_supervisor_acceptance' }, error: null };
+    }
+    if (table === 'rpc:rpc_submit_public_cleanliness_complaint') rpcCalls += 1;
+    return { data: null, error: null };
+  });
+
+  const result = await submitPublicHospitalFeedback({
+    client,
+    now: new Date('2026-07-31T10:01:00Z'),
+    payload: {
+      session_token: session.token,
+      submission_key: submissionKey,
+      cleanliness_status: 'not_clean',
+      language: 'en',
+      respondent_name: 'Lakshmi',
+      respondent_mobile: '98765 43210',
+      comments: 'Needs cleaning',
+      answers: {},
+    },
+  });
+
+  assert.equal(result.complaint.ticketNumber, 'QPMS-HK-2026-000778');
+  assert.equal(rpcCalls, 0);
 });
 
 test('public feedback submission blocks reused key across locations without leaking details', async () => {

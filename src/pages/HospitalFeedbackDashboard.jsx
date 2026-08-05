@@ -36,6 +36,7 @@ import {
   compareHierarchy,
   formatIndiaDateTime,
   formatReportDate,
+  maskIndianMobile,
   performanceClassName,
   pct,
   ratingDistributionFromBlocks,
@@ -45,7 +46,7 @@ import {
 } from '../utils/hospitalFeedbackReport.js';
 
 const LEGACY_CLIENT_KEY = '__legacy__';
-const tabs = ['Overview', 'Floor-wise Report', 'Location-wise Report', 'Comments & Names', 'Checklist Summary'];
+const tabs = ['Overview', 'Floor-wise Report', 'Location-wise Report', 'Comments & Names', 'Checklist Summary', 'Tickets'];
 const ratingOptions = ['', '5', '4', '3', '2', '1'];
 const responseFilterOptions = [
   { value: 'all', label: 'All responses' },
@@ -53,6 +54,19 @@ const responseFilterOptions = [
   { value: 'anonymous', label: 'Anonymous responses' },
   { value: 'hasComment', label: 'Has comment' },
   { value: 'noComment', label: 'No comment' },
+];
+const ticketStatusOptions = [
+  { value: '', label: 'All statuses' },
+  { value: 'open', label: 'New' },
+  { value: 'accepted', label: 'Acknowledged' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'resolved_awaiting_confirmation', label: 'Resolved' },
+  { value: 'closed', label: 'Closed' },
+];
+const ticketAssignmentOptions = [
+  { value: '', label: 'All assignments' },
+  { value: 'required', label: 'Assignment Required' },
+  { value: 'assigned', label: 'Assigned' },
 ];
 
 function monthStart() {
@@ -162,6 +176,31 @@ function EmptyState({ title, body }) {
       {body ? <p className="mt-1 text-xs font-semibold text-slate-500">{body}</p> : null}
     </div>
   );
+}
+
+function titleCase(value) {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .trim() || '-';
+}
+
+function ticketStatusLabel(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'open') return 'New';
+  if (normalized === 'accepted') return 'Acknowledged';
+  if (normalized === 'resolved_awaiting_confirmation') return 'Resolved';
+  return titleCase(value);
+}
+
+function ticketAge(value, now = new Date()) {
+  const start = value ? new Date(value).getTime() : 0;
+  if (!start || Number.isNaN(start)) return '-';
+  const minutes = Math.max(0, Math.floor((now.getTime() - start) / 60000));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} hr ${minutes % 60} min`;
+  return `${Math.floor(hours / 24)} days`;
 }
 
 function DataTable({ columns, rows, emptyTitle = 'No rows found.' }) {
@@ -360,6 +399,7 @@ export default function HospitalFeedbackDashboard() {
   const [locationSearch, setLocationSearch] = useState('');
   const [locationPage, setLocationPage] = useState(1);
   const [responseFilter, setResponseFilter] = useState('all');
+  const [ticketFilters, setTicketFilters] = useState({ status: '', assignment: '', search: '' });
   const locationPageSize = 12;
 
   useEffect(() => {
@@ -445,6 +485,27 @@ export default function HospitalFeedbackDashboard() {
     return [row.blockName, row.floorName, row.locationName].some((value) => String(value || '').toLowerCase().includes(query));
   });
   const pagedLocations = filteredLocationRows.slice((locationPage - 1) * locationPageSize, locationPage * locationPageSize);
+  const ticketRows = useMemo(() => [...(data?.publicCleanlinessComplaints || [])]
+    .filter((row) => row.ticketNumber)
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)), [data]);
+  const filteredTicketRows = useMemo(() => {
+    const query = ticketFilters.search.trim().toLowerCase();
+    return ticketRows.filter((row) => {
+      if (ticketFilters.status && row.currentStatus !== ticketFilters.status) return false;
+      if (ticketFilters.assignment === 'required' && !row.assignmentRequired) return false;
+      if (ticketFilters.assignment === 'assigned' && row.assignmentRequired) return false;
+      if (!query) return true;
+      return [row.ticketNumber, row.blockName, row.floorName, row.locationName, row.comment]
+        .some((value) => String(value || '').toLowerCase().includes(query));
+    });
+  }, [ticketRows, ticketFilters]);
+  const ticketSummary = useMemo(() => ({
+    total: filteredTicketRows.length,
+    newCount: filteredTicketRows.filter((row) => row.currentStatus === 'open').length,
+    inProgress: filteredTicketRows.filter((row) => row.currentStatus === 'in_progress').length,
+    resolved: filteredTicketRows.filter((row) => ['resolved_awaiting_confirmation', 'closed'].includes(row.currentStatus)).length,
+    assignmentRequired: filteredTicketRows.filter((row) => row.assignmentRequired).length,
+  }), [filteredTicketRows]);
   const contextParts = [
     filters.clientKey ? clients.find((item) => item.value === filters.clientKey)?.label : 'All Clients',
     filters.hospitalId ? hospitals.find((item) => item.value === filters.hospitalId)?.label : 'All Hospitals',
@@ -466,6 +527,13 @@ export default function HospitalFeedbackDashboard() {
     { label: 'Needs Attention', value: metrics.needsAttention, helper: 'Below 4-star ratings', icon: AlertTriangle, tone: 'amber' },
     { label: 'Named Responses', value: `${metrics.namedCount} (${metrics.namedPercentage}%)`, helper: 'With optional names', icon: UserRound, tone: 'blue' },
     { label: 'Checklist Completion Rate', value: `${metrics.checklistCompletion}%`, helper: `${metrics.checklistAnswered} of ${metrics.total} responses`, icon: ClipboardCheck, tone: 'green' },
+  ];
+  const cleanlinessKpis = [
+    { label: 'Clean Responses', value: metrics.cleanCount, helper: 'Survey-only clean reports', icon: CheckCircle2, tone: 'green' },
+    { label: 'Not Clean Responses', value: metrics.notCleanCount, helper: 'Public cleanliness complaints', icon: AlertTriangle, tone: 'rose' },
+    { label: 'Cleanliness Percentage', value: `${metrics.cleanlinessPercentage}%`, helper: 'Clean responses / total feedback', icon: BarChart3, tone: 'blue' },
+    { label: 'Complaint Tickets', value: metrics.complaintTicketCount, helper: `${metrics.openComplaintCount} open, ${metrics.resolvedComplaintCount} resolved`, icon: MessageSquareText, tone: 'amber' },
+    { label: 'Assignment Required', value: metrics.assignmentRequiredComplaintCount, helper: 'Unassigned public complaint tickets', icon: ClipboardCheck, tone: 'violet' },
   ];
 
   const floorColumns = [
@@ -489,6 +557,36 @@ export default function HospitalFeedbackDashboard() {
     { key: 'needsAttention', label: 'Needs Attention' },
     { key: 'latest', label: 'Latest Feedback', render: () => '-' },
     { key: 'performance', label: 'Performance', render: (row) => <span className={`rounded-full px-2.5 py-1 text-xs font-black ring-1 ${performanceClassName(row.performance)}`}>{row.performance}</span> },
+  ];
+  const complaintColumns = [
+    { key: 'ticketNumber', label: 'Ticket Number', render: (row) => row.ticketNumber || '-' },
+    { key: 'rating', label: 'Rating', render: (row) => row.rating ? ratingBadge(row.rating) : '-' },
+    { key: 'comment', label: 'Comment', render: (row) => commentExcerpt(row.comment, 140) },
+    { key: 'blockName', label: 'Block' },
+    { key: 'floorName', label: 'Floor' },
+    { key: 'locationName', label: 'Location' },
+    { key: 'createdAt', label: 'Created At', render: (row) => formatIndiaDateTime(row.createdAt) },
+    { key: 'currentStatus', label: 'Current Status', render: (row) => ticketStatusLabel(row.currentStatus) },
+    { key: 'assignmentStatus', label: 'Assignment', render: (row) => row.assignmentStatus || '-' },
+    { key: 'currentEscalationLevel', label: 'Escalation', render: (row) => row.assignmentRequired ? 'Not Started' : titleCase(row.currentEscalationLevel) },
+    { key: 'currentOwnerRole', label: 'Current Owner Role', render: (row) => row.assignmentRequired ? 'Unassigned' : titleCase(row.currentOwnerRole) },
+    { key: 'resolutionTimeMinutes', label: 'Resolution Time', render: (row) => row.resolutionTimeMinutes == null ? '-' : `${row.resolutionTimeMinutes} min` },
+  ];
+  const ticketColumns = [
+    { key: 'ticketNumber', label: 'Ticket Number', render: (row) => row.ticketNumber || '-' },
+    { key: 'createdAt', label: 'Created At', render: (row) => formatIndiaDateTime(row.createdAt) },
+    { key: 'age', label: 'Age', render: (row) => ticketAge(row.createdAt) },
+    { key: 'blockName', label: 'Block' },
+    { key: 'floorName', label: 'Floor' },
+    { key: 'locationName', label: 'Location' },
+    { key: 'comment', label: 'Complaint', render: (row) => commentExcerpt(row.comment, 160) },
+    { key: 'respondentName', label: 'Respondent Name', render: (row) => row.respondentName || 'Anonymous' },
+    { key: 'respondentMobile', label: 'Mobile', render: (row) => maskIndianMobile(row.respondentMobile) },
+    { key: 'currentStatus', label: 'Current Status', render: (row) => ticketStatusLabel(row.currentStatus) },
+    { key: 'assignmentStatus', label: 'Assignment', render: (row) => row.assignmentStatus || '-' },
+    { key: 'currentEscalationLevel', label: 'Current Escalation Level', render: (row) => row.assignmentRequired ? 'Not Started' : titleCase(row.currentEscalationLevel) },
+    { key: 'currentOwnerRole', label: 'Current Owner Role', render: (row) => row.assignmentRequired ? 'Unassigned' : titleCase(row.currentOwnerRole) },
+    { key: 'action', label: 'Action', render: () => <span className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-black text-slate-600 ring-1 ring-slate-200">View in ticketing</span> },
   ];
 
   return (
@@ -554,6 +652,9 @@ export default function HospitalFeedbackDashboard() {
             <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
               {kpis.map((kpi) => <KpiCard key={kpi.label} {...kpi} />)}
             </section>
+            <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+              {cleanlinessKpis.map((kpi) => <KpiCard key={kpi.label} {...kpi} />)}
+            </section>
             {metrics.total === 0 ? <EmptyState title="No feedback for selected period" body="Report cards will populate when matching feedback submissions are available." /> : null}
             <section className="grid gap-4 xl:grid-cols-2">
               <RatingSummary distribution={distribution} trend={data?.dailyTrend || []} />
@@ -566,6 +667,13 @@ export default function HospitalFeedbackDashboard() {
               <ChecklistCard checklistRows={checklistRows} metrics={metrics} />
               <NeedsAttentionCard rows={responseRows} onOpen={() => { setFilter('needsAttention', 'true'); setActiveTab('Comments & Names'); }} />
             </section>
+            <ReportCard
+              title="Recent Public Complaints"
+              subtitle="Latest Not Clean public reports linked to hospital tickets"
+              action={<button type="button" onClick={() => setActiveTab('Tickets')} className="no-print text-xs font-black text-qpms-700">View all tickets</button>}
+            >
+              <DataTable rows={ticketRows.slice(0, 5)} columns={complaintColumns} emptyTitle="No public cleanliness complaints found for the selected filters." />
+            </ReportCard>
           </>
         ) : null}
 
@@ -618,6 +726,56 @@ export default function HospitalFeedbackDashboard() {
               ]} />
             ) : <EmptyState title="Checklist reporting will appear when checklist questions are enabled in the public feedback form." body="No production checklist percentages have been invented." />}
           </ReportCard>
+        ) : null}
+
+        {activeTab === 'Tickets' ? (
+          <div className="space-y-4">
+            <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <KpiCard label="Total Tickets" value={ticketSummary.total} helper="Public QR Feedback tickets" icon={MessageSquareText} tone="blue" />
+              <KpiCard label="New" value={ticketSummary.newCount} helper="New complaint tickets" icon={AlertTriangle} tone="amber" />
+              <KpiCard label="In Progress" value={ticketSummary.inProgress} helper="Operational work started" icon={RefreshCw} tone="blue" />
+              <KpiCard label="Resolved" value={ticketSummary.resolved} helper="Resolved or closed tickets" icon={CheckCircle2} tone="green" />
+              <KpiCard label="Assignment Required" value={ticketSummary.assignmentRequired} helper="Unassigned demo tickets" icon={ClipboardCheck} tone="violet" />
+            </section>
+
+            <ReportCard title="Planned Escalation Workflow" subtitle="Role-based escalation is under configuration for the client demo" action={<span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-amber-700 ring-1 ring-amber-200">Under Configuration</span>}>
+              <div className="grid gap-3 md:grid-cols-5">
+                {[
+                  ['Supervisor', '15 minutes'],
+                  ['Facility Manager', 'next 15 minutes'],
+                  ['Zonal Head', 'next 15 minutes'],
+                  ['Project Head', 'next 15 minutes'],
+                  ['Hospital Dean', 'after 60 minutes'],
+                ].map(([role, timing]) => (
+                  <div key={role} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-sm font-black text-slate-800">{role}</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">{timing}</p>
+                  </div>
+                ))}
+              </div>
+            </ReportCard>
+
+            <ReportCard
+              title="Tickets"
+              subtitle="Actual Public QR Feedback tickets from the authenticated report scope"
+              action={(
+                <div className="no-print flex flex-wrap items-center gap-2">
+                  <select value={ticketFilters.status} onChange={(event) => setTicketFilters((current) => ({ ...current, status: event.target.value }))} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700">
+                    {ticketStatusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                  <select value={ticketFilters.assignment} onChange={(event) => setTicketFilters((current) => ({ ...current, assignment: event.target.value }))} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700">
+                    {ticketAssignmentOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                  <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
+                    <Search className="h-4 w-4 text-slate-400" />
+                    <input value={ticketFilters.search} onChange={(event) => setTicketFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Search ticket number" className="w-48 bg-transparent text-xs font-semibold outline-none" />
+                  </label>
+                </div>
+              )}
+            >
+              <DataTable rows={filteredTicketRows} columns={ticketColumns} emptyTitle="No Public QR Feedback tickets found for the selected filters." />
+            </ReportCard>
+          </div>
         ) : null}
 
         <footer className="rounded-xl bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-900 ring-1 ring-blue-100">

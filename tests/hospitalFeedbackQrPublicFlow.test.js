@@ -12,6 +12,7 @@ test('Hospital Feedback QR public flow starts at language selection and submits 
   assert.ok(publicPage.includes('\u0bb5\u0bb0\u0bb5\u0bc7\u0bb1\u0bcd\u0b95\u0bbf\u0bb1\u0bcb\u0bae\u0bcd!'));
   assert.ok(publicPage.includes("setCurrentStep('language')"));
   assert.ok(publicPage.includes("setCurrentStep('location')"));
+  assert.ok(publicPage.includes("setCurrentStep('cleanliness')"));
   assert.ok(publicPage.includes("setCurrentStep('details')"));
   assert.ok(publicPage.includes("setCurrentStep('rating')"));
   assert.ok(publicPage.includes("setCurrentStep('thankYou')"));
@@ -23,37 +24,51 @@ test('Hospital Feedback QR public flow starts at language selection and submits 
   assert.ok(publicPage.includes('if (submitting) return;'));
   assert.ok(api.includes("publicApi.post('/api/public/hospital-feedback/submissions'"));
   assert.ok(publicPage.includes('submission_key: submissionKey'));
+  assert.ok(publicPage.includes('cleanliness_status: cleanlinessStatus'));
   assert.ok(publicPage.includes('respondent_name'));
+  assert.ok(publicPage.includes('respondent_mobile'));
   assert.ok(publicPage.includes('comments: comment || null'));
   assert.ok(publicPage.includes('setSubmissionKey(newSubmissionKey())'));
   assert.ok(publicPage.includes("setCurrentStep('thankYou')"));
   assert.match(publicPage, /await submitPublicHospitalFeedback\([\s\S]*setCurrentStep\('thankYou'\)/);
-  assert.doesNotMatch(publicPage, /createHospitalTicket|createTicket|ticket_number|ticketNumber|feedbackApi/);
+  assert.ok(publicPage.includes('ticketNumber'));
   assert.doesNotMatch(api, /createHospitalTicketFromFeedback/);
 });
 
-test('Hospital Feedback QR public flow collects optional name and comment before rating', () => {
+test('Hospital Feedback QR public flow asks mutually exclusive cleanliness question before branching', () => {
+  assert.ok(publicPage.includes('Is the toilet clean?'));
+  assert.ok(publicPage.includes('Yes, Clean'));
+  assert.ok(publicPage.includes('No, Not Clean'));
+  assert.ok(publicPage.includes("selected === option.value"));
+  assert.ok(publicPage.includes("cleanlinessStatus === 'clean'"));
+  assert.ok(publicPage.includes("cleanlinessStatus === 'not_clean'"));
+  assert.match(publicPage, /currentStep === 'location'[\s\S]*onContinue=\{goToCleanliness\}/);
+  assert.match(publicPage, /currentStep === 'cleanliness'[\s\S]*CleanlinessPage/);
+});
+
+test('Hospital Feedback QR public flow collects complaint details only for Not Clean', () => {
   assert.ok(publicPage.includes('function RespondentDetailsPage'));
-  assert.ok(publicPage.includes('Tell us more'));
-  assert.ok(publicPage.includes('Your name is optional. You can also share a comment or suggestion.'));
+  assert.ok(publicPage.includes('Tell us what is wrong'));
+  assert.ok(publicPage.includes('Please share the issue so the hospital team can resolve it quickly.'));
   assert.ok(publicPage.includes('Enter your name (optional)'));
-  assert.ok(publicPage.includes('Share your feedback or suggestion (optional)'));
+  assert.ok(publicPage.includes('Enter mobile number (optional)'));
+  assert.ok(publicPage.includes('Clearly explain what is not clean'));
+  assert.ok(publicPage.includes('Complaint details are required.'));
+  assert.ok(publicPage.includes('Enter a valid 10-digit Indian mobile number.'));
   assert.ok(publicPage.includes('details.comment.length} / 2000'));
   assert.ok(publicPage.includes('Name must be 120 characters or fewer.'));
   assert.ok(publicPage.includes('Comment must be 2000 characters or fewer.'));
-  assert.match(publicPage, /currentStep === 'location'[\s\S]*onContinue=\{goToDetails\}/);
   assert.match(publicPage, /currentStep === 'details'[\s\S]*RespondentDetailsPage/);
   assert.match(publicPage, /currentStep === 'rating'[\s\S]*details=\{respondentDetails\}/);
-  assert.ok(publicPage.includes("onEditDetails={() => setCurrentStep('details')}"));
-  assert.ok(publicPage.includes("onBack={() => setCurrentStep('location')}"));
+  assert.ok(publicPage.includes("onBack={() => setCurrentStep('cleanliness')}"));
 });
 
 test('Hospital Feedback QR public flow preserves entered name and comment across language changes and failed submissions', () => {
-  assert.ok(publicPage.includes("const [respondentDetails, setRespondentDetails] = useState({ name: '', comment: '' })"));
+  assert.ok(publicPage.includes("const [respondentDetails, setRespondentDetails] = useState({ name: '', mobile: '', comment: '' })"));
   assert.ok(publicPage.includes('setRespondentDetails((current) => ({ ...current, [field]: value }))'));
   assert.ok(publicPage.includes('onLanguageChange={updateLanguage}'));
   assert.ok(publicPage.includes("setSubmitError(error.response?.data?.message || TEXT[language || 'en'].submitFailed)"));
-  assert.doesNotMatch(publicPage, /setRespondentDetails\(\{ name: '', comment: '' \}\)[\s\S]{0,160}catch/);
+  assert.doesNotMatch(publicPage, /setRespondentDetails\(\{ name: '', mobile: '', comment: '' \}\)[\s\S]{0,160}catch/);
 });
 
 test('Hospital Feedback QR public flow has English and Tamil location, rating and completion copy', () => {
@@ -63,6 +78,8 @@ test('Hospital Feedback QR public flow has English and Tamil location, rating an
   assert.ok(publicPage.includes('\u0b89\u0b99\u0bcd\u0b95\u0bb3\u0bcd \u0b85\u0ba9\u0bc1\u0baa\u0bb5\u0bae\u0bcd \u0b8e\u0baa\u0bcd\u0baa\u0b9f\u0bbf \u0b87\u0bb0\u0bc1\u0ba8\u0bcd\u0ba4\u0ba4\u0bc1?'));
   assert.ok(publicPage.includes('Please select one rating to continue.'));
   assert.ok(publicPage.includes('Submit Feedback'));
+  assert.ok(publicPage.includes('Complaint submitted successfully'));
+  assert.ok(publicPage.includes('The hospital team has been notified. Role-based escalation is currently under configuration.'));
   assert.ok(publicPage.includes('Thank you!'));
   assert.ok(publicPage.includes('\u0ba8\u0ba9\u0bcd\u0bb1\u0bbf!'));
   assert.ok(publicPage.includes('\u0bae\u0bbf\u0b95\u0bb5\u0bc1\u0bae\u0bcd \u0bae\u0bcb\u0b9a\u0bae\u0bcd'));
@@ -78,7 +95,7 @@ test('Hospital Feedback QR public page keeps safe error and location rendering c
   assert.ok(publicPage.includes('onRetry={loadQr}'));
   assert.ok(publicPage.includes('[t.department, location.departmentName]'));
   assert.ok(publicPage.includes('.filter(([, value]) => Boolean(value))'));
-  assert.doesNotMatch(publicPage, /hospitalId|blockId|floorId|locationId|employee|supervisor|ticketConfig/);
+  assert.doesNotMatch(publicPage, /hospitalId|blockId|floorId|locationId|employee|supervisor|ticketConfig|assigned employee|SLA/);
 });
 
 test('Hospital Feedback QR generator preview and download share one PNG data URL', () => {
@@ -119,9 +136,12 @@ test('Soft Services dashboard contains required filters KPI cards and drill-down
   for (const label of ['Date From', 'Date To', 'Client', 'Hospital', 'Block', 'Floor', 'Location', 'Rating', 'Needs Attention']) {
     assert.ok(dashboardPage.includes(label));
   }
-  for (const label of ['Total Feedback', 'Average Rating', 'Five-Star %', 'Needs Attention', 'Named Responses', 'Checklist Completion Rate']) {
+  for (const label of ['Total Feedback', 'Average Rating', 'Five-Star %', 'Needs Attention', 'Named Responses', 'Checklist Completion Rate', 'Clean Responses', 'Not Clean Responses', 'Cleanliness Percentage', 'Complaint Tickets', 'Assignment Required']) {
     assert.ok(dashboardPage.includes(label));
   }
+  assert.ok(dashboardPage.includes('Recent Public Complaints'));
+  assert.ok(dashboardPage.includes('Tickets'));
+  assert.ok(dashboardPage.includes('Under Configuration'));
   assert.ok(dashboardPage.includes('Block / Location Performance'));
   assert.ok(dashboardPage.includes('Floor-wise Report'));
   assert.ok(dashboardPage.includes('Location-wise Report'));
