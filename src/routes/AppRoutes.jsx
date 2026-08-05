@@ -64,6 +64,15 @@ const productionRoutes = [
     children: [
       { index: true, element: <Navigate to="/login" replace /> },
       { path: 'login', element: <Login /> },
+      { path: 'demo-login', element: <TenderDemoLogin /> },
+      {
+        path: 'demo',
+        element: <TenderDemoLayout />,
+        children: [
+          { index: true, element: <Navigate to="/demo/dashboard" replace /> },
+          { path: ':moduleKey', element: <TenderDemoWorkspace /> },
+        ],
+      },
       { path: 'set-password', element: <SetPassword /> },
       { path: 'account-deletion', element: <AccountDeletion /> },
       { path: 'public-feedback', element: <PublicFeedbackScanInstruction /> },
