@@ -39,14 +39,26 @@ test('DEMO_VIEWER is read-only and does not receive lead mutation authority', ()
 });
 
 test('DEMO_VIEWER safe GET requests are allowed by centralized middleware', () => {
-  const response = responseRecorder();
-  const rejected = rejectReadOnlyDemoRequest(
-    { method: 'GET', originalUrl: '/api/lead-management/leads' },
-    response,
-    { role: 'DEMO_VIEWER' },
-  );
-  assert.equal(rejected, false);
-  assert.equal(response.statusCode, 0);
+  [
+    '/api/lead-management/leads',
+    '/api/fo/operations/dashboard',
+    '/api/fo/operations/summary',
+    '/api/web/hospital-tickets/summary',
+    '/api/web/hospital-tickets',
+    '/api/hospital-feedback/dashboard',
+    '/api/fault-tracker/tickets',
+    '/api/deep-cleaning/records',
+    '/api/fo/reports/preview',
+  ].forEach((path) => {
+    const response = responseRecorder();
+    const rejected = rejectReadOnlyDemoRequest(
+      { method: 'GET', originalUrl: path },
+      response,
+      { role: 'DEMO_VIEWER' },
+    );
+    assert.equal(rejected, false, path);
+    assert.equal(response.statusCode, 0, path);
+  });
 });
 
 test('DEMO_VIEWER mutations return HTTP 403', () => {

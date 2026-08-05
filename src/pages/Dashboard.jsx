@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import {
   AlertTriangle,
-  ArrowRight,
   BriefcaseBusiness,
   CalendarCheck2,
   CheckCircle2,
@@ -73,7 +72,6 @@ import {
 } from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { isDemoMode } from '../config/demoMode.js';
-import { isDemoUser } from '../utils/demoAccess.js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 
 const taskColors = ['#10b981', '#f59e0b', '#ef4444'];
@@ -1024,42 +1022,6 @@ function CommandCenterOverview({ user, leads, siteVisits, stage }) {
       </section>
       <OperationalHealth items={data.operationalHealth} />
     </div>
-  );
-}
-
-function TenderDemoWelcomePanel() {
-  const cards = [
-    ['Field Operations', 'Live attendance, route, KM and petrol summary views for approved sample data.', '/fo-activities'],
-    ['Reliance Retail Deep Cleaning', 'Before/after activity evidence and store-level deep cleaning records.', '/deep-cleaning'],
-    ['Fault Tracker', 'IFMS fault ageing, stage summaries and detailed read-only ticket grids.', '/fault-tracker'],
-    ['Client Ticketing', 'Hospital and client complaint tracking with SLA and status timeline views.', '/tickets'],
-    ['Lead and Approval Workflow', 'Lead pipeline, site visit and approval workflow demonstration.', '/crm'],
-    ['Reports and Analytics', 'Read-only report views and safe export previews for demo data.', '/reports'],
-  ];
-  return (
-    <section className="rounded-3xl border border-qpms-100 bg-white p-5 shadow-sm">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-qpms-600">Tender Demo</p>
-          <h2 className="mt-1 text-2xl font-black text-slate-950">Welcome to the myQPMS Tender Demonstration Environment.</h2>
-          <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-slate-600">
-            This account provides read-only access to selected operational modules and sample data.
-          </p>
-        </div>
-        <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-black text-amber-800">
-          Read-Only Access
-        </span>
-      </div>
-      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {cards.map(([title, description, to]) => (
-          <Link key={title} to={to} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:border-qpms-200 hover:bg-qpms-50">
-            <h3 className="text-sm font-black text-slate-950">{title}</h3>
-            <p className="mt-1 min-h-10 text-xs font-semibold leading-5 text-slate-500">{description}</p>
-            <span className="mt-3 inline-flex text-xs font-black text-qpms-700">Open Module <ArrowRight className="ml-1 h-3.5 w-3.5" /></span>
-          </Link>
-        ))}
-      </div>
-    </section>
   );
 }
 
@@ -2233,7 +2195,6 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-7">
-      {isDemoUser(user) ? <TenderDemoWelcomePanel /> : null}
       <PageHeader
         title={reviewerDashboard?.title || (executiveViewer ? `Welcome back, ${user?.name || 'Admin'}` : 'Dashboard')}
         description={reviewerDashboard?.description}

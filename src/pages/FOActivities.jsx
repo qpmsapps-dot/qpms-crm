@@ -10468,7 +10468,7 @@ export default function FOActivities() {
   usePageTitle("FO Activities");
   const { user, session, authStatus, authError } = useAuth();
   const readOnlyDemo = isReadOnlyUser(user);
-  const hasDemoBackendReadSession = authStatus === "ready" && isDemoUser(user);
+  const hasDemoBackendReadSession = authStatus === "ready" && isDemoUser(user) && !session?.access_token;
   const hasActiveSession = authStatus === "ready" && (Boolean(session?.access_token) || hasDemoBackendReadSession);
   const currentRole = normalizeRoleKey(generatedUserRole(user));
   const fullTechnicalAccess = hasTechnicalKmAccess(user);

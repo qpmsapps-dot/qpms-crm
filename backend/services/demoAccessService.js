@@ -13,7 +13,6 @@ const SENSITIVE_DEMO_GET_PATTERNS = [
   /^\/api\/store-master(?:\/|$)/i,
   /^\/api\/profile\/avatar(?:\/|$)/i,
   /^\/api\/profile\/password/i,
-  /^\/api\/fo\/reports(?:\/|$)/i,
   /\/(?:export|download|pdf|upload|import|reset|recalculate|sync-auth|hard-delete|repair-employee-code|enable-login|reset-password)(?:\/|$|\?)/i,
 ];
 

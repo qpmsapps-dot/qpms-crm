@@ -7,6 +7,7 @@ import { isReadOnlyDemoUser, isReadOnlyUser } from '../src/utils/demoAccess.js';
 const sidebarSource = await readFile(new URL('../src/components/Sidebar.jsx', import.meta.url), 'utf8');
 const mainLayoutSource = await readFile(new URL('../src/layouts/MainLayout.jsx', import.meta.url), 'utf8');
 const routesSource = await readFile(new URL('../src/routes/AppRoutes.jsx', import.meta.url), 'utf8');
+const dashboardSource = await readFile(new URL('../src/pages/Dashboard.jsx', import.meta.url), 'utf8');
 const tasksSource = await readFile(new URL('../src/pages/Tasks.jsx', import.meta.url), 'utf8');
 const sitesSource = await readFile(new URL('../src/pages/Sites.jsx', import.meta.url), 'utf8');
 const foSource = await readFile(new URL('../src/pages/FOActivities.jsx', import.meta.url), 'utf8');
@@ -62,6 +63,19 @@ test('DEMO_VIEWER uses normal login and production routes, not the generic demo 
   const productionRoutes = routesSource.slice(productionStart);
   assert.match(productionRoutes, /path: 'login'/);
   assert.doesNotMatch(productionRoutes, /path: 'demo-login'|path: 'demo'/);
+});
+
+test('DEMO_VIEWER uses the normal Dashboard component without tender intro overrides', () => {
+  assert.doesNotMatch(dashboardSource, /TenderDemoWelcomePanel/);
+  assert.doesNotMatch(dashboardSource, /Welcome to the myQPMS Tender Demonstration Environment/);
+  assert.match(dashboardSource, /<PageHeader/);
+  assert.match(dashboardSource, /<ExecutiveOperationsCommandCenter/);
+  assert.match(dashboardSource, /<ApprovalDashboard/);
+});
+
+test('Supabase-authenticated DEMO_VIEWER keeps the normal FO live-data path', () => {
+  assert.match(foSource, /const hasDemoBackendReadSession = authStatus === "ready" && isDemoUser\(user\) && !session\?\.access_token;/);
+  assert.match(foSource, /const hasActiveSession = authStatus === "ready" && \(Boolean\(session\?\.access_token\) \|\| hasDemoBackendReadSession\);/);
 });
 
 test('read-only demonstration banner is shown in the normal app layout', () => {
