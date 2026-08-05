@@ -4912,6 +4912,7 @@ function missingCheckoutEvidence(visit) {
   );
   const suggestedKm = numberOrNull(
     metadata.suggested_missing_checkout_km ??
+      metadata.missing_km_review?.suggested_missing_km ??
       metadata.suggested_missing_checkout_haversine_km,
   );
   const suggestedAmount = numberOrNull(
@@ -4939,12 +4940,28 @@ function missingCheckoutEvidence(visit) {
     metadata.latest_gps_detected_at ||
     null;
   return {
+    reviewId:
+      metadata.missing_checkout_review_id ||
+      metadata.checkout_review_id ||
+      metadata.missing_km_review?.id ||
+      null,
     detectedKm,
     approvedKm: approvedKm ?? 0,
     approvedAmount: approvedAmount ?? 0,
     suggestedKm,
     suggestedAmount,
-    suggestedSource: metadata.suggested_missing_checkout_source || null,
+    suggestedSource:
+      metadata.suggested_missing_checkout_source ||
+      metadata.missing_km_review?.calculation_source ||
+      null,
+    evidenceQuality:
+      metadata.suggested_missing_checkout_evidence_quality ||
+      metadata.missing_km_review?.evidence_quality ||
+      null,
+    reason:
+      metadata.suggested_missing_checkout_reason_code ||
+      metadata.missing_km_review?.reason_code ||
+      null,
     googleError: metadata.suggested_missing_checkout_google_error || null,
     evidenceStatus,
     detectedAt,
@@ -4955,20 +4972,29 @@ function missingCheckoutEvidence(visit) {
 
 function missingCheckoutKmLabel(visit) {
   const evidence = missingCheckoutEvidence(visit);
-  if (evidence.suggestedKm !== null) return `${evidence.suggestedKm.toFixed(1)} km`;
+  const status = checkoutReviewStatus(visit).label;
+  const source = evidence.suggestedSource
+    ? evidence.suggestedSource.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+    : null;
+  if (evidence.approvedKm > 0) return `${evidence.approvedKm.toFixed(1)} km Approved`;
+  if (evidence.suggestedKm !== null) {
+    return `${evidence.suggestedKm.toFixed(1)} km${source ? ` — ${source}` : ""} — ${status}`;
+  }
   if (evidence.hasDetectedKm) return `${evidence.detectedKm.toFixed(1)} km`;
   return "--";
 }
 
 function missingCheckoutEvidenceLabel(visit) {
   const evidence = missingCheckoutEvidence(visit);
+  if (evidence.reason) return evidence.reason.replace(/_/g, " ");
+  if (evidence.evidenceQuality) return `Evidence: ${evidence.evidenceQuality}`;
   if (evidence.detectedAt) {
     return `Latest GPS: ${formatTime(evidence.detectedAt)}`;
   }
   if (String(evidence.evidenceStatus || "").toLowerCase() === "stale") {
     return "GPS evidence stale";
   }
-  return "No fresh GPS evidence";
+  return evidence.suggestedKm === 0 ? "No reliable route evidence" : "Review evidence pending";
 }
 
 function CheckoutStatusChip({ exception }) {
@@ -5457,6 +5483,44 @@ function finalReturnLegKmFromAttendance(attendance) {
       metadata.finalReturnLegKm ??
       attendance?.final_return_leg_km,
   );
+}
+
+function canonicalTravelLegForVisit(attendance, visit, index = 0) {
+  const metadata = attendanceMetadata(attendance);
+  const travelLegs = [
+    ...(Array.isArray(attendance?.travel_legs) ? attendance.travel_legs : []),
+    ...(Array.isArray(metadata.travel_legs) ? metadata.travel_legs : []),
+  ];
+  const visitId = visit?.id || null;
+  if (index === 0) {
+    return (
+      travelLegs.find((leg) =>
+        leg?.type === "start_to_first_checkin" &&
+        (!visitId || leg?.to_visit_id === visitId || leg?.toVisitId === visitId)
+      ) ||
+      travelLegs.find((leg) => leg?.type === "start_to_first_checkin") ||
+      null
+    );
+  }
+  return (
+    travelLegs.find((leg) =>
+      leg?.type === "site_checkout_to_next_checkin" &&
+      (!visitId || leg?.to_visit_id === visitId || leg?.toVisitId === visitId)
+    ) ||
+    travelLegs.filter((leg) => leg?.type === "site_checkout_to_next_checkin")[index - 1] ||
+    null
+  );
+}
+
+function canonicalTravelKmForVisit(attendance, visit, index = 0) {
+  const leg = canonicalTravelLegForVisit(attendance, visit, index);
+  const value = numberOrNull(
+    leg?.payable_km ??
+      leg?.calculated_km ??
+      leg?.calculatedKm ??
+      leg?.km,
+  );
+  return value !== null ? value : numberOrNull(visit?.route_km);
 }
 
 function isStaleAutoEndedAttendance(attendance) {
@@ -7532,6 +7596,7 @@ function FieldOfficerDetailsView({
     }
     visits.forEach((visit, index) => {
       const exception = checkoutExceptionForVisit(visit);
+      const canonicalRouteKm = canonicalTravelKmForVisit(lastAttendance, visit, index);
       rows.push({
         key: visit.id || `${visit.check_in_time}-${index}`,
         index: index + 1,
@@ -7542,7 +7607,7 @@ function FieldOfficerDetailsView({
         checkOut: formatDateTime(siteVisitCheckoutValue(visit)),
         duration: durationMinutesLabel(visitMinutes(visit)),
         travelFromPrevious: index === 0 ? "Start Day" : visitTitle(visits[index - 1]),
-        distance: numberLabel(visit.route_km, " km"),
+        distance: numberLabel(canonicalRouteKm, " km"),
         missingKm: exception.requiresReview ? missingCheckoutKmLabel(visit) : "--",
         missingEvidence: exception.requiresReview ? missingCheckoutEvidenceLabel(visit) : "",
         remarks: visitRemarks(visit),
@@ -8396,9 +8461,7 @@ function FieldOfficerDetailsView({
                         type="button"
                         disabled={checkoutReviewBusyVisitId === selectedVisit?.id}
                         onClick={() =>
-                          action === "Ask Clarification"
-                            ? showCheckoutReviewPreview(selectedVisit, action)
-                            : handleCheckoutReviewAction(selectedVisit, action)
+                          handleCheckoutReviewAction(selectedVisit, action)
                         }
                         className="focus-ring rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-black text-amber-800 hover:bg-amber-100 disabled:opacity-50"
                       >
@@ -9455,7 +9518,7 @@ function FieldOfficerDetailsView({
                                         key={action}
                                         type="button"
                                         onClick={() =>
-                                          showCheckoutReviewPreview(visit, action)
+                                          handleCheckoutReviewAction(visit, action)
                                         }
                                         className="focus-ring rounded-md border border-slate-200 bg-white px-2 py-1 text-[9px] font-black text-slate-700 hover:bg-qpms-50"
                                       >
@@ -12012,6 +12075,12 @@ export default function FOActivities() {
         window.alert("Rejection reason is required.");
         return;
       }
+    } else if (normalizedAction === "ask clarification" || normalizedAction === "clarification") {
+      remarks = window.prompt("Clarification required", "") || "";
+      if (!remarks.trim()) {
+        window.alert("Clarification message is required.");
+        return;
+      }
     } else {
       return;
     }
@@ -12026,11 +12095,14 @@ export default function FOActivities() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            action: normalizedAction,
+            action: normalizedAction === "ask clarification" ? "clarification" : normalizedAction,
             approved_km: approvedKm,
+            approved_missing_km: approvedKm,
             remarks,
+            requested_clarification: normalizedAction === "ask clarification" ? remarks : undefined,
             review_source: "fo_activities_dashboard",
             admin_override: adminOverride,
+            elevated_override: adminOverride,
           }),
         },
       );
@@ -12039,7 +12111,15 @@ export default function FOActivities() {
         throw new Error(payload.message || "Checkout review update failed.");
       }
       window.alert(payload.message || "Checkout review updated.");
+      if (payload.totals) {
+        setKmRecalcResult({
+          ok: true,
+          message: `Attendance totals refreshed. Approved KM: ${Number(payload.totals.total_approved_km || 0).toFixed(2)}.`,
+          ...payload.totals,
+        });
+      }
       setRefreshToken((value) => value + 1);
+      setSummaryRefreshToken((value) => value + 1);
     } catch (error) {
       console.warn("[myQPMS FO] Checkout missing KM review failed.", error);
       window.alert(error.message || "Checkout review update failed.");

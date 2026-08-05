@@ -28,7 +28,7 @@ test('main recalculation requests non-persisting leg calculation and owns the at
   const source = await readFile(servicePath, 'utf8');
   const main = source.slice(
     source.indexOf('export async function recalculateFoKm('),
-    source.indexOf('export async function recalculateSwitchModeKmTemporary'),
+    source.indexOf('export async function reconcileFinalLegOnly'),
   );
   assert.match(main, /persist: false/);
   assert.match(main, /auditDelayedCheckout: false/);

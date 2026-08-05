@@ -15,6 +15,8 @@ import {
 } from './services/hospitalTicketSlaService.js';
 import {
   auditDelayedCheckoutMissingKmForVisit,
+  decideMissingKmReview,
+  refreshMissingKmReviewsForAttendance,
   recalculateFullDayGpsNoSiteVisitKm,
   recalculateFoKm,
   recalculateFoKmBatch,
@@ -932,7 +934,16 @@ function requireFullDayGpsKmPermission(request, response, next) {
 function hasCheckoutMissingKmReviewPermission(profile) {
   if (!profile || profile.is_active !== true) return false;
   if (String(profile.status || '').trim().toLowerCase() !== 'active') return false;
-  return new Set(['ADMIN', 'QPMSADMIN', 'DEVELOPER']).has(
+  return new Set([
+    'ADMIN',
+    'QPMSADMIN',
+    'DEVELOPER',
+    'OPERATIONS_MANAGER',
+    'OPERATIONS MANAGER',
+    'BRANCH_HEAD',
+    'BRANCH HEAD',
+    'MANAGEMENT',
+  ]).has(
     normalizePermissionRole(profile.role),
   );
 }
@@ -7171,15 +7182,12 @@ app.post(
       await assertServiceRoleAuthAdminAccess(client);
       const visitId = String(request.params.visitId || '').trim();
       const action = String(request.body?.action || '').trim().toLowerCase();
-      const remarks = String(request.body?.remarks || '').trim();
-      const reviewSource = String(request.body?.review_source || 'dashboard').trim() || 'dashboard';
-      const adminOverride = request.body?.admin_override === true;
       if (!visitId) {
         response.status(400).json({ ok: false, message: 'visitId is required.' });
         return;
       }
-      if (!['approve', 'reject'].includes(action)) {
-        response.status(400).json({ ok: false, message: 'action must be approve or reject.' });
+      if (!['approve', 'reject', 'clarification'].includes(action)) {
+        response.status(400).json({ ok: false, message: 'action must be approve, reject, or clarification.' });
         return;
       }
 
@@ -7194,145 +7202,70 @@ app.post(
         return;
       }
 
-      let metadata = metadataObject(visit.metadata);
-      if (!metadataBoolean(metadata.requires_checkout_review)) {
-        const audit = await auditDelayedCheckoutMissingKmForVisit(client, visit);
-        const { data: refreshedVisit, error: refreshedError } = await client
-          .from('fo_site_visits')
-          .select('*')
-          .eq('id', visitId)
-          .single();
-        if (refreshedError) throw refreshedError;
-        metadata = metadataObject(refreshedVisit?.metadata);
-        if (!metadataBoolean(metadata.requires_checkout_review)) {
-          response.status(409).json({
-            ok: false,
-            message: 'This site visit does not require delayed checkout KM review.',
-            audit,
-          });
-          return;
-        }
-      }
-      const exceptionType = String(metadata.checkout_exception_type || '').trim().toLowerCase();
-      const hasDelayedCheckoutSuggestion =
-        metadataNumber(metadata.suggested_missing_checkout_km) !== null ||
-        metadataNumber(metadata.suggested_missing_checkout_haversine_km) !== null;
-      if (exceptionType && exceptionType !== 'delayed_far_checkout' && !hasDelayedCheckoutSuggestion) {
-        response.status(409).json({
-          ok: false,
-          message: 'This endpoint only handles delayed far checkout missing KM reviews.',
-        });
-        return;
-      }
-
-      const currentStatus = String(metadata.checkout_review_status || 'pending').trim().toLowerCase();
-      if (currentStatus && currentStatus !== 'pending' && !adminOverride) {
-        response.status(409).json({
-          ok: false,
-          message: `Checkout review is already ${currentStatus}. Use admin_override to change it.`,
-        });
-        return;
-      }
-
-      const nowIso = new Date().toISOString();
-      const actorEmail = request.profile?.email || request.authUser?.email || null;
-      const actorEmployeeCode = request.profile?.employee_code || request.employeeCode || null;
-      const actorRole = request.profile?.role || request.userRole || null;
-      const suggestedKm = metadataNumber(
-        metadata.suggested_missing_checkout_km ??
-          metadata.suggested_missing_checkout_haversine_km,
-      );
-      const toleranceKm = 2;
-      const nextMetadata = {
-        ...metadata,
-        checkout_review_last_action: action,
-        checkout_review_last_action_at: nowIso,
-        checkout_review_last_source: reviewSource,
-        checkout_review_last_actor_role: actorRole,
-        checkout_review_admin_override: adminOverride,
-      };
-
-      let approvedKm = 0;
-      if (action === 'approve') {
-        approvedKm = metadataNumber(request.body?.approved_km);
-        if (approvedKm === null || approvedKm < 0) {
-          response.status(400).json({ ok: false, message: 'approved_km must be a number greater than or equal to 0.' });
-          return;
-        }
-        if (suggestedKm !== null && approvedKm > suggestedKm + toleranceKm && !adminOverride) {
-          response.status(400).json({
-            ok: false,
-            message: `approved_km cannot exceed suggested KM by more than ${toleranceKm} km without admin_override.`,
-          });
-          return;
-        }
-        if (suggestedKm === null && approvedKm > 0 && !adminOverride) {
-          response.status(400).json({
-            ok: false,
-            message: 'admin_override is required when approving KM without a suggested KM.',
-          });
-          return;
-        }
-        nextMetadata.checkout_review_status = 'approved';
-        nextMetadata.approved_missing_checkout_km = Number(approvedKm.toFixed(2));
-        nextMetadata.approved_missing_checkout_amount = Number((approvedKm * 4).toFixed(2));
-        nextMetadata.approved_missing_checkout_adjustment_km = Number(approvedKm.toFixed(2));
-        nextMetadata.approved_missing_checkout_adjustment_amount = Number((approvedKm * 4).toFixed(2));
-        nextMetadata.checkout_review_approved_by = actorEmail;
-        nextMetadata.checkout_review_approved_by_employee_code = actorEmployeeCode;
-        nextMetadata.checkout_review_approval_role = actorRole;
-        nextMetadata.checkout_review_approved_at = nowIso;
-        nextMetadata.checkout_review_approval_remarks = remarks || null;
-        nextMetadata.checkout_review_final_source = 'admin_approved';
-      } else {
-        if (!remarks) {
-          response.status(400).json({ ok: false, message: 'remarks are required when rejecting delayed checkout KM.' });
-          return;
-        }
-        nextMetadata.checkout_review_status = 'rejected';
-        nextMetadata.checkout_review_rejected_by = actorEmail;
-        nextMetadata.checkout_review_rejected_by_employee_code = actorEmployeeCode;
-        nextMetadata.checkout_review_rejection_role = actorRole;
-        nextMetadata.checkout_review_rejected_at = nowIso;
-        nextMetadata.checkout_review_rejection_reason = remarks;
-        nextMetadata.approved_missing_checkout_km = 0;
-        nextMetadata.approved_missing_checkout_amount = 0;
-        nextMetadata.approved_missing_checkout_adjustment_km = 0;
-        nextMetadata.approved_missing_checkout_adjustment_amount = 0;
-      }
-
-      const { data: updatedVisit, error: updateError } = await client
-        .from('fo_site_visits')
-        .update({
-          metadata: nextMetadata,
-          updated_at: nowIso,
-        })
-        .eq('id', visitId)
+      let { data: review, error: reviewError } = await client
+        .from('fo_missing_km_reviews')
         .select('*')
-        .single();
-      if (updateError) throw updateError;
+        .eq('site_visit_id', visitId)
+        .eq('review_type', 'checkout_exception')
+        .maybeSingle();
+      if (reviewError) throw reviewError;
+      if (!review) {
+        const { data: attendance, error: attendanceError } = await client
+          .from('fo_attendance')
+          .select('*')
+          .eq('id', visit.attendance_id)
+          .single();
+        if (attendanceError) throw attendanceError;
+        await refreshMissingKmReviewsForAttendance(client, attendance, [visit], [], {
+          audit_label: 'checkout_review_action',
+        });
+        const refreshed = await client
+          .from('fo_missing_km_reviews')
+          .select('*')
+          .eq('site_visit_id', visitId)
+          .eq('review_type', 'checkout_exception')
+          .maybeSingle();
+        if (refreshed.error) throw refreshed.error;
+        review = refreshed.data;
+      }
+      if (!review?.id) {
+        response.status(409).json({
+          ok: false,
+          message: 'Missing KM review could not be prepared for this checkout exception.',
+        });
+        return;
+      }
 
-      console.log('DELAYED_CHECKOUT_REVIEW_DECISION', {
-        visit_id: visitId,
-        employee_code: visit.employee_code || visit.fo_user_id || null,
-        attendance_id: visit.attendance_id || null,
-        checkout_distance_meters: metadataNumber(nextMetadata.checkout_distance_meters),
-        suggested_missing_checkout_km: suggestedKm,
-        suggested_missing_checkout_amount: metadataNumber(nextMetadata.suggested_missing_checkout_amount),
+      const result = await decideMissingKmReview(
+        client,
+        review.id,
         action,
-        approved_km: action === 'approve' ? approvedKm : 0,
-        approver_employee_code: actorEmployeeCode,
-        approver_role: actorRole,
-        admin_override: adminOverride,
-      });
+        {
+          approved_missing_km: request.body?.approved_missing_km ?? request.body?.approved_km,
+          remarks: request.body?.remarks,
+          requested_clarification: request.body?.requested_clarification || request.body?.clarification,
+          elevated_override: request.body?.elevated_override === true || request.body?.admin_override === true,
+        },
+        {
+          email: request.profile?.email || request.authUser?.email || null,
+          employee_code: request.profile?.employee_code || request.employeeCode || null,
+          full_name: request.profile?.full_name || request.profile?.name || null,
+          role: request.profile?.role || request.userRole || null,
+        },
+      );
 
       response.json({
         ok: true,
         message: action === 'approve'
-          ? 'Delayed checkout missing KM approved for metadata review.'
-          : 'Delayed checkout missing KM rejected.',
-        visit: updatedVisit,
-        payable_application: 'not_connected_no_attendance_totals_changed',
+          ? 'Missing KM approved and attendance totals synchronized.'
+          : action === 'reject'
+            ? 'Missing KM rejected and attendance totals synchronized.'
+            : 'Clarification requested for Missing KM review.',
+        review: result.review,
+        totals: result.totals,
+        payable_application: action === 'approve'
+          ? 'approved_missing_km_added_to_total_approved_km'
+          : 'no_payable_km_added',
       });
     } catch (error) {
       response.status(error.statusCode || 500).json({ ok: false, message: error.message });

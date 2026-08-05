@@ -23,6 +23,8 @@ const DEFAULT_FINAL_RETURN_MISMATCH_MIN_DIFFERENCE_KM = 5;
 const SWITCH_TIME_ANCHOR_MAX_GAP_MINUTES = 60;
 const DELAYED_CHECKOUT_WARNING_THRESHOLD_METERS = 100;
 const DELAYED_CHECKOUT_REVIEW_THRESHOLD_METERS = 1000;
+const MISSING_KM_REVIEW_TYPE = 'checkout_exception';
+const MISSING_KM_APPROVAL_TOLERANCE_KM = 0.01;
 const ATTENDANCE_SELECT_COLUMNS = [
   'id',
   'fo_user_id',
@@ -1121,6 +1123,11 @@ function safeVisitMetadata(visit) {
   return visit?.metadata && typeof visit.metadata === 'object' && !Array.isArray(visit.metadata)
     ? visit.metadata
     : {};
+}
+
+function missingKmReviewTableUnavailable(error) {
+  return ['42P01', 'PGRST205'].includes(error?.code) ||
+    /fo_missing_km_reviews|schema cache|does not exist/i.test(String(error?.message || ''));
 }
 
 function delayedCheckoutReviewStatus(metadata = {}) {
@@ -2988,6 +2995,18 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     persistLegResults: !dryRun,
     auditDelayedCheckout: false,
   });
+  const missingKmReviewResults = dryRun
+    ? []
+    : await refreshMissingKmReviewsForAttendance(
+        client,
+        attendance,
+        visits,
+        legRecalculation.travel_legs || [],
+        {
+          ...options,
+          audit_label: 'canonical_fo_km_recalculation',
+        },
+      );
   const finalTravelLeg = (legRecalculation.travel_legs || []).find(
     (leg) => leg.type === 'last_checkout_to_end_day',
   ) || null;
@@ -3041,12 +3060,15 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   const calculatedPayableKm = canonicalRouteCalculation.routeBasedSelected
     ? canonicalRouteCalculation.calculatedPayableKm
     : Number((legRecalculation.total_route_km || 0).toFixed(2));
+  const approvedMissingKm = await loadApprovedMissingKmSummary(client, attendance.id);
   let approvedKm = calculatedPayableKm;
   if (
     switchFallback?.overridePayableKm &&
     (!canonicalRouteCalculation.routeBasedSelected || options.requireSwitchTimeFallback === true)
   ) {
     approvedKm = switchFallback.approvedKm;
+  } else {
+    approvedKm = Number((approvedKm + approvedMissingKm.approvedKm).toFixed(2));
   }
   let routeSyncStatus = canonicalRouteCalculation.routeBasedSelected
     ? 'gps_travel_leg_based'
@@ -3059,6 +3081,8 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   } else if (!travelPolicy.payableKmAllowed) {
     reviewFlags.push('NON_PAYABLE_TRAVEL_MODE');
     routeSyncStatus = 'non_payable_travel_mode';
+  } else if (approvedMissingKm.approvedKm > 0) {
+    routeSyncStatus = 'canonical_with_approved_missing_km';
   }
   if (
     visits.length === 0 &&
@@ -3080,9 +3104,12 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   if (switchFallback?.metadata?.manual_review_required === true) {
     reviewFlags.push(switchFallback.reviewFlag || 'SWITCH_TIME_FALLBACK_MANUAL_REVIEW');
   }
-  const petrolAmount = canonicalRouteCalculation.routeBasedSelected
-    ? canonicalRouteCalculation.petrolAmount
-    : Number((approvedKm * ratePerKm).toFixed(2));
+  const petrolAmount = Number((
+    (canonicalRouteCalculation.routeBasedSelected
+      ? canonicalRouteCalculation.petrolAmount
+      : Number((calculatedPayableKm * ratePerKm).toFixed(2))) +
+    approvedMissingKm.approvedAmount
+  ).toFixed(2));
   const filteredGpsKm = Number(calculation.acceptedKm.toFixed(2));
   const preSiteSourcingLeg = (legRecalculation.travel_legs || []).find((leg) => (
     leg.type === 'start_to_first_checkin' &&
@@ -3123,6 +3150,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     payable_km_allowed: travelPolicy.payableKmAllowed,
     temporary_switch_time_km_fallback: switchFallback?.applicable === true,
     approved_km: approvedKm,
+    approved_missing_km: approvedMissingKm.approvedKm,
     route_source: routeSyncStatus,
     gps_audit_km: actualTravelKm,
     filtered_gps_km: filteredGpsKm,
@@ -3163,7 +3191,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     : legRecalculation.travel_legs || [];
   const canonicalRouteSyncStatus = 'canonical_end_day_recalculation';
   const attendanceUpdate = {
-    total_route_km: approvedKm,
+    total_route_km: calculatedPayableKm,
     eligible_km: approvedKm,
     total_approved_km: approvedKm,
     petrol_amount: petrolAmount,
@@ -3219,6 +3247,18 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
       approved_adjustment_km: canonicalRouteCalculation.routeBasedSelected
         ? canonicalRouteCalculation.approvedAdjustmentKm
         : 0,
+      approved_missing_km_total: approvedMissingKm.approvedKm,
+      approved_missing_km_amount_total: approvedMissingKm.approvedAmount,
+      approved_missing_km_review_count: approvedMissingKm.count,
+      missing_km_review_results: missingKmReviewResults.map((item) => ({
+        site_visit_id: item.review?.site_visit_id || item.site_visit_id || null,
+        review_id: item.review?.id || null,
+        action: item.action || item.status || null,
+        status: item.review?.status || item.status || null,
+        suggested_missing_km: item.review?.suggested_missing_km ?? null,
+        reason: item.review?.reason_code || item.reason || null,
+      })),
+      total_approved_km_formula: 'canonical_travel_leg_payable_km_plus_approved_missing_km',
       approved_adjustment_included_in_payable: canonicalRouteCalculation.routeBasedSelected,
       approved_adjustments: canonicalRouteCalculation.adjustmentAudits || [],
       approved_adjustment_km_included: canonicalRouteCalculation.approvedAdjustmentKm,
@@ -3276,7 +3316,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
       selected_km_source: legRecalculation.selected_km_source || null,
       travel_leg_payable_km: canonicalRouteCalculation.routeBasedSelected
         ? canonicalRouteCalculation.calculatedPayableKm
-        : approvedKm,
+        : calculatedPayableKm,
       travel_leg_payable_role: canonicalRouteCalculation.routeBasedSelected
         ? 'canonical_payable_travel_windows'
         : 'payable',
@@ -3290,7 +3330,8 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
       gps_fallback_review_flags: [...new Set(gpsFallbackReview.flags)],
       travel_mode: travelPolicy.travelMode,
       payable_km_allowed: travelPolicy.payableKmAllowed,
-      recalculated_total_route_km: approvedKm,
+      recalculated_total_route_km: calculatedPayableKm,
+      recalculated_total_approved_km: approvedKm,
       recalculated_petrol_amount: petrolAmount,
       canonical_recalculation_pending: false,
       km_recalculation_status: 'complete',
@@ -3385,9 +3426,12 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     old_petrol_amount: normalizeNumber(attendance.petrol_amount),
     actual_travel_km: actualTravelKm,
     approved_km: approvedKm,
-    new_total_route_km: approvedKm,
+    approved_missing_km: approvedMissingKm.approvedKm,
+    new_total_route_km: calculatedPayableKm,
+    new_total_approved_km: approvedKm,
     new_petrol_amount: petrolAmount,
-    total_route_km: approvedKm,
+    total_route_km: calculatedPayableKm,
+    total_approved_km: approvedKm,
     petrol_amount: petrolAmount,
     gps_points_total: rows.length,
     gps_points_used: points.length,
@@ -3426,6 +3470,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     travel_leg_valid_points: legRecalculation.valid_points || 0,
     travel_leg_rejected_points: legRecalculation.rejected_points || 0,
     travel_legs: payableTravelLegAudit,
+    missing_km_reviews: missingKmReviewResults,
     gps_log_binding_source: legRecalculation.gps_log_binding_source,
     effective_end_source: legRecalculation.effective_end_source,
     effective_end_time: legRecalculation.effective_end_time,
@@ -3763,6 +3808,441 @@ export async function reconcileFinalLegOnly(serviceRoleClient, payload = {}, opt
     final_leg_valid_points: calculation.validPoints || 0,
     dry_run: dryRun,
   };
+}
+
+function checkoutExceptionRequiresReview(visit) {
+  const metadata = safeVisitMetadata(visit);
+  const status = String(
+    visit?.checkout_location_status ||
+      metadata.checkout_location_status ||
+      metadata.checkout_status ||
+      '',
+  ).trim().toLowerCase();
+  const distance = normalizeNumber(
+    visit?.checkout_distance_meters ??
+      metadata.checkout_distance_meters ??
+      metadata.checkout_distance_from_site_meters ??
+      metadata.distance_from_site_meters,
+  );
+  return (
+    status.includes('wrong') ||
+    status.includes('delayed') ||
+    status.includes('away') ||
+    metadata.requires_checkout_review === true ||
+    (Number.isFinite(distance) && distance > DELAYED_CHECKOUT_REVIEW_THRESHOLD_METERS)
+  );
+}
+
+function missingKmOriginForVisit(visit) {
+  const checkIn = visitCheckInCoordinate(visit);
+  if (checkIn) return { ...checkIn, source: 'check_in_coordinate' };
+  const site = coordinateFrom(visit, ['destination_lat', 'origin_lat'], ['destination_lng', 'origin_lng']);
+  return site ? { ...site, source: 'site_coordinate' } : null;
+}
+
+function missingKmDestinationForVisit(visit) {
+  const checkout = visitCheckOutCoordinate(visit);
+  return checkout ? { ...checkout, source: 'checkout_coordinate' } : null;
+}
+
+function windowsOverlap(startA, endA, startB, endB) {
+  const a1 = parseValidDate(startA);
+  const a2 = parseValidDate(endA);
+  const b1 = parseValidDate(startB);
+  const b2 = parseValidDate(endB);
+  return Boolean(a1 && a2 && b1 && b2 && a1 < b2 && b1 < a2);
+}
+
+function overlapsCanonicalLegs(windowStart, windowEnd, travelLegs = []) {
+  return travelLegs.some((leg) => (
+    leg?.status === 'calculated' &&
+    windowsOverlap(windowStart, windowEnd, leg.from_time || leg.started_at, leg.to_time || leg.ended_at)
+  ));
+}
+
+function missingKmReviewPayloadFromCalculation({
+  attendance,
+  visit,
+  origin,
+  destination,
+  windowStart,
+  windowEnd,
+  rows = [],
+  calculation = {},
+  googleKm = null,
+  straightLineKm = null,
+  overlap = false,
+  options = {},
+}) {
+  const points = cleanGpsLogs(rows);
+  const rawGpsKm = Number(calculateRawGpsKm(points).toFixed(2));
+  const filteredGpsKm = Number(Number(calculation.actualTravelKm || 0).toFixed(2));
+  const acceptedKm = Number(Number(calculation.acceptedKm || 0).toFixed(2));
+  const reconstructedKm = Number(Number(calculation.reconstructedKm || 0).toFixed(2));
+  const validRatio = rows.length > 0 ? points.length / rows.length : 0;
+  const gpsUsable =
+    rows.length >= MIN_WINDOW_RAW_GPS_ROWS &&
+    points.length >= MIN_WINDOW_VALID_GPS_POINTS &&
+    validRatio >= MIN_WINDOW_VALID_GPS_RATIO &&
+    filteredGpsKm > 0;
+  let suggestedMissingKm = 0;
+  let calculationSource = 'no_reliable_route_evidence';
+  let evidenceQuality = 'manual_review_required';
+  const reasonCodes = [];
+
+  if (overlap) reasonCodes.push('CHECKOUT_WINDOW_OVERLAPS_CANONICAL_TRAVEL_LEG');
+  if (checkoutExceptionRequiresReview(visit)) reasonCodes.push('CHECKOUT_AWAY_FROM_SITE');
+  if (rows.length < MIN_WINDOW_RAW_GPS_ROWS) reasonCodes.push('CHECKOUT_GPS_INCOMPLETE');
+
+  if (!overlap && gpsUsable) {
+    suggestedMissingKm = filteredGpsKm;
+    calculationSource = reconstructedKm > 0 ? 'gps_reconstructed_path' : 'gps_path';
+    evidenceQuality = reconstructedKm > 0 ? 'medium' : 'high';
+  } else if (!overlap && Number.isFinite(googleKm) && googleKm > 0) {
+    suggestedMissingKm = Number(googleKm.toFixed(2));
+    calculationSource = 'google_route';
+    evidenceQuality = 'medium';
+    reasonCodes.push('CHECKOUT_GOOGLE_FALLBACK');
+  } else {
+    calculationSource = Number.isFinite(straightLineKm) && straightLineKm > 0
+      ? 'straight_line_supporting_evidence'
+      : 'no_reliable_route_evidence';
+    evidenceQuality = 'manual_review_required';
+    reasonCodes.push('CHECKOUT_NO_RELIABLE_EVIDENCE');
+  }
+
+  const ratePerKm = ratePerKmForTravelMode(visit?.travel_mode || attendance?.travel_mode, attendance?.rate_per_km);
+  const roundedSuggestedKm = Number(Number(suggestedMissingKm || 0).toFixed(2));
+  return {
+    attendance_id: attendance.id,
+    site_visit_id: visit.id,
+    employee_code: visit.employee_code || attendance.employee_code || attendance.fo_user_id,
+    review_type: MISSING_KM_REVIEW_TYPE,
+    window_start_time: isoOrNull(windowStart),
+    window_end_time: isoOrNull(windowEnd),
+    origin_latitude: origin?.latitude ?? null,
+    origin_longitude: origin?.longitude ?? null,
+    destination_latitude: destination?.latitude ?? null,
+    destination_longitude: destination?.longitude ?? null,
+    checkout_distance_meters: normalizeNumber(visit.checkout_distance_meters ?? safeVisitMetadata(visit).checkout_distance_meters),
+    raw_gps_km: rawGpsKm,
+    filtered_gps_km: filteredGpsKm,
+    google_route_km: Number.isFinite(googleKm) ? Number(googleKm.toFixed(2)) : null,
+    straight_line_km: Number.isFinite(straightLineKm) ? Number(straightLineKm.toFixed(2)) : null,
+    suggested_missing_km: roundedSuggestedKm,
+    rate_per_km: ratePerKm,
+    suggested_amount: Number((roundedSuggestedKm * ratePerKm).toFixed(2)),
+    calculation_source: calculationSource,
+    evidence_quality: evidenceQuality,
+    status: 'pending',
+    reason_code: [...new Set(reasonCodes)].join(',') || 'CHECKOUT_DISTANCE_REVIEW_REQUIRED',
+    metadata: {
+      origin_source: origin?.source || null,
+      destination_source: destination?.source || null,
+      gps_log_count: rows.length,
+      valid_gps_count: points.length,
+      valid_gps_ratio: Number(validRatio.toFixed(4)),
+      accepted_gps_km: acceptedKm,
+      reconstructed_gap_km: reconstructedKm,
+      overlap_with_canonical_travel_leg: overlap,
+      calculated_at: new Date().toISOString(),
+      ...(options.audit_label ? { audit_label: options.audit_label } : {}),
+    },
+  };
+}
+
+async function writeMissingKmReviewSummaryToVisit(client, visitId, review, existingMetadata = {}) {
+  const nextMetadata = {
+    ...existingMetadata,
+    requires_checkout_review: true,
+    checkout_exception_type: existingMetadata.checkout_exception_type || 'delayed_far_checkout',
+    checkout_review_status: review.status,
+    checkout_review_id: review.id || existingMetadata.checkout_review_id || null,
+    missing_checkout_review_id: review.id || existingMetadata.missing_checkout_review_id || null,
+    suggested_missing_checkout_km: normalizeNumber(review.suggested_missing_km) || 0,
+    suggested_missing_checkout_amount: normalizeNumber(review.suggested_amount) || 0,
+    suggested_missing_checkout_source: review.calculation_source || null,
+    suggested_missing_checkout_evidence_quality: review.evidence_quality || null,
+    suggested_missing_checkout_reason_code: review.reason_code || null,
+    suggested_missing_checkout_calculated_at: review.updated_at || review.created_at || new Date().toISOString(),
+    suggested_missing_checkout_origin: {
+      latitude: normalizeNumber(review.origin_latitude),
+      longitude: normalizeNumber(review.origin_longitude),
+    },
+    suggested_missing_checkout_destination: {
+      latitude: normalizeNumber(review.destination_latitude),
+      longitude: normalizeNumber(review.destination_longitude),
+    },
+    missing_checkout_window_start_time: review.window_start_time || null,
+    missing_checkout_window_end_time: review.window_end_time || null,
+    raw_missing_checkout_gps_km: normalizeNumber(review.raw_gps_km) || 0,
+    filtered_missing_checkout_gps_km: normalizeNumber(review.filtered_gps_km) || 0,
+    google_missing_checkout_route_km: normalizeNumber(review.google_route_km),
+    straight_line_missing_checkout_km: normalizeNumber(review.straight_line_km),
+    approved_missing_checkout_km: normalizeNumber(review.approved_missing_km) || 0,
+    approved_missing_checkout_amount: normalizeNumber(review.approved_amount) || 0,
+    approved_missing_checkout_adjustment_km: normalizeNumber(review.approved_missing_km) || 0,
+    approved_missing_checkout_adjustment_amount: normalizeNumber(review.approved_amount) || 0,
+    checkout_review_last_action_at: review.reviewed_at || existingMetadata.checkout_review_last_action_at || null,
+    checkout_review_remarks: review.review_remarks || existingMetadata.checkout_review_remarks || null,
+    checkout_review_clarification: review.requested_clarification || existingMetadata.checkout_review_clarification || null,
+  };
+  const { error } = await client
+    .from('fo_site_visits')
+    .update({ metadata: nextMetadata, updated_at: new Date().toISOString() })
+    .eq('id', visitId);
+  if (error) throw error;
+}
+
+async function upsertMissingKmReview(client, payload, visit) {
+  const metadata = safeVisitMetadata(visit);
+  const { data: existing, error: lookupError } = await client
+    .from('fo_missing_km_reviews')
+    .select('*')
+    .eq('attendance_id', payload.attendance_id)
+    .eq('site_visit_id', payload.site_visit_id)
+    .eq('review_type', payload.review_type)
+    .maybeSingle();
+  if (lookupError) throw lookupError;
+
+  if (existing && String(existing.status || '').toLowerCase() !== 'pending') {
+    await writeMissingKmReviewSummaryToVisit(client, visit.id, existing, metadata);
+    return { review: existing, action: 'preserved_final_review' };
+  }
+
+  const values = existing
+    ? {
+        ...payload,
+        approved_missing_km: existing.approved_missing_km || 0,
+        approved_amount: existing.approved_amount || 0,
+        updated_at: new Date().toISOString(),
+        metadata: { ...(existing.metadata || {}), ...(payload.metadata || {}) },
+      }
+    : payload;
+  const query = existing
+    ? client
+        .from('fo_missing_km_reviews')
+        .update(values)
+        .eq('id', existing.id)
+        .select('*')
+        .single()
+    : client
+        .from('fo_missing_km_reviews')
+        .insert(values)
+        .select('*')
+        .single();
+  const { data, error } = await query;
+  if (error) throw error;
+  await writeMissingKmReviewSummaryToVisit(client, visit.id, data, metadata);
+  return { review: data, action: existing ? 'updated_pending_review' : 'created_pending_review' };
+}
+
+export async function refreshMissingKmReviewsForAttendance(client, attendance, visits = [], travelLegs = [], options = {}) {
+  const results = [];
+  for (const visit of visits) {
+    if (!visit?.id || !checkoutExceptionRequiresReview(visit)) continue;
+    const windowStart = visitCheckInTime(visit);
+    const windowEnd = visitCheckOutTime(visit);
+    const origin = missingKmOriginForVisit(visit);
+    const destination = missingKmDestinationForVisit(visit);
+    if (!windowStart || !windowEnd || !origin || !destination || windowEnd <= windowStart) {
+      results.push({ site_visit_id: visit.id, status: 'skipped', reason: 'missing_review_window_or_coordinates' });
+      continue;
+    }
+    const evidence = await loadGpsLogsForWindowWithBinding(client, attendance, windowStart, windowEnd);
+    const points = cleanGpsLogs(evidence.rows);
+    const calculation = points.length >= 2
+      ? await calculateActualTravelKm(points, options)
+      : { actualTravelKm: 0, acceptedKm: 0, reconstructedKm: 0, segmentSummary: [] };
+    const straightLineKm = haversineKm(origin, destination);
+    let googleKm = null;
+    try {
+      googleKm = await googleDirectionsKm(origin, destination, options);
+    } catch {
+      googleKm = null;
+    }
+    const payload = missingKmReviewPayloadFromCalculation({
+      attendance,
+      visit,
+      origin,
+      destination,
+      windowStart,
+      windowEnd,
+      rows: evidence.rows,
+      calculation,
+      googleKm,
+      straightLineKm,
+      overlap: overlapsCanonicalLegs(windowStart, windowEnd, travelLegs),
+      options,
+    });
+    try {
+      results.push(await upsertMissingKmReview(client, payload, visit));
+    } catch (error) {
+      if (missingKmReviewTableUnavailable(error)) {
+        results.push({ site_visit_id: visit.id, status: 'skipped', reason: 'missing_km_review_table_unavailable' });
+        continue;
+      }
+      throw error;
+    }
+  }
+  return results;
+}
+
+export async function loadApprovedMissingKmSummary(client, attendanceId) {
+  try {
+    const { data, error } = await client
+      .from('fo_missing_km_reviews')
+      .select('approved_missing_km, approved_amount, status')
+      .eq('attendance_id', attendanceId)
+      .eq('status', 'approved');
+    if (error) throw error;
+    return (data || []).reduce((summary, row) => ({
+      approvedKm: Number((summary.approvedKm + Number(row.approved_missing_km || 0)).toFixed(2)),
+      approvedAmount: Number((summary.approvedAmount + Number(row.approved_amount || 0)).toFixed(2)),
+      count: summary.count + 1,
+    }), { approvedKm: 0, approvedAmount: 0, count: 0 });
+  } catch (error) {
+    if (missingKmReviewTableUnavailable(error)) return { approvedKm: 0, approvedAmount: 0, count: 0 };
+    throw error;
+  }
+}
+
+export async function syncAttendanceApprovedKmTotals(client, attendanceId) {
+  const attendance = await findAttendance(client, { attendance_id: attendanceId });
+  const { data: legs, error: legsError } = await client
+    .from('fo_travel_legs')
+    .select('payable_km,payable_amount,fare_amount,status')
+    .eq('attendance_id', attendanceId);
+  if (legsError) throw legsError;
+  const legKm = Number((legs || []).reduce((sum, leg) => (
+    String(leg.status || '').toLowerCase() === 'completed'
+      ? sum + Number(leg.payable_km || 0)
+      : sum
+  ), 0).toFixed(2));
+  const legAmount = Number((legs || []).reduce((sum, leg) => (
+    String(leg.status || '').toLowerCase() === 'completed'
+      ? sum + Number(leg.payable_amount ?? leg.fare_amount ?? 0)
+      : sum
+  ), 0).toFixed(2));
+  const approvedMissing = await loadApprovedMissingKmSummary(client, attendanceId);
+  const totalApprovedKm = Number((legKm + approvedMissing.approvedKm).toFixed(2));
+  const petrolAmount = Number((legAmount + approvedMissing.approvedAmount).toFixed(2));
+  const metadata = {
+    ...safeAttendanceMetadata(attendance),
+    canonical_travel_leg_payable_km: legKm,
+    approved_missing_km_total: approvedMissing.approvedKm,
+    approved_missing_km_amount_total: approvedMissing.approvedAmount,
+    approved_missing_km_review_count: approvedMissing.count,
+    total_approved_km_formula: 'canonical_travel_leg_payable_km_plus_approved_missing_km',
+    missing_km_totals_synced_at: new Date().toISOString(),
+  };
+  const update = {
+    total_route_km: legKm,
+    eligible_km: totalApprovedKm,
+    total_approved_km: totalApprovedKm,
+    petrol_amount: petrolAmount,
+    route_sync_status: approvedMissing.approvedKm > 0
+      ? 'canonical_with_approved_missing_km'
+      : attendance.route_sync_status || 'canonical_end_day_recalculation',
+    metadata,
+    updated_at: new Date().toISOString(),
+  };
+  const { error } = await client.from('fo_attendance').update(update).eq('id', attendanceId);
+  if (error) throw error;
+  return {
+    attendance_id: attendanceId,
+    canonical_travel_leg_payable_km: legKm,
+    approved_missing_km: approvedMissing.approvedKm,
+    total_approved_km: totalApprovedKm,
+    petrol_amount: petrolAmount,
+    approved_missing_review_count: approvedMissing.count,
+  };
+}
+
+export async function decideMissingKmReview(client, reviewId, action, payload = {}, actor = {}) {
+  const normalizedAction = String(action || '').trim().toLowerCase();
+  if (!['approve', 'reject', 'clarification'].includes(normalizedAction)) {
+    const error = new Error('action must be approve, reject, or clarification.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const { data: review, error: reviewError } = await client
+    .from('fo_missing_km_reviews')
+    .select('*')
+    .eq('id', reviewId)
+    .single();
+  if (reviewError) throw reviewError;
+  const remarks = String(payload.remarks || payload.review_remarks || '').trim();
+  const clarification = String(payload.requested_clarification || payload.clarification || '').trim();
+  const now = new Date().toISOString();
+  const rate = normalizeNumber(review.rate_per_km) || RATE_PER_KM;
+  let approvedKm = 0;
+  let status = 'rejected';
+  if (normalizedAction === 'approve') {
+    approvedKm = normalizeNumber(payload.approved_missing_km ?? payload.approved_km);
+    if (!Number.isFinite(approvedKm) || approvedKm < 0) {
+      const error = new Error('approved_missing_km must be a non-negative number.');
+      error.statusCode = 400;
+      throw error;
+    }
+    const suggestedKm = normalizeNumber(review.suggested_missing_km) || 0;
+    if (approvedKm > suggestedKm + MISSING_KM_APPROVAL_TOLERANCE_KM && !payload.elevated_override) {
+      const error = new Error('Approved KM above suggestion requires elevated_override and justification.');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (approvedKm > suggestedKm + MISSING_KM_APPROVAL_TOLERANCE_KM && !remarks) {
+      const error = new Error('Remarks are required when approving above suggested KM.');
+      error.statusCode = 400;
+      throw error;
+    }
+    status = 'approved';
+  } else if (normalizedAction === 'reject') {
+    if (!remarks) {
+      const error = new Error('Remarks are required when rejecting Missing KM.');
+      error.statusCode = 400;
+      throw error;
+    }
+    status = 'rejected';
+  } else {
+    if (!clarification) {
+      const error = new Error('Clarification message is required.');
+      error.statusCode = 400;
+      throw error;
+    }
+    status = 'clarification_required';
+  }
+  const update = {
+    status,
+    approved_missing_km: status === 'approved' ? Number(approvedKm.toFixed(2)) : 0,
+    approved_amount: status === 'approved' ? Number((approvedKm * rate).toFixed(2)) : 0,
+    requested_clarification: status === 'clarification_required' ? clarification : null,
+    reviewer_employee_code: actor.employee_code || null,
+    reviewer_name: actor.full_name || actor.display_name || actor.email || null,
+    reviewed_at: now,
+    review_remarks: remarks || null,
+    updated_at: now,
+    metadata: {
+      ...(review.metadata || {}),
+      review_action: normalizedAction,
+      reviewed_by_role: actor.role || null,
+    },
+  };
+  const { data: updated, error: updateError } = await client
+    .from('fo_missing_km_reviews')
+    .update(update)
+    .eq('id', reviewId)
+    .select('*')
+    .single();
+  if (updateError) throw updateError;
+  const { data: visit } = await client
+    .from('fo_site_visits')
+    .select('id, metadata')
+    .eq('id', updated.site_visit_id)
+    .maybeSingle();
+  if (visit?.id) await writeMissingKmReviewSummaryToVisit(client, visit.id, updated, safeVisitMetadata(visit));
+  const totals = await syncAttendanceApprovedKmTotals(client, updated.attendance_id);
+  return { review: updated, totals };
 }
 
 export async function reconcileFinalLegOnlyBatch(serviceRoleClient, payload = {}, options = {}) {
