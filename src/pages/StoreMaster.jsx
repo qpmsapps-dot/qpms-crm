@@ -21,6 +21,7 @@ import {
 } from '../services/api.js';
 import { useAuth } from '../context/auth-context.js';
 import { demoReadOnlyMessage, isReadOnlyUser } from '../utils/demoAccess.js';
+import { buildStoreMasterExportRows, fetchAllStoreMasterRows } from '../utils/storeMasterExport.js';
 
 const DEFAULT_STATES = ['TN', 'AP', 'KA', 'KL', 'TG'];
 const DEFAULT_BUSINESSES = [
@@ -332,6 +333,7 @@ export default function StoreMaster() {
   const [selectedRow, setSelectedRow] = useState(null);
   const [form, setForm] = useState(emptyForm());
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const errors = useMemo(() => (drawerMode === 'view' ? {} : validateForm(form)), [drawerMode, form]);
   const totalPages = Math.max(1, Math.ceil((pagination.total || 0) / PAGE_LIMIT));
@@ -429,30 +431,20 @@ export default function StoreMaster() {
   }
 
   async function exportExcel() {
+    if (exporting) return;
+    setExporting(true);
+    setMessage('Preparing Store Master export...');
     try {
-      const payload = await getStoreMaster({
-        ...filters,
-        page: 1,
-        limit: 5000,
-      });
-      const exportRows = (payload.rows || []).map((row) => ({
-        'Store Code': row.store_code || '',
-        'Store Name': row.store_name || '',
-        'Site Name': row.site_name || '',
-        'Client Name': row.client_name || '',
-        Business: row.business || '',
-        State: row.state || '',
-        Latitude: row.latitude ?? '',
-        Longitude: row.longitude ?? '',
-        'GPS Accuracy': row.gps_accuracy ?? '',
-        'Updated At': formatDateTime(row.updated_at),
-        Status: row.status || '',
-      }));
+      const allRows = await fetchAllStoreMasterRows(getStoreMaster, filters);
+      const exportRows = buildStoreMasterExportRows(allRows, formatDateTime);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(exportRows), 'Store Master');
       XLSX.writeFile(workbook, 'Store_Master.xlsx');
+      setMessage(`${allRows.length.toLocaleString('en-IN')} stores exported successfully.`);
     } catch (error) {
       setMessage(error.message || 'Export failed.');
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -514,8 +506,8 @@ export default function StoreMaster() {
           <button type="button" onClick={resetFilters} className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-600 hover:bg-slate-50">
             <RefreshCw className="h-4 w-4" /> Reset
           </button>
-          <button type="button" onClick={exportExcel} className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-black text-emerald-700 hover:bg-emerald-100">
-            <Download className="h-4 w-4" /> Export Excel
+          <button type="button" onClick={exportExcel} disabled={exporting} className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-black text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60">
+            <Download className="h-4 w-4" /> {exporting ? 'Preparing export...' : 'Export Excel'}
           </button>
           {demoReadOnly ? (
             <span className="inline-flex h-10 items-center rounded-xl border border-amber-200 bg-amber-50 px-4 text-sm font-black text-amber-800">

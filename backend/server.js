@@ -4202,7 +4202,9 @@ app.get('/api/store-master', requireSupabaseJwtOrDemoApiRead, requireStoreMaster
   try {
     const client = requireServiceRoleSupabase();
     const page = Math.max(1, Number.parseInt(String(request.query.page || '1'), 10) || 1);
-    const limit = Math.min(100, Math.max(1, Number.parseInt(String(request.query.limit || '10'), 10) || 10));
+    const isExportRequest = /^true$/i.test(String(request.query.exportAll || ''));
+    const maxLimit = isExportRequest ? 1000 : 100;
+    const limit = Math.min(maxLimit, Math.max(1, Number.parseInt(String(request.query.limit || '10'), 10) || 10));
     const from = (page - 1) * limit;
     const to = from + limit - 1;
     const search = textOrNull(request.query.search);
@@ -4214,8 +4216,12 @@ app.get('/api/store-master', requireSupabaseJwtOrDemoApiRead, requireStoreMaster
     let query = client
       .from('store_master')
       .select(STORE_MASTER_SELECT, { count: 'exact' })
-      .order('updated_at', { ascending: false })
       .range(from, to);
+    if (isExportRequest) {
+      query = query.order('created_at', { ascending: true, nullsFirst: false }).order('id', { ascending: true });
+    } else {
+      query = query.order('updated_at', { ascending: false }).order('id', { ascending: true });
+    }
     if (search) {
       const safeSearch = search.replace(/[,%]/g, ' ').trim();
       query = query.or(
