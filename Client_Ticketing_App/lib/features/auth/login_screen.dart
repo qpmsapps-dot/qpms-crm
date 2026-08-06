@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../app/client_ticket_deep_link.dart';
 import '../../app/routes.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/widgets/logo_mark.dart';
@@ -201,7 +202,20 @@ class _LoginScreenState extends State<LoginScreen> {
       await tickets.load();
       await notifications.load();
       if (!mounted) return;
-      Navigator.pushReplacementNamed(context, AppRoutes.dashboard);
+      final pendingLink = PendingClientTicketDeepLink.take();
+      if (pendingLink != null) {
+        if (pendingLink.hasTicket) {
+          await tickets.loadDetail(pendingLink.ticketNumber!);
+        }
+        if (!mounted) return;
+        Navigator.pushReplacementNamed(
+          context,
+          pendingLink.targetRoute,
+          arguments: pendingLink.ticketNumber,
+        );
+      } else {
+        Navigator.pushReplacementNamed(context, AppRoutes.dashboard);
+      }
     } else {
       setState(
         () => _error =

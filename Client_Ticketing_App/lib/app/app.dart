@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../features/deep_links/hospital_ticket_deep_link_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/dashboard/dashboard_screen.dart';
 import '../features/locations/locations_screen.dart';
@@ -18,6 +19,7 @@ import '../state/auth_controller.dart';
 import '../state/notification_controller.dart';
 import '../state/ticket_controller.dart';
 import '../services/client_push_service.dart';
+import 'client_ticket_deep_link.dart';
 import 'routes.dart';
 import 'theme.dart';
 
@@ -64,7 +66,9 @@ class _QpmsClientTicketingAppState extends State<QpmsClientTicketingApp> {
         title: 'QPMS Client Ticketing',
         debugShowCheckedModeBanner: false,
         theme: buildQpmsTheme(),
-        initialRoute: AppRoutes.splash,
+        initialRoute: ClientTicketDeepLink.initialRouteName(
+          WidgetsBinding.instance.platformDispatcher.defaultRouteName,
+        ),
         routes: {
           AppRoutes.splash: (_) => const SplashScreen(),
           AppRoutes.login: (_) => const LoginScreen(),
@@ -95,6 +99,13 @@ class _QpmsClientTicketingAppState extends State<QpmsClientTicketingApp> {
             return MaterialPageRoute(
               builder: (_) =>
                   FeedbackScreen(ticketNumber: settings.arguments as String),
+            );
+          }
+          final deepLink = ClientTicketDeepLink.parse(settings.name);
+          if (deepLink != null) {
+            return MaterialPageRoute(
+              builder: (_) =>
+                  HospitalTicketDeepLinkScreen(destination: deepLink),
             );
           }
           return null;

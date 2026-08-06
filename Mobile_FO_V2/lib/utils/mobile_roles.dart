@@ -161,6 +161,61 @@ bool canAccessBusinessDevelopmentModule(String role) {
   }
 }
 
+bool canAccessHospitalTicketingLauncher(String role) {
+  final normalizedRole = _normalizedMobileRole(role);
+  if (const {
+    'HOUSEKEEPINGSUPERVISOR',
+    'SUPERVISOR',
+    'OPERATIONSEXECUTIVE',
+    'FACILITYMANAGER',
+    'PROJECTHEAD',
+    'HOSPITALDEAN',
+    'HOSPITALMANAGEMENT',
+    'DEMO',
+    'DEMOPREVIEW',
+    'DEMOPRESENTER',
+  }.contains(normalizedRole)) {
+    return true;
+  }
+  try {
+    return const {
+      'Admin',
+      'QPMS Admin',
+      'Developer',
+      'COO',
+      'GM',
+      'MD',
+      'Operations Manager',
+      'Branch Head',
+    }.contains(canonicalMobileRole(role));
+  } catch (_) {
+    return false;
+  }
+}
+
+bool hasHospitalTicketingDemoPreview(String role) {
+  final normalizedRole = _normalizedMobileRole(role);
+  if (const {
+    'DEMO',
+    'DEMOPREVIEW',
+    'DEMOPRESENTER',
+    'ADMIN',
+    'QPMSADMIN',
+    'DEVELOPER',
+  }.contains(normalizedRole)) {
+    return true;
+  }
+  try {
+    return const {
+      'Admin',
+      'QPMS Admin',
+      'Developer',
+    }.contains(canonicalMobileRole(role));
+  } catch (_) {
+    return false;
+  }
+}
+
 bool canCreateBusinessDevelopmentLead(String role) {
   try {
     return const {

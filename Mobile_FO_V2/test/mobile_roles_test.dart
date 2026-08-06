@@ -142,6 +142,49 @@ void main() {
     expect(canAccessBusinessDevelopmentModule('FO'), isFalse);
   });
 
+  test('hospital ticketing launcher appears for admin and hospital roles', () {
+    for (final role in [
+      'Admin',
+      'QPMS Admin',
+      'Developer',
+      'Operations Manager',
+      'Branch Head',
+      'housekeeping_supervisor',
+      'operations_executive',
+      'facility_manager',
+      'project_head',
+      'hospital_dean',
+      'demo_presenter',
+    ]) {
+      expect(canAccessHospitalTicketingLauncher(role), isTrue, reason: role);
+    }
+  });
+
+  test(
+    'hospital ticketing launcher does not grant access to normal FO users',
+    () {
+      for (final role in ['FO', 'KAM', 'BD Executive', 'Employee']) {
+        expect(canAccessHospitalTicketingLauncher(role), isFalse, reason: role);
+      }
+    },
+  );
+
+  test(
+    'hospital ticketing demo preview label is limited to admin demo roles',
+    () {
+      for (final role in ['Admin', 'QPMS Admin', 'Developer', 'demo-preview']) {
+        expect(hasHospitalTicketingDemoPreview(role), isTrue, reason: role);
+      }
+      for (final role in [
+        'FO',
+        'Operations Manager',
+        'housekeeping_supervisor',
+      ]) {
+        expect(hasHospitalTicketingDemoPreview(role), isFalse, reason: role);
+      }
+    },
+  );
+
   test('lead creation is restricted to approved mobile roles', () {
     for (final role in ['BD Executive', 'Admin', 'COO', 'GM', 'MD']) {
       expect(canCreateBusinessDevelopmentLead(role), isTrue, reason: role);

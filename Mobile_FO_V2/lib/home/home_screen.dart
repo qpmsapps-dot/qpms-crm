@@ -29,10 +29,16 @@ import '../utils/local_id.dart';
 import '../utils/mobile_roles.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({required this.user, required this.onLogout, super.key});
+  const HomeScreen({
+    required this.user,
+    required this.onLogout,
+    this.onOpenHospitalTicketing,
+    super.key,
+  });
 
   final FoUser user;
   final Future<void> Function() onLogout;
+  final VoidCallback? onOpenHospitalTicketing;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -2158,6 +2164,10 @@ class _HomeScreenState extends State<HomeScreen>
           _homeHeader(),
           const SizedBox(height: 22),
           _overviewCard(),
+          if (_showHospitalTicketingEntry) ...[
+            const SizedBox(height: 16),
+            _hospitalTicketingQuickAccessCard(),
+          ],
           const SizedBox(height: 16),
           if (active) ...[_travelModeCard(), const SizedBox(height: 16)],
           if (_showTrackingDebug) ...[
@@ -2195,7 +2205,7 @@ class _HomeScreenState extends State<HomeScreen>
         Row(
           children: [
             IconButton(
-              onPressed: () {},
+              onPressed: _openHomeMenu,
               icon: const Icon(Icons.menu_rounded, color: qpmsBlue, size: 30),
             ),
             const Spacer(),
@@ -2284,6 +2294,130 @@ class _HomeScreenState extends State<HomeScreen>
         const SizedBox(height: 14),
         FoStatusBadge(label: statusLabel, color: statusColor, showDot: active),
       ],
+    );
+  }
+
+  bool get _showHospitalTicketingEntry =>
+      widget.onOpenHospitalTicketing != null &&
+      canAccessHospitalTicketingLauncher(widget.user.role);
+
+  void _openHospitalTicketing() {
+    final callback = widget.onOpenHospitalTicketing;
+    if (callback != null) callback();
+  }
+
+  void _openHomeMenu() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 8, 18, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const CircleAvatar(
+                  backgroundColor: qpmsLight,
+                  child: Icon(Icons.account_circle_outlined, color: qpmsBlue),
+                ),
+                title: Text(
+                  widget.user.fullName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                subtitle: Text(widget.user.employeeCode),
+              ),
+              if (_showHospitalTicketingEntry)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const CircleAvatar(
+                    backgroundColor: qpmsLight,
+                    child: Icon(
+                      Icons.confirmation_number_outlined,
+                      color: qpmsBlue,
+                    ),
+                  ),
+                  title: const Text(
+                    'Hospital Ticketing',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: const Text('QPMS client and operations views'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _openHospitalTicketing();
+                  },
+                ),
+              const Divider(height: 20),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0xFFFFF1F2),
+                  child: Icon(Icons.logout_rounded, color: Color(0xFFE11D48)),
+                ),
+                title: const Text(
+                  'Logout',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  unawaited(widget.onLogout());
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _hospitalTicketingQuickAccessCard() {
+    return FoCard(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: _openHospitalTicketing,
+        child: Row(
+          children: [
+            const FoIconCircle(
+              icon: Icons.confirmation_number_outlined,
+              color: qpmsBlue,
+            ),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Hospital Ticketing',
+                    style: TextStyle(
+                      color: foNavy,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  SizedBox(height: 5),
+                  Text(
+                    'Open QPMS client and operations workflows.',
+                    style: TextStyle(
+                      color: Color(0xFF53607D),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (hasHospitalTicketingDemoPreview(widget.user.role)) ...[
+              const SizedBox(width: 8),
+              const FoStatusBadge(label: 'Demo Access', color: foPurple),
+            ],
+            const SizedBox(width: 8),
+            const Icon(Icons.chevron_right_rounded, color: qpmsBlue),
+          ],
+        ),
+      ),
     );
   }
 

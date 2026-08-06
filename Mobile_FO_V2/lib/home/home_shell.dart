@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../bd/bd_shell.dart';
+import '../hospital_housekeeping/hospital_models.dart';
+import '../hospital_housekeeping/hospital_ticket_api.dart';
+import '../hospital_housekeeping/hospital_ticketing_launcher_screen.dart';
 import '../models/fo_models.dart';
 import '../profile/profile_screen.dart';
 import '../tasks/tasks_screen.dart';
@@ -11,10 +14,16 @@ import '../utils/mobile_roles.dart';
 import 'home_screen.dart';
 
 class HomeShell extends StatefulWidget {
-  const HomeShell({required this.user, required this.onLogout, super.key});
+  const HomeShell({
+    required this.user,
+    required this.onLogout,
+    required this.onHospitalSession,
+    super.key,
+  });
 
   final FoUser user;
   final Future<void> Function() onLogout;
+  final ValueChanged<HospitalDemoSession> onHospitalSession;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -55,6 +64,7 @@ class _HomeShellState extends State<HomeShell> {
       HomeScreen(
         user: widget.user,
         onLogout: widget.onLogout,
+        onOpenHospitalTicketing: _openHospitalTicketingLauncher,
         key: const PageStorageKey('home'),
       ),
       TasksScreen(
@@ -202,5 +212,23 @@ class _HomeShellState extends State<HomeShell> {
         ),
       ),
     );
+  }
+
+  void _openHospitalTicketingLauncher() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => HospitalTicketingLauncherScreen(
+          user: widget.user,
+          openOperations: _openHospitalOperations,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openHospitalOperations() async {
+    final session = await HospitalTicketApi.discoverCurrentInternalSession(
+      emailHint: widget.user.email,
+    );
+    widget.onHospitalSession(session);
   }
 }

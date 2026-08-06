@@ -278,7 +278,11 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
         onHospitalDemoAuthenticated: _setHospitalDemoSession,
       );
     }
-    return HomeShell(user: _user!, onLogout: _logout);
+    return HomeShell(
+      user: _user!,
+      onLogout: _logout,
+      onHospitalSession: _setHospitalDemoSession,
+    );
   }
 }
 
