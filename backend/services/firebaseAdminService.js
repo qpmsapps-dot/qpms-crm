@@ -1,7 +1,8 @@
 import { Buffer } from 'node:buffer';
 import process from 'node:process';
 
-import admin from 'firebase-admin';
+import { cert, getApps, initializeApp } from 'firebase-admin/app';
+import { getMessaging } from 'firebase-admin/messaging';
 
 let initializedApp = null;
 let warnedUnavailable = false;
@@ -44,7 +45,7 @@ export function firebaseAdminStatus(environment = process.env) {
 }
 
 export function getFirebaseMessaging(environment = process.env) {
-  if (initializedApp) return admin.messaging(initializedApp);
+  if (initializedApp) return getMessaging(initializedApp);
   const account = parseServiceAccount(environment);
   if (!account?.projectId || !account?.clientEmail || !account?.privateKey) {
     if (!warnedUnavailable) {
@@ -53,13 +54,13 @@ export function getFirebaseMessaging(environment = process.env) {
     }
     return null;
   }
-  initializedApp = admin.apps.find((app) => app.name === 'hospital-ticketing')
-    || admin.initializeApp({
-      credential: admin.credential.cert(account),
+  initializedApp = getApps().find((app) => app.name === 'hospital-ticketing')
+    || initializeApp({
+      credential: cert(account),
       projectId: account.projectId,
     }, 'hospital-ticketing');
   console.log('[Hospital Push] Firebase Admin initialized', { project_id: account.projectId });
-  return admin.messaging(initializedApp);
+  return getMessaging(initializedApp);
 }
 
 export async function sendFirebaseMessage(message, { messaging = getFirebaseMessaging() } = {}) {
