@@ -18,13 +18,14 @@ const WEB_ROLE_KEYS = new Set([
   'OPERATIONSEXECUTIVE',
   'FACILITYMANAGER',
   'PROJECTHEAD',
+  'HOSPITALDEAN',
   'EXISTINGBUSINESSOPERATIONSTEAM',
   'DEMOVIEWER',
 ]);
 
 const SAFE_PAGE_SIZE_MAX = 100;
 const ACTIVE_SUPERVISOR_SLA_STATUSES = ['open', 'awaiting_supervisor_acceptance', 'assigned', 'accepted', 'in_progress', 'reopened'];
-const ESCALATED_STATUSES = ['escalated_operations_executive', 'escalated_facility_manager', 'escalated_project_head'];
+const ESCALATED_STATUSES = ['escalated_operations_executive', 'escalated_facility_manager', 'escalated_project_head', 'escalated_hospital_dean'];
 const CLOSED_STATUSES = ['closed', 'cancelled'];
 
 const TICKET_WEB_SELECT = `
@@ -179,6 +180,7 @@ function applyFilters(query, filters = {}, { includePaginationFilters = true } =
   if (filters.category_id) query = query.eq('category_id', clean(filters.category_id, 80));
   if (filters.assigned_user_id) query = query.eq('current_assignee_user_id', clean(filters.assigned_user_id, 80));
   if (filters.escalation_level) query = query.eq('current_escalation_level', clean(filters.escalation_level, 80));
+  if (truthy(filters.dean_escalated)) query = query.not('dean_escalated_at', 'is', null);
   const from = isoStart(filters.date_from);
   const to = isoEnd(filters.date_to);
   if (from) query = query.gte('raised_at', from);
@@ -192,6 +194,7 @@ function applyFilters(query, filters = {}, { includePaginationFilters = true } =
       `and(status_code.in.(${ACTIVE_SUPERVISOR_SLA_STATUSES.join(',')}),supervisor_sla_due_at.lt.${nowIso})`,
       `and(status_code.eq.escalated_operations_executive,operations_sla_due_at.lt.${nowIso})`,
       `and(status_code.eq.escalated_project_head,project_head_sla_due_at.lt.${nowIso})`,
+      `and(status_code.eq.escalated_hospital_dean,dean_sla_due_at.lt.${nowIso})`,
     ].join(','));
   }
   return query;
@@ -231,7 +234,7 @@ function locationPath(ticket) {
   ].map((value) => clean(value, 240)).filter(Boolean);
 }
 
-function listRow(ticket, attachmentCount = 0) {
+function listRow(ticket, attachmentCount = 0, beforeImage = null) {
   const sla = ticketSla(ticket);
   return {
     id: ticket.id,
@@ -268,12 +271,17 @@ function listRow(ticket, attachmentCount = 0) {
     operations_sla_due_at: ticket.operations_sla_due_at,
     escalation_due_at: ticket.escalation_due_at,
     project_head_sla_due_at: ticket.project_head_sla_due_at,
+    dean_sla_due_at: ticket.dean_sla_due_at,
+    dean_escalated_at: ticket.dean_escalated_at,
+    ticket_source: ticket.ticket_source || null,
     final_escalation: ticket.final_escalation === true,
     sla,
     rating: ticket.client_rating,
     satisfaction_status: ticket.client_satisfaction_status,
     reopen_count: ticket.reopen_count || 0,
     attachment_count: attachmentCount,
+    before_image: beforeImage,
+    before_image_url: beforeImage?.signed_url || null,
     unassigned: !ticket.current_assignee_user_id,
     overdue: sla.overdue,
     uat: uatIndicator(ticket),
@@ -337,6 +345,23 @@ async function attachmentCounts(client, ticketIds) {
   return counts;
 }
 
+async function firstComplaintAttachments(client, ticketIds) {
+  if (!ticketIds.length) return new Map();
+  const { data, error } = await client
+    .from('hospital_ticket_attachments')
+    .select('id,ticket_id,attachment_type,storage_bucket,storage_path,original_filename,mime_type,size_bytes,is_client_visible,created_at')
+    .in('ticket_id', ticketIds)
+    .eq('attachment_type', 'complaint_photo')
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  const byTicket = new Map();
+  for (const attachment of data || []) {
+    if (byTicket.has(attachment.ticket_id)) continue;
+    byTicket.set(attachment.ticket_id, await safeAttachment(client, attachment));
+  }
+  return byTicket;
+}
+
 export async function listWebHospitalTickets(client, access, filters = {}) {
   const page = parsePositiveInt(filters.page, 1, 100000);
   const pageSize = parsePositiveInt(filters.page_size || filters.pageSize, 25, SAFE_PAGE_SIZE_MAX);
@@ -353,9 +378,16 @@ export async function listWebHospitalTickets(client, access, filters = {}) {
   const { data, error, count } = await query;
   if (error) throw error;
   const ids = (data || []).map((ticket) => ticket.id);
-  const counts = await attachmentCounts(client, ids);
+  const [counts, complaintAttachments] = await Promise.all([
+    attachmentCounts(client, ids),
+    firstComplaintAttachments(client, ids),
+  ]);
   return {
-    tickets: (data || []).map((ticket) => listRow(ticket, counts.get(ticket.id) || 0)),
+    tickets: (data || []).map((ticket) => listRow(
+      ticket,
+      counts.get(ticket.id) || 0,
+      complaintAttachments.get(ticket.id) || null,
+    )),
     pagination: {
       page,
       page_size: pageSize,
@@ -366,7 +398,7 @@ export async function listWebHospitalTickets(client, access, filters = {}) {
 }
 
 export async function summarizeWebHospitalTickets(client, access, filters = {}) {
-  let query = client.from('hospital_tickets').select('id,status_code,current_assignee_user_id,current_assignee_role,current_escalation_level_no,supervisor_sla_due_at,operations_sla_due_at,project_head_sla_due_at,escalation_due_at,final_escalation,reopen_count,acceptance_status,acceptance_due_at', { count: 'exact' });
+  let query = client.from('hospital_tickets').select('id,status_code,current_assignee_user_id,current_assignee_role,current_escalation_level_no,supervisor_sla_due_at,operations_sla_due_at,project_head_sla_due_at,dean_sla_due_at,dean_escalated_at,escalation_due_at,final_escalation,reopen_count,acceptance_status,acceptance_due_at', { count: 'exact' });
   query = applyAccessScope(query, access);
   query = applyFilters(query, filters, { includePaginationFilters: false });
   const { data, error } = await query.limit(10000);
@@ -396,6 +428,7 @@ export async function summarizeWebHospitalTickets(client, access, filters = {}) 
     resolved: countStatus('resolved_awaiting_confirmation'),
     closed: countStatus('closed'),
     reopened: rows.filter((ticket) => ticket.status_code === 'reopened' || Number(ticket.reopen_count || 0) > 0).length,
+    dean_escalations: rows.filter((ticket) => ticket.dean_escalated_at || ticket.current_escalation_level_no === 5).length,
     overdue: rows.filter(isOverdue).length,
     unassigned: rows.filter((ticket) => !ticket.current_assignee_user_id && !CLOSED_STATUSES.includes(ticket.status_code)).length,
     on_duty_supervisors: onDutyResult.count || 0,

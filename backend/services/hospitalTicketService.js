@@ -98,7 +98,7 @@ export async function loadHospitalLocationHierarchy(client, actor, filters = {})
 
 function requireRoutingAdmin(actor) {
   if (!actor?.user || actor.user.profile_type !== 'internal'
-    || !['operations_executive', 'facility_manager'].includes(actor.user.role_code)) {
+    || !['operations_executive', 'facility_manager', 'admin'].includes(actor.user.role_code)) {
     const error = new Error('Routing configuration is available only to authorised operations users.');
     error.code = '42501';
     throw error;
@@ -240,11 +240,50 @@ export async function listHospitalTickets(client, actor, filters = {}) {
   const result = await query;
   if (result.error) throw result.error;
   const search = cleanHospitalText(filters.search, 120).toLowerCase();
-  return (result.data || []).filter((ticket) => canViewHospitalTicket(actor, ticket)).filter((ticket) => {
+  const visibleTickets = (result.data || []).filter((ticket) => canViewHospitalTicket(actor, ticket)).filter((ticket) => {
     if (!search) return true;
     return [ticket.ticket_no, ticket.title, ticket.description, ticket.floor_name, ticket.department_name, ticket.location_text, ticket.block?.block_name, ticket.assignee?.display_name]
       .some((value) => String(value || '').toLowerCase().includes(search));
-  }).map((ticket) => hospitalTicketForActor(actor, ticket));
+  });
+  const complaintPhotos = await firstComplaintPhotos(client, visibleTickets.map((ticket) => ticket.id));
+  return visibleTickets.map((ticket) => hospitalTicketForActor(actor, ticket, {
+    complaint_photo: complaintPhotos.get(ticket.id) || null,
+  }));
+}
+
+async function firstComplaintPhotos(client, ticketIds) {
+  if (!ticketIds.length) return new Map();
+  const { data, error } = await client
+    .from('hospital_ticket_attachments')
+    .select('id,ticket_id,attachment_type,storage_bucket,storage_path,original_filename,mime_type,size_bytes,is_client_visible,created_at')
+    .in('ticket_id', ticketIds)
+    .eq('attachment_type', 'complaint_photo')
+    .eq('is_client_visible', true)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  const byTicket = new Map();
+  for (const attachment of data || []) {
+    if (byTicket.has(attachment.ticket_id)) continue;
+    const safe = {
+      id: attachment.id,
+      ticket_id: attachment.ticket_id,
+      attachment_type: attachment.attachment_type,
+      original_filename: attachment.original_filename,
+      mime_type: attachment.mime_type,
+      size_bytes: attachment.size_bytes,
+      is_client_visible: attachment.is_client_visible,
+      created_at: attachment.created_at,
+      signed_url: null,
+    };
+    if (attachment.storage_bucket && attachment.storage_path) {
+      const signed = await client.storage
+        .from(attachment.storage_bucket)
+        .createSignedUrl(attachment.storage_path, 300);
+      if (!signed.error) safe.signed_url = signed.data?.signedUrl || null;
+    }
+    byTicket.set(attachment.ticket_id, safe);
+  }
+  return byTicket;
 }
 
 export async function getHospitalTicket(client, actor, ticketId) {
@@ -273,14 +312,21 @@ export async function getHospitalTicket(client, actor, ticketId) {
   };
 }
 
-export function hospitalTicketForActor(actor, ticket) {
+export function hospitalTicketForActor(actor, ticket, extra = {}) {
   const assignmentState = ticket?.metadata?.assignment_state
     || (ticket?.current_assignee_user_id ? 'assigned' : 'unassigned');
   const assignmentFailureReason = ticket?.metadata?.assignment_failure_reason || null;
+  const cancellation = ticket?.metadata?.cancellation || null;
+  const enrichedTicket = {
+    ...ticket,
+    cancellation_reason_code: cancellation?.reason_code || null,
+    cancellation_reason_text: cancellation?.reason_text || null,
+    cancelled_at: cancellation?.cancelled_at || null,
+  };
   if (actor?.user?.profile_type !== 'client') {
-    return { ...ticket, assignment_state: assignmentState, assignment_failure_reason: assignmentFailureReason };
+    return { ...enrichedTicket, ...extra, assignment_state: assignmentState, assignment_failure_reason: assignmentFailureReason };
   }
-  const safeTicket = { ...ticket };
+  const safeTicket = { ...enrichedTicket };
   for (const key of [
     'idempotency_key',
     'metadata',
@@ -300,7 +346,7 @@ export function hospitalTicketForActor(actor, ticket) {
       role_code: safeTicket.assignee.role_code || '',
     };
   }
-  return { ...safeTicket, assignment_state: assignmentState, assignment_failure_reason: assignmentFailureReason };
+  return { ...safeTicket, ...extra, assignment_state: assignmentState, assignment_failure_reason: assignmentFailureReason };
 }
 
 export function clientCanSeeHospitalEvent(event) {
@@ -480,6 +526,11 @@ async function applyExactLandmarkSnapshot(client, ticketId, exactLandmark) {
 
 export async function performHospitalAction(client, actor, ticketId, action, expectedVersion, payload = {}) {
   const current = await getHospitalTicket(client, actor, ticketId);
+  const effectiveAction = actor.user.role_code === 'admin'
+    && action === 'manual_escalation'
+    && current.ticket.status_code === 'escalated_operations_executive'
+    ? 'escalate_facility'
+    : action;
   const requiredPermission = actor.user.profile_type === 'client' ? 'view' : 'update';
   if (!scopeAllows(actor.scopes, {
     clientId: current.ticket.client_id,
@@ -491,10 +542,15 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
     error.code = '42501';
     throw error;
   }
-  const errors = validateHospitalAction({ role: actor.user.role_code, status: current.ticket.status_code, action, payload });
+  const errors = validateHospitalAction({ role: actor.user.role_code, status: current.ticket.status_code, action: effectiveAction, payload });
   if (errors.length) { const error = new Error(errors.join(' ')); error.code = '42501'; throw error; }
   if (!Number.isInteger(Number(expectedVersion))) { const error = new Error('Ticket version is required.'); error.code = '22023'; throw error; }
-  if (action === 'accept' && current.ticket.status_code === 'awaiting_supervisor_acceptance') {
+  if (current.ticket.version !== Number(expectedVersion)) {
+    const error = new Error('Ticket version conflict.');
+    error.code = '40001';
+    throw error;
+  }
+  if (effectiveAction === 'accept' && current.ticket.status_code === 'awaiting_supervisor_acceptance') {
     const result = await client.rpc('rpc_accept_hospital_supervisor_ticket', {
       p_ticket_id: current.ticket.id,
       p_actor_user_id: actor.user.id,
@@ -504,9 +560,30 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
     if (result.error) throw result.error;
     return getHospitalTicket(client, actor, current.ticket.id);
   }
-  const requiredRole = ['manual_escalation', 'escalate_operations'].includes(action)
+  if (effectiveAction === 'reassign_supervisor') {
+    return performManualHospitalReassignment(client, actor, current.ticket, {
+      targetRole: 'housekeeping_supervisor',
+      remarks: payload.remarks || 'Manually reassigned to the block Housekeeping Supervisor.',
+      eventType: 'manual_reassignment',
+    });
+  }
+  if (effectiveAction === 'assign_support' && payload.target_role) {
+    return performManualHospitalReassignment(client, actor, current.ticket, {
+      targetRole: cleanHospitalText(payload.target_role, 80),
+      remarks: payload.remarks || 'Manually reassigned for operational support.',
+      eventType: 'manual_reassignment',
+    });
+  }
+  if (effectiveAction === 'cancel') {
+    return performClientTicketCancellation(client, actor, current.ticket, payload);
+  }
+  if (effectiveAction === 'resolve') {
+    await requireCurrentOperationalOwner(client, actor, current.ticket);
+    await requireCompletionEvidence(client, current.ticket.id);
+  }
+  const requiredRole = ['manual_escalation', 'escalate_operations'].includes(effectiveAction)
     ? 'operations_executive'
-    : action === 'escalate_facility'
+    : effectiveAction === 'escalate_facility'
       ? 'facility_manager'
       : null;
   if (requiredRole) {
@@ -530,7 +607,7 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
   const result = await client.rpc('rpc_hospital_ticket_action', {
     p_ticket_id: current.ticket.id,
     p_actor_user_id: actor.user.id,
-    p_action: action,
+    p_action: effectiveAction,
     p_expected_version: Number(expectedVersion),
     p_payload: payload,
     p_operations_sla_minutes: slaMinutes().operations,
@@ -539,11 +616,236 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
   return getHospitalTicket(client, actor, current.ticket.id);
 }
 
+async function requireCurrentOperationalOwner(client, actor, ticket) {
+  if (actor.user.profile_type !== 'internal' || actor.user.role_code === 'admin') return;
+  if (ticket.current_assignee_user_id === actor.user.id) return;
+  const error = new Error('Only the current operational owner can resolve this ticket.');
+  error.code = '42501';
+  throw error;
+}
+
+async function requireCompletionEvidence(client, ticketId) {
+  const result = await client
+    .from('hospital_ticket_attachments')
+    .select('id')
+    .eq('ticket_id', ticketId)
+    .eq('attachment_type', 'completion_photo')
+    .limit(1);
+  if (result.error) throw result.error;
+  if ((result.data || []).length > 0) return;
+  const error = new Error('Upload completion evidence before resolving this ticket.');
+  error.code = '22023';
+  throw error;
+}
+
+async function performClientTicketCancellation(client, actor, ticket, payload = {}) {
+  const reasonCode = cleanHospitalText(payload.reason_code || payload.reasonCode, 80);
+  const reasonText = cleanHospitalText(payload.reason_text || payload.reasonText || cancellationReasonLabel(reasonCode), 500);
+  const now = new Date().toISOString();
+  const updated = await client
+    .from('hospital_tickets')
+    .update({
+      status_code: 'cancelled',
+      escalation_due_at: null,
+      acceptance_status: ticket.acceptance_status === 'awaiting'
+        ? 'not_required'
+        : ticket.acceptance_status || 'not_required',
+      version: ticket.version + 1,
+      updated_at: now,
+      metadata: {
+        ...(ticket.metadata || {}),
+        cancellation: {
+          by_user_id: actor.user.id,
+          by_role: actor.user.role_code,
+          reason_code: reasonCode,
+          reason_text: reasonText,
+          cancelled_at: now,
+        },
+      },
+    })
+    .eq('id', ticket.id)
+    .eq('version', ticket.version)
+    .select(TICKET_SELECT)
+    .maybeSingle();
+  if (updated.error) throw updated.error;
+  if (!updated.data) {
+    const error = new Error('Ticket version conflict.');
+    error.code = '40001';
+    throw error;
+  }
+
+  const event = await client.from('hospital_ticket_events').insert({
+    ticket_id: ticket.id,
+    event_type: 'ticket_cancelled_by_client',
+    from_status: ticket.status_code,
+    to_status: 'cancelled',
+    actor_user_id: actor.user.id,
+    actor_name: actor.user.display_name,
+    actor_role: actor.user.role_code,
+    remarks: reasonText,
+    event_data: {
+      reason_code: reasonCode,
+      cancelled_by_client: true,
+      is_client_visible: true,
+    },
+  });
+  if (event.error) throw event.error;
+
+  if (ticket.current_assignee_user_id) {
+    const notification = await client.from('hospital_ticket_notifications').insert({
+      ticket_id: ticket.id,
+      recipient_user_id: ticket.current_assignee_user_id,
+      notification_type: 'ticket_cancelled',
+      title: 'Ticket Cancelled by Client',
+      body: `${ticket.ticket_no} was cancelled by the client.`,
+      priority: ticket.priority,
+      current_owner_role: ticket.current_assignee_role,
+      escalation_level: ticket.current_escalation_level_no,
+      metadata: {
+        ticket_no: ticket.ticket_no,
+        reason_code: reasonCode,
+      },
+    });
+    if (notification.error) throw notification.error;
+  }
+  const notifications = await client.from('hospital_ticket_notifications')
+    .update({
+      action_status: 'superseded',
+      superseded_at: now,
+      superseded_reason: 'ticket_cancelled_by_client',
+    })
+    .eq('ticket_id', ticket.id)
+    .eq('notification_type', 'incoming_supervisor_ticket')
+    .eq('action_status', 'active');
+  if (notifications.error) throw notifications.error;
+
+  return getHospitalTicket(client, actor, ticket.id);
+}
+
+function cancellationReasonLabel(code) {
+  return {
+    raised_by_mistake: 'Raised by mistake',
+    issue_already_resolved: 'Issue already resolved / no longer required',
+    duplicate_complaint: 'Duplicate complaint',
+    wrong_location_or_category: 'Wrong location or complaint category',
+    other: 'Other',
+  }[code] || 'Client cancelled the ticket';
+}
+
+async function performManualHospitalReassignment(client, actor, ticket, { targetRole, remarks, eventType }) {
+  const normalizedTargetRole = cleanHospitalText(targetRole, 80);
+  if (!['housekeeping_supervisor', 'operations_executive', 'facility_manager', 'project_head'].includes(normalizedTargetRole)) {
+    const error = new Error('Unsupported reassignment target role.');
+    error.code = '22023';
+    throw error;
+  }
+  let assigneeQuery = client.from('hospital_ticket_users')
+    .select('id,display_name,role_code')
+    .eq('client_id', ticket.client_id)
+    .eq('role_code', normalizedTargetRole)
+    .eq('is_active', true)
+    .order('created_at')
+    .limit(1);
+  if (normalizedTargetRole === 'housekeeping_supervisor') {
+    assigneeQuery = client.from('hospital_ticket_users')
+      .select('id,display_name,role_code,scopes:hospital_ticket_user_scopes!inner(block_id,can_update)')
+      .eq('client_id', ticket.client_id)
+      .eq('role_code', normalizedTargetRole)
+      .eq('is_active', true)
+      .eq('scopes.block_id', ticket.block_id)
+      .eq('scopes.can_update', true)
+      .order('created_at')
+      .limit(1);
+  }
+  const assigneeResult = await assigneeQuery;
+  if (assigneeResult.error) throw assigneeResult.error;
+  const assignee = (assigneeResult.data || [])[0];
+  if (!assignee?.id) {
+    const error = new Error(`No active ${normalizedTargetRole.replaceAll('_', ' ')} is available for this ticket.`);
+    error.code = '22023';
+    throw error;
+  }
+
+  const update = {
+    current_assignee_user_id: assignee.id,
+    version: ticket.version + 1,
+    updated_at: new Date().toISOString(),
+    metadata: {
+      ...(ticket.metadata || {}),
+      last_manual_reassignment: {
+        by_user_id: actor.user.id,
+        by_role: actor.user.role_code,
+        to_user_id: assignee.id,
+        to_role: normalizedTargetRole,
+        preserves_sla_deadline: true,
+      },
+    },
+  };
+  if (normalizedTargetRole === 'housekeeping_supervisor') update.supervisor_user_id = assignee.id;
+  if (normalizedTargetRole === 'operations_executive') update.operations_executive_user_id = assignee.id;
+  if (normalizedTargetRole === 'facility_manager') update.facility_manager_user_id = assignee.id;
+  if (normalizedTargetRole === 'project_head') update.project_head_user_id = assignee.id;
+
+  const updated = await client.from('hospital_tickets')
+    .update(update)
+    .eq('id', ticket.id)
+    .eq('version', ticket.version)
+    .select(TICKET_SELECT)
+    .maybeSingle();
+  if (updated.error) throw updated.error;
+  if (!updated.data) {
+    const error = new Error('Ticket version conflict.');
+    error.code = '40001';
+    throw error;
+  }
+
+  const now = new Date().toISOString();
+  const history = await client.from('hospital_ticket_assignment_history').insert({
+    ticket_id: ticket.id,
+    from_user_id: ticket.current_assignee_user_id || null,
+    to_user_id: assignee.id,
+    assignment_type: 'manual_reassignment',
+    reason: cleanHospitalText(remarks, 500),
+    assigned_by_user_id: actor.user.id,
+    source: 'manual',
+    previous_status: ticket.status_code,
+    resulting_status: ticket.status_code,
+    assigned_at: now,
+    metadata: {
+      target_role: normalizedTargetRole,
+      previous_escalation_due_at: ticket.escalation_due_at || null,
+      previous_escalation_level_no: ticket.current_escalation_level_no || null,
+      preserves_sla_deadline: true,
+    },
+  });
+  if (history.error) throw history.error;
+  const event = await client.from('hospital_ticket_events').insert({
+    ticket_id: ticket.id,
+    event_type: eventType,
+    from_status: ticket.status_code,
+    to_status: ticket.status_code,
+    actor_user_id: actor.user.id,
+    actor_name: actor.user.display_name,
+    actor_role: actor.user.role_code,
+    remarks: cleanHospitalText(remarks, 500),
+    event_data: {
+      target_user_id: assignee.id,
+      target_role: normalizedTargetRole,
+      preserved_escalation_due_at: ticket.escalation_due_at || null,
+      preserved_escalation_level_no: ticket.current_escalation_level_no || null,
+      manual_reassignment: true,
+    },
+  });
+  if (event.error) throw event.error;
+  return getHospitalTicket(client, actor, ticket.id);
+}
+
 export function hospitalSlaState(ticket, now = new Date()) {
   let dueAt = ticket.escalation_due_at || null;
   if (!dueAt && ['open', 'awaiting_supervisor_acceptance', 'assigned', 'accepted', 'in_progress', 'reopened'].includes(ticket.status_code)) dueAt = ticket.supervisor_sla_due_at;
   if (!dueAt && ticket.status_code === 'escalated_operations_executive') dueAt = ticket.operations_sla_due_at;
   if (!dueAt && ticket.status_code === 'escalated_project_head') dueAt = ticket.project_head_sla_due_at;
+  if (!dueAt && ticket.status_code === 'escalated_hospital_dean') dueAt = ticket.dean_sla_due_at;
   if (!dueAt) return { state: 'not_applicable', due_at: null, remaining_seconds: 0 };
   const remaining = Math.floor((new Date(dueAt).getTime() - now.getTime()) / 1000);
   return {
@@ -559,7 +861,20 @@ export function hospitalSlaState(ticket, now = new Date()) {
 export function allowedActionsForTicket(actor, ticket) {
   return hospitalAllowedActions(actor.user).filter((action) => {
     const mapped = action === 'manual_escalation' ? 'manual_escalation' : action;
-    return validateHospitalAction({ role: actor.user.role_code, status: ticket.status_code, action: mapped, payload: action === 'progress' ? { remarks: 'check' } : action === 'resolve' ? { resolution_action: 'check', resolution_remarks: 'check' } : action === 'feedback' ? { rating: 5, satisfaction_status: 'satisfied' } : {} }).length === 0;
+    return validateHospitalAction({
+      role: actor.user.role_code,
+      status: ticket.status_code,
+      action: mapped,
+      payload: action === 'progress'
+        ? { remarks: 'check' }
+        : action === 'resolve'
+          ? { resolution_action: 'check', resolution_remarks: 'check' }
+          : action === 'feedback'
+            ? { rating: 5, satisfaction_status: 'satisfied' }
+            : action === 'cancel'
+              ? { reason_code: 'raised_by_mistake' }
+              : {},
+    }).length === 0;
   });
 }
 

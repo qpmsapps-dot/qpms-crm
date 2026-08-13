@@ -80,6 +80,7 @@ const productionRoutes = [
           { path: 'approvals', element: <ApprovalCenterPage /> },
           { path: 'existing-business', element: <ExistingBusinessPage /> },
           { path: 'tickets', element: <Tickets /> },
+          { path: 'tickets/:ticketId', element: <Tickets /> },
           { path: 'fault-tracker', element: <FaultTracker /> },
           { path: 'deep-cleaning', element: <DeepCleaning /> },
           { path: 'assets', element: <AssetCenterPage /> },

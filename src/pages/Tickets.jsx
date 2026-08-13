@@ -1,4 +1,5 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -6,7 +7,6 @@ import {
   ChevronRight,
   CircleUserRound,
   Clock3,
-  Copy,
   Filter,
   FolderOpen,
   Image as ImageIcon,
@@ -21,7 +21,6 @@ import {
   TicketCheck,
   UserRound,
   Wrench,
-  X,
 } from 'lucide-react';
 import { getHospitalTicketDetail, getHospitalTicketSummary, getHospitalTickets } from '../services/hospitalTicketsApi.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
@@ -223,137 +222,139 @@ function AttachmentPreview({ attachment }) {
   return <div className="grid h-16 place-items-center rounded-md bg-white text-slate-400"><ImageIcon className="h-6 w-6" /></div>;
 }
 
-function Timeline({ events = [], comments = [] }) {
-  const rows = [
-    ...events.map((row) => ({ ...row, kind: 'event', text: row.remarks || statusLabel(row.event_type), time: row.created_at })),
-    ...comments.map((row) => ({ ...row, kind: 'comment', text: row.comment_text, time: row.created_at, actor_name: row.author_name, actor_role: row.author_role, event_type: row.comment_type })),
-  ].sort((a, b) => new Date(a.time) - new Date(b.time));
-  if (!rows.length) return <p className="text-xs font-semibold text-slate-500">No timeline entries yet.</p>;
+function ProgressSteps({ ticket }) {
+  const steps = [
+    ['Raised', ticket?.raised_at],
+    ['Assigned', ticket?.assigned_at],
+    ['Accepted', ticket?.accepted_at],
+    ['Work Started', ticket?.work_started_at],
+    ['Resolved', ticket?.resolved_at],
+    ['Closed', ticket?.closed_at],
+  ];
   return (
-    <div className="space-y-4">
-      {rows.map((item, index) => (
-        <div key={`${item.kind}-${item.id}-${index}`} className="relative flex gap-3 pl-1">
-          {index < rows.length - 1 ? <span className="absolute left-[9px] top-5 h-[calc(100%+8px)] w-px bg-slate-200" /> : null}
-          <span className={`relative mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full ring-4 ring-white ${item.kind === 'comment' ? 'bg-blue-500' : 'bg-emerald-500'}`} />
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-baseline justify-between gap-1">
-              <p className="text-[11px] font-extrabold text-slate-800">{item.actor_name || 'System'} <span className="font-semibold text-slate-400">/ {titleCase(item.actor_role || item.event_type)}</span></p>
-              <time className="text-[9px] text-slate-400">{formatDate(item.time)}</time>
-            </div>
-            <p className="mt-0.5 text-[10px] leading-4 text-slate-500">{item.text}</p>
+    <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
+      {steps.map(([label, time], index) => {
+        const reached = Boolean(time) || index === 0;
+        return (
+          <div key={label} className={`rounded-xl border px-3 py-3 ${reached ? 'border-blue-100 bg-blue-50/70' : 'border-slate-200 bg-slate-50'}`}>
+            <p className={`text-xs font-extrabold ${reached ? 'text-blue-700' : 'text-slate-400'}`}>{label}</p>
+            <p className="mt-1 text-[11px] font-semibold text-slate-500">{formatDate(time || (index === 0 ? ticket?.raised_at : null))}</p>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
-function TicketDrawer({ ticket, detail, loading, error, onClose }) {
-  const data = detail?.ticket || ticket;
+function TicketDetailRoute({ ticketId, onBack }) {
+  const [detail, setDetail] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const loadDetail = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      setDetail(await getHospitalTicketDetail(ticketId));
+    } catch (loadError) {
+      setError(friendlyError(loadError));
+    } finally {
+      setLoading(false);
+    }
+  }, [ticketId]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      loadDetail();
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [loadDetail]);
+
+  const data = detail?.ticket;
+  const attachments = detail?.attachments || [];
+  const beforeImages = attachments.filter((row) => row.attachment_type === 'complaint_photo');
+  const afterImages = attachments.filter((row) => row.attachment_type === 'completion_photo');
+
+  if (loading) return <LoadingPanel label="Loading ticket details..." />;
+  if (error) return <ErrorPanel message={error} onRetry={loadDetail} />;
+  if (!data) return <ErrorPanel message="Ticket details were not available." onRetry={loadDetail} />;
+
   return (
-    <aside className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/70 shadow-[0_18px_60px_rgba(15,23,42,0.12)]">
-      <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-extrabold text-slate-950">Ticket Details</h2>
-          <button onClick={onClose} className="focus-ring rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close ticket panel"><X className="h-4 w-4" /></button>
-        </div>
-        <div className="mt-4 flex items-start justify-between gap-4">
-          <h3 className="text-lg font-black leading-6 text-slate-950">{data?.title || 'Hospital ticket'}</h3>
-          <button className="flex shrink-0 items-center gap-1.5 text-[11px] font-bold text-slate-600" title="Ticket number">{data?.ticket_no}<Copy className="h-3.5 w-3.5" /></button>
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Pill className={statusStyles[data?.status_code] || statusStyles.open}>{statusLabel(data?.status_code)}</Pill>
-          <Pill className={priorityStyles[data?.priority] || priorityStyles.medium}>{titleCase(data?.priority)} Priority</Pill>
-          {data?.unassigned ? <Pill className="bg-amber-50 text-amber-700 ring-amber-200">Unassigned</Pill> : null}
-          {data?.overdue ? <Pill className="bg-rose-50 text-rose-700 ring-rose-200">Overdue</Pill> : null}
-          {data?.uat ? <Pill className="bg-violet-50 text-violet-700 ring-violet-200">UAT</Pill> : null}
-        </div>
-      </header>
+    <div className="space-y-4">
+      <button onClick={onBack} className="focus-ring inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-extrabold text-slate-700">
+        <ChevronLeft className="h-4 w-4" />Back to Tickets
+      </button>
 
-      <div className="max-h-[calc(100vh-13rem)] space-y-3 overflow-y-auto p-3.5">
-        {loading ? <LoadingPanel label="Loading ticket details..." /> : null}
-        {error ? <ErrorPanel message={error} /> : null}
-        {!loading && !error ? (
-          <>
-            <section className="rounded-xl border border-slate-200 bg-white p-4">
-              <div className="grid gap-x-4 gap-y-4 sm:grid-cols-2 xl:grid-cols-3">
-                {[
-                  ['Client', data?.client?.name, CircleUserRound],
-                  ['Location', locationText(data), MapPin],
-                  ['Raised By', `${data?.raised_by?.name || '-'}\n${titleCase(data?.raised_by?.role || '')}`, UserRound],
-                  ['Created On', formatDate(data?.raised_at), Clock3],
-                  ['SLA Due', formatDate(data?.sla?.due_at), AlertTriangle],
-                  ['Acceptance Due', formatDate(data?.acceptance_due_at), Clock3],
-                  ['Acceptance Status', titleCase(data?.acceptance_status), CheckCircle2],
-                  ['Accepted By', data?.accepted_by?.display_name || '-', UserRound],
-                  ['Category', data?.category?.name, Tag],
-                  ['Assigned To', data?.current_assignee?.display_name || 'Unassigned', UserRound],
-                  ['Escalation Level', titleCase(data?.current_escalation_level), AlertTriangle],
-                  ['Rating', data?.rating ? `${data.rating} / 5` : 'Not rated', Star],
-                ].map(([label, value, MetaIcon]) => (
-                  <div key={label} className="min-w-0">
-                    <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">{createElement(MetaIcon, { className: 'h-3.5 w-3.5' })}{label}</p>
-                    <p className="mt-1 whitespace-pre-line break-words text-xs font-bold leading-5 text-slate-800">{value || '-'}</p>
-                    {label === 'SLA Due' && data?.sla?.state ? <Pill className={`mt-1 ${data.sla.state === 'breached' ? 'bg-rose-50 text-rose-700 ring-rose-200' : 'bg-emerald-50 text-emerald-700 ring-emerald-200'}`}>{statusLabel(data.sla.state)}</Pill> : null}
-                  </div>
-                ))}
-              </div>
-              <div className="mt-4 border-t border-slate-100 pt-4">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Issue Description</p>
-                <p className="mt-1.5 text-xs leading-5 text-slate-600">{data?.description || data?.description_preview || '-'}</p>
-              </div>
-            </section>
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_12px_36px_rgba(15,23,42,0.06)]">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-black tracking-tight text-slate-950">{data.title || `${data.category?.name || 'Hospital'} Complaint`}</h1>
+            <p className="mt-1 text-sm font-extrabold text-blue-700">{data.ticket_no}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Pill className={statusStyles[data.status_code] || statusStyles.open}>{statusLabel(data.status_code)}</Pill>
+            <Pill className={priorityStyles[data.priority] || priorityStyles.medium}>{titleCase(data.priority)} Priority</Pill>
+          </div>
+        </div>
+      </section>
 
-            <div className="grid gap-3 xl:grid-cols-2">
-              <DetailCard title="Lifecycle">
-                <div className="grid grid-cols-2 gap-3 text-[10px] text-slate-500">
-                  {[
-                    ['Assigned', data?.assigned_at],
-                    ['Accepted', data?.accepted_at],
-                    ['Work Started', data?.work_started_at],
-                    ['Resolved', data?.resolved_at],
-                    ['Closed', data?.closed_at],
-                    ['Reopened', data?.reopened_at],
-                  ].map(([label, value]) => <div key={label}><p className="font-bold text-slate-400">{label}</p><p className="mt-1 font-semibold text-slate-700">{formatDate(value)}</p></div>)}
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <main className="space-y-4">
+          <DetailCard title="Complaint Overview">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {[
+                ['Client', data.client?.name, CircleUserRound],
+                ['Location', locationText(data), MapPin],
+                ['Category', data.category?.name, Tag],
+                ['Created On', formatDate(data.raised_at), Clock3],
+                ['Raised By', data.raised_by?.name, UserRound],
+                ['Assigned To', data.current_assignee?.display_name || 'Unassigned', UserRound],
+                ['Status', statusLabel(data.status_code), CheckCircle2],
+                ['Priority', titleCase(data.priority), AlertTriangle],
+              ].filter(([, value]) => value && value !== '-').map(([label, value, MetaIcon]) => (
+                <div key={label} className="min-w-0">
+                  <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">{createElement(MetaIcon, { className: 'h-3.5 w-3.5' })}{label}</p>
+                  <p className="mt-1 break-words text-xs font-bold leading-5 text-slate-800">{value}</p>
                 </div>
-              </DetailCard>
-              <DetailCard title="Resolution / Feedback">
-                <div className="space-y-2 text-xs leading-5 text-slate-600">
-                  <p><span className="font-bold text-slate-800">Action:</span> {data?.resolution_action || '-'}</p>
-                  <p><span className="font-bold text-slate-800">Remarks:</span> {data?.resolution_remarks || '-'}</p>
-                  <p><span className="font-bold text-slate-800">Feedback:</span> {data?.client_feedback || '-'}</p>
-                  <p><span className="font-bold text-slate-800">Satisfaction:</span> {titleCase(data?.satisfaction_status || 'Pending')}</p>
-                  <p><span className="font-bold text-slate-800">Reopen Count:</span> {data?.reopen_count || 0}</p>
-                </div>
-              </DetailCard>
+              ))}
             </div>
+          </DetailCard>
 
-            <DetailCard title={`Attachments (${detail?.attachments?.length || 0})`}>
-              <AttachmentGrid attachments={detail?.attachments || []} />
-            </DetailCard>
+          <DetailCard title="Complaint Description">
+            <p className="text-sm leading-6 text-slate-700">{data.description || data.description_preview || '-'}</p>
+          </DetailCard>
 
-            <DetailCard title="Timeline / Comments">
-              <Timeline events={detail?.timeline || []} comments={detail?.comments || []} />
-            </DetailCard>
+          <DetailCard title="Complaint / Before Image">
+            <AttachmentGrid attachments={beforeImages} />
+          </DetailCard>
 
-            <DetailCard title="Assignment History">
-              {detail?.assignment_history?.length ? (
-                <div className="space-y-2">
-                  {detail.assignment_history.map((item) => (
-                    <div key={item.id} className="rounded-lg bg-slate-50 px-3 py-2 text-[10px] leading-4 text-slate-600">
-                      <p className="font-bold text-slate-800">{titleCase(item.source)} / {titleCase(item.assignment_type || 'assignment')}</p>
-                      <p>{item.reason}</p>
-                      <p className="text-slate-400">{formatDate(item.assigned_at)}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : <p className="text-xs font-semibold text-slate-500">No assignment history recorded.</p>}
-            </DetailCard>
-            <ReadOnlyNote />
-          </>
-        ) : null}
+          <DetailCard title="Ticket Progress">
+            <ProgressSteps ticket={data} />
+          </DetailCard>
+        </main>
+
+        <aside className="space-y-4">
+          <DetailCard title="Resolution">
+            <div className="space-y-3 text-xs leading-5 text-slate-600">
+              <p><span className="font-bold text-slate-800">Remarks:</span> {data.resolution_remarks || 'Not resolved yet.'}</p>
+              <p><span className="font-bold text-slate-800">Resolved By:</span> {data.resolved_by?.display_name || '-'}</p>
+              <p><span className="font-bold text-slate-800">Resolution Time:</span> {formatDate(data.resolved_at)}</p>
+            </div>
+            {afterImages.length ? <div className="mt-4"><AttachmentGrid attachments={afterImages} /></div> : null}
+          </DetailCard>
+
+          <DetailCard title="Client Feedback">
+            <div className="space-y-2 text-xs leading-5 text-slate-600">
+              <p><span className="font-bold text-slate-800">Rating:</span> {data.rating ? `${data.rating} / 5` : 'Not rated'}</p>
+              <p><span className="font-bold text-slate-800">Feedback:</span> {data.client_feedback || '-'}</p>
+              <p><span className="font-bold text-slate-800">Satisfaction:</span> {titleCase(data.satisfaction_status || 'Pending')}</p>
+            </div>
+          </DetailCard>
+
+          <ReadOnlyNote />
+        </aside>
       </div>
-    </aside>
+    </div>
   );
 }
 
@@ -366,13 +367,11 @@ function friendlyError(error) {
 
 export default function Tickets() {
   usePageTitle('Tickets');
+  const navigate = useNavigate();
+  const { ticketId } = useParams();
   const [tickets, setTickets] = useState([]);
   const [summary, setSummary] = useState({});
   const [pagination, setPagination] = useState({ page: 1, page_size: 25, total: 0, total_pages: 1 });
-  const [selectedTicket, setSelectedTicket] = useState(null);
-  const [detail, setDetail] = useState(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastRefreshed, setLastRefreshed] = useState(null);
@@ -411,10 +410,6 @@ export default function Tickets() {
       setPagination(listResponse.pagination || { page: 1, page_size: 25, total: 0, total_pages: 1 });
       setSummary(summaryResponse.counts || {});
       setLastRefreshed(new Date().toISOString());
-      setSelectedTicket((current) => {
-        if (!current) return (listResponse.tickets || [])[0] || null;
-        return (listResponse.tickets || []).find((row) => row.id === current.id) || current;
-      });
     } catch (loadError) {
       if (requestId !== requestIdRef.current) return;
       setError(friendlyError(loadError));
@@ -426,33 +421,18 @@ export default function Tickets() {
   }, [apiParams]);
 
   useEffect(() => {
-    loadTickets();
+    const timeout = window.setTimeout(() => {
+      loadTickets();
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [loadTickets]);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadDetail() {
-      if (!selectedTicket?.id) {
-        setDetail(null);
-        return;
-      }
-      setDetailLoading(true);
-      setDetailError('');
-      try {
-        const response = await getHospitalTicketDetail(selectedTicket.id);
-        if (!cancelled) setDetail(response);
-      } catch (loadError) {
-        if (!cancelled) setDetailError(friendlyError(loadError));
-      } finally {
-        if (!cancelled) setDetailLoading(false);
-      }
-    }
-    loadDetail();
-    return () => { cancelled = true; };
-  }, [selectedTicket?.id]);
 
   function updateFilter(key, value) {
     setFilters((current) => ({ ...current, [key]: value, page: key === 'page' ? value : 1 }));
+  }
+
+  if (ticketId) {
+    return <TicketDetailRoute ticketId={ticketId} onBack={() => navigate('/tickets')} />;
   }
 
   const kpis = kpiMeta.map((item) => Object.assign([...item], { value: summary[item[0]] || 0 }));
@@ -476,7 +456,7 @@ export default function Tickets() {
       {error ? <ErrorPanel message={error} onRetry={loadTickets} denied={denied} /> : null}
 
       {!error ? (
-        <div className={`grid min-w-0 gap-4 ${selectedTicket ? 'xl:grid-cols-[minmax(0,1.12fr)_minmax(500px,0.88fr)]' : ''}`}>
+        <div className="grid min-w-0 gap-4">
           <main className="min-w-0 space-y-4">
             <section className="grid grid-cols-2 gap-3 xl:grid-cols-5">{kpis.map((item) => <StatCard key={item[0]} item={item} />)}</section>
 
@@ -494,10 +474,12 @@ export default function Tickets() {
                     <thead><tr className="border-b border-slate-200 bg-white text-[10px] font-extrabold uppercase tracking-wide text-slate-400">{['Ticket ID', 'Client', 'Block / Location', 'Category', 'Priority', 'Status', 'Assigned To', 'Escalation', 'SLA', 'Created On', 'Rating', 'Actions'].map((heading) => <th key={heading} className="px-3 py-3">{heading}</th>)}</tr></thead>
                     <tbody>
                       {tickets.map((ticket) => {
-                        const selected = selectedTicket?.id === ticket.id;
                         return (
-                          <tr key={ticket.id} className={`border-b border-slate-100 text-[11px] last:border-0 ${selected ? 'bg-blue-50/80 shadow-[inset_3px_0_0_#2563eb]' : 'hover:bg-slate-50'}`}>
-                            <td className="whitespace-nowrap px-3 py-3 font-extrabold text-slate-800">{ticket.ticket_no}{ticket.uat ? <Pill className="ml-2 bg-violet-50 text-violet-700 ring-violet-200">UAT</Pill> : null}</td>
+                          <tr key={ticket.id} onDoubleClick={() => navigate(`/tickets/${encodeURIComponent(ticket.id)}`)} className="border-b border-slate-100 text-[11px] last:border-0 hover:bg-slate-50">
+                            <td className="whitespace-nowrap px-3 py-3 font-extrabold text-slate-800">
+                              <button onClick={() => navigate(`/tickets/${encodeURIComponent(ticket.id)}`)} className="focus-ring rounded text-left text-blue-700 hover:underline">{ticket.ticket_no}</button>
+                              {ticket.uat ? <Pill className="ml-2 bg-violet-50 text-violet-700 ring-violet-200">UAT</Pill> : null}
+                            </td>
                             <td className="px-3 py-3 font-bold text-slate-700">{ticket.client?.name || '-'}</td>
                             <td className="max-w-56 px-3 py-3 font-semibold leading-4 text-slate-600">{shortLocation(ticket)}{ticket.reopen_count ? <Pill className="mt-1 bg-rose-50 text-rose-700 ring-rose-200">Reopened</Pill> : null}</td>
                             <td className="px-3 py-3"><span className="inline-flex items-center gap-1.5 font-semibold text-slate-700"><Wrench className="h-3.5 w-3.5 text-blue-500" />{ticket.category?.name || '-'}</span></td>
@@ -508,7 +490,7 @@ export default function Tickets() {
                             <td className="px-3 py-3">{ticket.sla?.due_at ? <Pill className={ticket.overdue ? 'bg-rose-50 text-rose-700 ring-rose-200' : 'bg-emerald-50 text-emerald-700 ring-emerald-200'}>{ticket.overdue ? 'Overdue' : statusLabel(ticket.sla.state)}</Pill> : <Pill className="bg-slate-100 text-slate-600 ring-slate-200">No SLA</Pill>}</td>
                             <td className="max-w-32 px-3 py-3 text-slate-500">{formatDate(ticket.raised_at)}</td>
                             <td className="px-3 py-3 text-slate-600">{ticket.rating ? <span className="inline-flex items-center gap-1 font-bold text-amber-600"><Star className="h-3.5 w-3.5 fill-amber-400" />{ticket.rating}</span> : '-'}</td>
-                            <td className="px-3 py-3"><button onClick={() => setSelectedTicket(ticket)} className="focus-ring rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-bold text-slate-700">View</button></td>
+                            <td className="px-3 py-3"><button onClick={() => navigate(`/tickets/${encodeURIComponent(ticket.id)}`)} className="focus-ring rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-bold text-slate-700">View</button></td>
                           </tr>
                         );
                       })}
@@ -528,8 +510,6 @@ export default function Tickets() {
               </footer>
             </section>
           </main>
-
-          {selectedTicket ? <TicketDrawer ticket={selectedTicket} detail={detail} loading={detailLoading} error={detailError} onClose={() => setSelectedTicket(null)} /> : null}
         </div>
       ) : null}
     </div>

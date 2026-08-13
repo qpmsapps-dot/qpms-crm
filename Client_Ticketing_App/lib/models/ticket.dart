@@ -52,10 +52,14 @@ class Ticket {
     this.complaintPhotoAssets = const [],
     this.completionPhotoAssets = const [],
     this.resolutionNotes = '',
+    this.resolvedAt,
     this.updates = const [],
     this.feedbackRating,
     this.feedbackComment = '',
     this.isSatisfied,
+    this.cancellationReasonCode = '',
+    this.cancellationReasonText = '',
+    this.cancelledAt,
   });
 
   final String id;
@@ -83,10 +87,14 @@ class Ticket {
   final List<String> complaintPhotoAssets;
   final List<String> completionPhotoAssets;
   final String resolutionNotes;
+  final DateTime? resolvedAt;
   final List<TicketUpdate> updates;
   final int? feedbackRating;
   final String feedbackComment;
   final bool? isSatisfied;
+  final String cancellationReasonCode;
+  final String cancellationReasonText;
+  final DateTime? cancelledAt;
 
   factory Ticket.fromApi(
     Map<String, dynamic> row, {
@@ -119,7 +127,10 @@ class Ticket {
       ]),
       ward: '${row['ward_name_snapshot'] ?? ''}',
       roomArea: roomArea,
-      exactLandmark: '${row['exact_landmark_snapshot'] ?? ''}',
+      exactLandmark: _firstText([
+        row['exact_landmark_snapshot'],
+        row['exact_landmark'],
+      ]),
       completeLocationPath: '${row['location_path_snapshot'] ?? ''}',
       location: _firstText([
         row['location_text'],
@@ -139,12 +150,18 @@ class Ticket {
       slaLabel: row['assignment_state'] == 'unassigned'
           ? 'Assignment pending • Supervisor SLA not started'
           : '${row['sla_label'] ?? 'SLA managed by QPMS'}',
+      complaintPhotoAssets: _attachmentUrls(row, 'complaint_photo'),
+      completionPhotoAssets: _attachmentUrls(row, 'completion_photo'),
       resolutionNotes: '${row['resolution_remarks'] ?? ''}',
+      resolvedAt: DateTime.tryParse('${row['resolved_at'] ?? ''}')?.toLocal(),
       feedbackRating: row['client_rating'] as int?,
       feedbackComment: '${row['client_feedback'] ?? ''}',
       isSatisfied: row['client_satisfaction_status'] == null
           ? null
           : row['client_satisfaction_status'] == 'satisfied',
+      cancellationReasonCode: '${row['cancellation_reason_code'] ?? ''}',
+      cancellationReasonText: '${row['cancellation_reason_text'] ?? ''}',
+      cancelledAt: DateTime.tryParse('${row['cancelled_at'] ?? ''}')?.toLocal(),
       updates: updates,
     );
   }
@@ -173,10 +190,14 @@ class Ticket {
     List<String>? complaintPhotoAssets,
     List<String>? completionPhotoAssets,
     String? resolutionNotes,
+    DateTime? resolvedAt,
     List<TicketUpdate>? updates,
     int? feedbackRating,
     String? feedbackComment,
     bool? isSatisfied,
+    String? cancellationReasonCode,
+    String? cancellationReasonText,
+    DateTime? cancelledAt,
   }) {
     return Ticket(
       id: id,
@@ -204,48 +225,71 @@ class Ticket {
       completionPhotoAssets:
           completionPhotoAssets ?? this.completionPhotoAssets,
       resolutionNotes: resolutionNotes ?? this.resolutionNotes,
+      resolvedAt: resolvedAt ?? this.resolvedAt,
       updates: updates ?? this.updates,
       feedbackRating: feedbackRating ?? this.feedbackRating,
       feedbackComment: feedbackComment ?? this.feedbackComment,
       isSatisfied: isSatisfied ?? this.isSatisfied,
+      cancellationReasonCode:
+          cancellationReasonCode ?? this.cancellationReasonCode,
+      cancellationReasonText:
+          cancellationReasonText ?? this.cancellationReasonText,
+      cancelledAt: cancelledAt ?? this.cancelledAt,
     );
   }
 }
 
 String statusLabel(TicketStatus status) => switch (status) {
-  TicketStatus.open => 'Open',
-  TicketStatus.assigned => 'Assigned',
-  TicketStatus.accepted => 'Accepted',
-  TicketStatus.inProgress => 'In Progress',
-  TicketStatus.escalatedOperations => 'Escalated to Operations',
-  TicketStatus.escalatedFacilityManager => 'Escalated to Facility Manager',
-  TicketStatus.awaitingConfirmation => 'Resolved – Awaiting Confirmation',
-  TicketStatus.reopened => 'Reopened',
+  TicketStatus.open => 'Ticket Received',
+  TicketStatus.assigned => 'Team Assigned',
+  TicketStatus.accepted => 'Work In Progress',
+  TicketStatus.inProgress => 'Work In Progress',
+  TicketStatus.escalatedOperations => 'Ticket Under Process',
+  TicketStatus.escalatedFacilityManager => 'Ticket Under Process',
+  TicketStatus.awaitingConfirmation => 'Work Completed',
+  TicketStatus.reopened => 'Ticket Under Process',
   TicketStatus.closed => 'Closed',
   TicketStatus.cancelled => 'Cancelled',
 };
 
 String shortStatusLabel(TicketStatus status) => switch (status) {
-  TicketStatus.escalatedOperations => 'Ops Escalation',
-  TicketStatus.escalatedFacilityManager => 'FM Escalation',
-  TicketStatus.awaitingConfirmation => 'Awaiting Confirmation',
+  TicketStatus.open => 'Received',
+  TicketStatus.assigned => 'Assigned',
+  TicketStatus.escalatedOperations ||
+  TicketStatus.escalatedFacilityManager ||
+  TicketStatus.reopened => 'Under Process',
+  TicketStatus.awaitingConfirmation => 'Work Completed',
   _ => statusLabel(status),
 };
 
 String priorityLabel(TicketPriority priority) => switch (priority) {
   TicketPriority.low => 'Low',
   TicketPriority.medium => 'Medium',
-  TicketPriority.high => 'High',
+  TicketPriority.high => 'Critical',
 };
+
+String clientServiceLabel(String category) {
+  final value = category.trim().toLowerCase();
+  if (value.contains('security')) return 'Security';
+  if (value.contains('housekeeping') || value.contains('cleaning')) {
+    return 'Housekeeping';
+  }
+  return category.trim().isEmpty ? 'Housekeeping' : category.trim();
+}
 
 bool ticketMatchesFilter(Ticket ticket, TicketListFilter filter) {
   return switch (filter) {
     TicketListFilter.all => true,
-    TicketListFilter.open => ticket.status == TicketStatus.open,
+    TicketListFilter.open =>
+      ticket.status == TicketStatus.open ||
+          ticket.status == TicketStatus.assigned,
     TicketListFilter.assigned => ticket.status == TicketStatus.assigned,
     TicketListFilter.inProgress =>
       ticket.status == TicketStatus.accepted ||
-          ticket.status == TicketStatus.inProgress,
+          ticket.status == TicketStatus.inProgress ||
+          ticket.status == TicketStatus.escalatedOperations ||
+          ticket.status == TicketStatus.escalatedFacilityManager ||
+          ticket.status == TicketStatus.reopened,
     TicketListFilter.awaitingConfirmation =>
       ticket.status == TicketStatus.awaitingConfirmation,
     TicketListFilter.resolved =>
@@ -299,6 +343,42 @@ String _joinLocation(List<String> values) {
 bool _isMissingLocationPlaceholder(String value) {
   final key = value.trim().toLowerCase();
   return key == 'not specified' || key == 'floor not confirmed';
+}
+
+List<String> _attachmentUrls(Map<String, dynamic> row, String type) {
+  final urls = <String>[];
+
+  void addUrl(dynamic value) {
+    final text = '${value ?? ''}'.trim();
+    if (text.isNotEmpty && text != 'null') urls.add(text);
+  }
+
+  if (type == 'complaint_photo') {
+    addUrl(row['complaint_photo_url']);
+    final single = row['complaint_photo'];
+    if (single is Map) addUrl(single['signed_url'] ?? single['url']);
+  } else if (type == 'completion_photo') {
+    addUrl(row['completion_photo_url']);
+    final single = row['completion_photo'];
+    if (single is Map) addUrl(single['signed_url'] ?? single['url']);
+  }
+
+  for (final key in const [
+    'attachments',
+    'complaint_photos',
+    'completion_photos',
+  ]) {
+    final list = row[key];
+    if (list is! List) continue;
+    for (final item in list) {
+      if (item is! Map) continue;
+      final attachmentType = '${item['attachment_type'] ?? type}'.trim();
+      if (attachmentType != type) continue;
+      addUrl(item['signed_url'] ?? item['url']);
+    }
+  }
+
+  return List.unmodifiable(urls.toSet());
 }
 
 String formatTicketDateTime(DateTime value) {

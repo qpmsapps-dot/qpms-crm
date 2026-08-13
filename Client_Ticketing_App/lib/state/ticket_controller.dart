@@ -41,6 +41,17 @@ class ComplaintDraft {
   final String idempotencyKey;
 }
 
+class TicketPhotoUploadPartialException implements Exception {
+  const TicketPhotoUploadPartialException(this.ticket, this.failedCount);
+
+  final Ticket ticket;
+  final int failedCount;
+
+  @override
+  String toString() =>
+      'Ticket raised with $failedCount failed photo upload(s).';
+}
+
 class TicketController extends ChangeNotifier {
   TicketController({bool? demoMode})
     : demoMode = demoMode ?? ClientAppConfig.demoMode {
@@ -97,6 +108,11 @@ class TicketController extends ChangeNotifier {
     _departments = departments;
     _locations = locations;
     _categories = categories;
+  }
+
+  @visibleForTesting
+  void replaceTicketsForTesting(List<Ticket> tickets) {
+    _tickets = List<Ticket>.from(tickets);
   }
 
   List<String> floorsForBlock(String blockName) {
@@ -196,8 +212,41 @@ class TicketController extends ChangeNotifier {
       .where((ticket) => ticket.status == TicketStatus.awaitingConfirmation)
       .length;
 
-  Ticket ticketByNumber(String number) =>
-      _tickets.firstWhere((ticket) => ticket.number == number);
+  Ticket? findTicket(String identifier) {
+    final needle = identifier.trim();
+    if (needle.isEmpty) return null;
+    for (final ticket in _tickets) {
+      if (ticket.number == needle || ticket.id == needle) return ticket;
+    }
+    return null;
+  }
+
+  Ticket ticketByNumber(String number) {
+    final ticket = findTicket(number);
+    if (ticket == null) throw ArgumentError('Ticket not found.');
+    return ticket;
+  }
+
+  Future<Ticket?> resolveTicket(String identifier) async {
+    final local = findTicket(identifier);
+    if (local != null) {
+      if (!demoMode && local.number.isNotEmpty) {
+        await loadDetail(local.number);
+      }
+      return findTicket(local.number) ?? local;
+    }
+    if (!demoMode) {
+      await load();
+      final afterList = findTicket(identifier);
+      if (afterList != null) {
+        await loadDetail(afterList.number);
+        return findTicket(afterList.number) ?? afterList;
+      }
+      await loadDetail(identifier);
+      return findTicket(identifier);
+    }
+    return null;
+  }
 
   List<Ticket> filterTickets(TicketListFilter filter, {String query = ''}) {
     final needle = query.trim().toLowerCase();
@@ -211,15 +260,15 @@ class TicketController extends ChangeNotifier {
   }
 
   bool isDraftValid(ComplaintDraft draft) {
+    final hasMappedLocation =
+        draft.departmentId.trim().isNotEmpty ||
+        draft.department.trim().isNotEmpty ||
+        draft.locationId.trim().isNotEmpty ||
+        draft.location.trim().isNotEmpty;
+    final hasManualLocation = draft.exactLandmark.trim().length >= 3;
     final basic =
         draft.block.trim().isNotEmpty &&
-        (draft.departmentId.trim().isNotEmpty ||
-            draft.department.trim().isNotEmpty ||
-            draft.locationId.trim().isNotEmpty ||
-            draft.location.trim().isNotEmpty) &&
-        (draft.locationId.trim().isNotEmpty ||
-            draft.location.trim().isNotEmpty ||
-            draft.exactLandmark.trim().isNotEmpty) &&
+        (hasMappedLocation || hasManualLocation) &&
         draft.category.trim().isNotEmpty &&
         draft.description.trim().isNotEmpty;
     if (!basic || demoMode || _locations.isEmpty) {
@@ -290,7 +339,7 @@ class TicketController extends ChangeNotifier {
     } catch (error) {
       _error = friendlyErrorMessage(
         error,
-        fallback: 'Unable to load complaints. Please try again.',
+        fallback: 'Unable to load tickets. Please try again.',
       );
     } finally {
       _loading = false;
@@ -492,7 +541,7 @@ class TicketController extends ChangeNotifier {
     } catch (error) {
       _error = friendlyErrorMessage(
         error,
-        fallback: 'Unable to load complaint details.',
+        fallback: 'Unable to load ticket details.',
       );
       notifyListeners();
     }
@@ -500,12 +549,12 @@ class TicketController extends ChangeNotifier {
 
   Future<Ticket> submitComplaint(ComplaintDraft draft, {DateTime? now}) async {
     if (!isDraftValid(draft)) {
-      throw ArgumentError('All required complaint fields must be completed.');
+      throw ArgumentError('All required ticket fields must be completed.');
     }
     if (!demoMode) {
       if (_blocks.isEmpty || _categories.isEmpty) {
         throw const HospitalApiException(
-          'Complaint master data is unavailable. Refresh and try again.',
+          'Ticket master data is unavailable. Refresh and try again.',
         );
       }
       final payload = _createPayload(draft);
@@ -516,19 +565,30 @@ class TicketController extends ChangeNotifier {
         body: payload,
       );
       final row = Map<String, dynamic>.from(response['ticket'] as Map);
+      final failedPhotos = <String>[];
+      final uploadedPhotos = <String>[];
       for (final photoPath in draft.photoPaths.take(3)) {
-        await HospitalTicketApi.uploadPhoto(
-          ticketId: '${row['id']}',
-          filePath: photoPath,
-          attachmentType: 'complaint_photo',
-        );
+        try {
+          await HospitalTicketApi.uploadPhoto(
+            ticketId: '${row['id']}',
+            filePath: photoPath,
+            attachmentType: 'complaint_photo',
+          );
+          uploadedPhotos.add(photoPath);
+        } catch (error) {
+          debugPrint('[Client Ticket Photo Upload] failed: $error');
+          failedPhotos.add(photoPath);
+        }
       }
       final ticket = Ticket.fromApi(
         row,
         updates: _timeline(response['timeline']),
-      );
+      ).copyWith(complaintPhotoAssets: uploadedPhotos);
       _tickets.insert(0, ticket);
       notifyListeners();
+      if (failedPhotos.isNotEmpty) {
+        throw TicketPhotoUploadPartialException(ticket, failedPhotos.length);
+      }
       return ticket;
     }
     final raisedAt = now ?? DateTime.now();
@@ -552,7 +612,7 @@ class TicketController extends ChangeNotifier {
       complaintPhotoAssets: List.unmodifiable(draft.photoPaths),
       updates: [
         TicketUpdate(
-          title: 'Complaint raised',
+          title: 'Ticket raised',
           body: 'Sent to the Housekeeping Supervisor. SLA: 20 minutes.',
           dateTime: raisedAt,
         ),
@@ -599,7 +659,7 @@ class TicketController extends ChangeNotifier {
         .where((row) => row['category_name'] == draft.category)
         .toList();
     if (matchingCategories.length != 1) {
-      throw const HospitalApiException('Please select a complaint category.');
+      throw const HospitalApiException('Please select a ticket category.');
     }
     final category = matchingCategories.single;
     return {
@@ -680,6 +740,64 @@ class TicketController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> cancelTicket({
+    required String ticketNumber,
+    required String reasonCode,
+    required String reasonText,
+    DateTime? now,
+  }) async {
+    final index = _tickets.indexWhere(
+      (ticket) => ticket.number == ticketNumber,
+    );
+    if (index < 0) throw ArgumentError('Ticket not found.');
+    final ticket = _tickets[index];
+    if (!_isCancellable(ticket.status)) {
+      throw StateError('This ticket can no longer be cancelled.');
+    }
+    if (reasonCode.trim().isEmpty) {
+      throw ArgumentError('Cancellation reason is required.');
+    }
+    if (reasonCode == 'other' && reasonText.trim().isEmpty) {
+      throw ArgumentError('Cancellation remarks are required for Other.');
+    }
+    if (!demoMode) {
+      final response = await HospitalTicketApi.request(
+        'POST',
+        '/api/hospital-tickets/${ticket.id}/cancel',
+        body: {
+          'version': ticket.version,
+          'reason_code': reasonCode.trim(),
+          'reason_text': reasonText.trim(),
+        },
+      );
+      _tickets[index] = Ticket.fromApi(
+        Map<String, dynamic>.from(response['ticket'] as Map),
+        updates: _timeline(response['timeline']),
+      );
+      notifyListeners();
+      return;
+    }
+    final cancelledAt = now ?? DateTime.now();
+    _tickets[index] = ticket.copyWith(
+      status: TicketStatus.cancelled,
+      slaLabel: 'Cancelled by client',
+      cancellationReasonCode: reasonCode.trim(),
+      cancellationReasonText: reasonText.trim(),
+      cancelledAt: cancelledAt,
+      updates: [
+        ...ticket.updates,
+        TicketUpdate(
+          title: 'Cancelled',
+          body: reasonText.trim().isEmpty
+              ? 'Client cancelled the ticket.'
+              : 'Client cancelled the ticket: ${reasonText.trim()}',
+          dateTime: cancelledAt,
+        ),
+      ],
+    );
+    notifyListeners();
+  }
+
   void resetMockData() {
     _tickets = initialTickets();
     _nextTicketSequence = 6;
@@ -710,6 +828,19 @@ class TicketController extends ChangeNotifier {
         ),
       )
       .toList();
+
+  static bool _isCancellable(TicketStatus status) => switch (status) {
+    TicketStatus.open ||
+    TicketStatus.assigned ||
+    TicketStatus.accepted ||
+    TicketStatus.inProgress ||
+    TicketStatus.escalatedOperations ||
+    TicketStatus.escalatedFacilityManager ||
+    TicketStatus.reopened => true,
+    TicketStatus.awaitingConfirmation ||
+    TicketStatus.closed ||
+    TicketStatus.cancelled => false,
+  };
 }
 
 bool _isSelectable(dynamic row) {
