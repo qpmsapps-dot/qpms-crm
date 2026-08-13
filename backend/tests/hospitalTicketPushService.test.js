@@ -4,8 +4,10 @@ import test from 'node:test';
 
 import {
   appScopeForHospitalUser,
+  appScopeForNotification,
   buildHospitalPushData,
   buildHospitalPushMessage,
+  disableSupersededHospitalPushDevices,
   hashFcmToken,
   isPushActionableNotification,
   processHospitalPushDeliveries,
@@ -51,6 +53,14 @@ test('device registration uses signed-in user identity and stores only safe meta
     from(table) {
       assert.equal(table, 'hospital_ticket_push_devices');
       return {
+        select() {
+          return {
+            eq() { return this; },
+            then(resolve) {
+              return Promise.resolve({ data: [], error: null }).then(resolve);
+            },
+          };
+        },
         upsert(row, options) {
           writes.push({ row, options });
           return {
@@ -84,6 +94,86 @@ test('device registration uses signed-in user identity and stores only safe meta
   assert.equal(writes[0].row.fcm_token, 'fcm-secret-token');
   assert.equal(writes[0].row.metadata.token_hash_prefix, hashFcmToken('fcm-secret-token').slice(0, 12));
   assert.equal(writes[0].options.onConflict, 'hospital_ticket_user_id,app_scope,device_id');
+});
+
+test('same active FCM token registration supersedes stale ownership on the same app scope', async () => {
+  const state = {
+    devices: [
+      {
+        id: 'device-old-user',
+        hospital_ticket_user_id: 'doctor-a-user',
+        app_scope: 'qpms_client',
+        device_id: 'phone-old',
+        token_hash: hashFcmToken('shared-token'),
+        enabled: true,
+      },
+      {
+        id: 'device-current',
+        hospital_ticket_user_id: 'doctor-b-user',
+        app_scope: 'qpms_client',
+        device_id: 'phone-current',
+        token_hash: hashFcmToken('shared-token'),
+        enabled: true,
+      },
+      {
+        id: 'device-other-phone',
+        hospital_ticket_user_id: 'doctor-a-user',
+        app_scope: 'qpms_client',
+        device_id: 'phone-2',
+        token_hash: hashFcmToken('different-token'),
+        enabled: true,
+      },
+    ],
+  };
+  const count = await disableSupersededHospitalPushDevices(fakeDeviceClient(state), {
+    actor: actor('doctor-b', 'client'),
+    appScope: 'qpms_client',
+    deviceId: 'phone-current',
+    tokenHash: hashFcmToken('shared-token'),
+    now: '2026-08-13T12:00:00Z',
+  });
+
+  assert.equal(count, 1);
+  assert.equal(state.devices.find((row) => row.id === 'device-old-user').enabled, false);
+  assert.equal(state.devices.find((row) => row.id === 'device-current').enabled, true);
+  assert.equal(state.devices.find((row) => row.id === 'device-other-phone').enabled, true);
+  assert.equal(
+    state.devices.find((row) => row.id === 'device-old-user').disable_reason,
+    'superseded_by_token_registration',
+  );
+});
+
+test('same user keeps multiple phones when FCM tokens differ', async () => {
+  const state = {
+    devices: [
+      {
+        id: 'device-phone-1',
+        hospital_ticket_user_id: 'doctor-user',
+        app_scope: 'qpms_client',
+        device_id: 'phone-1',
+        token_hash: hashFcmToken('token-1'),
+        enabled: true,
+      },
+      {
+        id: 'device-phone-2',
+        hospital_ticket_user_id: 'doctor-user',
+        app_scope: 'qpms_client',
+        device_id: 'phone-2',
+        token_hash: hashFcmToken('token-2'),
+        enabled: true,
+      },
+    ],
+  };
+  const count = await disableSupersededHospitalPushDevices(fakeDeviceClient(state), {
+    actor: actor('doctor', 'client'),
+    appScope: 'qpms_client',
+    deviceId: 'phone-1',
+    tokenHash: hashFcmToken('token-1'),
+    now: '2026-08-13T12:00:00Z',
+  });
+
+  assert.equal(count, 0);
+  assert.equal(state.devices.every((row) => row.enabled), true);
 });
 
 test('incoming supervisor push is actionable only before supersede or timeout', () => {
@@ -139,6 +229,57 @@ test('push data maps escalation to ticket detail in the internal app', () => {
   assert.equal(data.current_owner_role, 'operations_executive');
 });
 
+test('incoming supervisor push is data-only and carries server acceptance deadline', () => {
+  const message = buildHospitalPushMessage({
+    id: 'notification-incoming',
+    ticket_id: 'ticket-incoming',
+    notification_type: 'incoming_supervisor_ticket',
+    title: 'New Housekeeping Complaint',
+    body: 'Block A needs acceptance.',
+    priority: 'high',
+    action_expires_at: '2026-08-11T09:02:00Z',
+    ticket: {
+      id: 'ticket-incoming',
+      ticket_no: 'QPMS-HK-2026-000036',
+      version: 7,
+      priority: 'high',
+      acceptance_due_at: '2026-08-11T09:02:00Z',
+      block: { block_name: 'Block A' },
+      floor_name: '3rd Floor',
+      category: { category_name: 'General Housekeeping' },
+    },
+  }, {
+    fcm_token: 'device-token',
+    app_scope: 'myqpms_internal',
+  });
+
+  assert.equal('notification' in message, false);
+  assert.equal(message.data.target_screen, 'incoming_ticket');
+  assert.equal(message.data.acceptance_due_at, '2026-08-11T09:02:00Z');
+  assert.equal(message.data.ticket_version, '7');
+  assert.equal(message.data.block_name, 'Block A');
+  assert.equal(message.data.floor_name, '3rd Floor');
+  assert.equal(message.data.category_name, 'General Housekeeping');
+});
+
+test('client resolution push keeps notification body and exact ticket route', () => {
+  const message = buildHospitalPushMessage({
+    id: 'notification-client',
+    ticket_id: 'ticket-client',
+    notification_type: 'awaiting_confirmation',
+    title: 'Housekeeping Work Completed',
+    body: 'QPMS-HK-2026-000036 is ready for your confirmation.',
+    ticket: { ticket_no: 'QPMS-HK-2026-000036' },
+  }, {
+    fcm_token: 'device-token',
+    app_scope: 'qpms_client',
+  });
+
+  assert.equal(message.notification.title, 'Housekeeping Work Completed');
+  assert.equal(message.data.target_screen, 'ticket_feedback');
+  assert.equal(message.data.ticket_number, 'QPMS-HK-2026-000036');
+});
+
 test('client cancellation push is routed to myQPMS internal devices', () => {
   const data = buildHospitalPushData({
     id: 'notification-3',
@@ -150,6 +291,14 @@ test('client cancellation push is routed to myQPMS internal devices', () => {
   }, 'myqpms_internal');
   assert.equal(data.app_scope, 'myqpms_internal');
   assert.equal(data.target_screen, 'ticket_detail');
+});
+
+test('phase 3 lifecycle notification types route to the intended app scopes', () => {
+  assert.equal(appScopeForNotification({ notification_type: 'ticket_created' }), 'qpms_client');
+  assert.equal(appScopeForNotification({ notification_type: 'ticket_accepted' }), 'qpms_client');
+  assert.equal(appScopeForNotification({ notification_type: 'work_started' }), 'qpms_client');
+  assert.equal(appScopeForNotification({ notification_type: 'ticket_reopened_client' }), 'qpms_client');
+  assert.equal(appScopeForNotification({ notification_type: 'ticket_assigned_internal' }), 'myqpms_internal');
 });
 
 test('dispatcher queues one supervisor delivery and processes pending row without Firebase Admin shape crash', async () => {
@@ -214,6 +363,83 @@ test('dispatcher queues one supervisor delivery and processes pending row withou
   assert.equal(state.deliveries[0].sent_at, now.toISOString());
 });
 
+test('temporary Firebase failure keeps delivery retryable with backoff', async () => {
+  const now = new Date('2026-08-11T00:10:28Z');
+  const state = {
+    notifications: [pushNotificationFixture()],
+    devices: [pushDeviceFixture()],
+    deliveries: [{
+      id: 'delivery-temporary-failure',
+      notification_id: 'notification-supervisor',
+      device_id: 'device-1',
+      ticket_id: 'ticket-1',
+      app_scope: 'myqpms_internal',
+      status: 'pending',
+      attempt_count: 0,
+      max_attempts: 5,
+      next_attempt_at: '2026-08-11T00:00:00Z',
+      retryable: true,
+      notification: pushNotificationFixture(),
+      device: pushDeviceFixture(),
+    }],
+  };
+
+  const processed = await processHospitalPushDeliveries(fakePushClient(state), {
+    now,
+    firebaseSender: async () => ({
+      ok: false,
+      code: 'messaging/server-unavailable',
+      message: 'temporary outage',
+      retryable: true,
+    }),
+  });
+
+  assert.deepEqual(processed, { sent: 0, failed: 1, skipped: 0, invalid_token: 0 });
+  assert.equal(state.deliveries[0].status, 'failed');
+  assert.equal(state.deliveries[0].attempt_count, 1);
+  assert.equal(state.deliveries[0].retryable, true);
+  assert.equal(state.deliveries[0].next_attempt_at, '2026-08-11T00:11:28.000Z');
+});
+
+test('permanent invalid Firebase token disables only that device', async () => {
+  const now = new Date('2026-08-11T00:10:28Z');
+  const device = pushDeviceFixture();
+  const state = {
+    notifications: [pushNotificationFixture()],
+    devices: [device],
+    deliveries: [{
+      id: 'delivery-invalid-token',
+      notification_id: 'notification-supervisor',
+      device_id: 'device-1',
+      ticket_id: 'ticket-1',
+      app_scope: 'myqpms_internal',
+      status: 'pending',
+      attempt_count: 0,
+      max_attempts: 5,
+      next_attempt_at: '2026-08-11T00:00:00Z',
+      retryable: true,
+      notification: pushNotificationFixture(),
+      device,
+    }],
+  };
+
+  const processed = await processHospitalPushDeliveries(fakePushClient(state), {
+    now,
+    firebaseSender: async () => ({
+      ok: false,
+      code: 'messaging/registration-token-not-registered',
+      message: 'gone',
+      retryable: false,
+    }),
+  });
+
+  assert.deepEqual(processed, { sent: 0, failed: 0, skipped: 0, invalid_token: 1 });
+  assert.equal(state.deliveries[0].status, 'invalid_token');
+  assert.equal(state.deliveries[0].retryable, false);
+  assert.equal(state.devices[0].enabled, false);
+  assert.equal(state.devices[0].disable_reason, 'messaging/registration-token-not-registered');
+});
+
 test('Firebase Admin initialization uses modular getApps instead of undefined admin.apps', () => {
   const source = readFileSync(
     new URL('../services/firebaseAdminService.js', import.meta.url),
@@ -225,11 +451,76 @@ test('Firebase Admin initialization uses modular getApps instead of undefined ad
   assert.doesNotMatch(source, /admin\.messaging/);
 });
 
+test('notification reliability migration adds database dedupe key without replacing source table', () => {
+  const source = readFileSync(
+    new URL('../../supabase/migrations_2_0/051_hospital_notification_reliability_hardening.sql', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /add column if not exists dedupe_key text/i);
+  assert.match(source, /hospital_ticket_notifications_dedupe_key_unique unique \(dedupe_key\)/i);
+  assert.match(source, /hospital_ticket_notification_dedupe_key/i);
+  assert.match(source, /sla_escalation/i);
+  assert.match(source, /incoming_supervisor_ticket/i);
+  assert.match(source, /drop index if exists public\.ux_hospital_incoming_supervisor_ticket_notification/i);
+  assert.doesNotMatch(source, /create table .*notifications/i);
+});
+
+test('notification event coverage migration extends lifecycle dedupe types only', () => {
+  const source = readFileSync(
+    new URL('../../supabase/migrations_2_0/052_hospital_notification_event_coverage.sql', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /create or replace function public\.hospital_ticket_notification_dedupe_key/i);
+  assert.match(source, /ticket_created/i);
+  assert.match(source, /ticket_accepted/i);
+  assert.match(source, /work_started/i);
+  assert.match(source, /ticket_reopened_client/i);
+  assert.match(source, /ticket_assigned_internal/i);
+  assert.match(source, /awaiting_confirmation/i);
+  assert.doesNotMatch(source, /create table/i);
+  assert.doesNotMatch(source, /alter table .*hospital_ticket_notifications/i);
+});
+
 function fakePushClient(state) {
   return {
     from(table) {
       return new FakePushQuery(state, table);
     },
+  };
+}
+
+function pushNotificationFixture() {
+  return {
+    id: 'notification-supervisor',
+    ticket_id: 'ticket-1',
+    recipient_user_id: 'supervisor-user',
+    notification_type: 'incoming_supervisor_ticket',
+    title: 'New Critical Ticket',
+    body: 'QPMS-HK-2026-0001 needs acceptance.',
+    priority: 'critical',
+    current_owner_role: 'housekeeping_supervisor',
+    escalation_level: 1,
+    action_status: 'active',
+    action_expires_at: '2099-08-11T00:12:28Z',
+    metadata: { ticket_no: 'QPMS-HK-2026-0001' },
+    recipient: {
+      id: 'supervisor-user',
+      profile_type: 'internal',
+      role_code: 'housekeeping_supervisor',
+      is_active: true,
+      client_id: 'client-a',
+    },
+  };
+}
+
+function pushDeviceFixture() {
+  return {
+    id: 'device-1',
+    hospital_ticket_user_id: 'supervisor-user',
+    fcm_token: 'fcm-token-redacted',
+    app_scope: 'myqpms_internal',
+    enabled: true,
+    notification_permission: 'granted',
   };
 }
 
@@ -309,6 +600,51 @@ class FakePushQuery {
       if (op === 'neq') return row[column] !== value;
       if (op === 'in') return value.includes(row[column]);
       if (op === 'lte') return !row[column] || new Date(row[column]) <= new Date(value);
+      return true;
+    }));
+  }
+}
+
+function fakeDeviceClient(state) {
+  return {
+    from(table) {
+      assert.equal(table, 'hospital_ticket_push_devices');
+      return new FakeDeviceQuery(state);
+    },
+  };
+}
+
+class FakeDeviceQuery {
+  constructor(state) {
+    this.state = state;
+    this.filters = [];
+    this.patch = null;
+  }
+
+  select() { return this; }
+  eq(column, value) {
+    this.filters.push(['eq', column, value]);
+    return this;
+  }
+  in(column, values) {
+    this.filters.push(['in', column, values]);
+    return this;
+  }
+  update(patch) {
+    this.patch = patch;
+    return this;
+  }
+  then(resolve, reject) {
+    const rows = this._rows();
+    if (this.patch) {
+      for (const row of rows) Object.assign(row, this.patch);
+    }
+    return Promise.resolve({ data: rows, error: null }).then(resolve, reject);
+  }
+  _rows() {
+    return this.state.devices.filter((row) => this.filters.every(([op, column, value]) => {
+      if (op === 'eq') return row[column] === value;
+      if (op === 'in') return value.includes(row[column]);
       return true;
     }));
   }

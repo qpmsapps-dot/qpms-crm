@@ -9,6 +9,7 @@ import {
   getHospitalTicket,
   hospitalDashboard,
   listIncomingSupervisorTickets,
+  listHospitalNotifications,
   listHospitalTickets,
   listHospitalRoutingAssignments,
   listHospitalRoutingShifts,
@@ -138,9 +139,10 @@ export function createHospitalTicketRouter({ anonClient, serviceClient }) {
 
   router.get('/notifications', async (request, response) => {
     try {
-      const result = await serviceClient.from('hospital_ticket_notifications').select('*,ticket:hospital_tickets(ticket_no)').eq('recipient_user_id', request.hospitalActor.user.id).order('created_at', { ascending: false }).limit(200);
-      if (result.error) throw result.error;
-      response.json({ ok: true, notifications: result.data || [] });
+      response.json({
+        ok: true,
+        notifications: await listHospitalNotifications(serviceClient, request.hospitalActor),
+      });
     } catch (error) { safeHospitalError(response, error); }
   });
 

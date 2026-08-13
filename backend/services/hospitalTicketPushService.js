@@ -5,7 +5,7 @@ import { normalizeHospitalRole } from './hospitalTicketAuthService.js';
 import { cleanHospitalText } from './hospitalTicketWorkflowService.js';
 
 export const HOSPITAL_PUSH_APP_SCOPES = new Set(['myqpms_internal', 'qpms_client']);
-const INTERNAL_PUSH_ROLES = new Set(['housekeeping_supervisor', 'operations_executive', 'facility_manager', 'project_head']);
+const INTERNAL_PUSH_ROLES = new Set(['housekeeping_supervisor', 'operations_executive', 'facility_manager', 'project_head', 'admin']);
 const CLIENT_PUSH_ROLES = new Set(['doctor', 'hospital_management']);
 
 export function appScopeForHospitalUser(user) {
@@ -67,13 +67,61 @@ export async function registerHospitalPushDevice(client, actor, body = {}) {
       token_hash_prefix: hashFcmToken(fcmToken).slice(0, 12),
     },
   };
+  const superseded = await disableSupersededHospitalPushDevices(client, {
+    actor,
+    appScope,
+    deviceId,
+    tokenHash: row.token_hash,
+  });
   const result = await client
     .from('hospital_ticket_push_devices')
     .upsert(row, { onConflict: 'hospital_ticket_user_id,app_scope,device_id' })
     .select('id,app_scope,platform,device_id,app_version,enabled,notification_permission,last_registered_at,last_seen_at')
     .maybeSingle();
   if (result.error) throw result.error;
+  console.info('[Hospital Push] Device registered', {
+    userId: actor.user.id,
+    appScope,
+    platform,
+    permission: notificationPermission,
+    tokenPresent: true,
+    superseded,
+  });
   return result.data;
+}
+
+export async function disableSupersededHospitalPushDevices(client, {
+  actor,
+  appScope,
+  deviceId,
+  tokenHash,
+  now = new Date().toISOString(),
+} = {}) {
+  if (!actor?.user?.id || !appScope || !deviceId || !tokenHash) return 0;
+  const existing = await client
+    .from('hospital_ticket_push_devices')
+    .select('id,hospital_ticket_user_id,device_id')
+    .eq('app_scope', appScope)
+    .eq('token_hash', tokenHash)
+    .eq('enabled', true);
+  if (existing.error) throw existing.error;
+  const staleIds = (existing.data || [])
+    .filter((device) =>
+      device.hospital_ticket_user_id !== actor.user.id ||
+      device.device_id !== deviceId)
+    .map((device) => device.id);
+  if (!staleIds.length) return 0;
+  const disabled = await client
+    .from('hospital_ticket_push_devices')
+    .update({
+      enabled: false,
+      disabled_at: now,
+      disable_reason: 'superseded_by_token_registration',
+      updated_at: now,
+    })
+    .in('id', staleIds);
+  if (disabled.error) throw disabled.error;
+  return staleIds.length;
 }
 
 export async function listHospitalPushDevices(client, actor) {
@@ -169,6 +217,11 @@ export async function queueHospitalPushDeliveries(client, { notificationIds = nu
       .from('hospital_ticket_push_deliveries')
       .upsert(rows, { onConflict: 'notification_id,device_id', ignoreDuplicates: true });
     if (inserted.error) throw inserted.error;
+    console.info('[Hospital Push] Delivery created', {
+      notificationId: notification.id,
+      appScope,
+      deviceCount: rows.length,
+    });
     queued += rows.length;
   }
   return queued;
@@ -178,7 +231,7 @@ export async function processHospitalPushDeliveries(client, { limit = 100, fireb
   const due = now.toISOString();
   const pending = await client
     .from('hospital_ticket_push_deliveries')
-    .select('*,notification:hospital_ticket_notifications(*,ticket:hospital_tickets(id,ticket_no,priority,floor_name,department_name,location_text,description,current_assignee_role,acceptance_due_at,status_code)),device:hospital_ticket_push_devices(id,fcm_token,token_hash,app_scope,enabled,notification_permission)')
+    .select('*,notification:hospital_ticket_notifications(*,ticket:hospital_tickets(id,ticket_no,version,priority,floor_name,department_name,location_text,description,current_assignee_role,acceptance_due_at,status_code,category:hospital_ticket_categories(category_name),block:hospital_blocks(block_name))),device:hospital_ticket_push_devices(id,fcm_token,token_hash,app_scope,enabled,notification_permission)')
     .in('status', ['pending', 'failed'])
     .eq('retryable', true)
     .lte('next_attempt_at', due)
@@ -226,6 +279,12 @@ export async function processHospitalPushDeliveries(client, { limit = 100, fireb
         error_message: null,
         updated_at: due,
       });
+      console.info('[Hospital Push] FCM send result', {
+        deliveryId: delivery.id,
+        appScope: delivery.device?.app_scope || null,
+        status: 'sent',
+        errorCode: null,
+      });
       stats.sent += 1;
     } else {
       const invalidToken = isInvalidFirebaseTokenError(sent.code);
@@ -247,6 +306,12 @@ export async function processHospitalPushDeliveries(client, { limit = 100, fireb
         error_code: sent.code || 'firebase_send_failed',
         error_message: cleanHospitalText(sent.message, 500) || null,
         updated_at: due,
+      });
+      console.info('[Hospital Push] FCM send result', {
+        deliveryId: delivery.id,
+        appScope: delivery.device?.app_scope || null,
+        status: invalidToken ? 'invalid_token' : 'failed',
+        errorCode: sent.code || 'firebase_send_failed',
       });
       stats[invalidToken ? 'invalid_token' : 'failed'] += 1;
     }
@@ -270,32 +335,46 @@ export function isPushActionableNotification(notification) {
 
 export function appScopeForNotification(notification) {
   const type = String(notification?.notification_type || '');
-  if (type === 'awaiting_confirmation') return 'qpms_client';
+  if ([
+    'awaiting_confirmation',
+    'ticket_created',
+    'ticket_accepted',
+    'work_started',
+    'ticket_reopened_client',
+    'ticket_closed',
+  ].includes(type)) return 'qpms_client';
   if ([
     'incoming_supervisor_ticket',
     'supervisor_acceptance_timeout',
     'sla_escalation',
     'assignment_alert',
     'ticket_reopened',
+    'ticket_cancelled',
+    'ticket_assigned_internal',
   ].includes(type)) return 'myqpms_internal';
   return appScopeForHospitalUser(notification?.recipient);
 }
 
 export function buildHospitalPushMessage(notification, device) {
   const data = buildHospitalPushData(notification, device?.app_scope);
+  const type = String(notification?.notification_type || '');
+  const actionableSupervisorInvite = type === 'incoming_supervisor_ticket';
+  const title = cleanHospitalText(notification.title, 120) || fallbackTitle(type);
+  const body = cleanHospitalText(notification.body, 300) || fallbackBody(notification);
   return {
     token: device.fcm_token,
-    notification: {
-      title: cleanHospitalText(notification.title, 120) || fallbackTitle(notification.notification_type),
-      body: cleanHospitalText(notification.body, 300) || fallbackBody(notification),
-    },
+    ...(actionableSupervisorInvite ? {} : { notification: { title, body } }),
     data,
     android: {
       priority: 'high',
-      notification: {
-        channelId: 'hospital_tickets',
-        clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-      },
+      ...(actionableSupervisorInvite
+        ? {}
+        : {
+            notification: {
+              channelId: 'hospital_tickets',
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+            },
+          }),
     },
     apns: {
       payload: { aps: { sound: 'default' } },
@@ -309,12 +388,19 @@ export function buildHospitalPushData(notification, appScope) {
   const ticketId = String(notification.ticket_id || ticket.id || metadata.ticket_id || '');
   const ticketNumber = String(ticket.ticket_no || metadata.ticket_no || '');
   const eventType = String(notification.notification_type || 'hospital_ticket_update');
+  const blockName = String(ticket.block?.block_name || metadata.block_name || '').trim();
+  const floorName = String(ticket.floor_name || metadata.floor_name || '').trim();
+  const categoryName = String(ticket.category?.category_name || metadata.category_name || '').trim();
   return compactStringMap({
     notification_id: notification.id,
     ticket_id: ticketId,
     ticket_number: ticketNumber,
+    ticket_version: String(ticket.version || metadata.ticket_version || ''),
     event_type: eventType,
     priority: String(notification.priority || ticket.priority || metadata.priority || ''),
+    block_name: blockName,
+    floor_name: floorName,
+    category_name: categoryName,
     target_screen: targetScreenForNotification(eventType),
     app_scope: appScope,
     acceptance_due_at: String(notification.action_expires_at || ticket.acceptance_due_at || metadata.acceptance_due_at || ''),
@@ -337,7 +423,7 @@ function targetScreenForNotification(type) {
 }
 
 function fallbackTitle(type) {
-  if (type === 'awaiting_confirmation') return 'Your Complaint Has Been Resolved';
+  if (type === 'awaiting_confirmation') return 'Ticket Resolved - Please Confirm';
   if (type === 'supervisor_acceptance_timeout') return 'Supervisor Acceptance Timeout';
   if (type === 'sla_escalation') return 'Ticket Escalated';
   return 'Hospital Ticket Update';

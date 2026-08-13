@@ -234,6 +234,50 @@ export async function listIncomingSupervisorTickets(client, actor) {
     }));
 }
 
+export async function listHospitalNotifications(client, actor, limit = 200) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 200, 1), 200);
+  const result = await client
+    .from('hospital_ticket_notifications')
+    .select('*,ticket:hospital_tickets(id,ticket_no,client_id,block_id,location_id,floor_name,department_name,location_text,exact_landmark,priority,status_code,block:hospital_blocks(id,block_name),location:hospital_locations(id,floor_name,department_name,location_name,location_code,room_number,area_name,ward_name),category:hospital_ticket_categories(id,category_name))')
+    .eq('recipient_user_id', actor.user.id)
+    .order('created_at', { ascending: false })
+    .limit(safeLimit);
+  if (result.error) throw result.error;
+
+  const rows = result.data || [];
+  const visibleTicketIds = rows
+    .map((row) => row.ticket)
+    .filter((ticket) => ticket?.id && canViewHospitalTicket(actor, ticket))
+    .map((ticket) => ticket.id);
+  const complaintPhotos = await firstComplaintPhotos(client, [...new Set(visibleTicketIds)]);
+
+  return rows.map((row) => {
+    const ticket = row.ticket && canViewHospitalTicket(actor, row.ticket) ? row.ticket : null;
+    const beforeImage = ticket?.id ? complaintPhotos.get(ticket.id) || null : null;
+    return {
+      ...row,
+      ticket: ticket ? {
+        id: ticket.id,
+        ticket_no: ticket.ticket_no,
+        priority: ticket.priority,
+        status_code: ticket.status_code,
+        block_name: ticket.block?.block_name || null,
+        floor_name: ticket.floor_name || ticket.location?.floor_name || null,
+        department_name: ticket.department_name || ticket.location?.department_name || null,
+        location_text: ticket.location_text
+          || ticket.location?.location_name
+          || ticket.location?.ward_name
+          || ticket.location?.area_name
+          || ticket.exact_landmark
+          || null,
+        category_name: ticket.category?.category_name || null,
+      } : null,
+      before_image: beforeImage,
+      before_image_url: beforeImage?.signed_url || null,
+    };
+  });
+}
+
 export async function listHospitalTickets(client, actor, filters = {}) {
   let query = client.from('hospital_tickets').select(TICKET_SELECT).eq('client_id', actor.user.client_id).order('raised_at', { ascending: false }).limit(500);
   query = applyTicketFilters(query, { ...filters, actorUserId: actor.user.id });
@@ -401,6 +445,11 @@ export async function createHospitalTicket(client, actor, body, idempotencyHeade
   if (payload.exactLandmark && result.data?.ticket?.location_id) {
     await applyExactLandmarkSnapshot(client, result.data?.ticket?.id, payload.exactLandmark);
   }
+  await safeWriteHospitalLifecycleNotifications(client, {
+    action: 'ticket_created',
+    actor,
+    afterTicket: result.data?.ticket,
+  });
   return result.data;
 }
 
@@ -558,7 +607,14 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
       p_confirmed_location: payload.confirmed_location === true || payload.confirmedLocation === true,
     });
     if (result.error) throw result.error;
-    return getHospitalTicket(client, actor, current.ticket.id);
+    const detail = await getHospitalTicket(client, actor, current.ticket.id);
+    await safeWriteHospitalLifecycleNotifications(client, {
+      action: effectiveAction,
+      actor,
+      beforeTicket: current.ticket,
+      afterTicket: detail.ticket,
+    });
+    return detail;
   }
   if (effectiveAction === 'reassign_supervisor') {
     return performManualHospitalReassignment(client, actor, current.ticket, {
@@ -613,7 +669,14 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
     p_operations_sla_minutes: slaMinutes().operations,
   });
   if (result.error) throw result.error;
-  return getHospitalTicket(client, actor, current.ticket.id);
+  const detail = await getHospitalTicket(client, actor, current.ticket.id);
+  await safeWriteHospitalLifecycleNotifications(client, {
+    action: effectiveAction,
+    actor,
+    beforeTicket: current.ticket,
+    afterTicket: detail.ticket,
+  });
+  return detail;
 }
 
 async function requireCurrentOperationalOwner(client, actor, ticket) {
@@ -837,7 +900,220 @@ async function performManualHospitalReassignment(client, actor, ticket, { target
     },
   });
   if (event.error) throw event.error;
-  return getHospitalTicket(client, actor, ticket.id);
+  const detail = await getHospitalTicket(client, actor, ticket.id);
+  await safeWriteHospitalLifecycleNotifications(client, {
+    action: 'manual_reassignment',
+    actor,
+    beforeTicket: ticket,
+    afterTicket: detail.ticket,
+    targetUserId: assignee.id,
+  });
+  return detail;
+}
+
+export function buildHospitalLifecycleNotificationRows({
+  action,
+  actor,
+  beforeTicket = null,
+  afterTicket = null,
+  targetUserId = null,
+} = {}) {
+  const ticket = afterTicket || beforeTicket || {};
+  const beforeStatus = beforeTicket?.status_code || '';
+  const afterStatus = ticket?.status_code || '';
+  const ticketId = cleanHospitalText(ticket.id || beforeTicket?.id, 80);
+  const ticketNo = cleanHospitalText(ticket.ticket_no || beforeTicket?.ticket_no, 80) || 'This ticket';
+  const raisedByUserId = cleanHospitalText(ticket.raised_by_user_id || beforeTicket?.raised_by_user_id, 80);
+  const version = Number(ticket.version || beforeTicket?.version || 0);
+  const cycle = Number(ticket.reopen_count ?? beforeTicket?.reopen_count ?? 0);
+  const priority = cleanHospitalText(ticket.priority || beforeTicket?.priority, 20) || null;
+  const rows = [];
+  const clientMetadata = {
+    ticket_id: ticketId,
+    ticket_no: ticketNo,
+    ticket_version: version,
+    reopen_count: cycle,
+    app_scope: 'qpms_client',
+  };
+
+  const pushClientRow = (notificationType, title, body, targetScreen = 'ticket_detail') => {
+    if (!ticketId || !raisedByUserId) return;
+    rows.push({
+      ticket_id: ticketId,
+      recipient_user_id: raisedByUserId,
+      notification_type: notificationType,
+      title,
+      body,
+      priority,
+      current_owner_role: cleanHospitalText(ticket.current_assignee_role || beforeTicket?.current_assignee_role, 80) || null,
+      escalation_level: Number(ticket.current_escalation_level_no || beforeTicket?.current_escalation_level_no || 0) || null,
+      dedupe_key: hospitalLifecycleNotificationDedupeKey({
+        ticketId,
+        recipientUserId: raisedByUserId,
+        notificationType,
+        version,
+        cycle,
+      }),
+      metadata: {
+        ...clientMetadata,
+        target_screen: targetScreen,
+      },
+    });
+  };
+
+  if (action === 'ticket_created') {
+    pushClientRow(
+      'ticket_created',
+      'Ticket Raised Successfully',
+      `${ticketNo} has been raised and our team has been notified.`,
+    );
+  } else if (action === 'accept' && beforeStatus !== 'accepted' && afterStatus === 'accepted') {
+    pushClientRow(
+      'ticket_accepted',
+      'Ticket Accepted',
+      `Your ticket ${ticketNo} has been accepted by the QPMS team.`,
+    );
+  } else if (action === 'start_work' && beforeStatus !== 'in_progress' && afterStatus === 'in_progress') {
+    pushClientRow(
+      'work_started',
+      'Work Started',
+      `Work has started on ticket ${ticketNo}.`,
+    );
+  } else if (action === 'feedback' && beforeStatus === 'resolved_awaiting_confirmation' && afterStatus === 'reopened') {
+    pushClientRow(
+      'ticket_reopened_client',
+      'Ticket Reopened',
+      `${ticketNo} has been reopened and the QPMS team has been notified.`,
+    );
+  } else if (action === 'manual_reassignment') {
+    const recipientUserId = cleanHospitalText(targetUserId, 80);
+    if (ticketId && recipientUserId) {
+      rows.push({
+        ticket_id: ticketId,
+        recipient_user_id: recipientUserId,
+        notification_type: 'ticket_assigned_internal',
+        title: 'Ticket Assigned',
+        body: `${ticketNo} has been assigned to you.`,
+        priority,
+        current_owner_role: cleanHospitalText(ticket.current_assignee_role || beforeTicket?.current_assignee_role, 80) || null,
+        escalation_level: Number(ticket.current_escalation_level_no || beforeTicket?.current_escalation_level_no || 0) || null,
+        dedupe_key: hospitalLifecycleNotificationDedupeKey({
+          ticketId,
+          recipientUserId,
+          notificationType: 'ticket_assigned_internal',
+          version,
+          cycle,
+        }),
+        metadata: {
+          ticket_id: ticketId,
+          ticket_no: ticketNo,
+          ticket_version: version,
+          reopen_count: cycle,
+          app_scope: 'myqpms_internal',
+          target_screen: 'ticket_detail',
+        },
+      });
+    }
+  }
+
+  return rows;
+}
+
+export function hospitalLifecycleNotificationDedupeKey({
+  ticketId,
+  recipientUserId,
+  notificationType,
+  version = 0,
+  cycle = 0,
+} = {}) {
+  if (!ticketId || !recipientUserId || !notificationType) return null;
+  return [
+    'hospital_ticket_notification',
+    cleanHospitalText(notificationType, 80),
+    cleanHospitalText(ticketId, 80),
+    cleanHospitalText(recipientUserId, 80),
+    String(Number(version) || 0),
+    String(Number(cycle) || 0),
+  ].join(':');
+}
+
+async function safeWriteHospitalLifecycleNotifications(client, context) {
+  await standardizeHospitalLifecycleNotificationCopy(client, context);
+  const rows = buildHospitalLifecycleNotificationRows(context);
+  if (!rows.length) return { inserted: 0 };
+  try {
+    const result = await client
+      .from('hospital_ticket_notifications')
+      .upsert(rows, { onConflict: 'dedupe_key', ignoreDuplicates: true });
+    if (result.error) throw result.error;
+    return { inserted: rows.length };
+  } catch (error) {
+    console.warn('[Hospital Notifications] lifecycle write skipped', {
+      action: context?.action || null,
+      ticketId: context?.afterTicket?.id || context?.beforeTicket?.id || null,
+      code: error?.code || null,
+      message: error?.message || 'unknown',
+    });
+    return { inserted: 0, failed: true };
+  }
+}
+
+async function standardizeHospitalLifecycleNotificationCopy(client, context) {
+  const ticket = context?.afterTicket || context?.beforeTicket || {};
+  const ticketId = cleanHospitalText(ticket.id, 80);
+  const ticketNo = cleanHospitalText(ticket.ticket_no, 80) || 'This ticket';
+  if (!ticketId) return;
+  try {
+    if (context.action === 'resolve' && ticket.status_code === 'resolved_awaiting_confirmation') {
+      const dedupeKey = hospitalLifecycleNotificationDedupeKey({
+        ticketId,
+        recipientUserId: ticket.raised_by_user_id,
+        notificationType: 'awaiting_confirmation',
+        version: ticket.version,
+        cycle: ticket.reopen_count,
+      });
+      const result = await client
+        .from('hospital_ticket_notifications')
+        .update({
+          title: 'Ticket Resolved - Please Confirm',
+          body: `QPMS has marked ${ticketNo} as resolved. Please review the work and confirm your satisfaction.`,
+          metadata: {
+            ticket_id: ticketId,
+            ticket_no: ticketNo,
+            ticket_version: ticket.version || null,
+            reopen_count: ticket.reopen_count ?? null,
+            app_scope: 'qpms_client',
+            target_screen: 'ticket_feedback',
+          },
+        })
+        .eq('ticket_id', ticketId)
+        .eq('recipient_user_id', ticket.raised_by_user_id)
+        .eq('notification_type', 'awaiting_confirmation')
+        .eq('dedupe_key', dedupeKey);
+      if (result.error) throw result.error;
+    }
+    if (context.action === 'feedback' && ticket.status_code === 'reopened') {
+      const result = await client
+        .from('hospital_ticket_notifications')
+        .update({
+          title: 'Ticket Reopened by Client',
+          body: `${ticketNo} was marked Not Satisfied and requires further action.`,
+          priority: ticket.priority || null,
+          current_owner_role: ticket.current_assignee_role || null,
+          escalation_level: ticket.current_escalation_level_no || null,
+        })
+        .eq('ticket_id', ticketId)
+        .eq('notification_type', 'ticket_reopened');
+      if (result.error) throw result.error;
+    }
+  } catch (error) {
+    console.warn('[Hospital Notifications] copy standardization skipped', {
+      action: context?.action || null,
+      ticketId,
+      code: error?.code || null,
+      message: error?.message || 'unknown',
+    });
+  }
 }
 
 export function hospitalSlaState(ticket, now = new Date()) {

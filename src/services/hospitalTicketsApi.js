@@ -26,3 +26,17 @@ export async function getHospitalTicketDetail(ticketId) {
     url: `/api/web/hospital-tickets/${encodeURIComponent(ticketId)}`,
   }).then(dataOrThrow);
 }
+
+export async function getHospitalTicketNotifications() {
+  return authenticatedApiRequest({
+    method: 'GET',
+    url: '/api/hospital-tickets/notifications',
+  }).then(dataOrThrow);
+}
+
+export async function markHospitalTicketNotificationRead(notificationId) {
+  return authenticatedApiRequest({
+    method: 'POST',
+    url: `/api/hospital-tickets/notifications/${encodeURIComponent(notificationId)}/read`,
+  }).then(dataOrThrow);
+}
