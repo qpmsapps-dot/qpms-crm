@@ -1,5 +1,5 @@
 import cors from 'cors';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import dotenv from 'dotenv';
 import express from 'express';
 import nodemailer from 'nodemailer';
@@ -9,6 +9,12 @@ import {
   createPublicHospitalFeedbackQrRouter,
 } from './routes/hospitalFeedbackQrRoutes.js';
 import { createHospitalTicketRouter } from './routes/hospitalTicketRoutes.js';
+import {
+  normalizeHospitalTicketCreate,
+  safeHospitalError,
+  slaMinutes,
+  validateHospitalTicketCreate,
+} from './services/hospitalTicketWorkflowService.js';
 import {
   runHospitalSlaWorker,
   startHospitalSlaScheduler,
@@ -380,6 +386,528 @@ app.use(
     environment: process.env,
   }),
 );
+
+app.get(
+  '/api/admin/hospital-client-contacts',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      const nimsClient = await resolveNimsHospitalClient(client);
+      let query = client
+        .from('hospital_client_contacts')
+        .select('*')
+        .eq('client_id', nimsClient.id)
+        .order('created_at', { ascending: false })
+        .limit(200);
+      const active = String(request.query.active ?? 'true').toLowerCase();
+      if (active === 'true') query = query.eq('is_active', true);
+      if (active === 'false') query = query.eq('is_active', false);
+      const search = textOrNull(request.query.search);
+      if (search) {
+        const normalizedMobile = normalizeIndianMobile(search);
+        query = normalizedMobile
+          ? query.eq('normalized_mobile', normalizedMobile)
+          : query.ilike('full_name', `%${search}%`);
+      }
+      const { data, error } = await query;
+      if (error) throw error;
+      response.json({ ok: true, client: nimsClient, contacts: data || [] });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.post(
+  '/api/admin/hospital-client-contacts',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      const nimsClient = await resolveNimsHospitalClient(client);
+      const fullName = textOrNull(request.body?.full_name || request.body?.fullName);
+      const mobile = textOrNull(request.body?.mobile);
+      const normalizedMobile = normalizeIndianMobile(mobile);
+      if (!fullName) throw userManagementHttpError(400, 'Full name is required.');
+      if (!normalizedMobile) throw userManagementHttpError(400, 'Enter a valid 10 digit Indian mobile number.');
+      const payload = {
+        client_id: nimsClient.id,
+        full_name: fullName,
+        mobile,
+        normalized_mobile: normalizedMobile,
+        designation: textOrNull(request.body?.designation),
+        department: textOrNull(request.body?.department),
+        email: normalizeEmail(request.body?.email) || null,
+        is_active: true,
+        metadata: {
+          source: 'user_management_nims_client_person',
+          created_by: request.authUser.id,
+        },
+      };
+      const { data, error } = await client
+        .from('hospital_client_contacts')
+        .insert(payload)
+        .select('*')
+        .single();
+      if (error) {
+        if (error.code === '23505') {
+          const duplicate = await client
+            .from('hospital_client_contacts')
+            .select('full_name')
+            .eq('client_id', nimsClient.id)
+            .eq('normalized_mobile', normalizedMobile)
+            .eq('is_active', true)
+            .maybeSingle();
+          throw userManagementHttpError(
+            409,
+            `This mobile number is already registered${duplicate.data?.full_name ? ` to ${duplicate.data.full_name}` : ''} for ${nimsClient.client_name}.`,
+          );
+        }
+        throw error;
+      }
+      await writeUserManagementAudit(client, {
+        action: 'CREATE_NIMS_CLIENT_CONTACT',
+        newData: data,
+        metadata: { client_id: nimsClient.id, auth_user_created: false, profile_created: false },
+        request,
+      });
+      response.status(201).json({ ok: true, client: nimsClient, contact: data });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.patch(
+  '/api/admin/hospital-client-contacts/:contactId',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      const nimsClient = await resolveNimsHospitalClient(client);
+      const patch = {};
+      if (hasOwn(request.body || {}, 'full_name')) patch.full_name = textOrNull(request.body.full_name);
+      if (hasOwn(request.body || {}, 'mobile')) {
+        patch.mobile = textOrNull(request.body.mobile);
+        patch.normalized_mobile = normalizeIndianMobile(request.body.mobile);
+        if (!patch.normalized_mobile) throw userManagementHttpError(400, 'Enter a valid 10 digit Indian mobile number.');
+      }
+      if (hasOwn(request.body || {}, 'designation')) patch.designation = textOrNull(request.body.designation);
+      if (hasOwn(request.body || {}, 'department')) patch.department = textOrNull(request.body.department);
+      if (hasOwn(request.body || {}, 'email')) patch.email = normalizeEmail(request.body.email) || null;
+      if (hasOwn(request.body || {}, 'is_active')) patch.is_active = booleanValue(request.body.is_active);
+      const { data, error } = await client
+        .from('hospital_client_contacts')
+        .update(patch)
+        .eq('id', request.params.contactId)
+        .eq('client_id', nimsClient.id)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw userManagementHttpError(404, 'NIMS client person was not found.');
+      await writeUserManagementAudit(client, {
+        action: 'UPDATE_NIMS_CLIENT_CONTACT',
+        newData: data,
+        metadata: { client_id: nimsClient.id },
+        request,
+      });
+      response.json({ ok: true, client: nimsClient, contact: data });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.post('/api/hospital-client/identify', async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const normalizedMobile = normalizeIndianMobile(request.body?.mobile);
+    if (!normalizedMobile) {
+      response.status(400).json({ ok: false, code: 'invalid_mobile', message: 'Enter a valid registered mobile number.' });
+      return;
+    }
+    const nimsClient = await resolveNimsHospitalClient(client);
+    const { data: contact, error } = await client
+      .from('hospital_client_contacts')
+      .select('id,client_id,full_name,mobile,normalized_mobile,designation,department,email,is_active')
+      .eq('client_id', nimsClient.id)
+      .eq('normalized_mobile', normalizedMobile)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (error) throw error;
+    if (!contact) {
+      response.status(403).json({ ok: false, code: 'mobile_not_registered', message: 'This mobile number is not registered for NIMS Client Ticketing.' });
+      return;
+    }
+    const token = signHospitalContactToken({
+      contact_id: contact.id,
+      client_id: contact.client_id,
+      exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 14,
+    });
+    response.json({
+      ok: true,
+      token,
+      contact: {
+        id: contact.id,
+        full_name: contact.full_name,
+        mobile: contact.mobile,
+        designation: contact.designation,
+        department: contact.department,
+        email: contact.email,
+      },
+      client: {
+        id: nimsClient.id,
+        name: nimsClient.client_name,
+        code: nimsClient.client_code,
+      },
+    });
+  } catch (error) {
+    response.status(500).json({ ok: false, code: 'hospital_client_identify_failed', message: 'Unable to verify registered mobile number.' });
+  }
+});
+
+function hospitalContactAuth(request, response) {
+  const token = String(request.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+  const payload = verifyHospitalContactToken(token);
+  if (!payload) {
+    response.status(401).json({ ok: false, code: 'client_contact_session_required', message: 'Registered mobile session required.' });
+    return null;
+  }
+  return payload;
+}
+
+async function loadHospitalContact(client, tokenPayload) {
+  const { data, error } = await client
+    .from('hospital_client_contacts')
+    .select('*')
+    .eq('id', tokenPayload.contact_id)
+    .eq('client_id', tokenPayload.client_id)
+    .eq('is_active', true)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+app.get('/api/hospital-client/me', async (request, response) => {
+  try {
+    const tokenPayload = hospitalContactAuth(request, response);
+    if (!tokenPayload) return;
+    const client = requireServiceRoleSupabase();
+    const contact = await loadHospitalContact(client, tokenPayload);
+    if (!contact) {
+      response.status(403).json({ ok: false, code: 'inactive_client_contact', message: 'This registered mobile access is inactive.' });
+      return;
+    }
+    response.json({ ok: true, user: { ...contact, profile_type: 'client_contact', role_code: 'client_contact' } });
+  } catch (error) {
+    response.status(500).json({ ok: false, code: 'hospital_client_profile_failed', message: 'Unable to load registered contact.' });
+  }
+});
+
+app.get('/api/hospital-client/blocks', hospitalClientMasterHandler('blocks'));
+app.get('/api/hospital-client/locations', hospitalClientMasterHandler('locations'));
+app.get('/api/hospital-client/categories', hospitalClientMasterHandler('categories'));
+app.get('/api/hospital-client/floors', hospitalClientMasterHandler('floors'));
+app.get('/api/hospital-client/departments', hospitalClientMasterHandler('departments'));
+app.get('/api/hospital-client/hierarchy/locations', hospitalClientMasterHandler('hierarchy_locations'));
+app.get('/api/hospital-client/hierarchy', hospitalClientMasterHandler('hierarchy'));
+
+function hospitalClientMasterHandler(kind) {
+  return async (request, response) => {
+    try {
+      const tokenPayload = hospitalContactAuth(request, response);
+      if (!tokenPayload) return;
+      const client = requireServiceRoleSupabase();
+      const contact = await loadHospitalContact(client, tokenPayload);
+      if (!contact) {
+        response.status(403).json({ ok: false, code: 'inactive_client_contact', message: 'This registered mobile access is inactive.' });
+        return;
+      }
+      const clientId = contact.client_id;
+      const blockId = textOrNull(request.query.block_id || request.query.blockId);
+      const floorId = textOrNull(request.query.floor_id || request.query.floorId);
+      const departmentId = textOrNull(request.query.department_id || request.query.departmentId);
+      const [blocks, floors, departments, locations, categories] = await Promise.all([
+        client.from('hospital_blocks').select('*').eq('client_id', clientId).eq('is_active', true).order('sort_order'),
+        client.from('hospital_floors').select('*').eq('client_id', clientId).eq('is_active', true).order('sort_order'),
+        client.from('hospital_departments').select('*').eq('client_id', clientId).eq('is_active', true).order('department_name'),
+        client.from('hospital_locations').select('*').eq('client_id', clientId).eq('is_active', true).order('floor_name').order('department_name').order('location_name'),
+        client.from('hospital_ticket_categories').select('*').or(`client_id.is.null,client_id.eq.${clientId}`).eq('is_active', true).order('sort_order'),
+      ]);
+      for (const result of [blocks, floors, departments, locations, categories]) if (result.error) throw result.error;
+      const blockRows = blocks.data || [];
+      let floorRows = floors.data || [];
+      let departmentRows = departments.data || [];
+      let locationRows = locations.data || [];
+      if (blockId) {
+        floorRows = floorRows.filter((row) => row.block_id === blockId);
+        departmentRows = departmentRows.filter((row) => row.block_id === blockId);
+        locationRows = locationRows.filter((row) => row.block_id === blockId);
+      }
+      if (floorId) {
+        departmentRows = departmentRows.filter((row) => !row.floor_id || row.floor_id === floorId);
+        locationRows = locationRows.filter((row) => row.floor_id === floorId);
+      }
+      if (departmentId) locationRows = locationRows.filter((row) => row.department_id === departmentId);
+      if (kind === 'blocks') response.json({ ok: true, blocks: blockRows });
+      else if (kind === 'floors') response.json({ ok: true, floors: floorRows });
+      else if (kind === 'departments') response.json({ ok: true, departments: departmentRows });
+      else if (kind === 'locations' || kind === 'hierarchy_locations') response.json({ ok: true, locations: locationRows });
+      else if (kind === 'categories') response.json({ ok: true, categories: categories.data || [] });
+      else response.json({ ok: true, hierarchy: { blocks: blockRows, floors: floorRows, departments: departmentRows, locations: locationRows } });
+    } catch (error) {
+      response.status(500).json({ ok: false, code: 'hospital_client_master_failed', message: 'Unable to load NIMS ticket master data.' });
+    }
+  };
+}
+
+app.get('/api/hospital-client/tickets', async (request, response) => {
+  try {
+    const tokenPayload = hospitalContactAuth(request, response);
+    if (!tokenPayload) return;
+    const client = requireServiceRoleSupabase();
+    const contact = await loadHospitalContact(client, tokenPayload);
+    if (!contact) {
+      response.status(403).json({ ok: false, code: 'inactive_client_contact', message: 'This registered mobile access is inactive.' });
+      return;
+    }
+    const { data, error } = await client
+      .from('hospital_tickets')
+      .select('*,block:hospital_blocks(id,block_code,block_name),location:hospital_locations(id,floor_name,department_name,location_name,location_code,room_number,area_name,ward_name),category:hospital_ticket_categories(id,category_code,category_name)')
+      .eq('raised_by_client_contact_id', contact.id)
+      .order('raised_at', { ascending: false })
+      .limit(200);
+    if (error) throw error;
+    response.json({ ok: true, tickets: data || [] });
+  } catch (error) {
+    response.status(500).json({ ok: false, code: 'hospital_client_tickets_failed', message: 'Unable to load your NIMS tickets.' });
+  }
+});
+
+app.get('/api/hospital-client/notifications', async (request, response) => {
+  const tokenPayload = hospitalContactAuth(request, response);
+  if (!tokenPayload) return;
+  response.json({ ok: true, notifications: [] });
+});
+
+app.post('/api/hospital-client/notifications/:notificationId/read', async (request, response) => {
+  const tokenPayload = hospitalContactAuth(request, response);
+  if (!tokenPayload) return;
+  response.json({ ok: true });
+});
+
+app.get('/api/hospital-client/tickets/:ticketId', async (request, response) => {
+  try {
+    const tokenPayload = hospitalContactAuth(request, response);
+    if (!tokenPayload) return;
+    const client = requireServiceRoleSupabase();
+    const contact = await loadHospitalContact(client, tokenPayload);
+    if (!contact) {
+      response.status(403).json({ ok: false, code: 'inactive_client_contact', message: 'This registered mobile access is inactive.' });
+      return;
+    }
+    const identifier = textOrNull(request.params.ticketId);
+    const identifierColumn = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(identifier)
+      ? 'id'
+      : 'ticket_no';
+    const ticketResult = await client
+      .from('hospital_tickets')
+      .select('*,block:hospital_blocks(id,block_code,block_name),location:hospital_locations(id,floor_name,department_name,location_name,location_code,room_number,area_name,ward_name),category:hospital_ticket_categories(id,category_code,category_name),assignee:hospital_ticket_users!hospital_tickets_current_assignee_user_id_fkey(id,display_name,role_code)')
+      .eq(identifierColumn, identifier)
+      .eq('raised_by_client_contact_id', contact.id)
+      .maybeSingle();
+    if (ticketResult.error) throw ticketResult.error;
+    if (!ticketResult.data) {
+      response.status(404).json({ ok: false, code: 'ticket_not_found', message: 'Ticket was not found for this registered mobile number.' });
+      return;
+    }
+    const [events, attachments] = await Promise.all([
+      client.from('hospital_ticket_events').select('*').eq('ticket_id', ticketResult.data.id).order('created_at'),
+      client.from('hospital_ticket_attachments').select('*').eq('ticket_id', ticketResult.data.id).eq('is_client_visible', true).order('created_at'),
+    ]);
+    if (events.error) throw events.error;
+    if (attachments.error) throw attachments.error;
+    response.json({ ok: true, ticket: ticketResult.data, timeline: events.data || [], attachments: attachments.data || [], comments: [] });
+  } catch (error) {
+    response.status(500).json({ ok: false, code: 'hospital_client_ticket_failed', message: 'Unable to load ticket details.' });
+  }
+});
+
+app.post('/api/hospital-client/tickets', async (request, response) => {
+  try {
+    const tokenPayload = hospitalContactAuth(request, response);
+    if (!tokenPayload) return;
+    const client = requireServiceRoleSupabase();
+    const contact = await loadHospitalContact(client, tokenPayload);
+    if (!contact) {
+      response.status(403).json({ ok: false, code: 'inactive_client_contact', message: 'This registered mobile access is inactive.' });
+      return;
+    }
+    const payload = normalizeHospitalTicketCreate({ ...request.body, idempotency_key: request.body?.idempotency_key || request.headers['idempotency-key'] });
+    const errors = validateHospitalTicketCreate(payload);
+    if (errors.length) {
+      response.status(400).json({ ok: false, code: 'invalid_ticket_request', message: errors.join(' ') });
+      return;
+    }
+    const sla = slaMinutes();
+    const result = await client.rpc('rpc_create_hospital_contact_ticket', {
+      p_contact_id: contact.id,
+      p_block_id: payload.blockId,
+      p_location_id: payload.locationId,
+      p_category_id: payload.categoryId,
+      p_priority: payload.priority,
+      p_title: payload.title,
+      p_description: payload.description,
+      p_idempotency_key: payload.idempotencyKey,
+      p_supervisor_sla_minutes: sla.supervisor,
+      p_floor_id: payload.floorId || null,
+      p_department_id: payload.departmentId || null,
+      p_exact_landmark: payload.exactLandmark || null,
+    });
+    if (result.error) throw result.error;
+    response.status(result.data?.idempotent_replay ? 200 : 201).json({ ok: true, ticket: result.data?.ticket, timeline: [], idempotent_replay: result.data?.idempotent_replay });
+  } catch (error) {
+    safeHospitalError(response, error);
+  }
+});
+
+async function loadContactTicketForRequest(client, tokenPayload, ticketId) {
+  const contact = await loadHospitalContact(client, tokenPayload);
+  if (!contact) return { contact: null, ticket: null };
+  const identifier = textOrNull(ticketId);
+  const identifierColumn = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(identifier)
+    ? 'id'
+    : 'ticket_no';
+  const ticketResult = await client
+    .from('hospital_tickets')
+    .select('*')
+    .eq(identifierColumn, identifier)
+    .eq('raised_by_client_contact_id', contact.id)
+    .maybeSingle();
+  if (ticketResult.error) throw ticketResult.error;
+  return { contact, ticket: ticketResult.data || null };
+}
+
+app.post('/api/hospital-client/tickets/:ticketId/attachments/sign-upload', async (request, response) => {
+  try {
+    const tokenPayload = hospitalContactAuth(request, response);
+    if (!tokenPayload) return;
+    const client = requireServiceRoleSupabase();
+    const { contact, ticket } = await loadContactTicketForRequest(client, tokenPayload, request.params.ticketId);
+    if (!contact || !ticket) {
+      response.status(404).json({ ok: false, code: 'ticket_not_found', message: 'Ticket was not found for this registered mobile number.' });
+      return;
+    }
+    const type = accessCode(request.body?.attachment_type);
+    if (type !== 'complaint_photo') {
+      response.status(400).json({ ok: false, code: 'invalid_attachment_type', message: 'Only complaint photos can be uploaded from registered mobile access.' });
+      return;
+    }
+    const mime = accessCode(request.body?.mime_type);
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) {
+      response.status(400).json({ ok: false, code: 'invalid_attachment_mime', message: 'Only JPEG, PNG, and WebP images are supported.' });
+      return;
+    }
+    const existing = await client
+      .from('hospital_ticket_attachments')
+      .select('id')
+      .eq('ticket_id', ticket.id)
+      .eq('attachment_type', type);
+    if (existing.error) throw existing.error;
+    if ((existing.data || []).length >= 3) {
+      response.status(400).json({ ok: false, code: 'too_many_attachments', message: 'A maximum of three complaint photos is allowed.' });
+      return;
+    }
+    const extension = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+    const path = `${contact.client_id}/${ticket.id}/${type}/${randomUUID()}.${extension}`;
+    const signed = await client.storage.from('hospital-ticket-attachments').createSignedUploadUrl(path);
+    if (signed.error) throw signed.error;
+    response.json({ ok: true, storage_path: path, signed_url: signed.data.signedUrl, token: signed.data.token, expires_in: 7200 });
+  } catch (error) {
+    safeHospitalError(response, error);
+  }
+});
+
+app.post('/api/hospital-client/tickets/:ticketId/attachments/complete', async (request, response) => {
+  try {
+    const tokenPayload = hospitalContactAuth(request, response);
+    if (!tokenPayload) return;
+    const client = requireServiceRoleSupabase();
+    const { contact, ticket } = await loadContactTicketForRequest(client, tokenPayload, request.params.ticketId);
+    if (!contact || !ticket) {
+      response.status(404).json({ ok: false, code: 'ticket_not_found', message: 'Ticket was not found for this registered mobile number.' });
+      return;
+    }
+    const path = textOrNull(request.body?.storage_path);
+    if (!path || !path.startsWith(`${contact.client_id}/${ticket.id}/`)) {
+      response.status(403).json({ ok: false, code: 'attachment_forbidden', message: 'Attachment path is outside this ticket.' });
+      return;
+    }
+    const size = Number(request.body?.size_bytes);
+    if (!Number.isInteger(size) || size < 1 || size > 10485760) {
+      response.status(400).json({ ok: false, code: 'invalid_attachment_size', message: 'Attachment size must be between 1 byte and 10 MB.' });
+      return;
+    }
+    const type = accessCode(request.body?.attachment_type || 'complaint_photo');
+    const mime = accessCode(request.body?.mime_type);
+    const inserted = await client
+      .from('hospital_ticket_attachments')
+      .insert({
+        ticket_id: ticket.id,
+        uploaded_by_user_id: null,
+        attachment_type: type,
+        storage_bucket: 'hospital-ticket-attachments',
+        storage_path: path,
+        original_filename: textOrNull(request.body?.original_filename) || 'complaint-photo',
+        mime_type: mime,
+        size_bytes: size,
+        is_client_visible: true,
+        metadata: { source: 'nims_client_contact_mobile', client_contact_id: contact.id },
+      })
+      .select('*')
+      .single();
+    if (inserted.error) throw inserted.error;
+    response.status(201).json({ ok: true, attachment: inserted.data });
+  } catch (error) {
+    safeHospitalError(response, error);
+  }
+});
+
+app.get('/api/hospital-client/tickets/:ticketId/attachments/:attachmentId/sign-download', async (request, response) => {
+  try {
+    const tokenPayload = hospitalContactAuth(request, response);
+    if (!tokenPayload) return;
+    const client = requireServiceRoleSupabase();
+    const { ticket } = await loadContactTicketForRequest(client, tokenPayload, request.params.ticketId);
+    if (!ticket) {
+      response.status(404).json({ ok: false, code: 'ticket_not_found', message: 'Ticket was not found for this registered mobile number.' });
+      return;
+    }
+    const attachment = await client
+      .from('hospital_ticket_attachments')
+      .select('*')
+      .eq('id', request.params.attachmentId)
+      .eq('ticket_id', ticket.id)
+      .eq('is_client_visible', true)
+      .maybeSingle();
+    if (attachment.error) throw attachment.error;
+    if (!attachment.data) {
+      response.status(404).json({ ok: false, code: 'attachment_not_found', message: 'Attachment was not found for this ticket.' });
+      return;
+    }
+    const signed = await client.storage
+      .from(attachment.data.storage_bucket)
+      .createSignedUrl(attachment.data.storage_path, 300);
+    if (signed.error) throw signed.error;
+    response.json({ ok: true, signed_url: signed.data.signedUrl, expires_in: 300 });
+  } catch (error) {
+    safeHospitalError(response, error);
+  }
+});
 
 app.use(
   '/api/hospital-tickets',
@@ -1626,6 +2154,70 @@ function accessCode(value) {
 function normalizeUserType(value) {
   const text = accessCode(value || 'internal');
   return text === 'client' ? 'client' : 'internal';
+}
+
+function normalizeIndianMobile(value) {
+  const digits = String(value || '').replace(/\D+/g, '');
+  const trimmed = digits.length === 12 && digits.startsWith('91')
+    ? digits.slice(2)
+    : digits.length === 11 && digits.startsWith('0')
+      ? digits.slice(1)
+      : digits;
+  return /^[6-9]\d{9}$/.test(trimmed) ? trimmed : '';
+}
+
+function hospitalContactTokenSecret() {
+  return process.env.HOSPITAL_CLIENT_CONTEXT_SECRET
+    || process.env.SUPABASE_SERVICE_ROLE_KEY
+    || 'local-hospital-client-contact-secret';
+}
+
+function signHospitalContactToken(payload) {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = createHmac('sha256', hospitalContactTokenSecret())
+    .update(body)
+    .digest('base64url');
+  return `${body}.${signature}`;
+}
+
+function verifyHospitalContactToken(token) {
+  const [body, signature] = String(token || '').split('.');
+  if (!body || !signature) return null;
+  const expected = createHmac('sha256', hospitalContactTokenSecret())
+    .update(body)
+    .digest('base64url');
+  if (signature !== expected) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (!payload?.contact_id || !payload?.client_id || Number(payload.exp || 0) < Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveNimsHospitalClient(client) {
+  const codeResult = await client
+    .from('hospital_clients')
+    .select('id,client_code,client_name,is_active')
+    .in('client_code', ['NIMS', 'NIMS_HYDERABAD', 'NIMS_HYD'])
+    .eq('is_active', true)
+    .order('client_name')
+    .limit(1);
+  if (codeResult.error) throw codeResult.error;
+  if (codeResult.data?.[0]) return codeResult.data[0];
+  const nameResult = await client
+    .from('hospital_clients')
+    .select('id,client_code,client_name,is_active')
+    .ilike('client_name', '%NIMS%')
+    .eq('is_active', true)
+    .order('client_name')
+    .limit(1);
+  if (nameResult.error) throw nameResult.error;
+  if (nameResult.data?.[0]) return nameResult.data[0];
+  throw userManagementHttpError(503, 'NIMS Hyderabad Hospital client master is not configured.');
 }
 
 function accessPayloadFromBody(body = {}) {
