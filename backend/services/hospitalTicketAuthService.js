@@ -133,7 +133,7 @@ export async function resolveAdminHospitalActor({ serviceClient, authUser, reque
   const authDebug = adminHospitalAuthDebug({ authUser, profile, existingHospitalUser });
   if (debugContext) Object.assign(debugContext, authDebug);
   if (!ADMIN_HOSPITAL_ROLE_CODE) {
-    console.warn('[Hospital Ticketing] Admin profile requires explicit Hospital Ticketing access', {
+    console.info('[Hospital Ticketing] Admin profile requires explicit Hospital Ticketing access', {
       ...authDebug,
       reason: 'hospital_admin_role_not_enabled',
     });

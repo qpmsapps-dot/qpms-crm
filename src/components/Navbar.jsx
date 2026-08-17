@@ -14,6 +14,7 @@ export default function Navbar({ onMenuClick, theme = 'light', onThemeToggle }) 
   const navigate = useNavigate();
   const accountRef = useRef(null);
   const notificationsRef = useRef(null);
+  const hospitalNotificationsUnavailableRef = useRef(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [notificationFilter, setNotificationFilter] = useState('all');
@@ -55,7 +56,7 @@ export default function Navbar({ onMenuClick, theme = 'light', onThemeToggle }) 
   }, []);
 
   const loadNotifications = useCallback(async ({ quiet = false } = {}) => {
-    if (!userKey) {
+    if (!userKey || hospitalNotificationsUnavailableRef.current) {
       return;
     }
     if (!quiet) setNotificationsLoading(true);
@@ -63,15 +64,26 @@ export default function Navbar({ onMenuClick, theme = 'light', onThemeToggle }) 
       const response = await getHospitalTicketNotifications();
       setNotifications(normalizeNotifications(response.notifications, userKey));
       setNotificationsError('');
-    } catch {
+      hospitalNotificationsUnavailableRef.current = false;
+    } catch (error) {
       setNotifications((items) => items.filter((item) => item.userKey !== userKey));
-      setNotificationsError('Unable to load notifications.');
+      const status = error?.response?.status;
+      const code = error?.response?.data?.code;
+      if (status === 403 && code === 'inactive_hospital_profile') {
+        hospitalNotificationsUnavailableRef.current = true;
+        setNotificationsError('');
+      } else {
+        setNotificationsError('Unable to load notifications.');
+      }
     } finally {
       if (!quiet) setNotificationsLoading(false);
     }
   }, [userKey]);
 
   useEffect(() => {
+    hospitalNotificationsUnavailableRef.current = false;
+    setNotifications((items) => items.filter((item) => item.userKey !== userKey));
+    setNotificationsError('');
     if (!userKey) {
       return undefined;
     }
