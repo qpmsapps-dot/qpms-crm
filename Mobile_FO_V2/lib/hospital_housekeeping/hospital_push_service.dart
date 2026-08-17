@@ -223,6 +223,7 @@ class HospitalPushService {
   }
 
   static Future<void> showRemoteMessageNotification(RemoteMessage message) async {
+    if (message.notification != null) return;
     if (!_localNotificationsReady) await _configureLocalNotifications();
     await _showNotification(_fromRemoteMessage(message));
   }

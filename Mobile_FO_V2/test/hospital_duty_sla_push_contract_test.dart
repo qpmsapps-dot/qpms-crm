@@ -40,6 +40,54 @@ void main() {
     expect(session.shiftLabel, '8 AM - 4 PM');
   });
 
+  test('client-wide supervisor can see assigned in-progress tickets', () async {
+    const gokulHospitalUserId = '84ef6e42-caa2-426b-af88-a5096a7fc2a2';
+    final gateway = _DutyGateway(
+      dutyResponse: {
+        'duty': {'duty_status': 'on_duty'},
+      },
+      tickets: [
+        _assignedApiTicket(
+          ticketNo: 'QPMS-HK-2026-000051',
+          hospitalUserId: gokulHospitalUserId,
+        ),
+        _assignedApiTicket(
+          ticketNo: 'QPMS-HK-2026-000052',
+          hospitalUserId: gokulHospitalUserId,
+        ),
+      ],
+    );
+    final controller = HospitalController(
+      session: const HospitalDemoSession(
+        loginId: '9384666202',
+        displayName: 'Gokul',
+        role: HospitalDemoRole.supervisor,
+        userId: gokulHospitalUserId,
+        clientName: 'NIMS Hyderabad',
+        isDemo: false,
+      ),
+      api: gateway,
+    );
+
+    await controller.load();
+
+    expect(controller.visibleTickets.map((ticket) => ticket.ticketNumber), [
+      'QPMS-HK-2026-000051',
+      'QPMS-HK-2026-000052',
+    ]);
+    expect(
+      controller.filteredTickets().map((ticket) => ticket.ticketNumber),
+      ['QPMS-HK-2026-000051', 'QPMS-HK-2026-000052'],
+    );
+    expect(
+      controller
+          .filteredTickets(assignedToMe: true)
+          .map((ticket) => ticket.ticketNumber),
+      ['QPMS-HK-2026-000051', 'QPMS-HK-2026-000052'],
+    );
+    expect(controller.summary.inProgress, 2);
+  });
+
   test(
     'controller parses backend duty status response during refresh',
     () async {
@@ -106,6 +154,46 @@ void main() {
       controller.actionsFor(controller.incomingTickets.single),
       contains(HospitalTicketAction.accept),
     );
+  });
+
+  test('notification fetch failure does not block incoming dashboard tickets', () async {
+    final acceptanceDue = DateTime.now().add(const Duration(minutes: 2));
+    final gateway = _DutyGateway(
+      dutyResponse: {
+        'duty': {'duty_status': 'on_duty'},
+      },
+      incomingTickets: [
+        HospitalTicket.fromApi({
+          'id': 'b61f2940-506f-4009-8986-06d7583c682c',
+          'ticket_no': 'QPMS-HK-2026-000048',
+          'block_name_snapshot': 'MILLENNIUM BLOCK',
+          'floor_name': 'Third Floor',
+          'location_text': 'Nephrology Unit I (MB Block 3rd Floor)',
+          'category': {'category_name': 'Housekeeping'},
+          'priority': 'high',
+          'description': 'Incoming broadcast ticket',
+          'raised_by_name': 'NIMS contact',
+          'raised_at': seed.toIso8601String(),
+          'status_code': 'awaiting_supervisor_acceptance',
+          'acceptance_status': 'awaiting',
+          'acceptance_due_at': acceptanceDue.toIso8601String(),
+          'current_assignee_user_id': null,
+          'supervisor_user_id': null,
+          'assigned_at': null,
+          'allowed_actions': ['accept'],
+        }),
+      ],
+      failNotifications: true,
+    );
+    final controller = _controller(gateway);
+
+    await controller.load();
+
+    expect(controller.error, isNull);
+    expect(controller.notificationError, 'Unable to load notifications. Retry.');
+    expect(controller.notifications, isEmpty);
+    expect(controller.incomingTickets, hasLength(1));
+    expect(controller.summary.awaitingAcceptance, 1);
   });
 
   test('incoming queue endpoint is called through the mobile API', () {
@@ -247,6 +335,33 @@ void main() {
   );
 }
 
+HospitalTicket _assignedApiTicket({
+  required String ticketNo,
+  required String hospitalUserId,
+}) => HospitalTicket.fromApi({
+  'id': ticketNo,
+  'ticket_no': ticketNo,
+  'client_id': 'nims-client',
+  'block_name_snapshot': 'MILLENNIUM BLOCK',
+  'floor_name': 'Third Floor',
+  'location_text': 'Nephrology Unit I',
+  'category': {'category_name': 'Housekeeping'},
+  'priority': 'high',
+  'description': 'Accepted live UAT ticket',
+  'raised_by_name': 'NIMS contact',
+  'raised_at': DateTime(2026, 8, 17, 12).toIso8601String(),
+  'status_code': 'in_progress',
+  'acceptance_status': 'accepted',
+  'current_assignee_user_id': hospitalUserId,
+  'supervisor_user_id': hospitalUserId,
+  'assignee': {
+    'id': hospitalUserId,
+    'display_name': 'Gokul',
+    'role_code': 'housekeeping_supervisor',
+  },
+  'allowed_actions': ['progress', 'resolve'],
+});
+
 HospitalController _controller(_DutyGateway gateway) => HospitalController(
   session: const HospitalDemoSession(
     loginId: 'supervisor@example.com',
@@ -284,14 +399,18 @@ class _DutyGateway implements HospitalTicketGateway {
     required this.dutyResponse,
     Map<String, dynamic>? startResponse,
     Map<String, dynamic>? endResponse,
+    this.tickets = const [],
     this.incomingTickets = const [],
+    this.failNotifications = false,
   }) : startResponse = startResponse ?? dutyResponse,
        endResponse = endResponse ?? dutyResponse;
 
   Map<String, dynamic> dutyResponse;
   final Map<String, dynamic> startResponse;
   final Map<String, dynamic> endResponse;
+  final List<HospitalTicket> tickets;
   final List<HospitalTicket> incomingTickets;
+  final bool failNotifications;
   int fetchDutyStatusCount = 0;
   int fetchIncomingTicketsCount = 0;
   int startDutyCount = 0;
@@ -299,7 +418,7 @@ class _DutyGateway implements HospitalTicketGateway {
   String? lastCugNumber;
 
   @override
-  Future<List<HospitalTicket>> fetchTickets() async => const [];
+  Future<List<HospitalTicket>> fetchTickets() async => tickets;
 
   @override
   Future<List<HospitalTicket>> fetchIncomingTickets() async {
@@ -308,7 +427,12 @@ class _DutyGateway implements HospitalTicketGateway {
   }
 
   @override
-  Future<List<Map<String, dynamic>>> fetchNotifications() async => const [];
+  Future<List<Map<String, dynamic>>> fetchNotifications() async {
+    if (failNotifications) {
+      throw Exception('GET /api/hospital-tickets/notifications failed (500)');
+    }
+    return const [];
+  }
 
   @override
   Future<Map<String, dynamic>> fetchDutyStatus() async {

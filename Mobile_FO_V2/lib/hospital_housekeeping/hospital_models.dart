@@ -96,7 +96,9 @@ class HospitalDemoSession {
   final String userId;
   final bool isDemo;
 
-  bool get hasAllBlocks => role != HospitalDemoRole.supervisor;
+  bool get hasAllBlocks =>
+      role != HospitalDemoRole.supervisor ||
+      (assignedBlock == null && assignedBlocks.isEmpty);
   String get scopeLabel {
     if (assignedBlocks.isNotEmpty) return assignedBlocks.join(', ');
     return assignedBlock ?? 'All Blocks';
@@ -139,6 +141,9 @@ class HospitalTicket {
     required this.supervisorName,
     required this.supervisorDueAt,
     required this.events,
+    this.currentAssigneeUserId = '',
+    this.supervisorUserId = '',
+    this.acceptedByUserId = '',
     this.escalationDueAt,
     this.acceptanceDueAt,
     this.acceptanceStatus = '',
@@ -194,6 +199,9 @@ class HospitalTicket {
   final String responsiblePerson;
   final String responsibleRole;
   final String supervisorName;
+  final String currentAssigneeUserId;
+  final String supervisorUserId;
+  final String acceptedByUserId;
   final DateTime? supervisorDueAt;
   final DateTime? escalationDueAt;
   final DateTime? acceptanceDueAt;
@@ -227,6 +235,9 @@ class HospitalTicket {
     HospitalTicketStatus? status,
     String? responsiblePerson,
     String? responsibleRole,
+    String? currentAssigneeUserId,
+    String? supervisorUserId,
+    String? acceptedByUserId,
     DateTime? assignedAt,
     DateTime? acceptedAt,
     DateTime? workStartedAt,
@@ -277,6 +288,10 @@ class HospitalTicket {
       responsiblePerson: responsiblePerson ?? this.responsiblePerson,
       responsibleRole: responsibleRole ?? this.responsibleRole,
       supervisorName: supervisorName,
+      currentAssigneeUserId:
+          currentAssigneeUserId ?? this.currentAssigneeUserId,
+      supervisorUserId: supervisorUserId ?? this.supervisorUserId,
+      acceptedByUserId: acceptedByUserId ?? this.acceptedByUserId,
       supervisorDueAt: supervisorDueAt ?? this.supervisorDueAt,
       escalationDueAt: escalationDueAt ?? this.escalationDueAt,
       acceptanceDueAt: acceptanceDueAt ?? this.acceptanceDueAt,
@@ -368,6 +383,15 @@ class HospitalTicket {
         '${row['work_started_at'] ?? ''}',
       )?.toLocal(),
       status: _hospitalStatusFromCode('${row['status_code'] ?? 'open'}'),
+      currentAssigneeUserId: _firstText([
+        row['current_assignee_user_id'],
+        assignee['id'],
+      ]),
+      supervisorUserId: _firstText([row['supervisor_user_id']]),
+      acceptedByUserId: _firstText([
+        row['accepted_by_user_id'],
+        acceptedBy['id'],
+      ]),
       responsiblePerson: '${assignee['display_name'] ?? 'Assignment pending'}',
       responsibleRole: '${row['current_assignee_role'] ?? ''}',
       supervisorName: _firstText([

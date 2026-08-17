@@ -149,6 +149,7 @@ class HospitalController extends ChangeNotifier {
   bool _loading = false;
   bool _sessionExpired = false;
   String? _error;
+  String? _notificationError;
   late List<HospitalTicket> _tickets;
   late DateTime _now;
   int _nextTicketNumber = 109;
@@ -164,6 +165,7 @@ class HospitalController extends ChangeNotifier {
   bool get isLoading => _loading;
   bool get sessionExpired => _sessionExpired;
   String? get error => _error;
+  String? get notificationError => _notificationError;
   List<HospitalTicket> get allTickets => List.unmodifiable(_tickets);
   List<Map<String, dynamic>> _notifications = [];
   String _dutyStatus = 'off_duty';
@@ -204,8 +206,7 @@ class HospitalController extends ChangeNotifier {
   List<HospitalTicket> get myAcceptedTickets => visibleTickets
       .where(
         (ticket) =>
-            ticket.responsiblePerson.trim().toLowerCase() ==
-                session.displayName.trim().toLowerCase() &&
+            _isAssignedToSession(ticket) &&
             ticket.status != HospitalTicketStatus.awaitingSupervisorAcceptance,
       )
       .toList();
@@ -225,9 +226,7 @@ class HospitalController extends ChangeNotifier {
       if (priority != null && ticket.priority != priority) return false;
       if (block.isNotEmpty && ticket.block != block) return false;
       if (category.isNotEmpty && ticket.category != category) return false;
-      if (assignedToMe &&
-          ticket.responsiblePerson.trim().toLowerCase() !=
-              session.displayName.trim().toLowerCase()) {
+      if (assignedToMe && !_isAssignedToSession(ticket)) {
         return false;
       }
       if (!_matchesDashboardFilter(ticket, filter)) return false;
@@ -250,6 +249,17 @@ class HospitalController extends ChangeNotifier {
     (ticket) => ticket.id == id || ticket.ticketNumber == id,
   );
 
+  bool _isAssignedToSession(HospitalTicket ticket) {
+    final hospitalUserId = session.userId.trim();
+    if (hospitalUserId.isNotEmpty) {
+      return ticket.currentAssigneeUserId == hospitalUserId ||
+          ticket.supervisorUserId == hospitalUserId ||
+          ticket.acceptedByUserId == hospitalUserId;
+    }
+    return ticket.responsiblePerson.trim().toLowerCase() ==
+        session.displayName.trim().toLowerCase();
+  }
+
   Future<void> load() async {
     if (!productionMode || _loading || _sessionExpired) return;
     _loading = true;
@@ -262,7 +272,7 @@ class HospitalController extends ChangeNotifier {
           _api.fetchIncomingTickets()
         else
           Future.value(<HospitalTicket>[]),
-        _api.fetchNotifications(),
+        _fetchNotificationsWithoutBlockingDashboard(),
         if (session.role == HospitalDemoRole.supervisor)
           _api.fetchDutyStatus()
         else
@@ -290,6 +300,20 @@ class HospitalController extends ChangeNotifier {
     } finally {
       _loading = false;
       notifyListeners();
+    }
+  }
+
+  Future<List<Map<String, dynamic>>>
+  _fetchNotificationsWithoutBlockingDashboard() async {
+    try {
+      final rows = await _api.fetchNotifications();
+      _notificationError = null;
+      return rows;
+    } catch (error) {
+      _notificationError = error is HospitalTicketApiException
+          ? error.message
+          : 'Unable to load notifications. Retry.';
+      return _notifications;
     }
   }
 
