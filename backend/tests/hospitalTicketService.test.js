@@ -586,7 +586,7 @@ function query(data, error = null) {
   };
 }
 
-test('authenticated Admin profile resolves a scoped Hospital admin actor', async () => {
+test('authenticated Admin profile does not auto-provision an unsupported Hospital role', async () => {
   const writes = [];
   const client = {
     from(table) {
@@ -647,12 +647,8 @@ test('authenticated Admin profile resolves a scoped Hospital admin actor', async
     authUser: { id: 'auth-admin', email: 'admin@example.com' },
     request: { headers: {}, query: {}, body: {} },
   });
-  assert.equal(actor.user.role_code, 'admin');
-  assert.equal(actor.user.profile_type, 'internal');
-  assert.equal(actor.user.client_id, 'client-a');
-  assert.equal(actor.scopes[0].scope_type, 'client');
-  assert.equal(actor.scopes[0].can_update, true);
-  assert.equal(writes.find((write) => write.table === 'hospital_ticket_users').options.onConflict, 'auth_user_id');
+  assert.equal(actor, null);
+  assert.equal(writes.length, 0);
 });
 
 test('ordinary FO profile does not resolve Hospital admin actor', async () => {
@@ -700,7 +696,7 @@ test('hospital auth middleware still rejects unauthenticated requests', async ()
   assert.equal(nextCalled, false);
 });
 
-test('Admin hospital context honors selected active client scope', async () => {
+test('Admin hospital fallback does not overwrite selected client access from profiles role', async () => {
   const writes = [];
   const client = {
     from(table) {
@@ -751,8 +747,8 @@ test('Admin hospital context honors selected active client scope', async () => {
     authUser: { id: 'auth-admin', email: 'admin@example.com' },
     request: { headers: { 'x-hospital-client-id': 'client-b' }, query: {}, body: {} },
   });
-  assert.equal(actor.selected_client.id, 'client-b');
-  assert.equal(writes[0].client_id, 'client-b');
+  assert.equal(actor, null);
+  assert.equal(writes.length, 0);
 });
 
 test('Admin can use scoped ticket list, detail, dashboard and privileged actions', async () => {

@@ -107,7 +107,18 @@ function profileDisplayName(profile, authUser) {
   ).trim();
 }
 
-export async function resolveAdminHospitalActor({ serviceClient, authUser, request }) {
+const ADMIN_HOSPITAL_ROLE_CODE = null;
+
+function adminHospitalAuthDebug({ authUser, profile, attemptedHospitalRole = 'admin', existingHospitalUser = null }) {
+  return {
+    auth_user_id: authUser?.id || null,
+    profile_role: profile?.role || null,
+    attempted_hospital_role: attemptedHospitalRole,
+    existing_hospital_role: existingHospitalUser?.role_code || null,
+  };
+}
+
+export async function resolveAdminHospitalActor({ serviceClient, authUser, request, existingHospitalUser = null, debugContext = null }) {
   const profileResult = await serviceClient
     .from('profiles')
     .select('id,auth_user_id,employee_code,full_name,display_name,email,role,status,is_active')
@@ -118,6 +129,16 @@ export async function resolveAdminHospitalActor({ serviceClient, authUser, reque
   if (!profile || profile.is_active === false || !isAdminApplicationRole(profile.role)) return null;
   const status = String(profile.status || 'active').trim().toLowerCase();
   if (status && status !== 'active') return null;
+
+  const authDebug = adminHospitalAuthDebug({ authUser, profile, existingHospitalUser });
+  if (debugContext) Object.assign(debugContext, authDebug);
+  if (!ADMIN_HOSPITAL_ROLE_CODE) {
+    console.warn('[Hospital Ticketing] Admin profile requires explicit Hospital Ticketing access', {
+      ...authDebug,
+      reason: 'hospital_admin_role_not_enabled',
+    });
+    return null;
+  }
 
   const clientsResult = await serviceClient
     .from('hospital_clients')
@@ -148,7 +169,7 @@ export async function resolveAdminHospitalActor({ serviceClient, authUser, reque
       auth_user_id: authUser.id,
       client_id: selectedClient.id,
       profile_type: 'internal',
-      role_code: 'admin',
+      role_code: ADMIN_HOSPITAL_ROLE_CODE,
       display_name: profileDisplayName(profile, authUser),
       email: String(profile.email || authUser.email || '').trim().toLowerCase(),
       employee_code: profile.employee_code || null,
@@ -161,7 +182,10 @@ export async function resolveAdminHospitalActor({ serviceClient, authUser, reque
     }, { onConflict: 'auth_user_id' })
     .select('*')
     .maybeSingle();
-  if (upsertResult.error) throw upsertResult.error;
+  if (upsertResult.error) {
+    upsertResult.error.hospitalAuthDebug = authDebug;
+    throw upsertResult.error;
+  }
   if (!isActiveHospitalUser(upsertResult.data)) return null;
 
   const existingScope = await serviceClient
@@ -225,20 +249,34 @@ export function createHospitalAuthMiddleware({ anonClient, serviceClient }) {
       response.status(503).json({ ok: false, code: 'hospital_service_unavailable', message: 'Hospital Ticketing authentication is not configured.' });
       return;
     }
+    const authDebug = {
+      auth_user_id: null,
+      profile_role: null,
+      attempted_hospital_role: null,
+      existing_hospital_role: null,
+    };
     try {
       const authResult = await anonClient.auth.getUser(token);
       if (authResult.error || !authResult.data?.user) {
         response.status(401).json({ ok: false, code: 'invalid_token', message: 'Invalid or expired access token.' });
         return;
       }
+      authDebug.auth_user_id = authResult.data.user.id;
       const userResult = await serviceClient
         .from('hospital_ticket_users')
         .select('*')
         .eq('auth_user_id', authResult.data.user.id)
         .maybeSingle();
       if (userResult.error) throw userResult.error;
+      authDebug.existing_hospital_role = userResult.data?.role_code || null;
       if (!isActiveHospitalUser(userResult.data)) {
-        const adminActor = await resolveAdminHospitalActor({ serviceClient, authUser: authResult.data.user, request });
+        const adminActor = await resolveAdminHospitalActor({
+          serviceClient,
+          authUser: authResult.data.user,
+          request,
+          existingHospitalUser: userResult.data,
+          debugContext: authDebug,
+        });
         if (adminActor) {
           request.hospitalActor = adminActor;
           next();
@@ -259,7 +297,11 @@ export function createHospitalAuthMiddleware({ anonClient, serviceClient }) {
       };
       next();
     } catch (error) {
-      console.warn('[Hospital Ticketing] authentication failed', { code: error?.code || null, message: error?.message || 'unknown' });
+      console.warn('[Hospital Ticketing] authentication failed', {
+        code: error?.code || null,
+        message: error?.message || 'unknown',
+        ...(error?.hospitalAuthDebug || authDebug),
+      });
       response.status(503).json({ ok: false, code: 'hospital_auth_failed', message: 'Unable to authorize Hospital Ticketing access.' });
     }
   };
