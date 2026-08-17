@@ -25,6 +25,21 @@ void main() {
     expect(api, contains("body['cug_number'] = cugNumber"));
   });
 
+  test('real supervisor session can display multiple assigned blocks', () {
+    const session = HospitalDemoSession(
+      loginId: '9948310098',
+      displayName: 'L. V. Sai',
+      role: HospitalDemoRole.supervisor,
+      assignedBlock: 'OPD Block',
+      assignedBlocks: ['OPD Block', 'Admin Block', 'Oncology Block'],
+      shiftLabel: '8 AM - 4 PM',
+      isDemo: false,
+    );
+
+    expect(session.scopeLabel, 'OPD Block, Admin Block, Oncology Block');
+    expect(session.shiftLabel, '8 AM - 4 PM');
+  });
+
   test(
     'controller parses backend duty status response during refresh',
     () async {
@@ -49,6 +64,60 @@ void main() {
       expect(controller.isOnDuty, isTrue);
     },
   );
+
+  test('supervisor dashboard merges incoming unassigned broadcast tickets', () async {
+    final acceptanceDue = DateTime.now().add(const Duration(minutes: 2));
+    final gateway = _DutyGateway(
+      dutyResponse: {
+        'duty': {'duty_status': 'on_duty'},
+      },
+      incomingTickets: [
+        HospitalTicket.fromApi({
+          'id': 'b61f2940-506f-4009-8986-06d7583c682c',
+          'ticket_no': 'QPMS-HK-2026-000048',
+          'block_name_snapshot': 'MILLENNIUM BLOCK',
+          'floor_name': 'Third Floor',
+          'location_text': 'Nephrology Unit I (MB Block 3rd Floor)',
+          'category': {'category_name': 'Housekeeping'},
+          'priority': 'high',
+          'description': 'Incoming broadcast ticket',
+          'raised_by_name': 'NIMS contact',
+          'raised_at': seed.toIso8601String(),
+          'status_code': 'awaiting_supervisor_acceptance',
+          'acceptance_status': 'awaiting',
+          'acceptance_due_at': acceptanceDue.toIso8601String(),
+          'current_assignee_user_id': null,
+          'supervisor_user_id': null,
+          'assigned_at': null,
+          'allowed_actions': ['accept'],
+        }),
+      ],
+    );
+    final controller = _controller(gateway);
+
+    await controller.load();
+
+    expect(gateway.fetchIncomingTicketsCount, 1);
+    expect(controller.incomingTickets, hasLength(1));
+    expect(controller.summary.awaitingAcceptance, 1);
+    expect(controller.summary.newComplaints, 1);
+    expect(controller.incomingTickets.single.block, 'MILLENNIUM BLOCK');
+    expect(
+      controller.actionsFor(controller.incomingTickets.single),
+      contains(HospitalTicketAction.accept),
+    );
+  });
+
+  test('incoming queue endpoint is called through the mobile API', () {
+    final api = File(
+      'lib/hospital_housekeeping/hospital_ticket_api.dart',
+    ).readAsStringSync();
+
+    expect(
+      api,
+      contains("'/api/hospital-tickets/supervisor/incoming'"),
+    );
+  });
 
   test('start duty calls backend gateway and refreshes server state', () async {
     final gateway = _DutyGateway(
@@ -165,6 +234,12 @@ void main() {
       expect(push, contains('onMessageOpenedApp.listen'));
       expect(push, contains('getInitialMessage'));
       expect(push, contains('openImmediately: true'));
+      expect(push, contains('usesChronometer: incoming'));
+      expect(push, contains('chronometerCountDown: incoming'));
+      expect(push, contains('timeoutAfter: incoming ? _remainingMs(push) : null'));
+      expect(push, contains("acceptActionId = 'hospital_accept_ticket'"));
+      expect(push, contains("viewActionId = 'hospital_view_ticket'"));
+      expect(push, contains("HospitalTicketApi.action(ticketId, 'accept'"));
       expect(shell, contains('HospitalTicketDetailScreen'));
       expect(shell, contains('ticketId: ticketId'));
       expect(shell, contains('message.ticketId'));
@@ -209,19 +284,28 @@ class _DutyGateway implements HospitalTicketGateway {
     required this.dutyResponse,
     Map<String, dynamic>? startResponse,
     Map<String, dynamic>? endResponse,
+    this.incomingTickets = const [],
   }) : startResponse = startResponse ?? dutyResponse,
        endResponse = endResponse ?? dutyResponse;
 
   Map<String, dynamic> dutyResponse;
   final Map<String, dynamic> startResponse;
   final Map<String, dynamic> endResponse;
+  final List<HospitalTicket> incomingTickets;
   int fetchDutyStatusCount = 0;
+  int fetchIncomingTicketsCount = 0;
   int startDutyCount = 0;
   int endDutyCount = 0;
   String? lastCugNumber;
 
   @override
   Future<List<HospitalTicket>> fetchTickets() async => const [];
+
+  @override
+  Future<List<HospitalTicket>> fetchIncomingTickets() async {
+    fetchIncomingTicketsCount += 1;
+    return incomingTickets;
+  }
 
   @override
   Future<List<Map<String, dynamic>>> fetchNotifications() async => const [];

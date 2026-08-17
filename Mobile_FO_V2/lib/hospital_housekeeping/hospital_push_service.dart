@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/supabase_service.dart';
 import 'hospital_ticket_api.dart';
 
 @pragma('vm:entry-point')
@@ -15,6 +16,14 @@ Future<void> hospitalTicketBackgroundMessageHandler(
   RemoteMessage message,
 ) async {
   await HospitalPushService.ensureFirebaseReady();
+  await HospitalPushService.showRemoteMessageNotification(message);
+}
+
+@pragma('vm:entry-point')
+void hospitalNotificationResponseBackgroundHandler(
+  NotificationResponse response,
+) {
+  HospitalPushService.handleNotificationResponse(response, background: true);
 }
 
 class HospitalPushMessage {
@@ -33,11 +42,18 @@ class HospitalPushMessage {
   String get ticketId => '${data['ticket_id'] ?? ''}';
   String get ticketNumber => '${data['ticket_number'] ?? ''}';
   String get targetScreen => '${data['target_screen'] ?? ''}';
+  String get eventType => '${data['event_type'] ?? ''}';
+  String get notificationId => '${data['notification_id'] ?? ''}';
+  DateTime? get acceptanceDueAt =>
+      DateTime.tryParse('${data['acceptance_due_at'] ?? ''}')?.toLocal();
 }
 
 class HospitalPushService {
   static const appScope = 'myqpms_internal';
+  static const acceptActionId = 'hospital_accept_ticket';
+  static const viewActionId = 'hospital_view_ticket';
   static const _deviceKey = 'hospital_push_device_id_myqpms';
+  static const _androidNotificationIcon = 'ic_notification';
   static const _channel = AndroidNotificationChannel(
     'hospital_tickets',
     'Hospital ticket alerts',
@@ -89,7 +105,7 @@ class HospitalPushService {
     FirebaseMessaging.onMessage.listen((message) {
       final push = _fromRemoteMessage(message);
       _emit(push);
-      unawaited(_showForegroundNotification(push));
+      unawaited(_showNotification(push));
     });
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
       _emit(_fromRemoteMessage(message, openImmediately: true));
@@ -171,44 +187,172 @@ class HospitalPushService {
 
   static Future<void> _configureLocalNotifications() async {
     if (_localNotificationsReady) return;
-    await _localNotifications.initialize(
-      settings: const InitializationSettings(
-        android: AndroidInitializationSettings('ic_launcher'),
-        iOS: DarwinInitializationSettings(
-          requestAlertPermission: false,
-          requestBadgePermission: false,
-          requestSoundPermission: false,
+    try {
+      await _localNotifications.initialize(
+        settings: const InitializationSettings(
+          android: AndroidInitializationSettings(_androidNotificationIcon),
+          iOS: DarwinInitializationSettings(
+            requestAlertPermission: false,
+            requestBadgePermission: false,
+            requestSoundPermission: false,
+          ),
         ),
-      ),
-      onDidReceiveNotificationResponse: (response) {
-        final push = _fromPayload(response.payload);
-        if (push != null) _emit(push);
-      },
-    );
-    await _localNotifications
-        .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin
-        >()
-        ?.createNotificationChannel(_channel);
-    await FirebaseMessaging.instance
-        .setForegroundNotificationPresentationOptions(
-          alert: true,
-          badge: true,
-          sound: true,
-        );
-    _localNotificationsReady = true;
+        onDidReceiveNotificationResponse: (response) {
+          handleNotificationResponse(response);
+        },
+        onDidReceiveBackgroundNotificationResponse:
+            hospitalNotificationResponseBackgroundHandler,
+      );
+      await _localNotifications
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.createNotificationChannel(_channel);
+      await FirebaseMessaging.instance
+          .setForegroundNotificationPresentationOptions(
+            alert: true,
+            badge: true,
+            sound: true,
+          );
+      _localNotificationsReady = true;
+    } catch (error, stackTrace) {
+      _localNotificationsReady = false;
+      debugPrint('Hospital push local notification setup failed: $error');
+      debugPrint('$stackTrace');
+    }
   }
 
-  static Future<void> _showForegroundNotification(
-    HospitalPushMessage push,
-  ) async {
+  static Future<void> showRemoteMessageNotification(RemoteMessage message) async {
+    if (!_localNotificationsReady) await _configureLocalNotifications();
+    await _showNotification(_fromRemoteMessage(message));
+  }
+
+  static Future<void> _showNotification(HospitalPushMessage push) async {
     if (!_localNotificationsReady) return;
-    final title = push.title.trim();
-    final body = push.body.trim();
+    final incoming = push.eventType == 'incoming_supervisor_ticket';
+    if (incoming && !_isAcceptanceActionable(push)) return;
+    final title = incoming ? 'New Housekeeping Complaint' : push.title.trim();
+    final body = incoming ? _incomingTicketBody(push) : push.body.trim();
     if (title.isEmpty && body.isEmpty) return;
     await _localNotifications.show(
-      id: DateTime.now().millisecondsSinceEpoch.remainder(2147483647),
+      id: _notificationId(push),
       title: title.isEmpty ? 'Hospital Ticket Update' : title,
+      body: body,
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          _channel.id,
+          _channel.name,
+          channelDescription: _channel.description,
+          importance: Importance.high,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
+          when: incoming
+              ? push.acceptanceDueAt?.millisecondsSinceEpoch
+              : null,
+          usesChronometer: incoming,
+          chronometerCountDown: incoming,
+          timeoutAfter: incoming ? _remainingMs(push) : null,
+          subText: incoming ? 'Accept within 2 minutes' : null,
+          actions: incoming
+              ? const [
+                  AndroidNotificationAction(
+                    acceptActionId,
+                    'ACCEPT',
+                    showsUserInterface: false,
+                    cancelNotification: true,
+                    semanticAction: SemanticAction.markAsRead,
+                  ),
+                  AndroidNotificationAction(
+                    viewActionId,
+                    'VIEW',
+                    showsUserInterface: true,
+                    cancelNotification: true,
+                  ),
+                ]
+              : null,
+        ),
+        iOS: const DarwinNotificationDetails(),
+      ),
+      payload: jsonEncode({
+        'title': push.title,
+        'body': push.body,
+        'data': push.data,
+      }),
+    );
+  }
+
+  static void handleNotificationResponse(
+    NotificationResponse response, {
+    bool background = false,
+  }) {
+    final push = _fromPayload(response.payload);
+    if (push == null) return;
+    if (response.actionId == acceptActionId) {
+      unawaited(_acceptFromNotification(push));
+      return;
+    }
+    _emit(push);
+  }
+
+  static Future<void> _acceptFromNotification(HospitalPushMessage push) async {
+    final ticketId = push.ticketId.isNotEmpty ? push.ticketId : push.ticketNumber;
+    if (ticketId.isEmpty) return;
+    if (!_isAcceptanceActionable(push)) {
+      await _showStatusNotification(
+        'Acceptance window expired',
+        'Ticket has moved to Operations.',
+      );
+      await _localNotifications.cancel(id: _notificationId(push));
+      return;
+    }
+    try {
+      await SupabaseService.initialize();
+      var version = int.tryParse('${push.data['ticket_version'] ?? ''}');
+      if (version == null || version < 1) {
+        final detail = await HospitalTicketApi.fetchDetail(ticketId);
+        final row = detail['ticket'] is Map
+            ? Map<String, dynamic>.from(detail['ticket'] as Map)
+            : const <String, dynamic>{};
+        version = int.tryParse('${row['version'] ?? ''}');
+      }
+      if (version == null || version < 1) {
+        throw const HospitalTicketApiException(
+          'Open myQPMS to accept this ticket.',
+        );
+      }
+      await HospitalTicketApi.action(ticketId, 'accept', version, {
+        'confirmed_location': true,
+      });
+      await _localNotifications.cancel(id: _notificationId(push));
+      await _showStatusNotification(
+        'Ticket accepted',
+        push.ticketNumber.isEmpty
+            ? 'Housekeeping complaint accepted.'
+            : '${push.ticketNumber} accepted.',
+      );
+    } catch (error) {
+      final text = error.toString().toLowerCase();
+      final message = text.contains('expired') ||
+              text.contains('timeout') ||
+              text.contains('moved') ||
+              text.contains('not allowed')
+          ? 'Acceptance window has expired. Ticket has moved to Operations.'
+          : text.contains('accepted') || text.contains('conflict')
+          ? 'Ticket has already been accepted by another Supervisor.'
+          : text.contains('session') || text.contains('sign in')
+          ? 'Please open myQPMS and sign in to accept this ticket.'
+          : 'Unable to accept now. Open myQPMS to retry.';
+      await _showStatusNotification('Ticket not accepted', message);
+    }
+  }
+
+  static Future<void> _showStatusNotification(String title, String body) async {
+    if (!_localNotificationsReady) await _configureLocalNotifications();
+    if (!_localNotificationsReady) return;
+    await _localNotifications.show(
+      id: DateTime.now().millisecondsSinceEpoch.remainder(2147483647),
+      title: title,
       body: body,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
@@ -222,12 +366,48 @@ class HospitalPushService {
         ),
         iOS: const DarwinNotificationDetails(),
       ),
-      payload: jsonEncode({
-        'title': push.title,
-        'body': push.body,
-        'data': push.data,
-      }),
     );
+  }
+
+  static bool _isAcceptanceActionable(HospitalPushMessage push) {
+    final dueAt = push.acceptanceDueAt;
+    return dueAt != null && dueAt.isAfter(DateTime.now());
+  }
+
+  static int? _remainingMs(HospitalPushMessage push) {
+    final dueAt = push.acceptanceDueAt;
+    if (dueAt == null) return null;
+    final remaining = dueAt.difference(DateTime.now()).inMilliseconds;
+    return remaining > 0 ? remaining : 1;
+  }
+
+  static int _notificationId(HospitalPushMessage push) {
+    final key = push.notificationId.isNotEmpty
+        ? push.notificationId
+        : push.ticketId.isNotEmpty
+        ? push.ticketId
+        : push.ticketNumber;
+    return key.hashCode.abs().remainder(2147483647);
+  }
+
+  static String _incomingTicketBody(HospitalPushMessage push) {
+    final block = '${push.data['block_name'] ?? ''}'.trim();
+    final floor = '${push.data['floor_name'] ?? ''}'.trim();
+    final category = '${push.data['category_name'] ?? 'General Housekeeping'}'
+        .trim();
+    final priority = '${push.data['priority'] ?? ''}'.trim().toUpperCase();
+    final firstLine = [
+      if (block.isNotEmpty) block,
+      if (floor.isNotEmpty) floor,
+    ].join(' • ');
+    final secondLine = [
+      if (category.isNotEmpty) category,
+      if (priority.isNotEmpty) priority,
+    ].join(' • ');
+    return [
+      if (firstLine.isNotEmpty) firstLine,
+      if (secondLine.isNotEmpty) secondLine,
+    ].join('\n');
   }
 
   static HospitalPushMessage? _fromPayload(String? payload) {

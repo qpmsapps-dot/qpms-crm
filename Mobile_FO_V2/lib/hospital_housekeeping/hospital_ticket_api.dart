@@ -15,7 +15,12 @@ class HospitalTicketApiException implements Exception {
 }
 
 class HospitalTicketApi {
-  static Future<void> closeSession() => SupabaseService.client.auth.signOut();
+  static String _selectedHospitalClientId = '';
+
+  static Future<void> closeSession() {
+    _selectedHospitalClientId = '';
+    return SupabaseService.client.auth.signOut();
+  }
 
   static Future<HospitalDemoSession> login({
     required String email,
@@ -35,8 +40,13 @@ class HospitalTicketApi {
 
   static Future<HospitalDemoSession> discoverCurrentInternalSession({
     String? emailHint,
+    String? clientId,
   }) async {
-    final response = await request('GET', '/api/hospital-tickets/me');
+    final response = await request(
+      'GET',
+      '/api/hospital-tickets/me',
+      hospitalClientId: clientId,
+    );
     final user = Map<String, dynamic>.from(response['user'] as Map);
     if (user['profile_type'] != 'internal') {
       throw const HospitalTicketApiException(
@@ -48,6 +58,7 @@ class HospitalTicketApi {
       'operations_executive' => HospitalDemoRole.operationsExecutive,
       'facility_manager' => HospitalDemoRole.facilityManager,
       'project_head' => HospitalDemoRole.projectHead,
+      'admin' => HospitalDemoRole.admin,
       _ => throw const HospitalTicketApiException(
         'This account cannot use the internal housekeeping module.',
       ),
@@ -56,22 +67,41 @@ class HospitalTicketApi {
         ? response['scopes'] as List
         : const [];
     String? assignedBlock;
+    var assignedBlocks = const <String>[];
     if (role == HospitalDemoRole.supervisor) {
       final blockScopes = scopes
           .whereType<Map>()
           .where((row) => row['scope_type'] == 'block')
           .toList();
-      final blockScope = blockScopes.isEmpty ? null : blockScopes.first;
-      if (blockScope != null) {
+      if (blockScopes.isNotEmpty) {
         final blocks = await request('GET', '/api/hospital-tickets/blocks');
-        final matchingBlocks = (blocks['blocks'] as List? ?? const [])
+        final scopedBlockIds = blockScopes
+            .map((row) => '${row['block_id'] ?? ''}')
+            .where((id) => id.isNotEmpty)
+            .toSet();
+        assignedBlocks = (blocks['blocks'] as List? ?? const [])
             .whereType<Map>()
-            .where((row) => row['id'] == blockScope['block_id'])
+            .where((row) => scopedBlockIds.contains('${row['id'] ?? ''}'))
+            .map((row) => '${row['block_name'] ?? ''}'.trim())
+            .where((name) => name.isNotEmpty)
             .toList();
-        final block = matchingBlocks.isEmpty ? null : matchingBlocks.first;
-        assignedBlock = block?['block_name']?.toString();
+        assignedBlock = assignedBlocks.isEmpty ? null : assignedBlocks.first;
       }
     }
+    final selectedClient = response['selected_client'] is Map
+        ? response['selected_client'] as Map
+        : const {};
+    final availableClients = response['available_clients'] is List
+        ? (response['available_clients'] as List)
+              .whereType<Map>()
+              .map(
+                (row) =>
+                    HospitalClientOption.fromApi(Map<String, dynamic>.from(row)),
+              )
+              .where((client) => client.id.isNotEmpty)
+              .toList()
+        : const <HospitalClientOption>[];
+    _selectedHospitalClientId = '${selectedClient['id'] ?? ''}';
     return HospitalDemoSession(
       loginId:
           (emailHint ?? SupabaseService.client.auth.currentUser?.email ?? '')
@@ -80,7 +110,14 @@ class HospitalTicketApi {
       displayName: '${user['display_name'] ?? ''}',
       role: role,
       assignedBlock: assignedBlock,
+      assignedBlocks: assignedBlocks,
+      shiftLabel:
+          '${(user['metadata'] is Map ? (user['metadata'] as Map)['shift_label'] : null) ?? ''}'
+              .trim(),
       userId: '${user['id'] ?? ''}',
+      clientName: '${selectedClient['client_name'] ?? ''}',
+      clientId: _selectedHospitalClientId,
+      availableClients: availableClients,
       isDemo: false,
     );
   }
@@ -216,6 +253,7 @@ class HospitalTicketApi {
     String method,
     String path, {
     Map<String, dynamic>? body,
+    String? hospitalClientId,
   }) async {
     final token = SupabaseService.client.auth.currentSession?.accessToken;
     if (token == null) {
@@ -235,6 +273,10 @@ class HospitalTicketApi {
     try {
       final request = await client.openUrl(method, Uri.parse('$base$path'));
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      final scopedClientId = hospitalClientId ?? _selectedHospitalClientId;
+      if (scopedClientId.isNotEmpty) {
+        request.headers.set('X-Hospital-Client-Id', scopedClientId);
+      }
       request.headers.contentType = ContentType.json;
       if (body != null) request.write(jsonEncode(body));
       final response = await request.close().timeout(
@@ -245,8 +287,9 @@ class HospitalTicketApi {
           ? <String, dynamic>{}
           : Map<String, dynamic>.from(jsonDecode(text) as Map);
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        final safeMessage = '${json['message'] ?? 'Request failed.'}';
         throw HospitalTicketApiException(
-          '${json['message'] ?? 'Request failed.'}',
+          '$method $path failed (${response.statusCode}): $safeMessage',
           code: '${json['code'] ?? ''}',
         );
       }

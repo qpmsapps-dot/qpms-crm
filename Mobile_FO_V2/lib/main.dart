@@ -17,7 +17,20 @@ Future<void> main() async {
         // Configure only; GPS starts after login + Start Day.
         await BackgroundTrackingService.configure();
       }
-      await HospitalPushService.configure();
+      try {
+        await HospitalPushService.configure();
+      } catch (error, stackTrace) {
+        debugPrint('Hospital push startup skipped: $error');
+        debugPrint('$stackTrace');
+        unawaited(
+          CrashLogService.record(
+            screen: 'global',
+            action: 'HOSPITAL_PUSH_STARTUP_ERROR',
+            error: error,
+            stackTrace: stackTrace,
+          ),
+        );
+      }
       FlutterError.onError = (details) {
         FlutterError.presentError(details);
         unawaited(

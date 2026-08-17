@@ -110,7 +110,22 @@ class HospitalDashboardScreen extends StatelessWidget {
               ),
               const SizedBox(height: 5),
               Text(
-                '${controller.session.role.label} • ${controller.session.assignedBlock ?? 'All Blocks'}',
+                controller.session.displayName,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                [
+                  controller.session.role.label,
+                  if (controller.session.shiftLabel.isNotEmpty)
+                    controller.session.shiftLabel,
+                  controller.session.clientName.isEmpty
+                      ? 'NIMS Hyderabad'
+                      : controller.session.clientName,
+                ].join(' - '),
                 style: const TextStyle(
                   color: Colors.white70,
                   fontWeight: FontWeight.w700,
@@ -275,7 +290,7 @@ class _DutyControl extends StatelessWidget {
                   style: const TextStyle(fontWeight: FontWeight.w900),
                 ),
                 const Text(
-                  'On-Duty Supervisors receive incoming NIMS housekeeping tickets.',
+                  'On-Duty Supervisors receive incoming NIMS housekeeping tickets for their assigned blocks.',
                   style: TextStyle(color: qpmsMuted, fontSize: 11),
                 ),
               ],

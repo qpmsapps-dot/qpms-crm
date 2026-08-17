@@ -27,6 +27,7 @@ class HospitalTicketCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final sla = controller.slaFor(ticket);
     final acceptanceRemaining = ticket.acceptanceDueAt?.difference(controller.now);
+    final canAccept = controller.actionsFor(ticket).contains(HospitalTicketAction.accept);
     final slaColor = switch (sla.state) {
       HospitalSlaState.breached => hospitalRed,
       HospitalSlaState.nearBreach => hospitalAmber,
@@ -46,7 +47,7 @@ class HospitalTicketCard extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      ticket.id,
+                      ticket.ticketNumber.isEmpty ? ticket.id : ticket.ticketNumber,
                       style: const TextStyle(
                         color: qpmsBlue,
                         fontWeight: FontWeight.w900,
@@ -58,9 +59,26 @@ class HospitalTicketCard extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                ticket.conciseLocation.isEmpty
+                ticket.block.isEmpty ? 'BLOCK NOT SPECIFIED' : ticket.block.toUpperCase(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: hospitalRed,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                [
+                  ticket.floor,
+                  ticket.roomArea.isEmpty ? ticket.location : ticket.roomArea,
+                ].where((part) => part.trim().isNotEmpty).join('\n').trim().isEmpty
                     ? 'Location snapshot unavailable'
-                    : ticket.conciseLocation,
+                    : [
+                        ticket.floor,
+                        ticket.roomArea.isEmpty ? ticket.location : ticket.roomArea,
+                      ].where((part) => part.trim().isNotEmpty).join('\n'),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontWeight: FontWeight.w800),
@@ -88,6 +106,18 @@ class HospitalTicketCard extends StatelessWidget {
                   _Badge(label: sla.label, color: slaColor, prominent: true),
                 ],
               ),
+              if (canAccept) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: controller.isTicketBusy(ticket.id)
+                        ? null
+                        : () => _accept(context),
+                    child: const Text('Accept'),
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -133,6 +163,20 @@ class HospitalTicketCard extends StatelessWidget {
     HospitalTicketStatus.accepted => hospitalTeal,
     _ => qpmsBlue,
   };
+
+  Future<void> _accept(BuildContext context) async {
+    try {
+      await controller.accept(ticket.id);
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Ticket is currently assigned. Refreshing latest status.'),
+        ),
+      );
+      await controller.loadDetail(ticket.id, force: true);
+    }
+  }
 }
 
 class _Badge extends StatelessWidget {

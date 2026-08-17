@@ -3,6 +3,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 class SiteAwayNotificationService {
   static const notificationId = 15703;
   static const channelId = 'myqpms_site_away';
+  static const _androidNotificationIcon = 'ic_notification';
   static const body =
       'You are away from the checked-in site. Please check out if your site visit is completed.';
 
@@ -14,7 +15,7 @@ class SiteAwayNotificationService {
     if (!_initialized) {
       await _notifications.initialize(
         settings: const InitializationSettings(
-          android: AndroidInitializationSettings('ic_launcher'),
+          android: AndroidInitializationSettings(_androidNotificationIcon),
           iOS: DarwinInitializationSettings(
             requestAlertPermission: false,
             requestBadgePermission: false,

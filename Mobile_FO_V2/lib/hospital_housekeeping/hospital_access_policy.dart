@@ -23,6 +23,10 @@ class HospitalAccessPolicy {
       HospitalTicketAction.addProgress,
       HospitalTicketAction.uploadProgressPhoto,
     };
+    final completion = <HospitalTicketAction>{
+      HospitalTicketAction.uploadCompletionPhoto,
+      HospitalTicketAction.resolve,
+    };
 
     switch (session.role) {
       case HospitalDemoRole.supervisor:
@@ -46,7 +50,7 @@ class HospitalAccessPolicy {
           if (ticket.status == HospitalTicketStatus.inProgress ||
               ticket.status == HospitalTicketStatus.accepted ||
               ticket.status == HospitalTicketStatus.reopened)
-            HospitalTicketAction.resolve,
+            ...completion,
           HospitalTicketAction.requestAssistance,
           if (ticket.status !=
                   HospitalTicketStatus.escalatedOperationsExecutive &&
@@ -70,7 +74,7 @@ class HospitalAccessPolicy {
           ...common,
           HospitalTicketAction.takeOver,
           HospitalTicketAction.reassignSupervisor,
-          HospitalTicketAction.resolve,
+          ...completion,
           HospitalTicketAction.escalateFurther,
           if (ticket.status ==
               HospitalTicketStatus.escalatedOperationsExecutive)
@@ -87,7 +91,7 @@ class HospitalAccessPolicy {
           ...common,
           HospitalTicketAction.takeOver,
           HospitalTicketAction.assignSupport,
-          HospitalTicketAction.resolve,
+          ...completion,
           if (ticket.status ==
               HospitalTicketStatus.escalatedOperationsExecutive)
             HospitalTicketAction.simulateOperationsBreach,
@@ -102,7 +106,35 @@ class HospitalAccessPolicy {
         return {
           ...common,
           HospitalTicketAction.takeOver,
-          HospitalTicketAction.resolve,
+          ...completion,
+        };
+      case HospitalDemoRole.admin:
+        if (ticket.isAwaitingClient) {
+          return const {};
+        }
+        return {
+          ...common,
+          if (ticket.status == HospitalTicketStatus.escalatedOperationsExecutive ||
+              ticket.status == HospitalTicketStatus.escalatedFacilityManager ||
+              ticket.status == HospitalTicketStatus.escalatedProjectHead)
+            HospitalTicketAction.takeOver,
+          HospitalTicketAction.reassignSupervisor,
+          HospitalTicketAction.assignSupport,
+          if (ticket.status !=
+                  HospitalTicketStatus.escalatedOperationsExecutive &&
+              ticket.status != HospitalTicketStatus.escalatedFacilityManager &&
+              ticket.status != HospitalTicketStatus.escalatedProjectHead)
+            HospitalTicketAction.escalateManually,
+          if (ticket.status == HospitalTicketStatus.escalatedOperationsExecutive)
+            HospitalTicketAction.escalateFurther,
+          if (ticket.status == HospitalTicketStatus.accepted ||
+              ticket.status == HospitalTicketStatus.inProgress ||
+              ticket.status == HospitalTicketStatus.reopened ||
+              ticket.status ==
+                  HospitalTicketStatus.escalatedOperationsExecutive ||
+              ticket.status == HospitalTicketStatus.escalatedFacilityManager ||
+              ticket.status == HospitalTicketStatus.escalatedProjectHead)
+            ...completion,
         };
     }
   }

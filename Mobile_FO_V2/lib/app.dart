@@ -26,6 +26,8 @@ class MyQpmsFoApp extends StatefulWidget {
 class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
   bool _loading = true;
   String? _error;
+  bool _resolvingPrimaryHospitalAccess = false;
+  String? _primaryHospitalAccessError;
   FoUser? _user;
   HospitalDemoSession? _hospitalDemoSession;
 
@@ -66,6 +68,12 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
       if (mounted && user != null && user != _user) {
         setState(() => _user = user);
       }
+      if (user != null &&
+          _isDedicatedHospitalEmployee(user) &&
+          _hospitalDemoSession == null) {
+        await _resolvePrimaryHospitalAccess(user, source: 'app_resume');
+        return;
+      }
       final attendance = await LocalStore.getAttendance();
       if (user != null &&
           attendance?.isActive == true &&
@@ -101,6 +109,9 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
         await CrashLogService.sync();
         _user = await LocalStore.getUser();
         _user = await _refreshCachedProfile(_user, source: 'app_startup');
+        if (_user != null && _isDedicatedHospitalEmployee(_user!)) {
+          await _resolvePrimaryHospitalAccess(_user!, source: 'app_startup');
+        }
       }
     } catch (error, stackTrace) {
       _error = error.toString();
@@ -184,8 +195,12 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
     if (mounted) {
       setState(() {
         _hospitalDemoSession = null;
+        _primaryHospitalAccessError = null;
         _user = user;
       });
+    }
+    if (_isDedicatedHospitalEmployee(user)) {
+      await _resolvePrimaryHospitalAccess(user, source: 'login');
     }
   }
 
@@ -193,6 +208,8 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       _hospitalDemoSession = session;
+      _primaryHospitalAccessError = null;
+      _resolvingPrimaryHospitalAccess = false;
       _user = null;
     });
     if (!session.isDemo) {
@@ -205,7 +222,71 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
       await HospitalPushService.unregisterAuthenticatedDevice();
       await HospitalTicketApi.closeSession();
     }
-    if (mounted) setState(() => _hospitalDemoSession = null);
+    await LocalStore.clearUser();
+    if (mounted) {
+      setState(() {
+        _hospitalDemoSession = null;
+        _primaryHospitalAccessError = null;
+        _resolvingPrimaryHospitalAccess = false;
+        _user = null;
+      });
+    }
+  }
+
+  Future<void> _resolvePrimaryHospitalAccess(
+    FoUser user, {
+    required String source,
+  }) async {
+    if (!_isDedicatedHospitalEmployee(user)) return;
+    if (mounted) {
+      setState(() {
+        _resolvingPrimaryHospitalAccess = true;
+        _primaryHospitalAccessError = null;
+        _hospitalDemoSession = null;
+      });
+    }
+    try {
+      final session = await HospitalTicketApi.discoverCurrentInternalSession(
+        emailHint: user.email.isEmpty ? user.mobile : user.email,
+      );
+      if (!_isPrimaryHospitalInternalSession(session)) {
+        throw const HospitalTicketApiException(
+          'This Hospital account is not active for the internal mobile workflow.',
+        );
+      }
+      if (!session.isDemo) {
+        unawaited(HospitalPushService.registerAuthenticatedDevice());
+      }
+      await CrashLogService.record(
+        employeeCode: user.employeeCode,
+        screen: 'app',
+        action: 'PRIMARY_HOSPITAL_ACCESS_RESOLVED',
+        error: 'source=$source role=${session.role.name}',
+      );
+      if (!mounted) return;
+      setState(() {
+        _hospitalDemoSession = session;
+        _resolvingPrimaryHospitalAccess = false;
+        _primaryHospitalAccessError = null;
+      });
+    } catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: user.employeeCode,
+        screen: 'app',
+        action: 'PRIMARY_HOSPITAL_ACCESS_FAILED',
+        error: '$source: $error',
+        stackTrace: stackTrace,
+      );
+      if (!mounted) return;
+      setState(() {
+        _hospitalDemoSession = null;
+        _resolvingPrimaryHospitalAccess = false;
+        _primaryHospitalAccessError =
+            error is HospitalTicketApiException && error.message.isNotEmpty
+            ? error.message
+            : 'Unable to load Hospital access. Retry.';
+      });
+    }
   }
 
   Future<void> _logout() async {
@@ -240,7 +321,14 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
         screen: 'app',
         action: 'SESSION_REFRESH_LOGOUT_COMPLETED',
       );
-      if (mounted) setState(() => _user = null);
+      if (mounted) {
+        setState(() {
+          _hospitalDemoSession = null;
+          _primaryHospitalAccessError = null;
+          _resolvingPrimaryHospitalAccess = false;
+          _user = null;
+        });
+      }
     } catch (error, stackTrace) {
       await CrashLogService.record(
         employeeCode: employeeCode,
@@ -249,7 +337,14 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
         error: error,
         stackTrace: stackTrace,
       );
-      if (mounted) setState(() => _user = null);
+      if (mounted) {
+        setState(() {
+          _hospitalDemoSession = null;
+          _primaryHospitalAccessError = null;
+          _resolvingPrimaryHospitalAccess = false;
+          _user = null;
+        });
+      }
     }
   }
 
@@ -278,8 +373,32 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
         onHospitalDemoAuthenticated: _setHospitalDemoSession,
       );
     }
+    if (_isDedicatedHospitalEmployee(_user!)) {
+      if (_resolvingPrimaryHospitalAccess) return const SplashScreen();
+      return PrimaryHospitalAccessErrorScreen(
+        message:
+            _primaryHospitalAccessError ??
+            'Unable to load Hospital access. Retry.',
+        onRetry: () =>
+            _resolvePrimaryHospitalAccess(_user!, source: 'manual_retry'),
+        onLogout: _logout,
+      );
+    }
     return HomeShell(user: _user!, onLogout: _logout);
   }
+}
+
+bool _isDedicatedHospitalEmployee(FoUser user) =>
+    (user.business ?? '').trim().toLowerCase() == 'hospitals';
+
+bool _isPrimaryHospitalInternalSession(HospitalDemoSession session) {
+  if (session.isDemo) return false;
+  return const {
+    HospitalDemoRole.supervisor,
+    HospitalDemoRole.operationsExecutive,
+    HospitalDemoRole.facilityManager,
+    HospitalDemoRole.projectHead,
+  }.contains(session.role);
 }
 
 class SplashScreen extends StatelessWidget {
@@ -329,6 +448,88 @@ class ConfigErrorScreen extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class PrimaryHospitalAccessErrorScreen extends StatelessWidget {
+  const PrimaryHospitalAccessErrorScreen({
+    required this.message,
+    required this.onRetry,
+    required this.onLogout,
+    super.key,
+  });
+
+  final String message;
+  final VoidCallback onRetry;
+  final Future<void> Function() onLogout;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const _LogoTitle(),
+                const SizedBox(height: 20),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(18),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.local_hospital_outlined,
+                          color: qpmsBlue,
+                          size: 42,
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Unable to load Hospital access. Retry.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: qpmsBlue,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          message,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: qpmsMuted,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: onRetry,
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: const Text('Retry'),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextButton.icon(
+                          onPressed: onLogout,
+                          icon: const Icon(Icons.logout_rounded),
+                          label: const Text('Logout'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

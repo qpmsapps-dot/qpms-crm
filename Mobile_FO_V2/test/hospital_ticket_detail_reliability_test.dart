@@ -228,6 +228,9 @@ class _FakeHospitalTicketGateway implements HospitalTicketGateway {
   }
 
   @override
+  Future<List<HospitalTicket>> fetchIncomingTickets() async => const [];
+
+  @override
   Future<List<Map<String, dynamic>>> fetchNotifications() async => const [];
 
   @override

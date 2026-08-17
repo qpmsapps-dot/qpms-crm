@@ -75,6 +75,11 @@ class _LoginScreenState extends State<LoginScreen> {
         employeeLoginError = error;
       }
 
+      if (user != null) {
+        widget.onAuthenticated(user);
+        return;
+      }
+
       if (SupabaseService.client.auth.currentSession != null) {
         try {
           final hospitalSession =
@@ -92,10 +97,6 @@ class _LoginScreenState extends State<LoginScreen> {
         } on HospitalTicketApiException {
           if (user == null) rethrow;
         }
-      }
-      if (user != null) {
-        widget.onAuthenticated(user);
-        return;
       }
       throw employeeLoginError ??
           const MobileLoginException(

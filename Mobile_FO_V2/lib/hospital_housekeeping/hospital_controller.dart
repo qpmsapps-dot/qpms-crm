@@ -55,6 +55,7 @@ enum HospitalTicketListFilter {
 
 abstract class HospitalTicketGateway {
   Future<List<HospitalTicket>> fetchTickets();
+  Future<List<HospitalTicket>> fetchIncomingTickets();
   Future<List<Map<String, dynamic>>> fetchNotifications();
   Future<Map<String, dynamic>> fetchDutyStatus();
   Future<Map<String, dynamic>> startDuty({String? cugNumber});
@@ -77,6 +78,10 @@ class LiveHospitalTicketGateway implements HospitalTicketGateway {
   @override
   Future<List<HospitalTicket>> fetchTickets() =>
       HospitalTicketApi.fetchTickets();
+
+  @override
+  Future<List<HospitalTicket>> fetchIncomingTickets() =>
+      HospitalTicketApi.fetchIncomingTickets();
 
   @override
   Future<List<Map<String, dynamic>>> fetchNotifications() =>
@@ -253,15 +258,22 @@ class HospitalController extends ChangeNotifier {
     try {
       final results = await Future.wait([
         _api.fetchTickets(),
+        if (session.role == HospitalDemoRole.supervisor)
+          _api.fetchIncomingTickets()
+        else
+          Future.value(<HospitalTicket>[]),
         _api.fetchNotifications(),
         if (session.role == HospitalDemoRole.supervisor)
           _api.fetchDutyStatus()
         else
           Future.value(<String, dynamic>{}),
       ]);
-      _tickets = _mergeListRefresh(results[0] as List<HospitalTicket>);
-      _notifications = results[1] as List<Map<String, dynamic>>;
-      final duty = results[2] is Map ? results[2] as Map : const {};
+      _tickets = _mergeListRefresh([
+        ...(results[0] as List<HospitalTicket>),
+        ...(results[1] as List<HospitalTicket>),
+      ]);
+      _notifications = results[2] as List<Map<String, dynamic>>;
+      final duty = results[3] is Map ? results[3] as Map : const {};
       final dutyBody = duty['duty'] is Map ? duty['duty'] as Map : duty;
       _dutyStatus = '${dutyBody['duty_status'] ?? _dutyStatus}';
       _now = DateTime.now();
@@ -413,6 +425,9 @@ class HospitalController extends ChangeNotifier {
         ..add(HospitalTicketAction.addRemarks)
         ..add(HospitalTicketAction.uploadProgressPhoto);
     }
+    if (actions.contains(HospitalTicketAction.resolve)) {
+      actions.add(HospitalTicketAction.uploadCompletionPhoto);
+    }
     return actions;
   }
 
@@ -424,8 +439,11 @@ class HospitalController extends ChangeNotifier {
       newComplaints: rows
           .where(
             (ticket) =>
-                ticket.status == HospitalTicketStatus.open &&
-                _now.difference(ticket.raisedAt) <= const Duration(minutes: 10),
+                ticket.status ==
+                    HospitalTicketStatus.awaitingSupervisorAcceptance ||
+                (ticket.status == HospitalTicketStatus.open &&
+                    _now.difference(ticket.raisedAt) <=
+                        const Duration(minutes: 10)),
           )
           .length,
       awaitingAcceptance: rows
@@ -564,14 +582,15 @@ class HospitalController extends ChangeNotifier {
     String ticketId, {
     required String actionTaken,
     required String resolutionRemarks,
-    required String completionPhotoPath,
+    String? completionPhotoPath,
   }) {
     final ticket = ticketById(ticketId);
     _requireAction(ticket, HospitalTicketAction.resolve);
     if (actionTaken.trim().isEmpty || resolutionRemarks.trim().isEmpty) {
       throw ArgumentError('Action taken and resolution remarks are required.');
     }
-    if (completionPhotoPath.trim().isEmpty) {
+    final photoPath = completionPhotoPath?.trim() ?? '';
+    if (photoPath.isEmpty && ticket.completionPhotoPaths.isEmpty) {
       throw ArgumentError('A completion photo is required.');
     }
     if (productionMode) {
@@ -579,7 +598,7 @@ class HospitalController extends ChangeNotifier {
         ticket,
         actionTaken,
         resolutionRemarks,
-        completionPhotoPath,
+        photoPath.isEmpty ? null : photoPath,
       );
     }
     _replace(
@@ -588,10 +607,9 @@ class HospitalController extends ChangeNotifier {
         resolvedAt: _now,
         actionTaken: actionTaken.trim(),
         resolutionRemarks: resolutionRemarks.trim(),
-        completionPhotoPaths: [
-          ...ticket.completionPhotoPaths,
-          completionPhotoPath,
-        ],
+        completionPhotoPaths: photoPath.isEmpty
+            ? ticket.completionPhotoPaths
+            : [...ticket.completionPhotoPaths, photoPath],
         events: [
           ...ticket.events,
           _event('Resolution', resolutionRemarks.trim(), hasPhoto: true),
@@ -601,6 +619,36 @@ class HospitalController extends ChangeNotifier {
             actorRole: 'System',
             occurredAt: _now,
             remarks: 'Waiting for client satisfaction confirmation.',
+          ),
+        ],
+      ),
+    );
+    return Future.value();
+  }
+
+  Future<void> uploadCompletionPhoto(
+    String ticketId, {
+    required String photoPath,
+  }) {
+    final ticket = ticketById(ticketId);
+    _requireAction(ticket, HospitalTicketAction.uploadCompletionPhoto);
+    if (photoPath.trim().isEmpty) {
+      throw ArgumentError('A completion photo is required.');
+    }
+    if (productionMode) {
+      return _api
+          .uploadPhoto(ticket.id, photoPath.trim(), 'completion_photo')
+          .then((_) => loadDetail(ticket.id, force: true));
+    }
+    _replace(
+      ticket.copyWith(
+        completionPhotoPaths: [...ticket.completionPhotoPaths, photoPath],
+        events: [
+          ...ticket.events,
+          _event(
+            'Completion photo uploaded',
+            'Completion evidence uploaded.',
+            hasPhoto: true,
           ),
         ],
       ),
@@ -1057,10 +1105,12 @@ class HospitalController extends ChangeNotifier {
     HospitalTicket ticket,
     String actionTaken,
     String remarks,
-    String photoPath,
+    String? photoPath,
   ) async {
     try {
-      await _api.uploadPhoto(ticket.id, photoPath, 'completion_photo');
+      if (photoPath != null && photoPath.trim().isNotEmpty) {
+        await _api.uploadPhoto(ticket.id, photoPath.trim(), 'completion_photo');
+      }
       await _remoteAction(ticket, 'resolve', {
         'resolution_action': actionTaken.trim(),
         'resolution_remarks': remarks.trim(),

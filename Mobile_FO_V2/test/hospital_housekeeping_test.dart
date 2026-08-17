@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:myqpms_fo_v2/hospital_housekeeping/hospital_access_policy.dart';
 import 'package:myqpms_fo_v2/hospital_housekeeping/hospital_controller.dart';
@@ -119,6 +121,73 @@ void main() {
       expect(value.ticketById(id).completionPhotoPaths, isNotEmpty);
     });
 
+    test('Operations owner uses completion photo before resolving', () {
+      final value = controller('ops.exec@qpmsdemo.com');
+      const id = 'QPMS-HH-2026-0104';
+      expect(
+        value.actionsFor(value.ticketById(id)),
+        contains(HospitalTicketAction.uploadCompletionPhoto),
+      );
+      value.uploadCompletionPhoto(id, photoPath: 'demo://oe-completion');
+      value.resolve(
+        id,
+        actionTaken: 'Cleaned and disinfected the assigned area.',
+        resolutionRemarks: 'Completion evidence uploaded and verified.',
+      );
+      final ticket = value.ticketById(id);
+      expect(ticket.status, HospitalTicketStatus.resolvedAwaitingConfirmation);
+      expect(ticket.completionPhotoPaths, contains('demo://oe-completion'));
+    });
+
+    test('Operations owner cannot resolve without completion evidence', () {
+      final value = controller('ops.exec@qpmsdemo.com');
+      expect(
+        () => value.resolve(
+          'QPMS-HH-2026-0104',
+          actionTaken: 'Cleaned.',
+          resolutionRemarks: 'Done.',
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('Facility Manager owner can resolve with completion evidence', () {
+      final value = controller('facility.manager@qpmsdemo.com');
+      const id = 'QPMS-HH-2026-0103';
+      value.uploadCompletionPhoto(id, photoPath: 'demo://completion-$id');
+      value.resolve(
+        id,
+        actionTaken: 'Completed housekeeping work.',
+        resolutionRemarks: 'Area verified after completion.',
+      );
+      expect(
+        value.ticketById(id).status,
+        HospitalTicketStatus.resolvedAwaitingConfirmation,
+      );
+    });
+
+    test('Project Head API action mapping supports completion workflow', () {
+      final ticket = HospitalTicket.fromApi({
+        'id': 'ticket-project',
+        'block_name_snapshot': 'Block A',
+        'floor_name': '3rd Floor',
+        'location_text': 'Ward',
+        'category': {'category_name': 'Housekeeping'},
+        'priority': 'medium',
+        'description': 'Delayed cleaning',
+        'raised_by_name': 'Doctor',
+        'raised_at': seed.toIso8601String(),
+        'status_code': 'escalated_project_head',
+        'allowed_actions': ['progress', 'resolve'],
+      });
+      final value = controller('facility.manager@qpmsdemo.com');
+      expect(
+        value.actionsFor(ticket),
+        contains(HospitalTicketAction.uploadCompletionPhoto),
+      );
+      expect(value.actionsFor(ticket), contains(HospitalTicketAction.resolve));
+    });
+
     test('Satisfied feedback closes same ticket', () {
       final value = controller('sup.blocka@qpmsdemo.com');
       const id = 'QPMS-HH-2026-0106';
@@ -163,6 +232,33 @@ void main() {
         HospitalTicketStatus.escalatedFacilityManager,
       );
       expect(value.allTickets.length, count);
+    });
+  });
+
+  group('hospital shell account access contract', () {
+    test('Hospital shell exposes account and logout without demo tools', () {
+      final source = File(
+        'lib/hospital_housekeeping/hospital_shell.dart',
+      ).readAsStringSync();
+      expect(source, contains("tooltip: 'Account'"));
+      expect(source, contains("label: const Text('Logout')"));
+      expect(source, contains('await widget.onLogout()'));
+      expect(source, contains('session.role.label'));
+      expect(source, contains('session.clientName'));
+    });
+
+    test('ticket detail labels completion flow without exposing close action', () {
+      final source = File(
+        'lib/hospital_housekeeping/hospital_ticket_detail_screen.dart',
+      ).readAsStringSync();
+      expect(source, contains("'Upload Completion Photo'"));
+      expect(source, contains("'Completion Evidence'"));
+      expect(source, contains("'Resolve Ticket'"));
+      expect(
+        source,
+        contains('Work completion sent to client for confirmation.'),
+      );
+      expect(source, isNot(contains("'Close Ticket'")));
     });
   });
 

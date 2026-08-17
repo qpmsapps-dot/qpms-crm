@@ -141,6 +141,14 @@ bool isBusinessDevelopmentRole(String role) {
   }
 }
 
+bool isAdminRole(String role) {
+  try {
+    return canonicalMobileRole(role) == 'Admin';
+  } catch (_) {
+    return false;
+  }
+}
+
 bool canAccessBusinessDevelopmentModule(String role) {
   try {
     final canonicalRole = canonicalMobileRole(role);
@@ -156,6 +164,61 @@ bool canAccessBusinessDevelopmentModule(String role) {
       'GM',
       'MD',
     }.contains(canonicalRole);
+  } catch (_) {
+    return false;
+  }
+}
+
+bool canAccessHospitalTicketingLauncher(String role) {
+  final normalizedRole = _normalizedMobileRole(role);
+  if (const {
+    'HOUSEKEEPINGSUPERVISOR',
+    'SUPERVISOR',
+    'OPERATIONSEXECUTIVE',
+    'FACILITYMANAGER',
+    'PROJECTHEAD',
+    'HOSPITALDEAN',
+    'HOSPITALMANAGEMENT',
+    'DEMO',
+    'DEMOPREVIEW',
+    'DEMOPRESENTER',
+  }.contains(normalizedRole)) {
+    return true;
+  }
+  try {
+    return const {
+      'Admin',
+      'QPMS Admin',
+      'Developer',
+      'COO',
+      'GM',
+      'MD',
+      'Operations Manager',
+      'Branch Head',
+    }.contains(canonicalMobileRole(role));
+  } catch (_) {
+    return false;
+  }
+}
+
+bool hasHospitalTicketingDemoPreview(String role) {
+  final normalizedRole = _normalizedMobileRole(role);
+  if (const {
+    'DEMO',
+    'DEMOPREVIEW',
+    'DEMOPRESENTER',
+    'ADMIN',
+    'QPMSADMIN',
+    'DEVELOPER',
+  }.contains(normalizedRole)) {
+    return true;
+  }
+  try {
+    return const {
+      'Admin',
+      'QPMS Admin',
+      'Developer',
+    }.contains(canonicalMobileRole(role));
   } catch (_) {
     return false;
   }

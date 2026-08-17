@@ -17,11 +17,13 @@ class HospitalHousekeepingShell extends StatefulWidget {
   const HospitalHousekeepingShell({
     required this.session,
     required this.onLogout,
+    this.initialIndex = 0,
     super.key,
   });
 
   final HospitalDemoSession session;
   final Future<void> Function() onLogout;
+  final int initialIndex;
 
   @override
   State<HospitalHousekeepingShell> createState() =>
@@ -34,12 +36,13 @@ class _HospitalHousekeepingShellState extends State<HospitalHousekeepingShell>
   Timer? _clock;
   Timer? _refreshTimer;
   StreamSubscription<HospitalPushMessage>? _pushSubscription;
-  int _index = 0;
+  late int _index;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _index = widget.initialIndex;
     _controller = HospitalController(session: widget.session)
       ..addListener(_refresh);
     if (!widget.session.isDemo) {
@@ -134,6 +137,96 @@ class _HospitalHousekeepingShellState extends State<HospitalHousekeepingShell>
     );
   }
 
+  Future<void> _showAccount() async {
+    final session = widget.session;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: hospitalTeal.withValues(alpha: .12),
+                    child: const Icon(
+                      Icons.person_outline,
+                      color: hospitalTeal,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          session.displayName,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                            color: qpmsText,
+                          ),
+                        ),
+                        Text(
+                          session.role.label,
+                          style: const TextStyle(
+                            color: qpmsMuted,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              _AccountRow(
+                icon: Icons.local_hospital_outlined,
+                label: 'Hospital',
+                value: session.clientName.isEmpty
+                    ? 'Hospital Housekeeping'
+                    : session.clientName,
+              ),
+              _AccountRow(
+                icon: Icons.business_outlined,
+                label: 'Scope',
+                value: session.scopeLabel,
+              ),
+              if (session.shiftLabel.isNotEmpty)
+                _AccountRow(
+                  icon: Icons.schedule_outlined,
+                  label: 'Shift',
+                  value: session.shiftLabel,
+                ),
+              if (session.email.isNotEmpty)
+                _AccountRow(
+                  icon: Icons.mail_outline,
+                  label: 'Email',
+                  value: session.email,
+                ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    await widget.onLogout();
+                  },
+                  icon: const Icon(Icons.logout_rounded),
+                  label: const Text('Logout'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
@@ -169,6 +262,11 @@ class _HospitalHousekeepingShellState extends State<HospitalHousekeepingShell>
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'Account',
+            onPressed: _showAccount,
+            icon: const Icon(Icons.account_circle_outlined),
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: Center(
@@ -179,7 +277,7 @@ class _HospitalHousekeepingShellState extends State<HospitalHousekeepingShell>
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
-                  widget.session.assignedBlock ?? 'All Blocks',
+                  widget.session.scopeLabel,
                   style: const TextStyle(
                     color: hospitalTeal,
                     fontWeight: FontWeight.w900,
@@ -244,6 +342,53 @@ class _HospitalHousekeepingShellState extends State<HospitalHousekeepingShell>
               selectedIcon: Icon(Icons.notifications),
               label: 'Alerts',
             ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AccountRow extends StatelessWidget {
+  const _AccountRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: hospitalTeal),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: qpmsMuted,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                Text(
+                  value,
+                  style: TextStyle(
+                    color: qpmsText,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

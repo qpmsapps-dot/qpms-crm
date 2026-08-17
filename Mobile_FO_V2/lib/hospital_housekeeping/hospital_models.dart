@@ -1,4 +1,10 @@
-enum HospitalDemoRole { supervisor, operationsExecutive, facilityManager, projectHead }
+enum HospitalDemoRole {
+  supervisor,
+  operationsExecutive,
+  facilityManager,
+  projectHead,
+  admin,
+}
 
 enum HospitalTicketStatus {
   open,
@@ -23,6 +29,7 @@ enum HospitalTicketAction {
   addProgress,
   addRemarks,
   uploadProgressPhoto,
+  uploadCompletionPhoto,
   resolve,
   requestAssistance,
   escalateManually,
@@ -36,16 +43,40 @@ enum HospitalTicketAction {
   simulateClientNotSatisfied,
 }
 
+class HospitalClientOption {
+  const HospitalClientOption({
+    required this.id,
+    required this.name,
+    this.code = '',
+  });
+
+  final String id;
+  final String name;
+  final String code;
+
+  factory HospitalClientOption.fromApi(Map<String, dynamic> json) {
+    return HospitalClientOption(
+      id: '${json['id'] ?? ''}',
+      name: '${json['client_name'] ?? json['name'] ?? ''}',
+      code: '${json['client_code'] ?? json['code'] ?? ''}',
+    );
+  }
+}
+
 class HospitalDemoSession {
   const HospitalDemoSession({
     required this.loginId,
     required this.displayName,
     required this.role,
     this.assignedBlock,
+    this.assignedBlocks = const [],
+    this.shiftLabel = '',
     this.userCode = '',
     this.email = '',
     this.mobile = '',
     this.clientName = '',
+    this.clientId = '',
+    this.availableClients = const [],
     this.userId = '',
     this.isDemo = true,
   });
@@ -54,14 +85,22 @@ class HospitalDemoSession {
   final String displayName;
   final HospitalDemoRole role;
   final String? assignedBlock;
+  final List<String> assignedBlocks;
+  final String shiftLabel;
   final String userCode;
   final String email;
   final String mobile;
   final String clientName;
+  final String clientId;
+  final List<HospitalClientOption> availableClients;
   final String userId;
   final bool isDemo;
 
   bool get hasAllBlocks => role != HospitalDemoRole.supervisor;
+  String get scopeLabel {
+    if (assignedBlocks.isNotEmpty) return assignedBlocks.join(', ');
+    return assignedBlock ?? 'All Blocks';
+  }
 }
 
 class HospitalTicketEvent {
@@ -467,8 +506,10 @@ HospitalTicketAction? hospitalActionFromCode(String value) => switch (value) {
   'accept' => HospitalTicketAction.accept,
   'start_work' => HospitalTicketAction.startWork,
   'progress' => HospitalTicketAction.addProgress,
+  'upload_completion_photo' => HospitalTicketAction.uploadCompletionPhoto,
   'request_assistance' => HospitalTicketAction.requestAssistance,
   'manual_escalation' => HospitalTicketAction.escalateManually,
+  'escalate_facility' => HospitalTicketAction.escalateFurther,
   'take_over' => HospitalTicketAction.takeOver,
   'reassign_supervisor' => HospitalTicketAction.reassignSupervisor,
   'assign_support' => HospitalTicketAction.assignSupport,
@@ -478,10 +519,11 @@ HospitalTicketAction? hospitalActionFromCode(String value) => switch (value) {
 
 extension HospitalDemoRoleLabels on HospitalDemoRole {
   String get label => switch (this) {
-    HospitalDemoRole.supervisor => 'Housekeeping Supervisor',
+    HospitalDemoRole.supervisor => 'Hospital Supervisor',
     HospitalDemoRole.operationsExecutive => 'Operations Executive',
     HospitalDemoRole.facilityManager => 'Facility Manager',
     HospitalDemoRole.projectHead => 'Project Head',
+    HospitalDemoRole.admin => 'Admin',
   };
 }
 

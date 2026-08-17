@@ -199,6 +199,14 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
                 HospitalTicketStatus.escalatedOperationsExecutive ||
             ticket.status == HospitalTicketStatus.escalatedFacilityManager ||
             ticket.status == HospitalTicketStatus.escalatedProjectHead)) {
+      if (ticket.completionPhotoPaths.isEmpty &&
+          actions.contains(HospitalTicketAction.uploadCompletionPhoto)) {
+        return const _PrimaryAction(
+          HospitalTicketAction.uploadCompletionPhoto,
+          'Upload Completion Photo',
+          Icons.add_a_photo_outlined,
+        );
+      }
       return const _PrimaryAction(
         HospitalTicketAction.resolve,
         'Resolve Ticket',
@@ -237,6 +245,9 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
           break;
         case HospitalTicketAction.uploadProgressPhoto:
           await _addPhotoUpdate(ticket.id);
+          break;
+        case HospitalTicketAction.uploadCompletionPhoto:
+          await _addCompletionPhoto(ticket.id);
           break;
         case HospitalTicketAction.requestAssistance:
           await _remarksAction(
@@ -280,7 +291,13 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
           await _feedback(ticket.id, false);
           break;
       }
-      if (mounted) _message('$actionLabel completed.');
+      if (mounted) {
+        _message(
+          action == HospitalTicketAction.resolve
+              ? 'Work completion sent to client for confirmation.'
+              : '$actionLabel completed.',
+        );
+      }
     } catch (error) {
       if (mounted) _message(_friendlyMessage(error));
     }
@@ -356,6 +373,15 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
     }
   }
 
+  Future<void> _addCompletionPhoto(String id) async {
+    final photo = await ImagePicker().pickImage(
+      source: ImageSource.camera,
+      imageQuality: 72,
+    );
+    if (photo == null || !mounted) return;
+    await widget.controller.uploadCompletionPhoto(id, photoPath: photo.path);
+  }
+
   Future<void> _remarksAction(
     String id,
     String title,
@@ -366,6 +392,11 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
   }
 
   Future<void> _resolve(String id) async {
+    final ticket = widget.controller.ticketById(id);
+    if (ticket.completionPhotoPaths.isEmpty) {
+      _message('Upload a completion photo before resolving this ticket.');
+      return;
+    }
     final action = await _textDialog(
       'Action taken',
       'Describe the housekeeping action completed',
@@ -376,19 +407,10 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
       'Add resolution details',
     );
     if (remarks == null || !mounted) return;
-    final photo = await ImagePicker().pickImage(
-      source: ImageSource.camera,
-      imageQuality: 72,
-    );
-    if (photo == null) {
-      _message('A completion photo is required.');
-      return;
-    }
     await widget.controller.resolve(
       id,
       actionTaken: action,
       resolutionRemarks: remarks,
-      completionPhotoPath: photo.path,
     );
   }
 
@@ -457,7 +479,7 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
                 if (!satisfied && value.isEmpty) return;
                 Navigator.pop(context, (rating, value));
               },
-              child: Text(satisfied ? 'Close Ticket' : 'Reopen Ticket'),
+              child: Text(satisfied ? 'Mark Satisfied' : 'Reopen Ticket'),
             ),
           ],
         ),
@@ -587,9 +609,46 @@ class _CompactHeader extends StatelessWidget {
               ),
           ],
         ),
+        if (ticket.status ==
+                HospitalTicketStatus.awaitingSupervisorAcceptance &&
+            ticket.acceptanceDueAt != null) ...[
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: hospitalAmber.withValues(alpha: .12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: hospitalAmber.withValues(alpha: .35)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.timer_outlined, color: hospitalAmber),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Acceptance Required • ${_remainingLabel(ticket.acceptanceDueAt!)} remaining',
+                    style: const TextStyle(
+                      color: qpmsText,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     ),
   );
+}
+
+String _remainingLabel(DateTime dueAt) {
+  final remaining = dueAt.difference(DateTime.now());
+  if (remaining.isNegative) return '00:00';
+  final minutes = remaining.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final seconds = remaining.inSeconds.remainder(60).toString().padLeft(2, '0');
+  return '$minutes:$seconds';
 }
 
 class _OverviewTab extends StatelessWidget {
@@ -665,6 +724,29 @@ class _OverviewTab extends StatelessWidget {
       ),
       const SizedBox(height: 12),
       _PhotoSummary(ticket: ticket, onViewAllPhotos: onViewAllPhotos),
+      if (ticket.completionPhotoPaths.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        _Section(
+          title: 'Completion Evidence',
+          children: [
+            const Text(
+              'Completion photo uploaded. Resolution remarks can now be submitted to the client.',
+              style: TextStyle(color: qpmsMuted, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 88,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: ticket.completionPhotoPaths.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 8),
+                itemBuilder: (_, index) =>
+                    _Photo(path: ticket.completionPhotoPaths[index]),
+              ),
+            ),
+          ],
+        ),
+      ],
       if (ticket.resolutionRemarks.isNotEmpty) ...[
         const SizedBox(height: 12),
         _Section(
@@ -785,30 +867,95 @@ class _ActionsTab extends StatelessWidget {
         .where((action) => action != primaryAction)
         .where(_isOperationalSecondaryAction)
         .toList();
-    if (secondary.isEmpty) {
+    final workUpdates = secondary
+        .where(
+          (action) =>
+              action == HospitalTicketAction.addProgress ||
+              action == HospitalTicketAction.addRemarks ||
+              action == HospitalTicketAction.uploadProgressPhoto,
+        )
+        .toList();
+    final completion = secondary
+        .where(
+          (action) =>
+              action == HospitalTicketAction.uploadCompletionPhoto ||
+              action == HospitalTicketAction.resolve,
+        )
+        .toList();
+    final escalation = secondary
+        .where((action) => !workUpdates.contains(action) && !completion.contains(action))
+        .toList();
+    final groups = [
+      if (workUpdates.isNotEmpty) ('WORK UPDATE', workUpdates),
+      if (completion.isNotEmpty) ('COMPLETION', completion),
+      if (escalation.isNotEmpty) ('ESCALATION / ASSIGNMENT', escalation),
+    ];
+    if (groups.isEmpty) {
       return const _CenteredState(
         icon: Icons.lock_clock_rounded,
         title: 'No other actions available',
         message: 'Available actions depend on the ticket status and your role.',
       );
     }
-    return ListView.separated(
+    return ListView(
       padding: EdgeInsets.fromLTRB(16, 12, 16, bottomInset),
-      itemCount: secondary.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 10),
-      itemBuilder: (_, index) {
-        final action = secondary[index];
-        return OutlinedButton.icon(
+      children: [
+        if (primaryAction == HospitalTicketAction.resolve)
+          const _Section(
+            title: 'COMPLETION READY',
+            children: [
+              Text(
+                'Completion evidence is uploaded. Use Resolve Ticket to send the work completion to the client.',
+                style: TextStyle(color: qpmsMuted, fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+        for (final group in groups) ...[
+          if (primaryAction == HospitalTicketAction.resolve)
+            const SizedBox(height: 12),
+          _ActionGroup(
+            title: group.$1,
+            actions: group.$2,
+            busy: busy,
+            onAction: onAction,
+          ),
+          const SizedBox(height: 12),
+        ],
+      ],
+    );
+  }
+}
+
+class _ActionGroup extends StatelessWidget {
+  const _ActionGroup({
+    required this.title,
+    required this.actions,
+    required this.busy,
+    required this.onAction,
+  });
+
+  final String title;
+  final List<HospitalTicketAction> actions;
+  final bool busy;
+  final Future<void> Function(HospitalTicketAction, [String?]) onAction;
+
+  @override
+  Widget build(BuildContext context) => _Section(
+    title: title,
+    children: [
+      for (final action in actions) ...[
+        OutlinedButton.icon(
           onPressed: busy ? null : () => onAction(action),
           icon: Icon(_actionIcon(action)),
           label: Align(
             alignment: Alignment.centerLeft,
             child: Text(_actionLabel(action)),
           ),
-        );
-      },
-    );
-  }
+        ),
+        if (action != actions.last) const SizedBox(height: 10),
+      ],
+    ],
+  );
 }
 
 class _PhotoSummary extends StatelessWidget {
@@ -1187,6 +1334,7 @@ bool _isOperationalSecondaryAction(HospitalTicketAction action) =>
       HospitalTicketAction.addProgress ||
       HospitalTicketAction.addRemarks ||
       HospitalTicketAction.uploadProgressPhoto ||
+      HospitalTicketAction.uploadCompletionPhoto ||
       HospitalTicketAction.requestAssistance ||
       HospitalTicketAction.escalateManually ||
       HospitalTicketAction.reassignSupervisor ||
@@ -1205,6 +1353,7 @@ String _actionLabel(HospitalTicketAction action) => switch (action) {
   HospitalTicketAction.addProgress => 'Add Progress',
   HospitalTicketAction.addRemarks => 'Add Remark',
   HospitalTicketAction.uploadProgressPhoto => 'Upload Photo',
+  HospitalTicketAction.uploadCompletionPhoto => 'Upload Completion Photo',
   HospitalTicketAction.resolve => 'Resolve Ticket',
   HospitalTicketAction.requestAssistance => 'Request Assistance',
   HospitalTicketAction.escalateManually => 'Escalate',
@@ -1222,6 +1371,7 @@ IconData _actionIcon(HospitalTicketAction action) => switch (action) {
   HospitalTicketAction.addProgress => Icons.add_comment_outlined,
   HospitalTicketAction.addRemarks => Icons.notes_rounded,
   HospitalTicketAction.uploadProgressPhoto => Icons.add_a_photo_outlined,
+  HospitalTicketAction.uploadCompletionPhoto => Icons.add_photo_alternate_outlined,
   HospitalTicketAction.requestAssistance => Icons.support_agent_rounded,
   HospitalTicketAction.escalateManually ||
   HospitalTicketAction.escalateFurther => Icons.trending_up_rounded,
