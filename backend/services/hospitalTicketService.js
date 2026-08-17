@@ -30,15 +30,37 @@ export async function loadHospitalMasters(client, actor) {
 
 export async function listHospitalFloors(client, actor, filters = {}) {
   const blockId = cleanHospitalUuid(filters.block_id || filters.blockId, 'block_id');
-  let query = client.from('hospital_floors').select('*').eq('client_id', actor.user.client_id).eq('is_active', true).order('sort_order').order('floor_name');
+  let query = client.from('hospital_floors')
+    .select('id,client_id,block_id,floor_code,floor_name,floor_number,sort_order,is_known_service_floor,is_confirmed_building_floor,verification_status,is_active,metadata')
+    .eq('client_id', actor.user.client_id)
+    .eq('is_active', true)
+    .eq('is_known_service_floor', true)
+    .order('sort_order')
+    .order('floor_name');
   if (blockId) query = query.eq('block_id', blockId);
   const result = await query;
   if (result.error) throw result.error;
-  return (result.data || []).filter((row) => scopeAllows(actor.scopes, {
+  const scopedRows = (result.data || []).filter((row) => scopeAllows(actor.scopes, {
     clientId: row.client_id,
     blockId: row.block_id,
     permission: 'view',
-  }));
+  }) && isUsableHospitalFloor(row));
+  if (!scopedRows.length) return [];
+  const blockIds = [...new Set(scopedRows.map((row) => row.block_id).filter(Boolean))];
+  let referencedFloorIds = new Set();
+  if (blockIds.length) {
+    let referenceQuery = client.from('hospital_locations')
+      .select('floor_id')
+      .eq('client_id', actor.user.client_id)
+      .eq('is_active', true)
+      .not('floor_id', 'is', null);
+    if (blockId) referenceQuery = referenceQuery.eq('block_id', blockId);
+    else referenceQuery = referenceQuery.in('block_id', blockIds);
+    const references = await referenceQuery;
+    if (references.error) throw references.error;
+    referencedFloorIds = new Set((references.data || []).map((row) => row.floor_id).filter(Boolean));
+  }
+  return dedupeHospitalFloors(scopedRows, referencedFloorIds);
 }
 
 export async function listHospitalDepartments(client, actor, filters = {}) {
@@ -72,12 +94,12 @@ export async function listHospitalHierarchyLocations(client, actor, filters = {}
   if (departmentId) query = query.eq('department_id', departmentId);
   const result = await query;
   if (result.error) throw result.error;
-  return (result.data || []).filter((row) => scopeAllows(actor.scopes, {
+  return dedupeHospitalLocations((result.data || []).filter((row) => row.floor_id && scopeAllows(actor.scopes, {
     clientId: row.client_id,
     blockId: row.block_id,
     locationId: row.id,
     permission: 'view',
-  }));
+  })));
 }
 
 export async function loadHospitalLocationHierarchy(client, actor, filters = {}) {
@@ -154,6 +176,100 @@ export function cleanHospitalUuid(value, fieldName = 'id') {
   const error = new Error(`${fieldName} must be a valid UUID.`);
   error.code = '22023';
   throw error;
+}
+
+function normalizeHierarchyLabel(value) {
+  return cleanHospitalText(value, 160)
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\bfirst\b/g, '1')
+    .replace(/\bsecond\b/g, '2')
+    .replace(/\bthird\b/g, '3')
+    .replace(/\bfourth\b/g, '4')
+    .replace(/\bfifth\b/g, '5')
+    .replace(/\bsixth\b/g, '6')
+    .replace(/\bseventh\b/g, '7')
+    .replace(/\beighth\b/g, '8')
+    .replace(/\bninth\b/g, '9')
+    .replace(/\btenth\b/g, '10')
+    .replace(/\b(\d+)(st|nd|rd|th)\b/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isUsableHospitalFloor(row) {
+  if (row?.is_active !== true) return false;
+  if (row.is_known_service_floor === false) return false;
+  const normalized = normalizeHierarchyLabel(row.floor_name || row.floor_code);
+  if (!normalized) return false;
+  const placeholderTokens = [
+    'not confirmed',
+    'unconfirmed floor',
+    'not applicable',
+    'campus areas',
+    'mentioned in department',
+  ];
+  return !placeholderTokens.some((token) => normalized.includes(token));
+}
+
+function hospitalFloorDedupeKey(row) {
+  if (Number.isInteger(row.floor_number)) return `${row.block_id}:number:${row.floor_number}`;
+  const normalized = normalizeHierarchyLabel(row.floor_name || row.floor_code);
+  return `${row.block_id}:name:${normalized}`;
+}
+
+function preferredHospitalFloor(existing, candidate, referencedFloorIds) {
+  if (!existing) return candidate;
+  const existingReferenced = referencedFloorIds.has(existing.id);
+  const candidateReferenced = referencedFloorIds.has(candidate.id);
+  if (candidateReferenced && !existingReferenced) return candidate;
+  if (existingReferenced && !candidateReferenced) return existing;
+  const existingConfirmed = existing.is_confirmed_building_floor === true;
+  const candidateConfirmed = candidate.is_confirmed_building_floor === true;
+  if (candidateConfirmed && !existingConfirmed) return candidate;
+  if (existingConfirmed && !candidateConfirmed) return existing;
+  const existingSort = Number.isFinite(Number(existing.sort_order)) ? Number(existing.sort_order) : 999999;
+  const candidateSort = Number.isFinite(Number(candidate.sort_order)) ? Number(candidate.sort_order) : 999999;
+  if (candidateSort < existingSort) return candidate;
+  return existing;
+}
+
+function dedupeHospitalFloors(rows, referencedFloorIds) {
+  const byKey = new Map();
+  for (const row of rows) {
+    const key = hospitalFloorDedupeKey(row);
+    byKey.set(key, preferredHospitalFloor(byKey.get(key), row, referencedFloorIds));
+  }
+  return [...byKey.values()].sort((a, b) => {
+    const aSort = Number.isFinite(Number(a.sort_order)) ? Number(a.sort_order) : 999999;
+    const bSort = Number.isFinite(Number(b.sort_order)) ? Number(b.sort_order) : 999999;
+    if (aSort !== bSort) return aSort - bSort;
+    return cleanHospitalText(a.floor_name, 120).localeCompare(cleanHospitalText(b.floor_name, 120));
+  });
+}
+
+function hospitalLocationDisplayLabel(row) {
+  return [
+    row?.ward_name,
+    row?.area_name,
+    row?.department_name,
+    row?.department?.department_name,
+    row?.location_name,
+  ].map((value) => cleanHospitalText(value, 160)).find(Boolean) || '';
+}
+
+function dedupeHospitalLocations(rows) {
+  const seen = new Set();
+  const output = [];
+  for (const row of rows) {
+    const label = hospitalLocationDisplayLabel(row);
+    const key = `${row.block_id}:${row.floor_id}:${normalizeHierarchyLabel(label)}`;
+    if (!label || seen.has(key)) continue;
+    seen.add(key);
+    output.push(row);
+  }
+  return output;
 }
 
 function applyTicketFilters(query, filters = {}) {
@@ -472,20 +588,17 @@ async function validateHospitalCreateHierarchy(client, actor, payload) {
     throw error;
   }
 
-  let floor = null;
-  if (payload.floorId) {
-    const floorResult = await client
-      .from('hospital_floors')
-      .select('id,client_id,block_id,is_active')
-      .eq('id', payload.floorId)
-      .maybeSingle();
-    if (floorResult.error) throw floorResult.error;
-    floor = floorResult.data;
-    if (!floor || floor.client_id !== actor.user.client_id || floor.block_id !== payload.blockId || floor.is_active !== true) {
-      const error = new Error('Selected floor is outside the selected block.');
-      error.code = '42501';
-      throw error;
-    }
+  const floorResult = await client
+    .from('hospital_floors')
+    .select('id,client_id,block_id,floor_code,floor_name,floor_number,sort_order,is_known_service_floor,is_confirmed_building_floor,verification_status,is_active,metadata')
+    .eq('id', payload.floorId)
+    .maybeSingle();
+  if (floorResult.error) throw floorResult.error;
+  const floor = floorResult.data;
+  if (!floor || floor.client_id !== actor.user.client_id || floor.block_id !== payload.blockId || !isUsableHospitalFloor(floor)) {
+    const error = new Error('Selected floor is outside the selected block.');
+    error.code = '42501';
+    throw error;
   }
 
   let department = null;
@@ -509,8 +622,6 @@ async function validateHospitalCreateHierarchy(client, actor, payload) {
     }
   }
 
-  if (!payload.locationId) return;
-
   const location = await client
     .from('hospital_locations')
     .select('id,client_id,block_id,floor_id,department_id,is_active')
@@ -522,7 +633,7 @@ async function validateHospitalCreateHierarchy(client, actor, payload) {
     error.code = '42501';
     throw error;
   }
-  if (payload.floorId && location.data.floor_id && location.data.floor_id !== payload.floorId) {
+  if (location.data.floor_id !== payload.floorId) {
     const error = new Error('Selected location is outside the selected floor.');
     error.code = '42501';
     throw error;

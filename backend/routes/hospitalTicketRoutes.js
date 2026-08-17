@@ -42,6 +42,7 @@ const ACTION_ROUTES = {
   'assign-support': 'assign_support',
   resolve: 'resolve',
   feedback: 'feedback',
+  cancel: 'cancel',
 };
 
 export function createHospitalTicketRouter({ anonClient, serviceClient }) {
@@ -52,6 +53,8 @@ export function createHospitalTicketRouter({ anonClient, serviceClient }) {
     ok: true,
     user: request.hospitalActor.user,
     scopes: request.hospitalActor.scopes,
+    available_clients: request.hospitalActor.available_clients || [],
+    selected_client: request.hospitalActor.selected_client || null,
     allowed_actions: hospitalAllowedActions(request.hospitalActor.user),
   }));
 

@@ -1,5 +1,23 @@
 const ACTIVE_STATUSES = new Set(['open', 'awaiting_supervisor_acceptance', 'assigned', 'accepted', 'in_progress', 'reopened']);
+const CANCELLABLE_STATUSES = new Set([
+  'open',
+  'awaiting_supervisor_acceptance',
+  'assigned',
+  'accepted',
+  'in_progress',
+  'reopened',
+  'escalated_operations_executive',
+  'escalated_facility_manager',
+  'escalated_project_head',
+]);
 const PRIORITIES = new Set(['low', 'medium', 'high', 'critical']);
+const CANCELLATION_REASONS = new Set([
+  'raised_by_mistake',
+  'issue_already_resolved',
+  'duplicate_complaint',
+  'wrong_location_or_category',
+  'other',
+]);
 const PRIORITY_SLA_MINUTES = {
   critical: 10,
   high: 10,
@@ -8,9 +26,10 @@ const PRIORITY_SLA_MINUTES = {
 };
 const ESCALATION_LEVELS = [
   { level: 1, code: 'supervisor', role: 'housekeeping_supervisor', label: 'Supervisor' },
-  { level: 2, code: 'operations_executive', role: 'operations_executive', label: 'Operations Executive' },
-  { level: 3, code: 'facility_manager', role: 'facility_manager', label: 'Facility Manager' },
+  { level: 2, code: 'facility_manager', role: 'facility_manager', label: 'Facility Manager' },
+  { level: 3, code: 'zonal_head', role: 'operations_executive', label: 'Zonal Head' },
   { level: 4, code: 'project_head', role: 'project_head', label: 'Project Head' },
+  { level: 5, code: 'hospital_dean', role: 'hospital_dean', label: 'Hospital Dean' },
 ];
 
 export function cleanHospitalText(value, maxLength = 500) {
@@ -35,8 +54,8 @@ export function normalizeHospitalTicketCreate(body = {}) {
 export function validateHospitalTicketCreate(payload) {
   const errors = [];
   if (!payload.blockId) errors.push('Block is required.');
-  if (!payload.locationId && !cleanHospitalText(payload.exactLandmark, 180)) errors.push('Select a room/area or provide an exact location landmark.');
-  if (!payload.locationId && !cleanHospitalText(payload.departmentId, 80)) errors.push('Select a department/unit for landmark-only tickets.');
+  if (!payload.floorId) errors.push('Floor is required.');
+  if (!payload.locationId) errors.push('Area / Ward is required.');
   if (!payload.categoryId) errors.push('Category is required.');
   if (!PRIORITIES.has(payload.priority)) errors.push('Priority must be low, medium, high, or critical.');
   if (!payload.title) errors.push('Title is required.');
@@ -53,24 +72,29 @@ export function validateHospitalAction({ role, status, action, payload = {} }) {
       (role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status) && status !== 'awaiting_supervisor_acceptance')
       || (role === 'operations_executive' && status === 'escalated_operations_executive')
       || (role === 'facility_manager' && ['escalated_facility_manager', 'reopened'].includes(status))
-      || (role === 'project_head' && status === 'escalated_project_head'),
+      || (role === 'project_head' && status === 'escalated_project_head')
+      || (role === 'hospital_dean' && status === 'escalated_hospital_dean')
+      || (role === 'admin' && !['closed', 'cancelled', 'resolved_awaiting_confirmation'].includes(status)),
     request_assistance: role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status) && status !== 'awaiting_supervisor_acceptance',
-    manual_escalation: role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status) && status !== 'awaiting_supervisor_acceptance',
-    escalate_facility: role === 'operations_executive' && status === 'escalated_operations_executive',
+    manual_escalation: ['housekeeping_supervisor', 'admin'].includes(role) && ACTIVE_STATUSES.has(status) && status !== 'awaiting_supervisor_acceptance',
+    escalate_facility: ['operations_executive', 'admin'].includes(role) && status === 'escalated_operations_executive',
     take_over:
       (role === 'operations_executive' && status === 'escalated_operations_executive')
       || (role === 'facility_manager' && status === 'escalated_facility_manager')
-      || (role === 'project_head' && status === 'escalated_project_head'),
-    reassign_supervisor: role === 'operations_executive'
+      || (role === 'project_head' && status === 'escalated_project_head')
+      || (role === 'admin' && ['escalated_operations_executive', 'escalated_facility_manager', 'escalated_project_head'].includes(status)),
+    reassign_supervisor: ['housekeeping_supervisor', 'operations_executive', 'facility_manager', 'admin'].includes(role)
       && !['closed', 'cancelled', 'resolved_awaiting_confirmation'].includes(status),
-    assign_support: role === 'facility_manager'
+    assign_support: ['facility_manager', 'admin'].includes(role)
       && !['closed', 'cancelled', 'resolved_awaiting_confirmation'].includes(status),
     resolve:
       (role === 'housekeeping_supervisor' && ['accepted', 'in_progress', 'reopened'].includes(status))
       || (role === 'operations_executive' && status === 'escalated_operations_executive')
       || (role === 'facility_manager' && ['escalated_facility_manager', 'reopened'].includes(status))
-      || (role === 'project_head' && status === 'escalated_project_head'),
+      || (role === 'project_head' && status === 'escalated_project_head')
+      || (role === 'admin' && ['accepted', 'in_progress', 'reopened', 'escalated_operations_executive', 'escalated_facility_manager', 'escalated_project_head'].includes(status)),
     feedback: ['doctor', 'hospital_management'].includes(role) && status === 'resolved_awaiting_confirmation',
+    cancel: ['doctor', 'hospital_management'].includes(role) && CANCELLABLE_STATUSES.has(status),
   };
   if (!allowed[action]) return ['This status transition is not allowed.'];
   const errors = [];
@@ -84,6 +108,13 @@ export function validateHospitalAction({ role, status, action, payload = {} }) {
     if (!Number.isInteger(rating) || rating < 1 || rating > 5) errors.push('Rating must be from 1 to 5.');
     if (!['satisfied', 'not_satisfied'].includes(payload.satisfaction_status)) errors.push('Select Satisfied or Not Satisfied.');
     if (payload.satisfaction_status === 'not_satisfied' && !cleanHospitalText(payload.comments)) errors.push('A reopening reason is required.');
+  }
+  if (action === 'cancel') {
+    const reason = cleanHospitalText(payload.reason_code || payload.reasonCode, 80);
+    if (!CANCELLATION_REASONS.has(reason)) errors.push('Select a valid cancellation reason.');
+    if (reason === 'other' && !cleanHospitalText(payload.reason_text || payload.reasonText, 500)) {
+      errors.push('Cancellation remarks are required for Other.');
+    }
   }
   return errors;
 }

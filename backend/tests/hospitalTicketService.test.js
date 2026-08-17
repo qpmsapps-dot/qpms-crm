@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
   canViewHospitalTicket,
+  createHospitalAuthMiddleware,
   hospitalAllowedActions,
   isActiveHospitalUser,
+  isAdminApplicationRole,
   normalizeHospitalRole,
+  resolveAdminHospitalActor,
   scopeAllows,
 } from '../services/hospitalTicketAuthService.js';
 import {
@@ -22,11 +26,14 @@ import {
   clientCanSeeHospitalEvent,
   clientHospitalEventView,
   buildHospitalLifecycleNotificationRows,
+  getHospitalTicket,
   hospitalLifecycleNotificationDedupeKey,
+  hospitalDashboard,
   hospitalSlaState,
   hospitalTicketForActor,
   hospitalTicketIdentifierColumn,
   listHospitalNotifications,
+  listHospitalTickets,
 } from '../services/hospitalTicketService.js';
 
 const activeUser = (role, id = 'user-a') => ({
@@ -51,13 +58,17 @@ test('role normalization preserves distinct hospital roles', () => {
   assert.equal(normalizeHospitalRole('Operations Executive'), 'operations_executive');
   assert.equal(normalizeHospitalRole('Facility Manager'), 'facility_manager');
   assert.equal(normalizeHospitalRole('Project Head'), 'project_head');
+  assert.equal(normalizeHospitalRole('ADMIN'), 'admin');
+  assert.equal(isAdminApplicationRole('Admin'), true);
+  assert.equal(isAdminApplicationRole('QPMS Admin'), false);
 });
 
 test('inactive or unknown hospital users are rejected', () => {
   assert.equal(isActiveHospitalUser(activeUser('doctor')), true);
   assert.equal(isActiveHospitalUser(activeUser('project_head')), true);
+  assert.equal(isActiveHospitalUser(activeUser('admin')), true);
   assert.equal(isActiveHospitalUser({ ...activeUser('doctor'), is_active: false }), false);
-  assert.equal(isActiveHospitalUser(activeUser('admin')), false);
+  assert.equal(isActiveHospitalUser(activeUser('developer')), false);
 });
 
 test('ticket lifecycle notifications cover useful client milestones without assignment spam', () => {
@@ -189,23 +200,6 @@ test('manual reassignment notifies only the new assigned internal user', () => {
   assert.equal(rows[0].notification_type, 'ticket_assigned_internal');
   assert.equal(rows[0].metadata.app_scope, 'myqpms_internal');
 });
-
-function query(data, error = null) {
-  return {
-    select() { return this; },
-    eq() { return this; },
-    in() { return this; },
-    is() { return this; },
-    order() { return this; },
-    limit() { return this; },
-    async maybeSingle() {
-      return { data: Array.isArray(data) ? data[0] || null : data, error };
-    },
-    then(resolve) {
-      return Promise.resolve({ data, error }).then(resolve);
-    },
-  };
-}
 
 test('notification list enriches complaint thumbnails with one attachment query', async () => {
   const attachmentInCalls = [];
@@ -411,18 +405,18 @@ test('creation scope is independent from view scope', () => {
 });
 
 test('ticket creation validates canonical fields and priority', () => {
-  const payload = normalizeHospitalTicketCreate({ block_id: 'b', location_id: 'l', category_id: 'c', priority: 'High', title: ' Wet floor ', description: ' Near ICU ', idempotency_key: 'request-1' });
+  const payload = normalizeHospitalTicketCreate({ block_id: 'b', floor_id: 'f', location_id: 'l', category_id: 'c', priority: 'High', title: ' Wet floor ', description: ' Near ICU ', idempotency_key: 'request-1' });
   assert.deepEqual(validateHospitalTicketCreate(payload), []);
   assert.equal(payload.priority, 'high');
   assert.ok(validateHospitalTicketCreate({ ...payload, idempotencyKey: '' }).length > 0);
 });
 
-test('ticket creation accepts hierarchy plus landmark without a room location', () => {
+test('ticket creation accepts complete hierarchy plus optional landmark', () => {
   const payload = normalizeHospitalTicketCreate({
     block_id: 'block-a',
-    floor_id: '',
+    floor_id: 'floor-a',
     department_id: 'department-a',
-    location_id: null,
+    location_id: 'location-a',
     exact_landmark: '  Opposite Nursing Station near Lift 2  ',
     category_id: 'category-a',
     priority: 'Medium',
@@ -431,12 +425,13 @@ test('ticket creation accepts hierarchy plus landmark without a room location', 
     idempotency_key: 'request-2',
   });
 
-  assert.equal(payload.locationId, '');
+  assert.equal(payload.floorId, 'floor-a');
+  assert.equal(payload.locationId, 'location-a');
   assert.equal(payload.exactLandmark, 'Opposite Nursing Station near Lift 2');
   assert.deepEqual(validateHospitalTicketCreate(payload), []);
 });
 
-test('ticket creation rejects landmark-only requests without a department or landmark', () => {
+test('ticket creation rejects landmark-only requests without floor and area', () => {
   const payload = normalizeHospitalTicketCreate({
     block_id: 'block-a',
     category_id: 'category-a',
@@ -447,10 +442,10 @@ test('ticket creation rejects landmark-only requests without a department or lan
   });
 
   assert.deepEqual(validateHospitalTicketCreate(payload), [
-    'Select a room/area or provide an exact location landmark.',
-    'Select a department/unit for landmark-only tickets.',
+    'Floor is required.',
+    'Area / Ward is required.',
   ]);
-  assert.ok(validateHospitalTicketCreate({ ...payload, departmentId: 'department-a', exactLandmark: '   ' }).includes('Select a room/area or provide an exact location landmark.'));
+  assert.ok(validateHospitalTicketCreate({ ...payload, floorId: 'floor-a', exactLandmark: 'Near Lift' }).includes('Area / Ward is required.'));
 });
 
 test('ticket detail selects UUIDs by id and ticket numbers without a UUID cast', () => {
@@ -494,14 +489,22 @@ test('status transitions reject arbitrary frontend statuses', () => {
   assert.ok(validateHospitalAction({ role: 'doctor', status: 'assigned', action: 'accept' }).length > 0);
   assert.ok(validateHospitalAction({ role: 'housekeeping_supervisor', status: 'closed', action: 'progress', payload: { remarks: 'x' } }).length > 0);
   assert.ok(validateHospitalAction({ role: 'doctor', status: 'assigned', action: 'progress', payload: { remarks: 'x' } }).length > 0);
+  assert.deepEqual(validateHospitalAction({ role: 'doctor', status: 'assigned', action: 'cancel', payload: { reason_code: 'duplicate_complaint' } }), []);
+  assert.ok(validateHospitalAction({ role: 'doctor', status: 'resolved_awaiting_confirmation', action: 'cancel', payload: { reason_code: 'duplicate_complaint' } }).length > 0);
   assert.deepEqual(validateHospitalAction({ role: 'operations_executive', status: 'escalated_operations_executive', action: 'progress', payload: { remarks: 'x' } }), []);
   assert.ok(validateHospitalAction({ role: 'housekeeping_supervisor', status: 'awaiting_supervisor_acceptance', action: 'progress', payload: { remarks: 'x' } }).length > 0);
+  assert.deepEqual(validateHospitalAction({ role: 'admin', status: 'escalated_operations_executive', action: 'take_over' }), []);
+  assert.deepEqual(validateHospitalAction({ role: 'admin', status: 'escalated_operations_executive', action: 'escalate_facility' }), []);
+  assert.deepEqual(validateHospitalAction({ role: 'admin', status: 'in_progress', action: 'resolve', payload: { resolution_action: 'Mopped', resolution_remarks: 'Dry and inspected' } }), []);
+  assert.ok(validateHospitalAction({ role: 'admin', status: 'closed', action: 'progress', payload: { remarks: 'x' } }).length > 0);
 });
 
 test('resolution and feedback validation enforce production requirements', () => {
   assert.ok(validateHospitalAction({ role: 'housekeeping_supervisor', status: 'in_progress', action: 'resolve', payload: {} }).length === 2);
   assert.deepEqual(validateHospitalAction({ role: 'housekeeping_supervisor', status: 'in_progress', action: 'resolve', payload: { resolution_action: 'Mopped', resolution_remarks: 'Dry and inspected' } }), []);
   assert.ok(validateHospitalAction({ role: 'doctor', status: 'resolved_awaiting_confirmation', action: 'feedback', payload: { rating: 2, satisfaction_status: 'not_satisfied', comments: '' } }).length > 0);
+  assert.ok(validateHospitalAction({ role: 'doctor', status: 'assigned', action: 'cancel', payload: { reason_code: 'other', reason_text: '' } }).length > 0);
+  assert.deepEqual(validateHospitalAction({ role: 'hospital_management', status: 'in_progress', action: 'cancel', payload: { reason_code: 'other', reason_text: 'Duplicate ticket raised by ward clerk.' } }), []);
 });
 
 test('SLA configuration exposes the priority escalation matrix', () => {
@@ -521,11 +524,13 @@ test('SLA configuration exposes the priority escalation matrix', () => {
   assert.equal(prioritySlaMinutes('low'), 20);
   assert.deepEqual(hospitalEscalationLevels().map((level) => level.role), [
     'housekeeping_supervisor',
-    'operations_executive',
     'facility_manager',
+    'operations_executive',
     'project_head',
+    'hospital_dean',
   ]);
   assert.equal(hospitalEscalationRoleForLevel(4).label, 'Project Head');
+  assert.equal(hospitalEscalationRoleForLevel(5).label, 'Hospital Dean');
 });
 
 test('SLA state is server-derived', () => {
@@ -539,6 +544,316 @@ test('SLA state is server-derived', () => {
 
 test('client and internal action lists stay separated', () => {
   assert.ok(hospitalAllowedActions(activeUser('doctor')).includes('create_ticket'));
+  assert.ok(hospitalAllowedActions(activeUser('doctor')).includes('cancel'));
   assert.ok(!hospitalAllowedActions(activeUser('doctor')).includes('resolve'));
   assert.ok(hospitalAllowedActions(activeUser('facility_manager')).includes('resolve'));
+  assert.ok(hospitalAllowedActions(activeUser('admin')).includes('take_over'));
+  assert.ok(hospitalAllowedActions(activeUser('admin')).includes('resolve'));
+  assert.ok(!hospitalAllowedActions(activeUser('admin')).includes('create_ticket'));
+});
+
+function query(data, error = null) {
+  return {
+    select() { return this; },
+    eq() { return this; },
+    in() { return this; },
+    is() { return this; },
+    order() { return this; },
+    limit() { return this; },
+    async maybeSingle() {
+      return { data: Array.isArray(data) ? data[0] || null : data, error };
+    },
+    then(resolve) {
+      return Promise.resolve({ data, error }).then(resolve);
+    },
+  };
+}
+
+test('authenticated Admin profile resolves a scoped Hospital admin actor', async () => {
+  const writes = [];
+  const client = {
+    from(table) {
+      if (table === 'profiles') {
+        return query({
+          id: 'profile-admin',
+          auth_user_id: 'auth-admin',
+          employee_code: 'ADM-1',
+          display_name: 'App Admin',
+          email: 'admin@example.com',
+          role: 'Admin',
+          status: 'Active',
+          is_active: true,
+        });
+      }
+      if (table === 'hospital_clients') {
+        return query([{ id: 'client-a', client_code: 'NIMS', client_name: 'NIMS', is_active: true }]);
+      }
+      if (table === 'hospital_ticket_users') {
+        return {
+          upsert(row, options) {
+            writes.push({ table, row, options });
+            return {
+              select() {
+                return query({
+                  id: 'admin-hospital-user',
+                  ...row,
+                });
+              },
+            };
+          },
+        };
+      }
+      if (table === 'hospital_ticket_user_scopes') {
+        return {
+          select() {
+            return {
+              eq() { return this; },
+              is() { return this; },
+              async maybeSingle() { return { data: null, error: null }; },
+            };
+          },
+          insert(row) {
+            writes.push({ table, row });
+            return {
+              select() {
+                return query([{ id: 'scope-admin', ...row }]);
+              },
+            };
+          },
+        };
+      }
+      return query(null);
+    },
+  };
+  const actor = await resolveAdminHospitalActor({
+    serviceClient: client,
+    authUser: { id: 'auth-admin', email: 'admin@example.com' },
+    request: { headers: {}, query: {}, body: {} },
+  });
+  assert.equal(actor.user.role_code, 'admin');
+  assert.equal(actor.user.profile_type, 'internal');
+  assert.equal(actor.user.client_id, 'client-a');
+  assert.equal(actor.scopes[0].scope_type, 'client');
+  assert.equal(actor.scopes[0].can_update, true);
+  assert.equal(writes.find((write) => write.table === 'hospital_ticket_users').options.onConflict, 'auth_user_id');
+});
+
+test('ordinary FO profile does not resolve Hospital admin actor', async () => {
+  const client = {
+    from(table) {
+      if (table === 'profiles') {
+        return query({
+          id: 'profile-fo',
+          auth_user_id: 'auth-fo',
+          role: 'FO',
+          status: 'Active',
+          is_active: true,
+        });
+      }
+      return query([]);
+    },
+  };
+  const actor = await resolveAdminHospitalActor({
+    serviceClient: client,
+    authUser: { id: 'auth-fo', email: 'fo@example.com' },
+    request: { headers: {}, query: {}, body: {} },
+  });
+  assert.equal(actor, null);
+});
+
+test('hospital auth middleware still rejects unauthenticated requests', async () => {
+  const middleware = createHospitalAuthMiddleware({ anonClient: {}, serviceClient: {} });
+  const response = {
+    statusCode: null,
+    body: null,
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(body) {
+      this.body = body;
+    },
+  };
+  let nextCalled = false;
+  await middleware({ headers: {}, query: {}, body: {} }, response, () => {
+    nextCalled = true;
+  });
+  assert.equal(response.statusCode, 401);
+  assert.equal(response.body.code, 'authentication_required');
+  assert.equal(nextCalled, false);
+});
+
+test('Admin hospital context honors selected active client scope', async () => {
+  const writes = [];
+  const client = {
+    from(table) {
+      if (table === 'profiles') {
+        return query({
+          id: 'profile-admin',
+          auth_user_id: 'auth-admin',
+          display_name: 'App Admin',
+          email: 'admin@example.com',
+          role: 'admin',
+          status: 'active',
+          is_active: true,
+        });
+      }
+      if (table === 'hospital_clients') {
+        return query([
+          { id: 'client-a', client_code: 'A', client_name: 'A Hospital', is_active: true },
+          { id: 'client-b', client_code: 'B', client_name: 'B Hospital', is_active: true },
+        ]);
+      }
+      if (table === 'hospital_ticket_users') {
+        return {
+          upsert(row) {
+            writes.push(row);
+            return { select: () => query({ id: 'admin-hospital-user', ...row }) };
+          },
+        };
+      }
+      if (table === 'hospital_ticket_user_scopes') {
+        return {
+          select() {
+            return {
+              eq() { return this; },
+              is() { return this; },
+              async maybeSingle() { return { data: null, error: null }; },
+            };
+          },
+          insert(row) {
+            return { select: () => query([{ id: 'scope-admin', ...row }]) };
+          },
+        };
+      }
+      return query(null);
+    },
+  };
+  const actor = await resolveAdminHospitalActor({
+    serviceClient: client,
+    authUser: { id: 'auth-admin', email: 'admin@example.com' },
+    request: { headers: { 'x-hospital-client-id': 'client-b' }, query: {}, body: {} },
+  });
+  assert.equal(actor.selected_client.id, 'client-b');
+  assert.equal(writes[0].client_id, 'client-b');
+});
+
+test('Admin can use scoped ticket list, detail, dashboard and privileged actions', async () => {
+  const actor = {
+    user: { ...activeUser('admin', 'admin-user'), profile_type: 'internal' },
+    scopes: [{ client_id: 'client-a', scope_type: 'client', can_view: true, can_update: true }],
+  };
+  const tickets = [
+    { id: 'ticket-a', ticket_no: 'QPMS-HK-1', client_id: 'client-a', block_id: 'block-a', location_id: 'loc-a', status_code: 'escalated_operations_executive', priority: 'medium', raised_at: '2026-08-07T01:00:00Z' },
+    { id: 'ticket-b', ticket_no: 'QPMS-HK-2', client_id: 'client-b', block_id: 'block-b', location_id: 'loc-b', status_code: 'open', priority: 'low', raised_at: '2026-08-07T02:00:00Z' },
+  ];
+  const client = {
+    from(table) {
+      if (table === 'hospital_tickets') return query(tickets);
+      if (table === 'hospital_ticket_events') return query([]);
+      if (table === 'hospital_ticket_comments') return query([]);
+      if (table === 'hospital_ticket_attachments') return query([]);
+      return query([]);
+    },
+  };
+  const rows = await listHospitalTickets(client, actor, {});
+  assert.deepEqual(rows.map((row) => row.id), ['ticket-a']);
+  const detail = await getHospitalTicket(client, actor, 'QPMS-HK-1');
+  assert.equal(detail.ticket.id, 'ticket-a');
+  assert.ok(detail.allowed_actions.includes('take_over'));
+  assert.ok(detail.allowed_actions.includes('resolve'));
+  const dashboard = await hospitalDashboard(client, actor);
+  assert.equal(dashboard.counts.escalated, 1);
+});
+
+test('client cancellation metadata is exposed safely and final statuses cannot cancel', () => {
+  const actor = { user: { ...activeUser('doctor'), profile_type: 'client' } };
+  const view = hospitalTicketForActor(actor, {
+    id: 'ticket-cancel',
+    ticket_no: 'QPMS-HK-9',
+    metadata: {
+      cancellation: {
+        reason_code: 'duplicate_complaint',
+        reason_text: 'Duplicate complaint',
+        cancelled_at: '2026-08-10T10:00:00Z',
+      },
+    },
+  });
+  assert.equal(view.cancellation_reason_code, 'duplicate_complaint');
+  assert.equal(view.cancellation_reason_text, 'Duplicate complaint');
+  assert.equal(view.cancelled_at, '2026-08-10T10:00:00Z');
+  assert.equal('metadata' in view, false);
+  assert.ok(validateHospitalAction({ role: 'doctor', status: 'closed', action: 'cancel', payload: { reason_code: 'raised_by_mistake' } }).length > 0);
+  assert.ok(validateHospitalAction({ role: 'doctor', status: 'cancelled', action: 'cancel', payload: { reason_code: 'raised_by_mistake' } }).length > 0);
+});
+
+test('service keeps resolve owner and completion evidence checks before RPC', () => {
+  const source = readFileSync(
+    new URL('../services/hospitalTicketService.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /if \(effectiveAction === 'resolve'\) \{/);
+  assert.match(source, /await requireCurrentOperationalOwner\(client, actor, current\.ticket\);/);
+  assert.match(source, /await requireCompletionEvidence\(client, current\.ticket\.id\);/);
+  assert.match(source, /Only the current operational owner can resolve this ticket\./);
+  assert.match(source, /Upload completion evidence before resolving this ticket\./);
+});
+
+test('client cancellation service is soft and auditable', () => {
+  const source = readFileSync(
+    new URL('../services/hospitalTicketService.js', import.meta.url),
+    'utf8',
+  );
+  const helper = source.slice(
+    source.indexOf('async function performClientTicketCancellation'),
+    source.indexOf('async function performManualHospitalReassignment'),
+  );
+  assert.match(helper, /status_code: 'cancelled'/);
+  assert.match(helper, /event_type: 'ticket_cancelled_by_client'/);
+  assert.match(helper, /notification_type: 'ticket_cancelled'/);
+  assert.match(helper, /superseded_reason: 'ticket_cancelled_by_client'/);
+  assert.doesNotMatch(helper, /\.delete\(/);
+});
+
+test('manual reassignment service preserves existing SLA deadline fields', () => {
+  const source = readFileSync(
+    new URL('../services/hospitalTicketService.js', import.meta.url),
+    'utf8',
+  );
+  const helper = source.slice(
+    source.indexOf('async function performManualHospitalReassignment'),
+    source.indexOf('export function hospitalSlaState'),
+  );
+  const updateBlock = helper.slice(
+    helper.indexOf('const update = {'),
+    helper.indexOf("const updated = await client.from('hospital_tickets')"),
+  );
+  assert.match(helper, /assignment_type: 'manual_reassignment'/);
+  assert.match(helper, /preserves_sla_deadline: true/);
+  assert.match(updateBlock, /current_assignee_user_id: assignee\.id/);
+  assert.doesNotMatch(updateBlock, /current_escalation_level_no\s*:/);
+  assert.doesNotMatch(updateBlock, /current_escalation_level\s*:/);
+  assert.doesNotMatch(updateBlock, /escalation_due_at\s*:/);
+  assert.doesNotMatch(updateBlock, /supervisor_sla_due_at\s*:/);
+  assert.doesNotMatch(updateBlock, /operations_sla_due_at\s*:/);
+  assert.doesNotMatch(updateBlock, /project_head_sla_due_at\s*:/);
+  assert.doesNotMatch(updateBlock, /assigned_at\s*:/);
+});
+
+test('manual reassignment actions are not treated as automatic SLA escalation', () => {
+  assert.deepEqual(validateHospitalAction({
+    role: 'operations_executive',
+    status: 'escalated_operations_executive',
+    action: 'reassign_supervisor',
+  }), []);
+  assert.deepEqual(validateHospitalAction({
+    role: 'facility_manager',
+    status: 'escalated_facility_manager',
+    action: 'reassign_supervisor',
+  }), []);
+  assert.deepEqual(validateHospitalAction({
+    role: 'housekeeping_supervisor',
+    status: 'in_progress',
+    action: 'reassign_supervisor',
+  }), []);
 });
