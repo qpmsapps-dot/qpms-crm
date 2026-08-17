@@ -253,7 +253,7 @@ class HospitalPushService {
           usesChronometer: incoming,
           chronometerCountDown: incoming,
           timeoutAfter: incoming ? _remainingMs(push) : null,
-          subText: incoming ? 'Accept within 2 minutes' : null,
+          subText: incoming ? 'Accept before timeout' : null,
           actions: incoming
               ? const [
                   AndroidNotificationAction(
