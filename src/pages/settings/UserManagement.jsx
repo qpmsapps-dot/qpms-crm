@@ -13,6 +13,8 @@ import { usePageTitle } from '../../hooks/usePageTitle.js';
 import { useAuth } from '../../context/auth-context.js';
 import {
   createAdminUser,
+  createHospitalClientContact,
+  addAdminUserModuleAccess,
   deactivateAdminUser,
   getAdminUser,
   getAdminUsers,
@@ -67,7 +69,7 @@ function inviteLifecycleLabel(profile = {}) {
   return profile.auth_user_id ? 'Login Enabled' : 'Profile Only';
 }
 
-function mapProfile(profile, hierarchy = null, unifiedAccess = []) {
+function mapProfile(profile, hierarchy = null, unifiedAccess = [], hospitalTicketingAccess = null) {
   const isActive = profile?.is_active === true;
   const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
   const mergedHierarchy = {
@@ -105,6 +107,7 @@ function mapProfile(profile, hierarchy = null, unifiedAccess = []) {
     siteVisitCount: Number(profile.site_visit_count || 0),
     gpsLogCount: Number(profile.gps_log_count || 0),
     unifiedAccess: Array.isArray(unifiedAccess) ? unifiedAccess : [],
+    hospitalTicketingAccess,
   };
 }
 
@@ -255,7 +258,7 @@ export default function UserManagement() {
       setBusy(true);
       try {
         const result = await getAdminUser(user.id);
-        completeUser = mapProfile(result.profile, result.hierarchy, result.unifiedAccess);
+        completeUser = mapProfile(result.profile, result.hierarchy, result.unifiedAccess, result.hospitalTicketingAccess);
       } catch (error) {
         showMessage(apiErrorMessage(error));
         return;
@@ -274,7 +277,7 @@ export default function UserManagement() {
     setDetailLoading(true);
     try {
       const result = await getAdminUser(user.id);
-      setDrawerUser(mapProfile(result.profile, result.hierarchy, result.unifiedAccess));
+      setDrawerUser(mapProfile(result.profile, result.hierarchy, result.unifiedAccess, result.hospitalTicketingAccess));
     } catch (error) {
       showMessage(apiErrorMessage(error));
     } finally {
@@ -286,17 +289,25 @@ export default function UserManagement() {
     setBusy(true);
     setFormError('');
     try {
-      const result = formMode === 'edit'
+      const result = payload.existing_profile_id
+        ? await addAdminUserModuleAccess(payload.existing_profile_id, payload)
+        : payload.user_type === 'nims_contact'
+        ? await createHospitalClientContact(payload)
+        : formMode === 'edit'
         ? await updateAdminUser(editingUser.id, payload)
         : await createAdminUser(payload);
       const next = result.profile
-        ? mapProfile(result.profile, result.hierarchy, result.unifiedAccess ? [result.unifiedAccess] : result.unifiedAccess)
+        ? mapProfile(result.profile, result.hierarchy, result.unifiedAccess ? [result.unifiedAccess] : result.unifiedAccess, result.hospitalTicketingAccess)
         : null;
       if (next && drawerUser?.id === next.id) setDrawerUser(next);
       setFormOpen(false);
       setEditingUser(null);
       refreshList();
-      if (formMode === 'edit') {
+      if (payload.user_type === 'nims_contact') {
+        showMessage('NIMS client person registered. No Supabase account or password invite was created.');
+      } else if (payload.existing_profile_id) {
+        showMessage('Module access added to existing user. Employee profile was not changed.');
+      } else if (formMode === 'edit') {
         showMessage('User profile updated.');
       } else {
         showInviteMessage(result.invite, 'User account invited.');
@@ -351,7 +362,7 @@ export default function UserManagement() {
       } else {
         try {
           const refreshed = await getAdminUser(user.id);
-          setDrawerUser(mapProfile(refreshed.profile, refreshed.hierarchy, refreshed.unifiedAccess));
+          setDrawerUser(mapProfile(refreshed.profile, refreshed.hierarchy, refreshed.unifiedAccess, refreshed.hospitalTicketingAccess));
         } catch {
           setDrawerUser(null);
         }

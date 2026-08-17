@@ -239,6 +239,38 @@ export function createAdminUser(payload) {
   });
 }
 
+export function lookupAdminUserByEmail(email) {
+  return adminApiRequest({
+    method: 'GET',
+    url: '/api/admin/users/lookup-by-email',
+    params: { email },
+  });
+}
+
+export function addAdminUserModuleAccess(profileId, payload) {
+  return adminApiRequest({
+    method: 'POST',
+    url: `/api/admin/users/${encodeURIComponent(profileId)}/module-access`,
+    data: payload,
+  });
+}
+
+export function createHospitalClientContact(payload) {
+  return adminApiRequest({
+    method: 'POST',
+    url: '/api/admin/hospital-client-contacts',
+    data: payload,
+  });
+}
+
+export function listHospitalClientContacts(params = {}) {
+  return adminApiRequest({
+    method: 'GET',
+    url: '/api/admin/hospital-client-contacts',
+    params,
+  });
+}
+
 export function getHierarchyOptions(params = {}) {
   return adminApiRequest({
     method: 'GET',

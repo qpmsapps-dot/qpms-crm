@@ -1,6 +1,6 @@
 import { X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { getAccessFoundation, getAccessScopeOptions, getHierarchyOptions } from '../../services/api.js';
+import { getAccessFoundation, getAccessScopeOptions, getHierarchyOptions, lookupAdminUserByEmail } from '../../services/api.js';
 
 const emptyForm = {
   user_type: 'internal',
@@ -34,6 +34,10 @@ const emptyForm = {
   access_scope_code: '',
   access_scope_text: '',
   access_verification_status: 'verified',
+  client_id: '',
+  hospital_access_enabled: false,
+  hospital_role_code: 'housekeeping_supervisor',
+  temporary_password: '',
 };
 
 const roleOptions = [
@@ -50,16 +54,22 @@ const businessOptions = [
   'AP DSH',
   'TN Government',
   'Osmania Hospitals',
+  'Hospitals',
   'Airport',
   'Retail',
   'Government',
   'Private Hospital',
 ];
-const operationalRoles = new Set(['FO', 'KAM', 'Operations Manager', 'Branch Head', 'Business Head']);
 const reportingRequiredRoles = new Set(['FO', 'KAM', 'Operations Manager', 'Branch Head']);
 const userTypeOptions = [
-  { value: 'internal', label: 'Internal User' },
-  { value: 'client', label: 'Client User' },
+  { value: 'internal', label: 'QPMS Employee' },
+  { value: 'nims_contact', label: 'NIMS Client Person' },
+];
+const nimsHospitalRoleOptions = [
+  { value: 'housekeeping_supervisor', label: 'Hospital Supervisor' },
+  { value: 'operations_executive', label: 'Operations Executive' },
+  { value: 'facility_manager', label: 'Facility Manager' },
+  { value: 'project_head', label: 'Project Head' },
 ];
 const fallbackScopeTypes = [
   'global',
@@ -102,6 +112,9 @@ function normalizeInitial(initialUser) {
     is_active: initialUser.isActive,
     mobile_access_enabled: initialUser.mobileAccess,
     web_access_enabled: initialUser.webAccess,
+    hospital_access_enabled: Boolean(initialUser.hospitalTicketingAccess?.id),
+    hospital_role_code: initialUser.hospitalTicketingAccess?.role_code || 'housekeeping_supervisor',
+    client_id: initialUser.hospitalTicketingAccess?.access_client_id || '',
   };
 }
 
@@ -110,6 +123,7 @@ function TextField({
   label,
   value,
   onChange,
+  onBlur,
   required = false,
   type = 'text',
   readOnly = false,
@@ -126,6 +140,7 @@ function TextField({
         readOnly={readOnly}
         autoComplete={type === 'password' ? 'new-password' : undefined}
         onChange={(event) => onChange(name, event.target.value)}
+        onBlur={onBlur}
         className={`mt-1 h-10 w-full rounded-xl border px-3 text-sm font-semibold outline-none ${
           readOnly
             ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-500'
@@ -205,6 +220,19 @@ function businessOptionsWithCurrent(currentBusiness) {
   return exists ? businessOptions : [current, ...businessOptions];
 }
 
+function scopeTypeLabel(scopeType) {
+  const labels = {
+    client: 'Entire Client',
+    hospital_block: 'Specific Block',
+    location: 'Specific Location',
+    global: 'Global',
+    business_vertical: 'Business Vertical',
+    all_client: 'All Client',
+    employee_self: 'Employee Self',
+  };
+  return labels[scopeType] || scopeType.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 export default function UserFormDrawer({
   open,
   mode,
@@ -245,9 +273,12 @@ export default function UserFormDrawer({
   const [scopeOptions, setScopeOptions] = useState([]);
   const [scopeOptionsLoading, setScopeOptionsLoading] = useState(false);
   const [scopeOptionsError, setScopeOptionsError] = useState('');
+  const [existingLookup, setExistingLookup] = useState(null);
+  const [existingLookupLoading, setExistingLookupLoading] = useState(false);
+  const [existingLookupError, setExistingLookupError] = useState('');
 
   useEffect(() => {
-    if (!open || mode !== 'add') return undefined;
+    if (!open) return undefined;
     let active = true;
     setFoundationLoading(true);
     setFoundationError('');
@@ -406,6 +437,20 @@ export default function UserFormDrawer({
       .map((client) => ({ value: client.id, label: client.name || client.code })),
     [foundation.clients, values.access_business_vertical_id],
   );
+  const nimsClientOptions = useMemo(
+    () => foundation.clients
+      .filter((client) => {
+        const text = `${client.code || ''} ${client.name || ''}`.toLowerCase();
+        return client.active !== false && text.includes('nims');
+      })
+      .map((client) => ({ value: client.id, label: client.name || client.code })),
+    [foundation.clients],
+  );
+  const selectedEmployeeClient = useMemo(
+    () => foundation.clients.find((client) => client.id === values.client_id) || null,
+    [foundation.clients, values.client_id],
+  );
+  const defaultNimsClientId = nimsClientOptions[0]?.value || '';
   const filteredModules = useMemo(
     () => foundation.modules
       .filter((module) => module.active !== false)
@@ -437,7 +482,7 @@ export default function UserFormDrawer({
   const scopeTypeOptions = useMemo(
     () => (foundation.scope_types || fallbackScopeTypes).map((scopeType) => ({
       value: scopeType,
-      label: scopeType.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
+      label: scopeTypeLabel(scopeType),
     })),
     [foundation.scope_types],
   );
@@ -449,10 +494,40 @@ export default function UserFormDrawer({
     })),
     [scopeOptions],
   );
+  const selectedAccessClient = useMemo(
+    () => foundation.clients.find((client) => client.id === values.access_client_id) || null,
+    [foundation.clients, values.access_client_id],
+  );
+  const selectedAccessModule = useMemo(
+    () => foundation.modules.find((module) => module.id === values.access_module_id) || null,
+    [foundation.modules, values.access_module_id],
+  );
+  const selectedAccessRole = useMemo(
+    () => foundation.roles.find((role) => role.id === values.access_role_id) || null,
+    [foundation.roles, values.access_role_id],
+  );
+  const accessPreview = useMemo(() => {
+    if (!values.access_scope_type || !selectedAccessModule) return '';
+    const clientName = selectedAccessClient?.name || selectedAccessClient?.code || 'the selected client';
+    if (values.access_scope_type === 'client') {
+      return `This user can raise and view tickets across all active ${clientName} blocks.`;
+    }
+    if (values.access_scope_type === 'hospital_block') {
+      return `This user can access ${selectedAccessModule.name || selectedAccessModule.code} only for ${values.access_scope_text || 'the selected block'}.`;
+    }
+    if (values.access_scope_type === 'location') {
+      return `This user can access ${selectedAccessModule.name || selectedAccessModule.code} only for ${values.access_scope_text || 'the selected location'}.`;
+    }
+    return `This user gets ${selectedAccessModule.name || selectedAccessModule.code} access for ${scopeTypeLabel(values.access_scope_type)}.`;
+  }, [selectedAccessClient, selectedAccessModule, values.access_scope_text, values.access_scope_type]);
 
   if (!open) return null;
 
   function update(key, value) {
+    if (key === 'email') {
+      setExistingLookup(null);
+      setExistingLookupError('');
+    }
     const selectedAccessRole = key === 'access_role_id'
       ? foundation.roles.find((role) => role.id === value)
       : null;
@@ -461,9 +536,12 @@ export default function UserFormDrawer({
       [key]: value,
       ...(key === 'user_type'
         ? {
-          role: value === 'client' ? '' : 'FO',
+          role: value === 'nims_contact' ? '' : 'FO',
           state: '',
           business: '',
+          client_id: '',
+          hospital_access_enabled: false,
+          hospital_role_code: 'housekeeping_supervisor',
           manager_employee_code: '',
           access_business_vertical_id: '',
           access_client_id: '',
@@ -473,6 +551,12 @@ export default function UserFormDrawer({
           access_scope_id: '',
           access_scope_code: '',
           access_scope_text: '',
+        }
+        : {}),
+      ...(key === 'hospital_access_enabled'
+        ? {
+          client_id: value ? (current.client_id || defaultNimsClientId) : '',
+          hospital_role_code: value ? (current.hospital_role_code || 'housekeeping_supervisor') : 'housekeeping_supervisor',
         }
         : {}),
       ...(key === 'access_business_vertical_id'
@@ -530,12 +614,29 @@ export default function UserFormDrawer({
     }));
   }
 
+  async function checkExistingEmail() {
+    const email = values.email.trim().toLowerCase();
+    if (mode !== 'add' || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
+    setExistingLookupLoading(true);
+    setExistingLookupError('');
+    try {
+      const result = await lookupAdminUserByEmail(email);
+      setExistingLookup(result.exists ? result : null);
+    } catch (error) {
+      setExistingLookupError(error.message || 'Could not check existing account.');
+    } finally {
+      setExistingLookupLoading(false);
+    }
+  }
+
   function needsState(role) {
-    return values.user_type !== 'client' && operationalRoles.has(role);
+    void role;
+    return values.user_type === 'internal';
   }
 
   function needsBusiness(role) {
-    return values.user_type !== 'client' && operationalRoles.has(role);
+    void role;
+    return values.user_type === 'internal';
   }
 
   function reportingLabel(role) {
@@ -551,30 +652,44 @@ export default function UserFormDrawer({
   async function submit(event) {
     event.preventDefault();
     const nextErrors = {};
-    const employeeCode = values.employee_code.trim().toUpperCase();
     const fullName = values.full_name.trim();
     const email = values.email.trim().toLowerCase();
+    const existingProfile = existingLookup?.profile || null;
+    const employeeCode = values.user_type === 'nims_contact'
+      ? ''
+      : values.employee_code.trim().toUpperCase();
     const profileOnlyMd = mode === 'add' && values.role === 'MD' && values.create_profile_only;
-    if (!employeeCode) nextErrors.employee_code = values.user_type === 'client' ? 'Client user code is required.' : 'Employee code is required.';
-    if (!fullName) nextErrors.full_name = 'Full name is required.';
-    if (!profileOnlyMd && !email) nextErrors.email = 'Email is required for Supabase Auth.';
+    const accessStarted = Boolean(
+      values.access_business_vertical_id ||
+      values.access_client_id ||
+      values.access_module_id ||
+      values.access_role_id ||
+      values.access_scope_type,
+    );
+    if (values.user_type !== 'nims_contact' && !employeeCode) nextErrors.employee_code = 'Employee code is required.';
+    if (!existingProfile && !fullName) nextErrors.full_name = 'Full name is required.';
+    if (!profileOnlyMd && values.user_type !== 'nims_contact' && !email) nextErrors.email = 'Email is required for Supabase Auth.';
     if (!profileOnlyMd && !values.mobile.trim()) nextErrors.mobile = 'Mobile number is required.';
-    if (values.user_type !== 'client' && !values.role) nextErrors.role = 'Role is required.';
-    if (mode === 'add' && values.user_type !== 'client' && needsState(values.role) && !values.state) nextErrors.state = 'State is required.';
-    if (mode === 'add' && values.user_type !== 'client' && needsBusiness(values.role) && !values.business) nextErrors.business = 'Business is required.';
-    if (mode === 'add' && values.user_type !== 'client' && reportingRequiredRoles.has(values.role) && !values.manager_employee_code) {
+    if (values.user_type !== 'nims_contact' && !values.role) nextErrors.role = 'Role is required.';
+    if (mode === 'add' && values.user_type !== 'nims_contact' && needsState(values.role) && !values.state) nextErrors.state = 'State is required.';
+    if (mode === 'add' && values.user_type !== 'nims_contact' && needsBusiness(values.role) && !values.business) nextErrors.business = 'Business is required.';
+    if (mode === 'add' && values.user_type === 'internal' && values.hospital_access_enabled && !values.client_id) nextErrors.client_id = 'NIMS Hospital client is required.';
+    if (mode === 'add' && values.user_type === 'internal' && values.hospital_access_enabled && !values.hospital_role_code) nextErrors.hospital_role_code = 'Hospital role is required.';
+    if (mode === 'add' && values.user_type !== 'nims_contact' && !values.hospital_access_enabled && reportingRequiredRoles.has(values.role) && !values.manager_employee_code) {
       nextErrors.manager_employee_code = `${reportingLabel(values.role)} is required.`;
     }
-    if (mode === 'add') {
-      if (!values.access_business_vertical_id) nextErrors.access_business_vertical_id = 'Business Vertical is required.';
+    if (mode === 'add' && values.user_type !== 'nims_contact' && !values.hospital_access_enabled) {
+      const accessRequired = values.user_type === 'client' || accessStarted;
+      if (accessRequired && !values.access_business_vertical_id) nextErrors.access_business_vertical_id = 'Business Vertical is required.';
       if (values.user_type === 'client' && !values.access_client_id) nextErrors.access_client_id = 'Client is required.';
-      if (!values.access_module_id) nextErrors.access_module_id = 'Module is required.';
-      if (!values.access_role_id) nextErrors.access_role_id = 'Unified Role is required.';
-      if (!values.access_scope_type) nextErrors.access_scope_type = 'Scope Type is required.';
+      if (accessRequired && !values.access_module_id) nextErrors.access_module_id = 'Module is required.';
+      if (accessRequired && !values.access_role_id) nextErrors.access_role_id = 'Module Role is required.';
+      if (accessRequired && !values.access_scope_type) nextErrors.access_scope_type = 'Scope is required.';
       if (values.access_scope_type === 'client' && !values.access_client_id) {
         nextErrors.access_client_id = 'Client is required for client scope.';
       }
       if (
+        accessRequired &&
         values.access_scope_type &&
         !['global', 'business_vertical', 'client', 'all_client', 'employee_self'].includes(values.access_scope_type) &&
         !values.access_scope_id &&
@@ -583,7 +698,7 @@ export default function UserFormDrawer({
       ) {
         nextErrors.access_scope_value = 'Scope Value is required.';
       }
-      if (foundationError) nextErrors.access_business_vertical_id = 'Unified access options are unavailable.';
+      if (accessRequired && foundationError) nextErrors.access_business_vertical_id = 'Module access options are unavailable.';
     }
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       nextErrors.email = 'Enter a valid email.';
@@ -596,6 +711,18 @@ export default function UserFormDrawer({
     }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) return;
+
+    if (mode === 'add' && values.user_type === 'nims_contact') {
+      await onSave({
+        user_type: 'nims_contact',
+        full_name: fullName,
+        mobile: values.mobile.trim(),
+        designation: values.designation.trim() || null,
+        department: values.department.trim() || null,
+        email: email || null,
+      });
+      return;
+    }
 
     const payload = {
       user_type: values.user_type,
@@ -630,6 +757,14 @@ export default function UserFormDrawer({
       payload.role = values.user_type === 'client'
         ? (selectedAccessRole?.code === 'hospital_management' ? 'Hospital Management' : selectedAccessRole?.name || values.role)
         : values.role;
+      if (values.temporary_password.trim()) {
+        payload.temporary_password = values.temporary_password;
+      }
+      if (values.hospital_access_enabled && values.client_id) {
+        payload.client_id = values.client_id;
+        payload.access_client_id = values.client_id;
+        payload.hospital_role_code = values.hospital_role_code;
+      }
       payload.business = values.business.trim() || selectedAccessVertical?.name || null;
       payload.department = values.user_type === 'client' ? null : null;
       payload.designation = values.user_type === 'client' ? selectedAccessRole?.name || null : null;
@@ -642,29 +777,44 @@ export default function UserFormDrawer({
         access_client_name: selectedAccessClient?.name || null,
         access_module_code: selectedAccessModule?.code || null,
       };
-      payload.access_assignment = {
-        user_type: values.user_type,
-        business_vertical_id: values.access_business_vertical_id,
-        client_id: values.access_client_id || null,
-        module_id: values.access_module_id,
-        role_id: values.access_role_id,
-        verification_status: values.access_verification_status,
-        source: 'web_invite',
-        scope: {
-          scope_type: values.access_scope_type,
-          scope_id: values.access_scope_type === 'business_vertical'
-            ? values.access_business_vertical_id
-            : values.access_scope_type === 'client'
-              ? values.access_client_id
-              : values.access_scope_id || null,
-          scope_code: values.access_scope_code || null,
-          scope_text: values.access_scope_text || null,
-        },
-      };
+      if (!values.hospital_access_enabled) {
+        payload.access_assignment = {
+          user_type: values.user_type,
+          business_vertical_id: values.access_business_vertical_id,
+          client_id: values.access_client_id || null,
+          module_id: values.access_module_id,
+          role_id: values.access_role_id,
+          verification_status: values.access_verification_status,
+          source: 'web_invite',
+          scope: {
+            scope_type: values.access_scope_type,
+            scope_id: values.access_scope_type === 'business_vertical'
+              ? values.access_business_vertical_id
+              : values.access_scope_type === 'client'
+                ? values.access_client_id
+                : values.access_scope_id || null,
+            scope_code: values.access_scope_code || null,
+            scope_text: values.access_scope_text || null,
+          },
+        };
+      }
+      if (existingProfile?.id) {
+        payload.existing_profile_id = existingProfile.id;
+        payload.full_name = existingProfile.full_name || existingProfile.display_name || fullName || existingProfile.email;
+        payload.employee_code = existingProfile.employee_code || employeeCode;
+        payload.role = existingProfile.role || payload.role;
+        payload.business = existingProfile.business || payload.business;
+        payload.state = existingProfile.state || payload.state;
+      }
     } else {
       delete payload.employee_code;
       payload.status = values.status;
       payload.is_active = values.is_active;
+      payload.hospital_access = {
+        enabled: Boolean(values.hospital_access_enabled),
+        client_id: values.client_id || defaultNimsClientId || null,
+        role_code: values.hospital_role_code,
+      };
     }
     await onSave(payload);
   }
@@ -680,7 +830,9 @@ export default function UserFormDrawer({
             <p className="text-sm font-semibold text-slate-500">
               {mode === 'edit'
                 ? 'Updates the profile and linked Supabase Auth metadata.'
-                : 'Creates the profile and sends a Supabase password setup invite.'}
+                : values.user_type === 'nims_contact'
+                  ? 'Registers a NIMS client-side person by mobile number. No Supabase login is created.'
+                  : 'Creates the profile and sends a Supabase password setup invite.'}
             </p>
           </div>
           <button type="button" aria-label="Close user form" onClick={onClose} className="focus-ring grid h-9 w-9 place-items-center rounded-full border border-slate-200 text-slate-500">
@@ -698,22 +850,56 @@ export default function UserFormDrawer({
           {mode === 'add' ? (
             <>
               <section className="rounded-xl border border-slate-200 p-4">
-                <h3 className="text-sm font-bold text-slate-950">Basic Access Details</h3>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <SelectField name="user_type" label="User Type" required value={values.user_type} options={userTypeOptions} error={errors.user_type} onChange={update} />
-                  <TextField name="employee_code" label={values.user_type === 'client' ? 'Client User Code' : 'Employee Code'} required value={values.employee_code} error={errors.employee_code} onChange={update} />
-                  <TextField name="full_name" label="Full Name" required value={values.full_name} error={errors.full_name} onChange={update} />
-                  <TextField name="email" label="Email" required={!profileOnlyMd} type="email" value={values.email} error={errors.email} onChange={update} />
-                  <TextField name="mobile" label="Mobile Number" required={!profileOnlyMd} value={values.mobile} error={errors.mobile} onChange={update} />
+                <h3 className="text-sm font-bold text-slate-950">Who are you creating?</h3>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {userTypeOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => update('user_type', option.value)}
+                      className={`rounded-xl border px-4 py-3 text-left text-sm font-black ${
+                        values.user_type === option.value
+                          ? 'border-qpms-500 bg-qpms-50 text-qpms-800'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
                 </div>
+                <h3 className="mt-5 text-sm font-bold text-slate-950">Basic Details</h3>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {values.user_type !== 'nims_contact' ? (
+                    <TextField name="employee_code" label="Employee Code" required value={values.employee_code} error={errors.employee_code} onChange={update} />
+                  ) : null}
+                  <TextField name="full_name" label="Full Name" required={!existingLookup?.profile} value={values.full_name} error={errors.full_name} onChange={update} />
+                  <TextField name="email" label={values.user_type === 'nims_contact' ? 'Email' : 'Email'} required={!profileOnlyMd && values.user_type !== 'nims_contact'} type="email" value={values.email} error={errors.email} onChange={update} onBlur={values.user_type === 'nims_contact' ? undefined : checkExistingEmail} />
+                  <TextField name="mobile" label="Mobile Number" required value={values.mobile} error={errors.mobile} onChange={update} />
+                  {values.user_type === 'nims_contact' ? (
+                    <>
+                      <TextField name="designation" label="Designation" value={values.designation} error={errors.designation} onChange={update} />
+                      <TextField name="department" label="Department" value={values.department} error={errors.department} onChange={update} />
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">
+                        Client: NIMS Hyderabad
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+                {existingLookupLoading ? <p className="mt-2 text-xs font-bold text-slate-400">Checking for existing account...</p> : null}
+                {existingLookupError ? <p className="mt-2 text-xs font-bold text-rose-600">{existingLookupError}</p> : null}
+                {existingLookup?.profile ? (
+                  <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold leading-5 text-emerald-800">
+                    Existing account found: {existingLookup.profile.full_name || existingLookup.profile.email}. This submit will add module access only and will not change the employee profile.
+                  </div>
+                ) : null}
               </section>
 
-              {values.user_type !== 'client' ? <section className="rounded-xl border border-slate-200 p-4">
+              {values.user_type !== 'nims_contact' ? <section className="rounded-xl border border-slate-200 p-4">
                 <h3 className="text-sm font-bold text-slate-950">Work Mapping</h3>
                 <div className="mt-3 grid gap-3 sm:grid-cols-3">
                   <SelectField name="state" label="State" required={needsState(values.role)} value={values.state} options={stateOptions} error={errors.state} onChange={update} />
                   <SelectField name="business" label="Business" required={needsBusiness(values.role)} value={values.business} options={resolvedBusinessOptions} error={errors.business} onChange={update} />
-                  <SelectField name="role" label="Role" required value={values.role} options={roleOptions} error={errors.role} onChange={update} />
+                  <SelectField name="role" label="Base/Application Role" required value={values.role} options={roleOptions} error={errors.role} onChange={update} />
                 </div>
                 {values.role === 'MD' ? (
                   <label className="mt-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900">
@@ -727,11 +913,38 @@ export default function UserFormDrawer({
                 ) : null}
               </section> : null}
 
-              <section className="rounded-xl border border-slate-200 p-4">
+              {values.user_type === 'internal' ? (
+                <section className="rounded-xl border border-slate-200 p-4">
+                  <label className="flex items-center gap-2 text-sm font-bold text-slate-800">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(values.hospital_access_enabled)}
+                      onChange={(event) => update('hospital_access_enabled', event.target.checked)}
+                    />
+                    Enable Hospital Ticketing
+                  </label>
+                  {values.hospital_access_enabled ? (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <SelectField name="client_id" label="Hospital Client" required value={values.client_id} options={nimsClientOptions} error={errors.client_id} disabled={foundationLoading} onChange={update} />
+                      <SelectField name="hospital_role_code" label="Hospital Role" required value={values.hospital_role_code} options={nimsHospitalRoleOptions} error={errors.hospital_role_code} onChange={update} />
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">
+                        Scope: NIMS client-wide
+                      </div>
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
+
+              {values.user_type === 'client' ? <section className="rounded-xl border border-slate-200 p-4">
                 <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-bold text-slate-950">Unified Module Access</h3>
+                  <h3 className="text-sm font-bold text-slate-950">
+                    {values.user_type === 'client' ? 'Client Access' : 'Additional Module Access'}
+                  </h3>
                   {foundationLoading ? <span className="text-xs font-bold text-slate-400">Loading...</span> : null}
                 </div>
+                {values.user_type !== 'client' ? (
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Optional. Add this only when the employee needs a specific operational module.</p>
+                ) : null}
                 {foundationError ? (
                   <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">
                     {foundationError}
@@ -747,7 +960,7 @@ export default function UserFormDrawer({
                   <SelectField
                     name="access_business_vertical_id"
                     label="Business Vertical"
-                    required
+                    required={values.user_type === 'client'}
                     value={values.access_business_vertical_id}
                     options={foundation.business_verticals.filter((item) => item.active !== false).map((item) => ({ value: item.id, label: item.name || item.code }))}
                     error={errors.access_business_vertical_id}
@@ -767,7 +980,7 @@ export default function UserFormDrawer({
                   <SelectField
                     name="access_module_id"
                     label="Module"
-                    required
+                    required={values.user_type === 'client'}
                     value={values.access_module_id}
                     options={filteredModules}
                     error={errors.access_module_id}
@@ -776,8 +989,8 @@ export default function UserFormDrawer({
                   />
                   <SelectField
                     name="access_role_id"
-                    label="Role"
-                    required
+                    label={values.user_type === 'client' ? 'Client Role' : 'Module Role'}
+                    required={values.user_type === 'client'}
                     value={values.access_role_id}
                     options={filteredAccessRoles}
                     error={errors.access_role_id}
@@ -786,8 +999,8 @@ export default function UserFormDrawer({
                   />
                   <SelectField
                     name="access_scope_type"
-                    label="Scope Type"
-                    required
+                    label="Scope"
+                    required={values.user_type === 'client'}
                     value={values.access_scope_type}
                     options={scopeTypeOptions}
                     error={errors.access_scope_type}
@@ -796,7 +1009,9 @@ export default function UserFormDrawer({
                   />
                   {['global', 'business_vertical', 'client', 'all_client', 'employee_self'].includes(values.access_scope_type) ? (
                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">
-                      Scope value is derived from the selected access context.
+                      {values.access_scope_type === 'client'
+                        ? 'Entire Client uses the selected client automatically.'
+                        : 'Scope value is derived from the selected access context.'}
                     </div>
                   ) : (
                     <SelectField
@@ -816,9 +1031,14 @@ export default function UserFormDrawer({
                 {values.access_scope_type && !scopeOptionsLoading && !scopeOptionsError && !['global', 'business_vertical', 'client', 'all_client', 'employee_self'].includes(values.access_scope_type) && scopeValueOptions.length === 0 ? (
                   <p className="mt-2 text-xs font-bold text-amber-700">No scope values are available for this selection.</p>
                 ) : null}
-              </section>
+                {accessPreview ? (
+                  <p className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold leading-5 text-sky-800">
+                    {accessPreview}
+                  </p>
+                ) : null}
+              </section> : null}
 
-              {!profileOnlyMd && values.user_type !== 'client' ? <section className="rounded-xl border border-slate-200 p-4">
+              {!profileOnlyMd && values.user_type !== 'client' && values.user_type !== 'nims_contact' && !values.client_id ? <section className="rounded-xl border border-slate-200 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-sm font-bold text-slate-950">Reporting Hierarchy</h3>
                   {hierarchyLoading ? <span className="text-xs font-bold text-slate-400">Loading...</span> : null}
@@ -882,12 +1102,44 @@ export default function UserFormDrawer({
             </section>
           )}
 
-          {mode === 'add' ? (
+          {mode === 'edit' ? (
+            <section className="rounded-xl border border-slate-200 p-4">
+              <label className="flex items-center gap-2 text-sm font-bold text-slate-800">
+                <input
+                  type="checkbox"
+                  checked={Boolean(values.hospital_access_enabled)}
+                  onChange={(event) => update('hospital_access_enabled', event.target.checked)}
+                />
+                Hospital Ticketing Access
+              </label>
+              {values.hospital_access_enabled ? (
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <SelectField name="client_id" label="Hospital Client" required value={values.client_id || defaultNimsClientId} options={nimsClientOptions} error={errors.client_id} disabled={foundationLoading} onChange={update} />
+                  <SelectField name="hospital_role_code" label="Hospital Role" required value={values.hospital_role_code} options={nimsHospitalRoleOptions} error={errors.hospital_role_code} onChange={update} />
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">
+                    Scope: NIMS client-wide
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
+          {mode === 'add' && values.user_type !== 'nims_contact' ? (
             <section className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
               <h3 className="text-sm font-bold text-slate-950">Password Setup Invite</h3>
               <p className="mt-1 text-xs font-semibold leading-5 text-slate-600">
-                Admin does not need to enter a password. The employee will receive an invite or a secure setup link to create their own password.
+                Leave temporary password blank for the normal invite email. Enter it only for controlled same-day UAT accounts.
               </p>
+              <div className="mt-3 max-w-sm">
+                <TextField
+                  name="temporary_password"
+                  label="Temporary Password"
+                  type="password"
+                  value={values.temporary_password}
+                  error={errors.temporary_password}
+                  onChange={update}
+                />
+              </div>
             </section>
           ) : null}
 
@@ -902,7 +1154,22 @@ export default function UserFormDrawer({
             </div>
           </section> : null}
 
-          <section className="rounded-xl border border-slate-200 p-4">
+          {mode === 'add' ? (
+            <section className="rounded-xl border border-slate-200 p-4">
+              <h3 className="text-sm font-bold text-slate-950">Review & Invite</h3>
+              <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+                <div><dt className="text-[11px] font-bold uppercase text-slate-400">Type</dt><dd className="font-semibold text-slate-800">{values.user_type === 'nims_contact' ? 'NIMS Client Person' : 'QPMS Employee'}</dd></div>
+                <div><dt className="text-[11px] font-bold uppercase text-slate-400">Name</dt><dd className="font-semibold text-slate-800">{existingLookup?.profile?.full_name || values.full_name || 'Not set'}</dd></div>
+                <div><dt className="text-[11px] font-bold uppercase text-slate-400">Email</dt><dd className="font-semibold text-slate-800">{values.email || (values.user_type === 'nims_contact' ? 'Optional' : 'Not set')}</dd></div>
+                {values.user_type !== 'nims_contact' ? <div><dt className="text-[11px] font-bold uppercase text-slate-400">Primary Role</dt><dd className="font-semibold text-slate-800">{values.role || 'Not set'}</dd></div> : null}
+                <div><dt className="text-[11px] font-bold uppercase text-slate-400">Client</dt><dd className="font-semibold text-slate-800">{values.user_type === 'nims_contact' ? 'NIMS Hyderabad' : selectedEmployeeClient?.name || selectedEmployeeClient?.code || 'Optional'}</dd></div>
+                <div><dt className="text-[11px] font-bold uppercase text-slate-400">{values.user_type === 'nims_contact' ? 'Designation' : 'Hospital Role'}</dt><dd className="font-semibold text-slate-800">{values.user_type === 'nims_contact' ? values.designation || 'Optional' : values.hospital_access_enabled ? optionLabel(nimsHospitalRoleOptions.find((option) => option.value === values.hospital_role_code)) : selectedAccessRole?.name || selectedAccessRole?.code || 'Optional'}</dd></div>
+                <div className="sm:col-span-2"><dt className="text-[11px] font-bold uppercase text-slate-400">Scope</dt><dd className="font-semibold text-slate-800">{values.hospital_access_enabled ? 'NIMS client-wide' : values.user_type === 'nims_contact' ? 'Registered mobile only' : values.access_scope_type ? scopeTypeLabel(values.access_scope_type) : 'Optional'}</dd></div>
+              </dl>
+            </section>
+          ) : null}
+
+          {mode === 'edit' || (values.user_type !== 'client' && values.user_type !== 'nims_contact') ? <section className="rounded-xl border border-slate-200 p-4">
             <h3 className="text-sm font-bold text-slate-950">Access</h3>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               {[
@@ -921,12 +1188,12 @@ export default function UserFormDrawer({
                 </label>
               ) : null}
             </div>
-          </section>
+          </section> : null}
 
           <div className="sticky bottom-0 -mx-5 flex justify-end gap-2 border-t border-slate-200 bg-white px-5 py-4">
             <button type="button" disabled={busy} onClick={onClose} className="focus-ring rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700">Cancel</button>
             <button type="submit" disabled={busy} className="focus-ring rounded-xl bg-qpms-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-60">
-              {busy ? 'Saving...' : mode === 'edit' ? 'Save Changes' : profileOnlyMd ? 'Create MD Profile' : 'Invite User'}
+              {busy ? 'Saving...' : mode === 'edit' ? 'Save Changes' : values.user_type === 'nims_contact' ? 'Register Person' : profileOnlyMd ? 'Create MD Profile' : 'Invite User'}
             </button>
           </div>
         </form>

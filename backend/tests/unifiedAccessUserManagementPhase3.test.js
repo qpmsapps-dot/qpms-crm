@@ -7,38 +7,40 @@ const drawer = readFileSync('src/components/user-management/UserFormDrawer.jsx',
 const details = readFileSync('src/components/user-management/EmployeeDetailsDrawer.jsx', 'utf8');
 const api = readFileSync('src/services/api.js', 'utf8');
 
-test('Invite User drawer exposes unified access selectors and user type split', () => {
+test('Invite User drawer exposes temporary QPMS employee and NIMS contact split', () => {
   for (const label of [
-    'Internal User',
-    'Client User',
-    'Business Vertical',
+    'QPMS Employee',
+    'NIMS Client Person',
+    'Registered mobile only',
+    'Hospital Supervisor',
+    'Operations Executive',
+    'Facility Manager',
+    'Project Head',
+    'Register Person',
     'Client',
-    'Module',
-    'Scope Type',
-    'Scope Value',
-    'Unified Module Access',
   ]) {
     assert.match(drawer, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
-  assert.match(drawer, /values\.user_type !== 'client' \? <section/);
-  assert.match(drawer, /Reporting Hierarchy/);
+  assert.match(drawer, /values\.user_type === 'nims_contact'/);
+  assert.match(drawer, /Base\/Application Role/);
+  assert.match(drawer, /Enable Hospital Ticketing/);
 });
 
-test('Invite User drawer uses live access foundation and scope options', () => {
+test('Invite User drawer uses live foundation to resolve NIMS client options', () => {
   assert.match(drawer, /getAccessFoundation\(\)/);
-  assert.match(drawer, /getAccessScopeOptions/);
-  assert.match(drawer, /business_vertical_modules/);
-  assert.match(drawer, /client_modules/);
-  assert.doesNotMatch(drawer, /NIMS Hyderabad|Reliance Retail Block A|Block A/);
+  assert.match(drawer, /foundation\.clients/);
+  assert.match(drawer, /text\.includes\('nims'\)/);
+  assert.doesNotMatch(drawer, /Reliance Retail Block A|Block A/);
 });
 
-test('Invite User payload includes one unified assignment and scope without passwords', () => {
+test('Invite User payload keeps unified assignment separate from optional temporary password', () => {
   assert.match(drawer, /access_assignment/);
   assert.match(drawer, /business_vertical_id: values\.access_business_vertical_id/);
   assert.match(drawer, /module_id: values\.access_module_id/);
   assert.match(drawer, /role_id: values\.access_role_id/);
   assert.match(drawer, /scope_type: values\.access_scope_type/);
-  assert.doesNotMatch(drawer, /temporary_password/);
+  assert.match(drawer, /Temporary Password/);
+  assert.match(drawer, /payload\.temporary_password = values\.temporary_password/);
 });
 
 test('backend creates unified assignment, scope and audit through admin invite route', () => {
@@ -54,6 +56,8 @@ test('backend supports client-user roles without employee hierarchy', () => {
   assert.match(server, /Client User role must be Hospital Management \/ RMO or Doctor/);
   assert.match(server, /userType === 'client'[\s\S]*hierarchyFields: \{\}/);
   assert.match(server, /userType !== 'client'[\s\S]*saveHierarchy/);
+  assert.match(server, /TEMPORARY_NIMS_INTERNAL_HOSPITAL_ROLES/);
+  assert.match(server, /temporary_nims_profile_role: 'FO'/);
 });
 
 test('foundation endpoint returns module enablement mappings and scope endpoint is protected', () => {
