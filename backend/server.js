@@ -2061,7 +2061,7 @@ function profilePatchPayload(body) {
   return payload;
 }
 
-async function ensureUniqueProfileIdentity(client, { employeeCode, email, excludeProfileId = null }) {
+async function ensureUniqueProfileIdentity(client, { employeeCode, email, mobile, excludeProfileId = null }) {
   if (employeeCode) {
     let employeeQuery = client
       .from('profiles')
@@ -2090,7 +2090,26 @@ async function ensureUniqueProfileIdentity(client, { employeeCode, email, exclud
     const { data, error } = await emailQuery;
     if (error) throw error;
     if (data?.length) {
-      throw userManagementHttpError(409, 'Email is already linked to another profile.');
+      throw userManagementHttpError(409, 'This account already exists. Use Add Module Access to Existing User instead of creating a duplicate account.');
+    }
+  }
+  const normalizedMobile = normalizeIndianMobile(mobile);
+  if (normalizedMobile) {
+    let mobileQuery = client
+      .from('profiles')
+      .select('id,is_active,mobile')
+      .eq('mobile', normalizedMobile)
+      .limit(1);
+    if (excludeProfileId) mobileQuery = mobileQuery.neq('id', excludeProfileId);
+    const { data, error } = await mobileQuery;
+    if (error) throw error;
+    if (data?.length) {
+      throw userManagementHttpError(
+        409,
+        data[0].is_active
+          ? 'Mobile number already exists in an active profile.'
+          : 'Mobile number already exists in an inactive profile and cannot be reused.',
+      );
     }
   }
 }
@@ -2107,7 +2126,7 @@ async function ensureUniqueAuthEmail(client, email) {
       (authUser) => normalizeEmail(authUser.email) === normalizedEmail,
     );
     if (exists) {
-      throw userManagementHttpError(409, 'Email already exists in Supabase Auth.');
+      throw userManagementHttpError(409, 'This email already exists in Supabase Auth. Sync or select the existing account, then add module access.');
     }
     if (!data.nextPage || !(data.users || []).length) break;
     page = data.nextPage;
@@ -2155,6 +2174,13 @@ function normalizeUserType(value) {
   const text = accessCode(value || 'internal');
   return text === 'client' ? 'client' : 'internal';
 }
+
+const TEMPORARY_NIMS_INTERNAL_HOSPITAL_ROLES = new Set([
+  'housekeeping_supervisor',
+  'operations_executive',
+  'facility_manager',
+  'project_head',
+]);
 
 function normalizeIndianMobile(value) {
   const digits = String(value || '').replace(/\D+/g, '');
@@ -2220,6 +2246,32 @@ async function resolveNimsHospitalClient(client) {
   throw userManagementHttpError(503, 'NIMS Hyderabad Hospital client master is not configured.');
 }
 
+async function resolveNimsAccessClient(client, accessClientId) {
+  if (!accessClientId) return null;
+  const { data: accessClient, error } = await client
+    .from('access_clients')
+    .select('*')
+    .eq('id', accessClientId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!accessClient || accessClient.active === false) {
+    throw userManagementHttpError(400, 'Selected client is unavailable.');
+  }
+  const hospitalClientId = accessClient.metadata?.legacy_hospital_client_id;
+  if (!hospitalClientId) return null;
+  const { data: hospitalClient, error: hospitalError } = await client
+    .from('hospital_clients')
+    .select('id,client_code,client_name,is_active')
+    .eq('id', hospitalClientId)
+    .maybeSingle();
+  if (hospitalError) throw hospitalError;
+  const isNims = hospitalClient?.is_active === true && (
+    ['nims', 'nims_hyderabad', 'nims_hyd'].includes(accessCode(hospitalClient.client_code))
+    || accessCode(hospitalClient.client_name).includes('nims')
+  );
+  return isNims ? { accessClient, hospitalClient } : null;
+}
+
 function accessPayloadFromBody(body = {}) {
   const input =
     body.access_assignment && typeof body.access_assignment === 'object' && !Array.isArray(body.access_assignment)
@@ -2260,8 +2312,262 @@ function accessPayloadPresent(access) {
   );
 }
 
+function isHospitalTicketAccess(foundation) {
+  return (
+    accessCode(foundation?.vertical?.code) === 'hospital' &&
+    ['client_ticketing', 'hospital_operations'].includes(accessCode(foundation?.module?.code))
+  );
+}
+
+function hospitalProfileTypeForAccess(access) {
+  return normalizeUserType(access?.user_type) === 'client' ? 'client' : 'internal';
+}
+
+function hospitalRoleAllowsCreate(roleCode) {
+  return ['doctor', 'hospital_management'].includes(accessCode(roleCode));
+}
+
+function hospitalRoleAllowsUpdate(roleCode) {
+  return !hospitalRoleAllowsCreate(roleCode);
+}
+
+function normalizeHospitalCugNumber(value) {
+  return normalizeIndianMobile(value) || String(value || '').replace(/\D+/g, '') || null;
+}
+
+async function validateHospitalScope(client, hospitalClientId, access) {
+  const scopeType = accessCode(access.scope_type);
+  if (scopeType === 'client') {
+    return {
+      scope_type: 'client',
+      client_id: hospitalClientId,
+      block_id: null,
+      location_id: null,
+    };
+  }
+  if (scopeType === 'hospital_block') {
+    const { data: block, error } = await client
+      .from('hospital_blocks')
+      .select('id,client_id,is_active')
+      .eq('id', access.scope_id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!block || block.is_active !== true || String(block.client_id) !== String(hospitalClientId)) {
+      throw userManagementHttpError(400, 'Selected block is not active for the selected Hospital client.');
+    }
+    return {
+      scope_type: 'block',
+      client_id: hospitalClientId,
+      block_id: block.id,
+      location_id: null,
+    };
+  }
+  if (scopeType === 'location') {
+    const { data: location, error } = await client
+      .from('hospital_locations')
+      .select('id,client_id,block_id,is_active')
+      .eq('id', access.scope_id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!location || location.is_active !== true || String(location.client_id) !== String(hospitalClientId)) {
+      throw userManagementHttpError(400, 'Selected location is not active for the selected Hospital client.');
+    }
+    return {
+      scope_type: 'location',
+      client_id: hospitalClientId,
+      block_id: location.block_id,
+      location_id: location.id,
+    };
+  }
+  throw userManagementHttpError(400, 'Hospital Ticketing scope must be Entire Client, Specific Block, or Specific Location.');
+}
+
+async function createHospitalTicketAccessForProfile(client, profile, authUserId, access, foundation, request) {
+  if (!isHospitalTicketAccess(foundation)) return null;
+  const hospitalClientId = foundation.accessClient?.metadata?.legacy_hospital_client_id;
+  if (!hospitalClientId) {
+    throw userManagementHttpError(400, 'Selected client is not linked to a Hospital Ticketing client.');
+  }
+
+  const roleCode = accessCode(foundation.role?.code);
+  const profileType = hospitalProfileTypeForAccess(access);
+  if (profileType === 'internal' && !TEMPORARY_NIMS_INTERNAL_HOSPITAL_ROLES.has(roleCode)) {
+    throw userManagementHttpError(400, 'QPMS Employee Hospital Ticketing role must be Hospital Supervisor, Operations Executive, Facility Manager, or Project Head.');
+  }
+  if (profileType === 'client' && !['doctor', 'hospital_management'].includes(roleCode)) {
+    throw userManagementHttpError(400, 'Client User Hospital Ticketing role must be Doctor or Hospital Management.');
+  }
+  const scope = await validateHospitalScope(
+    client,
+    hospitalClientId,
+    profileType === 'internal' ? { ...access, scope_type: 'client', scope_id: null } : access,
+  );
+  const cugNumber = profileType === 'internal' ? normalizeHospitalCugNumber(profile.mobile) : null;
+  if (profileType === 'internal' && !cugNumber) {
+    throw userManagementHttpError(400, 'A valid mobile number is required for QPMS Hospital mobile access.');
+  }
+
+  const { data: existingByAuth, error: authLookupError } = await client
+    .from('hospital_ticket_users')
+    .select('*')
+    .eq('auth_user_id', authUserId)
+    .maybeSingle();
+  if (authLookupError) throw authLookupError;
+  if (existingByAuth && String(existingByAuth.client_id) !== String(hospitalClientId)) {
+    throw userManagementHttpError(
+      409,
+      'This account already has Hospital Ticketing access for another client. The current Hospital Ticketing table allows only one client per Auth account.',
+    );
+  }
+  if (existingByAuth && existingByAuth.profile_type !== profileType) {
+    throw userManagementHttpError(
+      409,
+      'This account already has Hospital Ticketing access with a different user type.',
+    );
+  }
+
+  let hospitalUser = existingByAuth;
+  const hospitalUserPayload = {
+    auth_user_id: authUserId,
+    client_id: hospitalClientId,
+    profile_type: profileType,
+    role_code: roleCode,
+    display_name: profile.display_name || profile.full_name || profile.email,
+    email: normalizeEmail(profile.email),
+    employee_code: profileType === 'internal' ? profile.employee_code || null : null,
+    is_active: true,
+    metadata: {
+      ...(existingByAuth?.metadata || {}),
+      source: 'user_management',
+      profile_id: profile.id,
+      access_client_id: access.client_id,
+      access_assignment_source: access.source,
+      updated_from: 'user_management_hospital_access',
+    },
+    ...(profileType === 'internal'
+      ? {
+        cug_number: cugNumber,
+        cug_number_display: textOrNull(profile.mobile) || cugNumber,
+        duty_status: existingByAuth?.duty_status || 'off_duty',
+      }
+      : {}),
+  };
+  if (hospitalUser) {
+    const { data, error } = await client
+      .from('hospital_ticket_users')
+      .update(hospitalUserPayload)
+      .eq('id', hospitalUser.id)
+      .select('*')
+      .single();
+    if (error) {
+      if (error.code === '23505') {
+        throw userManagementHttpError(409, 'This mobile/email already has Hospital Ticketing access.');
+      }
+      throw error;
+    }
+    hospitalUser = data;
+  } else {
+    const { data, error } = await client
+      .from('hospital_ticket_users')
+      .insert(hospitalUserPayload)
+      .select('*')
+      .single();
+    if (error) {
+      if (error.code === '23505') {
+        throw userManagementHttpError(409, 'This email already has access to this Hospital client.');
+      }
+      throw error;
+    }
+    hospitalUser = data;
+  }
+
+  let scopedQuery = client
+    .from('hospital_ticket_user_scopes')
+    .select('*')
+    .eq('hospital_ticket_user_id', hospitalUser.id)
+    .eq('client_id', hospitalClientId)
+    .eq('scope_type', scope.scope_type);
+  scopedQuery = scope.block_id ? scopedQuery.eq('block_id', scope.block_id) : scopedQuery.is('block_id', null);
+  scopedQuery = scope.location_id ? scopedQuery.eq('location_id', scope.location_id) : scopedQuery.is('location_id', null);
+  const { data: duplicateScopes, error: duplicateScopeError } = await scopedQuery.limit(1);
+  if (duplicateScopeError) throw duplicateScopeError;
+
+  let hospitalScope = duplicateScopes?.[0] || null;
+  const scopePayload = {
+    hospital_ticket_user_id: hospitalUser.id,
+    ...scope,
+    can_view: true,
+    can_create: profileType === 'internal' ? false : hospitalRoleAllowsCreate(roleCode),
+    can_update: hospitalRoleAllowsUpdate(roleCode),
+  };
+  if (!hospitalScope) {
+    const { data, error } = await client
+      .from('hospital_ticket_user_scopes')
+      .insert(scopePayload)
+      .select('*')
+      .single();
+    if (error) {
+      if (error.code === '23505') {
+        throw userManagementHttpError(409, 'This account already has access to this Hospital scope.');
+      }
+      throw error;
+    }
+    hospitalScope = data;
+  } else if (
+    hospitalScope.can_view !== scopePayload.can_view ||
+    hospitalScope.can_create !== scopePayload.can_create ||
+    hospitalScope.can_update !== scopePayload.can_update
+  ) {
+    const { data, error } = await client
+      .from('hospital_ticket_user_scopes')
+      .update({
+        can_view: scopePayload.can_view,
+        can_create: scopePayload.can_create,
+        can_update: scopePayload.can_update,
+      })
+      .eq('id', hospitalScope.id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    hospitalScope = data;
+  }
+
+  await writeUserManagementAudit(client, {
+    action: 'HOSPITAL_TICKETING_ACCESS_PROVISIONED',
+    targetProfile: profile,
+    newData: { hospital_user: hospitalUser, hospital_scope: hospitalScope },
+    metadata: {
+      source: 'user_management_module_access',
+      client_id: hospitalClientId,
+      role_code: roleCode,
+      profile_type: profileType,
+      scope_type: scope.scope_type,
+    },
+    request,
+  });
+
+  return {
+    user: {
+      id: hospitalUser.id,
+      client_id: hospitalUser.client_id,
+      profile_type: hospitalUser.profile_type,
+      role_code: hospitalUser.role_code,
+      is_active: hospitalUser.is_active,
+    },
+    scope: {
+      scope_type: hospitalScope.scope_type,
+      client_id: hospitalScope.client_id,
+      block_id: hospitalScope.block_id,
+      location_id: hospitalScope.location_id,
+      can_view: hospitalScope.can_view,
+      can_create: hospitalScope.can_create,
+      can_update: hospitalScope.can_update,
+    },
+  };
+}
+
 function scopeRequiresValue(scopeType) {
-  return !['global', 'all_client', 'employee_self'].includes(accessCode(scopeType));
+  return !['global', 'all_client', 'employee_self', 'client'].includes(accessCode(scopeType));
 }
 
 function validateAccessInvitePayload(access) {
@@ -2515,6 +2821,50 @@ async function loadUnifiedAccessSummaryForProfile(client, profileId) {
         effective_to: scope.effective_to,
       })),
   }));
+}
+
+async function loadHospitalTicketingAccessSummaryForProfile(client, profile) {
+  if (!profile?.auth_user_id) return null;
+  const { data: hospitalUser, error } = await client
+    .from('hospital_ticket_users')
+    .select('id,client_id,profile_type,role_code,display_name,email,employee_code,is_active,cug_number,cug_number_display,duty_status,client:hospital_clients(id,client_code,client_name)')
+    .eq('auth_user_id', profile.auth_user_id)
+    .maybeSingle();
+  if (error) {
+    if (accessTableMissing(error)) return null;
+    throw error;
+  }
+  if (!hospitalUser) return null;
+  const { data: scopes, error: scopeError } = await client
+    .from('hospital_ticket_user_scopes')
+    .select('id,client_id,scope_type,block_id,location_id,can_view,can_create,can_update,block:hospital_blocks(id,block_name),location:hospital_locations(id,location_name,floor_name,department_name)')
+    .eq('hospital_ticket_user_id', hospitalUser.id)
+    .order('created_at', { ascending: false });
+  if (scopeError) {
+    if (accessTableMissing(scopeError)) return null;
+    throw scopeError;
+  }
+  return {
+    id: hospitalUser.id,
+    client: hospitalUser.client || { id: hospitalUser.client_id },
+    profile_type: hospitalUser.profile_type,
+    role_code: hospitalUser.role_code,
+    is_active: hospitalUser.is_active === true,
+    cug_number: hospitalUser.cug_number || null,
+    cug_number_display: hospitalUser.cug_number_display || null,
+    duty_status: hospitalUser.duty_status || null,
+    scopes: (scopes || []).map((scope) => ({
+      scope_type: scope.scope_type,
+      client_id: scope.client_id,
+      block_id: scope.block_id,
+      location_id: scope.location_id,
+      block: scope.block || null,
+      location: scope.location || null,
+      can_view: scope.can_view === true,
+      can_create: scope.can_create === true,
+      can_update: scope.can_update === true,
+    })),
+  };
 }
 
 function accessTableMissing(error) {
@@ -2908,6 +3258,14 @@ function currentProfileMetadata(profileOrBody = {}) {
 }
 
 function inviteMetadataForResult(invite = {}, timestamp = new Date().toISOString()) {
+  if (invite.method === 'admin_temporary_password') {
+    return {
+      invite_status: 'not_sent',
+      invite_sent_at: null,
+      invite_method: 'admin_temporary_password',
+      invite_redirect_to: null,
+    };
+  }
   const method = invite.method === 'password_recovery_email'
     ? 'password_recovery_email'
     : 'supabase_invite_email';
@@ -2919,7 +3277,47 @@ function inviteMetadataForResult(invite = {}, timestamp = new Date().toISOString
   };
 }
 
-async function createInvitedAuthUser(client, { email, authMetadata }) {
+function validateTemporaryPassword(value) {
+  const password = String(value || '');
+  if (!password) return '';
+  if (password.length < 10) {
+    throw userManagementHttpError(400, 'Temporary password must be at least 10 characters.');
+  }
+  if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+    throw userManagementHttpError(400, 'Temporary password must include at least one letter and one number.');
+  }
+  return password;
+}
+
+async function createInvitedAuthUser(client, { email, authMetadata, temporaryPassword = '' }) {
+  const password = validateTemporaryPassword(temporaryPassword);
+  if (password) {
+    const { data, error } = await client.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: authMetadata,
+    });
+    if (!error && data?.user) {
+      return {
+        user: data.user,
+        invite: {
+          method: 'admin_temporary_password',
+          email_sent: false,
+          setup_link: null,
+          message: 'Auth account created with the admin-entered temporary password. The user can sign in immediately.',
+          warning: null,
+        },
+        usedTemporaryPassword: true,
+      };
+    }
+    throw userManagementHttpError(
+      503,
+      'Supabase Auth user could not be created with a temporary password. Verify Auth Admin configuration and retry.',
+      { auth_error: safeAuthError(error) },
+    );
+  }
+
   const redirectTo = passwordSetupRedirectUrl();
   const inviteResult = {
     method: 'supabase_invite',
@@ -2934,7 +3332,7 @@ async function createInvitedAuthUser(client, { email, authMetadata }) {
     redirectTo,
   });
   if (!error && data?.user) {
-    return { user: data.user, invite: { ...inviteResult, email_sent: true } };
+    return { user: data.user, invite: { ...inviteResult, email_sent: true }, usedTemporaryPassword: false };
   }
 
   throw userManagementHttpError(
@@ -5307,10 +5705,10 @@ app.post(
       const employeeCode = normalizeEmployeeCode(body.employee_code);
       const fullName = textOrNull(body.full_name);
       const email = normalizeEmail(body.email);
-      if (textOrNull(body.temporary_password) || textOrNull(body.password)) {
+      if (textOrNull(body.password)) {
         throw userManagementHttpError(
           400,
-          'Admins cannot set user passwords. Use Invite User so the user can create their own password.',
+          'Use temporary_password for controlled User Management UAT password creation.',
         );
       }
       if (!employeeCode) throw userManagementHttpError(400, 'employee_code is required.');
@@ -5325,10 +5723,23 @@ app.post(
           );
         }
       }
-      validateCreateUserBody(body);
-      const userType = normalizeUserType(body.user_type);
-      const unifiedAccess = accessPayloadFromBody(body);
-      await ensureUniqueProfileIdentity(client, { employeeCode, email });
+      const requestedHospitalRole = accessCode(body.hospital_role_code || body.role);
+      const temporaryNimsEmployee = normalizeUserType(body.user_type) === 'internal'
+        && TEMPORARY_NIMS_INTERNAL_HOSPITAL_ROLES.has(requestedHospitalRole)
+        ? await resolveNimsAccessClient(client, body.access_client_id || body.client_id)
+        : null;
+      const validationBody = temporaryNimsEmployee
+        ? {
+          ...body,
+          role: 'Admin',
+          manager_employee_code: body.manager_employee_code || null,
+          reporting_manager_employee_code: body.reporting_manager_employee_code || body.manager_employee_code || null,
+        }
+        : body;
+      validateCreateUserBody(validationBody);
+      const userType = normalizeUserType(validationBody.user_type);
+      const unifiedAccess = temporaryNimsEmployee ? {} : accessPayloadFromBody(body);
+      await ensureUniqueProfileIdentity(client, { employeeCode, email, mobile: body.mobile });
 
       if (body.create_profile_only === true && createUserRoleKey(body.role) === 'MD') {
         const profilePayload = profileOnlyMdPayload(body);
@@ -5364,12 +5775,33 @@ app.post(
       }
 
       await ensureUniqueAuthEmail(client, email);
-      const hierarchyResolution = userType === 'client'
+      const hierarchyResolution = temporaryNimsEmployee
+        ? {
+          metadata: {
+            user_type: 'internal',
+            temporary_nims_hospital_role_code: requestedHospitalRole,
+            temporary_nims_profile_role: 'FO',
+            access_client_id: temporaryNimsEmployee.accessClient.id,
+            hospital_client_id: temporaryNimsEmployee.hospitalClient.id,
+            hierarchy_reason: 'Temporary NIMS Hospital Ticketing employee access keeps operational authority in hospital_ticket_users.role_code.',
+          },
+          hierarchyFields: {},
+          warnings: [],
+        }
+        : userType === 'client'
         ? { metadata: { user_type: 'client', unified_access_requested: accessPayloadPresent(unifiedAccess) }, hierarchyFields: {}, warnings: [] }
-        : await buildCreateHierarchyMetadata(client, body, employeeCode);
-      await validateUnifiedAccessFoundation(client, unifiedAccess);
+        : await buildCreateHierarchyMetadata(client, validationBody, employeeCode);
+      const accessFoundation = temporaryNimsEmployee
+        ? {
+          vertical: { code: 'hospital', name: 'Hospital' },
+          accessClient: temporaryNimsEmployee.accessClient,
+          module: { code: 'hospital_operations', name: 'Hospital Ticketing' },
+          role: { code: requestedHospitalRole, name: requestedHospitalRole },
+        }
+        : await validateUnifiedAccessFoundation(client, unifiedAccess);
       let createBody = {
-        ...body,
+        ...validationBody,
+        role: temporaryNimsEmployee ? 'FO' : validationBody.role,
         display_name: textOrNull(body.display_name) || fullName,
         metadata: {
           ...(body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
@@ -5385,16 +5817,17 @@ app.post(
         full_name: fullName,
         display_name: textOrNull(createBody.display_name) || fullName,
         mobile: textOrNull(body.mobile),
-        role: canonicalProfileRole(body.role, 'FO'),
+        role: canonicalProfileRole(createBody.role, 'FO'),
         designation: textOrNull(body.designation),
         department: textOrNull(body.department),
         business: textOrNull(body.business),
         state: textOrNull(body.state),
         user_type: userType,
       };
-      const { user: invitedAuthUser, invite: inviteResult } = await createInvitedAuthUser(client, {
+      const { user: invitedAuthUser, invite: inviteResult, usedTemporaryPassword } = await createInvitedAuthUser(client, {
         email,
         authMetadata,
+        temporaryPassword: textOrNull(body.temporary_password),
       });
       createdAuthUser = invitedAuthUser;
       createBody = {
@@ -5408,7 +5841,7 @@ app.post(
       const profilePayload = profileCreatePayload(
         createBody,
         createdAuthUser.id,
-        false,
+        usedTemporaryPassword,
       );
       const { data: profile, error: profileError } = await client
         .from('profiles')
@@ -5417,19 +5850,31 @@ app.post(
         .single();
       if (profileError) {
         const safeFailure = safeAuthError(profileError);
-        const { error: provisioningMarkError } = await client.auth.admin.updateUserById(
-          createdAuthUser.id,
-          {
-            app_metadata: {
-              ...(createdAuthUser.app_metadata || {}),
-              profile_provisioning_status: 'failed',
-              profile_provisioning_error: safeFailure.message,
+        let authCompensation = null;
+        try {
+          const { error: deleteAuthError } = await client.auth.admin.deleteUser(createdAuthUser.id);
+          authCompensation = deleteAuthError
+            ? { deleted: false, error: safeAuthError(deleteAuthError) }
+            : { deleted: true };
+        } catch (deleteAuthError) {
+          authCompensation = { deleted: false, error: safeAuthError(deleteAuthError) };
+        }
+        let safeProvisioningMarkError = null;
+        if (!authCompensation?.deleted) {
+          const { error: provisioningMarkError } = await client.auth.admin.updateUserById(
+            createdAuthUser.id,
+            {
+              app_metadata: {
+                ...(createdAuthUser.app_metadata || {}),
+                profile_provisioning_status: 'failed',
+                profile_provisioning_error: safeFailure.message,
+              },
             },
-          },
-        );
-        const safeProvisioningMarkError = provisioningMarkError
-          ? safeAuthError(provisioningMarkError)
-          : null;
+          );
+          safeProvisioningMarkError = provisioningMarkError
+            ? safeAuthError(provisioningMarkError)
+            : null;
+        }
         await writeUserManagementAudit(client, {
           action: 'CREATE_USER_PROFILE_FAILED',
           targetProfile: {
@@ -5442,57 +5887,131 @@ app.post(
             profile_created: false,
             error: safeFailure,
             auth_failure_marker_error: safeProvisioningMarkError,
+            auth_compensation: authCompensation,
           },
           request,
         });
         throw userManagementHttpError(
-          500,
-          'Supabase Auth user was created, but profile creation failed. The Auth user was retained and marked for provisioning review.',
+          profileError.code === '23505' ? 409 : 500,
+          profileError.code === '23505'
+            ? 'Profile identity already exists. Check duplicate employee code, mobile, or email.'
+            : authCompensation?.deleted
+              ? 'Supabase Auth user was created, but profile creation failed. The Auth user was rolled back; retry after fixing the profile error.'
+              : 'Supabase Auth user was created, but profile creation failed. The Auth user could not be rolled back and was marked for provisioning review.',
           {
             auth_user_id: createdAuthUser.id,
             error: safeFailure,
             auth_failure_marker_error: safeProvisioningMarkError,
+            auth_compensation: authCompensation,
           },
         );
       }
       createdProfile = profile;
 
       let hierarchy = null;
-      if (userType !== 'client') {
-        try {
+      let unifiedAccessResult = null;
+      let hospitalAccessResult = null;
+      try {
+        if (userType !== 'client' && !temporaryNimsEmployee) {
           hierarchy = await saveHierarchy(
             client,
             createdProfile.employee_code,
             createBody,
             request.authUser.id,
           );
-        } catch (hierarchyError) {
-          await writeUserManagementAudit(client, {
-            action: 'CREATE_USER_HIERARCHY_FAILED',
-            targetProfile: createdProfile,
-            newData: createdProfile,
-            metadata: {
-              profile_created: true,
-              hierarchy_saved: false,
-              error: safeAuthError(hierarchyError),
-            },
-            request,
-          });
-          throw userManagementHttpError(
-            500,
-            'User and profile were created, but hierarchy could not be saved. No user data was deleted.',
-            { profile_id: createdProfile.id, error: safeAuthError(hierarchyError) },
-          );
         }
-      }
 
-      const unifiedAccessResult = await createUnifiedAccessForProfile(
-        client,
-        createdProfile,
-        createdAuthUser.id,
-        unifiedAccess,
-        request,
-      );
+        unifiedAccessResult = temporaryNimsEmployee
+          ? null
+          : await createUnifiedAccessForProfile(
+            client,
+            createdProfile,
+            createdAuthUser.id,
+            unifiedAccess,
+            request,
+          );
+        hospitalAccessResult = await createHospitalTicketAccessForProfile(
+          client,
+          createdProfile,
+          createdAuthUser.id,
+          temporaryNimsEmployee
+            ? {
+              user_type: 'internal',
+              client_id: temporaryNimsEmployee.accessClient.id,
+              scope_type: 'client',
+              source: 'temporary_nims_employee_invite',
+            }
+            : unifiedAccess,
+          accessFoundation,
+          request,
+        );
+      } catch (provisioningError) {
+        const compensation = { hospital_user_deleted: false, profile_deleted: false, auth_user_deleted: false, errors: [] };
+        const { error: hospitalDeleteError } = await client
+          .from('hospital_ticket_users')
+          .delete()
+          .eq('auth_user_id', createdAuthUser.id);
+        if (hospitalDeleteError) compensation.errors.push({ step: 'delete_hospital_ticket_user', error: safeAuthError(hospitalDeleteError) });
+        else compensation.hospital_user_deleted = true;
+        const { data: assignmentRows, error: assignmentLookupError } = await client
+          .from('access_user_assignments')
+          .select('id')
+          .eq('profile_id', createdProfile.id);
+        if (assignmentLookupError) {
+          compensation.errors.push({ step: 'lookup_access_assignments', error: safeAuthError(assignmentLookupError) });
+        } else if ((assignmentRows || []).length) {
+          const assignmentIds = assignmentRows.map((row) => row.id).filter(Boolean);
+          const { error: scopeDeleteError } = await client
+            .from('access_user_scopes')
+            .delete()
+            .in('user_assignment_id', assignmentIds);
+          if (scopeDeleteError) compensation.errors.push({ step: 'delete_access_scopes', error: safeAuthError(scopeDeleteError) });
+          const { error: assignmentDeleteError } = await client
+            .from('access_user_assignments')
+            .delete()
+            .in('id', assignmentIds);
+          if (assignmentDeleteError) compensation.errors.push({ step: 'delete_access_assignments', error: safeAuthError(assignmentDeleteError) });
+        }
+        const { error: profileDeleteError } = await client
+          .from('profiles')
+          .delete()
+          .eq('id', createdProfile.id);
+        if (profileDeleteError) compensation.errors.push({ step: 'delete_profile', error: safeAuthError(profileDeleteError) });
+        else compensation.profile_deleted = true;
+        const { error: authDeleteError } = await client.auth.admin.deleteUser(createdAuthUser.id);
+        if (authDeleteError) compensation.errors.push({ step: 'delete_auth_user', error: safeAuthError(authDeleteError) });
+        else compensation.auth_user_deleted = true;
+        await writeUserManagementAudit(client, {
+          action: 'CREATE_USER_ACCESS_PROVISIONING_FAILED',
+          targetProfile: {
+            id: createdProfile.id,
+            auth_user_id: createdAuthUser.id,
+            employee_code: createdProfile.employee_code,
+          },
+          newData: {
+            profile: createdProfile,
+            hierarchy,
+            unified_access: unifiedAccessResult,
+            hospital_ticketing_access: hospitalAccessResult,
+          },
+          metadata: {
+            error: safeAuthError(provisioningError),
+            compensation,
+            user_type: userType,
+          },
+          request,
+        });
+        throw userManagementHttpError(
+          500,
+          compensation.profile_deleted && compensation.auth_user_deleted
+            ? 'User provisioning failed and the newly created profile/Auth account were rolled back. Retry after fixing the access error.'
+            : 'User provisioning failed. Rollback was attempted but needs administrator review.',
+          {
+            error: safeAuthError(provisioningError),
+            compensation,
+          },
+        );
+      }
 
       await writeUserManagementAudit(client, {
         action: 'CREATE_USER',
@@ -5501,6 +6020,7 @@ app.post(
           profile: createdProfile,
           hierarchy,
           unified_access: unifiedAccessResult,
+          hospital_ticketing_access: hospitalAccessResult,
         },
         metadata: {
           auth_user_created: true,
@@ -5517,6 +6037,7 @@ app.post(
         invite: inviteResult,
         hierarchyWarnings: hierarchyResolution.warnings,
         unifiedAccess: unifiedAccessResult,
+        hospitalTicketingAccess: hospitalAccessResult,
       });
     } catch (error) {
       respondUserManagementError(response, error);
@@ -5560,6 +6081,7 @@ app.post(
       if (!email) throw userManagementHttpError(400, 'Email is required to enable login access.');
       await ensureUniqueProfileIdentity(client, {
         email,
+        mobile: request.body?.mobile,
         excludeProfileId: profile.id,
       });
       await ensureUniqueAuthEmail(client, email);
@@ -5670,6 +6192,128 @@ app.patch(
 );
 
 app.get(
+  '/api/admin/users/lookup-by-email',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const email = normalizeEmail(request.query.email);
+      if (!email) throw userManagementHttpError(400, 'email is required.');
+      const { data: profiles, error: profileError } = await client
+        .from('profiles')
+        .select(USER_MANAGEMENT_PROFILE_SELECT)
+        .ilike('email', email)
+        .limit(2);
+      if (profileError) throw profileError;
+      let authUser = null;
+      for (let page = 1; page <= 10 && !authUser; page += 1) {
+        const { data, error } = await client.auth.admin.listUsers({ page, perPage: 1000 });
+        if (error) throw error;
+        authUser = (data?.users || []).find((user) => normalizeEmail(user.email) === email) || null;
+        if ((data?.users || []).length < 1000) break;
+      }
+      response.json({
+        ok: true,
+        exists: Boolean((profiles || []).length || authUser),
+        profile: profiles?.[0] || null,
+        duplicateProfiles: Math.max(0, (profiles || []).length - 1),
+        authUser: authUser ? {
+          id: authUser.id,
+          email: authUser.email,
+          created_at: authUser.created_at,
+          last_sign_in_at: authUser.last_sign_in_at || null,
+        } : null,
+        message: (profiles || []).length
+          ? 'Existing profile found. You can add module access to this user.'
+          : authUser
+            ? 'Existing Auth account found without a profile. Sync Auth users before adding profile-based access.'
+            : 'No existing account found.',
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.post(
+  '/api/admin/users/:profileId/module-access',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertUserManagementFoundation(client);
+      const profile = await loadProfileById(client, request.params.profileId);
+      if (!profile) throw userManagementHttpError(404, 'User profile not found.');
+      if (!profile.auth_user_id) {
+        throw userManagementHttpError(409, 'This profile has no Auth account. Enable login access before adding module access.');
+      }
+      const body = request.body || {};
+      const requestedHospitalRole = accessCode(body.hospital_role_code || body.role);
+      const directNimsHospitalAccess = TEMPORARY_NIMS_INTERNAL_HOSPITAL_ROLES.has(requestedHospitalRole)
+        ? await resolveNimsAccessClient(client, body.access_client_id || body.client_id)
+        : null;
+      const access = directNimsHospitalAccess
+        ? {
+          user_type: 'internal',
+          client_id: directNimsHospitalAccess.accessClient.id,
+          scope_type: 'client',
+          source: 'user_management_module_access',
+        }
+        : accessPayloadFromBody(body);
+      const foundation = directNimsHospitalAccess
+        ? {
+          vertical: { code: 'hospital', name: 'Hospital' },
+          accessClient: directNimsHospitalAccess.accessClient,
+          module: { code: 'hospital_operations', name: 'Hospital Ticketing' },
+          role: { code: requestedHospitalRole, name: requestedHospitalRole },
+        }
+        : await validateUnifiedAccessFoundation(client, access);
+      const unifiedAccess = directNimsHospitalAccess
+        ? null
+        : await createUnifiedAccessForProfile(
+          client,
+          profile,
+          profile.auth_user_id,
+          access,
+          request,
+        );
+      const hospitalTicketingAccess = await createHospitalTicketAccessForProfile(
+        client,
+        profile,
+        profile.auth_user_id,
+        access,
+        foundation,
+        request,
+      );
+      await writeUserManagementAudit(client, {
+        action: 'ADD_MODULE_ACCESS',
+        targetProfile: profile,
+        newData: {
+          unified_access: unifiedAccess,
+          hospital_ticketing_access: hospitalTicketingAccess,
+        },
+        metadata: {
+          source: access.source || 'web_user_management',
+          profile_role_unchanged: profile.role,
+        },
+        request,
+      });
+      response.status(201).json({
+        ok: true,
+        profile,
+        unifiedAccess,
+        hospitalTicketingAccess,
+      });
+    } catch (error) {
+      respondUserManagementError(response, error);
+    }
+  },
+);
+
+app.get(
   '/api/admin/users/:profileId',
   requireSupabaseJwt,
   requireUserManagementPermission,
@@ -5679,16 +6323,18 @@ app.get(
       await assertUserManagementFoundation(client);
       const profile = await loadProfileById(client, request.params.profileId);
       if (!profile) throw userManagementHttpError(404, 'User profile not found.');
-      const [counts, hierarchy, unifiedAccess] = await Promise.all([
+      const [counts, hierarchy, unifiedAccess, hospitalTicketingAccess] = await Promise.all([
         loadOperationalCounts(client, [profile.employee_code]),
         loadHierarchy(client, profile.employee_code),
         loadUnifiedAccessSummaryForProfile(client, profile.id),
+        loadHospitalTicketingAccessSummaryForProfile(client, profile),
       ]);
       response.json({
         ok: true,
         profile: attachOperationalCounts(profile, counts),
         hierarchy,
         unifiedAccess,
+        hospitalTicketingAccess,
       });
     } catch (error) {
       respondUserManagementError(response, error);
@@ -5726,13 +6372,25 @@ app.patch(
       const hierarchySupplied = Boolean(
         hierarchyPayloadFromBody(body, oldProfile.employee_code),
       );
-      if (!Object.keys(profilePatch).length && !hierarchySupplied) {
+      const hospitalAccessSupplied = body.hospital_access &&
+        typeof body.hospital_access === 'object' &&
+        !Array.isArray(body.hospital_access);
+      if (!Object.keys(profilePatch).length && !hierarchySupplied && !hospitalAccessSupplied) {
         throw userManagementHttpError(400, 'No supported profile or hierarchy fields were supplied.');
       }
       const nextEmail = hasOwn(profilePatch, 'email') ? profilePatch.email : oldProfile.email;
       if (nextEmail && normalizeEmail(nextEmail) !== normalizeEmail(oldProfile.email)) {
         await ensureUniqueProfileIdentity(client, {
           email: normalizeEmail(nextEmail),
+          excludeProfileId: oldProfile.id,
+        });
+      }
+      if (
+        hasOwn(profilePatch, 'mobile') &&
+        normalizeHospitalCugNumber(profilePatch.mobile) !== normalizeHospitalCugNumber(oldProfile.mobile)
+      ) {
+        await ensureUniqueProfileIdentity(client, {
+          mobile: profilePatch.mobile,
           excludeProfileId: oldProfile.id,
         });
       }
@@ -5814,6 +6472,62 @@ app.patch(
           });
         }
       }
+      let hospitalTicketingAccess = null;
+      if (hospitalAccessSupplied) {
+        if (!updatedProfile.auth_user_id) {
+          throw userManagementHttpError(409, 'This profile has no Auth account. Enable login access before editing Hospital access.');
+        }
+        if (body.hospital_access.enabled === false) {
+          const { data: hospitalUsers, error: hospitalLookupError } = await client
+            .from('hospital_ticket_users')
+            .select('id,metadata')
+            .eq('auth_user_id', updatedProfile.auth_user_id);
+          if (hospitalLookupError) throw hospitalLookupError;
+          for (const hospitalUser of hospitalUsers || []) {
+            const { error: hospitalUpdateError } = await client
+              .from('hospital_ticket_users')
+              .update({
+                is_active: false,
+                duty_status: 'off_duty',
+                duty_ended_at: new Date().toISOString(),
+                metadata: {
+                  ...(hospitalUser.metadata || {}),
+                  user_management_hospital_access_disabled: true,
+                  user_management_hospital_access_disabled_at: new Date().toISOString(),
+                  user_management_hospital_access_disabled_by: request.authUser.id,
+                },
+              })
+              .eq('id', hospitalUser.id);
+            if (hospitalUpdateError) throw hospitalUpdateError;
+          }
+        } else {
+          const roleCode = accessCode(body.hospital_access.role_code);
+          if (!TEMPORARY_NIMS_INTERNAL_HOSPITAL_ROLES.has(roleCode)) {
+            throw userManagementHttpError(400, 'Hospital role must be Hospital Supervisor, Operations Executive, Facility Manager, or Project Head.');
+          }
+          const nimsAccess = await resolveNimsAccessClient(client, body.hospital_access.client_id);
+          if (!nimsAccess) throw userManagementHttpError(400, 'Selected Hospital client must be NIMS Hyderabad.');
+          await createHospitalTicketAccessForProfile(
+            client,
+            updatedProfile,
+            updatedProfile.auth_user_id,
+            {
+              user_type: 'internal',
+              client_id: nimsAccess.accessClient.id,
+              scope_type: 'client',
+              source: 'user_management_edit',
+            },
+            {
+              vertical: { code: 'hospital', name: 'Hospital' },
+              accessClient: nimsAccess.accessClient,
+              module: { code: 'hospital_operations', name: 'Hospital Ticketing' },
+              role: { code: roleCode, name: roleCode },
+            },
+            request,
+          );
+        }
+        hospitalTicketingAccess = await loadHospitalTicketingAccessSummaryForProfile(client, updatedProfile);
+      }
 
       await writeUserManagementAudit(client, {
         action: 'UPDATE_USER',
@@ -5822,6 +6536,7 @@ app.patch(
         newData: {
           profile: updatedProfile,
           hierarchy,
+          hospital_ticketing_access: hospitalTicketingAccess,
         },
         metadata: { warnings },
         request,
@@ -5830,6 +6545,7 @@ app.patch(
         ok: true,
         profile: updatedProfile,
         hierarchy,
+        hospitalTicketingAccess,
         warnings,
       });
     } catch (error) {
@@ -5869,6 +6585,40 @@ app.post(
 
       const warnings = [];
       if (updatedProfile.auth_user_id) {
+        const { data: hospitalUsers, error: hospitalLookupError } = await client
+          .from('hospital_ticket_users')
+          .select('id,is_active,duty_status,metadata')
+          .eq('auth_user_id', updatedProfile.auth_user_id);
+        if (hospitalLookupError) {
+          warnings.push({
+            code: 'HOSPITAL_ACCESS_LOOKUP_FAILED',
+            message: safeAuthError(hospitalLookupError).message,
+          });
+        } else {
+          for (const hospitalUser of hospitalUsers || []) {
+            const { error: hospitalUpdateError } = await client
+              .from('hospital_ticket_users')
+              .update({
+                is_active: false,
+                duty_status: 'off_duty',
+                duty_ended_at: nowIso,
+                metadata: {
+                  ...(hospitalUser.metadata || {}),
+                  user_management_deactivated: true,
+                  user_management_deactivated_at: nowIso,
+                  user_management_deactivated_by: request.authUser.id,
+                  user_management_was_active: hospitalUser.is_active === true,
+                },
+              })
+              .eq('id', hospitalUser.id);
+            if (hospitalUpdateError) {
+              warnings.push({
+                code: 'HOSPITAL_ACCESS_DEACTIVATE_FAILED',
+                message: safeAuthError(hospitalUpdateError).message,
+              });
+            }
+          }
+        }
         const { error: banError } = await client.auth.admin.updateUserById(
           updatedProfile.auth_user_id,
           { ban_duration: '876000h' },
@@ -5888,6 +6638,7 @@ app.post(
         reason,
         metadata: {
           auth_suspended: Boolean(updatedProfile.auth_user_id) && !warnings.length,
+          hospital_access_deactivated: Boolean(updatedProfile.auth_user_id) && !warnings.some((warning) => warning.code?.startsWith('HOSPITAL_ACCESS')),
           warnings,
         },
         request,
@@ -5934,6 +6685,43 @@ app.post(
 
       const warnings = [];
       if (updatedProfile.auth_user_id) {
+        const { data: hospitalUsers, error: hospitalLookupError } = await client
+          .from('hospital_ticket_users')
+          .select('id,is_active,metadata')
+          .eq('auth_user_id', updatedProfile.auth_user_id);
+        if (hospitalLookupError) {
+          warnings.push({
+            code: 'HOSPITAL_ACCESS_LOOKUP_FAILED',
+            message: safeAuthError(hospitalLookupError).message,
+          });
+        } else {
+          for (const hospitalUser of hospitalUsers || []) {
+            const metadata = hospitalUser.metadata || {};
+            if (metadata.user_management_deactivated !== true || metadata.user_management_was_active !== true) {
+              continue;
+            }
+            const { error: hospitalUpdateError } = await client
+              .from('hospital_ticket_users')
+              .update({
+                is_active: true,
+                duty_status: 'off_duty',
+                duty_started_at: null,
+                metadata: {
+                  ...metadata,
+                  user_management_reactivated_at: new Date().toISOString(),
+                  user_management_reactivated_by: request.authUser.id,
+                  user_management_deactivated: false,
+                },
+              })
+              .eq('id', hospitalUser.id);
+            if (hospitalUpdateError) {
+              warnings.push({
+                code: 'HOSPITAL_ACCESS_REACTIVATE_FAILED',
+                message: safeAuthError(hospitalUpdateError).message,
+              });
+            }
+          }
+        }
         const { error: unbanError } = await client.auth.admin.updateUserById(
           updatedProfile.auth_user_id,
           { ban_duration: 'none' },
@@ -5953,6 +6741,7 @@ app.post(
         reason,
         metadata: {
           auth_reactivated: Boolean(updatedProfile.auth_user_id) && !warnings.length,
+          hospital_access_reactivated_if_previously_active: Boolean(updatedProfile.auth_user_id) && !warnings.some((warning) => warning.code?.startsWith('HOSPITAL_ACCESS')),
           warnings,
         },
         request,

@@ -60,6 +60,23 @@ function scopeLabel(scope = {}) {
   ].filter(Boolean).join(': ') || 'Not available';
 }
 
+function hospitalRoleLabel(roleCode) {
+  const labels = {
+    housekeeping_supervisor: 'Hospital Supervisor',
+    operations_executive: 'Operations Executive',
+    facility_manager: 'Facility Manager',
+    project_head: 'Project Head',
+  };
+  return labels[roleCode] || roleCode || 'Not available';
+}
+
+function hospitalScopeLabel(scope = {}) {
+  if (scope.scope_type === 'client') return 'Client-wide';
+  if (scope.scope_type === 'block') return scope.block?.block_name || 'Specific Block';
+  if (scope.scope_type === 'location') return scope.location?.location_name || 'Specific Location';
+  return scope.scope_type || 'Not available';
+}
+
 function ActionPanel({ action, employee, busy, onCancel, onSubmit }) {
   const [reason, setReason] = useState('');
   const [newEmployeeCode, setNewEmployeeCode] = useState('');
@@ -348,6 +365,27 @@ export default function EmployeeDetailsDrawer({
               </p>
             )}
           </section>
+
+          {employee.hospitalTicketingAccess ? (
+            <section className="rounded-xl border border-slate-200 p-4">
+              <h3 className="text-sm font-bold text-slate-950">Hospital Ticketing</h3>
+              <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+                <Field label="Status" value={employee.hospitalTicketingAccess.is_active ? 'Enabled' : 'Disabled'} />
+                <Field label="Client" value={employee.hospitalTicketingAccess.client?.client_name || employee.hospitalTicketingAccess.client?.client_code} />
+                <Field label="Hospital role" value={hospitalRoleLabel(employee.hospitalTicketingAccess.role_code)} />
+                <Field label="Profile type" value={employee.hospitalTicketingAccess.profile_type} />
+                <Field label="CUG / Mobile" value={employee.hospitalTicketingAccess.cug_number_display || employee.hospitalTicketingAccess.cug_number} />
+                <Field label="Duty status" value={employee.hospitalTicketingAccess.duty_status || 'off_duty'} />
+              </dl>
+              <div className="mt-3 space-y-2">
+                {(employee.hospitalTicketingAccess.scopes || []).map((scope, index) => (
+                  <div key={`${scope.scope_type}-${index}`} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700">
+                    {hospitalScopeLabel(scope)} - view {scope.can_view ? 'yes' : 'no'}, create {scope.can_create ? 'yes' : 'no'}, update {scope.can_update ? 'yes' : 'no'}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           <section className="rounded-xl border border-slate-200 p-4">
             <h3 className="text-sm font-bold text-slate-950">Account Actions</h3>
