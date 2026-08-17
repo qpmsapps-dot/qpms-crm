@@ -306,6 +306,23 @@ test('notification list enriches complaint thumbnails with one attachment query'
   assert.equal(rows[0].before_image_url, 'https://signed.example/hospital-ticket-attachments/ticket-1/photo.jpg?ttl=300');
 });
 
+test('notification list query matches current ticket schema and incoming statuses', () => {
+  const source = readFileSync(
+    new URL('../services/hospitalTicketService.js', import.meta.url),
+    'utf8',
+  );
+  const helper = source.slice(
+    source.indexOf('export async function listHospitalNotifications'),
+    source.indexOf('export async function listHospitalTickets'),
+  );
+  assert.match(helper, /exact_landmark_snapshot/);
+  assert.doesNotMatch(helper, /exact_landmark,/);
+  assert.doesNotMatch(helper, /ticket\.exact_landmark\s/);
+  assert.doesNotMatch(helper, /\.eq\('action_status', 'active'\)/);
+  assert.match(source, /incoming_supervisor_ticket/);
+  assert.match(source, /action_status/);
+});
+
 test('full ticket lifecycle notification sequence supports reopen cycles without spam', () => {
   const clientActor = { user: activeUser('doctor', 'client-user') };
   const supervisorActor = { user: activeUser('housekeeping_supervisor', 'supervisor-user') };

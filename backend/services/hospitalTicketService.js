@@ -354,7 +354,7 @@ export async function listHospitalNotifications(client, actor, limit = 200) {
   const safeLimit = Math.min(Math.max(Number(limit) || 200, 1), 200);
   const result = await client
     .from('hospital_ticket_notifications')
-    .select('*,ticket:hospital_tickets(id,ticket_no,client_id,block_id,location_id,floor_name,department_name,location_text,exact_landmark,priority,status_code,block:hospital_blocks(id,block_name),location:hospital_locations(id,floor_name,department_name,location_name,location_code,room_number,area_name,ward_name),category:hospital_ticket_categories(id,category_name))')
+    .select('*,ticket:hospital_tickets(id,ticket_no,client_id,block_id,location_id,floor_name,department_name,location_text,exact_landmark_snapshot,priority,status_code,block:hospital_blocks(id,block_name),location:hospital_locations(id,floor_name,department_name,location_name,location_code,room_number,area_name,ward_name),category:hospital_ticket_categories(id,category_name))')
     .eq('recipient_user_id', actor.user.id)
     .order('created_at', { ascending: false })
     .limit(safeLimit);
@@ -384,7 +384,7 @@ export async function listHospitalNotifications(client, actor, limit = 200) {
           || ticket.location?.location_name
           || ticket.location?.ward_name
           || ticket.location?.area_name
-          || ticket.exact_landmark
+          || ticket.exact_landmark_snapshot
           || null,
         category_name: ticket.category?.category_name || null,
       } : null,
