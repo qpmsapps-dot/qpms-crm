@@ -304,7 +304,19 @@ test('phase 3 lifecycle notification types route to the intended app scopes', ()
   assert.equal(appScopeForNotification({ notification_type: 'ticket_assigned_internal' }), 'myqpms_internal');
 });
 
-test('dispatcher queues one supervisor delivery and processes pending row without Firebase Admin shape crash', async () => {
+test('contact ticket creation route schedules push fanout after RPC notification creation', () => {
+  const source = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const routeStart = source.indexOf("app.post('/api/hospital-client/tickets'");
+  const routeEnd = source.indexOf('async function loadContactTicketForRequest', routeStart);
+  assert.notEqual(routeStart, -1);
+  assert.notEqual(routeEnd, -1);
+  const routeSource = source.slice(routeStart, routeEnd);
+  assert.match(routeSource, /rpc\('rpc_create_hospital_contact_ticket'/);
+  assert.match(routeSource, /runHospitalClientPushDispatch\(client,\s*result\.data\?\.ticket\?\.id,\s*'hospital_client_ticket_created'\)/);
+  assert.match(routeSource, /dispatchHospitalNotificationPushes\(client,\s*\{\s*notificationIds\s*\}\)/);
+});
+
+test('contact-created incoming supervisor notification queues one delivery and processes pending row without duplicates', async () => {
   const now = new Date('2026-08-11T00:10:28Z');
   const notification = {
     id: 'notification-supervisor',
@@ -346,7 +358,7 @@ test('dispatcher queues one supervisor delivery and processes pending row withou
   const queuedFirst = await queueHospitalPushDeliveries(client, { now });
   const queuedAgain = await queueHospitalPushDeliveries(client, { now });
   assert.equal(queuedFirst, 1);
-  assert.equal(queuedAgain, 1);
+  assert.equal(queuedAgain, 0);
   assert.equal(state.deliveries.length, 1);
   assert.equal(state.deliveries[0].status, 'pending');
 
@@ -557,11 +569,12 @@ class FakePushQuery {
   }
   upsert(rows) {
     const items = Array.isArray(rows) ? rows : [rows];
+    const inserted = [];
     for (const row of items) {
       if (!this.state.deliveries.some((existing) =>
         existing.notification_id === row.notification_id && existing.device_id === row.device_id
       )) {
-        this.state.deliveries.push({
+        const delivery = {
           id: `delivery-${this.state.deliveries.length + 1}`,
           attempt_count: 0,
           max_attempts: 5,
@@ -569,10 +582,16 @@ class FakePushQuery {
           ...row,
           notification: this.state.notifications.find((item) => item.id === row.notification_id),
           device: this.state.devices.find((item) => item.id === row.device_id),
-        });
+        };
+        this.state.deliveries.push(delivery);
+        inserted.push(delivery);
       }
     }
-    return Promise.resolve({ data: null, error: null });
+    return {
+      select() {
+        return Promise.resolve({ data: inserted.map((row) => ({ id: row.id })), error: null });
+      },
+    };
   }
   update(patch) {
     this.patch = patch;

@@ -188,9 +188,21 @@ export async function queueHospitalPushDeliveries(client, { notificationIds = nu
 
   let queued = 0;
   for (const notification of notifications.data || []) {
-    if (!isPushActionableNotification(notification)) continue;
     const appScope = appScopeForNotification(notification);
-    if (!appScope) continue;
+    const skipReason = pushNotificationSkipReason(notification, appScope);
+    if (skipReason) {
+      console.info('[Hospital Push] Delivery fanout skipped', {
+        notificationId: notification.id,
+        notificationType: notification.notification_type,
+        ticketId: notification.ticket_id,
+        recipientUserId: notification.recipient_user_id,
+        appScope,
+        eligibleDeviceCount: 0,
+        deliveryRowsCreated: 0,
+        skipReason,
+      });
+      continue;
+    }
     const devices = await client
       .from('hospital_ticket_push_devices')
       .select('id')
@@ -212,17 +224,36 @@ export async function queueHospitalPushDeliveries(client, { notificationIds = nu
         app_scope: appScope,
       },
     }));
-    if (!rows.length) continue;
+    if (!rows.length) {
+      console.info('[Hospital Push] Delivery fanout skipped', {
+        notificationId: notification.id,
+        notificationType: notification.notification_type,
+        ticketId: notification.ticket_id,
+        recipientUserId: notification.recipient_user_id,
+        appScope,
+        eligibleDeviceCount: 0,
+        deliveryRowsCreated: 0,
+        skipReason: 'no_eligible_devices',
+      });
+      continue;
+    }
     const inserted = await client
       .from('hospital_ticket_push_deliveries')
-      .upsert(rows, { onConflict: 'notification_id,device_id', ignoreDuplicates: true });
+      .upsert(rows, { onConflict: 'notification_id,device_id', ignoreDuplicates: true })
+      .select('id');
     if (inserted.error) throw inserted.error;
-    console.info('[Hospital Push] Delivery created', {
+    const deliveryRowsCreated = Array.isArray(inserted.data) ? inserted.data.length : rows.length;
+    console.info('[Hospital Push] Delivery fanout completed', {
       notificationId: notification.id,
+      notificationType: notification.notification_type,
+      ticketId: notification.ticket_id,
+      recipientUserId: notification.recipient_user_id,
       appScope,
-      deviceCount: rows.length,
+      eligibleDeviceCount: rows.length,
+      deliveryRowsCreated,
+      skipReason: null,
     });
-    queued += rows.length;
+    queued += deliveryRowsCreated;
   }
   return queued;
 }
@@ -324,13 +355,19 @@ function markDelivery(client, id, patch) {
 }
 
 export function isPushActionableNotification(notification) {
-  if (!notification?.id || !notification.recipient_user_id) return false;
-  if (notification.recipient?.is_active === false) return false;
+  return !pushNotificationSkipReason(notification, appScopeForNotification(notification));
+}
+
+function pushNotificationSkipReason(notification, appScope = appScopeForNotification(notification)) {
+  if (!notification?.id) return 'missing_notification_id';
+  if (!notification.recipient_user_id) return 'missing_recipient';
+  if (notification.recipient?.is_active === false) return 'recipient_inactive';
   if (notification.notification_type === 'incoming_supervisor_ticket') {
-    if (notification.action_status !== 'active') return false;
-    if (notification.action_expires_at && new Date(notification.action_expires_at) <= new Date()) return false;
+    if (notification.action_status !== 'active') return 'incoming_not_active';
+    if (notification.action_expires_at && new Date(notification.action_expires_at) <= new Date()) return 'incoming_expired';
   }
-  return Boolean(appScopeForNotification(notification));
+  if (!appScope) return 'no_app_scope';
+  return null;
 }
 
 export function appScopeForNotification(notification) {

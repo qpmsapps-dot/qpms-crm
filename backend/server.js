@@ -21,6 +21,9 @@ import {
   startHospitalSlaScheduler,
 } from './services/hospitalTicketSlaService.js';
 import {
+  dispatchHospitalNotificationPushes,
+} from './services/hospitalTicketPushService.js';
+import {
   auditDelayedCheckoutMissingKmForVisit,
   decideMissingKmReview,
   refreshMissingKmReviewsForAttendance,
@@ -770,11 +773,42 @@ app.post('/api/hospital-client/tickets', async (request, response) => {
       p_exact_landmark: payload.exactLandmark || null,
     });
     if (result.error) throw result.error;
+    runHospitalClientPushDispatch(client, result.data?.ticket?.id, 'hospital_client_ticket_created');
     response.status(result.data?.idempotent_replay ? 200 : 201).json({ ok: true, ticket: result.data?.ticket, timeline: [], idempotent_replay: result.data?.idempotent_replay });
   } catch (error) {
     safeHospitalError(response, error);
   }
 });
+
+function runHospitalClientPushDispatch(client, ticketId, source) {
+  const safeTicketId = textOrNull(ticketId);
+  if (!client || !safeTicketId) return;
+  setImmediate(async () => {
+    try {
+      const notifications = await client
+        .from('hospital_ticket_notifications')
+        .select('id,notification_type,recipient_user_id')
+        .eq('ticket_id', safeTicketId);
+      if (notifications.error) throw notifications.error;
+      const notificationIds = (notifications.data || []).map((row) => row.id).filter(Boolean);
+      console.info('[Hospital Push] Contact ticket fanout requested', {
+        source,
+        ticketId: safeTicketId,
+        notificationCount: notificationIds.length,
+        notificationTypes: [...new Set((notifications.data || []).map((row) => row.notification_type).filter(Boolean))],
+      });
+      if (!notificationIds.length) return;
+      await dispatchHospitalNotificationPushes(client, { notificationIds });
+    } catch (error) {
+      console.warn('[Hospital Push] Contact ticket fanout failed', {
+        source,
+        ticketId: safeTicketId,
+        code: error?.code || null,
+        message: error?.message || 'unknown',
+      });
+    }
+  });
+}
 
 async function loadContactTicketForRequest(client, tokenPayload, ticketId) {
   const contact = await loadHospitalContact(client, tokenPayload);
