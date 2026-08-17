@@ -358,23 +358,18 @@ export function appScopeForNotification(notification) {
 export function buildHospitalPushMessage(notification, device) {
   const data = buildHospitalPushData(notification, device?.app_scope);
   const type = String(notification?.notification_type || '');
-  const actionableSupervisorInvite = type === 'incoming_supervisor_ticket';
   const title = cleanHospitalText(notification.title, 120) || fallbackTitle(type);
   const body = cleanHospitalText(notification.body, 300) || fallbackBody(notification);
   return {
     token: device.fcm_token,
-    ...(actionableSupervisorInvite ? {} : { notification: { title, body } }),
+    notification: { title, body },
     data,
     android: {
       priority: 'high',
-      ...(actionableSupervisorInvite
-        ? {}
-        : {
-            notification: {
-              channelId: 'hospital_tickets',
-              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-            },
-          }),
+      notification: {
+        channelId: 'hospital_tickets',
+        clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+      },
     },
     apns: {
       payload: { aps: { sound: 'default' } },

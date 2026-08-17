@@ -229,7 +229,7 @@ test('push data maps escalation to ticket detail in the internal app', () => {
   assert.equal(data.current_owner_role, 'operations_executive');
 });
 
-test('incoming supervisor push is data-only and carries server acceptance deadline', () => {
+test('incoming supervisor push carries notification fallback and server acceptance deadline', () => {
   const message = buildHospitalPushMessage({
     id: 'notification-incoming',
     ticket_id: 'ticket-incoming',
@@ -253,7 +253,10 @@ test('incoming supervisor push is data-only and carries server acceptance deadli
     app_scope: 'myqpms_internal',
   });
 
-  assert.equal('notification' in message, false);
+  assert.equal(message.notification.title, 'New Housekeeping Complaint');
+  assert.equal(message.notification.body, 'Block A needs acceptance.');
+  assert.equal(message.android.notification.channelId, 'hospital_tickets');
+  assert.equal(message.android.notification.clickAction, 'FLUTTER_NOTIFICATION_CLICK');
   assert.equal(message.data.target_screen, 'incoming_ticket');
   assert.equal(message.data.acceptance_due_at, '2026-08-11T09:02:00Z');
   assert.equal(message.data.ticket_version, '7');
