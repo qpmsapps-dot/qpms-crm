@@ -5,6 +5,8 @@ import '../../app/routes.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/utils/friendly_errors.dart';
 import '../../core/widgets/app_card.dart';
+import '../../core/widgets/client_ui.dart';
+import '../../models/ticket.dart';
 import '../../state/ticket_controller.dart';
 
 class FeedbackScreen extends StatefulWidget {
@@ -29,9 +31,29 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final ticket = context.watch<TicketController>().ticketByNumber(
+    final ticket = context.watch<TicketController>().findTicket(
       widget.ticketNumber,
     );
+    if (ticket == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Confirm Resolution')),
+        body: const SafeArea(
+          child: Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Unable to load this ticket. Please return to My Tickets and refresh.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: AppColors.deepBlue,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return Scaffold(
       appBar: AppBar(title: const Text('Confirm Resolution')),
       body: SafeArea(
@@ -44,6 +66,15 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  const Text(
+                    'WORK COMPLETED',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.green,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   Text(
                     ticket.number,
                     style: const TextStyle(
@@ -61,6 +92,28 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
+                  if (ticket.assignedPerson.isNotEmpty)
+                    Text(
+                      'Completed by ${ticket.assignedPerson}'
+                      '${ticket.assignedRole.isEmpty ? '' : ' (${ticket.assignedRole})'}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.muted,
+                      ),
+                    ),
+                  if (ticket.resolvedAt != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Completed on ${formatTicketDateTime(ticket.resolvedAt!)}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.muted,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
                   Text(
                     ticket.resolutionNotes,
                     style: const TextStyle(
@@ -69,6 +122,32 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                       color: AppColors.ink,
                     ),
                   ),
+                  if (ticket.completionPhotoAssets.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Completion Evidence',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.deepBlue,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 178,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: ticket.completionPhotoAssets.length,
+                        separatorBuilder: (_, _) => const SizedBox(width: 10),
+                        itemBuilder: (_, index) => ClientPhotoThumbnail(
+                          url: ticket.completionPhotoAssets[index],
+                          width: 260,
+                          height: 178,
+                          label: 'Completion Evidence',
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -77,7 +156,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               child: Column(
                 children: [
                   const Text(
-                    'Rate the service',
+                    'How was the service?',
                     style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w900,
@@ -128,7 +207,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                     maxLength: 300,
                     enabled: !_submitting,
                     decoration: const InputDecoration(
-                      labelText: 'Comments',
+                      labelText: 'Add feedback (optional)',
                       hintText: 'Tell us about the completed work',
                       alignLabelWithHint: true,
                     ),
@@ -148,6 +227,16 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               ),
             ),
             const SizedBox(height: 18),
+            const Text(
+              'Confirming will close this ticket.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: AppColors.muted,
+              ),
+            ),
+            const SizedBox(height: 8),
             ElevatedButton.icon(
               onPressed: _submitting ? null : () => _submit(satisfied: true),
               icon: _submitting
@@ -159,13 +248,13 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                       ),
                     )
                   : const Icon(Icons.star_rounded),
-              label: const Text('Submit Rating'),
+              label: const Text('Confirm & Close'),
             ),
             const SizedBox(height: 10),
             OutlinedButton.icon(
               onPressed: _submitting ? null : _confirmReopen,
               icon: const Icon(Icons.replay_rounded),
-              label: const Text('Not Satisfied / Reopen'),
+              label: const Text('Not Satisfied'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: AppColors.red,
                 side: const BorderSide(color: AppColors.red),
@@ -177,7 +266,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Not satisfied keeps the same ticket open for another review. A duplicate complaint is not created.',
+              "We'll reopen the ticket for QPMS follow-up. A duplicate ticket is not created.",
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 11,
@@ -200,9 +289,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Reopen complaint?'),
+        title: const Text('Reopen ticket?'),
         content: const Text(
-          'This will mark the work as not satisfied and reopen the same complaint.',
+          'This will mark the work as not satisfied and reopen the same ticket.',
         ),
         actions: [
           TextButton(
@@ -212,7 +301,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(backgroundColor: AppColors.red),
-            child: const Text('Submit & Reopen'),
+            child: const Text('Reopen Ticket'),
           ),
         ],
       ),
@@ -297,7 +386,7 @@ class _RatingHeader extends StatelessWidget {
         ),
         SizedBox(height: 5),
         Text(
-          'Rate the service before confirming the completed work.',
+          'Review the completed work before confirming the ticket.',
           textAlign: TextAlign.center,
           style: TextStyle(color: AppColors.muted),
         ),

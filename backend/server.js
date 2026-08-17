@@ -10,6 +10,7 @@ import {
 } from './routes/hospitalFeedbackQrRoutes.js';
 import { createHospitalTicketRouter } from './routes/hospitalTicketRoutes.js';
 import {
+  cleanHospitalText,
   normalizeHospitalTicketCreate,
   safeHospitalError,
   slaMinutes,
@@ -791,6 +792,203 @@ async function loadContactTicketForRequest(client, tokenPayload, ticketId) {
   if (ticketResult.error) throw ticketResult.error;
   return { contact, ticket: ticketResult.data || null };
 }
+
+async function loadContactTicketDetail(client, contact, ticketId) {
+  const ticketResult = await client
+    .from('hospital_tickets')
+    .select('*,block:hospital_blocks(id,block_code,block_name),location:hospital_locations(id,floor_name,department_name,location_name,location_code,room_number,area_name,ward_name),category:hospital_ticket_categories(id,category_code,category_name),assignee:hospital_ticket_users!hospital_tickets_current_assignee_user_id_fkey(id,display_name,role_code)')
+    .eq('id', ticketId)
+    .eq('raised_by_client_contact_id', contact.id)
+    .maybeSingle();
+  if (ticketResult.error) throw ticketResult.error;
+  if (!ticketResult.data) return null;
+  const [events, attachments] = await Promise.all([
+    client.from('hospital_ticket_events').select('*').eq('ticket_id', ticketResult.data.id).order('created_at'),
+    client.from('hospital_ticket_attachments').select('*').eq('ticket_id', ticketResult.data.id).eq('is_client_visible', true).order('created_at'),
+  ]);
+  if (events.error) throw events.error;
+  if (attachments.error) throw attachments.error;
+  return { ticket: ticketResult.data, timeline: events.data || [], attachments: attachments.data || [], comments: [] };
+}
+
+app.post('/api/hospital-client/tickets/:ticketId/feedback', async (request, response) => {
+  try {
+    const tokenPayload = hospitalContactAuth(request, response);
+    if (!tokenPayload) return;
+    const client = requireServiceRoleSupabase();
+    const { contact, ticket } = await loadContactTicketForRequest(client, tokenPayload, request.params.ticketId);
+    if (!contact || !ticket) {
+      response.status(404).json({ ok: false, code: 'ticket_not_found', message: 'Ticket was not found for this registered mobile number.' });
+      return;
+    }
+    if (ticket.status_code !== 'resolved_awaiting_confirmation') {
+      response.status(409).json({ ok: false, code: 'ticket_not_awaiting_confirmation', message: 'This ticket is no longer awaiting confirmation.' });
+      return;
+    }
+    const rating = Number(request.body?.rating);
+    const satisfactionStatus = cleanHospitalText(request.body?.satisfaction_status || request.body?.satisfactionStatus, 40);
+    const comments = cleanHospitalText(request.body?.comments || request.body?.feedback || request.body?.comment, 500);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      response.status(400).json({ ok: false, code: 'invalid_rating', message: 'Please select a rating from 1 to 5 stars.' });
+      return;
+    }
+    if (!['satisfied', 'not_satisfied'].includes(satisfactionStatus)) {
+      response.status(400).json({ ok: false, code: 'invalid_satisfaction_status', message: 'Select Confirm & Close or Not Satisfied.' });
+      return;
+    }
+    if (satisfactionStatus === 'not_satisfied' && !comments) {
+      response.status(400).json({ ok: false, code: 'feedback_required', message: 'Please tell us what still needs attention.' });
+      return;
+    }
+
+    const expectedVersion = Number(request.body?.version || ticket.version);
+    if (!Number.isInteger(expectedVersion) || expectedVersion !== Number(ticket.version)) {
+      response.status(409).json({ ok: false, code: 'ticket_version_conflict', message: 'This ticket was updated. Please refresh and try again.' });
+      return;
+    }
+    const now = new Date().toISOString();
+    const satisfied = satisfactionStatus === 'satisfied';
+    const patch = satisfied
+      ? {
+          status_code: 'closed',
+          current_escalation_level: 'completed',
+          escalation_due_at: null,
+          sla_status: 'closed',
+          client_rating: rating,
+          client_feedback: comments,
+          client_satisfaction_status: 'satisfied',
+          closed_at: now,
+          version: Number(ticket.version) + 1,
+          updated_at: now,
+          metadata: {
+            ...(ticket.metadata || {}),
+            client_confirmation: {
+              source: 'nims_client_contact_mobile',
+              contact_id: contact.id,
+              satisfied: true,
+              rating,
+              confirmed_at: now,
+            },
+          },
+        }
+      : {
+          status_code: 'reopened',
+          current_escalation_level: 'supervisor',
+          escalation_due_at: null,
+          sla_status: 'running',
+          client_rating: rating,
+          client_feedback: comments,
+          client_satisfaction_status: 'not_satisfied',
+          reopened_at: now,
+          reopen_count: Number(ticket.reopen_count || 0) + 1,
+          version: Number(ticket.version) + 1,
+          updated_at: now,
+          metadata: {
+            ...(ticket.metadata || {}),
+            client_confirmation: {
+              source: 'nims_client_contact_mobile',
+              contact_id: contact.id,
+              satisfied: false,
+              rating,
+              submitted_at: now,
+            },
+          },
+        };
+    const updated = await client
+      .from('hospital_tickets')
+      .update(patch)
+      .eq('id', ticket.id)
+      .eq('raised_by_client_contact_id', contact.id)
+      .eq('version', ticket.version)
+      .select('*')
+      .maybeSingle();
+    if (updated.error) throw updated.error;
+    if (!updated.data) {
+      response.status(409).json({ ok: false, code: 'ticket_version_conflict', message: 'This ticket was updated. Please refresh and try again.' });
+      return;
+    }
+
+    const event = await client.from('hospital_ticket_events').insert({
+      ticket_id: ticket.id,
+      event_type: satisfied ? 'client_satisfied' : 'client_not_satisfied',
+      from_status: ticket.status_code,
+      to_status: patch.status_code,
+      actor_user_id: null,
+      actor_name: contact.full_name,
+      actor_role: 'client_contact',
+      remarks: comments || 'Client confirmed satisfaction.',
+      event_data: {
+        source: 'nims_client_contact_mobile',
+        client_contact_id: contact.id,
+        rating,
+        satisfaction_status: satisfactionStatus,
+        is_client_visible: true,
+      },
+    });
+    if (event.error) throw event.error;
+    if (!satisfied) {
+      const reopenEvent = await client.from('hospital_ticket_events').insert({
+        ticket_id: ticket.id,
+        event_type: 'ticket_reopened',
+        from_status: ticket.status_code,
+        to_status: 'reopened',
+        actor_user_id: null,
+        actor_name: contact.full_name,
+        actor_role: 'client_contact',
+        remarks: comments,
+        event_data: {
+          source: 'nims_client_contact_mobile',
+          client_contact_id: contact.id,
+          rating,
+          is_client_visible: true,
+        },
+      });
+      if (reopenEvent.error) throw reopenEvent.error;
+    }
+
+    const recipientIds = [
+      ticket.supervisor_user_id,
+      ticket.operations_executive_user_id,
+      ticket.facility_manager_user_id,
+      ticket.project_head_user_id,
+      ticket.resolved_by_user_id,
+      ticket.current_assignee_user_id,
+    ].filter(Boolean);
+    const uniqueRecipients = [...new Set(recipientIds)];
+    if (uniqueRecipients.length) {
+      const notificationRows = uniqueRecipients.map((recipientId) => ({
+        ticket_id: ticket.id,
+        recipient_user_id: recipientId,
+        notification_type: satisfied ? 'client_satisfied' : 'ticket_reopened',
+        title: satisfied ? 'Client confirmed satisfaction' : 'Client reopened complaint',
+        body: `${ticket.ticket_no}${satisfied ? ' was closed by the client.' : ' requires further action.'}`,
+        priority: ticket.priority,
+        current_owner_role: updated.data.current_assignee_role || ticket.current_assignee_role || null,
+        escalation_level: Number(updated.data.current_escalation_level_no || ticket.current_escalation_level_no || 0) || null,
+        metadata: {
+          ticket_id: ticket.id,
+          ticket_no: ticket.ticket_no,
+          source: 'nims_client_contact_mobile',
+          client_contact_id: contact.id,
+          rating,
+          app_scope: 'myqpms_internal',
+          target_screen: 'ticket_detail',
+        },
+      }));
+      const notification = await client.from('hospital_ticket_notifications').insert(notificationRows);
+      if (notification.error) throw notification.error;
+    }
+
+    const detail = await loadContactTicketDetail(client, contact, ticket.id);
+    if (!detail) {
+      response.status(404).json({ ok: false, code: 'ticket_not_found', message: 'Ticket was not found for this registered mobile number.' });
+      return;
+    }
+    response.json({ ok: true, ...detail });
+  } catch (error) {
+    safeHospitalError(response, error);
+  }
+});
 
 app.post('/api/hospital-client/tickets/:ticketId/attachments/sign-upload', async (request, response) => {
   try {
