@@ -21,7 +21,9 @@ import {
   startHospitalSlaScheduler,
 } from './services/hospitalTicketSlaService.js';
 import {
+  disableHospitalContactPushDevice,
   dispatchHospitalNotificationPushes,
+  registerHospitalContactPushDevice,
 } from './services/hospitalTicketPushService.js';
 import {
   auditDelayedCheckoutMissingKmForVisit,
@@ -612,6 +614,40 @@ app.get('/api/hospital-client/me', async (request, response) => {
   }
 });
 
+app.post('/api/hospital-client/me/push-devices', async (request, response) => {
+  try {
+    const tokenPayload = hospitalContactAuth(request, response);
+    if (!tokenPayload) return;
+    const client = requireServiceRoleSupabase();
+    const contact = await loadHospitalContact(client, tokenPayload);
+    if (!contact) {
+      response.status(403).json({ ok: false, code: 'inactive_client_contact', message: 'This registered mobile access is inactive.' });
+      return;
+    }
+    const device = await registerHospitalContactPushDevice(client, contact, request.body || {});
+    response.status(201).json({ ok: true, device });
+  } catch (error) {
+    safeHospitalError(response, error);
+  }
+});
+
+app.delete('/api/hospital-client/me/push-devices/:deviceId', async (request, response) => {
+  try {
+    const tokenPayload = hospitalContactAuth(request, response);
+    if (!tokenPayload) return;
+    const client = requireServiceRoleSupabase();
+    const contact = await loadHospitalContact(client, tokenPayload);
+    if (!contact) {
+      response.status(403).json({ ok: false, code: 'inactive_client_contact', message: 'This registered mobile access is inactive.' });
+      return;
+    }
+    const device = await disableHospitalContactPushDevice(client, contact, request.params.deviceId);
+    response.json({ ok: true, device });
+  } catch (error) {
+    safeHospitalError(response, error);
+  }
+});
+
 app.get('/api/hospital-client/blocks', hospitalClientMasterHandler('blocks'));
 app.get('/api/hospital-client/locations', hospitalClientMasterHandler('locations'));
 app.get('/api/hospital-client/categories', hospitalClientMasterHandler('categories'));
@@ -810,6 +846,28 @@ function runHospitalClientPushDispatch(client, ticketId, source) {
   });
 }
 
+function runHospitalNotificationPushDispatch(client, notificationIds, source, ticketId = null) {
+  const ids = Array.isArray(notificationIds) ? notificationIds.filter(Boolean) : [];
+  if (!client || !ids.length) return;
+  setImmediate(async () => {
+    try {
+      console.info('[Hospital Push] Notification fanout requested', {
+        source,
+        ticketId: textOrNull(ticketId),
+        notificationCount: ids.length,
+      });
+      await dispatchHospitalNotificationPushes(client, { notificationIds: ids });
+    } catch (error) {
+      console.warn('[Hospital Push] Notification fanout failed', {
+        source,
+        ticketId: textOrNull(ticketId),
+        code: error?.code || null,
+        message: error?.message || 'unknown',
+      });
+    }
+  });
+}
+
 async function loadContactTicketForRequest(client, tokenPayload, ticketId) {
   const contact = await loadHospitalContact(client, tokenPayload);
   if (!contact) return { contact: null, ticket: null };
@@ -989,13 +1047,16 @@ app.post('/api/hospital-client/tickets/:ticketId/feedback', async (request, resp
       ticket.current_assignee_user_id,
     ].filter(Boolean);
     const uniqueRecipients = [...new Set(recipientIds)];
+    let feedbackNotificationIds = [];
     if (uniqueRecipients.length) {
       const notificationRows = uniqueRecipients.map((recipientId) => ({
         ticket_id: ticket.id,
         recipient_user_id: recipientId,
-        notification_type: satisfied ? 'client_satisfied' : 'ticket_reopened',
-        title: satisfied ? 'Client confirmed satisfaction' : 'Client reopened complaint',
-        body: `${ticket.ticket_no}${satisfied ? ' was closed by the client.' : ' requires further action.'}`,
+        notification_type: satisfied ? 'client_satisfied' : 'ticket_reopened_client',
+        title: satisfied ? 'Client Confirmed Closure' : 'Client Reopened Ticket',
+        body: satisfied
+          ? `Ticket ${ticket.ticket_no} was closed with a ${rating}-star client rating.`
+          : `The client was not satisfied with ticket ${ticket.ticket_no}. Please review and take action.`,
         priority: ticket.priority,
         current_owner_role: updated.data.current_assignee_role || ticket.current_assignee_role || null,
         escalation_level: Number(updated.data.current_escalation_level_no || ticket.current_escalation_level_no || 0) || null,
@@ -1009,9 +1070,11 @@ app.post('/api/hospital-client/tickets/:ticketId/feedback', async (request, resp
           target_screen: 'ticket_detail',
         },
       }));
-      const notification = await client.from('hospital_ticket_notifications').insert(notificationRows);
+      const notification = await client.from('hospital_ticket_notifications').insert(notificationRows).select('id');
       if (notification.error) throw notification.error;
+      feedbackNotificationIds = (notification.data || []).map((row) => row.id).filter(Boolean);
     }
+    runHospitalNotificationPushDispatch(client, feedbackNotificationIds, 'hospital_client_feedback', ticket.id);
 
     const detail = await loadContactTicketDetail(client, contact, ticket.id);
     if (!detail) {

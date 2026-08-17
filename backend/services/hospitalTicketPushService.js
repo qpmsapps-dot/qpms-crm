@@ -90,6 +90,96 @@ export async function registerHospitalPushDevice(client, actor, body = {}) {
   return result.data;
 }
 
+export async function registerHospitalContactPushDevice(client, contact, body = {}) {
+  const appScope = cleanHospitalText(body.app_scope || body.appScope, 40);
+  if (appScope !== 'qpms_client') {
+    const error = new Error('Registered client contacts can only register the client app scope.');
+    error.code = '42501';
+    throw error;
+  }
+  const fcmToken = cleanHospitalText(body.fcm_token || body.fcmToken, 4096);
+  const deviceId = cleanHospitalText(body.device_id || body.deviceId, 160);
+  if (!contact?.id || !contact?.client_id || !fcmToken || !deviceId) {
+    const error = new Error('Device ID and FCM token are required.');
+    error.code = '22023';
+    throw error;
+  }
+  const platform = normalizePlatform(body.platform);
+  const notificationPermission = normalizePermission(body.notification_permission || body.notificationPermission);
+  const tokenHash = hashFcmToken(fcmToken);
+  const superseded = await disableSupersededHospitalContactPushDevices(client, {
+    contact,
+    appScope,
+    deviceId,
+    tokenHash,
+  });
+  const row = {
+    auth_user_id: null,
+    hospital_ticket_user_id: null,
+    hospital_client_contact_id: contact.id,
+    client_id: contact.client_id,
+    app_scope: appScope,
+    platform,
+    device_id: deviceId,
+    fcm_token: fcmToken,
+    token_hash: tokenHash,
+    app_version: cleanHospitalText(body.app_version || body.appVersion, 80) || null,
+    enabled: true,
+    notification_permission: notificationPermission,
+    last_registered_at: new Date().toISOString(),
+    last_seen_at: new Date().toISOString(),
+    disabled_at: null,
+    disable_reason: null,
+    metadata: {
+      registered_by_contact_id: contact.id,
+      token_hash_prefix: tokenHash.slice(0, 12),
+    },
+  };
+  const result = await client
+    .from('hospital_ticket_push_devices')
+    .upsert(row, { onConflict: 'hospital_client_contact_id,app_scope,device_id' })
+    .select('id,app_scope,platform,device_id,app_version,enabled,notification_permission,last_registered_at,last_seen_at')
+    .maybeSingle();
+  if (result.error) throw result.error;
+  console.info('[Hospital Push] Contact device registered', {
+    contactId: contact.id,
+    appScope,
+    platform,
+    permission: notificationPermission,
+    tokenPresent: true,
+    superseded,
+  });
+  return result.data;
+}
+
+export async function disableHospitalContactPushDevice(client, contact, deviceId) {
+  const identifier = cleanHospitalText(deviceId, 160);
+  if (!contact?.id || !identifier) {
+    const error = new Error('Registered device was not found.');
+    error.code = 'P0002';
+    throw error;
+  }
+  const result = await client
+    .from('hospital_ticket_push_devices')
+    .update({
+      enabled: false,
+      disabled_at: new Date().toISOString(),
+      disable_reason: 'logout_or_user_request',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('hospital_client_contact_id', contact.id)
+    .eq('device_id', identifier)
+    .select('id,device_id,enabled,disabled_at')
+    .maybeSingle();
+  if (result.error) throw result.error;
+  if (!result.data) {
+    const error = new Error('Registered device was not found.');
+    error.code = 'P0002';
+    throw error;
+  }
+  return result.data;
+}
+
 export async function disableSupersededHospitalPushDevices(client, {
   actor,
   appScope,
@@ -108,6 +198,40 @@ export async function disableSupersededHospitalPushDevices(client, {
   const staleIds = (existing.data || [])
     .filter((device) =>
       device.hospital_ticket_user_id !== actor.user.id ||
+      device.device_id !== deviceId)
+    .map((device) => device.id);
+  if (!staleIds.length) return 0;
+  const disabled = await client
+    .from('hospital_ticket_push_devices')
+    .update({
+      enabled: false,
+      disabled_at: now,
+      disable_reason: 'superseded_by_token_registration',
+      updated_at: now,
+    })
+    .in('id', staleIds);
+  if (disabled.error) throw disabled.error;
+  return staleIds.length;
+}
+
+async function disableSupersededHospitalContactPushDevices(client, {
+  contact,
+  appScope,
+  deviceId,
+  tokenHash,
+  now = new Date().toISOString(),
+} = {}) {
+  if (!contact?.id || !appScope || !deviceId || !tokenHash) return 0;
+  const existing = await client
+    .from('hospital_ticket_push_devices')
+    .select('id,hospital_client_contact_id,device_id')
+    .eq('app_scope', appScope)
+    .eq('token_hash', tokenHash)
+    .eq('enabled', true);
+  if (existing.error) throw existing.error;
+  const staleIds = (existing.data || [])
+    .filter((device) =>
+      device.hospital_client_contact_id !== contact.id ||
       device.device_id !== deviceId)
     .map((device) => device.id);
   if (!staleIds.length) return 0;
@@ -179,7 +303,7 @@ export async function dispatchHospitalNotificationPushes(client, options = {}) {
 export async function queueHospitalPushDeliveries(client, { notificationIds = null, limit = 200 } = {}) {
   let query = client
     .from('hospital_ticket_notifications')
-    .select('id,ticket_id,recipient_user_id,notification_type,title,body,priority,current_owner_role,escalation_level,action_status,action_expires_at,metadata,created_at,recipient:hospital_ticket_users!hospital_ticket_notifications_recipient_user_id_fkey(id,profile_type,role_code,is_active,client_id)')
+    .select('id,ticket_id,recipient_user_id,recipient_client_contact_id,notification_type,title,body,priority,current_owner_role,escalation_level,action_status,action_expires_at,metadata,created_at,recipient:hospital_ticket_users!hospital_ticket_notifications_recipient_user_id_fkey(id,profile_type,role_code,is_active,client_id),contact:hospital_client_contacts!hospital_ticket_notifications_recipient_client_contact_id_fkey(id,is_active,client_id)')
     .order('created_at', { ascending: true })
     .limit(Math.min(Math.max(Number(limit) || 200, 1), 500));
   if (Array.isArray(notificationIds) && notificationIds.length) query = query.in('id', notificationIds);
@@ -195,7 +319,8 @@ export async function queueHospitalPushDeliveries(client, { notificationIds = nu
         notificationId: notification.id,
         notificationType: notification.notification_type,
         ticketId: notification.ticket_id,
-        recipientUserId: notification.recipient_user_id,
+        recipientIdentityType: notification.recipient_client_contact_id ? 'client_contact' : 'hospital_user',
+        recipientId: notification.recipient_client_contact_id || notification.recipient_user_id || null,
         appScope,
         eligibleDeviceCount: 0,
         deliveryRowsCreated: 0,
@@ -203,10 +328,14 @@ export async function queueHospitalPushDeliveries(client, { notificationIds = nu
       });
       continue;
     }
+    const deviceOwnerColumn = notification.recipient_client_contact_id
+      ? 'hospital_client_contact_id'
+      : 'hospital_ticket_user_id';
+    const deviceOwnerId = notification.recipient_client_contact_id || notification.recipient_user_id;
     const devices = await client
       .from('hospital_ticket_push_devices')
       .select('id')
-      .eq('hospital_ticket_user_id', notification.recipient_user_id)
+      .eq(deviceOwnerColumn, deviceOwnerId)
       .eq('app_scope', appScope)
       .eq('enabled', true)
       .neq('notification_permission', 'denied');
@@ -229,7 +358,8 @@ export async function queueHospitalPushDeliveries(client, { notificationIds = nu
         notificationId: notification.id,
         notificationType: notification.notification_type,
         ticketId: notification.ticket_id,
-        recipientUserId: notification.recipient_user_id,
+        recipientIdentityType: notification.recipient_client_contact_id ? 'client_contact' : 'hospital_user',
+        recipientId: deviceOwnerId,
         appScope,
         eligibleDeviceCount: 0,
         deliveryRowsCreated: 0,
@@ -247,7 +377,8 @@ export async function queueHospitalPushDeliveries(client, { notificationIds = nu
       notificationId: notification.id,
       notificationType: notification.notification_type,
       ticketId: notification.ticket_id,
-      recipientUserId: notification.recipient_user_id,
+      recipientIdentityType: notification.recipient_client_contact_id ? 'client_contact' : 'hospital_user',
+      recipientId: deviceOwnerId,
       appScope,
       eligibleDeviceCount: rows.length,
       deliveryRowsCreated,
@@ -360,8 +491,9 @@ export function isPushActionableNotification(notification) {
 
 function pushNotificationSkipReason(notification, appScope = appScopeForNotification(notification)) {
   if (!notification?.id) return 'missing_notification_id';
-  if (!notification.recipient_user_id) return 'missing_recipient';
+  if (!notification.recipient_user_id && !notification.recipient_client_contact_id) return 'missing_recipient';
   if (notification.recipient?.is_active === false) return 'recipient_inactive';
+  if (notification.contact?.is_active === false) return 'contact_inactive';
   if (notification.notification_type === 'incoming_supervisor_ticket') {
     if (notification.action_status !== 'active') return 'incoming_not_active';
     if (notification.action_expires_at && new Date(notification.action_expires_at) <= new Date()) return 'incoming_expired';
@@ -377,11 +509,12 @@ export function appScopeForNotification(notification) {
     'ticket_created',
     'ticket_accepted',
     'work_started',
-    'ticket_reopened_client',
     'ticket_closed',
   ].includes(type)) return 'qpms_client';
   if ([
     'incoming_supervisor_ticket',
+    'client_satisfied',
+    'ticket_reopened_client',
     'supervisor_acceptance_timeout',
     'sla_escalation',
     'assignment_alert',

@@ -148,6 +148,18 @@ void main() {
       '/api/hospital-client/me',
     );
     expect(
+      HospitalTicketApi.contactPathForTesting(
+        '/api/hospital-tickets/me/push-devices',
+      ),
+      '/api/hospital-client/me/push-devices',
+    );
+    expect(
+      HospitalTicketApi.contactPathForTesting(
+        '/api/hospital-tickets/me/push-devices/device-1',
+      ),
+      '/api/hospital-client/me/push-devices/device-1',
+    );
+    expect(
       HospitalTicketApi.contactPathForTesting('/api/hospital-tickets/blocks'),
       '/api/hospital-client/blocks',
     );

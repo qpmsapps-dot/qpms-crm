@@ -2,8 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
 
-import 'package:supabase_flutter/supabase_flutter.dart';
-
+import 'package:flutter/foundation.dart';
 import 'app_config.dart';
 import '../models/hospital_location_models.dart';
 
@@ -17,9 +16,31 @@ class HospitalApiException implements Exception {
 }
 
 class HospitalTicketApi {
+  static String? contactSessionToken;
+
+  static Future<Map<String, dynamic>> identifyRegisteredMobile(
+    String mobile,
+  ) async {
+    final response = await publicRequest(
+      'POST',
+      '/api/hospital-client/identify',
+      body: {'mobile': mobile},
+    );
+    return response;
+  }
+
   static Future<List<HospitalBlock>> loadBlocks() async {
     final response = await request('GET', '/api/hospital-tickets/blocks');
-    return _rows(response['blocks']).map(HospitalBlock.fromJson).toList();
+    final blocks = _rows(
+      response['blocks'],
+    ).map(HospitalBlock.fromJson).toList();
+    if (kDebugMode) {
+      debugPrint(
+        '[HospitalTicketApi] GET /api/hospital-tickets/blocks '
+        'count=${blocks.length} names=${blocks.map((row) => row.name).join(', ')}',
+      );
+    }
+    return blocks;
   }
 
   static Future<List<HospitalFloor>> loadFloors(String blockId) async {
@@ -139,16 +160,20 @@ class HospitalTicketApi {
     Map<String, String>? query,
     Map<String, String>? headers,
   }) async {
-    final session = Supabase.instance.client.auth.currentSession;
-    if (session == null) {
+    final token = contactSessionToken;
+    if (token == null || token.isEmpty) {
       throw const HospitalApiException(
         'Your session expired. Please sign in again.',
         code: 'session_expired',
         statusCode: 401,
       );
     }
-    final base = ClientAppConfig.backendApiUrl.replaceAll(RegExp(r'/+$'), '');
-    final uri = Uri.parse('$base$path').replace(
+    final effectivePath = _contactPath(path);
+    final base = ClientAppConfig.effectiveBackendApiUrl.replaceAll(
+      RegExp(r'/+$'),
+      '',
+    );
+    final uri = Uri.parse('$base$effectivePath').replace(
       queryParameters: query?.map((key, value) => MapEntry(key, value)),
     );
     final client = HttpClient()
@@ -157,10 +182,86 @@ class HospitalTicketApi {
       final request = await client.openUrl(method, uri);
       request.headers.set(
         HttpHeaders.authorizationHeader,
-        'Bearer ${session.accessToken}',
+        'Bearer $token',
       );
       request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
       headers?.forEach(request.headers.set);
+      if (body != null) request.write(jsonEncode(body));
+      final response = await request.close().timeout(
+        const Duration(seconds: 30),
+      );
+      final text = await response.transform(utf8.decoder).join();
+      final decoded = text.isEmpty
+          ? <String, dynamic>{}
+          : Map<String, dynamic>.from(jsonDecode(text) as Map);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HospitalApiException(
+          '${decoded['message'] ?? 'Ticket request failed. Please try again.'}',
+          code: '${decoded['code'] ?? ''}',
+          statusCode: response.statusCode,
+        );
+      }
+      return decoded;
+    } on HospitalApiException {
+      rethrow;
+    } on TimeoutException {
+      throw const HospitalApiException(
+        'The request timed out. You can try again safely.',
+        code: 'timeout',
+      );
+    } catch (_) {
+      throw const HospitalApiException(
+        'Unable to reach QPMS. Check your connection and try again.',
+        code: 'network_error',
+      );
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static String _contactPath(String path) {
+    if (!path.startsWith('/api/hospital-tickets')) return path;
+    const source = '/api/hospital-tickets';
+    const target = '/api/hospital-client';
+    final suffix = path.substring(source.length);
+    if (suffix.isEmpty || suffix == '/') return '$target/tickets';
+    if (suffix == '/me') return '$target/me';
+    if (suffix.startsWith('/me/push-devices')) return '$target$suffix';
+    if (suffix == '/blocks' ||
+        suffix == '/locations' ||
+        suffix == '/categories' ||
+        suffix == '/floors' ||
+        suffix == '/departments' ||
+        suffix == '/hierarchy' ||
+        suffix == '/hierarchy/locations' ||
+        suffix == '/notifications') {
+      return '$target$suffix';
+    }
+    if (suffix.startsWith('/notifications/')) return '$target$suffix';
+    return '$target/tickets$suffix';
+  }
+
+  @visibleForTesting
+  static String contactPathForTesting(String path) => _contactPath(path);
+
+  static Future<Map<String, dynamic>> publicRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+    Map<String, String>? query,
+  }) async {
+    final base = ClientAppConfig.effectiveBackendApiUrl.replaceAll(
+      RegExp(r'/+$'),
+      '',
+    );
+    final uri = Uri.parse('$base$path').replace(
+      queryParameters: query?.map((key, value) => MapEntry(key, value)),
+    );
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15);
+    try {
+      final request = await client.openUrl(method, uri);
+      request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
       if (body != null) request.write(jsonEncode(body));
       final response = await request.close().timeout(
         const Duration(seconds: 30),
@@ -181,7 +282,7 @@ class HospitalTicketApi {
       rethrow;
     } on TimeoutException {
       throw const HospitalApiException(
-        'The request timed out. Your complaint can be retried safely.',
+        'The request timed out. You can try again safely.',
         code: 'timeout',
       );
     } catch (_) {

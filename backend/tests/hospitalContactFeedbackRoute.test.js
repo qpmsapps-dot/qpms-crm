@@ -39,8 +39,9 @@ test('registered contact feedback writes existing lifecycle events and internal 
   const route = contactFeedbackRoute();
   assert.match(route, /event_type: satisfied \? 'client_satisfied' : 'client_not_satisfied'/);
   assert.match(route, /event_type: 'ticket_reopened'/);
-  assert.match(route, /notification_type: satisfied \? 'client_satisfied' : 'ticket_reopened'/);
+  assert.match(route, /notification_type: satisfied \? 'client_satisfied' : 'ticket_reopened_client'/);
   assert.match(route, /source: 'nims_client_contact_mobile'/);
   assert.match(route, /client_contact_id: contact\.id/);
   assert.match(route, /app_scope: 'myqpms_internal'/);
+  assert.match(route, /runHospitalNotificationPushDispatch\(client, feedbackNotificationIds, 'hospital_client_feedback', ticket\.id\)/);
 });

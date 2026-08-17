@@ -781,6 +781,12 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
   });
   if (result.error) throw result.error;
   const detail = await getHospitalTicket(client, actor, current.ticket.id);
+  if (effectiveAction === 'resolve') {
+    await safeWriteContactAwaitingConfirmationNotification(client, {
+      beforeTicket: current.ticket,
+      afterTicket: detail.ticket,
+    });
+  }
   await safeWriteHospitalLifecycleNotifications(client, {
     action: effectiveAction,
     actor,
@@ -788,6 +794,59 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
     afterTicket: detail.ticket,
   });
   return detail;
+}
+
+async function safeWriteContactAwaitingConfirmationNotification(client, { beforeTicket = null, afterTicket = null } = {}) {
+  const ticket = afterTicket || beforeTicket || {};
+  if (ticket.status_code !== 'resolved_awaiting_confirmation' || !ticket.raised_by_client_contact_id) return { inserted: 0 };
+  const ticketId = cleanHospitalText(ticket.id || beforeTicket?.id, 80);
+  const ticketNo = cleanHospitalText(ticket.ticket_no || beforeTicket?.ticket_no, 80) || 'This ticket';
+  const contactId = cleanHospitalText(ticket.raised_by_client_contact_id, 80);
+  const version = Number(ticket.version || beforeTicket?.version || 0);
+  const cycle = Number(ticket.reopen_count ?? beforeTicket?.reopen_count ?? 0);
+  if (!ticketId || !contactId) return { inserted: 0 };
+  const row = {
+    ticket_id: ticketId,
+    recipient_user_id: null,
+    recipient_client_contact_id: contactId,
+    notification_type: 'awaiting_confirmation',
+    title: 'Work Completed',
+    body: `QPMS has completed ticket ${ticketNo}. Please review the work and confirm the service.`,
+    priority: cleanHospitalText(ticket.priority || beforeTicket?.priority, 20) || null,
+    current_owner_role: cleanHospitalText(ticket.current_assignee_role || beforeTicket?.current_assignee_role, 80) || null,
+    escalation_level: Number(ticket.current_escalation_level_no || beforeTicket?.current_escalation_level_no || 0) || null,
+    dedupe_key: hospitalLifecycleNotificationDedupeKey({
+      ticketId,
+      recipientUserId: contactId,
+      notificationType: 'awaiting_confirmation',
+      version,
+      cycle,
+    }),
+    metadata: {
+      ticket_id: ticketId,
+      ticket_no: ticketNo,
+      ticket_version: version,
+      reopen_count: cycle,
+      recipient_identity_type: 'client_contact',
+      app_scope: 'qpms_client',
+      target_screen: 'ticket_feedback',
+    },
+  };
+  try {
+    const result = await client
+      .from('hospital_ticket_notifications')
+      .upsert(row, { onConflict: 'dedupe_key', ignoreDuplicates: true });
+    if (result.error) throw result.error;
+    return { inserted: 1 };
+  } catch (error) {
+    console.warn('[Hospital Notifications] contact confirmation write skipped', {
+      ticketId,
+      contactId,
+      code: error?.code || null,
+      message: error?.message || 'unknown',
+    });
+    return { inserted: 0, failed: true };
+  }
 }
 
 async function requireCurrentOperationalOwner(client, actor, ticket) {

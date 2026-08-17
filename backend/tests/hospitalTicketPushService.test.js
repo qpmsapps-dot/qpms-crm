@@ -300,7 +300,9 @@ test('phase 3 lifecycle notification types route to the intended app scopes', ()
   assert.equal(appScopeForNotification({ notification_type: 'ticket_created' }), 'qpms_client');
   assert.equal(appScopeForNotification({ notification_type: 'ticket_accepted' }), 'qpms_client');
   assert.equal(appScopeForNotification({ notification_type: 'work_started' }), 'qpms_client');
-  assert.equal(appScopeForNotification({ notification_type: 'ticket_reopened_client' }), 'qpms_client');
+  assert.equal(appScopeForNotification({ notification_type: 'awaiting_confirmation' }), 'qpms_client');
+  assert.equal(appScopeForNotification({ notification_type: 'client_satisfied' }), 'myqpms_internal');
+  assert.equal(appScopeForNotification({ notification_type: 'ticket_reopened_client' }), 'myqpms_internal');
   assert.equal(appScopeForNotification({ notification_type: 'ticket_assigned_internal' }), 'myqpms_internal');
 });
 
@@ -376,6 +378,80 @@ test('contact-created incoming supervisor notification queues one delivery and p
   assert.equal(state.deliveries[0].attempt_count, 1);
   assert.equal(state.deliveries[0].last_attempt_at, now.toISOString());
   assert.equal(state.deliveries[0].sent_at, now.toISOString());
+});
+
+test('work completed notification queues delivery to registered contact client device', async () => {
+  const now = new Date('2026-08-17T12:00:00Z');
+  const state = {
+    notifications: [{
+      id: 'notification-contact-confirm',
+      ticket_id: 'ticket-contact',
+      recipient_user_id: null,
+      recipient_client_contact_id: 'contact-1',
+      notification_type: 'awaiting_confirmation',
+      title: 'Work Completed',
+      body: 'QPMS has completed ticket QPMS-HK-2026-000057. Please review the work and confirm the service.',
+      priority: 'high',
+      metadata: { ticket_no: 'QPMS-HK-2026-000057' },
+      contact: { id: 'contact-1', is_active: true, client_id: 'client-a' },
+    }],
+    devices: [{
+      id: 'device-contact',
+      hospital_client_contact_id: 'contact-1',
+      fcm_token: 'contact-fcm-token-redacted',
+      app_scope: 'qpms_client',
+      enabled: true,
+      notification_permission: 'granted',
+    }],
+    deliveries: [],
+  };
+
+  const queued = await queueHospitalPushDeliveries(fakePushClient(state), { now });
+  assert.equal(queued, 1);
+  assert.equal(state.deliveries.length, 1);
+  assert.equal(state.deliveries[0].app_scope, 'qpms_client');
+});
+
+test('client feedback notifications are actionable for internal myQPMS devices', async () => {
+  const now = new Date('2026-08-17T12:00:00Z');
+  const baseNotification = {
+    ticket_id: 'ticket-contact',
+    recipient_user_id: 'supervisor-user',
+    recipient_client_contact_id: null,
+    priority: 'high',
+    recipient: {
+      id: 'supervisor-user',
+      profile_type: 'internal',
+      role_code: 'housekeeping_supervisor',
+      is_active: true,
+      client_id: 'client-a',
+    },
+  };
+  const state = {
+    notifications: [
+      {
+        ...baseNotification,
+        id: 'notification-satisfied',
+        notification_type: 'client_satisfied',
+        title: 'Client Confirmed Closure',
+        body: 'Ticket QPMS-HK-2026-000057 was closed with a 5-star client rating.',
+      },
+      {
+        ...baseNotification,
+        id: 'notification-reopened',
+        notification_type: 'ticket_reopened_client',
+        title: 'Client Reopened Ticket',
+        body: 'The client was not satisfied with ticket QPMS-HK-2026-000057. Please review and take action.',
+      },
+    ],
+    devices: [pushDeviceFixture()],
+    deliveries: [],
+  };
+
+  const queued = await queueHospitalPushDeliveries(fakePushClient(state), { now });
+  assert.equal(queued, 2);
+  assert.equal(state.deliveries.length, 2);
+  assert.equal(state.deliveries.every((row) => row.app_scope === 'myqpms_internal'), true);
 });
 
 test('temporary Firebase failure keeps delivery retryable with backoff', async () => {
