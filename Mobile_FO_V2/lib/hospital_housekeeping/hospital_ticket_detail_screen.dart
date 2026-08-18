@@ -8,6 +8,7 @@ import '../theme/app_theme.dart';
 import 'hospital_controller.dart';
 import 'hospital_models.dart';
 import 'hospital_sla_policy.dart';
+import 'hospital_ticket_api.dart';
 import 'hospital_ticket_card.dart';
 
 class HospitalTicketDetailScreen extends StatefulWidget {
@@ -397,19 +398,14 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
       _message('Upload a completion photo before resolving this ticket.');
       return;
     }
-    final action = await _textDialog(
-      'Action taken',
-      'Describe the housekeeping action completed',
-    );
-    if (action == null || !mounted) return;
     final remarks = await _textDialog(
-      'Resolution remarks',
-      'Add resolution details',
+      'Work Completion Remarks',
+      'Briefly describe the work completed',
+      maxLength: 500,
     );
     if (remarks == null || !mounted) return;
     await widget.controller.resolve(
       id,
-      actionTaken: action,
       resolutionRemarks: remarks,
     );
   }
@@ -489,7 +485,11 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
     return result;
   }
 
-  Future<String?> _textDialog(String title, String hint) async {
+  Future<String?> _textDialog(
+    String title,
+    String hint, {
+    int maxLength = 500,
+  }) async {
     final controller = TextEditingController();
     final result = await showDialog<String>(
       context: context,
@@ -498,7 +498,7 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
         content: TextField(
           controller: controller,
           autofocus: true,
-          maxLength: 500,
+          maxLength: maxLength,
           maxLines: 3,
           decoration: InputDecoration(hintText: hint),
         ),
@@ -546,6 +546,7 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
 
   String _friendlyMessage(Object error) {
     final text = error.toString();
+    if (error is HospitalTicketApiException) return error.message;
     if (text.contains('session')) return 'Your session expired. Sign in again.';
     if (text.contains('timed out')) return 'The request timed out. Try again.';
     if (text.contains('not allowed')) {
@@ -730,7 +731,7 @@ class _OverviewTab extends StatelessWidget {
           title: 'Completion Evidence',
           children: [
             const Text(
-              'Completion photo uploaded. Resolution remarks can now be submitted to the client.',
+              'Completion photo uploaded. Work completion remarks can now be submitted to the client.',
               style: TextStyle(color: qpmsMuted, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 10),
@@ -753,9 +754,10 @@ class _OverviewTab extends StatelessWidget {
           title: 'Resolution',
           children: [
             ...[
-              _optionalRow('Action taken', ticket.actionTaken),
+              if (ticket.actionTaken.trim().toLowerCase() != 'work completed')
+                _optionalRow('Action taken', ticket.actionTaken),
             ].whereType<Widget>(),
-            _row('Resolution remarks', ticket.resolutionRemarks),
+            _row('Work completion remarks', ticket.resolutionRemarks),
             if (ticket.clientRating != null)
               _row(
                 'Client feedback',

@@ -604,14 +604,14 @@ class HospitalController extends ChangeNotifier {
 
   Future<void> resolve(
     String ticketId, {
-    required String actionTaken,
     required String resolutionRemarks,
+    String actionTaken = 'Work completed',
     String? completionPhotoPath,
   }) {
     final ticket = ticketById(ticketId);
     _requireAction(ticket, HospitalTicketAction.resolve);
-    if (actionTaken.trim().isEmpty || resolutionRemarks.trim().isEmpty) {
-      throw ArgumentError('Action taken and resolution remarks are required.');
+    if (resolutionRemarks.trim().isEmpty) {
+      throw ArgumentError('Work completion remarks are required.');
     }
     final photoPath = completionPhotoPath?.trim() ?? '';
     if (photoPath.isEmpty && ticket.completionPhotoPaths.isEmpty) {
@@ -620,7 +620,7 @@ class HospitalController extends ChangeNotifier {
     if (productionMode) {
       return _remoteResolve(
         ticket,
-        actionTaken,
+        actionTaken.trim().isEmpty ? 'Work completed' : actionTaken.trim(),
         resolutionRemarks,
         photoPath.isEmpty ? null : photoPath,
       );
@@ -1050,7 +1050,7 @@ class HospitalController extends ChangeNotifier {
       if (row != null) {
         _replace(_mergeDetailTicket(row, response));
       }
-      await loadDetail(ticket.id, force: true);
+      unawaited(loadDetail(ticket.id, force: true));
     } catch (error) {
       _error = _friendlyError(error);
       rethrow;

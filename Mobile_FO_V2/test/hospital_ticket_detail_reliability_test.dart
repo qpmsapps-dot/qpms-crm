@@ -142,6 +142,48 @@ void main() {
         expect(value.ticketById(ticketId).events, hasLength(1));
       },
     );
+
+    test(
+      'resolve sends canonical action with one remarks field and updates before background refresh',
+      () async {
+        final backgroundRefresh = Completer<Map<String, dynamic>>();
+        final api = _FakeHospitalTicketGateway()
+          ..ticketRows = [_ticketRow(status: 'in_progress')]
+          ..detailResponses.add(
+            _detailResponse(
+              status: 'in_progress',
+              allowedActions: ['resolve'],
+            ),
+          )
+          ..detailCompleters.add(backgroundRefresh);
+        final value = controller(api);
+
+        await value.load();
+        await value.loadDetail(ticketId);
+        await value.resolve(
+          ticketId,
+          resolutionRemarks: 'Area cleaned and disinfected.',
+          completionPhotoPath: 'after-photo.jpg',
+        );
+
+        expect(api.actionCalls, hasLength(1));
+        expect(api.actionCalls.single.path, 'resolve');
+        expect(api.actionCalls.single.payload['resolution_action'], 'Work completed');
+        expect(
+          api.actionCalls.single.payload['resolution_remarks'],
+          'Area cleaned and disinfected.',
+        );
+        expect(
+          value.ticketById(ticketId).status,
+          HospitalTicketStatus.resolvedAwaitingConfirmation,
+        );
+        expect(api.fetchDetailCount, 2);
+
+        backgroundRefresh.complete(
+          _detailResponse(status: 'resolved_awaiting_confirmation'),
+        );
+      },
+    );
   });
 
   group('hospital detail UI', () {
@@ -218,6 +260,7 @@ class _FakeHospitalTicketGateway implements HospitalTicketGateway {
   List<Map<String, dynamic>> ticketRows = const [];
   final List<Map<String, dynamic>> detailResponses = [];
   final List<Completer<Map<String, dynamic>>> detailCompleters = [];
+  final List<_ActionCall> actionCalls = [];
   HospitalTicketApiException? actionError;
   bool failSignedDownload = false;
   int fetchDetailCount = 0;
@@ -276,7 +319,15 @@ class _FakeHospitalTicketGateway implements HospitalTicketGateway {
     Map<String, dynamic> payload = const {},
   ]) async {
     if (actionError != null) throw actionError!;
-    return _detailResponse(status: path == 'accept' ? 'accepted' : 'assigned');
+    actionCalls.add(_ActionCall(path, Map<String, dynamic>.from(payload)));
+    if (path == 'accept') return _detailResponse(status: 'accepted');
+    if (path == 'resolve') {
+      return _detailResponse(
+        status: 'resolved_awaiting_confirmation',
+        eventType: 'work_completed',
+      );
+    }
+    return _detailResponse();
   }
 
   @override
@@ -287,10 +338,18 @@ class _FakeHospitalTicketGateway implements HospitalTicketGateway {
   ) async {}
 }
 
+class _ActionCall {
+  const _ActionCall(this.path, this.payload);
+
+  final String path;
+  final Map<String, dynamic> payload;
+}
+
 Map<String, dynamic> _detailResponse({
   String status = 'assigned',
   String eventType = 'assigned',
   List<Map<String, dynamic>> attachments = const [],
+  List<String> allowedActions = const ['accept'],
 }) {
   return {
     'ticket': _ticketRow(status: status),
@@ -304,7 +363,7 @@ Map<String, dynamic> _detailResponse({
       },
     ],
     'attachments': attachments,
-    'allowed_actions': ['accept'],
+    'allowed_actions': allowedActions,
   };
 }
 
