@@ -8,7 +8,6 @@ import '../../core/constants/app_assets.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/widgets/app_card.dart';
 import '../../core/widgets/client_bottom_nav.dart';
-import '../../core/widgets/logo_mark.dart';
 import '../../models/ticket.dart';
 import '../../state/auth_controller.dart';
 import '../../state/notification_controller.dart';
@@ -236,27 +235,15 @@ class _CollaborationBadge extends StatelessWidget {
             fontWeight: FontWeight.w900,
           ),
         ),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 10),
-          child: Text(
-            '×',
-            style: TextStyle(
-              color: AppColors.deepBlue,
-              fontSize: 19,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-        const LogoMark(size: 27),
-        const SizedBox(width: 7),
-        const Flexible(
-          child: Text(
-            'QPMS',
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: AppColors.deepBlue,
-              fontSize: 16,
-              fontWeight: FontWeight.w900,
+        const SizedBox(width: 18),
+        Flexible(
+          child: SizedBox(
+            width: 94,
+            height: 30,
+            child: Image.asset(
+              'assets/Images/qpms_logo.png',
+              fit: BoxFit.contain,
+              alignment: Alignment.centerLeft,
             ),
           ),
         ),

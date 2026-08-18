@@ -9,7 +9,6 @@ import '../../core/widgets/app_card.dart';
 import '../../core/widgets/chips.dart';
 import '../../core/widgets/client_bottom_nav.dart';
 import '../../core/widgets/client_ui.dart';
-import '../../core/widgets/logo_mark.dart';
 import '../../models/ticket.dart';
 import '../../models/ticket_update.dart';
 import '../../state/ticket_controller.dart';
@@ -85,6 +84,7 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen>
           tooltip: 'Back',
         ),
         titleSpacing: 0,
+        centerTitle: true,
         title: const _QpmsWordmark(),
         actions: [
           if (canCancel)
@@ -319,6 +319,7 @@ class _TicketLookupState extends StatelessWidget {
       ),
       title: const _QpmsWordmark(),
       titleSpacing: 0,
+      centerTitle: true,
     ),
     bottomNavigationBar: const ClientBottomNav(currentRoute: AppRoutes.tickets),
     body: SafeArea(
@@ -378,21 +379,14 @@ class _QpmsWordmark extends StatelessWidget {
   const _QpmsWordmark();
 
   @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      const LogoMark(size: 32),
-      const SizedBox(width: 7),
-      const Text(
-        'PMS',
-        style: TextStyle(
-          color: AppColors.deepBlue,
-          fontSize: 22,
-          height: 1,
-          fontWeight: FontWeight.w900,
-        ),
-      ),
-    ],
+  Widget build(BuildContext context) => SizedBox(
+    width: 132,
+    height: 38,
+    child: Image.asset(
+      'assets/Images/qpms_logo.png',
+      fit: BoxFit.contain,
+      alignment: Alignment.center,
+    ),
   );
 }
 
