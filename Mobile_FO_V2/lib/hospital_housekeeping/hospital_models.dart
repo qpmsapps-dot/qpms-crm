@@ -43,6 +43,109 @@ enum HospitalTicketAction {
   simulateClientNotSatisfied,
 }
 
+enum HospitalSupervisorAvailabilityStatus {
+  onDuty,
+  dutyNotStarted,
+  offShift,
+  offlineStale,
+}
+
+class HospitalSupervisorAvailabilitySummary {
+  const HospitalSupervisorAvailabilitySummary({
+    required this.generatedAt,
+    required this.timezone,
+    required this.staleTrackingSupported,
+    required this.onDuty,
+    required this.dutyNotStarted,
+    required this.offShift,
+    required this.offlineStale,
+    required this.supervisors,
+  });
+
+  final DateTime? generatedAt;
+  final String timezone;
+  final bool staleTrackingSupported;
+  final int onDuty;
+  final int dutyNotStarted;
+  final int offShift;
+  final int offlineStale;
+  final List<HospitalSupervisorAvailability> supervisors;
+
+  factory HospitalSupervisorAvailabilitySummary.fromApi(
+    Map<String, dynamic> json,
+  ) {
+    final body = json['availability'] is Map
+        ? Map<String, dynamic>.from(json['availability'] as Map)
+        : json;
+    final counts = body['counts'] is Map
+        ? Map<String, dynamic>.from(body['counts'] as Map)
+        : const <String, dynamic>{};
+    final rows = body['supervisors'] is List
+        ? body['supervisors'] as List
+        : const [];
+    return HospitalSupervisorAvailabilitySummary(
+      generatedAt: DateTime.tryParse('${body['generated_at'] ?? ''}'),
+      timezone: '${body['timezone'] ?? 'Asia/Kolkata'}',
+      staleTrackingSupported: body['stale_tracking_supported'] == true,
+      onDuty: int.tryParse('${counts['on_duty'] ?? 0}') ?? 0,
+      dutyNotStarted:
+          int.tryParse('${counts['duty_not_started'] ?? 0}') ?? 0,
+      offShift: int.tryParse('${counts['off_shift'] ?? 0}') ?? 0,
+      offlineStale: int.tryParse('${counts['offline_stale'] ?? 0}') ?? 0,
+      supervisors: rows
+          .whereType<Map>()
+          .map(
+            (row) => HospitalSupervisorAvailability.fromApi(
+              Map<String, dynamic>.from(row),
+            ),
+          )
+          .toList(),
+    );
+  }
+}
+
+class HospitalSupervisorAvailability {
+  const HospitalSupervisorAvailability({
+    required this.name,
+    required this.status,
+    required this.statusLabel,
+    required this.shiftLabel,
+    required this.areaLabel,
+    this.mobileDisplay = '',
+    this.lastActiveAt,
+    this.matchedUserId = '',
+  });
+
+  final String name;
+  final HospitalSupervisorAvailabilityStatus status;
+  final String statusLabel;
+  final String shiftLabel;
+  final String areaLabel;
+  final String mobileDisplay;
+  final DateTime? lastActiveAt;
+  final String matchedUserId;
+
+  factory HospitalSupervisorAvailability.fromApi(Map<String, dynamic> json) {
+    final statusCode = '${json['status'] ?? ''}';
+    return HospitalSupervisorAvailability(
+      name: '${json['name'] ?? ''}',
+      status: switch (statusCode) {
+        'on_duty' => HospitalSupervisorAvailabilityStatus.onDuty,
+        'duty_not_started' =>
+          HospitalSupervisorAvailabilityStatus.dutyNotStarted,
+        'offline_stale' => HospitalSupervisorAvailabilityStatus.offlineStale,
+        _ => HospitalSupervisorAvailabilityStatus.offShift,
+      },
+      statusLabel: '${json['status_label'] ?? statusCode}',
+      shiftLabel: '${json['shift_label'] ?? ''}',
+      areaLabel: '${json['area_label'] ?? ''}',
+      mobileDisplay: '${json['mobile_display'] ?? ''}'.trim(),
+      lastActiveAt: DateTime.tryParse('${json['last_active_at'] ?? ''}'),
+      matchedUserId: '${json['matched_user_id'] ?? ''}',
+    );
+  }
+}
+
 class HospitalClientOption {
   const HospitalClientOption({
     required this.id,

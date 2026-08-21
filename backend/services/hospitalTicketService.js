@@ -127,6 +127,152 @@ function requireRoutingAdmin(actor) {
   }
 }
 
+const NIMS_SUPERVISOR_ROSTER = [
+  { roster_id: 'nims-supervisor-01', name: 'Ch Ramu', mobile: '9866320241', shift_label: '8 AM - 4 PM', start_minute: 8 * 60, end_minute: 16 * 60, area_label: 'Overall / Administration' },
+  { roster_id: 'nims-supervisor-02', name: 'L. V. Sai', mobile: '9948310098', shift_label: '8 AM - 4 PM', start_minute: 8 * 60, end_minute: 16 * 60, area_label: 'OPD Block / Admin Block / Oncology Block' },
+  { roster_id: 'nims-supervisor-03', name: 'M. Praveen', mobile: '9704682736', shift_label: '8 AM - 4 PM', start_minute: 8 * 60, end_minute: 16 * 60, area_label: 'Speciality Block' },
+  { roster_id: 'nims-supervisor-04', name: 'Sastri', mobile: '7013989869', shift_label: '8 AM - 4 PM', start_minute: 8 * 60, end_minute: 16 * 60, area_label: 'Speciality Block / Trauma Block / Campus' },
+  { roster_id: 'nims-supervisor-05', name: 'B. Anil', mobile: '9866934055', shift_label: '7 AM - 3 PM', start_minute: 7 * 60, end_minute: 15 * 60, area_label: 'Trauma Block' },
+  { roster_id: 'nims-supervisor-06', name: 'Shiva', mobile: '7799876077', shift_label: '2 PM - 8 PM', start_minute: 14 * 60, end_minute: 20 * 60, area_label: 'Speciality Block / Trauma Block' },
+  { roster_id: 'nims-supervisor-07', name: 'Venkata Krishna Reddy', mobile: '7815969967', shift_label: '8 PM - 8 AM', start_minute: 20 * 60, end_minute: 8 * 60, area_label: 'All Blocks / Night' },
+  { roster_id: 'nims-supervisor-08', name: 'A Ravi', mobile: '9581219133', shift_label: '7 AM - 3 PM', start_minute: 7 * 60, end_minute: 15 * 60, area_label: 'NPR Blocks / Old Building' },
+  { roster_id: 'nims-supervisor-09', name: 'K Srinivas', mobile: '7989159722', shift_label: '8 AM - 4 PM', start_minute: 8 * 60, end_minute: 16 * 60, area_label: 'Campus / Waiting Halls' },
+  { roster_id: 'nims-supervisor-10', name: 'V Lenin', mobile: '8897427043', shift_label: '8 AM - 4 PM', start_minute: 8 * 60, end_minute: 16 * 60, area_label: 'Millennium Block' },
+  { roster_id: 'nims-supervisor-11', name: 'V Anji Reddy', mobile: '970365667', shift_label: '12 Noon - 8 PM', start_minute: 12 * 60, end_minute: 20 * 60, area_label: 'NPR Blocks / Old Building / Millennium Block' },
+  { roster_id: 'nims-supervisor-12', name: 'Y Nikhil', mobile: '8886744183', shift_label: '8 PM - 8 AM', start_minute: 20 * 60, end_minute: 8 * 60, area_label: 'All Blocks / Night' },
+  { roster_id: 'nims-supervisor-13', name: 'M Srinivas', mobile: '9010199955', shift_label: '12 Noon - 8 PM', start_minute: 12 * 60, end_minute: 20 * 60, area_label: 'Millennium Block / Overall' },
+];
+
+const SUPERVISOR_AVAILABILITY_ROLES = new Set(['operations_executive', 'facility_manager', 'project_head']);
+
+function requireSupervisorAvailabilityViewer(actor) {
+  if (!actor?.user || actor.user.profile_type !== 'internal' || !SUPERVISOR_AVAILABILITY_ROLES.has(actor.user.role_code)) {
+    const error = new Error('Supervisor availability is available only to Hospital escalation owners.');
+    error.code = '42501';
+    throw error;
+  }
+}
+
+export function nimsSupervisorRosterDataIssues() {
+  return NIMS_SUPERVISOR_ROSTER
+    .filter((row) => row.mobile && !/^\d{10}$/.test(row.mobile))
+    .map((row) => ({
+      roster_id: row.roster_id,
+      name: row.name,
+      issue: `Supplied mobile '${row.mobile}' is not 10 digits.`,
+    }));
+}
+
+function normalizeSupervisorKey(value) {
+  return cleanHospitalText(value, 120).toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function supervisorPhoneValues(user = {}) {
+  return [user.cug_number, user.cug_number_display, user.phone, user.mobile, user.metadata?.mobile, user.metadata?.phone]
+    .map((value) => cleanHospitalText(value, 40).replace(/\D+/g, ''))
+    .filter(Boolean);
+}
+
+function currentMinuteInKolkata(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(now);
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value || 0);
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value || 0);
+  return hour * 60 + minute;
+}
+
+function isInsideShift(rosterRow, now = new Date()) {
+  const minute = currentMinuteInKolkata(now);
+  if (rosterRow.start_minute === rosterRow.end_minute) return true;
+  if (rosterRow.start_minute < rosterRow.end_minute) {
+    return minute >= rosterRow.start_minute && minute < rosterRow.end_minute;
+  }
+  return minute >= rosterRow.start_minute || minute < rosterRow.end_minute;
+}
+
+function findRosterUser(rosterRow, users) {
+  const rosterMobile = cleanHospitalText(rosterRow.mobile, 40).replace(/\D+/g, '');
+  if (rosterMobile) {
+    const byMobile = users.find((user) => supervisorPhoneValues(user).includes(rosterMobile));
+    if (byMobile) return byMobile;
+  }
+  const rosterName = normalizeSupervisorKey(rosterRow.name);
+  return users.find((user) => normalizeSupervisorKey(user.display_name) === rosterName) || null;
+}
+
+export function supervisorAvailabilityStatus({ rosterRow, user, now = new Date() }) {
+  const withinShift = isInsideShift(rosterRow, now);
+  if (user?.duty_status === 'on_duty') {
+    return { status: 'on_duty', status_label: 'On Duty', is_on_duty: true, within_shift: withinShift };
+  }
+  if (withinShift) {
+    return { status: 'duty_not_started', status_label: 'Duty Not Started', is_on_duty: false, within_shift: true };
+  }
+  return { status: 'off_shift', status_label: 'Off Shift', is_on_duty: false, within_shift: false };
+}
+
+export function buildNimsSupervisorAvailability(users = [], now = new Date()) {
+  const activeSupervisorUsers = users.filter((user) => user?.is_active !== false && user?.role_code === 'housekeeping_supervisor');
+  const supervisors = NIMS_SUPERVISOR_ROSTER.map((rosterRow) => {
+    const user = findRosterUser(rosterRow, activeSupervisorUsers);
+    const status = supervisorAvailabilityStatus({ rosterRow, user, now });
+    const phones = user ? supervisorPhoneValues(user) : [];
+    return {
+      roster_id: rosterRow.roster_id,
+      name: cleanHospitalText(user?.display_name, 120) || rosterRow.name,
+      role_code: 'housekeeping_supervisor',
+      matched_user_id: user?.id || null,
+      identity_status: user?.id ? 'matched' : 'not_linked',
+      status: status.status,
+      status_label: status.status_label,
+      is_on_duty: status.is_on_duty,
+      within_shift: status.within_shift,
+      shift_label: rosterRow.shift_label,
+      area_label: rosterRow.area_label,
+      mobile_display: phones[0] || null,
+      duty_status: user?.duty_status || 'off_duty',
+      duty_started_at: user?.duty_started_at || null,
+      duty_ended_at: user?.duty_ended_at || null,
+      last_active_at: user?.last_seen_at || user?.duty_started_at || user?.duty_ended_at || null,
+    };
+  }).sort((left, right) => {
+    const rank = { on_duty: 0, duty_not_started: 1, offline_stale: 2, off_shift: 3 };
+    return (rank[left.status] ?? 9) - (rank[right.status] ?? 9) || left.name.localeCompare(right.name);
+  });
+  const count = (status) => supervisors.filter((row) => row.status === status).length;
+  return {
+    generated_at: now.toISOString(),
+    timezone: 'Asia/Kolkata',
+    stale_tracking_supported: false,
+    data_issues: nimsSupervisorRosterDataIssues(),
+    counts: {
+      on_duty: count('on_duty'),
+      duty_not_started: count('duty_not_started'),
+      off_shift: count('off_shift'),
+      offline_stale: 0,
+    },
+    supervisors,
+  };
+}
+
+export async function listHospitalSupervisorAvailability(client, actor, options = {}) {
+  requireSupervisorAvailabilityViewer(actor);
+  const result = await client
+    .from('hospital_ticket_users')
+    .select('id,client_id,profile_type,role_code,display_name,email,cug_number,cug_number_display,duty_status,duty_started_at,duty_ended_at,last_seen_at,metadata,is_active')
+    .eq('client_id', actor.user.client_id)
+    .eq('profile_type', 'internal')
+    .eq('role_code', 'housekeeping_supervisor')
+    .eq('is_active', true)
+    .order('display_name');
+  if (result.error) throw result.error;
+  return buildNimsSupervisorAvailability(result.data || [], options.now || new Date());
+}
+
 export async function listHospitalRoutingShifts(client, actor) {
   requireRoutingAdmin(actor);
   const result = await client
@@ -716,6 +862,30 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
       p_actor_user_id: actor.user.id,
       p_expected_version: Number(expectedVersion),
       p_confirmed_location: payload.confirmed_location === true || payload.confirmedLocation === true,
+    });
+    if (result.error) throw result.error;
+    const detail = await getHospitalTicket(client, actor, current.ticket.id);
+    await safeWriteHospitalLifecycleNotifications(client, {
+      action: effectiveAction,
+      actor,
+      beforeTicket: current.ticket,
+      afterTicket: detail.ticket,
+    });
+    return detail;
+  }
+  if (
+    ['accept', 'take_over'].includes(effectiveAction)
+    && current.ticket.acceptance_status === 'awaiting'
+    && (
+      (actor.user.role_code === 'operations_executive' && current.ticket.status_code === 'escalated_operations_executive')
+      || (actor.user.role_code === 'facility_manager' && current.ticket.status_code === 'escalated_facility_manager')
+      || (actor.user.role_code === 'project_head' && current.ticket.status_code === 'escalated_project_head')
+    )
+  ) {
+    const result = await client.rpc('rpc_accept_hospital_escalation_ticket', {
+      p_ticket_id: current.ticket.id,
+      p_actor_user_id: actor.user.id,
+      p_expected_version: Number(expectedVersion),
     });
     if (result.error) throw result.error;
     const detail = await getHospitalTicket(client, actor, current.ticket.id);

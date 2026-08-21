@@ -282,6 +282,24 @@ class _FakeHospitalTicketGateway implements HospitalTicketGateway {
   };
 
   @override
+  Future<HospitalSupervisorAvailabilitySummary>
+  fetchSupervisorAvailability() async =>
+      HospitalSupervisorAvailabilitySummary.fromApi({
+        'availability': {
+          'generated_at': '2026-08-21T05:00:00.000Z',
+          'timezone': 'Asia/Kolkata',
+          'stale_tracking_supported': false,
+          'counts': {
+            'on_duty': 0,
+            'duty_not_started': 0,
+            'off_shift': 13,
+            'offline_stale': 0,
+          },
+          'supervisors': const [],
+        },
+      });
+
+  @override
   Future<Map<String, dynamic>> startDuty({String? cugNumber}) async => const {
     'duty': {'duty_status': 'on_duty'},
   };

@@ -10,6 +10,7 @@ import {
   hospitalDashboard,
   listIncomingSupervisorTickets,
   listHospitalNotifications,
+  listHospitalSupervisorAvailability,
   listHospitalTickets,
   listHospitalRoutingAssignments,
   listHospitalRoutingShifts,
@@ -113,6 +114,11 @@ export function createHospitalTicketRouter({ anonClient, serviceClient }) {
   });
   router.get('/routing/coverage', async (request, response) => {
     try { response.json({ ok: true, coverage: nimsSupervisorCoverageReport(request.hospitalActor) }); }
+    catch (error) { safeHospitalError(response, error); }
+  });
+
+  router.get('/supervisors/availability', async (request, response) => {
+    try { response.json({ ok: true, availability: await listHospitalSupervisorAvailability(serviceClient, request.hospitalActor) }); }
     catch (error) { safeHospitalError(response, error); }
   });
 

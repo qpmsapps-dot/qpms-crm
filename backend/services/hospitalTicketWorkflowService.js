@@ -66,7 +66,11 @@ export function validateHospitalTicketCreate(payload) {
 
 export function validateHospitalAction({ role, status, action, payload = {} }) {
   const allowed = {
-    accept: role === 'housekeeping_supervisor' && ['awaiting_supervisor_acceptance', 'open', 'assigned', 'reopened'].includes(status),
+    accept:
+      (role === 'housekeeping_supervisor' && ['awaiting_supervisor_acceptance', 'open', 'assigned', 'reopened'].includes(status))
+      || (role === 'operations_executive' && status === 'escalated_operations_executive')
+      || (role === 'facility_manager' && status === 'escalated_facility_manager')
+      || (role === 'project_head' && status === 'escalated_project_head'),
     start_work: role === 'housekeeping_supervisor' && ['accepted', 'reopened'].includes(status),
     progress:
       (role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status) && status !== 'awaiting_supervisor_acceptance')

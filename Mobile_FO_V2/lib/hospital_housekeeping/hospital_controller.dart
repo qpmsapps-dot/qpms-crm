@@ -58,6 +58,7 @@ abstract class HospitalTicketGateway {
   Future<List<HospitalTicket>> fetchIncomingTickets();
   Future<List<Map<String, dynamic>>> fetchNotifications();
   Future<Map<String, dynamic>> fetchDutyStatus();
+  Future<HospitalSupervisorAvailabilitySummary> fetchSupervisorAvailability();
   Future<Map<String, dynamic>> startDuty({String? cugNumber});
   Future<Map<String, dynamic>> endDuty();
   Future<void> markNotificationRead(String id);
@@ -90,6 +91,10 @@ class LiveHospitalTicketGateway implements HospitalTicketGateway {
   @override
   Future<Map<String, dynamic>> fetchDutyStatus() =>
       HospitalTicketApi.fetchDutyStatus();
+
+  @override
+  Future<HospitalSupervisorAvailabilitySummary> fetchSupervisorAvailability() =>
+      HospitalTicketApi.fetchSupervisorAvailability();
 
   @override
   Future<Map<String, dynamic>> startDuty({String? cugNumber}) =>
@@ -169,11 +174,18 @@ class HospitalController extends ChangeNotifier {
   List<HospitalTicket> get allTickets => List.unmodifiable(_tickets);
   List<Map<String, dynamic>> _notifications = [];
   String _dutyStatus = 'off_duty';
+  HospitalSupervisorAvailabilitySummary? _supervisorAvailability;
   final Set<String> _busyTicketIds = {};
   List<Map<String, dynamic>> get notifications =>
       List.unmodifiable(_notifications);
   String get dutyStatus => _dutyStatus;
   bool get isOnDuty => _dutyStatus == 'on_duty';
+  HospitalSupervisorAvailabilitySummary? get supervisorAvailability =>
+      _supervisorAvailability;
+  bool get canViewSupervisorAvailability =>
+      session.role == HospitalDemoRole.operationsExecutive ||
+      session.role == HospitalDemoRole.facilityManager ||
+      session.role == HospitalDemoRole.projectHead;
   bool isTicketBusy(String ticketId) => _busyTicketIds.contains(ticketId);
   bool isDetailLoading(String ticketId) =>
       _detailLoadingTicketIds.contains(ticketId);
@@ -277,6 +289,10 @@ class HospitalController extends ChangeNotifier {
           _api.fetchDutyStatus()
         else
           Future.value(<String, dynamic>{}),
+        if (canViewSupervisorAvailability)
+          _fetchSupervisorAvailabilityWithoutBlockingDashboard()
+        else
+          Future.value(null),
       ]);
       _tickets = _mergeListRefresh([
         ...(results[0] as List<HospitalTicket>),
@@ -286,6 +302,8 @@ class HospitalController extends ChangeNotifier {
       final duty = results[3] is Map ? results[3] as Map : const {};
       final dutyBody = duty['duty'] is Map ? duty['duty'] as Map : duty;
       _dutyStatus = '${dutyBody['duty_status'] ?? _dutyStatus}';
+      _supervisorAvailability =
+          results[4] as HospitalSupervisorAvailabilitySummary?;
       _now = DateTime.now();
     } catch (error) {
       _error = error.toString();
@@ -300,6 +318,15 @@ class HospitalController extends ChangeNotifier {
     } finally {
       _loading = false;
       notifyListeners();
+    }
+  }
+
+  Future<HospitalSupervisorAvailabilitySummary?>
+  _fetchSupervisorAvailabilityWithoutBlockingDashboard() async {
+    try {
+      return await _api.fetchSupervisorAvailability();
+    } catch (_) {
+      return _supervisorAvailability;
     }
   }
 

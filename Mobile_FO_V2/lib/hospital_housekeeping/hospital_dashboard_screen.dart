@@ -139,6 +139,10 @@ class HospitalDashboardScreen extends StatelessWidget {
           _DutyControl(controller: controller),
           const SizedBox(height: 16),
         ],
+        if (controller.canViewSupervisorAvailability) ...[
+          _SupervisorAvailabilityCard(controller: controller),
+          const SizedBox(height: 16),
+        ],
         GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
@@ -272,40 +276,321 @@ class _DutyControl extends StatelessWidget {
   Widget build(BuildContext context) => Card(
     child: Padding(
       padding: const EdgeInsets.all(14),
-      child: Row(
+      child: Column(
         children: [
-          Icon(
-            controller.isOnDuty
-                ? Icons.verified_user_outlined
-                : Icons.pause_circle_outline,
-            color: controller.isOnDuty ? hospitalGreen : hospitalAmber,
+          Row(
+            children: [
+              Icon(
+                controller.isOnDuty
+                    ? Icons.verified_user_outlined
+                    : Icons.pause_circle_outline,
+                color: controller.isOnDuty ? hospitalGreen : hospitalAmber,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      controller.isOnDuty ? 'On Duty' : 'Off Duty',
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const Text(
+                      'On-Duty Supervisors receive incoming NIMS housekeeping tickets for their assigned blocks.',
+                      style: TextStyle(color: qpmsMuted, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              FilledButton.tonal(
+                onPressed: () => _toggleDuty(context),
+                child: Text(controller.isOnDuty ? 'End Duty' : 'Start Duty'),
+              ),
+            ],
           ),
-          const SizedBox(width: 10),
+          if (controller.session.shiftLabel.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.schedule_outlined, size: 18, color: qpmsMuted),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    controller.isOnDuty
+                        ? 'Scheduled Shift: ${controller.session.shiftLabel}'
+                        : 'Scheduled Shift: ${controller.session.shiftLabel}. Start Duty to receive Hospital tickets.',
+                    style: TextStyle(
+                      color: controller.isOnDuty ? qpmsMuted : hospitalAmber,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
+
+  Future<void> _toggleDuty(BuildContext context) async {
+    if (!controller.isOnDuty) {
+      await controller.startDuty();
+      return;
+    }
+    if (controller.myAcceptedTickets.isEmpty) {
+      await controller.endDuty();
+      return;
+    }
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('End Duty?'),
+        content: const Text(
+          'You currently have active Hospital tickets. Existing tickets will remain assigned to you. Please coordinate handover before ending duty.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('End Duty'),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) await controller.endDuty();
+  }
+}
+
+class _SupervisorAvailabilityCard extends StatelessWidget {
+  const _SupervisorAvailabilityCard({required this.controller});
+
+  final HospitalController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final summary = controller.supervisorAvailability;
+    final supervisors = summary?.supervisors ?? const [];
+    final preview = supervisors
+        .where(
+          (row) =>
+              row.status == HospitalSupervisorAvailabilityStatus.onDuty ||
+              row.status ==
+                  HospitalSupervisorAvailabilityStatus.dutyNotStarted,
+        )
+        .take(3)
+        .toList();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Supervisor Availability',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+                TextButton(
+                  onPressed: summary == null
+                      ? null
+                      : () => _showSupervisorAvailability(context, summary),
+                  child: const Text('View All'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            if (summary == null)
+              const Text(
+                'Availability will appear on the next refresh.',
+                style: TextStyle(color: qpmsMuted, fontSize: 12),
+              )
+            else ...[
+              Wrap(
+                spacing: 10,
+                runSpacing: 6,
+                children: [
+                  _AvailabilityCount(
+                    value: summary.onDuty,
+                    label: 'On Duty',
+                    color: hospitalGreen,
+                  ),
+                  _AvailabilityCount(
+                    value: summary.dutyNotStarted,
+                    label: 'Duty Not Started',
+                    color: hospitalAmber,
+                  ),
+                  _AvailabilityCount(
+                    value: summary.offShift,
+                    label: 'Off Shift',
+                    color: qpmsMuted,
+                  ),
+                  if (summary.staleTrackingSupported)
+                    _AvailabilityCount(
+                      value: summary.offlineStale,
+                      label: 'Offline/Stale',
+                      color: hospitalRed,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              if (preview.isEmpty)
+                const Text(
+                  'No supervisors are on duty or inside scheduled shift.',
+                  style: TextStyle(color: qpmsMuted, fontSize: 12),
+                )
+              else
+                ...preview.map(
+                  (row) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _SupervisorAvailabilityRow(row: row, compact: true),
+                  ),
+                ),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => _showSupervisorAvailability(context, summary),
+                  icon: const Icon(Icons.groups_2_outlined),
+                  label: Text('View All ${supervisors.length} Supervisors'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSupervisorAvailability(
+    BuildContext context,
+    HospitalSupervisorAvailabilitySummary summary,
+  ) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: .82,
+          minChildSize: .45,
+          maxChildSize: .95,
+          builder: (context, controller) => ListView(
+            controller: controller,
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+            children: [
+              const Text(
+                'Supervisor Availability',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${summary.onDuty} On Duty - ${summary.dutyNotStarted} Duty Not Started - ${summary.offShift} Off Shift',
+                style: const TextStyle(color: qpmsMuted, fontSize: 12),
+              ),
+              const SizedBox(height: 14),
+              ...summary.supervisors.map(
+                (row) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _SupervisorAvailabilityRow(row: row),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AvailabilityCount extends StatelessWidget {
+  const _AvailabilityCount({
+    required this.value,
+    required this.label,
+    required this.color,
+  });
+
+  final int value;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    '$value $label',
+    style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w900),
+  );
+}
+
+class _SupervisorAvailabilityRow extends StatelessWidget {
+  const _SupervisorAvailabilityRow({required this.row, this.compact = false});
+
+  final HospitalSupervisorAvailability row;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (row.status) {
+      HospitalSupervisorAvailabilityStatus.onDuty => hospitalGreen,
+      HospitalSupervisorAvailabilityStatus.dutyNotStarted => hospitalAmber,
+      HospitalSupervisorAvailabilityStatus.offlineStale => hospitalRed,
+      HospitalSupervisorAvailabilityStatus.offShift => qpmsMuted,
+    };
+    return Container(
+      padding: EdgeInsets.all(compact ? 0 : 12),
+      decoration: compact
+          ? null
+          : BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: qpmsBorder),
+            ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.circle, size: 10, color: color),
+          const SizedBox(width: 9),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  controller.isOnDuty ? 'On Duty' : 'Off Duty',
+                  row.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w900),
                 ),
-                const Text(
-                  'On-Duty Supervisors receive incoming NIMS housekeeping tickets for their assigned blocks.',
-                  style: TextStyle(color: qpmsMuted, fontSize: 11),
+                Text(
+                  compact
+                      ? row.areaLabel
+                      : '${row.shiftLabel}\n${row.areaLabel}',
+                  maxLines: compact ? 1 : 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: qpmsMuted, fontSize: 11),
                 ),
               ],
             ),
           ),
-          FilledButton.tonal(
-            onPressed: controller.isOnDuty
-                ? controller.endDuty
-                : controller.startDuty,
-            child: Text(controller.isOnDuty ? 'End Duty' : 'Start Duty'),
+          const SizedBox(width: 8),
+          Text(
+            row.statusLabel,
+            style: TextStyle(
+              color: color,
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+            ),
           ),
         ],
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _EmptyState extends StatelessWidget {

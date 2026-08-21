@@ -6,6 +6,10 @@ const migration057 = readFileSync(
   new URL('../../supabase/migrations_2_0/057_hospital_supervisor_acceptance_20_minutes.sql', import.meta.url),
   'utf8',
 );
+const migration061 = readFileSync(
+  new URL('../../supabase/migrations_2_0/061_hospital_escalation_acceptance_sla_2_minutes.sql', import.meta.url),
+  'utf8',
+);
 const migration042 = readFileSync(
   new URL('../../supabase/migrations_2_0/042_hospital_ticket_supervisor_self_assignment.sql', import.meta.url),
   'utf8',
@@ -19,13 +23,23 @@ const mobilePush = readFileSync(
   'utf8',
 );
 
-test('migration 057 changes contact-created supervisor acceptance window to 20 minutes', () => {
+test('migration 057 previously changed contact-created supervisor acceptance window to 20 minutes', () => {
   assert.match(migration057, /create or replace function public\.rpc_create_hospital_contact_ticket/);
   assert.match(migration057, /v_acceptance_due_at := now\(\) \+ public\.hospital_supervisor_acceptance_window\(\)/);
   assert.match(migration057, /select interval '20 minutes'/);
   assert.match(migration057, /'acceptance_window_seconds', 1200/);
   assert.doesNotMatch(migration057, /interval '2 minutes'/);
   assert.doesNotMatch(migration057, /'acceptance_window_seconds',\s*120\b/);
+});
+
+test('migration 061 is the current two-minute acceptance override for every escalation level', () => {
+  assert.match(migration061, /create or replace function public\.hospital_supervisor_acceptance_window\(\)/);
+  assert.match(migration061, /create or replace function public\.hospital_escalation_acceptance_window\(\)/);
+  assert.match(migration061, /select interval '2 minutes'/);
+  assert.match(migration061, /acceptance_sla_minutes',2/);
+  assert.match(migration061, /rpc_accept_hospital_escalation_ticket/);
+  assert.match(migration061, /project_head_acceptance_overdue/);
+  assert.doesNotMatch(migration061, /select interval '20 minutes'/);
 });
 
 test('migration 057 keeps broadcast semantics and notification expiry aligned', () => {
@@ -48,10 +62,10 @@ test('scheduler timeout processing remains deadline driven', () => {
   assert.doesNotMatch(slaFunction, /created_at\s*\+\s*interval '2 minutes'/);
 });
 
-test('timeout copy and default awaiting trigger now reference 20 minutes', () => {
+test('latest timeout copy and default awaiting trigger reference 2 minutes', () => {
   assert.match(migration057, /new\.acceptance_due_at := coalesce\(new\.acceptance_due_at, now\(\)\+public\.hospital_supervisor_acceptance_window\(\)\)/);
-  assert.match(migration057, /No Supervisor accepted within 20 minutes\./);
-  assert.match(migration057, /within 20 minutes\./);
+  assert.match(migration061, /requires ' \|\| public\.hospital_ticket_role_label\(v_next_role\) \|\| ' acceptance within 2 minutes\./);
+  assert.match(migration061, /Escalated to ' \|\| public\.hospital_ticket_role_label\(v_next_role\) \|\| ' for 2-minute acceptance\./);
 });
 
 test('mobile acceptance countdown uses backend deadline fields', () => {

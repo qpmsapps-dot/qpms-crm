@@ -10,6 +10,10 @@ const migration057 = readFileSync(
   new URL('../../supabase/migrations_2_0/057_hospital_supervisor_acceptance_20_minutes.sql', import.meta.url),
   'utf8',
 );
+const migration061 = readFileSync(
+  new URL('../../supabase/migrations_2_0/061_hospital_escalation_acceptance_sla_2_minutes.sql', import.meta.url),
+  'utf8',
+);
 
 test('migration 060 immediately routes zero-broadcast supervisor tickets to Operations', () => {
   assert.match(migration060, /create or replace function public\.hospital_ticket_skip_empty_supervisor_broadcast/);
@@ -25,9 +29,10 @@ test('migration 060 preserves working supervisor broadcast path', () => {
   assert.doesNotMatch(migration060, /hospital_ticket_on_duty_supervisors/);
 });
 
-test('existing 20-minute deadline and timeout worker remain deadline driven', () => {
+test('latest two-minute acceptance deadline and timeout worker remain deadline driven', () => {
   assert.match(migration057, /select interval '20 minutes'/);
-  assert.match(migration057, /'acceptance_window_seconds', 1200/);
-  assert.match(migration057, /No Supervisor accepted within 20 minutes\./);
+  assert.match(migration061, /select interval '2 minutes'/);
+  assert.match(migration061, /p_now \+ public\.hospital_escalation_acceptance_window\(\)/);
+  assert.match(migration061, /acceptance_due_at <= p_now/);
   assert.doesNotMatch(migration057, /created_at\s*\+\s*interval '2 minutes'/);
 });

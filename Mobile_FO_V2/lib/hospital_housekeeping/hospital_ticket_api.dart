@@ -150,6 +150,15 @@ class HospitalTicketApi {
   static Future<Map<String, dynamic>> fetchDutyStatus() =>
       request('GET', '/api/hospital-tickets/me/duty');
 
+  static Future<HospitalSupervisorAvailabilitySummary>
+  fetchSupervisorAvailability() async {
+    final response = await request(
+      'GET',
+      '/api/hospital-tickets/supervisors/availability',
+    );
+    return HospitalSupervisorAvailabilitySummary.fromApi(response);
+  }
+
   static Future<Map<String, dynamic>> startDuty({String? cugNumber}) {
     final body = <String, dynamic>{};
     if (cugNumber != null) body['cug_number'] = cugNumber;

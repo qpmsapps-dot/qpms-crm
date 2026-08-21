@@ -22,6 +22,10 @@ void main() {
       api,
       contains("request('POST', '/api/hospital-tickets/me/duty/end')"),
     );
+    expect(
+      api,
+      contains("'/api/hospital-tickets/supervisors/availability'"),
+    );
     expect(api, contains("body['cug_number'] = cugNumber"));
   });
 
@@ -205,6 +209,70 @@ void main() {
       api,
       contains("'/api/hospital-tickets/supervisor/incoming'"),
     );
+  });
+
+  test('escalation owners load NIMS supervisor availability', () async {
+    final gateway = _DutyGateway(
+      dutyResponse: {
+        'duty': {'duty_status': 'off_duty'},
+      },
+      availabilityResponse: HospitalSupervisorAvailabilitySummary.fromApi({
+        'availability': {
+          'generated_at': seed.toIso8601String(),
+          'timezone': 'Asia/Kolkata',
+          'stale_tracking_supported': false,
+          'counts': {
+            'on_duty': 1,
+            'duty_not_started': 1,
+            'off_shift': 11,
+            'offline_stale': 0,
+          },
+          'supervisors': [
+            {
+              'name': 'L. V. Sai',
+              'status': 'on_duty',
+              'status_label': 'On Duty',
+              'shift_label': '8 AM - 4 PM',
+              'area_label': 'OPD Block / Admin Block / Oncology Block',
+            },
+          ],
+        },
+      }),
+    );
+    final controller = HospitalController(
+      session: const HospitalDemoSession(
+        loginId: 'ops@example.com',
+        displayName: 'Operations',
+        role: HospitalDemoRole.operationsExecutive,
+        isDemo: false,
+      ),
+      api: gateway,
+    );
+
+    await controller.load();
+
+    expect(gateway.fetchSupervisorAvailabilityCount, 1);
+    expect(gateway.fetchDutyStatusCount, 0);
+    expect(controller.supervisorAvailability?.onDuty, 1);
+    expect(
+      controller.supervisorAvailability?.supervisors.single.status,
+      HospitalSupervisorAvailabilityStatus.onDuty,
+    );
+  });
+
+  test('supervisors do not load the management availability roster', () async {
+    final gateway = _DutyGateway(
+      dutyResponse: {
+        'duty': {'duty_status': 'on_duty'},
+      },
+    );
+    final controller = _controller(gateway);
+
+    await controller.load();
+
+    expect(gateway.fetchDutyStatusCount, 1);
+    expect(gateway.fetchSupervisorAvailabilityCount, 0);
+    expect(controller.supervisorAvailability, isNull);
   });
 
   test('start duty calls backend gateway and refreshes server state', () async {
@@ -401,6 +469,7 @@ class _DutyGateway implements HospitalTicketGateway {
     Map<String, dynamic>? endResponse,
     this.tickets = const [],
     this.incomingTickets = const [],
+    this.availabilityResponse,
     this.failNotifications = false,
   }) : startResponse = startResponse ?? dutyResponse,
        endResponse = endResponse ?? dutyResponse;
@@ -410,9 +479,11 @@ class _DutyGateway implements HospitalTicketGateway {
   final Map<String, dynamic> endResponse;
   final List<HospitalTicket> tickets;
   final List<HospitalTicket> incomingTickets;
+  final HospitalSupervisorAvailabilitySummary? availabilityResponse;
   final bool failNotifications;
   int fetchDutyStatusCount = 0;
   int fetchIncomingTicketsCount = 0;
+  int fetchSupervisorAvailabilityCount = 0;
   int startDutyCount = 0;
   int endDutyCount = 0;
   String? lastCugNumber;
@@ -438,6 +509,27 @@ class _DutyGateway implements HospitalTicketGateway {
   Future<Map<String, dynamic>> fetchDutyStatus() async {
     fetchDutyStatusCount += 1;
     return dutyResponse;
+  }
+
+  @override
+  Future<HospitalSupervisorAvailabilitySummary>
+  fetchSupervisorAvailability() async {
+    fetchSupervisorAvailabilityCount += 1;
+    return availabilityResponse ??
+        HospitalSupervisorAvailabilitySummary.fromApi({
+          'availability': {
+            'generated_at': '2026-08-21T05:00:00.000Z',
+            'timezone': 'Asia/Kolkata',
+            'stale_tracking_supported': false,
+            'counts': {
+              'on_duty': 0,
+              'duty_not_started': 0,
+              'off_shift': 13,
+              'offline_stale': 0,
+            },
+            'supervisors': const [],
+          },
+        });
   }
 
   @override
