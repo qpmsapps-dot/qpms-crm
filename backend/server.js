@@ -64,6 +64,12 @@ import {
   summarizeWebHospitalTickets,
 } from './services/hospitalTicketWebDashboardService.js';
 import {
+  clientCanSeeHospitalEvent,
+  clientHospitalEventView,
+  hospitalTicketForActor,
+  performClientTicketCancellation,
+} from './services/hospitalTicketService.js';
+import {
   getDemoAccessScope,
   isDemoUser,
   isReadOnlyUser,
@@ -729,15 +735,57 @@ app.get('/api/hospital-client/tickets', async (request, response) => {
 });
 
 app.get('/api/hospital-client/notifications', async (request, response) => {
-  const tokenPayload = hospitalContactAuth(request, response);
-  if (!tokenPayload) return;
-  response.json({ ok: true, notifications: [] });
+  try {
+    const tokenPayload = hospitalContactAuth(request, response);
+    if (!tokenPayload) return;
+    const client = requireServiceRoleSupabase();
+    const contact = await loadHospitalContact(client, tokenPayload);
+    if (!contact) {
+      response.status(403).json({ ok: false, code: 'inactive_client_contact', message: 'This registered mobile access is inactive.' });
+      return;
+    }
+    const notifications = await client
+      .from('hospital_ticket_notifications')
+      .select('id,ticket_id,notification_type,title,body,priority,read_at,created_at,metadata,ticket:hospital_tickets(id,ticket_no,status_code,priority,description,floor_name,department_name,location_text,raised_by_client_contact_id,block:hospital_blocks(block_name),category:hospital_ticket_categories(category_name))')
+      .eq('recipient_client_contact_id', contact.id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (notifications.error) throw notifications.error;
+    const rows = await Promise.all((notifications.data || [])
+      .filter((row) => !row.ticket || row.ticket.raised_by_client_contact_id === contact.id)
+      .map((row) => contactNotificationView(client, row)));
+    response.json({ ok: true, notifications: rows });
+  } catch (error) {
+    safeHospitalError(response, error);
+  }
 });
 
 app.post('/api/hospital-client/notifications/:notificationId/read', async (request, response) => {
-  const tokenPayload = hospitalContactAuth(request, response);
-  if (!tokenPayload) return;
-  response.json({ ok: true });
+  try {
+    const tokenPayload = hospitalContactAuth(request, response);
+    if (!tokenPayload) return;
+    const client = requireServiceRoleSupabase();
+    const contact = await loadHospitalContact(client, tokenPayload);
+    if (!contact) {
+      response.status(403).json({ ok: false, code: 'inactive_client_contact', message: 'This registered mobile access is inactive.' });
+      return;
+    }
+    const result = await client
+      .from('hospital_ticket_notifications')
+      .update({ read_at: new Date().toISOString(), delivery_status: 'read', read_status: true })
+      .eq('id', request.params.notificationId)
+      .eq('recipient_client_contact_id', contact.id)
+      .select('id')
+      .maybeSingle();
+    if (result.error) throw result.error;
+    if (!result.data) {
+      response.status(404).json({ ok: false, code: 'notification_not_found', message: 'Notification was not found for this registered mobile number.' });
+      return;
+    }
+    response.json({ ok: true });
+  } catch (error) {
+    safeHospitalError(response, error);
+  }
 });
 
 app.get('/api/hospital-client/tickets/:ticketId', async (request, response) => {
@@ -771,7 +819,13 @@ app.get('/api/hospital-client/tickets/:ticketId', async (request, response) => {
     ]);
     if (events.error) throw events.error;
     if (attachments.error) throw attachments.error;
-    response.json({ ok: true, ticket: ticketResult.data, timeline: events.data || [], attachments: attachments.data || [], comments: [] });
+    response.json({
+      ok: true,
+      ticket: contactSafeTicket(ticketResult.data),
+      timeline: (events.data || []).filter(clientCanSeeHospitalEvent).map(clientHospitalEventView),
+      attachments: attachments.data || [],
+      comments: [],
+    });
   } catch (error) {
     response.status(500).json({ ok: false, code: 'hospital_client_ticket_failed', message: 'Unable to load ticket details.' });
   }
@@ -900,8 +954,79 @@ async function loadContactTicketDetail(client, contact, ticketId) {
   ]);
   if (events.error) throw events.error;
   if (attachments.error) throw attachments.error;
-  return { ticket: ticketResult.data, timeline: events.data || [], attachments: attachments.data || [], comments: [] };
+  return {
+    ticket: contactSafeTicket(ticketResult.data),
+    timeline: (events.data || []).filter(clientCanSeeHospitalEvent).map(clientHospitalEventView),
+    attachments: attachments.data || [],
+    comments: [],
+  };
 }
+
+function contactSafeTicket(ticket) {
+  return hospitalTicketForActor({ user: { profile_type: 'client' } }, ticket || {});
+}
+
+async function contactNotificationView(client, notification) {
+  const ticket = notification.ticket || null;
+  const beforeImageUrl = ticket?.id ? await signedContactComplaintPhotoUrl(client, ticket.id) : null;
+  return {
+    ...notification,
+    ticket: ticket ? contactSafeTicket(ticket) : null,
+    before_image_url: beforeImageUrl,
+  };
+}
+
+async function signedContactComplaintPhotoUrl(client, ticketId) {
+  const attachment = await client
+    .from('hospital_ticket_attachments')
+    .select('storage_bucket,storage_path')
+    .eq('ticket_id', ticketId)
+    .eq('attachment_type', 'complaint_photo')
+    .eq('is_client_visible', true)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (attachment.error || !attachment.data?.storage_bucket || !attachment.data?.storage_path) return null;
+  const signed = await client.storage
+    .from(attachment.data.storage_bucket)
+    .createSignedUrl(attachment.data.storage_path, 300);
+  return signed.error ? null : signed.data?.signedUrl || null;
+}
+
+app.post('/api/hospital-client/tickets/:ticketId/cancel', async (request, response) => {
+  try {
+    const tokenPayload = hospitalContactAuth(request, response);
+    if (!tokenPayload) return;
+    const client = requireServiceRoleSupabase();
+    const { contact, ticket } = await loadContactTicketForRequest(client, tokenPayload, request.params.ticketId);
+    if (!contact || !ticket) {
+      response.status(404).json({ ok: false, code: 'ticket_not_found', message: 'Ticket was not found for this registered mobile number.' });
+      return;
+    }
+    if (['closed', 'cancelled', 'resolved_awaiting_confirmation'].includes(ticket.status_code)) {
+      response.status(409).json({ ok: false, code: 'ticket_not_cancellable', message: 'This ticket can no longer be cancelled.' });
+      return;
+    }
+    const expectedVersion = Number(request.body?.version || ticket.version);
+    if (!Number.isInteger(expectedVersion) || expectedVersion !== Number(ticket.version)) {
+      response.status(409).json({ ok: false, code: 'ticket_version_conflict', message: 'This ticket was updated. Please refresh and try again.' });
+      return;
+    }
+    await performClientTicketCancellation(client, {
+      user: {
+        id: contact.id,
+        display_name: contact.full_name,
+        role_code: 'client_contact',
+        profile_type: 'client',
+      },
+    }, ticket, request.body || {});
+    runHospitalClientPushDispatch(client, ticket.id, 'hospital_client_ticket_cancelled');
+    const detail = await loadContactTicketDetail(client, contact, ticket.id);
+    response.json({ ok: true, ...detail });
+  } catch (error) {
+    safeHospitalError(response, error);
+  }
+});
 
 app.post('/api/hospital-client/tickets/:ticketId/feedback', async (request, response) => {
   try {
@@ -2438,6 +2563,7 @@ const CREATE_USER_ROLE_OPTIONS = new Set([
   'OPERATIONSMANAGER',
   'KAM',
   'FO',
+  'SUPERVISOR',
   'ADMIN',
 ]);
 
@@ -2453,6 +2579,7 @@ const OPERATIONAL_CREATE_ROLE_KEYS = new Set([
   'OPERATIONSMANAGER',
   'BRANCHHEAD',
   'BUSINESSHEAD',
+  'SUPERVISOR',
 ]);
 
 const IFMS_BUSINESS_KEYS = new Set(['IFMS', 'RELIANCERETAIL', 'RELIANCE']);
@@ -2476,6 +2603,12 @@ const TEMPORARY_NIMS_INTERNAL_HOSPITAL_ROLES = new Set([
   'facility_manager',
   'project_head',
 ]);
+
+function assertSupervisorHospitalRoleCombination(profileRole, hospitalRoleCode) {
+  if (createUserRoleKey(profileRole) !== 'SUPERVISOR') return;
+  if (accessCode(hospitalRoleCode) === 'housekeeping_supervisor') return;
+  throw userManagementHttpError(400, 'Base/Application Role Supervisor can only be mapped to Hospital Supervisor.');
+}
 
 function normalizeIndianMobile(value) {
   const digits = String(value || '').replace(/\D+/g, '');
@@ -2688,6 +2821,9 @@ async function createHospitalTicketAccessForProfile(client, profile, authUserId,
   const profileType = hospitalProfileTypeForAccess(access);
   if (profileType === 'internal' && !TEMPORARY_NIMS_INTERNAL_HOSPITAL_ROLES.has(roleCode)) {
     throw userManagementHttpError(400, 'QPMS Employee Hospital Ticketing role must be Hospital Supervisor, Operations Executive, Facility Manager, or Project Head.');
+  }
+  if (profileType === 'internal') {
+    assertSupervisorHospitalRoleCombination(profile.role, roleCode);
   }
   if (profileType === 'client' && !['doctor', 'hospital_management'].includes(roleCode)) {
     throw userManagementHttpError(400, 'Client User Hospital Ticketing role must be Doctor or Hospital Management.');
@@ -3480,7 +3616,7 @@ function validateCreateUserBody(body) {
     return;
   }
   if (!CREATE_USER_ROLE_OPTIONS.has(roleKey)) {
-    throw userManagementHttpError(400, 'role must be one of MD, COO, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, or Admin.');
+    throw userManagementHttpError(400, 'role must be one of MD, COO, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, Supervisor, or Admin.');
   }
   if (body.create_profile_only === true && roleKey === 'MD') return;
   if (!textOrNull(body.mobile)) throw userManagementHttpError(400, 'mobile is required.');
@@ -6023,6 +6159,12 @@ app.post(
         && TEMPORARY_NIMS_INTERNAL_HOSPITAL_ROLES.has(requestedHospitalRole)
         ? await resolveNimsAccessClient(client, body.access_client_id || body.client_id)
         : null;
+      if (temporaryNimsEmployee) {
+        assertSupervisorHospitalRoleCombination(body.role, requestedHospitalRole);
+      }
+      const temporaryNimsProfileRole = temporaryNimsEmployee && createUserRoleKey(body.role) === 'SUPERVISOR'
+        ? 'Supervisor'
+        : 'FO';
       const validationBody = temporaryNimsEmployee
         ? {
           ...body,
@@ -6075,7 +6217,7 @@ app.post(
           metadata: {
             user_type: 'internal',
             temporary_nims_hospital_role_code: requestedHospitalRole,
-            temporary_nims_profile_role: 'FO',
+            temporary_nims_profile_role: temporaryNimsProfileRole,
             access_client_id: temporaryNimsEmployee.accessClient.id,
             hospital_client_id: temporaryNimsEmployee.hospitalClient.id,
             hierarchy_reason: 'Temporary NIMS Hospital Ticketing employee access keeps operational authority in hospital_ticket_users.role_code.',
@@ -6096,7 +6238,7 @@ app.post(
         : await validateUnifiedAccessFoundation(client, unifiedAccess);
       let createBody = {
         ...validationBody,
-        role: temporaryNimsEmployee ? 'FO' : validationBody.role,
+        role: temporaryNimsEmployee ? temporaryNimsProfileRole : validationBody.role,
         display_name: textOrNull(body.display_name) || fullName,
         metadata: {
           ...(body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
@@ -6550,6 +6692,9 @@ app.post(
       const directNimsHospitalAccess = TEMPORARY_NIMS_INTERNAL_HOSPITAL_ROLES.has(requestedHospitalRole)
         ? await resolveNimsAccessClient(client, body.access_client_id || body.client_id)
         : null;
+      if (directNimsHospitalAccess) {
+        assertSupervisorHospitalRoleCombination(profile.role, requestedHospitalRole);
+      }
       const access = directNimsHospitalAccess
         ? {
           user_type: 'internal',
@@ -6800,6 +6945,7 @@ app.patch(
           if (!TEMPORARY_NIMS_INTERNAL_HOSPITAL_ROLES.has(roleCode)) {
             throw userManagementHttpError(400, 'Hospital role must be Hospital Supervisor, Operations Executive, Facility Manager, or Project Head.');
           }
+          assertSupervisorHospitalRoleCombination(updatedProfile.role, roleCode);
           const nimsAccess = await resolveNimsAccessClient(client, body.hospital_access.client_id);
           if (!nimsAccess) throw userManagementHttpError(400, 'Selected Hospital client must be NIMS Hyderabad.');
           await createHospitalTicketAccessForProfile(

@@ -393,7 +393,7 @@ export async function processHospitalPushDeliveries(client, { limit = 100, fireb
   const due = now.toISOString();
   const pending = await client
     .from('hospital_ticket_push_deliveries')
-    .select('*,notification:hospital_ticket_notifications(*,ticket:hospital_tickets(id,ticket_no,version,priority,floor_name,department_name,location_text,description,current_assignee_role,acceptance_due_at,status_code,category:hospital_ticket_categories(category_name),block:hospital_blocks(block_name))),device:hospital_ticket_push_devices(id,fcm_token,token_hash,app_scope,enabled,notification_permission)')
+    .select('*,notification:hospital_ticket_notifications(*,ticket:hospital_tickets(id,ticket_no,version,priority,title,floor_name,department_name,location_text,description,current_assignee_role,acceptance_due_at,status_code,category:hospital_ticket_categories(category_name),block:hospital_blocks(block_name))),device:hospital_ticket_push_devices(id,fcm_token,token_hash,app_scope,enabled,notification_permission)')
     .in('status', ['pending', 'failed'])
     .eq('retryable', true)
     .lte('next_attempt_at', due)
@@ -426,6 +426,12 @@ export async function processHospitalPushDeliveries(client, { limit = 100, fireb
       continue;
     }
 
+    if (delivery.notification?.notification_type === 'incoming_supervisor_ticket') {
+      delivery.notification.metadata = {
+        ...(delivery.notification.metadata || {}),
+        before_image_url: await firstVisibleComplaintPhotoUrl(client, delivery.notification.ticket_id),
+      };
+    }
     const message = buildHospitalPushMessage(delivery.notification, delivery.device);
     const sent = await firebaseSender(message);
     const attemptCount = Number(delivery.attempt_count || 0) + 1;
@@ -528,8 +534,13 @@ export function appScopeForNotification(notification) {
 export function buildHospitalPushMessage(notification, device) {
   const data = buildHospitalPushData(notification, device?.app_scope);
   const type = String(notification?.notification_type || '');
-  const title = cleanHospitalText(notification.title, 120) || fallbackTitle(type);
-  const body = cleanHospitalText(notification.body, 300) || fallbackBody(notification);
+  const title = type === 'incoming_supervisor_ticket'
+    ? incomingSupervisorTitle(notification)
+    : cleanHospitalText(notification.title, 120) || fallbackTitle(type);
+  const body = type === 'incoming_supervisor_ticket'
+    ? incomingSupervisorBody(notification)
+    : cleanHospitalText(notification.body, 300) || fallbackBody(notification);
+  const imageUrl = cleanHospitalText(notification?.metadata?.before_image_url, 1000);
   return {
     token: device.fcm_token,
     notification: { title, body },
@@ -539,6 +550,7 @@ export function buildHospitalPushMessage(notification, device) {
       notification: {
         channelId: 'hospital_tickets',
         clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+        ...(imageUrl ? { imageUrl } : {}),
       },
     },
     apns: {
@@ -555,7 +567,9 @@ export function buildHospitalPushData(notification, appScope) {
   const eventType = String(notification.notification_type || 'hospital_ticket_update');
   const blockName = String(ticket.block?.block_name || metadata.block_name || '').trim();
   const floorName = String(ticket.floor_name || metadata.floor_name || '').trim();
+  const locationText = String(ticket.location_text || metadata.location_text || '').trim();
   const categoryName = String(ticket.category?.category_name || metadata.category_name || '').trim();
+  const complaintText = String(ticket.title || ticket.description || metadata.complaint_text || '').trim();
   return compactStringMap({
     notification_id: notification.id,
     ticket_id: ticketId,
@@ -565,7 +579,10 @@ export function buildHospitalPushData(notification, appScope) {
     priority: String(notification.priority || ticket.priority || metadata.priority || ''),
     block_name: blockName,
     floor_name: floorName,
+    location_text: locationText,
     category_name: categoryName,
+    complaint_text: complaintText,
+    before_image_url: String(metadata.before_image_url || ''),
     target_screen: targetScreenForNotification(eventType),
     app_scope: appScope,
     acceptance_due_at: String(notification.action_expires_at || ticket.acceptance_due_at || metadata.acceptance_due_at || ''),
@@ -585,6 +602,43 @@ function targetScreenForNotification(type) {
   if (type === 'incoming_supervisor_ticket') return 'incoming_ticket';
   if (type === 'awaiting_confirmation') return 'ticket_feedback';
   return 'ticket_detail';
+}
+
+async function firstVisibleComplaintPhotoUrl(client, ticketId) {
+  if (!ticketId) return null;
+  const attachment = await client
+    .from('hospital_ticket_attachments')
+    .select('storage_bucket,storage_path')
+    .eq('ticket_id', ticketId)
+    .eq('attachment_type', 'complaint_photo')
+    .eq('is_client_visible', true)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (attachment.error || !attachment.data?.storage_bucket || !attachment.data?.storage_path) return null;
+  const signed = await client.storage
+    .from(attachment.data.storage_bucket)
+    .createSignedUrl(attachment.data.storage_path, 300);
+  return signed.error ? null : signed.data?.signedUrl || null;
+}
+
+function incomingSupervisorTitle(notification) {
+  const ticketNo = notification?.ticket?.ticket_no || notification?.metadata?.ticket_no || 'New ticket';
+  return `New Housekeeping Ticket ${ticketNo}`;
+}
+
+function incomingSupervisorBody(notification) {
+  const ticket = notification?.ticket || {};
+  const block = cleanHospitalText(ticket.block?.block_name || notification?.metadata?.block_name, 80);
+  const floor = cleanHospitalText(ticket.floor_name || notification?.metadata?.floor_name, 80);
+  const location = cleanHospitalText(ticket.location_text || notification?.metadata?.location_text, 100);
+  const priority = cleanHospitalText(notification?.priority || ticket.priority || notification?.metadata?.priority, 20).toUpperCase();
+  const complaint = cleanHospitalText(ticket.title || ticket.description || notification?.metadata?.complaint_text, 120);
+  const where = [block, floor, location].filter(Boolean).join(' - ');
+  return [
+    [where, priority].filter(Boolean).join(' | '),
+    complaint,
+  ].filter(Boolean).join('\n') || fallbackBody(notification);
 }
 
 function fallbackTitle(type) {

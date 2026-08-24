@@ -75,14 +75,51 @@ export function scopeAllows(scopes, { clientId, blockId, locationId, permission 
   });
 }
 
+const OPERATIONAL_ROLES = new Set([
+  'housekeeping_supervisor',
+  'operations_executive',
+  'facility_manager',
+  'project_head',
+]);
+
+const STATUS_OWNER_ROLE = {
+  open: 'housekeeping_supervisor',
+  awaiting_supervisor_acceptance: 'housekeeping_supervisor',
+  assigned: 'housekeeping_supervisor',
+  accepted: 'housekeeping_supervisor',
+  in_progress: 'housekeeping_supervisor',
+  reopened: 'housekeeping_supervisor',
+  escalated_operations_executive: 'operations_executive',
+  escalated_facility_manager: 'facility_manager',
+  escalated_project_head: 'project_head',
+};
+
+export function currentHospitalTicketOwnerRole(ticket) {
+  const assignedRole = normalizeHospitalRole(ticket?.current_assignee_role);
+  if (OPERATIONAL_ROLES.has(assignedRole)) return assignedRole;
+  return STATUS_OWNER_ROLE[String(ticket?.status_code || '').trim().toLowerCase()] || null;
+}
+
+export function isAssignedHospitalTicketOwner(actor, ticket) {
+  const role = normalizeHospitalRole(actor?.user?.role_code);
+  if (!OPERATIONAL_ROLES.has(role)) return false;
+  if (currentHospitalTicketOwnerRole(ticket) !== role) return false;
+  const assignedUserId = ticket?.current_assignee_user_id;
+  return !assignedUserId || assignedUserId === actor?.user?.id;
+}
+
 export function canViewHospitalTicket(actor, ticket) {
-  return isActiveHospitalUser(actor?.user)
-    && scopeAllows(actor.scopes, {
-      clientId: ticket?.client_id,
-      blockId: ticket?.block_id,
-      locationId: ticket?.location_id,
-      permission: 'view',
-    });
+  if (!isActiveHospitalUser(actor?.user)) return false;
+  if (!scopeAllows(actor.scopes, {
+    clientId: ticket?.client_id,
+    blockId: ticket?.block_id,
+    locationId: ticket?.location_id,
+    permission: 'view',
+  })) return false;
+  const role = normalizeHospitalRole(actor.user.role_code);
+  if (role === 'admin' || role === 'doctor' || role === 'hospital_management' || role === 'hospital_dean') return true;
+  if (OPERATIONAL_ROLES.has(role)) return isAssignedHospitalTicketOwner(actor, ticket);
+  return false;
 }
 
 function requestedHospitalClientId(request) {

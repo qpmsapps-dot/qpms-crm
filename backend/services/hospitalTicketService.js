@@ -13,6 +13,15 @@ const TICKET_SELECT = `
   accepted_by:hospital_ticket_users!hospital_tickets_accepted_by_user_id_fkey(id,display_name,role_code)
 `;
 
+function newestHospitalTicketComparator(left, right) {
+  const leftCreated = Date.parse(left?.created_at || left?.raised_at || '') || 0;
+  const rightCreated = Date.parse(right?.created_at || right?.raised_at || '') || 0;
+  if (leftCreated !== rightCreated) return rightCreated - leftCreated;
+  const ticketCompare = String(right?.ticket_no || '').localeCompare(String(left?.ticket_no || ''), undefined, { numeric: true });
+  if (ticketCompare !== 0) return ticketCompare;
+  return String(left?.id || '').localeCompare(String(right?.id || ''));
+}
+
 export async function loadHospitalMasters(client, actor) {
   const clientId = actor.user.client_id;
   const [blocksResult, locationsResult, categoriesResult] = await Promise.all([
@@ -541,7 +550,13 @@ export async function listHospitalNotifications(client, actor, limit = 200) {
 }
 
 export async function listHospitalTickets(client, actor, filters = {}) {
-  let query = client.from('hospital_tickets').select(TICKET_SELECT).eq('client_id', actor.user.client_id).order('raised_at', { ascending: false }).limit(500);
+  let query = client.from('hospital_tickets').select(TICKET_SELECT)
+    .eq('client_id', actor.user.client_id)
+    .order('created_at', { ascending: false })
+    .order('raised_at', { ascending: false })
+    .order('ticket_no', { ascending: false })
+    .order('id', { ascending: true })
+    .limit(500);
   query = applyTicketFilters(query, { ...filters, actorUserId: actor.user.id });
   const result = await query;
   if (result.error) throw result.error;
@@ -551,6 +566,7 @@ export async function listHospitalTickets(client, actor, filters = {}) {
     return [ticket.ticket_no, ticket.title, ticket.description, ticket.floor_name, ticket.department_name, ticket.location_text, ticket.block?.block_name, ticket.assignee?.display_name]
       .some((value) => String(value || '').toLowerCase().includes(search));
   });
+  visibleTickets.sort(newestHospitalTicketComparator);
   const complaintPhotos = await firstComplaintPhotos(client, visibleTickets.map((ticket) => ticket.id));
   return visibleTickets.map((ticket) => hospitalTicketForActor(actor, ticket, {
     complaint_photo: complaintPhotos.get(ticket.id) || null,
@@ -637,6 +653,7 @@ export function hospitalTicketForActor(actor, ticket, extra = {}) {
     'idempotency_key',
     'metadata',
     'raised_by_user_id',
+    'raised_by_client_contact_id',
     'current_assignee_user_id',
     'supervisor_user_id',
     'operations_executive_user_id',
@@ -1041,7 +1058,7 @@ async function requireCompletionEvidence(client, ticketId) {
   throw error;
 }
 
-async function performClientTicketCancellation(client, actor, ticket, payload = {}) {
+export async function performClientTicketCancellation(client, actor, ticket, payload = {}) {
   const reasonCode = cleanHospitalText(payload.reason_code || payload.reasonCode, 80);
   const reasonText = cleanHospitalText(payload.reason_text || payload.reasonText || cancellationReasonLabel(reasonCode), 500);
   const now = new Date().toISOString();
@@ -1094,10 +1111,22 @@ async function performClientTicketCancellation(client, actor, ticket, payload = 
   });
   if (event.error) throw event.error;
 
-  if (ticket.current_assignee_user_id) {
-    const notification = await client.from('hospital_ticket_notifications').insert({
+  const incomingRecipients = await client
+    .from('hospital_ticket_notifications')
+    .select('recipient_user_id')
+    .eq('ticket_id', ticket.id)
+    .eq('notification_type', 'incoming_supervisor_ticket')
+    .eq('action_status', 'active');
+  if (incomingRecipients.error) throw incomingRecipients.error;
+  const recipientIds = [
+    ticket.current_assignee_user_id,
+    ...(incomingRecipients.data || []).map((row) => row.recipient_user_id),
+  ].filter(Boolean);
+  const uniqueRecipients = [...new Set(recipientIds)];
+  if (uniqueRecipients.length) {
+    const notificationRows = uniqueRecipients.map((recipientId) => ({
       ticket_id: ticket.id,
-      recipient_user_id: ticket.current_assignee_user_id,
+      recipient_user_id: recipientId,
       notification_type: 'ticket_cancelled',
       title: 'Ticket Cancelled by Client',
       body: `${ticket.ticket_no} was cancelled by the client.`,
@@ -1105,10 +1134,14 @@ async function performClientTicketCancellation(client, actor, ticket, payload = 
       current_owner_role: ticket.current_assignee_role,
       escalation_level: ticket.current_escalation_level_no,
       metadata: {
+        ticket_id: ticket.id,
         ticket_no: ticket.ticket_no,
         reason_code: reasonCode,
+        app_scope: 'myqpms_internal',
+        target_screen: 'ticket_detail',
       },
-    });
+    }));
+    const notification = await client.from('hospital_ticket_notifications').insert(notificationRows);
     if (notification.error) throw notification.error;
   }
   const notifications = await client.from('hospital_ticket_notifications')
@@ -1457,9 +1490,13 @@ async function standardizeHospitalLifecycleNotificationCopy(client, context) {
 }
 
 export function hospitalSlaState(ticket, now = new Date()) {
+  if (['resolved_awaiting_confirmation', 'closed', 'cancelled'].includes(ticket?.status_code)) {
+    return { state: 'not_applicable', due_at: null, remaining_seconds: 0 };
+  }
   let dueAt = ticket.escalation_due_at || null;
   if (!dueAt && ['open', 'awaiting_supervisor_acceptance', 'assigned', 'accepted', 'in_progress', 'reopened'].includes(ticket.status_code)) dueAt = ticket.supervisor_sla_due_at;
   if (!dueAt && ticket.status_code === 'escalated_operations_executive') dueAt = ticket.operations_sla_due_at;
+  if (!dueAt && ticket.status_code === 'escalated_facility_manager') dueAt = ticket.facility_manager_sla_due_at;
   if (!dueAt && ticket.status_code === 'escalated_project_head') dueAt = ticket.project_head_sla_due_at;
   if (!dueAt && ticket.status_code === 'escalated_hospital_dean') dueAt = ticket.dean_sla_due_at;
   if (!dueAt) return { state: 'not_applicable', due_at: null, remaining_seconds: 0 };

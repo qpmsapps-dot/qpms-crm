@@ -253,8 +253,8 @@ test('incoming supervisor push carries notification fallback and server acceptan
     app_scope: 'myqpms_internal',
   });
 
-  assert.equal(message.notification.title, 'New Housekeeping Complaint');
-  assert.equal(message.notification.body, 'Block A needs acceptance.');
+  assert.equal(message.notification.title, 'New Housekeeping Ticket QPMS-HK-2026-000036');
+  assert.equal(message.notification.body, 'Block A - 3rd Floor | HIGH');
   assert.equal(message.android.notification.channelId, 'hospital_tickets');
   assert.equal(message.android.notification.clickAction, 'FLUTTER_NOTIFICATION_CLICK');
   assert.equal(message.data.target_screen, 'incoming_ticket');
@@ -316,6 +316,35 @@ test('contact ticket creation route schedules push fanout after RPC notification
   assert.match(routeSource, /rpc\('rpc_create_hospital_contact_ticket'/);
   assert.match(routeSource, /runHospitalClientPushDispatch\(client,\s*result\.data\?\.ticket\?\.id,\s*'hospital_client_ticket_created'\)/);
   assert.match(routeSource, /dispatchHospitalNotificationPushes\(client,\s*\{\s*notificationIds\s*\}\)/);
+});
+
+test('supervisor resolve writes client-contact confirmation notification before route push fanout', () => {
+  const serviceSource = readFileSync(new URL('../services/hospitalTicketService.js', import.meta.url), 'utf8');
+  const helperStart = serviceSource.indexOf('async function safeWriteContactAwaitingConfirmationNotification');
+  const helperEnd = serviceSource.indexOf('async function requireCurrentOperationalOwner', helperStart);
+  assert.notEqual(helperStart, -1);
+  assert.notEqual(helperEnd, -1);
+  const helperSource = serviceSource.slice(helperStart, helperEnd);
+
+  assert.match(serviceSource, /if \(effectiveAction === 'resolve'\)[\s\S]*safeWriteContactAwaitingConfirmationNotification\(client/);
+  assert.match(helperSource, /ticket\.status_code !== 'resolved_awaiting_confirmation'/);
+  assert.match(helperSource, /!ticket\.raised_by_client_contact_id/);
+  assert.match(helperSource, /recipient_user_id:\s*null/);
+  assert.match(helperSource, /recipient_client_contact_id:\s*contactId/);
+  assert.match(helperSource, /notification_type:\s*'awaiting_confirmation'/);
+  assert.match(helperSource, /app_scope:\s*'qpms_client'/);
+  assert.match(helperSource, /target_screen:\s*'ticket_feedback'/);
+  assert.match(helperSource, /upsert\(row,\s*\{\s*onConflict:\s*'dedupe_key',\s*ignoreDuplicates:\s*true\s*\}\)/);
+
+  const routeSource = readFileSync(new URL('../routes/hospitalTicketRoutes.js', import.meta.url), 'utf8');
+  const actionRouteStart = routeSource.indexOf('for (const [path, action] of Object.entries(ACTION_ROUTES))');
+  const actionRouteEnd = routeSource.indexOf("router.post('/:ticketId/attachments/sign-upload'", actionRouteStart);
+  assert.notEqual(actionRouteStart, -1);
+  assert.notEqual(actionRouteEnd, -1);
+  const actionRouteSource = routeSource.slice(actionRouteStart, actionRouteEnd);
+  assert.match(actionRouteSource, /performHospitalAction\(serviceClient/);
+  assert.match(actionRouteSource, /runHospitalPushDispatch\(serviceClient,\s*`ticket_action_\$\{path\}`\)/);
+  assert.match(routeSource, /dispatchHospitalNotificationPushes\(serviceClient\)/);
 });
 
 test('contact-created incoming supervisor notification queues one delivery and processes pending row without duplicates', async () => {
@@ -380,7 +409,7 @@ test('contact-created incoming supervisor notification queues one delivery and p
   assert.equal(state.deliveries[0].sent_at, now.toISOString());
 });
 
-test('work completed notification queues delivery to registered contact client device', async () => {
+test('work completed notification queues and sends one delivery to registered contact client device', async () => {
   const now = new Date('2026-08-17T12:00:00Z');
   const state = {
     notifications: [{
@@ -392,7 +421,19 @@ test('work completed notification queues delivery to registered contact client d
       title: 'Work Completed',
       body: 'QPMS has completed ticket QPMS-HK-2026-000057. Please review the work and confirm the service.',
       priority: 'high',
-      metadata: { ticket_no: 'QPMS-HK-2026-000057' },
+      metadata: {
+        ticket_id: 'ticket-contact',
+        ticket_no: 'QPMS-HK-2026-000057',
+        app_scope: 'qpms_client',
+        target_screen: 'ticket_detail',
+      },
+      ticket: {
+        id: 'ticket-contact',
+        ticket_no: 'QPMS-HK-2026-000057',
+        version: 9,
+        priority: 'high',
+        status_code: 'resolved_awaiting_confirmation',
+      },
       contact: { id: 'contact-1', is_active: true, client_id: 'client-a' },
     }],
     devices: [{
@@ -405,11 +446,34 @@ test('work completed notification queues delivery to registered contact client d
     }],
     deliveries: [],
   };
+  const client = fakePushClient(state);
 
-  const queued = await queueHospitalPushDeliveries(fakePushClient(state), { now });
+  const queued = await queueHospitalPushDeliveries(client, { now });
+  const queuedAgain = await queueHospitalPushDeliveries(client, { now });
   assert.equal(queued, 1);
+  assert.equal(queuedAgain, 0);
   assert.equal(state.deliveries.length, 1);
   assert.equal(state.deliveries[0].app_scope, 'qpms_client');
+  assert.equal(state.deliveries[0].payload_metadata.ticket_id, 'ticket-contact');
+  assert.equal(state.deliveries[0].payload_metadata.app_scope, 'qpms_client');
+
+  const processed = await processHospitalPushDeliveries(client, {
+    now,
+    firebaseSender: async (message) => {
+      assert.equal(message.token, 'contact-fcm-token-redacted');
+      assert.equal(message.notification.title, 'Work Completed');
+      assert.equal(message.data.app_scope, 'qpms_client');
+      assert.equal(message.data.target_screen, 'ticket_feedback');
+      assert.equal(message.data.ticket_id, 'ticket-contact');
+      assert.equal(message.data.ticket_number, 'QPMS-HK-2026-000057');
+      assert.equal(message.data.event_type, 'awaiting_confirmation');
+      return { ok: true, messageId: 'projects/demo/messages/contact-confirm' };
+    },
+  });
+
+  assert.deepEqual(processed, { sent: 1, failed: 0, skipped: 0, invalid_token: 0 });
+  assert.equal(state.deliveries[0].status, 'sent');
+  assert.equal(state.deliveries[0].attempt_count, 1);
 });
 
 test('client feedback notifications are actionable for internal myQPMS devices', async () => {

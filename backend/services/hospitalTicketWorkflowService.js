@@ -26,8 +26,8 @@ const PRIORITY_SLA_MINUTES = {
 };
 const ESCALATION_LEVELS = [
   { level: 1, code: 'supervisor', role: 'housekeeping_supervisor', label: 'Supervisor' },
-  { level: 2, code: 'facility_manager', role: 'facility_manager', label: 'Facility Manager' },
-  { level: 3, code: 'zonal_head', role: 'operations_executive', label: 'Zonal Head' },
+  { level: 2, code: 'operations_executive', role: 'operations_executive', label: 'Operations Executive' },
+  { level: 3, code: 'facility_manager', role: 'facility_manager', label: 'Facility Manager' },
   { level: 4, code: 'project_head', role: 'project_head', label: 'Project Head' },
   { level: 5, code: 'hospital_dean', role: 'hospital_dean', label: 'Hospital Dean' },
 ];

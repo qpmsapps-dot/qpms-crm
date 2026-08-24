@@ -8,7 +8,9 @@
     "dev": "nodemon server.js",
     "test": "node --test",
     "hospital:provision-uat": "node scripts/provisionHospitalUatUsers.js",
-    "hospital:seed-pilot": "node scripts/seedHospitalPilotTickets.js"
+    "hospital:seed-pilot": "node scripts/seedHospitalPilotTickets.js",
+    "hospital:test-escalation": "node scripts/test-hospital-escalation.js",
+    "hospital:create-nims-escalation-test-users": "node scripts/create-nims-escalation-test-users.js"
   },
   "engines": {
     "node": "22"

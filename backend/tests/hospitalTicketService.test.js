@@ -407,12 +407,47 @@ test('Block A client and Supervisor cannot access Block B', () => {
   }
 });
 
-test('client-wide Operations and Facility roles see both blocks', () => {
-  for (const role of ['operations_executive', 'facility_manager']) {
-    const actor = { user: activeUser(role), scopes: [{ client_id: 'client-a', scope_type: 'client', can_view: true }] };
-    assert.equal(canViewHospitalTicket(actor, { client_id: 'client-a', block_id: 'block-a' }), true);
-    assert.equal(canViewHospitalTicket(actor, { client_id: 'client-a', block_id: 'block-b' }), true);
-  }
+test('client-wide escalation roles see only their current actionable owner level', () => {
+  const supervisorTicket = {
+    client_id: 'client-a',
+    block_id: 'block-a',
+    status_code: 'awaiting_supervisor_acceptance',
+    current_assignee_role: 'housekeeping_supervisor',
+  };
+  const operationsTicket = {
+    client_id: 'client-a',
+    block_id: 'block-b',
+    status_code: 'escalated_operations_executive',
+    current_assignee_role: 'operations_executive',
+    current_assignee_user_id: 'ops-user',
+  };
+  const facilityTicket = {
+    client_id: 'client-a',
+    block_id: 'block-b',
+    status_code: 'escalated_facility_manager',
+    current_assignee_role: 'facility_manager',
+    current_assignee_user_id: 'facility-user',
+  };
+  const projectTicket = {
+    client_id: 'client-a',
+    block_id: 'block-b',
+    status_code: 'escalated_project_head',
+    current_assignee_role: 'project_head',
+    current_assignee_user_id: 'project-user',
+  };
+  const clientScope = { client_id: 'client-a', scope_type: 'client', can_view: true };
+
+  assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor', 'sup-user'), scopes: [clientScope] }, supervisorTicket), true);
+  assert.equal(canViewHospitalTicket({ user: activeUser('operations_executive', 'ops-user'), scopes: [clientScope] }, supervisorTicket), false);
+  assert.equal(canViewHospitalTicket({ user: activeUser('facility_manager', 'facility-user'), scopes: [clientScope] }, supervisorTicket), false);
+  assert.equal(canViewHospitalTicket({ user: activeUser('project_head', 'project-user'), scopes: [clientScope] }, supervisorTicket), false);
+
+  assert.equal(canViewHospitalTicket({ user: activeUser('operations_executive', 'ops-user'), scopes: [clientScope] }, operationsTicket), true);
+  assert.equal(canViewHospitalTicket({ user: activeUser('facility_manager', 'facility-user'), scopes: [clientScope] }, operationsTicket), false);
+  assert.equal(canViewHospitalTicket({ user: activeUser('facility_manager', 'facility-user'), scopes: [clientScope] }, facilityTicket), true);
+  assert.equal(canViewHospitalTicket({ user: activeUser('project_head', 'project-user'), scopes: [clientScope] }, facilityTicket), false);
+  assert.equal(canViewHospitalTicket({ user: activeUser('project_head', 'project-user'), scopes: [clientScope] }, projectTicket), true);
+  assert.equal(canViewHospitalTicket({ user: activeUser('operations_executive', 'other-ops'), scopes: [clientScope] }, operationsTicket), false);
 });
 
 test('creation scope is independent from view scope', () => {
@@ -541,8 +576,8 @@ test('SLA configuration exposes the priority escalation matrix', () => {
   assert.equal(prioritySlaMinutes('low'), 20);
   assert.deepEqual(hospitalEscalationLevels().map((level) => level.role), [
     'housekeeping_supervisor',
-    'facility_manager',
     'operations_executive',
+    'facility_manager',
     'project_head',
     'hospital_dean',
   ]);
@@ -556,7 +591,11 @@ test('SLA state is server-derived', () => {
   assert.equal(hospitalSlaState({ status_code: 'assigned', supervisor_sla_due_at: '2026-07-16T09:59:00Z' }, now).state, 'breached');
   assert.equal(hospitalSlaState({ status_code: 'reopened', supervisor_sla_due_at: '2026-07-16T09:59:00Z' }, now).state, 'breached');
   assert.equal(hospitalSlaState({ status_code: 'escalated_facility_manager', escalation_due_at: '2026-07-16T10:10:00Z' }, now).state, 'healthy');
+  assert.equal(hospitalSlaState({ status_code: 'escalated_facility_manager', facility_manager_sla_due_at: '2026-07-16T10:10:00Z' }, now).state, 'healthy');
   assert.equal(hospitalSlaState({ status_code: 'escalated_project_head', project_head_sla_due_at: '2026-07-16T09:59:00Z', final_escalation: true }, now).final_escalation, true);
+  assert.equal(hospitalSlaState({ status_code: 'resolved_awaiting_confirmation', escalation_due_at: '2026-07-16T09:59:00Z' }, now).state, 'not_applicable');
+  assert.equal(hospitalSlaState({ status_code: 'closed', escalation_due_at: '2026-07-16T09:59:00Z' }, now).state, 'not_applicable');
+  assert.equal(hospitalSlaState({ status_code: 'cancelled', escalation_due_at: '2026-07-16T09:59:00Z' }, now).state, 'not_applicable');
 });
 
 test('client and internal action lists stay separated', () => {
@@ -585,6 +624,60 @@ function query(data, error = null) {
     },
   };
 }
+
+test('ticket list returns newest tickets first with stable ticket number ties', async () => {
+  const actor = {
+    user: activeUser('housekeeping_supervisor', 'supervisor-user'),
+    scopes: [{ client_id: 'client-a', scope_type: 'client', can_view: true }],
+  };
+  const tickets = [
+    {
+      id: 'ticket-48',
+      ticket_no: 'QPMS-HK-2026-000048',
+      client_id: 'client-a',
+      block_id: 'block-a',
+      status_code: 'awaiting_supervisor_acceptance',
+      current_assignee_role: 'housekeeping_supervisor',
+      raised_at: '2026-08-24T10:00:00Z',
+      created_at: '2026-08-24T10:00:00Z',
+    },
+    {
+      id: 'ticket-50',
+      ticket_no: 'QPMS-HK-2026-000050',
+      client_id: 'client-a',
+      block_id: 'block-a',
+      status_code: 'awaiting_supervisor_acceptance',
+      current_assignee_role: 'housekeeping_supervisor',
+      raised_at: '2026-08-24T10:02:00Z',
+      created_at: '2026-08-24T10:02:00Z',
+    },
+    {
+      id: 'ticket-49',
+      ticket_no: 'QPMS-HK-2026-000049',
+      client_id: 'client-a',
+      block_id: 'block-a',
+      status_code: 'awaiting_supervisor_acceptance',
+      current_assignee_role: 'housekeeping_supervisor',
+      raised_at: '2026-08-24T10:01:00Z',
+      created_at: '2026-08-24T10:01:00Z',
+    },
+  ];
+  const client = {
+    from(table) {
+      if (table === 'hospital_tickets') return query(tickets);
+      if (table === 'hospital_ticket_attachments') return query([]);
+      return query([]);
+    },
+  };
+
+  const rows = await listHospitalTickets(client, actor, {});
+
+  assert.deepEqual(rows.map((row) => row.ticket_no), [
+    'QPMS-HK-2026-000050',
+    'QPMS-HK-2026-000049',
+    'QPMS-HK-2026-000048',
+  ]);
+});
 
 test('authenticated Admin profile does not auto-provision an unsupported Hospital role', async () => {
   const writes = [];
