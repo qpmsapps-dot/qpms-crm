@@ -3128,14 +3128,14 @@ function OperationsMap({
   // TODO: optional Google Maps provider switch using Google Maps JS API key
   const tileUrl =
     mapTheme === "dark"
-      ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+      ? "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       : mapTheme === "satellite"
         ? "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-        : "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+        : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
   const attribution =
     mapTheme === "satellite"
       ? "Tiles &copy; Esri"
-      : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+      : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
   const safePins = useMemo(
     () =>
       pins.flatMap((pin) => {
