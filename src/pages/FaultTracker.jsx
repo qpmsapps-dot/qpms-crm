@@ -235,6 +235,7 @@ function isAdminDeveloperUser(user) {
 function isManagementFaultTrackerUser(user) {
   return new Set([
     'COO',
+    'EXECUTIVEASSISTANT',
     'IFMSSOUTHHEAD',
     'SOUTHHEAD',
     'OPERATIONMANAGER',

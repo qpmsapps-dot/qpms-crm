@@ -9,7 +9,9 @@ import {
   previewHospitalFeedbackQr,
   reprintHospitalFeedbackQr,
 } from '../services/api.js';
+import { useAuth } from '../context/auth-context.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
+import { canManageHospitalFeedbackQr } from '../utils/authRoles.js';
 import { naturalOptionCompare } from '../utils/naturalSort.js';
 
 const QR_PAGE_SIZE = 20;
@@ -170,7 +172,7 @@ function RegistryFilters({ filters, setFilter, clients, hospitals, blocks, floor
   );
 }
 
-function QrPreviewModal({ qr, loading, error, copied, onClose, onCopy, onReprint }) {
+function QrPreviewModal({ qr, loading, error, copied, canManageQr, onClose, onCopy, onReprint }) {
   if (!qr && !loading && !error) return null;
   const active = qr?.status === 'active';
   return (
@@ -214,7 +216,9 @@ function QrPreviewModal({ qr, loading, error, copied, onClose, onCopy, onReprint
                 </label>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <button type="button" onClick={onCopy} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700"><Clipboard className="h-4 w-4" />{copied ? 'Copied' : 'Copy URL'}</button>
-                  <button type="button" onClick={() => onReprint(qr.qrId)} disabled={!active} title={active ? '' : 'Only active QR codes can be reprinted'} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:bg-slate-300"><Download className="h-4 w-4" />Reprint / Download</button>
+                  {canManageQr ? (
+                    <button type="button" onClick={() => onReprint(qr.qrId)} disabled={!active} title={active ? '' : 'Only active QR codes can be reprinted'} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:bg-slate-300"><Download className="h-4 w-4" />Reprint / Download</button>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -304,7 +308,7 @@ class QrRegistryErrorBoundary extends Component {
   }
 }
 
-function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
+function QrRegistryBody({ locations = [], refreshVersion, canManageQr, onQrDeleted }) {
   const [filters, setFilters] = useState({ search: '', clientKey: '', hospitalId: '', blockId: '', floorId: '', locationId: '', status: '', dateFrom: '', dateTo: '' });
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -513,8 +517,12 @@ function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
                       <div className="flex flex-wrap gap-2">
                         <button type="button" onClick={() => openPreview(item.qrId)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-bold text-slate-700"><Eye className="h-3.5 w-3.5" />Preview</button>
                         <button type="button" onClick={() => copyFromRow(item)} disabled={!active} title={active ? '' : 'Only active QR URLs can be copied'} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-bold text-slate-700 disabled:opacity-40"><Clipboard className="h-3.5 w-3.5" />{copiedId === item.qrId ? 'Copied' : 'Copy'}</button>
-                        <button type="button" onClick={() => reprint(item.qrId)} disabled={!active} title={active ? '' : 'Only active QR codes can be reprinted'} className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-2 text-xs font-bold text-white disabled:bg-slate-300"><Download className="h-3.5 w-3.5" />Reprint / Download</button>
-                        <button type="button" onClick={() => setDeleteState({ qr: item, deleting: false, error: '' })} className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs font-bold text-rose-700"><Trash2 className="h-3.5 w-3.5" />Delete</button>
+                        {canManageQr ? (
+                          <>
+                            <button type="button" onClick={() => reprint(item.qrId)} disabled={!active} title={active ? '' : 'Only active QR codes can be reprinted'} className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-2 text-xs font-bold text-white disabled:bg-slate-300"><Download className="h-3.5 w-3.5" />Reprint / Download</button>
+                            <button type="button" onClick={() => setDeleteState({ qr: item, deleting: false, error: '' })} className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs font-bold text-rose-700"><Trash2 className="h-3.5 w-3.5" />Delete</button>
+                          </>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -540,6 +548,7 @@ function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
           loading={previewState.loading}
           error={previewState.error}
           copied={copiedId === (previewState.qr?.qrId || 'preview')}
+          canManageQr={canManageQr}
           onClose={() => setPreviewState({ open: false, loading: false, qr: null, error: '' })}
           onCopy={() => copyFromQr(previewState.qr)}
           onReprint={reprint}
@@ -558,7 +567,7 @@ function QrRegistryBody({ locations = [], refreshVersion, onQrDeleted }) {
   );
 }
 
-function QrRegistry({ locations, refreshVersion, onQrDeleted }) {
+function QrRegistry({ locations, refreshVersion, canManageQr, onQrDeleted }) {
   return (
     <section className="enterprise-card-compact overflow-hidden">
       <div className="border-b border-slate-100 bg-white px-5 py-4">
@@ -566,7 +575,7 @@ function QrRegistry({ locations, refreshVersion, onQrDeleted }) {
         <p className="mt-1 text-sm text-slate-500">Search and reprint existing Client Feedback QR codes.</p>
       </div>
       <QrRegistryErrorBoundary>
-        <QrRegistryBody locations={locations} refreshVersion={refreshVersion} onQrDeleted={onQrDeleted} />
+        <QrRegistryBody locations={locations} refreshVersion={refreshVersion} canManageQr={canManageQr} onQrDeleted={onQrDeleted} />
       </QrRegistryErrorBoundary>
     </section>
   );
@@ -574,6 +583,8 @@ function QrRegistry({ locations, refreshVersion, onQrDeleted }) {
 
 export default function HospitalFeedbackQrGenerator() {
   usePageTitle('Client Feedback QR Generator');
+  const { user } = useAuth();
+  const canManageQr = canManageHospitalFeedbackQr(user);
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingError, setLoadingError] = useState('');
@@ -704,7 +715,7 @@ export default function HospitalFeedbackQrGenerator() {
       <PageHeader title="Client Feedback QR Generator" />
 
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="enterprise-card-compact overflow-hidden">
+        {canManageQr ? <div className="enterprise-card-compact overflow-hidden">
           <div className="border-b border-slate-100 bg-slate-50/80 px-5 py-4">
             <h2 className="text-base font-bold text-slate-950">Select feedback location</h2>
             <p className="mt-1 text-sm leading-6 text-slate-500">Generate the secure public QR for one active client hospital location.</p>
@@ -764,7 +775,7 @@ export default function HospitalFeedbackQrGenerator() {
               </div>
             ) : null}
           </div>
-        </div>
+        </div> : null}
 
         <aside className="enterprise-card-compact overflow-hidden">
           <div className="flex items-center justify-between border-b border-slate-100 bg-white px-5 py-4">
@@ -820,7 +831,7 @@ export default function HospitalFeedbackQrGenerator() {
         </aside>
       </section>
 
-      <QrRegistry locations={locations} refreshVersion={registryRefresh} onQrDeleted={onRegistryQrDeleted} />
+      <QrRegistry locations={locations} refreshVersion={registryRefresh} canManageQr={canManageQr} onQrDeleted={onRegistryQrDeleted} />
     </div>
   );
 }

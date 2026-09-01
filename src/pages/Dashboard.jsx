@@ -61,6 +61,7 @@ import { useWorkflow } from '../context/workflow-context.js';
 import {
   bdExecutives,
   canViewBdTeam,
+  hasCooWebVisibility,
   isCommercialTeam,
   isCoordinator,
   isExistingBusinessOperations,
@@ -422,7 +423,7 @@ const healthTone = {
 };
 
 function roleScope(user) {
-  if (['Admin', 'COO'].includes(user?.role)) return 'admin';
+  if (user?.role === 'Admin' || hasCooWebVisibility(user)) return 'admin';
   if (['BD Head', 'BD Executive'].includes(user?.role)) return 'bd';
   if (isCommercialTeam(user)) return 'commercial';
   if (isFinanceTeam(user)) return 'finance';
@@ -2184,12 +2185,12 @@ export default function Dashboard() {
     : 'new-business';
 
   const visibleLeads = useMemo(() => {
-    if (canViewBdTeam(user) || user?.role === 'COO') return leads;
+    if (canViewBdTeam(user) || hasCooWebVisibility(user)) return leads;
     return leads.filter((lead) => lead.assigned_bd_email === user?.email || lead.created_by_user_id === user?.id);
   }, [leads, user]);
 
   const visibleSiteVisits = useMemo(() => {
-    if (canViewBdTeam(user) || user?.role === 'COO') return siteVisits;
+    if (canViewBdTeam(user) || hasCooWebVisibility(user)) return siteVisits;
     return siteVisits.filter((visit) => visit.assigned_bd_email === user?.email || visit.created_by_user_id === user?.id);
   }, [siteVisits, user]);
 

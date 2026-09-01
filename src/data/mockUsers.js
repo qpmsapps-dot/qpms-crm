@@ -205,7 +205,15 @@ export function isCoordinator(user) {
 }
 
 export function isManagement(user) {
-  return ['MD', 'Admin', 'DEMO_ADMIN', 'COO', 'Management', 'GM', 'Top Management', 'GM / Top Management'].includes(user?.role);
+  return ['MD', 'Admin', 'DEMO_ADMIN', 'COO', 'Executive Assistant', 'Management', 'GM', 'Top Management', 'GM / Top Management'].includes(user?.role);
+}
+
+export function hasCooWebVisibility(user) {
+  return ['COO', 'Executive Assistant'].includes(user?.role);
+}
+
+export function hasCooAuthority(user) {
+  return user?.role === 'COO';
 }
 
 export function isFinanceLeadership(user) {
@@ -229,7 +237,7 @@ export function isApprovalReviewer(user) {
 }
 
 export function canManageLeads(user) {
-  return ['BD Head', 'BD Executive', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer'].includes(user?.role) || isManagement(user);
+  return ['BD Head', 'BD Executive', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer', 'DEMO_ADMIN', 'COO', 'GM', 'MD', 'Management', 'Top Management', 'GM / Top Management'].includes(user?.role);
 }
 
 export function canViewBdTeam(user) {

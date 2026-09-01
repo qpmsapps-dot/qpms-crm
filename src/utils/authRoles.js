@@ -6,6 +6,7 @@ const explicitDemoAuthFlag = String(
 export const isDemoAuthEnabled = explicitDemoAuthFlag === 'true';
 export const appMode = isDemoAuthEnabled ? 'demo' : 'production';
 export const isProductionAuthMode = !isDemoAuthEnabled;
+export const EXECUTIVE_ASSISTANT_ROLE = 'Executive Assistant';
 
 export const roleGroups = {
   BD: ['BD', 'BD Team', 'BD Executive', 'BD Head'],
@@ -15,7 +16,7 @@ export const roleGroups = {
   Commercial: ['Commercial', 'Commercial Team', 'Commercial Reviewer'],
   Finance: ['Finance', 'Finance Team', 'Finance Reviewer'],
   FinanceLeadership: ['Finance GM', 'CFO'],
-  Management: ['Management', 'MD', 'COO', 'GM', 'Top Management', 'GM / Top Management'],
+  Management: ['Management', 'MD', 'COO', EXECUTIVE_ASSISTANT_ROLE, 'GM', 'Top Management', 'GM / Top Management'],
   ExistingOperations: ['Existing Business Operations Team'],
   FieldOfficer: ['Field Officer', 'FO'],
   Client: ['Client', 'Client Login'],
@@ -27,6 +28,20 @@ export const protectedNavRoutes = ['/dashboard', '/crm', '/sites', '/site-visit'
 
 function normalizedRoleKey(role = '') {
   return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+export function hasCooWebVisibility(roleOrUser = '') {
+  const role = typeof roleOrUser === 'object' && roleOrUser !== null
+    ? roleOrUser.rawRole || roleOrUser.role
+    : roleOrUser;
+  return new Set(['COO', 'EXECUTIVEASSISTANT']).has(normalizedRoleKey(role));
+}
+
+export function hasCooAuthority(roleOrUser = '') {
+  const role = typeof roleOrUser === 'object' && roleOrUser !== null
+    ? roleOrUser.rawRole || roleOrUser.role
+    : roleOrUser;
+  return normalizedRoleKey(role) === 'COO';
 }
 
 export function normalizeCanonicalRole(role = '') {
@@ -49,6 +64,7 @@ export function normalizeCanonicalRole(role = '') {
     READONLYADMIN: 'DEMO_ADMIN',
     DEMOVIEWER: 'DEMO_VIEWER',
     COO: 'COO',
+    EXECUTIVEASSISTANT: EXECUTIVE_ASSISTANT_ROLE,
     GM: 'GM',
     GENERALMANAGER: 'GM',
     GMTOPMANAGEMENT: 'GM',
@@ -125,6 +141,7 @@ export function canSendLeadMom(user) {
 
 export function canAccessFaultTracker(user) {
   if (!user) return false;
+  if (hasCooWebVisibility(user)) return true;
   return new Set([
     'ADMIN',
     'QPMSADMIN',
@@ -148,7 +165,28 @@ export function canAccessFaultTracker(user) {
 export function canAccessStoreMaster(user) {
   if (!user) return false;
   if (normalizeAppRole(user.rawRole || user.role) === 'DemoViewer') return false;
+  return hasCooWebVisibility(user) || new Set(['DEVELOPER', 'ADMIN', 'QPMSADMIN', 'MD', 'DEMOADMIN', 'TENDERDEMO', 'READONLYADMIN']).has(
+    normalizeRawRole(user.rawRole || user.role),
+  );
+}
+
+export function canAccessUserManagementAdmin(user) {
+  if (!user) return false;
+  if (hasCooWebVisibility(user) && !hasCooAuthority(user)) return false;
+  return hasAnyRole(user, ['Admin', 'Management', 'HR', 'FinanceLeadership']);
+}
+
+export function canManageStoreMaster(user) {
+  if (!user) return false;
+  if (normalizeAppRole(user.rawRole || user.role) === 'DemoViewer') return false;
   return new Set(['DEVELOPER', 'ADMIN', 'QPMSADMIN', 'MD', 'COO', 'DEMOADMIN', 'TENDERDEMO', 'READONLYADMIN']).has(
+    normalizeRawRole(user.rawRole || user.role),
+  );
+}
+
+export function canManageHospitalFeedbackQr(user) {
+  if (!user) return false;
+  return new Set(['ADMIN', 'QPMSADMIN', 'DEVELOPER', 'DEV', 'MD', 'COO', 'GM', 'GMTOPMANAGEMENT', 'DEMOVIEWER']).has(
     normalizeRawRole(user.rawRole || user.role),
   );
 }
@@ -157,6 +195,7 @@ export function canAccessRoute(user, pathname) {
   if (normalizeAppRole(user?.rawRole || user?.role) === 'DemoViewer') {
     if (pathname.startsWith('/store-master') || pathname.startsWith('/settings') || pathname.startsWith('/employees')) return false;
   }
+  if (pathname.startsWith('/settings/user-management')) return canAccessUserManagementAdmin(user);
   if (pathname.startsWith('/store-master')) return canAccessStoreMaster(user);
   if (pathname.startsWith('/fault-tracker')) return canAccessFaultTracker(user);
   if (pathname.startsWith('/crm') && ['Business Head', 'Branch Head'].includes(normalizeCanonicalRole(user?.rawRole || user?.role))) return true;

@@ -1,7 +1,9 @@
 import { Bell, Building, QrCode, ShieldCheck, UserCog, Users } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
+import { useAuth } from '../context/auth-context.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
+import { canAccessUserManagementAdmin } from '../utils/authRoles.js';
 
 const settings = [
   { title: 'Company profile', description: 'Manage myQPMS identity, logo, address, and workspace details.', icon: Building },
@@ -14,6 +16,11 @@ const settings = [
 
 export default function Settings() {
   usePageTitle('Settings');
+  const { user } = useAuth();
+  const visibleSettings = settings.filter((item) => {
+    if (item.to === '/settings/user-management') return canAccessUserManagementAdmin(user);
+    return true;
+  });
 
   return (
     <div className="space-y-6">
@@ -22,7 +29,7 @@ export default function Settings() {
       />
 
       <section className="grid gap-4 md:grid-cols-2">
-        {settings.map((item) => {
+        {visibleSettings.map((item) => {
           const content = (
             <div className="flex gap-4">
               <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-qpms-50 text-qpms-600">

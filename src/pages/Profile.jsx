@@ -51,7 +51,7 @@ function roleKeyForProfile(role) {
 }
 
 function isExecutiveRole(roleKey) {
-  return ['ADMIN', 'MD', 'COO'].includes(roleKey);
+  return ['ADMIN', 'MD', 'COO', 'EXECUTIVEASSISTANT'].includes(roleKey);
 }
 
 function isOperationalRole(roleKey) {

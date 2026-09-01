@@ -21,6 +21,7 @@ import {
 } from '../services/api.js';
 import { useAuth } from '../context/auth-context.js';
 import { demoReadOnlyMessage, isReadOnlyUser } from '../utils/demoAccess.js';
+import { canManageStoreMaster } from '../utils/authRoles.js';
 import { buildStoreMasterExportRows, fetchAllStoreMasterRows } from '../utils/storeMasterExport.js';
 
 const DEFAULT_STATES = ['TN', 'AP', 'KA', 'KL', 'TG'];
@@ -310,6 +311,10 @@ export default function StoreMaster() {
   usePageTitle('Store Master');
   const { user } = useAuth();
   const demoReadOnly = isReadOnlyUser(user);
+  const canManageStores = canManageStoreMaster(user);
+  const storeMasterManageDeniedMessage = demoReadOnly
+    ? demoReadOnlyMessage
+    : 'Store Master editing is restricted to authorised management/admin roles.';
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState({
     totalStores: 0,
@@ -383,8 +388,8 @@ export default function StoreMaster() {
   }
 
   function openDrawer(mode, row = null) {
-    if (demoReadOnly && ['create', 'edit'].includes(mode)) {
-      setMessage(demoReadOnlyMessage);
+    if ((demoReadOnly || !canManageStores) && ['create', 'edit'].includes(mode)) {
+      setMessage(storeMasterManageDeniedMessage);
       return;
     }
     setDrawerMode(mode);
@@ -398,8 +403,8 @@ export default function StoreMaster() {
 
   async function saveStore() {
     if (Object.keys(errors).length) return;
-    if (demoReadOnly) {
-      setMessage(demoReadOnlyMessage);
+    if (demoReadOnly || !canManageStores) {
+      setMessage(storeMasterManageDeniedMessage);
       return;
     }
     if (outsideSouthIndia(form.latitude, form.longitude)) {
@@ -509,9 +514,9 @@ export default function StoreMaster() {
           <button type="button" onClick={exportExcel} disabled={exporting} className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-black text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60">
             <Download className="h-4 w-4" /> {exporting ? 'Preparing export...' : 'Export Excel'}
           </button>
-          {demoReadOnly ? (
+          {demoReadOnly || !canManageStores ? (
             <span className="inline-flex h-10 items-center rounded-xl border border-amber-200 bg-amber-50 px-4 text-sm font-black text-amber-800">
-              Tender Demo - read-only
+              {demoReadOnly ? 'Tender Demo - read-only' : 'View-only access'}
             </span>
           ) : (
             <button type="button" onClick={() => openDrawer('create')} className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl bg-qpms-700 px-4 text-sm font-black text-white shadow-lg shadow-qpms-600/20 hover:bg-qpms-800">
@@ -569,7 +574,7 @@ export default function StoreMaster() {
                       <button type="button" onClick={() => openDrawer('view', row)} className="focus-ring inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 font-black text-slate-600 hover:bg-slate-50">
                         <Eye className="h-3.5 w-3.5" /> View
                       </button>
-                      {!demoReadOnly ? (
+                      {!demoReadOnly && canManageStores ? (
                         <button type="button" onClick={() => openDrawer('edit', row)} className="focus-ring inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 font-black text-slate-600 hover:bg-slate-50">
                           <Edit className="h-3.5 w-3.5" /> Edit
                         </button>

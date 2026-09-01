@@ -21,6 +21,7 @@ import { useWorkflow } from '../context/workflow-context.js';
 import { isAdmin, isCoordinator, isFinanceTeam, isHrReviewer, isOperationsTeam } from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { isReadOnlyUser } from '../utils/demoAccess.js';
+import { hasCooAuthority, hasCooWebVisibility } from '../utils/authRoles.js';
 
 function serviceScope(visit) {
   const scope = visit.serviceScope || visit.survey?.serviceScope || visit.survey?.ifmScope;
@@ -204,6 +205,8 @@ export default function Tasks() {
   const operationsMode = isOperationsTeam(user);
   const coordinatorMode = isCoordinator(user);
   const readOnlyDemo = isReadOnlyUser(user);
+  const viewOnlyCooVisibility = hasCooWebVisibility(user) && !hasCooAuthority(user);
+  const canDecideReview = !readOnlyDemo && !viewOnlyCooVisibility;
   const adminReviewStage = ['HR Validation', 'Commercial Review', 'Finance Review'].includes(searchParams.get('stage'))
     ? searchParams.get('stage')
     : 'HR Validation';
@@ -354,11 +357,11 @@ export default function Tasks() {
           <aside className="enterprise-card-compact h-fit space-y-4 p-4">
             <div>
               <p className="text-sm font-semibold text-slate-950 dark:text-white">{meta.panelTitle}</p>
-              <p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">{readOnlyDemo ? 'Decision actions are hidden for demonstration viewers.' : 'Decision applies only to this review stage.'}</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">{canDecideReview ? 'Decision applies only to this review stage.' : 'Decision actions are hidden for view-only access.'}</p>
             </div>
-            {readOnlyDemo ? (
+            {!canDecideReview ? (
               <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900">
-                Read-only demonstration access. Approve, reject, rework and escalation controls are disabled.
+                Approve, reject, rework and escalation controls are disabled.
               </div>
             ) : (
               <>
