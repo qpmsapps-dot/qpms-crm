@@ -1,5 +1,17 @@
 const ACTIVE_BLOCKS = [
   'Admin Block',
+  'Core Block',
+  'Emergency Block',
+  'Millennium Block',
+  'Radiation Block',
+  'Speciality Block',
+  'OPD Block',
+  'Oncology Block',
+  'Extra Mural',
+];
+
+const LEGACY_ACTIVE_BLOCKS = [
+  'Admin Block',
   'OPD Block',
   'Oncology Block',
   'Speciality Block',
@@ -16,6 +28,7 @@ const ROUTING_TYPE_RANK = {
 };
 
 export const nimsActiveBlockNames = ACTIVE_BLOCKS;
+export const nimsLegacyActiveBlockNames = LEGACY_ACTIVE_BLOCKS;
 
 export const nimsSupervisorRoster = [
   { name: 'Ch Ramu', shift: '8 AM-4 PM', responsibility: 'Overall / Administration', assignmentType: 'overall_fallback', draftOnly: true },

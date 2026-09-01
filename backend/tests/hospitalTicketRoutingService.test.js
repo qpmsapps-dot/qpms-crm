@@ -5,6 +5,7 @@ import {
   chooseSupervisorAssignment,
   isShiftActive,
   nimsActiveBlockNames,
+  nimsLegacyActiveBlockNames,
   nimsRosterCoverageMatrix,
   parseShiftWindow,
   rosterImportPlan,
@@ -99,6 +100,24 @@ test('Core and Extra Mural daytime remain gaps without verified mappings', () =>
   assert.equal(extra.windows.find((row) => row.window === '12 Noon-2 PM').status, 'gap');
 });
 
+test('official V2 Emergency and Radiation blocks are active while legacy blocks remain supported', () => {
+  for (const block of ['Core Block', 'Admin Block', 'Millennium Block', 'Radiation Block', 'Speciality Block', 'Emergency Block']) {
+    assert.equal(nimsActiveBlockNames.includes(block), true);
+  }
+  for (const legacyBlock of ['OPD Block', 'Oncology Block', 'Extra Mural']) {
+    assert.equal(nimsActiveBlockNames.includes(legacyBlock), true);
+    assert.equal(nimsLegacyActiveBlockNames.includes(legacyBlock), true);
+  }
+});
+
+test('Emergency and Radiation inherit all-block night routing support', () => {
+  const matrix = nimsRosterCoverageMatrix();
+  for (const block of ['Emergency Block', 'Radiation Block']) {
+    const row = matrix.find((item) => item.block === block);
+    assert.equal(row.windows.find((window) => window.window === '8 PM-8 AM').status, 'primary');
+  }
+});
+
 test('Admin OPD and Oncology 4 PM-8 PM remain gaps while night all-block coverage works', () => {
   const matrix = nimsRosterCoverageMatrix();
   for (const block of ['Admin Block', 'OPD Block', 'Oncology Block']) {
@@ -108,7 +127,7 @@ test('Admin OPD and Oncology 4 PM-8 PM remain gaps while night all-block coverag
   }
 });
 
-test('Trauma and Emergency roster responsibilities are not active selectable blocks', () => {
+test('Trauma roster responsibilities are not active selectable blocks', () => {
   assert.equal(nimsActiveBlockNames.includes('Trauma Block'), false);
   const plan = rosterImportPlan();
   assert.ok(plan.ambiguousBlocks.some((row) => row.block === 'Trauma Block'));

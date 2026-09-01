@@ -25,15 +25,20 @@ import {
 import {
   clientCanSeeHospitalEvent,
   clientHospitalEventView,
+  allowedActionsForTicket,
   buildHospitalLifecycleNotificationRows,
+  buildHospitalRequesterClosedNotificationRows,
+  createHospitalTicket,
   getHospitalTicket,
   hospitalLifecycleNotificationDedupeKey,
   hospitalDashboard,
+  inferHospitalDepartmentFromLocation,
   hospitalSlaState,
   hospitalTicketForActor,
   hospitalTicketIdentifierColumn,
   listHospitalNotifications,
   listHospitalTickets,
+  safeWriteHospitalRequesterClosedNotification,
 } from '../services/hospitalTicketService.js';
 
 const activeUser = (role, id = 'user-a') => ({
@@ -53,6 +58,78 @@ const blockScope = (blockId, permissions = {}) => ({
   ...permissions,
 });
 
+const uuid = {
+  client: '11111111-1111-4111-8111-111111111111',
+  actor: '22222222-2222-4222-8222-222222222222',
+  block: '33333333-3333-4333-8333-333333333333',
+  floor: '44444444-4444-4444-8444-444444444444',
+  department: '55555555-5555-4555-8555-555555555555',
+  location: '66666666-6666-4666-8666-666666666666',
+  category: '77777777-7777-4777-8777-777777777777',
+  ticket: '88888888-8888-4888-8888-888888888888',
+};
+
+function selectClientForHospitalCreate({ rpcCalls = [] } = {}) {
+  const rows = {
+    hospital_locations: {
+      id: uuid.location,
+      client_id: uuid.client,
+      block_id: uuid.block,
+      floor_id: uuid.floor,
+      department_id: uuid.department,
+      is_active: true,
+    },
+    hospital_blocks: {
+      id: uuid.block,
+      client_id: uuid.client,
+      is_active: true,
+    },
+    hospital_floors: {
+      id: uuid.floor,
+      client_id: uuid.client,
+      block_id: uuid.block,
+      floor_name: 'Ground Floor',
+      is_active: true,
+      is_known_service_floor: true,
+      verification_status: 'verified',
+    },
+    hospital_departments: {
+      id: uuid.department,
+      client_id: uuid.client,
+      block_id: uuid.block,
+      floor_id: uuid.floor,
+      is_active: true,
+    },
+  };
+  return {
+    from(table) {
+      return {
+        select() { return this; },
+        eq() { return this; },
+        maybeSingle: async () => ({ data: rows[table] || null, error: null }),
+        upsert: async () => ({ data: null, error: null }),
+      };
+    },
+    rpc: async (name, payload) => {
+      rpcCalls.push({ name, payload });
+      return {
+        data: {
+          ticket: {
+            id: uuid.ticket,
+            ticket_no: 'QPMS-HK-2026-000001',
+            raised_by_user_id: uuid.actor,
+            priority: 'medium',
+            status_code: 'awaiting_supervisor_acceptance',
+            version: 1,
+            reopen_count: 0,
+          },
+        },
+        error: null,
+      };
+    },
+  };
+}
+
 test('role normalization preserves distinct hospital roles', () => {
   assert.equal(normalizeHospitalRole('Housekeeping Supervisor'), 'housekeeping_supervisor');
   assert.equal(normalizeHospitalRole('Operations Executive'), 'operations_executive');
@@ -69,6 +146,55 @@ test('inactive or unknown hospital users are rejected', () => {
   assert.equal(isActiveHospitalUser(activeUser('admin')), true);
   assert.equal(isActiveHospitalUser({ ...activeUser('doctor'), is_active: false }), false);
   assert.equal(isActiveHospitalUser(activeUser('developer')), false);
+});
+
+test('APK-style ticket creation infers department from selected location before RPC routing', async () => {
+  const rpcCalls = [];
+  const client = selectClientForHospitalCreate({ rpcCalls });
+  const actor = {
+    user: {
+      ...activeUser('doctor', uuid.actor),
+      client_id: uuid.client,
+      profile_type: 'client',
+    },
+    scopes: [{ ...blockScope(uuid.block, { can_create: true }), client_id: uuid.client }],
+  };
+  const result = await createHospitalTicket(client, actor, {
+    block_id: uuid.block,
+    floor_id: uuid.floor,
+    location_id: uuid.location,
+    category_id: uuid.category,
+    priority: 'medium',
+    title: 'Washroom cleaning',
+    description: 'Please clean the area.',
+    idempotency_key: 'apk-request-without-department',
+  });
+  assert.equal(result.ticket.id, uuid.ticket);
+  assert.equal(rpcCalls.length, 1);
+  assert.equal(rpcCalls[0].name, 'rpc_create_hospital_ticket');
+  assert.equal(rpcCalls[0].payload.p_department_id, uuid.department);
+});
+
+test('department inference leaves explicit department unchanged and keeps legacy locations valid', async () => {
+  const client = selectClientForHospitalCreate();
+  const actor = { user: { client_id: uuid.client } };
+  const payload = {
+    blockId: uuid.block,
+    floorId: uuid.floor,
+    departmentId: uuid.department,
+    locationId: uuid.location,
+  };
+  const result = await inferHospitalDepartmentFromLocation(client, actor, payload);
+  assert.equal(result.departmentId, uuid.department);
+
+  const legacyPayload = {
+    blockId: uuid.block,
+    floorId: uuid.floor,
+    departmentId: '',
+    locationId: '',
+  };
+  const legacyResult = await inferHospitalDepartmentFromLocation(client, actor, legacyPayload);
+  assert.equal(legacyResult.departmentId, '');
 });
 
 test('ticket lifecycle notifications cover useful client milestones without assignment spam', () => {
@@ -111,6 +237,22 @@ test('ticket lifecycle notifications cover useful client milestones without assi
   });
   assert.equal(workStarted.length, 1);
   assert.equal(workStarted[0].notification_type, 'work_started');
+
+  const escalationOwnerWorkStarted = buildHospitalLifecycleNotificationRows({
+    action: 'start_work',
+    actor: { user: activeUser('operations_executive', 'ops-user') },
+    beforeTicket: { ...baseTicket, status_code: 'escalated_operations_executive', version: 2, work_started_at: null },
+    afterTicket: {
+      ...baseTicket,
+      status_code: 'escalated_operations_executive',
+      version: 3,
+      current_assignee_role: 'operations_executive',
+      current_escalation_level_no: 2,
+      work_started_at: '2026-08-24T10:00:00Z',
+    },
+  });
+  assert.equal(escalationOwnerWorkStarted.length, 1);
+  assert.equal(escalationOwnerWorkStarted[0].notification_type, 'work_started');
 
   const noAssignmentSpam = buildHospitalLifecycleNotificationRows({
     action: 'reassign_supervisor',
@@ -166,6 +308,144 @@ test('client not-satisfied feedback sends client reopen confirmation and allows 
   assert.notEqual(firstWorkKey, secondWorkKey);
 });
 
+test('requester closed notification supports registered contact requester exactly once per closure cycle', () => {
+  const beforeTicket = {
+    id: 'ticket-contact-1',
+    ticket_no: 'QPMS-HK-2026-000123',
+    raised_by_client_contact_id: 'contact-1',
+    raised_by_user_id: null,
+    status_code: 'resolved_awaiting_confirmation',
+    priority: 'medium',
+    version: 6,
+    reopen_count: 0,
+  };
+  const afterTicket = {
+    ...beforeTicket,
+    status_code: 'closed',
+    version: 7,
+  };
+
+  const rows = buildHospitalRequesterClosedNotificationRows({ beforeTicket, afterTicket });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].notification_type, 'ticket_closed');
+  assert.equal(rows[0].recipient_client_contact_id, 'contact-1');
+  assert.equal(rows[0].recipient_user_id, null);
+  assert.equal(rows[0].ticket_id, 'ticket-contact-1');
+  assert.equal(rows[0].metadata.ticket_no, 'QPMS-HK-2026-000123');
+  assert.equal(rows[0].metadata.target_screen, 'ticket_detail');
+  assert.match(rows[0].dedupe_key, /ticket_closed/);
+
+  const duplicate = buildHospitalRequesterClosedNotificationRows({ beforeTicket, afterTicket });
+  assert.equal(duplicate[0].dedupe_key, rows[0].dedupe_key);
+
+  const secondCycle = buildHospitalRequesterClosedNotificationRows({
+    beforeTicket: { ...beforeTicket, version: 11, reopen_count: 1 },
+    afterTicket: { ...afterTicket, version: 12, reopen_count: 1 },
+  });
+  assert.notEqual(secondCycle[0].dedupe_key, rows[0].dedupe_key);
+});
+
+test('requester closed notification writer upserts one DB row and returns it for push dispatch', async () => {
+  const writes = [];
+  const client = {
+    from(table) {
+      assert.equal(table, 'hospital_ticket_notifications');
+      return {
+        upsert(rows, options) {
+          writes.push({ rows, options });
+          return {
+            select: async (columns) => {
+              assert.equal(columns, 'id');
+              return { data: [{ id: 'notification-closed-1' }], error: null };
+            },
+          };
+        },
+      };
+    },
+  };
+
+  const result = await safeWriteHospitalRequesterClosedNotification(client, {
+    beforeTicket: {
+      id: 'ticket-contact-1',
+      ticket_no: 'QPMS-HK-2026-000123',
+      raised_by_client_contact_id: 'contact-1',
+      status_code: 'resolved_awaiting_confirmation',
+      version: 6,
+      reopen_count: 0,
+    },
+    afterTicket: {
+      id: 'ticket-contact-1',
+      ticket_no: 'QPMS-HK-2026-000123',
+      raised_by_client_contact_id: 'contact-1',
+      status_code: 'closed',
+      version: 7,
+      reopen_count: 0,
+    },
+  });
+
+  assert.deepEqual(result.notificationIds, ['notification-closed-1']);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].options.onConflict, 'dedupe_key');
+  assert.equal(writes[0].options.ignoreDuplicates, true);
+  assert.equal(writes[0].rows.length, 1);
+  assert.equal(writes[0].rows[0].notification_type, 'ticket_closed');
+  assert.equal(writes[0].rows[0].recipient_client_contact_id, 'contact-1');
+});
+
+test('requester closed notification supports authenticated hospital user requester', () => {
+  const rows = buildHospitalLifecycleNotificationRows({
+    action: 'feedback',
+    actor: { user: activeUser('doctor', 'client-user') },
+    beforeTicket: {
+      id: 'ticket-user-1',
+      ticket_no: 'QPMS-HK-2026-000124',
+      raised_by_user_id: 'client-user',
+      status_code: 'resolved_awaiting_confirmation',
+      priority: 'high',
+      version: 3,
+      reopen_count: 0,
+    },
+    afterTicket: {
+      id: 'ticket-user-1',
+      ticket_no: 'QPMS-HK-2026-000124',
+      raised_by_user_id: 'client-user',
+      status_code: 'closed',
+      priority: 'high',
+      version: 4,
+      reopen_count: 0,
+    },
+  });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].notification_type, 'ticket_closed');
+  assert.equal(rows[0].recipient_user_id, 'client-user');
+  assert.equal(rows[0].recipient_client_contact_id, null);
+  assert.equal(rows[0].metadata.app_scope, 'qpms_client');
+});
+
+test('requester closed notification is not emitted for reopened, cancelled, or pre-close states', () => {
+  const base = {
+    id: 'ticket-no-close',
+    ticket_no: 'QPMS-HK-2026-000125',
+    raised_by_client_contact_id: 'contact-1',
+    priority: 'low',
+    version: 2,
+    reopen_count: 0,
+  };
+  assert.equal(buildHospitalRequesterClosedNotificationRows({
+    beforeTicket: { ...base, status_code: 'resolved_awaiting_confirmation' },
+    afterTicket: { ...base, status_code: 'reopened', version: 3, reopen_count: 1 },
+  }).length, 0);
+  assert.equal(buildHospitalRequesterClosedNotificationRows({
+    beforeTicket: { ...base, status_code: 'resolved_awaiting_confirmation' },
+    afterTicket: { ...base, status_code: 'cancelled', version: 3 },
+  }).length, 0);
+  assert.equal(buildHospitalRequesterClosedNotificationRows({
+    beforeTicket: { ...base, status_code: 'in_progress' },
+    afterTicket: { ...base, status_code: 'closed', version: 3 },
+  }).length, 0);
+});
+
 test('manual reassignment notifies only the new assigned internal user', () => {
   const rows = buildHospitalLifecycleNotificationRows({
     action: 'manual_reassignment',
@@ -191,13 +471,15 @@ test('manual reassignment notifies only the new assigned internal user', () => {
       reopen_count: 0,
       priority: 'medium',
       current_assignee_role: 'housekeeping_supervisor',
-      current_escalation_level_no: 1,
+      current_escalation_level_no: 2,
     },
   });
 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].recipient_user_id, 'supervisor-user');
   assert.equal(rows[0].notification_type, 'ticket_assigned_internal');
+  assert.equal(rows[0].title, 'Ticket Reassigned');
+  assert.match(rows[0].body, /reassigned to you by Operations Executive/);
   assert.equal(rows[0].metadata.app_scope, 'myqpms_internal');
 });
 
@@ -391,12 +673,14 @@ test('full ticket lifecycle notification sequence supports reopen cycles without
     'work_started',
     'ticket_reopened_client',
     'work_started',
+    'ticket_closed',
   ]);
   assert.equal(rows.every((row) => row.recipient_user_id === 'client-user'), true);
   assert.equal(rows.every((row) => row.metadata.app_scope === 'qpms_client'), true);
   assert.equal(new Set(rows.map((row) => row.dedupe_key)).size, rows.length);
   assert.equal(rows.filter((row) => row.notification_type === 'work_started').length, 2);
   assert.equal(rows.filter((row) => row.notification_type === 'ticket_accepted').length, 1);
+  assert.equal(rows.filter((row) => row.notification_type === 'ticket_closed').length, 1);
 });
 
 test('Block A client and Supervisor cannot access Block B', () => {
@@ -544,11 +828,44 @@ test('status transitions reject arbitrary frontend statuses', () => {
   assert.deepEqual(validateHospitalAction({ role: 'doctor', status: 'assigned', action: 'cancel', payload: { reason_code: 'duplicate_complaint' } }), []);
   assert.ok(validateHospitalAction({ role: 'doctor', status: 'resolved_awaiting_confirmation', action: 'cancel', payload: { reason_code: 'duplicate_complaint' } }).length > 0);
   assert.deepEqual(validateHospitalAction({ role: 'operations_executive', status: 'escalated_operations_executive', action: 'progress', payload: { remarks: 'x' } }), []);
+  assert.deepEqual(validateHospitalAction({ role: 'operations_executive', status: 'escalated_operations_executive', action: 'start_work' }), []);
+  assert.deepEqual(validateHospitalAction({ role: 'facility_manager', status: 'escalated_facility_manager', action: 'start_work' }), []);
+  assert.deepEqual(validateHospitalAction({ role: 'project_head', status: 'escalated_project_head', action: 'start_work' }), []);
   assert.ok(validateHospitalAction({ role: 'housekeeping_supervisor', status: 'awaiting_supervisor_acceptance', action: 'progress', payload: { remarks: 'x' } }).length > 0);
   assert.deepEqual(validateHospitalAction({ role: 'admin', status: 'escalated_operations_executive', action: 'take_over' }), []);
   assert.deepEqual(validateHospitalAction({ role: 'admin', status: 'escalated_operations_executive', action: 'escalate_facility' }), []);
   assert.deepEqual(validateHospitalAction({ role: 'admin', status: 'in_progress', action: 'resolve', payload: { resolution_action: 'Mopped', resolution_remarks: 'Dry and inspected' } }), []);
   assert.ok(validateHospitalAction({ role: 'admin', status: 'closed', action: 'progress', payload: { remarks: 'x' } }).length > 0);
+});
+
+test('takeover exposes operational work actions without duplicate takeover', () => {
+  const actor = {
+    user: { ...activeUser('operations_executive', 'ops-user'), profile_type: 'internal' },
+  };
+  const awaiting = {
+    status_code: 'escalated_operations_executive',
+    acceptance_status: 'awaiting',
+    current_assignee_role: 'operations_executive',
+    current_assignee_user_id: 'ops-user',
+  };
+  const accepted = {
+    ...awaiting,
+    acceptance_status: 'accepted',
+    work_started_at: null,
+  };
+  const started = {
+    ...accepted,
+    work_started_at: '2026-08-24T10:00:00Z',
+  };
+
+  assert.ok(allowedActionsForTicket(actor, awaiting).includes('take_over'));
+  assert.ok(!allowedActionsForTicket(actor, awaiting).includes('start_work'));
+  assert.ok(!allowedActionsForTicket(actor, accepted).includes('take_over'));
+  assert.ok(allowedActionsForTicket(actor, accepted).includes('start_work'));
+  assert.ok(allowedActionsForTicket(actor, accepted).includes('progress'));
+  assert.ok(allowedActionsForTicket(actor, accepted).includes('resolve'));
+  assert.ok(allowedActionsForTicket(actor, accepted).includes('reassign_supervisor'));
+  assert.ok(!allowedActionsForTicket(actor, started).includes('start_work'));
 });
 
 test('resolution and feedback validation enforce production requirements', () => {
@@ -602,7 +919,10 @@ test('client and internal action lists stay separated', () => {
   assert.ok(hospitalAllowedActions(activeUser('doctor')).includes('create_ticket'));
   assert.ok(hospitalAllowedActions(activeUser('doctor')).includes('cancel'));
   assert.ok(!hospitalAllowedActions(activeUser('doctor')).includes('resolve'));
+  assert.ok(hospitalAllowedActions(activeUser('operations_executive')).includes('start_work'));
   assert.ok(hospitalAllowedActions(activeUser('facility_manager')).includes('resolve'));
+  assert.ok(hospitalAllowedActions(activeUser('facility_manager')).includes('reassign_supervisor'));
+  assert.ok(hospitalAllowedActions(activeUser('project_head')).includes('reassign_supervisor'));
   assert.ok(hospitalAllowedActions(activeUser('admin')).includes('take_over'));
   assert.ok(hospitalAllowedActions(activeUser('admin')).includes('resolve'));
   assert.ok(!hospitalAllowedActions(activeUser('admin')).includes('create_ticket'));
@@ -850,7 +1170,7 @@ test('Admin can use scoped ticket list, detail, dashboard and privileged actions
     scopes: [{ client_id: 'client-a', scope_type: 'client', can_view: true, can_update: true }],
   };
   const tickets = [
-    { id: 'ticket-a', ticket_no: 'QPMS-HK-1', client_id: 'client-a', block_id: 'block-a', location_id: 'loc-a', status_code: 'escalated_operations_executive', priority: 'medium', raised_at: '2026-08-07T01:00:00Z' },
+    { id: 'ticket-a', ticket_no: 'QPMS-HK-1', client_id: 'client-a', block_id: 'block-a', location_id: 'loc-a', status_code: 'escalated_operations_executive', acceptance_status: 'awaiting', priority: 'medium', raised_at: '2026-08-07T01:00:00Z' },
     { id: 'ticket-b', ticket_no: 'QPMS-HK-2', client_id: 'client-b', block_id: 'block-b', location_id: 'loc-b', status_code: 'open', priority: 'low', raised_at: '2026-08-07T02:00:00Z' },
   ];
   const client = {
@@ -921,7 +1241,7 @@ test('client cancellation service is soft and auditable', () => {
   assert.doesNotMatch(helper, /\.delete\(/);
 });
 
-test('manual reassignment service preserves existing SLA deadline fields', () => {
+test('supervisor reassignment resets SLA while preserving escalation continuation', () => {
   const source = readFileSync(
     new URL('../services/hospitalTicketService.js', import.meta.url),
     'utf8',
@@ -935,15 +1255,16 @@ test('manual reassignment service preserves existing SLA deadline fields', () =>
     helper.indexOf("const updated = await client.from('hospital_tickets')"),
   );
   assert.match(helper, /assignment_type: 'manual_reassignment'/);
-  assert.match(helper, /preserves_sla_deadline: true/);
+  assert.match(helper, /reassignment_resets_sla_deadline: isSupervisorReassignment/);
+  assert.match(helper, /next_escalation_level_no: preservedEscalationLevelNo < 4 \? preservedEscalationLevelNo \+ 1 : null/);
   assert.match(updateBlock, /current_assignee_user_id: assignee\.id/);
-  assert.doesNotMatch(updateBlock, /current_escalation_level_no\s*:/);
-  assert.doesNotMatch(updateBlock, /current_escalation_level\s*:/);
-  assert.doesNotMatch(updateBlock, /escalation_due_at\s*:/);
-  assert.doesNotMatch(updateBlock, /supervisor_sla_due_at\s*:/);
-  assert.doesNotMatch(updateBlock, /operations_sla_due_at\s*:/);
-  assert.doesNotMatch(updateBlock, /project_head_sla_due_at\s*:/);
-  assert.doesNotMatch(updateBlock, /assigned_at\s*:/);
+  assert.match(updateBlock, /update\.current_assignee_role = 'housekeeping_supervisor'/);
+  assert.match(updateBlock, /update\.current_escalation_level = 'supervisor'/);
+  assert.match(updateBlock, /update\.current_escalation_level_no = preservedEscalationLevelNo/);
+  assert.match(updateBlock, /update\.escalation_due_at = supervisorDueAt/);
+  assert.match(updateBlock, /update\.supervisor_sla_due_at = supervisorDueAt/);
+  assert.match(updateBlock, /update\.assigned_at = reassignedAt/);
+  assert.match(updateBlock, /update\.final_escalation = preservedEscalationLevelNo >= 4/);
 });
 
 test('manual reassignment actions are not treated as automatic SLA escalation', () => {
@@ -955,6 +1276,11 @@ test('manual reassignment actions are not treated as automatic SLA escalation', 
   assert.deepEqual(validateHospitalAction({
     role: 'facility_manager',
     status: 'escalated_facility_manager',
+    action: 'reassign_supervisor',
+  }), []);
+  assert.deepEqual(validateHospitalAction({
+    role: 'project_head',
+    status: 'escalated_project_head',
     action: 'reassign_supervisor',
   }), []);
   assert.deepEqual(validateHospitalAction({

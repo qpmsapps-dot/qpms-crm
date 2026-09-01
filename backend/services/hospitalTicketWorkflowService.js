@@ -31,6 +31,11 @@ const ESCALATION_LEVELS = [
   { level: 4, code: 'project_head', role: 'project_head', label: 'Project Head' },
   { level: 5, code: 'hospital_dean', role: 'hospital_dean', label: 'Hospital Dean' },
 ];
+const ESCALATED_STATUS_FOR_ROLE = {
+  operations_executive: 'escalated_operations_executive',
+  facility_manager: 'escalated_facility_manager',
+  project_head: 'escalated_project_head',
+};
 
 export function cleanHospitalText(value, maxLength = 500) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
@@ -71,7 +76,9 @@ export function validateHospitalAction({ role, status, action, payload = {} }) {
       || (role === 'operations_executive' && status === 'escalated_operations_executive')
       || (role === 'facility_manager' && status === 'escalated_facility_manager')
       || (role === 'project_head' && status === 'escalated_project_head'),
-    start_work: role === 'housekeeping_supervisor' && ['accepted', 'reopened'].includes(status),
+    start_work:
+      (role === 'housekeeping_supervisor' && ['accepted', 'reopened'].includes(status))
+      || ESCALATED_STATUS_FOR_ROLE[role] === status,
     progress:
       (role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status) && status !== 'awaiting_supervisor_acceptance')
       || (role === 'operations_executive' && status === 'escalated_operations_executive')
@@ -87,7 +94,7 @@ export function validateHospitalAction({ role, status, action, payload = {} }) {
       || (role === 'facility_manager' && status === 'escalated_facility_manager')
       || (role === 'project_head' && status === 'escalated_project_head')
       || (role === 'admin' && ['escalated_operations_executive', 'escalated_facility_manager', 'escalated_project_head'].includes(status)),
-    reassign_supervisor: ['housekeeping_supervisor', 'operations_executive', 'facility_manager', 'admin'].includes(role)
+    reassign_supervisor: ['housekeeping_supervisor', 'operations_executive', 'facility_manager', 'project_head', 'admin'].includes(role)
       && !['closed', 'cancelled', 'resolved_awaiting_confirmation'].includes(status),
     assign_support: ['facility_manager', 'admin'].includes(role)
       && !['closed', 'cancelled', 'resolved_awaiting_confirmation'].includes(status),

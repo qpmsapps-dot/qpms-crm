@@ -48,19 +48,19 @@ export function hospitalAllowedActions(actor) {
     return ['view_ticket', 'accept', 'start_work', 'progress', 'request_assistance', 'manual_escalation', 'resolve'];
   }
   if (role === 'operations_executive') {
-    return ['view_ticket', 'take_over', 'reassign_supervisor', 'progress', 'escalate_facility', 'resolve'];
+    return ['view_ticket', 'take_over', 'start_work', 'reassign_supervisor', 'progress', 'escalate_facility', 'resolve'];
   }
   if (role === 'facility_manager') {
-    return ['view_ticket', 'take_over', 'assign_support', 'progress', 'resolve'];
+    return ['view_ticket', 'take_over', 'start_work', 'reassign_supervisor', 'assign_support', 'progress', 'resolve'];
   }
   if (role === 'project_head') {
-    return ['view_ticket', 'take_over', 'progress', 'resolve'];
+    return ['view_ticket', 'take_over', 'start_work', 'reassign_supervisor', 'progress', 'resolve'];
   }
   if (role === 'hospital_dean') {
     return ['view_ticket', 'progress', 'assign_support'];
   }
   if (role === 'admin') {
-    return ['view_ticket', 'progress', 'take_over', 'reassign_supervisor', 'assign_support', 'manual_escalation', 'escalate_facility', 'resolve'];
+    return ['view_ticket', 'progress', 'take_over', 'start_work', 'reassign_supervisor', 'assign_support', 'manual_escalation', 'escalate_facility', 'resolve'];
   }
   return [];
 }

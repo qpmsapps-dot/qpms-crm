@@ -301,9 +301,26 @@ test('phase 3 lifecycle notification types route to the intended app scopes', ()
   assert.equal(appScopeForNotification({ notification_type: 'ticket_accepted' }), 'qpms_client');
   assert.equal(appScopeForNotification({ notification_type: 'work_started' }), 'qpms_client');
   assert.equal(appScopeForNotification({ notification_type: 'awaiting_confirmation' }), 'qpms_client');
+  assert.equal(appScopeForNotification({ notification_type: 'ticket_closed' }), 'qpms_client');
   assert.equal(appScopeForNotification({ notification_type: 'client_satisfied' }), 'myqpms_internal');
   assert.equal(appScopeForNotification({ notification_type: 'ticket_reopened_client' }), 'myqpms_internal');
   assert.equal(appScopeForNotification({ notification_type: 'ticket_assigned_internal' }), 'myqpms_internal');
+});
+
+test('ticket closed push payload routes existing client APK to ticket detail', () => {
+  const data = buildHospitalPushData({
+    id: 'notification-closed-1',
+    ticket_id: 'ticket-closed-1',
+    notification_type: 'ticket_closed',
+    title: 'Ticket Closed',
+    body: 'Ticket QPMS-HK-2026-000123 has been closed.',
+    ticket: { ticket_no: 'QPMS-HK-2026-000123', version: 7 },
+  }, 'qpms_client');
+  assert.equal(data.app_scope, 'qpms_client');
+  assert.equal(data.target_screen, 'ticket_detail');
+  assert.equal(data.ticket_id, 'ticket-closed-1');
+  assert.equal(data.ticket_number, 'QPMS-HK-2026-000123');
+  assert.equal(data.event_type, 'ticket_closed');
 });
 
 test('contact ticket creation route schedules push fanout after RPC notification creation', () => {

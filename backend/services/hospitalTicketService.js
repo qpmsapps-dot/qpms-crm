@@ -2,7 +2,15 @@ import { randomUUID } from 'node:crypto';
 
 import { canViewHospitalTicket, hospitalAllowedActions, scopeAllows } from './hospitalTicketAuthService.js';
 import { nimsRosterCoverageMatrix } from './hospitalTicketRoutingService.js';
-import { cleanHospitalText, normalizeHospitalTicketCreate, slaMinutes, validateHospitalAction, validateHospitalTicketCreate } from './hospitalTicketWorkflowService.js';
+import {
+  cleanHospitalText,
+  normalizeHospitalTicketCreate,
+  normalizedHospitalSlaPriority,
+  prioritySlaMinutes,
+  slaMinutes,
+  validateHospitalAction,
+  validateHospitalTicketCreate,
+} from './hospitalTicketWorkflowService.js';
 
 const TICKET_SELECT = `
   *,
@@ -20,6 +28,44 @@ function newestHospitalTicketComparator(left, right) {
   const ticketCompare = String(right?.ticket_no || '').localeCompare(String(left?.ticket_no || ''), undefined, { numeric: true });
   if (ticketCompare !== 0) return ticketCompare;
   return String(left?.id || '').localeCompare(String(right?.id || ''));
+}
+
+const ESCALATION_ROLE_LEVELS = {
+  housekeeping_supervisor: 1,
+  operations_executive: 2,
+  facility_manager: 3,
+  project_head: 4,
+};
+const ESCALATED_STATUS_FOR_ROLE = {
+  operations_executive: 'escalated_operations_executive',
+  facility_manager: 'escalated_facility_manager',
+  project_head: 'escalated_project_head',
+};
+
+function escalationLevelForTicket(ticket) {
+  const explicit = Number(ticket?.current_escalation_level_no);
+  if (Number.isInteger(explicit) && explicit >= 1) return Math.min(4, explicit);
+  return ESCALATION_ROLE_LEVELS[cleanHospitalText(ticket?.current_assignee_role, 80)] || 1;
+}
+
+function addMinutesIso(startIso, minutes) {
+  return new Date(new Date(startIso).getTime() + minutes * 60 * 1000).toISOString();
+}
+
+function hospitalRoleLabel(role) {
+  return {
+    housekeeping_supervisor: 'Supervisor',
+    operations_executive: 'Operations Executive',
+    facility_manager: 'Facility Manager',
+    project_head: 'Project Head',
+    admin: 'Admin',
+  }[cleanHospitalText(role, 80)] || cleanHospitalText(role, 80).replaceAll('_', ' ');
+}
+
+function isAcceptedEscalationOwner(role, ticket) {
+  const normalizedRole = cleanHospitalText(role, 80);
+  return ESCALATED_STATUS_FOR_ROLE[normalizedRole] === ticket?.status_code
+    && ticket?.acceptance_status === 'accepted';
 }
 
 export async function loadHospitalMasters(client, actor) {
@@ -704,6 +750,7 @@ export async function createHospitalTicket(client, actor, body, idempotencyHeade
   payload.departmentId = cleanHospitalUuid(payload.departmentId, 'department_id');
   payload.locationId = cleanHospitalUuid(payload.locationId, 'location_id');
   payload.categoryId = cleanHospitalUuid(payload.categoryId, 'category_id');
+  await inferHospitalDepartmentFromLocation(client, actor, payload);
   await validateHospitalCreateHierarchy(client, actor, payload);
   const sla = slaMinutes();
   const result = await client.rpc('rpc_create_hospital_ticket', {
@@ -730,6 +777,27 @@ export async function createHospitalTicket(client, actor, body, idempotencyHeade
     afterTicket: result.data?.ticket,
   });
   return result.data;
+}
+
+export async function inferHospitalDepartmentFromLocation(client, actor, payload) {
+  if (payload.departmentId || !payload.locationId) return payload;
+  const location = await client
+    .from('hospital_locations')
+    .select('id,client_id,block_id,floor_id,department_id,is_active')
+    .eq('id', payload.locationId)
+    .maybeSingle();
+  if (location.error) throw location.error;
+  if (!location.data) return payload;
+  if (
+    location.data.client_id !== actor.user.client_id ||
+    location.data.block_id !== payload.blockId ||
+    location.data.floor_id !== payload.floorId ||
+    location.data.is_active !== true
+  ) {
+    return payload;
+  }
+  if (location.data.department_id) payload.departmentId = location.data.department_id;
+  return payload;
 }
 
 async function validateHospitalCreateHierarchy(client, actor, payload) {
@@ -914,10 +982,21 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
     });
     return detail;
   }
+  if (effectiveAction === 'take_over') {
+    const error = new Error('This escalation has already been taken over or is no longer awaiting acceptance.');
+    error.code = '40001';
+    throw error;
+  }
+  if (
+    effectiveAction === 'start_work'
+    && isAcceptedEscalationOwner(actor.user.role_code, current.ticket)
+  ) {
+    return performEscalationOwnerStartWork(client, actor, current.ticket);
+  }
   if (effectiveAction === 'reassign_supervisor') {
     return performManualHospitalReassignment(client, actor, current.ticket, {
       targetRole: 'housekeeping_supervisor',
-      remarks: payload.remarks || 'Manually reassigned to the block Housekeeping Supervisor.',
+      remarks: payload.remarks || `Reassigned to Supervisor by ${hospitalRoleLabel(actor.user.role_code)}.`,
       eventType: 'manual_reassignment',
     });
   }
@@ -978,6 +1057,89 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
     action: effectiveAction,
     actor,
     beforeTicket: current.ticket,
+    afterTicket: detail.ticket,
+  });
+  return detail;
+}
+
+async function hospitalTicketSlaMinutesForClient(client, ticket, level) {
+  const priority = normalizedHospitalSlaPriority(ticket?.priority);
+  try {
+    const result = await client
+      .from('hospital_ticket_client_sla_overrides')
+      .select('sla_minutes')
+      .eq('client_id', ticket.client_id)
+      .eq('priority', priority)
+      .eq('escalation_level', level)
+      .eq('is_active', true)
+      .limit(1);
+    if (result.error) throw result.error;
+    const minutes = Number((result.data || [])[0]?.sla_minutes);
+    if (Number.isInteger(minutes) && minutes > 0) return minutes;
+  } catch (error) {
+    console.warn('[Hospital Tickets] client SLA override lookup failed; using priority fallback', {
+      ticketId: ticket?.id || null,
+      clientId: ticket?.client_id || null,
+      level,
+      code: error?.code || null,
+      message: error?.message || 'unknown',
+    });
+  }
+  return prioritySlaMinutes(ticket?.priority);
+}
+
+async function performEscalationOwnerStartWork(client, actor, ticket) {
+  await requireCurrentOperationalOwner(client, actor, ticket);
+  if (ticket.work_started_at) {
+    const error = new Error('Work has already been started for this ticket.');
+    error.code = '40001';
+    throw error;
+  }
+  const now = new Date().toISOString();
+  const updated = await client.from('hospital_tickets')
+    .update({
+      work_started_at: now,
+      version: ticket.version + 1,
+      updated_at: now,
+      metadata: {
+        ...(ticket.metadata || {}),
+        assignment_state: 'in_progress',
+        work_started_by_role: actor.user.role_code,
+        work_started_at: now,
+      },
+    })
+    .eq('id', ticket.id)
+    .eq('version', ticket.version)
+    .select(TICKET_SELECT)
+    .maybeSingle();
+  if (updated.error) throw updated.error;
+  if (!updated.data) {
+    const error = new Error('Ticket version conflict.');
+    error.code = '40001';
+    throw error;
+  }
+
+  const event = await client.from('hospital_ticket_events').insert({
+    ticket_id: ticket.id,
+    event_type: 'work_started',
+    from_status: ticket.status_code,
+    to_status: ticket.status_code,
+    actor_user_id: actor.user.id,
+    actor_name: actor.user.display_name,
+    actor_role: actor.user.role_code,
+    remarks: `Ticket work started by ${hospitalRoleLabel(actor.user.role_code)}.`,
+    event_data: {
+      taken_over_escalation_owner: true,
+      work_started_at: now,
+    },
+  });
+  if (event.error) throw event.error;
+
+  const detail = await getHospitalTicket(client, actor, ticket.id);
+  await safeWriteHospitalLifecycleNotifications(client, {
+    action: 'start_work',
+    actor,
+    beforeTicket: ticket,
     afterTicket: detail.ticket,
   });
   return detail;
@@ -1202,10 +1364,22 @@ async function performManualHospitalReassignment(client, actor, ticket, { target
     throw error;
   }
 
+  const reassignedAt = new Date().toISOString();
+  const isSupervisorReassignment = normalizedTargetRole === 'housekeeping_supervisor';
+  const preservedEscalationLevelNo = escalationLevelForTicket(ticket);
+  const fromEscalatedStatus = Object.values(ESCALATED_STATUS_FOR_ROLE).includes(ticket.status_code);
+  const resultingStatus = isSupervisorReassignment && fromEscalatedStatus ? 'accepted' : ticket.status_code;
+  const supervisorSlaMinutes = isSupervisorReassignment
+    ? await hospitalTicketSlaMinutesForClient(client, ticket, 1)
+    : null;
+  const supervisorDueAt = isSupervisorReassignment
+    ? addMinutesIso(reassignedAt, supervisorSlaMinutes)
+    : null;
+
   const update = {
     current_assignee_user_id: assignee.id,
     version: ticket.version + 1,
-    updated_at: new Date().toISOString(),
+    updated_at: reassignedAt,
     metadata: {
       ...(ticket.metadata || {}),
       last_manual_reassignment: {
@@ -1213,11 +1387,35 @@ async function performManualHospitalReassignment(client, actor, ticket, { target
         by_role: actor.user.role_code,
         to_user_id: assignee.id,
         to_role: normalizedTargetRole,
-        preserves_sla_deadline: true,
+        preserves_sla_deadline: !isSupervisorReassignment,
+        reassignment_resets_sla_deadline: isSupervisorReassignment,
+        reassigned_at: reassignedAt,
+        supervisor_sla_due_at: supervisorDueAt,
+        preserved_escalation_level_no: preservedEscalationLevelNo,
+        next_escalation_level_no: preservedEscalationLevelNo < 4 ? preservedEscalationLevelNo + 1 : null,
       },
     },
   };
-  if (normalizedTargetRole === 'housekeeping_supervisor') update.supervisor_user_id = assignee.id;
+  if (isSupervisorReassignment) {
+    update.status_code = resultingStatus;
+    update.current_assignee_role = 'housekeeping_supervisor';
+    update.current_escalation_level = 'supervisor';
+    update.current_escalation_level_no = preservedEscalationLevelNo;
+    update.supervisor_user_id = assignee.id;
+    update.acceptance_status = 'accepted';
+    update.acceptance_due_at = null;
+    update.acceptance_timeout_at = null;
+    update.accepted_by_user_id = assignee.id;
+    update.accepted_at = reassignedAt;
+    update.assigned_at = reassignedAt;
+    update.supervisor_sla_due_at = supervisorDueAt;
+    update.escalation_due_at = supervisorDueAt;
+    update.sla_status = 'running';
+    update.final_escalation = preservedEscalationLevelNo >= 4;
+    if (preservedEscalationLevelNo <= 2) update.operations_sla_due_at = null;
+    if (preservedEscalationLevelNo <= 3) update.facility_manager_sla_due_at = null;
+    if (preservedEscalationLevelNo >= 4) update.project_head_sla_due_at = null;
+  }
   if (normalizedTargetRole === 'operations_executive') update.operations_executive_user_id = assignee.id;
   if (normalizedTargetRole === 'facility_manager') update.facility_manager_user_id = assignee.id;
   if (normalizedTargetRole === 'project_head') update.project_head_user_id = assignee.id;
@@ -1235,7 +1433,6 @@ async function performManualHospitalReassignment(client, actor, ticket, { target
     throw error;
   }
 
-  const now = new Date().toISOString();
   const history = await client.from('hospital_ticket_assignment_history').insert({
     ticket_id: ticket.id,
     from_user_id: ticket.current_assignee_user_id || null,
@@ -1245,13 +1442,17 @@ async function performManualHospitalReassignment(client, actor, ticket, { target
     assigned_by_user_id: actor.user.id,
     source: 'manual',
     previous_status: ticket.status_code,
-    resulting_status: ticket.status_code,
-    assigned_at: now,
+    resulting_status: resultingStatus,
+    assigned_at: reassignedAt,
     metadata: {
       target_role: normalizedTargetRole,
       previous_escalation_due_at: ticket.escalation_due_at || null,
       previous_escalation_level_no: ticket.current_escalation_level_no || null,
-      preserves_sla_deadline: true,
+      resulting_escalation_level_no: isSupervisorReassignment ? preservedEscalationLevelNo : ticket.current_escalation_level_no || null,
+      supervisor_sla_due_at: supervisorDueAt,
+      preserves_sla_deadline: !isSupervisorReassignment,
+      reassignment_resets_sla_deadline: isSupervisorReassignment,
+      next_escalation_level_no: isSupervisorReassignment && preservedEscalationLevelNo < 4 ? preservedEscalationLevelNo + 1 : null,
     },
   });
   if (history.error) throw history.error;
@@ -1259,7 +1460,7 @@ async function performManualHospitalReassignment(client, actor, ticket, { target
     ticket_id: ticket.id,
     event_type: eventType,
     from_status: ticket.status_code,
-    to_status: ticket.status_code,
+    to_status: resultingStatus,
     actor_user_id: actor.user.id,
     actor_name: actor.user.display_name,
     actor_role: actor.user.role_code,
@@ -1269,6 +1470,10 @@ async function performManualHospitalReassignment(client, actor, ticket, { target
       target_role: normalizedTargetRole,
       preserved_escalation_due_at: ticket.escalation_due_at || null,
       preserved_escalation_level_no: ticket.current_escalation_level_no || null,
+      resulting_escalation_level_no: isSupervisorReassignment ? preservedEscalationLevelNo : ticket.current_escalation_level_no || null,
+      supervisor_sla_due_at: supervisorDueAt,
+      reassignment_resets_sla_deadline: isSupervisorReassignment,
+      next_escalation_level_no: isSupervisorReassignment && preservedEscalationLevelNo < 4 ? preservedEscalationLevelNo + 1 : null,
       manual_reassignment: true,
     },
   });
@@ -1352,21 +1557,33 @@ export function buildHospitalLifecycleNotificationRows({
       'Work Started',
       `Work has started on ticket ${ticketNo}.`,
     );
+  } else if (action === 'start_work' && !beforeTicket?.work_started_at && ticket?.work_started_at) {
+    pushClientRow(
+      'work_started',
+      'Work Started',
+      `Work has started on ticket ${ticketNo}.`,
+    );
   } else if (action === 'feedback' && beforeStatus === 'resolved_awaiting_confirmation' && afterStatus === 'reopened') {
     pushClientRow(
       'ticket_reopened_client',
       'Ticket Reopened',
       `${ticketNo} has been reopened and the QPMS team has been notified.`,
     );
+  } else if (action === 'feedback' && beforeStatus === 'resolved_awaiting_confirmation' && afterStatus === 'closed') {
+    rows.push(...buildHospitalRequesterClosedNotificationRows({ beforeTicket, afterTicket }));
   } else if (action === 'manual_reassignment') {
     const recipientUserId = cleanHospitalText(targetUserId, 80);
+    const isSupervisorReassignment = ticket.current_assignee_role === 'housekeeping_supervisor';
+    const actorRoleLabel = hospitalRoleLabel(actor?.user?.role_code);
     if (ticketId && recipientUserId) {
       rows.push({
         ticket_id: ticketId,
         recipient_user_id: recipientUserId,
         notification_type: 'ticket_assigned_internal',
-        title: 'Ticket Assigned',
-        body: `${ticketNo} has been assigned to you.`,
+        title: isSupervisorReassignment ? 'Ticket Reassigned' : 'Ticket Assigned',
+        body: isSupervisorReassignment
+          ? `${ticketNo} has been reassigned to you by ${actorRoleLabel}.`
+          : `${ticketNo} has been assigned to you.`,
         priority,
         current_owner_role: cleanHospitalText(ticket.current_assignee_role || beforeTicket?.current_assignee_role, 80) || null,
         escalation_level: Number(ticket.current_escalation_level_no || beforeTicket?.current_escalation_level_no || 0) || null,
@@ -1392,6 +1609,61 @@ export function buildHospitalLifecycleNotificationRows({
   return rows;
 }
 
+export function buildHospitalRequesterClosedNotificationRows({
+  beforeTicket = null,
+  afterTicket = null,
+} = {}) {
+  const ticket = afterTicket || beforeTicket || {};
+  const beforeStatus = beforeTicket?.status_code || '';
+  const afterStatus = ticket?.status_code || '';
+  if (beforeStatus !== 'resolved_awaiting_confirmation' || afterStatus !== 'closed') return [];
+
+  const ticketId = cleanHospitalText(ticket.id || beforeTicket?.id, 80);
+  const ticketNo = cleanHospitalText(ticket.ticket_no || beforeTicket?.ticket_no, 80) || 'This ticket';
+  const contactId = cleanHospitalText(ticket.raised_by_client_contact_id || beforeTicket?.raised_by_client_contact_id, 80);
+  const userId = cleanHospitalText(ticket.raised_by_user_id || beforeTicket?.raised_by_user_id, 80);
+  const version = Number(ticket.version || beforeTicket?.version || 0);
+  const cycle = Number(ticket.reopen_count ?? beforeTicket?.reopen_count ?? 0);
+  const priority = cleanHospitalText(ticket.priority || beforeTicket?.priority, 20) || null;
+
+  if (!ticketId) return [];
+  const recipient = contactId
+    ? { recipient_client_contact_id: contactId, recipient_user_id: null, identityKey: `contact:${contactId}` }
+    : userId
+      ? { recipient_user_id: userId, recipient_client_contact_id: null, identityKey: `user:${userId}` }
+      : null;
+  if (!recipient) return [];
+
+  return [{
+    ticket_id: ticketId,
+    recipient_user_id: recipient.recipient_user_id,
+    recipient_client_contact_id: recipient.recipient_client_contact_id,
+    notification_type: 'ticket_closed',
+    title: 'Ticket Closed',
+    body: `Ticket ${ticketNo} has been closed.`,
+    priority,
+    current_owner_role: cleanHospitalText(ticket.current_assignee_role || beforeTicket?.current_assignee_role, 80) || null,
+    escalation_level: Number(ticket.current_escalation_level_no || beforeTicket?.current_escalation_level_no || 0) || null,
+    dedupe_key: hospitalLifecycleNotificationDedupeKey({
+      ticketId,
+      recipientUserId: recipient.identityKey,
+      notificationType: 'ticket_closed',
+      version,
+      cycle,
+    }),
+    metadata: {
+      ticket_id: ticketId,
+      ticket_no: ticketNo,
+      ticket_version: version,
+      reopen_count: cycle,
+      app_scope: 'qpms_client',
+      target_screen: 'ticket_detail',
+      notification_type: 'ticket_closed',
+      recipient_identity_type: contactId ? 'client_contact' : 'hospital_user',
+    },
+  }];
+}
+
 export function hospitalLifecycleNotificationDedupeKey({
   ticketId,
   recipientUserId,
@@ -1408,6 +1680,29 @@ export function hospitalLifecycleNotificationDedupeKey({
     String(Number(version) || 0),
     String(Number(cycle) || 0),
   ].join(':');
+}
+
+export async function safeWriteHospitalRequesterClosedNotification(client, { beforeTicket = null, afterTicket = null } = {}) {
+  const rows = buildHospitalRequesterClosedNotificationRows({ beforeTicket, afterTicket });
+  if (!rows.length) return { inserted: 0, notificationIds: [] };
+  try {
+    const result = await client
+      .from('hospital_ticket_notifications')
+      .upsert(rows, { onConflict: 'dedupe_key', ignoreDuplicates: true })
+      .select('id');
+    if (result.error) throw result.error;
+    return {
+      inserted: rows.length,
+      notificationIds: (result.data || []).map((row) => row.id).filter(Boolean),
+    };
+  } catch (error) {
+    console.warn('[Hospital Notifications] requester closed write skipped', {
+      ticketId: rows[0]?.ticket_id || null,
+      code: error?.code || null,
+      message: error?.message || 'unknown',
+    });
+    return { inserted: 0, notificationIds: [], failed: true };
+  }
 }
 
 async function safeWriteHospitalLifecycleNotifications(client, context) {
@@ -1513,6 +1808,10 @@ export function hospitalSlaState(ticket, now = new Date()) {
 
 export function allowedActionsForTicket(actor, ticket) {
   return hospitalAllowedActions(actor.user).filter((action) => {
+    if (action === 'take_over' && ticket.acceptance_status !== 'awaiting') return false;
+    if (action === 'start_work' && ESCALATED_STATUS_FOR_ROLE[actor.user.role_code] === ticket.status_code) {
+      if (ticket.acceptance_status !== 'accepted' || ticket.work_started_at) return false;
+    }
     const mapped = action === 'manual_escalation' ? 'manual_escalation' : action;
     return validateHospitalAction({
       role: actor.user.role_code,

@@ -68,6 +68,7 @@ import {
   clientHospitalEventView,
   hospitalTicketForActor,
   performClientTicketCancellation,
+  safeWriteHospitalRequesterClosedNotification,
 } from './services/hospitalTicketService.js';
 import {
   getDemoAccessScope,
@@ -1198,6 +1199,13 @@ app.post('/api/hospital-client/tickets/:ticketId/feedback', async (request, resp
       const notification = await client.from('hospital_ticket_notifications').insert(notificationRows).select('id');
       if (notification.error) throw notification.error;
       feedbackNotificationIds = (notification.data || []).map((row) => row.id).filter(Boolean);
+    }
+    if (satisfied && updated.data?.status_code === 'closed') {
+      const closedNotification = await safeWriteHospitalRequesterClosedNotification(client, {
+        beforeTicket: ticket,
+        afterTicket: updated.data,
+      });
+      feedbackNotificationIds.push(...(closedNotification.notificationIds || []));
     }
     runHospitalNotificationPushDispatch(client, feedbackNotificationIds, 'hospital_client_feedback', ticket.id);
 

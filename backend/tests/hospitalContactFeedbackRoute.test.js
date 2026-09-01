@@ -45,3 +45,12 @@ test('registered contact feedback writes existing lifecycle events and internal 
   assert.match(route, /app_scope: 'myqpms_internal'/);
   assert.match(route, /runHospitalNotificationPushDispatch\(client, feedbackNotificationIds, 'hospital_client_feedback', ticket\.id\)/);
 });
+
+test('registered contact satisfied feedback writes requester ticket closed notification after close update', () => {
+  const route = contactFeedbackRoute();
+  assert.match(route, /if \(satisfied && updated\.data\?\.status_code === 'closed'\)/);
+  assert.match(route, /safeWriteHospitalRequesterClosedNotification\(client,\s*\{/);
+  assert.match(route, /beforeTicket: ticket/);
+  assert.match(route, /afterTicket: updated\.data/);
+  assert.match(route, /feedbackNotificationIds\.push\(\.\.\.\(closedNotification\.notificationIds \|\| \[\]\)\)/);
+});
