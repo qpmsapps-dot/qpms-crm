@@ -86,6 +86,10 @@ import {
   buildConsolidatedTravelClaimPdf,
 } from './services/consolidatedTravelClaimPdfService.js';
 import {
+  hasCooWebVisibility,
+  normalizeWebRoleKey,
+} from './services/webRoleAccessService.js';
+import {
   loadAuthorizedEmployeeRange,
   recalculateEmployeeRange,
 } from './services/employeeRangeReportService.js';
@@ -1785,10 +1789,7 @@ const USER_MANAGEMENT_ROLE_KEYS = new Set([
 ]);
 
 function normalizePermissionRole(role) {
-  return String(role || '')
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, '');
+  return normalizeWebRoleKey(role);
 }
 
 function requirePostmanTestResetAdmin(request, response, next) {
@@ -1960,6 +1961,16 @@ function hasStoreMasterPermission(profile) {
   if (!profile || profile.is_active !== true) return false;
   if (String(profile.status || '').trim().toLowerCase() !== 'active') return false;
   if (isDemoUser(profile)) return true;
+  if (hasCooWebVisibility(profile.role)) return profile.web_access_enabled !== false;
+  return new Set(['DEVELOPER', 'ADMIN', 'QPMSADMIN', 'MD', 'COO']).has(
+    normalizePermissionRole(profile.role),
+  );
+}
+
+function hasStoreMasterManagePermission(profile) {
+  if (!profile || profile.is_active !== true) return false;
+  if (String(profile.status || '').trim().toLowerCase() !== 'active') return false;
+  if (isDemoUser(profile)) return true;
   return new Set(['DEVELOPER', 'ADMIN', 'QPMSADMIN', 'MD', 'COO']).has(
     normalizePermissionRole(profile.role),
   );
@@ -1967,6 +1978,17 @@ function hasStoreMasterPermission(profile) {
 
 function requireStoreMasterPermission(request, response, next) {
   if (!hasStoreMasterPermission(request.profile)) {
+    response.status(403).json({
+      ok: false,
+      message: `Role ${request.userRole || 'Unknown'} cannot access Store Master.`,
+    });
+    return;
+  }
+  next();
+}
+
+function requireStoreMasterManagePermission(request, response, next) {
+  if (!hasStoreMasterManagePermission(request.profile)) {
     response.status(403).json({
       ok: false,
       message: `Role ${request.userRole || 'Unknown'} cannot manage Store Master.`,
@@ -2350,6 +2372,7 @@ function profileCreatePayload(body, authUserId, usedTemporaryPassword) {
   const employeeCode = normalizeEmployeeCode(body.employee_code);
   const fullName = textOrNull(body.full_name);
   const email = normalizeEmail(body.email);
+  const role = canonicalProfileRole(body.role, 'FO');
   const sourceMetadata =
     body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
       ? body.metadata
@@ -2363,7 +2386,7 @@ function profileCreatePayload(body, authUserId, usedTemporaryPassword) {
     mobile: textOrNull(body.mobile),
     email,
     state: textOrNull(body.state),
-    role: canonicalProfileRole(body.role, 'FO'),
+    role,
     designation: textOrNull(body.designation),
     department: textOrNull(body.department),
     business: textOrNull(body.business),
@@ -2376,7 +2399,9 @@ function profileCreatePayload(body, authUserId, usedTemporaryPassword) {
     requires_password_change: usedTemporaryPassword
       ? true
       : booleanValue(body.requires_password_change, false),
-    mobile_access_enabled: booleanValue(body.mobile_access_enabled, true),
+    mobile_access_enabled: normalizePermissionRole(role) === 'EXECUTIVEASSISTANT'
+      ? false
+      : booleanValue(body.mobile_access_enabled, true),
     web_access_enabled: booleanValue(body.web_access_enabled, true),
     auth_provisioning_status: 'provisioned',
     auth_provisioning_error: null,
@@ -2385,7 +2410,7 @@ function profileCreatePayload(body, authUserId, usedTemporaryPassword) {
   };
 }
 
-const EXECUTIVE_PROFILE_ROLE_KEYS = new Set(['ADMIN', 'MD', 'COO']);
+const EXECUTIVE_PROFILE_ROLE_KEYS = new Set(['ADMIN', 'MD', 'COO', 'EXECUTIVEASSISTANT']);
 const OPERATIONAL_PROFILE_ROLE_KEYS = new Set([
   'BUSINESSHEAD',
   'BRANCHHEAD',
@@ -2495,6 +2520,10 @@ function profilePatchPayload(body) {
   for (const field of booleanFields) {
     if (hasOwn(body, field)) payload[field] = booleanValue(body[field]);
   }
+  const effectiveRole = payload.role || body.role;
+  if (normalizePermissionRole(effectiveRole) === 'EXECUTIVEASSISTANT') {
+    payload.mobile_access_enabled = false;
+  }
   return payload;
 }
 
@@ -2573,6 +2602,7 @@ async function ensureUniqueAuthEmail(client, email) {
 const CREATE_USER_ROLE_OPTIONS = new Set([
   'MD',
   'COO',
+  'EXECUTIVEASSISTANT',
   'GM',
   'SOUTHHEAD',
   'BUSINESSHEAD',
@@ -3528,6 +3558,9 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
   if (roleKey === 'COO') {
     if (!md) throw userManagementHttpError(400, 'MD profile not found. Please create MD user first.');
     reportingManager = md;
+  } else if (roleKey === 'EXECUTIVEASSISTANT') {
+    if (!coo) throw userManagementHttpError(400, 'COO profile not found. Please create COO user first.');
+    reportingManager = coo;
   } else if (roleKey === 'BUSINESSHEAD' || roleKey === 'GM' || roleKey === 'SOUTHHEAD') {
     if (!coo) throw userManagementHttpError(400, 'COO profile not found. Please create COO user first.');
     reportingManager = coo;
@@ -3633,7 +3666,7 @@ function validateCreateUserBody(body) {
     return;
   }
   if (!CREATE_USER_ROLE_OPTIONS.has(roleKey)) {
-    throw userManagementHttpError(400, 'role must be one of MD, COO, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, Supervisor, or Admin.');
+    throw userManagementHttpError(400, 'role must be one of MD, COO, Executive Assistant, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, Supervisor, or Admin.');
   }
   if (body.create_profile_only === true && roleKey === 'MD') return;
   if (!textOrNull(body.mobile)) throw userManagementHttpError(400, 'mobile is required.');
@@ -4619,6 +4652,7 @@ const FAULT_TRACKER_READ_ALL_ROLE_KEYS = new Set([
   ...FAULT_TRACKER_MANAGE_ROLE_KEYS,
   'DEMOVIEWER',
   'COO',
+  'EXECUTIVEASSISTANT',
   'IFMSSOUTHHEAD',
   'SOUTHHEAD',
   'OPERATIONMANAGER',
@@ -5753,7 +5787,7 @@ app.get('/api/store-master/:id', requireSupabaseJwtOrDemoApiRead, requireStoreMa
   }
 });
 
-app.post('/api/store-master', requireSupabaseJwtOrDemoApiRead, requireStoreMasterPermission, async (request, response) => {
+app.post('/api/store-master', requireSupabaseJwtOrDemoApiRead, requireStoreMasterManagePermission, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     const payload = buildStoreMasterPayload(request.body || {}, null, request.profile);
@@ -5783,7 +5817,7 @@ app.post('/api/store-master', requireSupabaseJwtOrDemoApiRead, requireStoreMaste
   }
 });
 
-app.patch('/api/store-master/:id', requireSupabaseJwtOrDemoApiRead, requireStoreMasterPermission, async (request, response) => {
+app.patch('/api/store-master/:id', requireSupabaseJwtOrDemoApiRead, requireStoreMasterManagePermission, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     const { data: existing, error: existingError } = await client

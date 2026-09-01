@@ -7,6 +7,7 @@ import sharp from 'sharp';
 
 import { resolveCurrentUserAccess } from './accessControlService.js';
 import { scopeAllows } from './hospitalTicketAuthService.js';
+import { activeWebProfile, hasCooWebVisibility } from './webRoleAccessService.js';
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{22,160}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -356,6 +357,10 @@ function isPlatformQrAdmin(profile = {}) {
   return new Set(['ADMIN', 'QPMSADMIN', 'DEVELOPER', 'DEV', 'MD', 'COO', 'GM', 'GMTOPMANAGEMENT', 'DEMOVIEWER']).has(roleKey(profile));
 }
 
+function hasPlatformQrReadVisibility(profile = {}) {
+  return activeWebProfile(profile) && hasCooWebVisibility(profile.role);
+}
+
 function scopeAllowsQr(scopes, location, permission) {
   return scopeAllows(scopes, {
     clientId: location.client_id,
@@ -399,6 +404,9 @@ export async function assertHospitalFeedbackQrAccess({
   location,
   permission = 'view',
 }) {
+  if (permission === 'view' && hasPlatformQrReadVisibility(profile)) {
+    return { allowed: true, source: 'platform_visibility' };
+  }
   if (isPlatformQrAdmin(profile)) return { allowed: true, source: 'platform_role' };
 
   const access = await resolveCurrentUserAccess({

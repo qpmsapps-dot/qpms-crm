@@ -4,6 +4,7 @@ const FULL_VISIBILITY_ROLES = new Set([
   'QPMS Admin',
   'Developer',
   'COO',
+  'Executive Assistant',
   'GM',
   'MD',
 ]);
@@ -85,6 +86,7 @@ export function normalizeLeadRole(value) {
     MANAGEMENTITADMIN: 'Developer',
     DEMOVIEWER: 'DEMO_VIEWER',
     COO: 'COO',
+    EXECUTIVEASSISTANT: 'Executive Assistant',
     GM: 'GM',
     GENERALMANAGER: 'GM',
     GMTOPMANAGEMENT: 'GM',
@@ -109,10 +111,12 @@ export function leadActor(profile, authUser = {}) {
     state: cleanText(profile?.state),
     business: cleanText(profile?.business),
     branch: cleanText(profile?.branch),
+    webAccessEnabled: profile?.web_access_enabled !== false,
   };
 }
 
 export function canAccessLeadModule(actor) {
+  if (actor?.role === 'Executive Assistant' && actor.webAccessEnabled === false) return false;
   return isActiveLeadProfile({ is_active: true, status: 'Active', ...actor }) && LEAD_ACCESS_ROLES.has(actor?.role);
 }
 
@@ -196,6 +200,7 @@ export function canEditLead(actor, lead) {
   if (actor?.role === 'DEMO_VIEWER') return false;
   if (!canViewLead(actor, lead)) return false;
   if (actor.role === 'BD Executive') return true;
+  if (actor.role === 'Executive Assistant') return false;
   return FULL_VISIBILITY_ROLES.has(actor.role) || actor.role === 'Business Head' || actor.role === 'Branch Head';
 }
 

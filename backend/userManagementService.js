@@ -75,6 +75,7 @@ export function canonicalProfileRole(value, fallback = null) {
   const canonicalByNormalized = {
     FO: 'FO',
     FIELDOFFICER: 'FO',
+    SUPERVISOR: 'Supervisor',
     KAM: 'KAM',
     KEYACCOUNTMANAGER: 'KAM',
     OM: 'Operations Manager',
@@ -85,6 +86,7 @@ export function canonicalProfileRole(value, fallback = null) {
     BH: 'Branch Head',
     GM: 'GM',
     COO: 'COO',
+    EXECUTIVEASSISTANT: 'Executive Assistant',
     MD: 'MD',
     BDEXECUTIVE: 'BD Executive',
     BUSINESSDEVELOPMENTEXECUTIVE: 'BD Executive',

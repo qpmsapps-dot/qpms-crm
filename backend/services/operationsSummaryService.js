@@ -1,3 +1,5 @@
+import { hasCooWebVisibility, normalizeWebRoleKey } from './webRoleAccessService.js';
+
 const FULL_VISIBILITY_ROLES = new Set([
   'ADMIN', 'QPMSADMIN', 'DEVELOPER', 'DEV', 'ITADMIN', 'MD', 'COO',
   'DEMOADMIN', 'TENDERDEMO',
@@ -34,7 +36,7 @@ const STATE_ALIASES = new Map([
 ]);
 
 function roleKey(value) {
-  return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+  return normalizeWebRoleKey(value);
 }
 
 function text(value) {
@@ -163,7 +165,8 @@ export function normalizeOperationsSummaryFilters(query = {}, today) {
 }
 
 export function canAccessOperationsSummary(profile) {
-  if (!activeProfile(profile) || !OPERATIONS_ROLES.has(roleKey(profile.role))) return false;
+  if (hasCooWebVisibility(profile?.role) && profile?.web_access_enabled === false) return false;
+  if (!activeProfile(profile) || (!OPERATIONS_ROLES.has(roleKey(profile.role)) && !hasCooWebVisibility(profile.role))) return false;
   if (roleKey(profile.role) !== 'MANAGER') return true;
   return comparable([
     profile.role,
@@ -224,7 +227,7 @@ export function operationsSummaryAllowedEmployeeCodes(actor, profiles = [], hier
     if (!activeProfile(profile) || !isOperationalEmployeeProfile(profile)) continue;
     const code = employeeKey(profile);
     if (!code) continue;
-    if (FULL_VISIBILITY_ROLES.has(actorRole)) {
+    if (FULL_VISIBILITY_ROLES.has(actorRole) || hasCooWebVisibility(actor.role)) {
       allowed.add(code);
       continue;
     }

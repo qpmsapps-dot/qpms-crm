@@ -1,5 +1,6 @@
 import { resolveCurrentUserAccess } from './accessControlService.js';
 import { hospitalSlaState } from './hospitalTicketService.js';
+import { activeWebProfile, hasCooWebVisibility } from './webRoleAccessService.js';
 
 const WEB_ROLE_KEYS = new Set([
   'ADMIN',
@@ -74,9 +75,8 @@ function escapeLike(value) {
 }
 
 function isWebManagementProfile(profile) {
-  if (!profile || profile.is_active !== true || profile.web_access_enabled === false) return false;
-  const status = roleKey(profile.status || 'ACTIVE');
-  if (['INACTIVE', 'DISABLED', 'DEACTIVATED'].includes(status)) return false;
+  if (!activeWebProfile(profile)) return false;
+  if (hasCooWebVisibility(profile.role)) return true;
   return WEB_ROLE_KEYS.has(roleKey(profile.role));
 }
 
