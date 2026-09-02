@@ -7,10 +7,12 @@ import {
   calculateTravelLegKm,
   classifyPersistedTravelLeg,
   reconcileTravelLegCandidates,
+  recalculateFoKm,
   recalculateAttendanceTravelLegs,
   reconcileFinalLegOnly,
   previousFinalLegContribution,
   resolveEffectiveAttendanceEnd,
+  syncAttendanceApprovedKmTotals,
 } from '../foKmRecalculationService.js';
 
 const attendance = (overrides = {}) => ({
@@ -186,6 +188,57 @@ test('QPMSADMIN final sourcing detour keeps cleaned GPS instead of shorter direc
   assert.equal(result.calculatedPayableKm, 33.24);
   assert.equal(result.petrolAmount, 132.96);
   assert.equal(result.payableKmSource, 'gps_travel_leg_based');
+});
+
+test('protected shared-travel passenger recalculation preserves zero payable totals', async () => {
+  const row = attendance({
+    total_approved_km: 0,
+    eligible_km: 0,
+    total_route_km: 117,
+    petrol_amount: 0,
+    payable_km_allowed: false,
+    metadata: {
+      shared_travel_adjustment: true,
+      shared_travel_original_km: 117,
+      shared_travel_original_amount: 468,
+    },
+  });
+  const client = clientWith([], { attendanceRow: row });
+
+  const result = await recalculateFoKm(client, { attendance_id: row.id });
+
+  assert.equal(result.skipped, true);
+  assert.equal(result.skip_reason, 'protected_shared_travel_non_payable_adjustment');
+  assert.equal(result.total_approved_km, 0);
+  assert.equal(result.petrol_amount, 0);
+  assert.equal(result.payable_km_allowed, false);
+});
+
+test('protected shared-travel passenger sync ignores old completed travel-leg payable values', async () => {
+  const row = attendance({
+    total_approved_km: 0,
+    eligible_km: 0,
+    total_route_km: 160.41,
+    petrol_amount: 0,
+    payable_km_allowed: false,
+    metadata: {
+      shared_travel_adjustment: true,
+      shared_travel_original_km: 160.41,
+      shared_travel_original_amount: 641.64,
+    },
+  });
+  const client = clientWith([], {
+    attendanceRow: row,
+    travelLegs: [
+      { attendance_id: row.id, status: 'completed', payable_km: 160.41, payable_amount: 641.64 },
+    ],
+  });
+
+  const result = await syncAttendanceApprovedKmTotals(client, row.id);
+
+  assert.equal(result.skipped, true);
+  assert.equal(result.total_approved_km, 0);
+  assert.equal(result.petrol_amount, 0);
 });
 
 test('all eligible GPS travel windows are summed and checked-in distance is absent', () => {

@@ -56,6 +56,10 @@ function number(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function hasStoredValue(value) {
+  return value !== null && value !== undefined && String(value).trim() !== '';
+}
+
 function rounded(value) {
   return Number(number(value).toFixed(2));
 }
@@ -260,8 +264,11 @@ export function operationsSummaryAllowedEmployeeCodes(actor, profiles = [], hier
 }
 
 export function storedAttendancePayableKm(row = {}) {
+  if (row.payable_km_allowed === false || String(row.payable_km_allowed).toLowerCase() === 'false') {
+    return 0;
+  }
   for (const value of [row.total_approved_km, row.eligible_km, row.total_route_km]) {
-    if (value === null || value === undefined || text(value) === '') continue;
+    if (!hasStoredValue(value)) continue;
     const number = Number(value);
     if (Number.isFinite(number)) return Math.max(0, number);
   }
@@ -269,7 +276,10 @@ export function storedAttendancePayableKm(row = {}) {
 }
 
 export function storedAttendancePetrolAmount(row = {}, payableKm = storedAttendancePayableKm(row)) {
-  const hasStoredAmount = row.petrol_amount !== null && row.petrol_amount !== undefined && text(row.petrol_amount) !== '';
+  if (row.payable_km_allowed === false || String(row.payable_km_allowed).toLowerCase() === 'false') {
+    return 0;
+  }
+  const hasStoredAmount = hasStoredValue(row.petrol_amount);
   const stored = Number(row.petrol_amount);
   if (hasStoredAmount && Number.isFinite(stored)) return Math.max(0, stored);
   const rate = Number(row.rate_per_km);
@@ -628,7 +638,7 @@ export async function buildOperationsSummary(client, actor, query, today) {
     fetchPaged(() => client.from('employee_hierarchy').select('*').eq('is_active', true)),
     fetchPaged(() => client
       .from('fo_attendance')
-      .select('id,fo_user_id,employee_code,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,petrol_amount,rate_per_km')
+      .select('id,fo_user_id,employee_code,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,petrol_amount,rate_per_km,payable_km_allowed')
       .gte('attendance_date', filters.date_from)
       .lte('attendance_date', filters.date_to)
       .order('attendance_date', { ascending: true })

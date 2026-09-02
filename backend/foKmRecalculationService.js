@@ -1742,6 +1742,36 @@ function travelModeAllowsPayableKm(attendance) {
   };
 }
 
+function isProtectedSharedTravelNonPayableAttendance(attendance = {}) {
+  const metadata = safeAttendanceMetadata(attendance);
+  return metadata.shared_travel_adjustment === true &&
+    (attendance.payable_km_allowed === false ||
+      String(attendance.payable_km_allowed).toLowerCase() === 'false');
+}
+
+function protectedSharedTravelResult(attendance = {}, dryRun = true) {
+  const payableKm = normalizeNumber(attendance.total_approved_km) || 0;
+  const petrolAmount = normalizeNumber(attendance.petrol_amount) || 0;
+  return {
+    ok: true,
+    skipped: true,
+    skip_reason: 'protected_shared_travel_non_payable_adjustment',
+    status: 'skipped',
+    attendance_id: attendance.id,
+    fo_user_id: attendance.fo_user_id || null,
+    employee_code: attendance.employee_code || null,
+    total_approved_km: payableKm,
+    eligible_km: normalizeNumber(attendance.eligible_km) || 0,
+    petrol_amount: petrolAmount,
+    new_total_approved_km: payableKm,
+    new_petrol_amount: petrolAmount,
+    payable_km_allowed: false,
+    review_flags: ['PROTECTED_SHARED_TRAVEL_NON_PAYABLE_ADJUSTMENT'],
+    dry_run: dryRun,
+    updated: false,
+  };
+}
+
 function attendanceEndCoordinate(attendance) {
   return coordinateFrom(
     attendance,
@@ -2887,6 +2917,12 @@ export async function recalculateFullDayGpsNoSiteVisitKm(serviceRoleClient, payl
     date: payload.date || payload.attendance_date || null,
   });
   const dryRun = payload.dry_run !== false;
+  if (isProtectedSharedTravelNonPayableAttendance(attendance)) {
+    return {
+      ...protectedSharedTravelResult(attendance, dryRun),
+      applied: false,
+    };
+  }
   const apply = payload.apply === true && !dryRun;
   const result = await calculateFullDayGpsNoSiteVisitKm(client, attendance, {
     ...options,
@@ -2975,6 +3011,15 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     employee_code: employeeCode,
     date,
   });
+  const dryRun = payload.dry_run === true || payload.dryRun === true || options.persist === false;
+  if (isProtectedSharedTravelNonPayableAttendance(attendance)) {
+    log('FO_KM_RECALC_SKIPPED', {
+      attendance_id: attendance.id,
+      employee_code: attendance.employee_code || null,
+      reason: 'protected_shared_travel_non_payable_adjustment',
+    });
+    return protectedSharedTravelResult(attendance, dryRun);
+  }
   const rows = await loadGpsLogs(client, attendance);
   const visits = await loadSiteVisits(client, attendance);
   log('FO_KM_GPS_LOGS_LOADED', {
@@ -2988,7 +3033,6 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   const actualTravelKm = Number(calculation.actualTravelKm.toFixed(2));
   const storedRouteKm = Number(sumStoredRouteKm(visits).toFixed(2));
   const existingMetadata = safeAttendanceMetadata(attendance);
-  const dryRun = payload.dry_run === true || payload.dryRun === true || options.persist === false;
   const legRecalculation = await recalculateAttendanceTravelLegs(client, attendance.id, {
     ...options,
     persist: false,
@@ -3635,6 +3679,9 @@ export async function reconcileFinalLegOnly(serviceRoleClient, payload = {}, opt
     date: payload.date || payload.attendance_date || null,
   });
   const dryRun = payload.dry_run !== false && payload.dryRun !== false && options.persist !== true;
+  if (isProtectedSharedTravelNonPayableAttendance(attendance)) {
+    return protectedSharedTravelResult(attendance, dryRun);
+  }
   const visits = await loadSiteVisits(client, attendance);
   const effectiveEnd = await resolveEffectiveAttendanceEnd(client, attendance, { includeEvidence: true });
   const snapshots = await loadPersistedTravelLegSnapshots(client, attendance);
@@ -4109,6 +4156,18 @@ export async function loadApprovedMissingKmSummary(client, attendanceId) {
 
 export async function syncAttendanceApprovedKmTotals(client, attendanceId) {
   const attendance = await findAttendance(client, { attendance_id: attendanceId });
+  if (isProtectedSharedTravelNonPayableAttendance(attendance)) {
+    return {
+      attendance_id: attendanceId,
+      canonical_travel_leg_payable_km: 0,
+      approved_missing_km: 0,
+      total_approved_km: normalizeNumber(attendance.total_approved_km) || 0,
+      petrol_amount: normalizeNumber(attendance.petrol_amount) || 0,
+      approved_missing_review_count: 0,
+      skipped: true,
+      skip_reason: 'protected_shared_travel_non_payable_adjustment',
+    };
+  }
   const { data: legs, error: legsError } = await client
     .from('fo_travel_legs')
     .select('payable_km,payable_amount,fare_amount,status')

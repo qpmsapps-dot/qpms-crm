@@ -44,6 +44,64 @@ test('KL inclusive date range returns only KL stored totals', () => {
   assert.equal(result.matching_attendance_count, 3);
 });
 
+test('normal payable Bike attendance contributes stored KM and petrol', () => {
+  const result = summarizeOperationsRows({
+    actor,
+    profiles: [
+      { employee_code: 'BIKE1', role: 'FO', state: 'KA', business: 'OPS', status: 'active', is_active: true },
+    ],
+    hierarchyRows: [],
+    liveRows: [],
+    attendances: [
+      {
+        employee_code: 'BIKE1',
+        attendance_date: '2026-08-10',
+        status: 'Completed',
+        travel_mode: 'bike',
+        payable_km_allowed: true,
+        total_approved_km: 42.5,
+        eligible_km: 42.5,
+        total_route_km: 50,
+        petrol_amount: 170,
+        rate_per_km: 4,
+      },
+    ],
+    filters: { date_from: '2026-08-01', date_to: '2026-08-31', state: null, business: null, status: null },
+  });
+
+  assert.equal(result.payable_km, 42.5);
+  assert.equal(result.petrol_amount, 170);
+});
+
+test('normal payable Car attendance contributes stored KM and petrol', () => {
+  const result = summarizeOperationsRows({
+    actor,
+    profiles: [
+      { employee_code: 'CAR1', role: 'KAM', state: 'KA', business: 'OPS', status: 'active', is_active: true },
+    ],
+    hierarchyRows: [],
+    liveRows: [],
+    attendances: [
+      {
+        employee_code: 'CAR1',
+        attendance_date: '2026-08-10',
+        status: 'Completed',
+        travel_mode: 'car',
+        payable_km_allowed: true,
+        total_approved_km: 20,
+        eligible_km: 20,
+        total_route_km: 20,
+        petrol_amount: 160,
+        rate_per_km: 8,
+      },
+    ],
+    filters: { date_from: '2026-08-01', date_to: '2026-08-31', state: null, business: null, status: null },
+  });
+
+  assert.equal(result.payable_km, 20);
+  assert.equal(result.petrol_amount, 160);
+});
+
 test('state and business filters combine', () => {
   assert.equal(summary({ state: 'KL', business: 'HDFC' }).payable_km, 30);
 });
@@ -78,8 +136,88 @@ test('stored final approved payable value wins without adjustment duplication', 
 
 test('stored petrol wins and rate fallback applies only when stored petrol is absent', () => {
   assert.equal(storedAttendancePetrolAmount({ petrol_amount: 61, rate_per_km: 4 }, 15), 61);
+  assert.equal(storedAttendancePetrolAmount({ petrol_amount: 0, rate_per_km: 4 }, 15), 0);
   assert.equal(storedAttendancePetrolAmount({ petrol_amount: null, rate_per_km: 4 }, 15), 60);
   assert.equal(storedAttendancePetrolAmount({ rate_per_km: 4 }, 15), 60);
+});
+
+test('payable_km_allowed=false contributes zero even with historical route KM and metadata', () => {
+  const row = {
+    payable_km_allowed: false,
+    total_approved_km: 0,
+    eligible_km: 0,
+    total_route_km: 117,
+    petrol_amount: 0,
+    rate_per_km: 4,
+    metadata: {
+      shared_travel_adjustment: true,
+      shared_travel_original_km: 117,
+      shared_travel_original_amount: 468,
+    },
+  };
+
+  assert.equal(storedAttendancePayableKm(row), 0);
+  assert.equal(storedAttendancePetrolAmount(row), 0);
+});
+
+test('travel-leg-shaped metadata does not override attendance non-payable state', () => {
+  const result = summarizeOperationsRows({
+    actor,
+    profiles: [
+      { employee_code: 'PASSENGER1', role: 'FO', state: 'KA', business: 'OPS', status: 'active', is_active: true },
+    ],
+    hierarchyRows: [],
+    liveRows: [],
+    attendances: [
+      {
+        employee_code: 'PASSENGER1',
+        attendance_date: '2026-08-22',
+        status: 'Completed',
+        payable_km_allowed: false,
+        total_approved_km: 0,
+        eligible_km: 0,
+        total_route_km: 117,
+        petrol_amount: 0,
+        rate_per_km: 4,
+        metadata: {
+          shared_travel_adjustment: true,
+          shared_travel_original_km: 117,
+          shared_travel_original_amount: 468,
+          travel_legs: [{ payable_km: 117, payable_amount: 468 }],
+        },
+      },
+    ],
+    filters: { date_from: '2026-08-01', date_to: '2026-08-31', state: null, business: null, status: null },
+  });
+
+  assert.equal(result.payable_km, 0);
+  assert.equal(result.petrol_amount, 0);
+});
+
+test('mixed date state business status summary uses canonical attendance payable fields', () => {
+  const result = summarizeOperationsRows({
+    actor,
+    profiles: [
+      { employee_code: 'KA1', role: 'FO', state: 'KA', business: 'OPS', status: 'active', is_active: true },
+      { employee_code: 'KA2', role: 'FO', state: 'KA', business: 'OPS', status: 'active', is_active: true },
+      { employee_code: 'TN2', role: 'FO', state: 'TN', business: 'OPS', status: 'active', is_active: true },
+    ],
+    hierarchyRows: [],
+    liveRows: [],
+    attendances: [
+      { employee_code: 'KA1', attendance_date: '2026-08-10', status: 'Active', total_approved_km: 10, petrol_amount: 40, payable_km_allowed: true },
+      { employee_code: 'KA2', attendance_date: '2026-08-10', status: 'Active', total_approved_km: 0, eligible_km: 0, total_route_km: 80, petrol_amount: 0, rate_per_km: 4, payable_km_allowed: false },
+      { employee_code: 'KA1', attendance_date: '2026-09-01', status: 'Active', total_approved_km: 90, petrol_amount: 360, payable_km_allowed: true },
+      { employee_code: 'TN2', attendance_date: '2026-08-10', status: 'Active', total_approved_km: 30, petrol_amount: 120, payable_km_allowed: true },
+      { employee_code: 'KA1', attendance_date: '2026-08-11', status: 'Completed', total_approved_km: 50, petrol_amount: 200, payable_km_allowed: true },
+    ],
+    filters: { date_from: '2026-08-01', date_to: '2026-08-31', state: 'KA', business: 'OPS', status: 'Active' },
+  });
+
+  assert.equal(result.payable_km, 10);
+  assert.equal(result.petrol_amount, 40);
+  assert.equal(result.matching_attendance_count, 2);
+  assert.equal(result.matching_employee_count, 2);
 });
 
 test('inactive and non-operations manager profiles cannot access totals', () => {
@@ -180,6 +318,7 @@ test('live status query uses fo_user_id and never selects missing employee_code 
   }, '2026-07-14');
 
   const liveSelection = selections.get('fo_live_status');
+  assert.match(selections.get('fo_attendance'), /payable_km_allowed/);
   assert.equal(liveSelection, 'fo_user_id,current_status,is_tracking,active_site_visit_id');
   assert.doesNotMatch(liveSelection, /(^|,)employee_code(,|$)/);
   assert.doesNotMatch(liveSelection, /(^|,)status(,|$)/);
