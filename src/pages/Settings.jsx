@@ -7,6 +7,7 @@ import { canAccessUserManagementAdmin } from '../utils/authRoles.js';
 
 const settings = [
   { title: 'Company profile', description: 'Manage myQPMS identity, logo, address, and workspace details.', icon: Building },
+  { title: 'Field Operations Access', description: 'Preview current Command Center permissions, business scope, and visible employee coverage.', icon: ShieldCheck, to: '/settings/access-management/field-operations' },
   { title: 'User roles', description: 'Configure access levels for administrators, managers, and agents.', icon: UserCog },
   { title: 'User Management', description: 'Preview employee hierarchy, HOD mapping, imports, and app account onboarding.', icon: Users, to: '/settings/user-management' },
   { title: 'Client Feedback QR', description: 'Generate secure public QR codes for client hospital locations.', icon: QrCode, to: '/settings/hospital-feedback/qr-generator' },
@@ -18,6 +19,7 @@ export default function Settings() {
   usePageTitle('Settings');
   const { user } = useAuth();
   const visibleSettings = settings.filter((item) => {
+    if (item.to?.startsWith('/settings/access-management')) return canAccessUserManagementAdmin(user);
     if (item.to === '/settings/user-management') return canAccessUserManagementAdmin(user);
     return true;
   });

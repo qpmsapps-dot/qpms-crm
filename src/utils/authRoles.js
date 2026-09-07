@@ -197,6 +197,7 @@ export function canAccessRoute(user, pathname) {
   if (normalizeAppRole(user?.rawRole || user?.role) === 'DemoViewer') {
     if (pathname.startsWith('/store-master') || pathname.startsWith('/settings') || pathname.startsWith('/employees')) return false;
   }
+  if (pathname.startsWith('/settings/access-management')) return canAccessUserManagementAdmin(user);
   if (pathname.startsWith('/settings/user-management')) return canAccessUserManagementAdmin(user);
   if (pathname.startsWith('/store-master')) return canAccessStoreMaster(user);
   if (pathname.startsWith('/fault-tracker')) return canAccessFaultTracker(user);

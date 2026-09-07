@@ -83,8 +83,10 @@ import {
   normalizeOperationsSummaryFilters,
 } from './services/operationsSummaryService.js';
 import {
+  buildFieldOperationsAccessPreview,
   buildFoAccessMatrix,
   foEmployeeKey,
+  isProfileInOperationsCommandCenterScope,
   operationsCommandCenterAllowedEmployeeCodes,
   resolveOperationsCommandCenterScope,
 } from './services/foOperationalAccessService.js';
@@ -5580,6 +5582,67 @@ app.get(
   },
 );
 
+app.get(
+  '/api/admin/access/field-operations/preview',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      const identifier = String(request.query.employee || request.query.employee_code || request.query.profile_id || '').trim();
+      if (!identifier) {
+        response.status(400).json({ ok: false, message: 'employee is required.' });
+        return;
+      }
+      const [profilesRes, hierarchyRes] = await Promise.all([
+        client
+          .from('profiles')
+          .select('id,full_name,display_name,employee_code,username,role,department,designation,business,state,status,is_active,web_access_enabled,metadata')
+          .eq('is_active', true)
+          .limit(5000),
+        client
+          .from('employee_hierarchy')
+          .select('*')
+          .eq('is_active', true)
+          .limit(5000),
+      ]);
+      if (profilesRes.error) throw profilesRes.error;
+      if (hierarchyRes.error) throw hierarchyRes.error;
+      const normalizedIdentifier = identifier.toUpperCase();
+      const employee = (profilesRes.data || []).find((profile) =>
+        [
+          profile.id,
+          profile.employee_code,
+          profile.username,
+          profile.full_name,
+          profile.display_name,
+        ]
+          .map((value) => String(value || '').trim().toUpperCase())
+          .includes(normalizedIdentifier));
+      if (!employee) {
+        response.status(404).json({ ok: false, message: 'Employee profile not found.' });
+        return;
+      }
+      response.json({
+        ok: true,
+        mode: 'legacy',
+        read_only: true,
+        ...buildFieldOperationsAccessPreview(employee, profilesRes.data || [], hierarchyRes.data || []),
+      });
+    } catch (error) {
+      const safeError = sanitizeSupabaseDiagnosticError(error);
+      console.warn('[FO Access Preview] Failed to build preview', {
+        code: safeError.code,
+        message: safeError.message,
+      });
+      response.status(error.statusCode || 500).json({
+        ok: false,
+        message: 'Unable to preview Field Operations access.',
+      });
+    }
+  },
+);
+
 app.get('/api/profile/me', requireSupabaseJwt, (request, response) => {
   response.json({
     ok: true,
@@ -9117,6 +9180,41 @@ app.post(
         return;
       }
 
+      const { data: attendance, error: attendanceError } = await client
+        .from('fo_attendance')
+        .select('*')
+        .eq('id', visit.attendance_id)
+        .maybeSingle();
+      if (attendanceError) throw attendanceError;
+
+      const [profilesRes, hierarchyRes] = await Promise.all([
+        client
+          .from('profiles')
+          .select('id,full_name,display_name,employee_code,username,role,department,designation,business,state,status,is_active,web_access_enabled,metadata')
+          .eq('is_active', true)
+          .limit(5000),
+        client
+          .from('employee_hierarchy')
+          .select('*')
+          .eq('is_active', true)
+          .limit(5000),
+      ]);
+      if (profilesRes.error) throw profilesRes.error;
+      if (hierarchyRes.error) throw hierarchyRes.error;
+      const scopedTarget = {
+        ...(attendance || {}),
+        employee_code: visit.employee_code || attendance?.employee_code,
+        fo_user_id: visit.fo_user_id || attendance?.fo_user_id,
+        username: visit.employee_code || attendance?.username,
+      };
+      if (!isProfileInOperationsCommandCenterScope(request.profile, scopedTarget, profilesRes.data || [], hierarchyRes.data || [])) {
+        response.status(403).json({
+          ok: false,
+          message: 'You cannot review Missing KM outside your Field Operations scope.',
+        });
+        return;
+      }
+
       let { data: review, error: reviewError } = await client
         .from('fo_missing_km_reviews')
         .select('*')
@@ -9125,12 +9223,10 @@ app.post(
         .maybeSingle();
       if (reviewError) throw reviewError;
       if (!review) {
-        const { data: attendance, error: attendanceError } = await client
-          .from('fo_attendance')
-          .select('*')
-          .eq('id', visit.attendance_id)
-          .single();
-        if (attendanceError) throw attendanceError;
+        if (!attendance) {
+          response.status(404).json({ ok: false, message: 'Attendance not found for this site visit.' });
+          return;
+        }
         await refreshMissingKmReviewsForAttendance(client, attendance, [visit], [], {
           audit_label: 'checkout_review_action',
         });
@@ -9602,7 +9698,7 @@ app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRec
   }
 });
 
-app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, async (request, response) => {
+app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
   const payload = request.body || {};
   const lockKey = [
     String(payload.employee || payload.employee_code || payload.fo_user_id || '').trim().toUpperCase(),

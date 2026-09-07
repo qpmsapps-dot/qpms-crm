@@ -172,6 +172,14 @@ export function getAccessScopeOptions(params = {}) {
   });
 }
 
+export function getFieldOperationsAccessPreview(params = {}) {
+  return adminApiRequest({
+    method: 'GET',
+    url: '/api/admin/access/field-operations/preview',
+    params,
+  });
+}
+
 export function getMyProfile() {
   return adminApiRequest({
     method: 'GET',

@@ -4,8 +4,10 @@ import path from 'node:path';
 import test from 'node:test';
 import {
   buildFoAccessMatrix,
+  buildFieldOperationsAccessPreview,
   canFoUser,
   foOperationalAllowedEmployeeCodes,
+  isProfileInOperationsCommandCenterScope,
   normalizeFoOperationalRole,
   operationsCommandCenterAllowedEmployeeCodes,
   resolveOperationsCommandCenterScope,
@@ -191,6 +193,46 @@ test('feature authorization helper separates permission from scope', () => {
   assert.equal(canFoUser(branchHead, 'KM_AUDIT_VIEW'), false);
 });
 
+test('Branch Head Missing KM approval target must be inside Command Center scope', () => {
+  const actor = active({ employee_code: 'BH_KL', role: 'Branch Head', state: 'KL', business: 'Standalone' });
+  const scopedProfiles = [
+    actor,
+    active({ employee_code: 'KL_ST_FO', role: 'FO', state: 'KL', business: 'Standalone' }),
+    active({ employee_code: 'TN_ST_FO', role: 'FO', state: 'TN', business: 'Standalone' }),
+    active({ employee_code: 'KL_NIMS_FO', role: 'FO', state: 'KL', business: 'Hospitals', metadata: { client_name: 'NIMS Hyderabad' } }),
+  ];
+
+  assert.equal(
+    isProfileInOperationsCommandCenterScope(actor, { employee_code: 'KL_ST_FO' }, scopedProfiles, []),
+    true,
+  );
+  assert.equal(
+    isProfileInOperationsCommandCenterScope(actor, { fo_user_id: 'KL_ST_FO' }, scopedProfiles, []),
+    true,
+  );
+  assert.equal(
+    isProfileInOperationsCommandCenterScope(actor, { employee_code: 'TN_ST_FO' }, scopedProfiles, []),
+    false,
+  );
+  assert.equal(
+    isProfileInOperationsCommandCenterScope(actor, { employee_code: 'KL_NIMS_FO' }, scopedProfiles, []),
+    false,
+  );
+});
+
+test('Field Operations access preview is read-only and calculated by backend resolver', () => {
+  const actor = active({ employee_code: 'QPMSTN3082', role: 'OPERATIONS_MANAGER', state: 'TN', business: 'Standalone' });
+  const preview = buildFieldOperationsAccessPreview(actor, commandCenterProfiles, []);
+
+  assert.equal(preview.employee.employee_code, 'QPMSTN3082');
+  assert.equal(preview.read_only, undefined);
+  assert.equal(preview.capabilities.command_center_view, true);
+  assert.equal(preview.capabilities.missing_km_approve, true);
+  assert.equal(preview.effective_scope.scope_type, 'TN_STANDALONE_OVERRIDE');
+  assert.equal(preview.visible_employee_count, 1);
+  assert.deepEqual(preview.visible_employees.map((employee) => employee.employee_code), ['TN_ST']);
+});
+
 test('diagnostic matrix is legacy/shadow-compatible and normalized is not active', () => {
   const matrix = buildFoAccessMatrix();
 
@@ -209,4 +251,23 @@ test('admin FO matrix route is read-only and protected by JWT plus user-manageme
   assert.match(serverSource, /buildFoAccessMatrix\(\)/);
   assert.match(serverSource, /'OPERATIONSMANAGER'/);
   assert.doesNotMatch(serverSource, /'OPERATIONS_MANAGER'/);
+});
+
+test('employee-range KM recalculation route requires privileged recalculation permission', () => {
+  const serverPath = path.resolve('server.js');
+  const serverSource = fs.readFileSync(serverPath, 'utf8');
+
+  assert.match(
+    serverSource,
+    /app\.post\('\/api\/fo\/km\/recalculate-employee-range',\s*requireSupabaseJwt,\s*requireFoKmBatchRecalculationPermission/,
+  );
+});
+
+test('checkout Missing KM review route enforces resolved Command Center scope', () => {
+  const serverPath = path.resolve('server.js');
+  const serverSource = fs.readFileSync(serverPath, 'utf8');
+
+  assert.match(serverSource, /'\/api\/fo\/site-visits\/:visitId\/checkout-missing-km-review'[\s\S]*requireCheckoutMissingKmReviewPermission/);
+  assert.match(serverSource, /isProfileInOperationsCommandCenterScope\(request\.profile,\s*scopedTarget/);
+  assert.match(serverSource, /outside your Field Operations scope/);
 });

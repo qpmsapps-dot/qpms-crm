@@ -20,6 +20,7 @@ import Tickets from '../pages/Tickets.jsx';
 import FaultTracker from '../pages/FaultTracker.jsx';
 import DeepCleaning from '../pages/DeepCleaning.jsx';
 import UserManagement from '../pages/settings/UserManagement.jsx';
+import FieldOperationsAccess from '../pages/settings/FieldOperationsAccess.jsx';
 import HospitalFeedbackQrGenerator from '../pages/HospitalFeedbackQrGenerator.jsx';
 import HospitalFeedbackDashboard from '../pages/HospitalFeedbackDashboard.jsx';
 import PublicFeedbackQrPage, { PublicFeedbackScanInstruction } from '../pages/PublicFeedbackQrPage.jsx';
@@ -97,6 +98,7 @@ const productionRoutes = [
           { path: 'store-master', element: <StoreMaster /> },
           { path: 'employees', element: isDemoMode ? <Navigate to="/dashboard" replace /> : <Employees /> },
           { path: 'settings', element: <Settings /> },
+          { path: 'settings/access-management/field-operations', element: <FieldOperationsAccess /> },
           { path: 'settings/user-management', element: <UserManagement /> },
           { path: 'settings/hospital-feedback/qr-generator', element: <HospitalFeedbackQrGenerator /> },
           { path: 'operations/hospital-feedback/dashboard', element: <HospitalFeedbackDashboard /> },

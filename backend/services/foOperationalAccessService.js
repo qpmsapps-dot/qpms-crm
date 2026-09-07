@@ -392,6 +392,29 @@ export function operationsCommandCenterAllowedEmployeeCodes(actor, profiles = []
   return allowed;
 }
 
+export function isProfileInOperationsCommandCenterScope(actor, target, profiles = [], hierarchyRows = []) {
+  const allowedCodes = operationsCommandCenterAllowedEmployeeCodes(actor, profiles, hierarchyRows);
+  const targetProfile = profiles.find((profile) =>
+    [profile.id, profile.employee_code, profile.username]
+      .map((value) => text(value).toUpperCase())
+      .filter(Boolean)
+      .some((value) => [
+        target?.id,
+        target?.profile_id,
+        target?.employee_code,
+        target?.fo_user_id,
+        target?.username,
+      ].map((candidate) => text(candidate).toUpperCase()).includes(value)));
+  const targetCodes = [
+    employeeKey(target),
+    text(target?.employee_code).toUpperCase(),
+    text(target?.fo_user_id).toUpperCase(),
+    text(target?.username).toUpperCase(),
+    employeeKey(targetProfile),
+  ].filter(Boolean);
+  return targetCodes.some((code) => allowedCodes.has(code));
+}
+
 export function resolveFoAccessMode(env = process.env) {
   const requested = comparable(env.FO_ACCESS_MODE || 'legacy');
   if (requested === FO_ACCESS_MODES.SHADOW) {
@@ -451,6 +474,56 @@ export function resolveFoOperationalAccess(actor, profiles = [], hierarchyRows =
     ...scope,
     canAccessFoOperations: canAccessFoOperations(actor),
     permissions: Object.fromEntries(FO_FEATURES.map((feature) => [feature.key, canFoUser(actor, feature.key)])),
+  };
+}
+
+export function buildFieldOperationsAccessPreview(actor, profiles = [], hierarchyRows = []) {
+  const allowedCodes = operationsCommandCenterAllowedEmployeeCodes(actor, profiles, hierarchyRows);
+  const commandCenterScope = resolveOperationsCommandCenterScope(actor);
+  const visibleEmployees = profiles
+    .filter((profile) => allowedCodes.has(employeeKey(profile)))
+    .map((profile) => ({
+      id: profile.id || null,
+      employee_code: profile.employee_code || profile.username || null,
+      full_name: profile.full_name || profile.display_name || null,
+      role: profile.role || null,
+      state: profileValue(profile, 'state') || null,
+      business: profileValue(profile, 'business') || null,
+    }))
+    .sort((left, right) =>
+      text(left.state).localeCompare(text(right.state)) ||
+      text(left.business).localeCompare(text(right.business)) ||
+      text(left.full_name).localeCompare(text(right.full_name)));
+  return {
+    employee: {
+      id: actor?.id || null,
+      employee_code: actor?.employee_code || actor?.username || null,
+      full_name: actor?.full_name || actor?.display_name || null,
+      role: actor?.role || null,
+      state: profileValue(actor, 'state') || null,
+      business: profileValue(actor, 'business') || null,
+      is_active: actor?.is_active === true,
+      web_access_enabled: actor?.web_access_enabled !== false,
+    },
+    capabilities: {
+      command_center_view: canFoUser(actor, 'MAP_VIEW'),
+      employee_details_view: canFoUser(actor, 'VISITS_VIEW'),
+      visit_history_view: canFoUser(actor, 'VISITS_VIEW'),
+      km_view: canFoUser(actor, 'KM_VIEW'),
+      missing_km_approve: canFoUser(actor, 'KM_APPROVE'),
+    },
+    effective_scope: {
+      scope_type: commandCenterScope.scopeType,
+      label: commandCenterScope.label,
+      states: commandCenterScope.allowedStates || [],
+      businesses: commandCenterScope.allowedBusinesses || [],
+      role: normalizeFoOperationalRole(actor?.role),
+      source: commandCenterScope.legacyFallback
+        ? 'legacy_profiles_employee_hierarchy'
+        : 'operations_command_center_resolver',
+    },
+    visible_employee_count: visibleEmployees.length,
+    visible_employees: visibleEmployees,
   };
 }
 
