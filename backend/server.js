@@ -37,7 +37,6 @@ import {
   recalculateSwitchModeKmTemporary,
 } from './foKmRecalculationService.js';
 import { authorizeFoKmRecalculation } from './services/foKmRecalculationAuthorizationService.js';
-import { assertFoTravelModePayloadAllowed } from './services/foTravelModePolicyService.js';
 import {
   cleanupStaleFoSessions,
   cleanupStaleLiveStatusReferences,
@@ -89,9 +88,6 @@ import {
   operationsCommandCenterAllowedEmployeeCodes,
   resolveOperationsCommandCenterScope,
 } from './services/foOperationalAccessService.js';
-import {
-  loadFoKmAuditDataset,
-} from './services/foKmAuditService.js';
 import {
   buildConsolidatedTravelClaimPdf,
 } from './services/consolidatedTravelClaimPdfService.js';
@@ -1934,22 +1930,6 @@ function requireCheckoutMissingKmReviewPermission(request, response, next) {
     return;
   }
   next();
-}
-
-function rejectDisallowedFoTravelModePayload(request, response) {
-  try {
-    assertFoTravelModePayloadAllowed(request.profile, request.body || {}, {
-      statusCode: 400,
-    });
-    return false;
-  } catch (error) {
-    response.status(error.statusCode || 400).json({
-      ok: false,
-      code: error.code || 'FO_TRAVEL_MODE_NOT_ALLOWED',
-      message: error.message,
-    });
-    return true;
-  }
 }
 
 const STORE_MASTER_SELECT = [
@@ -9232,30 +9212,6 @@ app.get('/api/fo/operations/summary', requireSupabaseJwtOrDemoApiRead, async (re
   }
 });
 
-app.get('/api/fo/operations/km-audit', requireSupabaseJwt, async (request, response) => {
-  try {
-    const client = requireServiceRoleSupabase();
-    const dataset = await loadFoKmAuditDataset(
-      client,
-      request.profile,
-      request.query || {},
-      currentIndiaDateInput(),
-    );
-    response.json({ ok: true, ...dataset });
-  } catch (error) {
-    const status = Number(error?.statusCode || 500);
-    if (status >= 500) {
-      console.error('[myQPMS FO KM Audit] request failed', sanitizeSupabaseDiagnosticError(error));
-    }
-    response.status(status).json({
-      ok: false,
-      message: status >= 500
-        ? 'FO KM audit is temporarily unavailable. Please retry.'
-        : error.message,
-    });
-  }
-});
-
 app.get('/api/fo/operations/employee-range', requireSupabaseJwt, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
@@ -9567,7 +9523,6 @@ app.get('/api/deep-cleaning/records', requireSupabaseJwtOrDemoApiRead, async (re
 });
 
 app.post('/api/fo/km/recalculate', requireSupabaseJwt, async (request, response) => {
-  if (rejectDisallowedFoTravelModePayload(request, response)) return;
   let payload = request.body || {};
   const client = requireServiceRoleSupabase();
   try {
@@ -9615,7 +9570,6 @@ app.post('/api/fo/km/recalculate', requireSupabaseJwt, async (request, response)
 });
 
 app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
-  if (rejectDisallowedFoTravelModePayload(request, response)) return;
   const payload = request.body || {};
   const fromDate = normalizeFoKmRecalculationDate(payload.fromDate || payload.date);
   const toDate = normalizeFoKmRecalculationDate(payload.toDate || payload.date || fromDate);
@@ -9649,7 +9603,6 @@ app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRec
 });
 
 app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, async (request, response) => {
-  if (rejectDisallowedFoTravelModePayload(request, response)) return;
   const payload = request.body || {};
   const lockKey = [
     String(payload.employee || payload.employee_code || payload.fo_user_id || '').trim().toUpperCase(),
@@ -9699,7 +9652,6 @@ app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, async (req
 });
 
 app.post('/api/fo/km/recalculate-switch-mode', requireSupabaseJwt, requireTemporarySwitchKmPermission, async (request, response) => {
-  if (rejectDisallowedFoTravelModePayload(request, response)) return;
   const payload = request.body || {};
   const lockKey = `switch_mode:${foKmRecalculationLockKey(payload)}`;
   const lockDate = normalizeFoKmRecalculationDate(payload.date);
@@ -9731,7 +9683,6 @@ app.post('/api/fo/km/recalculate-switch-mode', requireSupabaseJwt, requireTempor
 });
 
 app.post('/api/fo/km/recalculate-full-day-gps', requireSupabaseJwt, requireFullDayGpsKmPermission, async (request, response) => {
-  if (rejectDisallowedFoTravelModePayload(request, response)) return;
   const payload = request.body || {};
   const lockKey = `full_day_gps:${foKmRecalculationLockKey(payload)}`;
   const lockDate = normalizeFoKmRecalculationDate(payload.date);
@@ -9769,7 +9720,6 @@ app.post('/api/fo/km/recalculate-full-day-gps', requireSupabaseJwt, requireFullD
 });
 
 app.post('/api/fo/km/recalculate-all', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
-  if (rejectDisallowedFoTravelModePayload(request, response)) return;
   const payload = request.body || {};
   const date = payload.date || payload.fromDate || currentIndiaDateInput();
   const lockDate = normalizeFoKmRecalculationDate(date);
