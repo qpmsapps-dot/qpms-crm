@@ -3859,25 +3859,13 @@ export async function reconcileFinalLegOnly(serviceRoleClient, payload = {}, opt
 
 function checkoutExceptionRequiresReview(visit) {
   const metadata = safeVisitMetadata(visit);
-  const status = String(
-    visit?.checkout_location_status ||
-      metadata.checkout_location_status ||
-      metadata.checkout_status ||
-      '',
-  ).trim().toLowerCase();
   const distance = normalizeNumber(
     visit?.checkout_distance_meters ??
       metadata.checkout_distance_meters ??
       metadata.checkout_distance_from_site_meters ??
       metadata.distance_from_site_meters,
   );
-  return (
-    status.includes('wrong') ||
-    status.includes('delayed') ||
-    status.includes('away') ||
-    metadata.requires_checkout_review === true ||
-    (Number.isFinite(distance) && distance > DELAYED_CHECKOUT_REVIEW_THRESHOLD_METERS)
-  );
+  return Number.isFinite(distance) && distance > DELAYED_CHECKOUT_REVIEW_THRESHOLD_METERS;
 }
 
 function missingKmOriginForVisit(visit) {
@@ -3900,11 +3888,41 @@ function windowsOverlap(startA, endA, startB, endB) {
   return Boolean(a1 && a2 && b1 && b2 && a1 < b2 && b1 < a2);
 }
 
-function overlapsCanonicalLegs(windowStart, windowEnd, travelLegs = []) {
-  return travelLegs.some((leg) => (
-    leg?.status === 'calculated' &&
-    windowsOverlap(windowStart, windowEnd, leg.from_time || leg.started_at, leg.to_time || leg.ended_at)
-  ));
+function canonicalLegOverlapEvidence(windowStart, windowEnd, travelLegs = []) {
+  const overlappingLegs = travelLegs.filter((leg) => {
+    const status = String(leg?.status || '').trim().toLowerCase();
+    return ['calculated', 'completed'].includes(status) && windowsOverlap(
+      windowStart,
+      windowEnd,
+      leg.from_time || leg.started_at,
+      leg.to_time || leg.ended_at,
+    );
+  });
+  const alreadyIncludedKm = Number(overlappingLegs.reduce(
+    (sum, leg) => sum + Math.max(0, normalizeNumber(leg.payable_km) || 0),
+    0,
+  ).toFixed(2));
+  return {
+    overlaps: overlappingLegs.length > 0,
+    alreadyIncludedKm,
+    legIds: overlappingLegs.map((leg) => leg.id).filter(Boolean),
+  };
+}
+
+function checkoutReviewBaselineAmbiguous(attendance, travelLegs = [], overlapEvidence = {}) {
+  if (overlapEvidence.overlaps) return false;
+  const storedRouteKm = normalizeNumber(attendance?.total_route_km);
+  return Boolean(Number.isFinite(storedRouteKm) && storedRouteKm > 0);
+}
+
+export function calculateIncrementalMissingKm(detectedKm, overlapEvidence = {}) {
+  const detected = Math.max(0, normalizeNumber(detectedKm) || 0);
+  const included = Math.max(0, normalizeNumber(overlapEvidence.alreadyIncludedKm) || 0);
+  return {
+    detectedMissingKm: Number(detected.toFixed(2)),
+    alreadyIncludedKm: Number(Math.min(detected, included).toFixed(2)),
+    approvalMissingKm: Number(Math.max(0, detected - included).toFixed(2)),
+  };
 }
 
 function missingKmReviewPayloadFromCalculation({
@@ -3918,7 +3936,7 @@ function missingKmReviewPayloadFromCalculation({
   calculation = {},
   googleKm = null,
   straightLineKm = null,
-  overlap = false,
+  overlapEvidence = {},
   options = {},
 }) {
   const points = cleanGpsLogs(rows);
@@ -3932,21 +3950,21 @@ function missingKmReviewPayloadFromCalculation({
     points.length >= MIN_WINDOW_VALID_GPS_POINTS &&
     validRatio >= MIN_WINDOW_VALID_GPS_RATIO &&
     filteredGpsKm > 0;
-  let suggestedMissingKm = 0;
+  let detectedMissingKm = 0;
   let calculationSource = 'no_reliable_route_evidence';
   let evidenceQuality = 'manual_review_required';
   const reasonCodes = [];
 
-  if (overlap) reasonCodes.push('CHECKOUT_WINDOW_OVERLAPS_CANONICAL_TRAVEL_LEG');
+  if (overlapEvidence.overlaps) reasonCodes.push('CHECKOUT_WINDOW_OVERLAPS_CANONICAL_TRAVEL_LEG');
   if (checkoutExceptionRequiresReview(visit)) reasonCodes.push('CHECKOUT_AWAY_FROM_SITE');
   if (rows.length < MIN_WINDOW_RAW_GPS_ROWS) reasonCodes.push('CHECKOUT_GPS_INCOMPLETE');
 
-  if (!overlap && gpsUsable) {
-    suggestedMissingKm = filteredGpsKm;
+  if (gpsUsable) {
+    detectedMissingKm = filteredGpsKm;
     calculationSource = reconstructedKm > 0 ? 'gps_reconstructed_path' : 'gps_path';
     evidenceQuality = reconstructedKm > 0 ? 'medium' : 'high';
-  } else if (!overlap && Number.isFinite(googleKm) && googleKm > 0) {
-    suggestedMissingKm = Number(googleKm.toFixed(2));
+  } else if (Number.isFinite(googleKm) && googleKm > 0) {
+    detectedMissingKm = Number(googleKm.toFixed(2));
     calculationSource = 'google_route';
     evidenceQuality = 'medium';
     reasonCodes.push('CHECKOUT_GOOGLE_FALLBACK');
@@ -3957,6 +3975,17 @@ function missingKmReviewPayloadFromCalculation({
     evidenceQuality = 'manual_review_required';
     reasonCodes.push('CHECKOUT_NO_RELIABLE_EVIDENCE');
   }
+
+  const incremental = calculateIncrementalMissingKm(detectedMissingKm, overlapEvidence);
+  const overlapIsAuditable = !overlapEvidence.baselineAmbiguous && (
+    !overlapEvidence.overlaps || overlapEvidence.legIds?.length > 0
+  );
+  const suggestedMissingKm = overlapIsAuditable ? incremental.approvalMissingKm : 0;
+  if (incremental.alreadyIncludedKm > 0) reasonCodes.push('PAYABLE_KM_ALREADY_INCLUDED_IN_OVERLAPPING_LEG');
+  if (suggestedMissingKm <= 0 && incremental.detectedMissingKm > 0) {
+    reasonCodes.push('NO_INCREMENTAL_MISSING_KM');
+  }
+  if (overlapEvidence.baselineAmbiguous) reasonCodes.push('ALREADY_INCLUDED_KM_CANNOT_BE_DETERMINED');
 
   const ratePerKm = ratePerKmForTravelMode(visit?.travel_mode || attendance?.travel_mode, attendance?.rate_per_km);
   const roundedSuggestedKm = Number(Number(suggestedMissingKm || 0).toFixed(2));
@@ -3981,7 +4010,7 @@ function missingKmReviewPayloadFromCalculation({
     suggested_amount: Number((roundedSuggestedKm * ratePerKm).toFixed(2)),
     calculation_source: calculationSource,
     evidence_quality: evidenceQuality,
-    status: 'pending',
+    status: overlapIsAuditable ? 'pending' : 'clarification_required',
     reason_code: [...new Set(reasonCodes)].join(',') || 'CHECKOUT_DISTANCE_REVIEW_REQUIRED',
     metadata: {
       origin_source: origin?.source || null,
@@ -3991,7 +4020,13 @@ function missingKmReviewPayloadFromCalculation({
       valid_gps_ratio: Number(validRatio.toFixed(4)),
       accepted_gps_km: acceptedKm,
       reconstructed_gap_km: reconstructedKm,
-      overlap_with_canonical_travel_leg: overlap,
+      overlap_with_canonical_travel_leg: Boolean(overlapEvidence.overlaps),
+      overlapping_travel_leg_ids: overlapEvidence.legIds || [],
+      detected_missing_km: incremental.detectedMissingKm,
+      already_included_km: overlapIsAuditable ? incremental.alreadyIncludedKm : null,
+      approval_missing_km: suggestedMissingKm,
+      incremental_formula: 'max(0, detected_missing_km - already_included_km)',
+      incremental_determination: overlapIsAuditable ? 'defensible' : 'requires_review',
       calculated_at: new Date().toISOString(),
       ...(options.audit_label ? { audit_label: options.audit_label } : {}),
     },
@@ -4011,6 +4046,9 @@ async function writeMissingKmReviewSummaryToVisit(client, visitId, review, exist
     suggested_missing_checkout_source: review.calculation_source || null,
     suggested_missing_checkout_evidence_quality: review.evidence_quality || null,
     suggested_missing_checkout_reason_code: review.reason_code || null,
+    detected_missing_checkout_km: normalizeNumber(review.metadata?.detected_missing_km),
+    already_included_checkout_km: normalizeNumber(review.metadata?.already_included_km),
+    incremental_missing_km_determination: review.metadata?.incremental_determination || null,
     suggested_missing_checkout_calculated_at: review.updated_at || review.created_at || new Date().toISOString(),
     suggested_missing_checkout_origin: {
       latitude: normalizeNumber(review.origin_latitude),
@@ -4108,6 +4146,8 @@ export async function refreshMissingKmReviewsForAttendance(client, attendance, v
     } catch {
       googleKm = null;
     }
+    const overlapEvidence = canonicalLegOverlapEvidence(windowStart, windowEnd, travelLegs);
+    overlapEvidence.baselineAmbiguous = checkoutReviewBaselineAmbiguous(attendance, travelLegs, overlapEvidence);
     const payload = missingKmReviewPayloadFromCalculation({
       attendance,
       visit,
@@ -4119,7 +4159,7 @@ export async function refreshMissingKmReviewsForAttendance(client, attendance, v
       calculation,
       googleKm,
       straightLineKm,
-      overlap: overlapsCanonicalLegs(windowStart, windowEnd, travelLegs),
+      overlapEvidence,
       options,
     });
     try {
@@ -4238,6 +4278,11 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
   let approvedKm = 0;
   let status = 'rejected';
   if (normalizedAction === 'approve') {
+    if (review.metadata?.incremental_determination === 'requires_review') {
+      const error = new Error('Incremental Missing KM is not defensible yet. Request clarification before approval.');
+      error.statusCode = 409;
+      throw error;
+    }
     approvedKm = normalizeNumber(payload.approved_missing_km ?? payload.approved_km);
     if (!Number.isFinite(approvedKm) || approvedKm < 0) {
       const error = new Error('approved_missing_km must be a non-negative number.');

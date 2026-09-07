@@ -293,9 +293,20 @@ function safeAttendance(row = {}) {
 
 const SAFE_VISIT_METADATA_KEYS = [
   'checkout_review_status',
+  'missing_checkout_review_id',
+  'checkout_review_id',
+  'suggested_missing_checkout_km',
+  'suggested_missing_checkout_amount',
+  'suggested_missing_checkout_source',
+  'suggested_missing_checkout_evidence_quality',
+  'suggested_missing_checkout_reason_code',
+  'detected_missing_checkout_km',
+  'already_included_checkout_km',
+  'incremental_missing_km_determination',
   'checkout_review_approved_km',
   'approved_missing_km',
   'approved_missing_checkout_km',
+  'approved_missing_checkout_amount',
   'checkout_review_approval_remarks',
   'checkout_review_approved_by_employee_code',
   'checkout_review_reason',
@@ -320,6 +331,8 @@ function safeVisit(row = {}, attendanceDateById = new Map()) {
     check_in_longitude: row.check_in_longitude ?? null,
     check_out_latitude: row.check_out_latitude ?? null,
     check_out_longitude: row.check_out_longitude ?? null,
+    checkout_distance_meters: row.checkout_distance_meters ?? null,
+    checkout_location_status: row.checkout_location_status || null,
     route_km: row.route_km ?? null,
     visit_duration_minutes: deriveVisitDurationMinutes({
       storedMinutes: row.visit_duration_minutes,
@@ -885,6 +898,91 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
     travelLegs,
     expenseClaims: linkedExpenseClaims,
   });
+  const reviews = attendanceIds.length
+    ? await fetchByAttendanceIds(client, 'fo_missing_km_reviews', attendanceIds, 'created_at')
+    : [];
+  const reviewByVisit = new Map(reviews.map((review) => [text(review.site_visit_id), review]));
+  dataset.site_visits = dataset.site_visits.map((visit) => {
+    const review = reviewByVisit.get(text(visit.id));
+    if (!review) return visit;
+    const reviewMetadata = review.metadata && typeof review.metadata === 'object' && !Array.isArray(review.metadata)
+      ? review.metadata
+      : {};
+    return {
+      ...visit,
+      checkout_distance_meters: review.checkout_distance_meters ?? visit.checkout_distance_meters ?? null,
+      metadata: {
+        ...(visit.metadata || {}),
+        checkout_review_status: review.status,
+        checkout_review_id: review.id,
+        missing_checkout_review_id: review.id,
+        suggested_missing_checkout_km: review.suggested_missing_km,
+        suggested_missing_checkout_amount: review.suggested_amount,
+        suggested_missing_checkout_source: review.calculation_source,
+        suggested_missing_checkout_evidence_quality: review.evidence_quality,
+        suggested_missing_checkout_reason_code: review.reason_code,
+        approved_missing_checkout_km: review.approved_missing_km,
+        approved_missing_checkout_amount: review.approved_amount,
+        missing_km_review: {
+          id: review.id,
+          status: review.status,
+          detected_missing_km: reviewMetadata.detected_missing_km ?? review.filtered_gps_km ?? review.google_route_km,
+          already_included_km: reviewMetadata.already_included_km ?? null,
+          incremental_determination: reviewMetadata.incremental_determination ?? null,
+          suggested_missing_km: review.suggested_missing_km,
+          approved_missing_km: review.approved_missing_km,
+          rate_per_km: review.rate_per_km,
+          suggested_amount: review.suggested_amount,
+          approved_amount: review.approved_amount,
+          calculation_source: review.calculation_source,
+          evidence_quality: review.evidence_quality,
+          reason_code: review.reason_code,
+          reviewer_employee_code: review.reviewer_employee_code,
+          reviewer_name: review.reviewer_name,
+          reviewed_at: review.reviewed_at,
+        },
+      },
+    };
+  });
+  dataset.missing_km_reviews = reviews.map((review) => {
+    const metadata = review.metadata && typeof review.metadata === 'object' && !Array.isArray(review.metadata)
+      ? review.metadata
+      : {};
+    return {
+      id: review.id,
+      attendance_id: review.attendance_id,
+      site_visit_id: review.site_visit_id,
+      employee_code: review.employee_code,
+      checkout_distance_meters: review.checkout_distance_meters,
+      detected_missing_km: metadata.detected_missing_km ?? review.filtered_gps_km ?? review.google_route_km ?? null,
+      already_included_km: metadata.already_included_km ?? null,
+      approval_missing_km: review.suggested_missing_km,
+      approved_missing_km: review.approved_missing_km,
+      rate_per_km: review.rate_per_km,
+      suggested_amount: review.suggested_amount,
+      approved_amount: review.approved_amount,
+      calculation_source: review.calculation_source,
+      evidence_quality: review.evidence_quality,
+      status: review.status,
+      reason_code: review.reason_code,
+      requested_clarification: review.requested_clarification,
+      reviewer_employee_code: review.reviewer_employee_code,
+      reviewer_name: review.reviewer_name,
+      reviewed_at: review.reviewed_at,
+    };
+  });
+  dataset.period_summary.pending_missing_km = rounded(reviews
+    .filter((review) => normalizedMode(review.status) === 'pending')
+    .reduce((sum, review) => sum + number(review.suggested_missing_km), 0));
+  dataset.period_summary.pending_missing_km_amount = rounded(reviews
+    .filter((review) => normalizedMode(review.status) === 'pending')
+    .reduce((sum, review) => sum + number(review.suggested_amount), 0));
+  dataset.period_summary.approved_missing_km = rounded(reviews
+    .filter((review) => normalizedMode(review.status) === 'approved')
+    .reduce((sum, review) => sum + number(review.approved_missing_km), 0));
+  dataset.period_summary.approved_missing_km_amount = rounded(reviews
+    .filter((review) => normalizedMode(review.status) === 'approved')
+    .reduce((sum, review) => sum + number(review.approved_amount), 0));
   if (optionalClaims.warning) {
     dataset.data_quality_warnings.unshift(optionalClaims.warning);
   }

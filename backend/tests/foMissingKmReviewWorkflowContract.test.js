@@ -15,7 +15,7 @@ test('missing km review helper uses checkout open-window evidence, not final leg
   assert.match(helper, /const windowEnd = visitCheckOutTime\(visit\)/);
   assert.match(helper, /missingKmOriginForVisit\(visit\)/);
   assert.match(helper, /missingKmDestinationForVisit\(visit\)/);
-  assert.match(helper, /overlapsCanonicalLegs\(windowStart, windowEnd, travelLegs\)/);
+  assert.match(helper, /canonicalLegOverlapEvidence\(windowStart, windowEnd, travelLegs\)/);
   assert.doesNotMatch(helper, /attendanceEndCoordinate/);
 });
 
@@ -24,7 +24,7 @@ test('pending missing km suggestions are refreshed but not automatically approve
     service.indexOf('function missingKmReviewPayloadFromCalculation'),
     service.indexOf('async function writeMissingKmReviewSummaryToVisit'),
   );
-  assert.match(payload, /status: 'pending'/);
+  assert.match(payload, /status: overlapIsAuditable \? 'pending' : 'clarification_required'/);
   assert.match(payload, /suggested_missing_km: roundedSuggestedKm/);
   assert.doesNotMatch(payload, /approved_missing_km:\s*roundedSuggestedKm/);
 });
@@ -50,6 +50,26 @@ test('approval workflow syncs attendance totals and supports reject and clarific
   assert.match(decision, /syncAttendanceApprovedKmTotals/);
   assert.match(decision, /status = 'clarification_required'/);
   assert.match(decision, /Approved KM above suggestion requires elevated_override/);
+  assert.match(decision, /Incremental Missing KM is not defensible yet/);
+});
+
+test('review payload records detected, already-included, and incremental KM separately', () => {
+  const payload = service.slice(
+    service.indexOf('function missingKmReviewPayloadFromCalculation'),
+    service.indexOf('async function writeMissingKmReviewSummaryToVisit'),
+  );
+  assert.match(payload, /detected_missing_km: incremental\.detectedMissingKm/);
+  assert.match(payload, /already_included_km:/);
+  assert.match(payload, /approval_missing_km: suggestedMissingKm/);
+  assert.match(payload, /max\(0, detected_missing_km - already_included_km\)/);
+});
+
+test('employee range exposes canonical review rows and refresh endpoint', () => {
+  const employeeRange = readFileSync('backend/services/employeeRangeReportService.js', 'utf8');
+  assert.match(employeeRange, /from\('fo_missing_km_reviews'\)|fetchByAttendanceIds\(client, 'fo_missing_km_reviews'/);
+  assert.match(employeeRange, /pending_missing_km/);
+  assert.match(server, /employee-missing-km-reviews\/refresh/);
+  assert.match(server, /requireCheckoutMissingKmReviewPermission/);
 });
 
 test('checkout review endpoint resolves canonical review row and returns totals', () => {

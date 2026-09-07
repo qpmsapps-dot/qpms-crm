@@ -5008,6 +5008,8 @@ function missingCheckoutEvidence(visit) {
       ? visit.metadata
       : {};
   const detectedKm = numberOrNull(
+    metadata.missing_km_review?.detected_missing_km ??
+      metadata.detected_missing_checkout_km ??
     metadata.missing_checkout_km_detected ??
       metadata.missing_km_detected ??
       visit?.missing_checkout_km_detected,
@@ -5023,6 +5025,14 @@ function missingCheckoutEvidence(visit) {
       metadata.missing_km_review?.suggested_missing_km ??
       metadata.suggested_missing_checkout_haversine_km,
   );
+  const alreadyIncludedKm = numberOrNull(
+    metadata.missing_km_review?.already_included_km ??
+      metadata.already_included_checkout_km,
+  );
+  const incrementalDetermination =
+    metadata.missing_km_review?.incremental_determination ||
+    metadata.missing_checkout_incremental_determination ||
+    null;
   const suggestedAmount = numberOrNull(
     metadata.suggested_missing_checkout_amount ??
       (suggestedKm === null ? null : suggestedKm * RATE_PER_KM),
@@ -5054,6 +5064,12 @@ function missingCheckoutEvidence(visit) {
       metadata.missing_km_review?.id ||
       null,
     detectedKm,
+    alreadyIncludedKm,
+    incrementalDetermination,
+    approvalDefensible:
+      incrementalDetermination !== "requires_review" &&
+      suggestedKm !== null &&
+      suggestedKm > 0,
     approvedKm: approvedKm ?? 0,
     approvedAmount: approvedAmount ?? 0,
     suggestedKm,
@@ -5084,11 +5100,12 @@ function missingCheckoutKmLabel(visit) {
   const source = evidence.suggestedSource
     ? evidence.suggestedSource.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
     : null;
-  if (evidence.approvedKm > 0) return `${evidence.approvedKm.toFixed(1)} km Approved`;
+  if (evidence.approvedKm > 0) return `${evidence.approvedKm.toFixed(2)} km Approved`;
   if (evidence.suggestedKm !== null) {
-    return `${evidence.suggestedKm.toFixed(1)} km${source ? ` — ${source}` : ""} — ${status}`;
+    if (evidence.suggestedKm <= 0 && (evidence.detectedKm || 0) > 0) return "Requires Review";
+    return `${evidence.suggestedKm.toFixed(2)} km${source ? ` — ${source}` : ""} — ${status}`;
   }
-  if (evidence.hasDetectedKm) return `${evidence.detectedKm.toFixed(1)} km`;
+  if (evidence.hasDetectedKm) return `${evidence.detectedKm.toFixed(2)} km detected — Requires Review`;
   return "--";
 }
 
@@ -7961,6 +7978,13 @@ function FieldOfficerDetailsView({
           <DetailSummaryCard icon={ShieldCheck} label="Period Attendance Status" value={displayValue(periodSummary.period_attendance_status || lastAttendance.status)} hint={attendances.length > 1 ? `${attendances.length} attendance records` : "--"} tone={periodSummary.incomplete_count > 0 ? "amber" : "blue"} />
         </div>
 
+        <div className="grid grid-cols-2 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:grid-cols-4">
+          <DetailSummaryCard icon={Route} label="Current Payable KM" value={`${Number(periodSummary.canonical_payable_km || periodSummary.kilometer || 0).toFixed(2)} km`} hint="Selected range" tone="green" />
+          <DetailSummaryCard icon={Clock} label="Pending Missing KM" value={`${Number(periodSummary.pending_missing_km || 0).toFixed(2)} km`} hint={formatInr(periodSummary.pending_missing_km_amount || 0)} tone="amber" />
+          <DetailSummaryCard icon={ShieldCheck} label="Approved Missing KM" value={`${Number(periodSummary.approved_missing_km || 0).toFixed(2)} km`} hint={formatInr(periodSummary.approved_missing_km_amount || 0)} tone="blue" />
+          <DetailSummaryCard icon={Fuel} label="Current Petrol Amount" value={formatInr(periodSummary.canonical_petrol_amount || periodSummary.distance_amount || 0)} hint="DB-backed total" tone="amber" />
+        </div>
+
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between gap-3">
@@ -8501,7 +8525,7 @@ function FieldOfficerDetailsView({
                 ["Duration", durationMinutesLabel(visitMinutes(selectedVisit))],
                 ["Travel from Previous", selectedTravelFromPrevious],
                 ["Route KM", numberLabel(selectedVisit?.route_km, " km")],
-                ["Missing KM Detected", selectedCheckoutException?.requiresReview ? missingCheckoutKmLabel(selectedVisit) : "--"],
+                  ["Missing KM", selectedCheckoutException?.requiresReview ? missingCheckoutKmLabel(selectedVisit) : "--"],
                 ["Suggested Amount", selectedCheckoutException?.requiresReview && missingCheckoutEvidence(selectedVisit).suggestedAmount !== null ? formatInr(missingCheckoutEvidence(selectedVisit).suggestedAmount) : "--"],
                 ["Approved Missing KM", `${missingCheckoutEvidence(selectedVisit).approvedKm.toFixed(1)} km`],
                 ["Approved Amount", `${formatInr(missingCheckoutEvidence(selectedVisit).approvedAmount)}`],
@@ -8545,13 +8569,16 @@ function FieldOfficerDetailsView({
                   ["Site / Client", `${visitTitle(selectedVisit)} / ${visitClient(selectedVisit)}`],
                   ["Exception Type", selectedCheckoutException.label],
                   ["Existing Remarks", visitRemarks(selectedVisit)],
-                  ["Checkout Distance", selectedCheckoutException.distanceMeters === null ? "--" : `${selectedCheckoutException.distanceMeters.toFixed(0)} m`],
+                  ["Checkout Deviation", selectedCheckoutException.distanceMeters === null ? "--" : `${(selectedCheckoutException.distanceMeters / 1000).toFixed(2)} km`],
                   ["Check-in Time", formatDateTime(selectedVisit?.check_in_time)],
                   ["Check-out Time", formatDateTime(siteVisitCheckoutValue(selectedVisit))],
                   ["Route KM", numberLabel(selectedVisit?.route_km, " km")],
-                  ["Suggested KM", missingCheckoutEvidence(selectedVisit).suggestedKm === null ? "--" : `${missingCheckoutEvidence(selectedVisit).suggestedKm.toFixed(1)} km`],
-                  ["Suggested Amount", missingCheckoutEvidence(selectedVisit).suggestedAmount === null ? "--" : formatInr(missingCheckoutEvidence(selectedVisit).suggestedAmount)],
-                  ["Payable KM Impact", Number(selectedVisit?.route_km) > 0 ? `${Number(selectedVisit.route_km).toFixed(1)} km route contribution` : "--"],
+                  ["Detected Missing KM", missingCheckoutEvidence(selectedVisit).detectedKm === null ? "--" : `${missingCheckoutEvidence(selectedVisit).detectedKm.toFixed(2)} km`],
+                  ["Already Included", missingCheckoutEvidence(selectedVisit).alreadyIncludedKm === null ? "Requires Review" : `${missingCheckoutEvidence(selectedVisit).alreadyIncludedKm.toFixed(2)} km`],
+                  ["Approval Missing KM", missingCheckoutEvidence(selectedVisit).approvalDefensible ? `${missingCheckoutEvidence(selectedVisit).suggestedKm.toFixed(2)} km` : "Requires Review"],
+                  ["Approval Amount", missingCheckoutEvidence(selectedVisit).approvalDefensible ? formatInr(missingCheckoutEvidence(selectedVisit).suggestedAmount) : "--"],
+                  ["Calculation Source", displayValue(missingCheckoutEvidence(selectedVisit).suggestedSource?.replace(/_/g, " "))],
+                  ["Evidence", displayValue(missingCheckoutEvidence(selectedVisit).evidenceQuality)],
                   ["Review Status", selectedCheckoutReviewStatus?.label || "Pending Review"],
                 ].map(([label, value]) => (
                   <div key={label}>
@@ -8567,7 +8594,13 @@ function FieldOfficerDetailsView({
                       <button
                         key={action}
                         type="button"
-                        disabled={checkoutReviewBusyVisitId === selectedVisit?.id}
+                        disabled={
+                          checkoutReviewBusyVisitId === selectedVisit?.id ||
+                          (action === "Approve" && !missingCheckoutEvidence(selectedVisit).approvalDefensible)
+                        }
+                        title={action === "Approve" && !missingCheckoutEvidence(selectedVisit).approvalDefensible
+                          ? "Approval requires a defensible incremental unpaid KM value."
+                          : undefined}
                         onClick={() =>
                           handleCheckoutReviewAction(selectedVisit, action)
                         }
@@ -11335,6 +11368,29 @@ export default function FOActivities() {
         fromDate: selectedRange.fromDate,
         toDate: selectedRange.toDate,
       });
+      if (canApproveCheckoutMissingKmReviews) {
+        const refreshResponse = await authenticatedFetch(
+          `${API_BASE_URL}/api/fo/operations/employee-missing-km-reviews/refresh`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              employee: selectedEmployeeIdentifier,
+              date_from: selectedRange.fromDate,
+              date_to: selectedRange.toDate,
+            }),
+          },
+        );
+        if (refreshResponse.ok) {
+          const refreshPayload = await refreshResponse.json();
+          if (refreshPayload?.dataset) {
+            if (requestSequence === employeeRangeRequestSequenceRef.current) {
+              setEmployeeRangeDataset(refreshPayload.dataset);
+            }
+            return refreshPayload.dataset;
+          }
+        }
+      }
       const response = await authenticatedFetch(
         `${API_BASE_URL}/api/fo/operations/employee-range?${query}`,
       );
@@ -11362,6 +11418,7 @@ export default function FOActivities() {
   }, [
     hasActiveSession,
     hasDemoBackendReadSession,
+    canApproveCheckoutMissingKmReviews,
     selectedEmployeeIdentifier,
     selectedRange.fromDate,
     selectedRange.toDate,
@@ -12126,12 +12183,16 @@ export default function FOActivities() {
     let adminOverride = false;
 
     if (normalizedAction === "approve") {
+      if (!evidence.approvalDefensible) {
+        window.alert(
+          "Approval is unavailable because the incremental unpaid KM cannot be determined safely. Ask for clarification or review the route evidence.",
+        );
+        return;
+      }
       const defaultKm =
         evidence.suggestedKm !== null
           ? evidence.suggestedKm.toFixed(2)
-          : evidence.detectedKm !== null
-            ? evidence.detectedKm.toFixed(2)
-            : "";
+          : "";
       const input = window.prompt("Approve missing checkout KM", defaultKm);
       if (input === null) return;
       approvedKm = Number(input);

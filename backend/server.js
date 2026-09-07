@@ -9761,6 +9761,67 @@ app.get('/api/fo/operations/employee-range', requireSupabaseJwt, async (request,
   }
 });
 
+app.post(
+  '/api/fo/operations/employee-missing-km-reviews/refresh',
+  requireSupabaseJwt,
+  requireCheckoutMissingKmReviewPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      await assertServiceRoleAuthAdminAccess(client);
+      const query = request.body || {};
+      const authorized = await loadAuthorizedEmployeeRange(client, request.profile, query);
+      const attendanceIds = (authorized.attendance_days || []).map((row) => row.id).filter(Boolean);
+      if (!attendanceIds.length) {
+        response.json({ ok: true, created_or_refreshed: 0, reviews: [], dataset: authorized });
+        return;
+      }
+      const [attendanceResult, visitResult, legResult] = await Promise.all([
+        client.from('fo_attendance').select('*').in('id', attendanceIds),
+        client.from('fo_site_visits').select('*').in('attendance_id', attendanceIds),
+        client.from('fo_travel_legs').select('*').in('attendance_id', attendanceIds),
+      ]);
+      const sourceError = attendanceResult.error || visitResult.error || legResult.error;
+      if (sourceError) throw sourceError;
+      const visitsByAttendance = new Map();
+      const legsByAttendance = new Map();
+      for (const visit of visitResult.data || []) {
+        const rows = visitsByAttendance.get(visit.attendance_id) || [];
+        rows.push(visit);
+        visitsByAttendance.set(visit.attendance_id, rows);
+      }
+      for (const leg of legResult.data || []) {
+        const rows = legsByAttendance.get(leg.attendance_id) || [];
+        rows.push(leg);
+        legsByAttendance.set(leg.attendance_id, rows);
+      }
+      const reviews = [];
+      for (const attendance of attendanceResult.data || []) {
+        reviews.push(...await refreshMissingKmReviewsForAttendance(
+          client,
+          attendance,
+          visitsByAttendance.get(attendance.id) || [],
+          legsByAttendance.get(attendance.id) || [],
+          { audit_label: 'employee_range_review_refresh' },
+        ));
+      }
+      const dataset = await loadAuthorizedEmployeeRange(client, request.profile, query);
+      response.json({
+        ok: true,
+        created_or_refreshed: reviews.filter((item) => item.review?.id).length,
+        reviews,
+        dataset,
+      });
+    } catch (error) {
+      const status = Number(error?.statusCode || 500);
+      response.status(status).json({
+        ok: false,
+        message: status >= 500 ? 'Missing KM review evidence could not be refreshed.' : error.message,
+      });
+    }
+  },
+);
+
 app.get('/api/fo/reports/consolidated-travel-claims/pdf', requireSupabaseJwt, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
