@@ -197,7 +197,7 @@ export function isHrReviewer(user) {
 }
 
 export function isOperationsTeam(user) {
-  return ['Operations Team', 'Operations Manager', 'Business Head', 'Branch Head', 'KAM'].includes(user?.role);
+  return ['Operations Team', 'Operations Manager', 'Business Head', 'Branch Head', 'South Head', 'KAM'].includes(user?.role);
 }
 
 export function isCoordinator(user) {

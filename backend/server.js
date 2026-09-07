@@ -37,6 +37,7 @@ import {
   recalculateSwitchModeKmTemporary,
 } from './foKmRecalculationService.js';
 import { authorizeFoKmRecalculation } from './services/foKmRecalculationAuthorizationService.js';
+import { assertFoTravelModePayloadAllowed } from './services/foTravelModePolicyService.js';
 import {
   cleanupStaleFoSessions,
   cleanupStaleLiveStatusReferences,
@@ -82,6 +83,15 @@ import {
   buildOperationsSummary,
   normalizeOperationsSummaryFilters,
 } from './services/operationsSummaryService.js';
+import {
+  buildFoAccessMatrix,
+  foEmployeeKey,
+  operationsCommandCenterAllowedEmployeeCodes,
+  resolveOperationsCommandCenterScope,
+} from './services/foOperationalAccessService.js';
+import {
+  loadFoKmAuditDataset,
+} from './services/foKmAuditService.js';
 import {
   buildConsolidatedTravelClaimPdf,
 } from './services/consolidatedTravelClaimPdfService.js';
@@ -1904,10 +1914,11 @@ function hasCheckoutMissingKmReviewPermission(profile) {
     'ADMIN',
     'QPMSADMIN',
     'DEVELOPER',
-    'OPERATIONS_MANAGER',
-    'OPERATIONS MANAGER',
-    'BRANCH_HEAD',
-    'BRANCH HEAD',
+    'OPERATIONSMANAGER',
+    'OPERATIONMANAGER',
+    'OM',
+    'BRANCHHEAD',
+    'BH',
     'MANAGEMENT',
   ]).has(
     normalizePermissionRole(profile.role),
@@ -1923,6 +1934,22 @@ function requireCheckoutMissingKmReviewPermission(request, response, next) {
     return;
   }
   next();
+}
+
+function rejectDisallowedFoTravelModePayload(request, response) {
+  try {
+    assertFoTravelModePayloadAllowed(request.profile, request.body || {}, {
+      statusCode: 400,
+    });
+    return false;
+  } catch (error) {
+    response.status(error.statusCode || 400).json({
+      ok: false,
+      code: error.code || 'FO_TRAVEL_MODE_NOT_ALLOWED',
+      message: error.message,
+    });
+    return true;
+  }
 }
 
 const STORE_MASTER_SELECT = [
@@ -5539,6 +5566,35 @@ app.get(
       response.status(error.statusCode || 500).json({
         ok: false,
         message: 'Unable to load scope options.',
+      });
+    }
+  },
+);
+
+app.get(
+  '/api/admin/access/fo-matrix',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      response.json({
+        ok: true,
+        ...buildFoAccessMatrix(),
+        actor: {
+          profile_id: request.profile?.id || null,
+          employee_code: request.employeeCode || null,
+          role: request.userRole || null,
+        },
+      });
+    } catch (error) {
+      const safeError = sanitizeSupabaseDiagnosticError(error);
+      console.warn('[FO Access Matrix] Failed to build access matrix', {
+        code: safeError.code,
+        message: safeError.message,
+      });
+      response.status(error.statusCode || 500).json({
+        ok: false,
+        message: 'Unable to load FO access matrix.',
       });
     }
   },
@@ -9176,6 +9232,30 @@ app.get('/api/fo/operations/summary', requireSupabaseJwtOrDemoApiRead, async (re
   }
 });
 
+app.get('/api/fo/operations/km-audit', requireSupabaseJwt, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const dataset = await loadFoKmAuditDataset(
+      client,
+      request.profile,
+      request.query || {},
+      currentIndiaDateInput(),
+    );
+    response.json({ ok: true, ...dataset });
+  } catch (error) {
+    const status = Number(error?.statusCode || 500);
+    if (status >= 500) {
+      console.error('[myQPMS FO KM Audit] request failed', sanitizeSupabaseDiagnosticError(error));
+    }
+    response.status(status).json({
+      ok: false,
+      message: status >= 500
+        ? 'FO KM audit is temporarily unavailable. Please retry.'
+        : error.message,
+    });
+  }
+});
+
 app.get('/api/fo/operations/employee-range', requireSupabaseJwt, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
@@ -9309,10 +9389,15 @@ app.get('/api/fo/operations/dashboard', requireSupabaseJwtOrDemoApiRead, async (
   try {
     const client = requireServiceRoleSupabase();
     const filters = normalizeOperationsSummaryFilters(request.query || {}, currentIndiaDateInput());
-    const [profilesRes, attendanceRes, siteVisitsRes, liveStatusRes] = await Promise.all([
+    const [profilesRes, hierarchyRes, attendanceRes, siteVisitsRes, liveStatusRes] = await Promise.all([
       client
         .from('profiles')
         .select('id,full_name,display_name,employee_code,username,role,department,designation,business,state,status,is_active,metadata')
+        .eq('is_active', true)
+        .limit(5000),
+      client
+        .from('employee_hierarchy')
+        .select('*')
         .eq('is_active', true)
         .limit(5000),
       client
@@ -9335,13 +9420,31 @@ app.get('/api/fo/operations/dashboard', requireSupabaseJwtOrDemoApiRead, async (
         .order('last_seen_at', { ascending: false })
         .limit(5000),
     ]);
-    const errors = [profilesRes, attendanceRes, siteVisitsRes, liveStatusRes].map((result) => result.error).filter(Boolean);
+    const errors = [profilesRes, hierarchyRes, attendanceRes, siteVisitsRes, liveStatusRes].map((result) => result.error).filter(Boolean);
     if (errors.length) throw errors[0];
+    const profileRows = profilesRes.data || [];
+    const scope = resolveOperationsCommandCenterScope(request.profile);
+    const allowedCodes = operationsCommandCenterAllowedEmployeeCodes(
+      request.profile,
+      profileRows,
+      hierarchyRes.data || [],
+    );
+    const allowedProfileIds = new Set(
+      profileRows
+        .filter((profile) => allowedCodes.has(foEmployeeKey(profile)))
+        .map((profile) => String(profile.id || '').trim())
+        .filter(Boolean),
+    );
+    const rowIsAllowed = (row = {}) => {
+      const code = foEmployeeKey(row);
+      const foUserId = String(row.fo_user_id || '').trim();
+      return (code && allowedCodes.has(code)) || (foUserId && (allowedCodes.has(foUserId.toUpperCase()) || allowedProfileIds.has(foUserId)));
+    };
     const rows = {
-      profiles: profilesRes.data || [],
-      attendances: attendanceRes.data || [],
-      site_visits: siteVisitsRes.data || [],
-      live_status: liveStatusRes.data || [],
+      profiles: profileRows.filter((profile) => allowedCodes.has(foEmployeeKey(profile))),
+      attendances: (attendanceRes.data || []).filter(rowIsAllowed),
+      site_visits: (siteVisitsRes.data || []).filter(rowIsAllowed),
+      live_status: (liveStatusRes.data || []).filter(rowIsAllowed),
     };
     response.json({
       ok: true,
@@ -9354,6 +9457,7 @@ app.get('/api/fo/operations/dashboard', requireSupabaseJwtOrDemoApiRead, async (
         })
         : rows),
       applied_filters: filters,
+      access_scope: scope,
     });
   } catch (error) {
     const status = Number(error?.statusCode || 500);
@@ -9463,6 +9567,7 @@ app.get('/api/deep-cleaning/records', requireSupabaseJwtOrDemoApiRead, async (re
 });
 
 app.post('/api/fo/km/recalculate', requireSupabaseJwt, async (request, response) => {
+  if (rejectDisallowedFoTravelModePayload(request, response)) return;
   let payload = request.body || {};
   const client = requireServiceRoleSupabase();
   try {
@@ -9510,6 +9615,7 @@ app.post('/api/fo/km/recalculate', requireSupabaseJwt, async (request, response)
 });
 
 app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
+  if (rejectDisallowedFoTravelModePayload(request, response)) return;
   const payload = request.body || {};
   const fromDate = normalizeFoKmRecalculationDate(payload.fromDate || payload.date);
   const toDate = normalizeFoKmRecalculationDate(payload.toDate || payload.date || fromDate);
@@ -9543,6 +9649,7 @@ app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRec
 });
 
 app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, async (request, response) => {
+  if (rejectDisallowedFoTravelModePayload(request, response)) return;
   const payload = request.body || {};
   const lockKey = [
     String(payload.employee || payload.employee_code || payload.fo_user_id || '').trim().toUpperCase(),
@@ -9592,6 +9699,7 @@ app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, async (req
 });
 
 app.post('/api/fo/km/recalculate-switch-mode', requireSupabaseJwt, requireTemporarySwitchKmPermission, async (request, response) => {
+  if (rejectDisallowedFoTravelModePayload(request, response)) return;
   const payload = request.body || {};
   const lockKey = `switch_mode:${foKmRecalculationLockKey(payload)}`;
   const lockDate = normalizeFoKmRecalculationDate(payload.date);
@@ -9623,6 +9731,7 @@ app.post('/api/fo/km/recalculate-switch-mode', requireSupabaseJwt, requireTempor
 });
 
 app.post('/api/fo/km/recalculate-full-day-gps', requireSupabaseJwt, requireFullDayGpsKmPermission, async (request, response) => {
+  if (rejectDisallowedFoTravelModePayload(request, response)) return;
   const payload = request.body || {};
   const lockKey = `full_day_gps:${foKmRecalculationLockKey(payload)}`;
   const lockDate = normalizeFoKmRecalculationDate(payload.date);
@@ -9660,6 +9769,7 @@ app.post('/api/fo/km/recalculate-full-day-gps', requireSupabaseJwt, requireFullD
 });
 
 app.post('/api/fo/km/recalculate-all', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
+  if (rejectDisallowedFoTravelModePayload(request, response)) return;
   const payload = request.body || {};
   const date = payload.date || payload.fromDate || currentIndiaDateInput();
   const lockDate = normalizeFoKmRecalculationDate(date);

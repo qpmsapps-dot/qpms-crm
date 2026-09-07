@@ -10,7 +10,7 @@ export const EXECUTIVE_ASSISTANT_ROLE = 'Executive Assistant';
 
 export const roleGroups = {
   BD: ['BD', 'BD Team', 'BD Executive', 'BD Head'],
-  Operations: ['Operations', 'Operations Team', 'Operations Manager', 'Branch Head', 'Business Head', 'KAM'],
+  Operations: ['Operations', 'Operations Team', 'Operations Manager', 'Branch Head', 'Business Head', 'South Head', 'KAM'],
   Coordinator: ['Coordinator'],
   HR: ['HR', 'HR Reviewer', 'HR GM'],
   Commercial: ['Commercial', 'Commercial Team', 'Commercial Reviewer'],
@@ -53,6 +53,8 @@ export function normalizeCanonicalRole(role = '') {
     BUSINESSHEAD: 'Business Head',
     BRANCHHEAD: 'Branch Head',
     BH: 'Branch Head',
+    SOUTHHEAD: 'South Head',
+    IFMSSOUTHHEAD: 'South Head',
     ADMIN: 'Admin',
     QPMSADMIN: 'QPMS Admin',
     DEVELOPER: 'Developer',

@@ -2793,14 +2793,16 @@ function SelectedOfficerSummary({
           <Route className="h-4 w-4" />
         </span>
       </div>
-      <button
-        type="button"
-        onClick={onRecalculateKm}
-        disabled={recalculatingKm}
-        className="focus-ring mt-3 w-full rounded-lg border border-qpms-200 bg-white px-3 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-blue-300"
-      >
-        {recalculatingKm ? "Recalculating KM..." : "Recalculate KM"}
-      </button>
+      {onRecalculateKm ? (
+        <button
+          type="button"
+          onClick={onRecalculateKm}
+          disabled={recalculatingKm}
+          className="focus-ring mt-3 w-full rounded-lg border border-qpms-200 bg-white px-3 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-blue-300"
+        >
+          {recalculatingKm ? "Recalculating KM..." : "Recalculate KM"}
+        </button>
+      ) : null}
       {recalculationResult?.ok === true ? (
         <p className="mt-2 text-[11px] font-semibold text-slate-500">
           KM recalculation completed. Refreshing payable values.
@@ -4345,6 +4347,112 @@ function exportEmployeeRangeExcel(dataset) {
   XLSX.writeFile(
     workbook,
     `${employeeCode}_Field_Activity_KM_Report_${fromDate}_to_${toDate}.xlsx`,
+  );
+}
+
+function legAuditValue(leg, field) {
+  if (!leg) return "";
+  const value = leg[field];
+  if (["expected_km", "current_payable_km", "missing_km", "excess_km"].includes(field)) {
+    return value === null || value === undefined ? "" : formatNumber(value);
+  }
+  return value ?? "";
+}
+
+function exportAdminKmAuditExcel(dataset, filters = {}) {
+  const workbook = XLSX.utils.book_new();
+  const summary = dataset?.summary || {};
+  const summaryRows = [{
+    "Total Visits Audited": summary.total_visits_audited ?? 0,
+    "Correct Usage": summary.correct_usage ?? 0,
+    "Checkout Deviations": summary.checkout_deviations ?? 0,
+    "Left Site Before Checkout": summary.left_site_before_checkout ?? 0,
+    "Confirmed System KM Issues": summary.confirmed_system_km_issues ?? 0,
+    "Confirmed Missing Payable KM": formatNumber(summary.confirmed_missing_payable_km),
+    "Confirmed Excess Payable KM": formatNumber(summary.confirmed_excess_payable_km),
+    "Review Required": summary.review_required ?? 0,
+    "Insufficient Evidence": summary.insufficient_evidence ?? 0,
+  }];
+  const auditRows = (dataset?.visit_audits || []).map((visit) => ({
+    "Attendance Date": visit.attendance_date || "",
+    "Employee Code": visit.employee_code || "",
+    "Employee Name": visit.employee_name || "",
+    State: visit.state || "",
+    Business: visit.business || "",
+    "Store Code": visit.store_code || "",
+    "Store Name / Site Name": visit.site_name || "",
+    "Check-In Time": formatDateTime(visit.check_in_time),
+    "Check-Out Time": formatDateTime(visit.check_out_time),
+    "Checkout Distance From Site M": visit.checkout_distance_from_site_m ?? "",
+    "Checkout Distance From Site KM": visit.checkout_distance_from_site_km ?? "",
+    "Checkout Location Status": visit.checkout_location_status || "",
+    "Usage Compliance Status": visit.usage_compliance_status || "",
+    "Previous Travel Leg Type": legAuditValue(visit.previous_leg, "leg_type"),
+    "Previous Leg Expected KM": legAuditValue(visit.previous_leg, "expected_km"),
+    "Previous Leg Payable KM": legAuditValue(visit.previous_leg, "current_payable_km"),
+    "Previous Leg Missing KM": legAuditValue(visit.previous_leg, "missing_km"),
+    "Previous Leg Excess KM": legAuditValue(visit.previous_leg, "excess_km"),
+    "Previous Leg Source": legAuditValue(visit.previous_leg, "calculation_source"),
+    "Previous Leg Status": legAuditValue(visit.previous_leg, "audit_status"),
+    "Next Travel Leg Type": legAuditValue(visit.next_leg, "leg_type"),
+    "Next Leg Expected KM": legAuditValue(visit.next_leg, "expected_km"),
+    "Next Leg Payable KM": legAuditValue(visit.next_leg, "current_payable_km"),
+    "Next Leg Missing KM": legAuditValue(visit.next_leg, "missing_km"),
+    "Next Leg Excess KM": legAuditValue(visit.next_leg, "excess_km"),
+    "Next Leg Source": legAuditValue(visit.next_leg, "calculation_source"),
+    "Next Leg Status": legAuditValue(visit.next_leg, "audit_status"),
+    "Checkout Review Suggested KM": visit.checkout_review_suggested_km ?? "",
+    "Confirmed Missing KM": formatNumber(visit.confirmed_missing_km),
+    "Confirmed Excess KM": formatNumber(visit.confirmed_excess_km),
+    "KM Audit Status": visit.km_audit_status || "",
+    "KM Audit Reason": visit.km_audit_reason || "",
+    "Admin Explanation": visit.admin_explanation || "",
+    "Approved Missing KM": formatNumber(visit.approved_missing_km),
+    "Final Payable KM": formatNumber(visit.final_payable_km),
+    "Checkout Note": visit.checkout_note || "",
+  }));
+  appendSheet(workbook, "KM Audit Summary", summaryRows);
+  appendSheet(workbook, "KM Audit", auditRows, [
+    "Attendance Date",
+    "Employee Code",
+    "Employee Name",
+    "State",
+    "Business",
+    "Store Code",
+    "Store Name / Site Name",
+    "Check-In Time",
+    "Check-Out Time",
+    "Checkout Distance From Site M",
+    "Checkout Distance From Site KM",
+    "Checkout Location Status",
+    "Usage Compliance Status",
+    "Previous Travel Leg Type",
+    "Previous Leg Expected KM",
+    "Previous Leg Payable KM",
+    "Previous Leg Missing KM",
+    "Previous Leg Excess KM",
+    "Previous Leg Source",
+    "Previous Leg Status",
+    "Next Travel Leg Type",
+    "Next Leg Expected KM",
+    "Next Leg Payable KM",
+    "Next Leg Missing KM",
+    "Next Leg Excess KM",
+    "Next Leg Source",
+    "Next Leg Status",
+    "Checkout Review Suggested KM",
+    "Confirmed Missing KM",
+    "Confirmed Excess KM",
+    "KM Audit Status",
+    "KM Audit Reason",
+    "Admin Explanation",
+    "Approved Missing KM",
+    "Final Payable KM",
+    "Checkout Note",
+  ]);
+  XLSX.writeFile(
+    workbook,
+    `FO_KM_Audit_${toDateInputValue(filters.from)}_${toDateInputValue(filters.to)}.xlsx`,
   );
 }
 
@@ -9571,12 +9679,14 @@ function FieldOfficerDetailsView({
                 <p className="mt-1 text-xs font-semibold text-slate-500">GPS evidence is shown separately from payable route KM.</p>
               </div>
               <div className="flex gap-2">
-                <button type="button" onClick={onRecalculateKm} disabled={recalculatingKm} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-qpms-200 px-4 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50 disabled:opacity-50">
-                  <RefreshCw className={`h-4 w-4 ${recalculatingKm ? "animate-spin" : ""}`} />
-                  {recalculatingKm
-                    ? "Recalculating Selected Period..."
-                    : "Recalculate Selected Period"}
-                </button>
+                {onRecalculateKm ? (
+                  <button type="button" onClick={onRecalculateKm} disabled={recalculatingKm} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-qpms-200 px-4 py-2 text-xs font-black text-qpms-700 hover:bg-qpms-50 disabled:opacity-50">
+                    <RefreshCw className={`h-4 w-4 ${recalculatingKm ? "animate-spin" : ""}`} />
+                    {recalculatingKm
+                      ? "Recalculating Selected Period..."
+                      : "Recalculate Selected Period"}
+                  </button>
+                ) : null}
                 {onTemporarySwitchKm ? (
                   <button type="button" onClick={onTemporarySwitchKm} disabled={recalculatingSwitchKm} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-2 text-xs font-black text-orange-800 hover:bg-orange-100 disabled:opacity-50">
                     <RefreshCw className={`h-4 w-4 ${recalculatingSwitchKm ? "animate-spin" : ""}`} />
@@ -10472,7 +10582,10 @@ export default function FOActivities() {
   const hasActiveSession = authStatus === "ready" && (Boolean(session?.access_token) || hasDemoBackendReadSession);
   const currentRole = normalizeRoleKey(generatedUserRole(user));
   const fullTechnicalAccess = hasTechnicalKmAccess(user);
+  const canViewKmAudit = !readOnlyDemo && currentRole === "admin";
   const canRunBatchKmRecalculation = !readOnlyDemo && ["admin", "developer", "qpmsadmin", "md", "coo"].includes(currentRole);
+  const canUseLegacyDashboardExcelExport =
+    !readOnlyDemo && (fullTechnicalAccess || currentRole === "coo");
   const temporarySwitchNormalizedRole = resolveTemporarySwitchRole(user);
   const canUseTemporarySwitchKm = temporarySwitchAllowedRoles.has(temporarySwitchNormalizedRole);
   const canRunTemporarySwitchKm = !readOnlyDemo && canUseTemporarySwitchKm;
@@ -10492,6 +10605,9 @@ export default function FOActivities() {
   const [employeeRangeDataset, setEmployeeRangeDataset] = useState(null);
   const [employeeRangeLoading, setEmployeeRangeLoading] = useState(false);
   const [employeeRangeError, setEmployeeRangeError] = useState("");
+  const [kmAuditDataset, setKmAuditDataset] = useState(null);
+  const [kmAuditBusy, setKmAuditBusy] = useState(false);
+  const [kmAuditError, setKmAuditError] = useState("");
   const [mapRouteOfficerId, setMapRouteOfficerId] = useState(null);
   const [supportOfficerId, setSupportOfficerId] = useState(null);
   const [supportContext, setSupportContext] = useState({ attendanceRows: [], visitRows: [] });
@@ -10537,6 +10653,7 @@ export default function FOActivities() {
   const [filteredSummary, setFilteredSummary] = useState(EMPTY_OPERATIONS_SUMMARY);
   const [filteredSummaryLoading, setFilteredSummaryLoading] = useState(false);
   const [filteredSummaryError, setFilteredSummaryError] = useState("");
+  const [operationsAccessScope, setOperationsAccessScope] = useState(null);
   const [summaryRefreshToken, setSummaryRefreshToken] = useState(0);
   const [demoDateRange, setDemoDateRange] = useState(null);
   const [detailDraftFromDate, setDetailDraftFromDate] = useState(customFromDate);
@@ -10552,6 +10669,7 @@ export default function FOActivities() {
     () => dateRangeForPreset("custom", customFromDate, customToDate),
     [customFromDate, customToDate],
   );
+  const usesScopedBackendOperationsData = true;
 
   useEffect(() => {
     let cancelled = false;
@@ -10560,105 +10678,34 @@ export default function FOActivities() {
         return;
       }
       try {
-        if (hasDemoBackendReadSession) {
-          const query = operationsSummaryQuery({
-            dateFrom: selectedRange.fromDate,
-            dateTo: selectedRange.toDate,
-            state: stateFilter,
-            business: businessFilter,
-            status: statusFilter,
-          });
-          const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/operations/dashboard?${query}`);
-          const payload = await response.json();
-          if (!response.ok || payload.ok === false) {
-            throw new Error(payload.message || "Operations dashboard failed.");
-          }
-          const profileRows = payload.profiles || [];
-          const officersFromBackend = buildLiveFoData({
-            attendance: payload.attendances || [],
-            visits: payload.site_visits || [],
-            liveStatus: payload.live_status || [],
-            profiles: profileRows,
-            logs: [],
-            statusDate: selectedRange.toDate,
-            currentUser: user,
-          });
-          if (!cancelled) {
-            profileRowsRef.current = profileRows;
-            setAttendanceKpiRows(payload.attendances || []);
-            setSiteVisitRows(payload.site_visits || []);
-            setLiveOfficers(officersFromBackend);
-          }
-          return;
-        }
-        await authSessionManager().requireSession();
-        const fromIso = formatDateForDb(selectedRange.from);
-        const toIso = formatDateForDb(selectedRange.to);
-        const [attendanceRes, siteVisits, liveStatusRows, profilesRes] =
-          await Promise.all([
-            supabase
-              .from("fo_attendance")
-              .select("*")
-              .gte("attendance_date", selectedRange.fromDate)
-              .lte("attendance_date", selectedRange.toDate)
-              .order("login_time", { ascending: false })
-              .limit(500),
-            fetchFoSiteVisitRows(fromIso, toIso),
-            fetchFoLiveStatusRows(),
-            supabase
-              .from("profiles")
-              .select(
-                "id, full_name, display_name, employee_code, username, mobile, email, role, department, designation, business, state, status, is_active, metadata",
-              )
-              .eq("is_active", true)
-              .limit(5000),
-          ]);
-        const errors = [attendanceRes, profilesRes]
-          .map((res) => res?.error)
-          .filter(Boolean);
-        console.debug("FO_SUPABASE_QUERY_RESULTS", {
-          attendanceCount: attendanceRes.data?.length || 0,
-          attendanceError: attendanceRes.error || null,
-          liveStatusCount: liveStatusRows.length,
-          profilesCount: profilesRes.data?.length || 0,
-          profilesError: profilesRes.error || null,
+        const query = operationsSummaryQuery({
+          dateFrom: selectedRange.fromDate,
+          dateTo: selectedRange.toDate,
+          state: stateFilter,
+          business: businessFilter,
+          status: statusFilter,
         });
-        if (errors.length) {
-          console.warn("FO_SUPABASE_ERRORS", {
-            attendance: attendanceRes.error || null,
-            profiles: profilesRes.error || null,
-          });
+        const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/operations/dashboard?${query}`);
+        const payload = await response.json();
+        if (!response.ok || payload.ok === false) {
+          throw new Error(payload.message || "Operations dashboard failed.");
         }
-        if (errors.length) {
-          throw errors[0];
-        }
-        const profileRows = profilesRes.data || [];
-        const profilesByCode = profileByEmployeeCode(profileRows);
-        console.debug("FO_PROFILES_LOADED", profileRows.length);
-        liveStatusRows.forEach((row) => {
-          const foId = normalizeFoKey(row?.fo_user_id);
-          if (foId && !profilesByCode.has(foId)) {
-            console.debug("FO_INCLUDED_LIVE_WITHOUT_PROFILE", foId);
-          }
-        });
-        const officersFromSupabase = buildLiveFoData({
-          attendance: attendanceRes.data || [],
-          visits: siteVisits,
-          liveStatus: liveStatusRows,
+        const profileRows = payload.profiles || [];
+        const officersFromBackend = buildLiveFoData({
+          attendance: payload.attendances || [],
+          visits: payload.site_visits || [],
+          liveStatus: payload.live_status || [],
           profiles: profileRows,
           logs: [],
-          statusDate: toDateInputValue(new Date()),
+          statusDate: selectedRange.toDate,
           currentUser: user,
         });
-        console.debug("FO_ATTENDANCE_LOADED", attendanceRes.data?.length || 0);
-        console.debug("FO_SITE_VISITS_LOADED", siteVisits.length);
-        console.debug("FO_LIVE_STATUS_LOADED", liveStatusRows.length);
-        console.debug("FO_OFFICERS_BUILT", officersFromSupabase.length);
         if (!cancelled) {
           profileRowsRef.current = profileRows;
-          setAttendanceKpiRows(attendanceRes.data || []);
-          setSiteVisitRows(siteVisits);
-          setLiveOfficers(officersFromSupabase);
+          setAttendanceKpiRows(payload.attendances || []);
+          setSiteVisitRows(payload.site_visits || []);
+          setLiveOfficers(officersFromBackend);
+          setOperationsAccessScope(payload.access_scope || null);
         }
       } catch (error) {
         console.warn("[myQPMS FO] Supabase FO fetch failed.", error);
@@ -10674,7 +10721,7 @@ export default function FOActivities() {
     return () => {
       cancelled = true;
     };
-  }, [businessFilter, hasActiveSession, hasDemoBackendReadSession, refreshToken, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate, stateFilter, statusFilter, user]);
+  }, [businessFilter, hasActiveSession, refreshToken, selectedRange.fromDate, selectedRange.toDate, stateFilter, statusFilter, user]);
 
   useEffect(() => {
     if (!hasActiveSession || hasDemoBackendReadSession) return undefined;
@@ -10685,7 +10732,7 @@ export default function FOActivities() {
   }, [hasActiveSession, hasDemoBackendReadSession]);
 
   useEffect(() => {
-    if (!isSupabaseConfigured || !supabase || !hasActiveSession || hasDemoBackendReadSession) return undefined;
+    if (!isSupabaseConfigured || !supabase || !hasActiveSession || hasDemoBackendReadSession || usesScopedBackendOperationsData) return undefined;
     const channel = supabase
       .channel("fo-operations-live-status")
       .on(
@@ -10718,10 +10765,10 @@ export default function FOActivities() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [hasActiveSession, hasDemoBackendReadSession, user]);
+  }, [hasActiveSession, hasDemoBackendReadSession, user, usesScopedBackendOperationsData]);
 
   useEffect(() => {
-    if (!isSupabaseConfigured || !supabase || !hasActiveSession || hasDemoBackendReadSession) return undefined;
+    if (!isSupabaseConfigured || !supabase || !hasActiveSession || hasDemoBackendReadSession || usesScopedBackendOperationsData) return undefined;
     const channel = supabase
       .channel("fo-operations-site-visits")
       .on(
@@ -10736,7 +10783,7 @@ export default function FOActivities() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [hasActiveSession, hasDemoBackendReadSession]);
+  }, [hasActiveSession, hasDemoBackendReadSession, usesScopedBackendOperationsData]);
 
   const officers = useMemo(
     () =>
@@ -10974,6 +11021,39 @@ export default function FOActivities() {
       window.alert("Unable to export Operations report for the selected date range. Please retry.");
     } finally {
       setDashboardExportBusy(false);
+    }
+  }
+
+  async function exportKmAuditExcel() {
+    if (!canViewKmAudit || kmAuditBusy) return;
+    setKmAuditBusy(true);
+    setKmAuditError("");
+    try {
+      await authSessionManager().requireSession();
+      const query = operationsSummaryQuery({
+        dateFrom: selectedRange.fromDate,
+        dateTo: selectedRange.toDate,
+        state: stateFilter,
+        business: businessFilter,
+        status: statusFilter,
+      });
+      const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/operations/km-audit?${query.toString()}`);
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.message || "Unable to load FO KM audit.");
+      }
+      setKmAuditDataset(payload);
+      exportAdminKmAuditExcel(payload, {
+        from: selectedRange.from,
+        to: selectedRange.to,
+      });
+    } catch (error) {
+      console.warn("[myQPMS FO] KM audit export failed.", error);
+      const message = error.message || "Unable to export FO KM audit.";
+      setKmAuditError(message);
+      window.alert(message);
+    } finally {
+      setKmAuditBusy(false);
     }
   }
 
@@ -12322,7 +12402,7 @@ export default function FOActivities() {
         onApplyDate={applyDetailDateRange}
         onBack={() => setSelectedOfficerId(null)}
         onExport={readOnlyDemo ? null : () => exportEmployeeRangeExcel(employeeRangeDataset)}
-        onRecalculateKm={recalculateSelectedOfficerKm}
+        onRecalculateKm={fullTechnicalAccess ? recalculateSelectedOfficerKm : null}
         onTemporarySwitchKm={
           canRunTemporarySwitchKm
             ? () => recalculateTemporarySwitchKmForOfficer(selectedOfficer)
@@ -12366,6 +12446,12 @@ export default function FOActivities() {
               <RadioTower className="h-3.5 w-3.5 text-emerald-500" /> Live
               every 12s
             </span>
+            {operationsAccessScope?.label ? (
+              <span className="command-pill">
+                <ShieldCheck className="h-3.5 w-3.5 text-sky-500" />
+                {operationsAccessScope.label}
+              </span>
+            ) : null}
         </div>
       </div>
       {hasDemoBackendReadSession ? (
@@ -12472,7 +12558,8 @@ export default function FOActivities() {
           </div>
           {!readOnlyDemo ? (
             <>
-              <div className="flex items-end">
+              {canUseLegacyDashboardExcelExport ? (
+                <div className="flex items-end">
                 <button
                   type="button"
                   onClick={exportDashboardExcel}
@@ -12481,7 +12568,8 @@ export default function FOActivities() {
                 >
                   <FileSpreadsheet className="h-4 w-4" /> {dashboardExportBusy ? "Exporting..." : "Export Excel"}
                 </button>
-              </div>
+                </div>
+              ) : null}
               <div className="flex items-end">
                 <button
                   type="button"
@@ -12492,6 +12580,18 @@ export default function FOActivities() {
                   <Download className="h-4 w-4" /> {travelClaimPdfExportBusy ? "Generating..." : "Export Travel Claim PDF"}
                 </button>
               </div>
+              {canViewKmAudit ? (
+                <div className="flex items-end">
+                  <button
+                    type="button"
+                    onClick={exportKmAuditExcel}
+                    disabled={kmAuditBusy}
+                    className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-blue-200 bg-blue-50 px-3 text-sm font-black text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <ShieldAlert className="h-4 w-4" /> {kmAuditBusy ? "Auditing..." : "KM Audit"}
+                  </button>
+                </div>
+              ) : null}
             </>
           ) : null}
           {canRunBatchKmRecalculation ? (
@@ -12527,6 +12627,30 @@ export default function FOActivities() {
         {travelClaimPdfExportError ? (
           <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">
             {travelClaimPdfExportError}
+          </div>
+        ) : null}
+        {canViewKmAudit && kmAuditError ? (
+          <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">
+            {kmAuditError}
+          </div>
+        ) : null}
+        {canViewKmAudit && kmAuditDataset?.summary ? (
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+            {[
+              ["Visits Audited", kmAuditDataset.summary.total_visits_audited],
+              ["Correct Usage", kmAuditDataset.summary.correct_usage],
+              ["Checkout Deviations", kmAuditDataset.summary.checkout_deviations],
+              ["Left Before Checkout", kmAuditDataset.summary.left_site_before_checkout],
+              ["System KM Issues", kmAuditDataset.summary.confirmed_system_km_issues],
+              ["Missing KM", `${Number(kmAuditDataset.summary.confirmed_missing_payable_km || 0).toFixed(2)} km`],
+              ["Excess KM", `${Number(kmAuditDataset.summary.confirmed_excess_payable_km || 0).toFixed(2)} km`],
+              ["Insufficient Evidence", kmAuditDataset.summary.insufficient_evidence],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-[10px] font-black uppercase text-slate-500">{label}</p>
+                <p className="mt-1 text-sm font-black text-slate-900">{value ?? 0}</p>
+              </div>
+            ))}
           </div>
         ) : null}
       </section>

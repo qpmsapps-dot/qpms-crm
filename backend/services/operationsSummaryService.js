@@ -1,17 +1,7 @@
-import { hasCooWebVisibility, normalizeWebRoleKey } from './webRoleAccessService.js';
-
-const FULL_VISIBILITY_ROLES = new Set([
-  'ADMIN', 'QPMSADMIN', 'DEVELOPER', 'DEV', 'ITADMIN', 'MD', 'COO',
-  'DEMOADMIN', 'TENDERDEMO',
-  'DEMOVIEWER',
-]);
-
-const OPERATIONS_ROLES = new Set([
-  ...FULL_VISIBILITY_ROLES,
-  'GM', 'GENERALMANAGER', 'SOUTHHEAD', 'BRANCHHEAD', 'BH',
-  'OPERATIONSMANAGER', 'OPERATIONMANAGER', 'OM', 'MANAGER',
-  'BUSINESSHEAD', 'KAM', 'KEYACCOUNTMANAGER', 'FO', 'FIELDOFFICER',
-]);
+import {
+  canAccessFoOperations,
+  operationsCommandCenterAllowedEmployeeCodes,
+} from './foOperationalAccessService.js';
 
 export const TRAVEL_CLAIM_REPORT_INCLUDED_STATUSES = Object.freeze([
   'submitted',
@@ -35,16 +25,23 @@ const STATE_ALIASES = new Map([
   ['ANDHRA PRADESH', { state_name: 'Andhra Pradesh', state_code: 'AP' }],
 ]);
 
-function roleKey(value) {
-  return normalizeWebRoleKey(value);
-}
-
 function text(value) {
   return String(value || '').trim();
 }
 
 function comparable(value) {
   return text(value).toLowerCase();
+}
+
+function businessGroup(value) {
+  const key = comparable(value);
+  if (key === 'retail' || key === 'reliance retail') return 'reliance_retail';
+  if (key === 'standalone') return 'standalone';
+  return key;
+}
+
+function compactKey(value) {
+  return text(value).toUpperCase().replace(/[^A-Z0-9]+/g, '');
 }
 
 function employeeKey(row = {}) {
@@ -124,10 +121,6 @@ function profileValue(profile = {}, field) {
   return text(profile[field] || profile.metadata?.[field]);
 }
 
-function activeProfile(profile) {
-  return profile?.is_active === true && !['inactive', 'disabled', 'deactivated'].includes(comparable(profile.status));
-}
-
 function validDateInput(value, fallback) {
   const candidate = text(value || fallback);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return null;
@@ -169,98 +162,11 @@ export function normalizeOperationsSummaryFilters(query = {}, today) {
 }
 
 export function canAccessOperationsSummary(profile) {
-  if (hasCooWebVisibility(profile?.role) && profile?.web_access_enabled === false) return false;
-  if (!activeProfile(profile) || (!OPERATIONS_ROLES.has(roleKey(profile.role)) && !hasCooWebVisibility(profile.role))) return false;
-  if (roleKey(profile.role) !== 'MANAGER') return true;
-  return comparable([
-    profile.role,
-    profile.designation,
-    profile.department,
-    profile.metadata?.designation,
-    profile.metadata?.department,
-  ].join(' ')).includes('operation');
-}
-
-function hierarchyCodesForActor(actorCode, hierarchyRows = []) {
-  const codes = new Set(actorCode ? [actorCode] : []);
-  for (const row of hierarchyRows) {
-    if (row?.is_active === false) continue;
-    const references = [
-      row.manager_employee_code,
-      row.managers_manager_employee_code,
-      row.business_head_employee_code,
-      row.gm_employee_code,
-      row.coo_employee_code,
-      ...(Array.isArray(row.hierarchy_path) ? row.hierarchy_path : []),
-    ].map((value) => text(value).toUpperCase());
-    if (actorCode && references.includes(actorCode)) {
-      const code = employeeKey(row);
-      if (code) codes.add(code);
-    }
-  }
-  return codes;
-}
-
-function isOperationalEmployeeProfile(profile = {}) {
-  const operationalRole = new Set([
-    'GM', 'GENERALMANAGER', 'SOUTHHEAD', 'BRANCHHEAD', 'BH',
-    'OPERATIONSMANAGER', 'OPERATIONMANAGER', 'OM', 'MANAGER',
-    'KAM', 'KEYACCOUNTMANAGER', 'FO', 'FIELDOFFICER',
-  ]).has(roleKey(profile.role));
-  if (!operationalRole || roleKey(profile.role) !== 'MANAGER') return operationalRole;
-  return comparable([
-    profile.role,
-    profile.designation,
-    profile.department,
-    profile.metadata?.designation,
-    profile.metadata?.department,
-  ].join(' ')).includes('operation');
+  return canAccessFoOperations(profile);
 }
 
 export function operationsSummaryAllowedEmployeeCodes(actor, profiles = [], hierarchyRows = []) {
-  if (!canAccessOperationsSummary(actor)) return new Set();
-  const actorRole = roleKey(actor.role);
-  const actorCode = employeeKey(actor);
-  const descendants = hierarchyCodesForActor(actorCode, hierarchyRows);
-  const actorState = comparable(profileValue(actor, 'state'));
-  const actorBusiness = comparable(profileValue(actor, 'business'));
-  const actorBranch = comparable(profileValue(actor, 'branch'));
-  const allowed = new Set();
-
-  for (const profile of profiles) {
-    if (!activeProfile(profile) || !isOperationalEmployeeProfile(profile)) continue;
-    const code = employeeKey(profile);
-    if (!code) continue;
-    if (FULL_VISIBILITY_ROLES.has(actorRole) || hasCooWebVisibility(actor.role)) {
-      allowed.add(code);
-      continue;
-    }
-    const profileState = comparable(profileValue(profile, 'state'));
-    const profileBusiness = comparable(profileValue(profile, 'business'));
-    const profileBranch = comparable(profileValue(profile, 'branch'));
-    if (actorRole === 'BUSINESSHEAD') {
-      if (actorBusiness && profileBusiness === actorBusiness) allowed.add(code);
-      continue;
-    }
-    if (['BRANCHHEAD', 'BH'].includes(actorRole)) {
-      if (
-        actorState && profileState === actorState &&
-        (!actorBusiness || profileBusiness === actorBusiness) &&
-        (!actorBranch || profileBranch === actorBranch)
-      ) allowed.add(code);
-      continue;
-    }
-    if (['GM', 'GENERALMANAGER', 'SOUTHHEAD'].includes(actorRole)) {
-      if (
-        descendants.has(code) ||
-        (actorState && profileState === actorState && (!actorBusiness || profileBusiness === actorBusiness))
-      ) allowed.add(code);
-      continue;
-    }
-    if (descendants.has(code)) allowed.add(code);
-  }
-  if (actorCode && isOperationalEmployeeProfile(actor)) allowed.add(actorCode);
-  return allowed;
+  return operationsCommandCenterAllowedEmployeeCodes(actor, profiles, hierarchyRows);
 }
 
 export function storedAttendancePayableKm(row = {}) {
@@ -293,7 +199,7 @@ function liveStatusKey(row = {}, employeeCodeByProfileId = new Map()) {
 
 function statusMatches(row, requestedStatus, liveByEmployee) {
   if (!requestedStatus) return true;
-  const requested = roleKey(requestedStatus);
+  const requested = compactKey(requestedStatus);
   if (requested === 'NOTSTARTED') return false;
   const attendanceActive = comparable(row.status || 'active') === 'active' && !row.logout_time;
   if (requested === 'ACTIVE') return attendanceActive;
@@ -337,7 +243,7 @@ export function summarizeOperationsRows({
     if (date < filters.date_from || date > filters.date_to) continue;
     const profile = profilesByCode.get(code) || {};
     if (filters.state && comparable(profileValue(profile, 'state')) !== comparable(filters.state)) continue;
-    if (filters.business && comparable(profileValue(profile, 'business')) !== comparable(filters.business)) continue;
+    if (filters.business && businessGroup(profileValue(profile, 'business')) !== businessGroup(filters.business)) continue;
     if (!statusMatches(attendance, filters.status, liveByEmployee)) continue;
     const rowPayableKm = storedAttendancePayableKm(attendance);
     payableKm += rowPayableKm;
@@ -445,7 +351,7 @@ export function buildConsolidatedTravelClaimReportDataset({
     if (date < filters.date_from || date > filters.date_to) continue;
     const profile = profilesByCode.get(code) || {};
     if (filters.state && !stateMatchesFilter(profile, filters.state)) continue;
-    if (filters.business && comparable(profileValue(profile, 'business')) !== comparable(filters.business)) continue;
+    if (filters.business && businessGroup(profileValue(profile, 'business')) !== businessGroup(filters.business)) continue;
     if (!statusMatches(attendance, filters.status, liveByEmployee)) continue;
 
     const payableKm = storedAttendancePayableKm(attendance);

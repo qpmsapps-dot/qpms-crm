@@ -123,10 +123,17 @@ test('reset/default filters restore all authorized totals', () => {
 
 test('restricted Branch Head cannot obtain another state totals', () => {
   const branchHead = { employee_code: 'BH1', role: 'Branch Head', state: 'KL', status: 'active', is_active: true };
-  const codes = operationsSummaryAllowedEmployeeCodes(branchHead, profiles, []);
+  const scopedProfiles = [
+    { employee_code: 'KL1', role: 'FO', state: 'KL', business: 'Standalone', status: 'active', is_active: true },
+    { employee_code: 'KL2', role: 'KAM', state: 'KL', business: 'Reliance Retail', status: 'active', is_active: true },
+    { employee_code: 'TN1', role: 'FO', state: 'TN', business: 'Standalone', status: 'active', is_active: true },
+    { employee_code: 'NIMS1', role: 'FO', state: 'KL', business: 'Hospitals', status: 'active', is_active: true },
+  ];
+  const codes = operationsSummaryAllowedEmployeeCodes(branchHead, scopedProfiles, []);
   assert.equal(codes.has('KL1'), true);
   assert.equal(codes.has('KL2'), true);
   assert.equal(codes.has('TN1'), false);
+  assert.equal(codes.has('NIMS1'), false);
 });
 
 test('stored final approved payable value wins without adjustment duplication', () => {
