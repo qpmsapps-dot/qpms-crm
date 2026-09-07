@@ -233,6 +233,54 @@ test('Field Operations access preview is read-only and calculated by backend res
   assert.deepEqual(preview.visible_employees.map((employee) => employee.employee_code), ['TN_ST']);
 });
 
+test('configured Field Operations access overrides legacy profile scope without changing profile fields', () => {
+  const actor = active({
+    employee_code: 'BH_TN_ST_LEGACY',
+    role: 'Branch Head',
+    state: 'TN',
+    business: 'Standalone',
+    fo_access_config: {
+      role: 'branch_head',
+      states: ['AP', 'KA'],
+      business_groups: ['reliance_retail'],
+      businesses: ['Reliance Retail', 'Retail'],
+      source: 'access_user_assignments',
+    },
+  });
+  const codes = operationsCommandCenterAllowedEmployeeCodes(actor, commandCenterProfiles, []);
+  const preview = buildFieldOperationsAccessPreview(actor, commandCenterProfiles, []);
+
+  assert.equal(preview.effective_scope.configured, true);
+  assert.equal(preview.effective_scope.source, 'access_user_assignments');
+  assert.deepEqual(preview.effective_scope.states, ['AP', 'KA']);
+  assert.equal(codes.has('AP_RR'), true);
+  assert.equal(codes.has('KA_RR'), true);
+  assert.equal(codes.has('TN_ST'), false);
+  assert.equal(codes.has('NIMS1'), false);
+});
+
+test('invalid configured Field Operations access fails closed instead of falling back to legacy', () => {
+  const actor = active({
+    employee_code: 'BH_TN_ST_LEGACY',
+    role: 'Branch Head',
+    state: 'TN',
+    business: 'Standalone',
+    fo_access_config: {
+      role: 'branch_head',
+      invalid: true,
+      reason: 'configured_scope_invalid',
+      source: 'access_user_assignments',
+    },
+  });
+  const codes = operationsCommandCenterAllowedEmployeeCodes(actor, commandCenterProfiles, []);
+  const scope = resolveOperationsCommandCenterScope(actor);
+
+  assert.equal(scope.scopeType, 'CONFIGURED_INVALID');
+  assert.equal(scope.legacyFallback, false);
+  assert.equal(scope.configured, true);
+  assert.equal(codes.size, 0);
+});
+
 test('diagnostic matrix is legacy/shadow-compatible and normalized is not active', () => {
   const matrix = buildFoAccessMatrix();
 
@@ -268,6 +316,27 @@ test('checkout Missing KM review route enforces resolved Command Center scope', 
   const serverSource = fs.readFileSync(serverPath, 'utf8');
 
   assert.match(serverSource, /'\/api\/fo\/site-visits\/:visitId\/checkout-missing-km-review'[\s\S]*requireCheckoutMissingKmReviewPermission/);
-  assert.match(serverSource, /isProfileInOperationsCommandCenterScope\(request\.profile,\s*scopedTarget/);
+  assert.match(serverSource, /isProfileInOperationsCommandCenterScope\(actor,\s*scopedTarget/);
   assert.match(serverSource, /outside your Field Operations scope/);
+});
+
+test('Field Operations access management endpoints use access foundation tables without profile writes', () => {
+  const serverPath = path.resolve('server.js');
+  const serverSource = fs.readFileSync(serverPath, 'utf8');
+
+  assert.match(serverSource, /'\/api\/admin\/access\/field-operations\/users'[\s\S]*requireSupabaseJwt[\s\S]*requireUserManagementPermission/);
+  assert.match(serverSource, /'\/api\/admin\/access\/field-operations\/preview-team'[\s\S]*requireSupabaseJwt[\s\S]*requireUserManagementPermission/);
+  assert.match(serverSource, /'\/api\/admin\/access\/field-operations\/:profileId'[\s\S]*requireSupabaseJwt[\s\S]*requireUserManagementPermission/);
+  assert.match(serverSource, /\.from\('access_user_assignments'\)[\s\S]*\.insert/);
+  assert.match(serverSource, /\.from\('access_user_scopes'\)[\s\S]*\.insert/);
+  assert.match(serverSource, /\.from\('access_user_assignments'\)[\s\S]*\.update\(\{\s*active:\s*false,\s*verification_status:\s*'inactive'/);
+  assert.match(serverSource, /Only active non-Hospital GM or Branch Head profiles can receive Field Operations management access/);
+  assert.match(serverSource, /profiles_modified:\s*false/);
+  const routeStart = serverSource.indexOf("'/api/admin/access/field-operations/:profileId'");
+  const routeEnd = serverSource.indexOf("app.get('/api/profile/me'", routeStart);
+  const routeSource = serverSource.slice(routeStart, routeEnd);
+  assert.doesNotMatch(
+    routeSource,
+    /\.from\('profiles'\)\s*\.update/,
+  );
 });

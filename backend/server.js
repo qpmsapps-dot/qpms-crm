@@ -5582,6 +5582,246 @@ app.get(
   },
 );
 
+const FO_ACCESS_UI_SOURCE = 'field_operations_access_ui';
+const FO_MANAGEMENT_ROLE_CODES = new Set(['gm', 'branch_head']);
+const FO_ACCESS_STATE_CODES = new Set(['AP', 'KA', 'KL', 'TN', 'TG']);
+const FO_ACCESS_BUSINESS_KEYS = new Set(['reliance_retail', 'standalone']);
+
+function foAccessText(value) {
+  return String(value || '').trim();
+}
+
+function foAccessComparable(value) {
+  return foAccessText(value).toLowerCase();
+}
+
+function foAccessBusinessKey(value) {
+  const key = foAccessComparable(value).replace(/[\s-]+/g, '_');
+  if (key === 'retail' || key === 'reliance_retail') return 'reliance_retail';
+  if (key === 'standalone') return 'standalone';
+  return key;
+}
+
+function foAccessRoleCode(value) {
+  const key = foAccessComparable(value).replace(/[\s-]+/g, '_');
+  if (key === 'gm' || key === 'general_manager') return 'gm';
+  if (key === 'branch_head' || key === 'branchhead' || key === 'bh') return 'branch_head';
+  return key;
+}
+
+function isFieldOperationsManagementProfile(profile = {}) {
+  const role = foAccessRoleCode(profile.role);
+  if (!FO_MANAGEMENT_ROLE_CODES.has(role)) return false;
+  const business = foAccessBusinessKey(profile.business || profile.metadata?.business || profile.metadata?.client_name);
+  return business !== 'hospital' &&
+    !foAccessComparable(profile.business).includes('hospital') &&
+    !foAccessComparable(profile.metadata?.client_name).includes('nims') &&
+    !foAccessComparable(profile.metadata?.client_name).includes('hospital');
+}
+
+function requestedFoAccessPayload(body = {}) {
+  const role = foAccessRoleCode(body.role);
+  if (!FO_MANAGEMENT_ROLE_CODES.has(role)) {
+    throw userManagementHttpError(400, 'Field Operations role must be GM or Branch Head.');
+  }
+  const states = [...new Set((Array.isArray(body.states) ? body.states : [])
+    .map((value) => foAccessText(value).toUpperCase())
+    .filter((value) => FO_ACCESS_STATE_CODES.has(value)))];
+  const businessKeys = [...new Set((Array.isArray(body.businesses) ? body.businesses : [])
+    .map(foAccessBusinessKey)
+    .filter((value) => FO_ACCESS_BUSINESS_KEYS.has(value)))];
+  if (!states.length) throw userManagementHttpError(400, 'Select at least one state.');
+  if (!businessKeys.length) throw userManagementHttpError(400, 'Select at least one business.');
+  return { role, states, businessKeys };
+}
+
+async function loadFieldOperationsAccessFoundation(client) {
+  const [
+    modulesRes,
+    verticalsRes,
+    clientsRes,
+    rolesRes,
+  ] = await Promise.all([
+    client.from('access_modules').select('id,code,name,active').eq('code', 'fo_operations').maybeSingle(),
+    client.from('access_business_verticals').select('id,code,name,active'),
+    client.from('access_clients').select('id,business_vertical_id,code,name,active'),
+    client.from('access_roles').select('id,code,name,module_id,user_type,active'),
+  ]);
+  if (modulesRes.error) throw modulesRes.error;
+  if (verticalsRes.error) throw verticalsRes.error;
+  if (clientsRes.error) throw clientsRes.error;
+  if (rolesRes.error) throw rolesRes.error;
+  const module = modulesRes.data;
+  if (!module?.id || module.active === false) throw userManagementHttpError(503, 'FO Operations module is not configured.');
+  const verticals = new Map((verticalsRes.data || [])
+    .filter((row) => row.active !== false)
+    .map((row) => [foAccessBusinessKey(row.code), row]));
+  const roles = new Map((rolesRes.data || [])
+    .filter((row) => row.active !== false && String(row.module_id) === String(module.id))
+    .map((row) => [foAccessRoleCode(row.code), row]));
+  const retailVertical = verticals.get('reliance_retail') || verticals.get('retail');
+  const standaloneVertical = verticals.get('standalone');
+  const relianceClient = (clientsRes.data || []).find((row) =>
+    row.active !== false &&
+    retailVertical?.id &&
+    String(row.business_vertical_id) === String(retailVertical.id) &&
+    (foAccessBusinessKey(row.name) === 'reliance_retail' || foAccessBusinessKey(row.code) === 'reliance_retail'));
+  return {
+    module,
+    businesses: {
+      reliance_retail: { vertical: retailVertical || null, client: relianceClient || null },
+      standalone: { vertical: standaloneVertical || null, client: null },
+    },
+    roles,
+  };
+}
+
+async function loadFieldOperationsConfiguredAccess(client, profileIds = []) {
+  const ids = [...new Set(profileIds.map(foAccessText).filter(Boolean))];
+  if (!ids.length) return new Map();
+  const foundation = await loadFieldOperationsAccessFoundation(client);
+  const { data: assignments, error } = await client
+    .from('access_user_assignments')
+    .select('id,auth_user_id,profile_id,business_vertical_id,client_id,module_id,role_id,active,verification_status,effective_from,effective_to,source,metadata')
+    .in('profile_id', ids)
+    .eq('module_id', foundation.module.id)
+    .eq('active', true)
+    .neq('verification_status', 'rejected')
+    .limit(5000);
+  if (error) throw error;
+  const assignmentIds = (assignments || []).map((row) => row.id).filter(Boolean);
+  const { data: scopes, error: scopesError } = assignmentIds.length
+    ? await client
+      .from('access_user_scopes')
+      .select('user_assignment_id,scope_type,scope_id,scope_code,scope_text,allowed,effective_to')
+      .in('user_assignment_id', assignmentIds)
+      .eq('allowed', true)
+    : { data: [], error: null };
+  if (scopesError) throw scopesError;
+  const scopesByAssignment = new Map();
+  for (const scope of scopes || []) {
+    if (!scopesByAssignment.has(scope.user_assignment_id)) scopesByAssignment.set(scope.user_assignment_id, []);
+    scopesByAssignment.get(scope.user_assignment_id).push(scope);
+  }
+  const roleById = new Map([...foundation.roles.values()].map((row) => [String(row.id), row]));
+  const configByProfile = new Map();
+  for (const assignment of assignments || []) {
+    const role = foAccessRoleCode(roleById.get(String(assignment.role_id))?.code);
+    if (!FO_MANAGEMENT_ROLE_CODES.has(role)) continue;
+    const invalidConfig = {
+      role,
+      states: [],
+      business_groups: [],
+      businesses: [],
+      source: assignment.source || assignment.metadata?.source || 'access_user_assignments',
+      configured: true,
+      invalid: true,
+      reason: 'configured_scope_invalid',
+    };
+    const businessKey = Object.entries(foundation.businesses).find(([, value]) =>
+      value.vertical?.id &&
+      String(value.vertical.id) === String(assignment.business_vertical_id) &&
+      String(value.client?.id || '') === String(assignment.client_id || ''))?.[0];
+    if (!businessKey) {
+      if (!configByProfile.has(assignment.profile_id)) configByProfile.set(assignment.profile_id, invalidConfig);
+      continue;
+    }
+    const states = (scopesByAssignment.get(assignment.id) || [])
+      .filter((scope) => foAccessComparable(scope.scope_type) === 'state')
+      .map((scope) => foAccessText(scope.scope_code || scope.scope_text).toUpperCase())
+      .filter((state) => FO_ACCESS_STATE_CODES.has(state));
+    if (!states.length) {
+      if (!configByProfile.has(assignment.profile_id)) configByProfile.set(assignment.profile_id, invalidConfig);
+      continue;
+    }
+    const current = configByProfile.get(assignment.profile_id) || {
+      role,
+      states: new Set(),
+      business_groups: new Set(),
+      businesses: new Set(),
+      source: 'access_user_assignments',
+      configured: true,
+    };
+    if (current.invalid) {
+      current.states = new Set();
+      current.business_groups = new Set();
+      current.businesses = new Set();
+      current.invalid = false;
+      delete current.reason;
+    }
+    current.role = role;
+    for (const state of states) current.states.add(state);
+    current.business_groups.add(businessKey);
+    if (businessKey === 'standalone') current.businesses.add('Standalone');
+    if (businessKey === 'reliance_retail') {
+      current.businesses.add('Reliance Retail');
+      current.businesses.add('Retail');
+    }
+    configByProfile.set(assignment.profile_id, current);
+  }
+  return new Map([...configByProfile.entries()].map(([profileId, config]) => [profileId, {
+    ...config,
+    states: config.states instanceof Set ? [...config.states].sort() : config.states,
+    business_groups: config.business_groups instanceof Set ? [...config.business_groups].sort() : config.business_groups,
+    businesses: config.businesses instanceof Set ? [...config.businesses] : config.businesses,
+  }]));
+}
+
+function attachFoConfiguredAccess(profile, configByProfile) {
+  const config = configByProfile.get(profile.id);
+  return config ? { ...profile, fo_access_config: config } : profile;
+}
+
+function fieldOperationsUserRow(profile, preview) {
+  return {
+    id: profile.id,
+    employee_code: profile.employee_code || profile.username || null,
+    full_name: profile.full_name || profile.display_name || null,
+    role: profile.role || null,
+    normalized_role: preview.effective_scope?.role || null,
+    business: profile.business || profile.metadata?.business || null,
+    state: profile.state || profile.metadata?.state || null,
+    effective_scope: preview.effective_scope,
+    visible_employee_count: preview.visible_employee_count,
+    access_status: preview.effective_scope?.configured ? 'Configured' : 'Legacy fallback',
+  };
+}
+
+async function loadFieldOperationsAccessContext(client) {
+  const [profilesRes, hierarchyRes] = await Promise.all([
+    client
+      .from('profiles')
+      .select('id,auth_user_id,full_name,display_name,employee_code,username,role,department,designation,business,state,status,is_active,web_access_enabled,metadata')
+      .eq('is_active', true)
+      .limit(5000),
+    client
+      .from('employee_hierarchy')
+      .select('*')
+      .eq('is_active', true)
+      .limit(5000),
+  ]);
+  if (profilesRes.error) throw profilesRes.error;
+  if (hierarchyRes.error) throw hierarchyRes.error;
+  const profiles = profilesRes.data || [];
+  const configByProfile = await loadFieldOperationsConfiguredAccess(client, profiles.map((profile) => profile.id));
+  const decoratedProfiles = profiles.map((profile) => attachFoConfiguredAccess(profile, configByProfile));
+  return { profiles: decoratedProfiles, hierarchyRows: hierarchyRes.data || [], configByProfile };
+}
+
+function findFieldOperationsProfile(profiles = [], identifier = '') {
+  const normalizedIdentifier = foAccessText(identifier).toUpperCase();
+  return profiles.find((profile) =>
+    [
+      profile.id,
+      profile.employee_code,
+      profile.username,
+      profile.full_name,
+      profile.display_name,
+    ]
+      .map((value) => foAccessText(value).toUpperCase())
+      .includes(normalizedIdentifier));
+}
+
 app.get(
   '/api/admin/access/field-operations/preview',
   requireSupabaseJwt,
@@ -5594,31 +5834,8 @@ app.get(
         response.status(400).json({ ok: false, message: 'employee is required.' });
         return;
       }
-      const [profilesRes, hierarchyRes] = await Promise.all([
-        client
-          .from('profiles')
-          .select('id,full_name,display_name,employee_code,username,role,department,designation,business,state,status,is_active,web_access_enabled,metadata')
-          .eq('is_active', true)
-          .limit(5000),
-        client
-          .from('employee_hierarchy')
-          .select('*')
-          .eq('is_active', true)
-          .limit(5000),
-      ]);
-      if (profilesRes.error) throw profilesRes.error;
-      if (hierarchyRes.error) throw hierarchyRes.error;
-      const normalizedIdentifier = identifier.toUpperCase();
-      const employee = (profilesRes.data || []).find((profile) =>
-        [
-          profile.id,
-          profile.employee_code,
-          profile.username,
-          profile.full_name,
-          profile.display_name,
-        ]
-          .map((value) => String(value || '').trim().toUpperCase())
-          .includes(normalizedIdentifier));
+      const { profiles, hierarchyRows } = await loadFieldOperationsAccessContext(client);
+      const employee = findFieldOperationsProfile(profiles, identifier);
       if (!employee) {
         response.status(404).json({ ok: false, message: 'Employee profile not found.' });
         return;
@@ -5626,8 +5843,8 @@ app.get(
       response.json({
         ok: true,
         mode: 'legacy',
-        read_only: true,
-        ...buildFieldOperationsAccessPreview(employee, profilesRes.data || [], hierarchyRes.data || []),
+        read_only: false,
+        ...buildFieldOperationsAccessPreview(employee, profiles, hierarchyRows),
       });
     } catch (error) {
       const safeError = sanitizeSupabaseDiagnosticError(error);
@@ -5638,6 +5855,209 @@ app.get(
       response.status(error.statusCode || 500).json({
         ok: false,
         message: 'Unable to preview Field Operations access.',
+      });
+    }
+  },
+);
+
+app.get(
+  '/api/admin/access/field-operations/users',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      const { profiles, hierarchyRows } = await loadFieldOperationsAccessContext(client);
+      const users = profiles
+        .filter(isFieldOperationsManagementProfile)
+        .map((profile) => fieldOperationsUserRow(
+          profile,
+          buildFieldOperationsAccessPreview(profile, profiles, hierarchyRows),
+        ))
+        .sort((left, right) =>
+          foAccessText(left.state).localeCompare(foAccessText(right.state)) ||
+          foAccessText(left.business).localeCompare(foAccessText(right.business)) ||
+          foAccessText(left.normalized_role).localeCompare(foAccessText(right.normalized_role)) ||
+          foAccessText(left.full_name).localeCompare(foAccessText(right.full_name)));
+      response.json({
+        ok: true,
+        mode: 'legacy',
+        users,
+        filters: {
+          roles: ['GM', 'Branch Head'],
+          businesses: ['Reliance Retail', 'Standalone'],
+          states: ['AP', 'KA', 'KL', 'TN', 'TG'],
+        },
+      });
+    } catch (error) {
+      const safeError = sanitizeSupabaseDiagnosticError(error);
+      console.warn('[FO Access Users] Failed to list users', {
+        code: safeError.code,
+        message: safeError.message,
+      });
+      response.status(error.statusCode || 500).json({
+        ok: false,
+        message: 'Unable to load Field Operations users.',
+      });
+    }
+  },
+);
+
+app.post(
+  '/api/admin/access/field-operations/preview-team',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      const profileId = foAccessText(request.body?.profile_id);
+      const payload = requestedFoAccessPayload(request.body || {});
+      const { profiles, hierarchyRows } = await loadFieldOperationsAccessContext(client);
+      const employee = findFieldOperationsProfile(profiles, profileId);
+      if (!employee) throw userManagementHttpError(404, 'Employee profile not found.');
+      const actor = {
+        ...employee,
+        fo_access_config: {
+          role: payload.role,
+          states: payload.states,
+          business_groups: payload.businessKeys,
+          businesses: payload.businessKeys.flatMap((key) => key === 'standalone' ? ['Standalone'] : ['Reliance Retail', 'Retail']),
+          source: 'unsaved_preview',
+        },
+      };
+      response.json({
+        ok: true,
+        read_only: true,
+        ...buildFieldOperationsAccessPreview(actor, profiles, hierarchyRows),
+      });
+    } catch (error) {
+      const safeError = sanitizeSupabaseDiagnosticError(error);
+      console.warn('[FO Access Preview Team] Failed to preview team', {
+        code: safeError.code,
+        message: safeError.message,
+      });
+      response.status(error.statusCode || 500).json({
+        ok: false,
+        message: error.statusCode ? error.message : 'Unable to preview Field Operations team.',
+      });
+    }
+  },
+);
+
+app.put(
+  '/api/admin/access/field-operations/:profileId',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      const profileId = foAccessText(request.params.profileId);
+      const payload = requestedFoAccessPayload(request.body || {});
+      const foundation = await loadFieldOperationsAccessFoundation(client);
+      const role = foundation.roles.get(payload.role);
+      if (!role) throw userManagementHttpError(503, 'Selected FO Operations role is not configured.');
+      const { data: profile, error: profileError } = await client
+        .from('profiles')
+        .select('id,auth_user_id,full_name,display_name,employee_code,username,role,business,state,status,is_active,web_access_enabled,metadata')
+        .eq('id', profileId)
+        .maybeSingle();
+      if (profileError) throw profileError;
+      if (!profile) throw userManagementHttpError(404, 'Employee profile not found.');
+      if (!isFieldOperationsManagementProfile(profile)) {
+        throw userManagementHttpError(400, 'Only active non-Hospital GM or Branch Head profiles can receive Field Operations management access.');
+      }
+
+      const { data: existingAssignments, error: existingError } = await client
+        .from('access_user_assignments')
+        .select('id,metadata,source')
+        .eq('profile_id', profile.id)
+        .eq('module_id', foundation.module.id)
+        .eq('active', true)
+        .limit(100);
+      if (existingError) throw existingError;
+      const uiAssignmentIds = (existingAssignments || [])
+        .filter((assignment) => assignment.source === FO_ACCESS_UI_SOURCE || assignment.metadata?.source === FO_ACCESS_UI_SOURCE)
+        .map((assignment) => assignment.id);
+      if (uiAssignmentIds.length) {
+        const { error: deactivateError } = await client
+          .from('access_user_assignments')
+          .update({ active: false, verification_status: 'inactive', effective_to: new Date().toISOString() })
+          .in('id', uiAssignmentIds);
+        if (deactivateError) throw deactivateError;
+      }
+
+      const savedAssignments = [];
+      for (const businessKey of payload.businessKeys) {
+        const business = foundation.businesses[businessKey];
+        if (!business?.vertical?.id) throw userManagementHttpError(503, `${businessKey} vertical is not configured.`);
+        if (businessKey === 'reliance_retail' && !business.client?.id) {
+          throw userManagementHttpError(503, 'Reliance Retail client is not configured.');
+        }
+        const { data: assignment, error: insertError } = await client
+          .from('access_user_assignments')
+          .insert({
+            auth_user_id: profile.auth_user_id || null,
+            profile_id: profile.id,
+            business_vertical_id: business.vertical.id,
+            client_id: business.client?.id || null,
+            module_id: foundation.module.id,
+            role_id: role.id,
+            active: true,
+            verification_status: 'verified',
+            source: FO_ACCESS_UI_SOURCE,
+            metadata: {
+              source: FO_ACCESS_UI_SOURCE,
+              ui: 'settings_access_management_field_operations',
+              profile_role_reference: profile.role || null,
+            },
+            created_by: request.authUser.id,
+          })
+          .select('id')
+          .single();
+        if (insertError) throw insertError;
+        const scopeRows = payload.states.map((state) => ({
+          user_assignment_id: assignment.id,
+          scope_type: 'state',
+          scope_code: state,
+          allowed: true,
+          metadata: { source: FO_ACCESS_UI_SOURCE },
+          created_by: request.authUser.id,
+        }));
+        const { error: scopeError } = await client.from('access_user_scopes').insert(scopeRows);
+        if (scopeError) throw scopeError;
+        savedAssignments.push({ assignment_id: assignment.id, business: businessKey, states: payload.states });
+      }
+
+      await client.from('access_audit_logs').insert({
+        actor_user_id: request.authUser.id,
+        action: 'field_operations_access_saved',
+        target_type: 'profile',
+        target_id: profile.id,
+        after_state: {
+          role: payload.role,
+          businesses: payload.businessKeys,
+          states: payload.states,
+          assignments: savedAssignments,
+        },
+        metadata: { source: FO_ACCESS_UI_SOURCE },
+      });
+
+      const { profiles, hierarchyRows } = await loadFieldOperationsAccessContext(client);
+      const updated = findFieldOperationsProfile(profiles, profile.id);
+      response.json({
+        ok: true,
+        profiles_modified: false,
+        ...buildFieldOperationsAccessPreview(updated || profile, profiles, hierarchyRows),
+      });
+    } catch (error) {
+      const safeError = sanitizeSupabaseDiagnosticError(error);
+      console.warn('[FO Access Save] Failed to save access', {
+        code: safeError.code,
+        message: safeError.message,
+      });
+      response.status(error.statusCode || 500).json({
+        ok: false,
+        message: error.statusCode ? error.message : 'Unable to save Field Operations access.',
       });
     }
   },
@@ -9201,13 +9621,15 @@ app.post(
       ]);
       if (profilesRes.error) throw profilesRes.error;
       if (hierarchyRes.error) throw hierarchyRes.error;
+      const actorConfig = await loadFieldOperationsConfiguredAccess(client, [request.profile?.id]);
+      const actor = attachFoConfiguredAccess(request.profile || {}, actorConfig);
       const scopedTarget = {
         ...(attendance || {}),
         employee_code: visit.employee_code || attendance?.employee_code,
         fo_user_id: visit.fo_user_id || attendance?.fo_user_id,
         username: visit.employee_code || attendance?.username,
       };
-      if (!isProfileInOperationsCommandCenterScope(request.profile, scopedTarget, profilesRes.data || [], hierarchyRes.data || [])) {
+      if (!isProfileInOperationsCommandCenterScope(actor, scopedTarget, profilesRes.data || [], hierarchyRes.data || [])) {
         response.status(403).json({
           ok: false,
           message: 'You cannot review Missing KM outside your Field Operations scope.',
@@ -9287,9 +9709,11 @@ app.post(
 app.get('/api/fo/operations/summary', requireSupabaseJwtOrDemoApiRead, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
+    const actorConfig = await loadFieldOperationsConfiguredAccess(client, [request.profile?.id]);
+    const actor = attachFoConfiguredAccess(request.profile || {}, actorConfig);
     const summary = await buildOperationsSummary(
       client,
-      request.profile,
+      actor,
       request.query || {},
       currentIndiaDateInput(),
     );
@@ -9311,9 +9735,11 @@ app.get('/api/fo/operations/summary', requireSupabaseJwtOrDemoApiRead, async (re
 app.get('/api/fo/operations/employee-range', requireSupabaseJwt, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
+    const actorConfig = await loadFieldOperationsConfiguredAccess(client, [request.profile?.id]);
+    const actor = attachFoConfiguredAccess(request.profile || {}, actorConfig);
     const dataset = await loadAuthorizedEmployeeRange(
       client,
-      request.profile,
+      actor,
       request.query || {},
     );
     response.json({ ok: true, ...dataset });
@@ -9475,9 +9901,11 @@ app.get('/api/fo/operations/dashboard', requireSupabaseJwtOrDemoApiRead, async (
     const errors = [profilesRes, hierarchyRes, attendanceRes, siteVisitsRes, liveStatusRes].map((result) => result.error).filter(Boolean);
     if (errors.length) throw errors[0];
     const profileRows = profilesRes.data || [];
-    const scope = resolveOperationsCommandCenterScope(request.profile);
+    const actorConfig = await loadFieldOperationsConfiguredAccess(client, [request.profile?.id]);
+    const actor = attachFoConfiguredAccess(request.profile || {}, actorConfig);
+    const scope = resolveOperationsCommandCenterScope(actor);
     const allowedCodes = operationsCommandCenterAllowedEmployeeCodes(
-      request.profile,
+      actor,
       profileRows,
       hierarchyRes.data || [],
     );

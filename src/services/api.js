@@ -180,6 +180,30 @@ export function getFieldOperationsAccessPreview(params = {}) {
   });
 }
 
+export function getFieldOperationsAccessUsers(params = {}) {
+  return adminApiRequest({
+    method: 'GET',
+    url: '/api/admin/access/field-operations/users',
+    params,
+  });
+}
+
+export function previewFieldOperationsAccessTeam(payload) {
+  return adminApiRequest({
+    method: 'POST',
+    url: '/api/admin/access/field-operations/preview-team',
+    data: payload,
+  });
+}
+
+export function saveFieldOperationsAccess(profileId, payload) {
+  return adminApiRequest({
+    method: 'PUT',
+    url: `/api/admin/access/field-operations/${encodeURIComponent(profileId)}`,
+    data: payload,
+  });
+}
+
 export function getMyProfile() {
   return adminApiRequest({
     method: 'GET',

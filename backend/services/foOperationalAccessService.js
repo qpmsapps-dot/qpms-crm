@@ -36,6 +36,7 @@ const COMMAND_CENTER_RELIANCE_STATES = Object.freeze(['AP', 'KA', 'KL', 'TG', 'T
 const COMMAND_CENTER_BRANCH_HEAD_MULTI_BUSINESS_STATES = new Set(['ap', 'ka', 'kl', 'tg']);
 const COMMAND_CENTER_STANDARD_BUSINESS_GROUPS = new Set(['standalone', 'reliance_retail']);
 const COMMAND_CENTER_STATE_BUSINESS_ROLES = new Set(['BRANCHHEAD']);
+const CONFIGURED_MANAGEMENT_ROLES = new Set(['GM', 'BRANCHHEAD']);
 
 export const FO_FEATURES = Object.freeze([
   { key: 'DASHBOARD_VIEW', label: 'View Dashboard', category: 'Overview', module: 'FO Operations' },
@@ -169,6 +170,42 @@ function profileBusinessGroup(profile = {}) {
   );
 }
 
+function configuredFoAccess(profile = {}) {
+  const config = profile.fo_access_config || profile._fo_access_config || null;
+  if (!config || config.active === false) return null;
+  const role = normalizeFoOperationalRole(config.role || config.role_code);
+  if (!CONFIGURED_MANAGEMENT_ROLES.has(role)) return null;
+  if (config.invalid === true) {
+    return {
+      role,
+      states: [],
+      businessGroups: [],
+      businesses: [],
+      source: config.source || 'access_user_assignments',
+      invalid: true,
+      reason: config.reason || 'configured_scope_invalid',
+    };
+  }
+  const states = Array.isArray(config.states)
+    ? config.states.map(uppercaseState).filter(Boolean)
+    : [];
+  const businessGroups = Array.isArray(config.business_groups)
+    ? config.business_groups.map(normalizedBusinessGroup).filter((value) => COMMAND_CENTER_STANDARD_BUSINESS_GROUPS.has(value))
+    : [];
+  const businesses = Array.isArray(config.businesses)
+    ? config.businesses.map(text).filter(Boolean)
+    : [];
+  if (!states.length || !businessGroups.length) return null;
+  return {
+    role,
+    states: [...new Set(states)],
+    businessGroups: [...new Set(businessGroups)],
+    businesses: [...new Set(businesses.length ? businesses : businessGroups.flatMap((group) =>
+      group === 'standalone' ? ['Standalone'] : ['Reliance Retail', 'Retail']))],
+    source: config.source || 'access_user_assignments',
+  };
+}
+
 function isHospitalOrNimsProfile(profile = {}) {
   return [
     profileValue(profile, 'business'),
@@ -198,6 +235,7 @@ export function isOperationalEmployeeProfile(profile = {}) {
 
 export function canAccessFoOperations(profile) {
   if (hasCooWebVisibility(profile?.role) && profile?.web_access_enabled === false) return false;
+  if (activeProfile(profile) && configuredFoAccess(profile)) return true;
   const key = normalizeFoOperationalRole(profile?.role);
   if (!activeProfile(profile) || (!OPERATIONS_ROLES.has(key) && !hasCooWebVisibility(profile?.role))) return false;
   if (key !== 'MANAGER') return true;
@@ -228,6 +266,7 @@ export function foOperationalAllowedEmployeeCodes(actor, profiles = [], hierarch
   if (!canAccessFoOperations(actor)) return new Set();
   const actorRole = normalizeFoOperationalRole(actor.role);
   const actorCode = employeeKey(actor);
+  const configured = configuredFoAccess(actor);
   const descendants = hierarchyCodesForActor(actorCode, hierarchyRows);
   const actorState = comparable(profileValue(actor, 'state'));
   const actorBusiness = comparable(profileValue(actor, 'business'));
@@ -240,6 +279,16 @@ export function foOperationalAllowedEmployeeCodes(actor, profiles = [], hierarch
     if (!code) continue;
     if (FULL_VISIBILITY_ROLES.has(actorRole) || hasCooWebVisibility(actor.role)) {
       allowed.add(code);
+      continue;
+    }
+    if (configured) {
+      const profileState = uppercaseState(profileValue(profile, 'state'));
+      const profileGroup = profileBusinessGroup(profile);
+      if (
+        configured.states.includes(profileState) &&
+        configured.businessGroups.includes(profileGroup) &&
+        !isHospitalOrNimsProfile(profile)
+      ) allowed.add(code);
       continue;
     }
     const profileState = comparable(profileValue(profile, 'state'));
@@ -287,6 +336,35 @@ export function resolveOperationsCommandCenterScope(actor = {}) {
   const actorCode = employeeKey(actor);
   const actorState = uppercaseState(profileValue(actor, 'state'));
   const actorBusinessGroup = profileBusinessGroup(actor);
+  const configured = configuredFoAccess(actor);
+
+  if (configured) {
+    if (configured.invalid) {
+      return {
+        scopeType: 'CONFIGURED_INVALID',
+        allowedStates: [],
+        allowedBusinessGroups: [],
+        allowedBusinesses: [],
+        excludeHospital: true,
+        legacyFallback: false,
+        configured: true,
+        invalid: true,
+        label: 'Configured access requires valid state and business scope',
+        source: configured.source,
+      };
+    }
+    return {
+      scopeType: configured.role === 'GM' ? 'CONFIGURED_GM' : 'CONFIGURED_BRANCH_HEAD',
+      allowedStates: configured.states,
+      allowedBusinessGroups: configured.businessGroups,
+      allowedBusinesses: configured.businesses,
+      excludeHospital: true,
+      legacyFallback: false,
+      configured: true,
+      label: `Viewing: ${configured.states.join(', ')} - ${configured.businesses.filter((value) => value !== 'Retail').join(' + ')}`,
+      source: configured.source,
+    };
+  }
 
   if (FULL_VISIBILITY_ROLES.has(actorRole) || hasCooWebVisibility(actor.role)) {
     return {
@@ -371,6 +449,7 @@ export function resolveOperationsCommandCenterScope(actor = {}) {
 }
 
 function profileMatchesOperationsCommandCenterScope(profile = {}, scope = {}) {
+  if (scope.configured && (!scope.allowedStates?.length || !scope.allowedBusinessGroups?.length)) return false;
   if (!activeProfile(profile) || !isOperationalEmployeeProfile(profile)) return false;
   if (scope.scopeType === 'GLOBAL') return true;
   if (scope.excludeHospital && isHospitalOrNimsProfile(profile)) return false;
@@ -517,10 +596,11 @@ export function buildFieldOperationsAccessPreview(actor, profiles = [], hierarch
       label: commandCenterScope.label,
       states: commandCenterScope.allowedStates || [],
       businesses: commandCenterScope.allowedBusinesses || [],
-      role: normalizeFoOperationalRole(actor?.role),
-      source: commandCenterScope.legacyFallback
+      role: configuredFoAccess(actor)?.role || normalizeFoOperationalRole(actor?.role),
+      source: commandCenterScope.source || (commandCenterScope.legacyFallback
         ? 'legacy_profiles_employee_hierarchy'
-        : 'operations_command_center_resolver',
+        : 'operations_command_center_resolver'),
+      configured: commandCenterScope.configured === true,
     },
     visible_employee_count: visibleEmployees.length,
     visible_employees: visibleEmployees,
@@ -528,7 +608,7 @@ export function buildFieldOperationsAccessPreview(actor, profiles = [], hierarch
 }
 
 export function canFoUser(actor, featureKey) {
-  const role = normalizeFoOperationalRole(actor?.role);
+  const role = configuredFoAccess(actor)?.role || normalizeFoOperationalRole(actor?.role);
   if (!activeProfile(actor)) return false;
   if (!canAccessFoOperations(actor) && String(featureKey || '').startsWith('KM_') === false) {
     return false;
