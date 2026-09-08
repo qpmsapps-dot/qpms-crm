@@ -51,6 +51,10 @@ test('approval workflow syncs attendance totals and supports reject and clarific
   assert.match(decision, /status = 'clarification_required'/);
   assert.match(decision, /Approved KM above suggestion requires elevated_override/);
   assert.match(decision, /Incremental Missing KM is not defensible yet/);
+  assert.match(decision, /manual_override/);
+  assert.match(decision, /approval_source: manualOverride \? 'MANUAL_REVIEW'/);
+  assert.match(decision, /This review is already approved\. Financial adjustments require a separate review/);
+  assert.match(decision, /missingKmApprovedAmount\(approvedKm, rate\)/);
 });
 
 test('review payload records detected, already-included, and incremental KM separately', () => {
@@ -90,4 +94,7 @@ test('timeline displays canonical travel-leg km and real missing km review statu
   assert.match(frontend, /suggested_missing_checkout_evidence_quality/);
   assert.match(frontend, /suggested_missing_checkout_reason_code/);
   assert.match(frontend, /action: normalizedAction === "ask clarification" \? "clarification" : normalizedAction/);
+  assert.match(frontend, /Manual Missing KM Approval/);
+  assert.match(frontend, /Approve Entered KM/);
+  assert.match(frontend, /manual_override: options\.manualOverride === true/);
 });

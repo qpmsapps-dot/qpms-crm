@@ -5033,6 +5033,15 @@ function missingCheckoutEvidence(visit) {
     metadata.missing_km_review?.incremental_determination ||
     metadata.missing_checkout_incremental_determination ||
     null;
+  const filteredGpsKm = numberOrNull(
+    metadata.missing_km_review?.filtered_gps_km ?? metadata.filtered_missing_checkout_gps_km,
+  );
+  const googleRouteKm = numberOrNull(
+    metadata.missing_km_review?.google_route_km ?? metadata.google_missing_checkout_route_km,
+  );
+  const ratePerKm = numberOrNull(
+    metadata.missing_km_review?.rate_per_km ?? metadata.rate_per_km,
+  );
   const suggestedAmount = numberOrNull(
     metadata.suggested_missing_checkout_amount ??
       (suggestedKm === null ? null : suggestedKm * RATE_PER_KM),
@@ -5066,6 +5075,14 @@ function missingCheckoutEvidence(visit) {
     detectedKm,
     alreadyIncludedKm,
     incrementalDetermination,
+    filteredGpsKm,
+    googleRouteKm,
+    ratePerKm,
+    reviewer:
+      metadata.missing_km_review?.reviewer_name ||
+      metadata.missing_km_review?.reviewer_employee_code ||
+      null,
+    reviewRemarks: metadata.missing_km_review?.review_remarks || null,
     approvalDefensible:
       incrementalDetermination !== "requires_review" &&
       suggestedKm !== null &&
@@ -6918,6 +6935,10 @@ function FieldOfficerDetailsView({
   const [drillDownOpen, setDrillDownOpen] = useState(true);
   const [printRequested, setPrintRequested] = useState(false);
   const [checkoutReviewPreview, setCheckoutReviewPreview] = useState(null);
+  const [manualMissingKmReview, setManualMissingKmReview] = useState(null);
+  const [manualMissingKmValue, setManualMissingKmValue] = useState("");
+  const [manualMissingKmRemarks, setManualMissingKmRemarks] = useState("");
+  const [manualMissingKmError, setManualMissingKmError] = useState("");
   const activityMenuRef = useRef(null);
   const activityPreviewRequestRef = useRef(0);
   const visits = useMemo(() => sortedOfficerVisits(officer), [officer]);
@@ -7832,12 +7853,47 @@ function FieldOfficerDetailsView({
         "Approval saving requires backend support. This is currently a UI preview only.",
     });
   };
+  const manualMissingKmAdmin = String(generatedByRole || "")
+    .trim().toUpperCase().replace(/[^A-Z0-9]+/g, "") === "ADMIN";
+  const openManualMissingKmReview = (visit) => {
+    setManualMissingKmReview(visit);
+    setManualMissingKmValue("");
+    setManualMissingKmRemarks("");
+    setManualMissingKmError("");
+  };
+  const closeManualMissingKmReview = () => {
+    if (checkoutReviewBusyVisitId) return;
+    setManualMissingKmReview(null);
+    setManualMissingKmError("");
+  };
   const handleCheckoutReviewAction = (visit, action) => {
-    if (typeof onCheckoutReviewAction === "function") {
-      onCheckoutReviewAction(visit, action);
+    const evidence = missingCheckoutEvidence(visit);
+    if (action === "Approve" && evidence.incrementalDetermination === "requires_review") {
+      if (manualMissingKmAdmin) openManualMissingKmReview(visit);
       return;
     }
+    if (typeof onCheckoutReviewAction === "function") {
+      return onCheckoutReviewAction(visit, action);
+    }
     showCheckoutReviewPreview(visit, action);
+  };
+  const submitManualMissingKmReview = async () => {
+    const approvedKm = Number(manualMissingKmValue);
+    if (!Number.isFinite(approvedKm) || approvedKm < 0) {
+      setManualMissingKmError("Approved Missing KM must be a number greater than or equal to zero.");
+      return;
+    }
+    if (!manualMissingKmRemarks.trim()) {
+      setManualMissingKmError("Approval remarks are required.");
+      return;
+    }
+    setManualMissingKmError("");
+    const result = await onCheckoutReviewAction?.(manualMissingKmReview, "Approve", {
+      approvedKm,
+      remarks: manualMissingKmRemarks.trim(),
+      manualOverride: true,
+    });
+    if (result?.ok !== false) setManualMissingKmReview(null);
   };
   const canViewRouteGpsEvidence = fullTechnicalAccess;
   const tabs = useMemo(() => [
@@ -8073,6 +8129,57 @@ function FieldOfficerDetailsView({
 
   return (
     <div className="fo-activity-detail min-h-screen space-y-4 bg-slate-50/70 p-1 sm:p-2">
+      {manualMissingKmReview ? (
+        <div className="fixed inset-0 z-[1300] grid place-items-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="manual-missing-km-title">
+          <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-200 p-4">
+              <div>
+                <h2 id="manual-missing-km-title" className="text-base font-black text-slate-950">Manual Missing KM Approval</h2>
+                <p className="mt-1 text-xs font-semibold text-slate-500">Human override for clarification-required evidence</p>
+              </div>
+              <button type="button" onClick={closeManualMissingKmReview} className="focus-ring grid h-9 w-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Close manual approval"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="p-4">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {(() => {
+                  const evidence = missingCheckoutEvidence(manualMissingKmReview);
+                  const exception = checkoutExceptionForVisit(manualMissingKmReview);
+                  return [
+                    ["Date", manualMissingKmReview.attendance_date || formatDateOnly(manualMissingKmReview.check_in_time)],
+                    ["Site", visitTitle(manualMissingKmReview)],
+                    ["Checkout Deviation", exception?.distanceMeters == null ? "--" : `${(exception.distanceMeters / 1000).toFixed(2)} km`],
+                    ["Detected Travel KM", evidence.detectedKm == null ? "--" : `${evidence.detectedKm.toFixed(2)} km`],
+                    ["Filtered GPS KM", evidence.filteredGpsKm == null ? "--" : `${evidence.filteredGpsKm.toFixed(2)} km`],
+                    ["Google Route KM", evidence.googleRouteKm == null ? "--" : `${evidence.googleRouteKm.toFixed(2)} km`],
+                    ["Already Included KM", evidence.alreadyIncludedKm == null ? "Unknown" : `${evidence.alreadyIncludedKm.toFixed(2)} km`],
+                    ["Current Payable KM", `${Number(periodSummary.canonical_payable_km || periodSummary.kilometer || 0).toFixed(2)} km`],
+                    ["Transport Mode", evidence.ratePerKm === CAR_RATE_PER_KM ? "Car" : evidence.ratePerKm === RATE_PER_KM ? "Bike / Own Vehicle" : "Unavailable"],
+                    ["Rate", evidence.ratePerKm == null ? "Unavailable" : `${formatInr(evidence.ratePerKm)} / km`],
+                    ["Calculation Source", displayValue(evidence.suggestedSource?.replace(/_/g, " "))],
+                    ["Evidence Quality", displayValue(evidence.evidenceQuality)],
+                    ["Reason", displayValue(evidence.reason?.replace(/_/g, " "))],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-lg bg-slate-50 p-3">
+                      <p className="text-[10px] font-bold uppercase text-slate-500">{label}</p>
+                      <p className="mt-1 break-words text-xs font-bold text-slate-800">{value}</p>
+                    </div>
+                  ));
+                })()}
+              </div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <label className="text-xs font-bold text-slate-700">Approved Missing KM<input type="number" min="0" step="0.01" value={manualMissingKmValue} onChange={(event) => setManualMissingKmValue(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Enter reviewed KM" /></label>
+                <label className="text-xs font-bold text-slate-700">Approval Remarks<textarea required rows={3} value={manualMissingKmRemarks} onChange={(event) => setManualMissingKmRemarks(event.target.value)} className="mt-1 w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Document the evidence and approval reason" /></label>
+              </div>
+              {manualMissingKmError ? <p className="mt-3 text-xs font-bold text-rose-700">{manualMissingKmError}</p> : null}
+              <div className="mt-5 flex flex-wrap justify-end gap-2">
+                <button type="button" onClick={closeManualMissingKmReview} className="focus-ring rounded-lg border border-slate-300 px-4 py-2 text-xs font-black text-slate-700">Cancel</button>
+                <button type="button" onClick={() => { const visit = manualMissingKmReview; closeManualMissingKmReview(); handleCheckoutReviewAction(visit, "Reject"); }} className="focus-ring rounded-lg border border-rose-300 px-4 py-2 text-xs font-black text-rose-700">Reject</button>
+                <button type="button" disabled={checkoutReviewBusyVisitId === manualMissingKmReview.id} onClick={submitManualMissingKmReview} className="focus-ring rounded-lg bg-emerald-700 px-4 py-2 text-xs font-black text-white disabled:opacity-50">{checkoutReviewBusyVisitId === manualMissingKmReview.id ? "Saving..." : "Approve Entered KM"}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <header className="fo-screen-only rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
         <button
           type="button"
@@ -8448,7 +8555,12 @@ function FieldOfficerDetailsView({
                                     <button
                                       key={action}
                                       type="button"
-                                      disabled={checkoutReviewBusyVisitId === row.visit?.id}
+                                      disabled={
+                                        checkoutReviewBusyVisitId === row.visit?.id ||
+                                        (action === "Approve" &&
+                                          missingCheckoutEvidence(row.visit).incrementalDetermination === "requires_review" &&
+                                          !manualMissingKmAdmin)
+                                      }
                                       onClick={() =>
                                         action === "Ask Clarification"
                                           ? showCheckoutReviewPreview(row.visit, action)
@@ -8580,6 +8692,8 @@ function FieldOfficerDetailsView({
                   ["Calculation Source", displayValue(missingCheckoutEvidence(selectedVisit).suggestedSource?.replace(/_/g, " "))],
                   ["Evidence", displayValue(missingCheckoutEvidence(selectedVisit).evidenceQuality)],
                   ["Review Status", selectedCheckoutReviewStatus?.label || "Pending Review"],
+                  ["Reviewer", displayValue(missingCheckoutEvidence(selectedVisit).reviewer)],
+                  ["Review Remarks", displayValue(missingCheckoutEvidence(selectedVisit).reviewRemarks)],
                 ].map(([label, value]) => (
                   <div key={label}>
                     <p className="text-[10px] font-bold uppercase text-amber-700">{label}</p>
@@ -8596,9 +8710,9 @@ function FieldOfficerDetailsView({
                         type="button"
                         disabled={
                           checkoutReviewBusyVisitId === selectedVisit?.id ||
-                          (action === "Approve" && !missingCheckoutEvidence(selectedVisit).approvalDefensible)
+                          (action === "Approve" && !missingCheckoutEvidence(selectedVisit).approvalDefensible && !manualMissingKmAdmin)
                         }
-                        title={action === "Approve" && !missingCheckoutEvidence(selectedVisit).approvalDefensible
+                        title={action === "Approve" && !missingCheckoutEvidence(selectedVisit).approvalDefensible && !manualMissingKmAdmin
                           ? "Approval requires a defensible incremental unpaid KM value."
                           : undefined}
                         onClick={() =>
@@ -12167,7 +12281,7 @@ export default function FOActivities() {
     }
   }
 
-  async function submitCheckoutMissingKmReview(visit, action) {
+  async function submitCheckoutMissingKmReview(visit, action, options = {}) {
     if (!visit?.id || !canApproveCheckoutMissingKmReviews) return;
     try {
       assertDemoWriteAllowed(user);
@@ -12180,21 +12294,22 @@ export default function FOActivities() {
     const evidence = missingCheckoutEvidence(visit);
     let approvedKm = null;
     let remarks = "";
-    let adminOverride = false;
+    let adminOverride = options.manualOverride === true;
 
     if (normalizedAction === "approve") {
-      if (!evidence.approvalDefensible) {
+      if (!evidence.approvalDefensible && !options.manualOverride) {
         window.alert(
           "Approval is unavailable because the incremental unpaid KM cannot be determined safely. Ask for clarification or review the route evidence.",
         );
         return;
       }
-      const defaultKm =
-        evidence.suggestedKm !== null
-          ? evidence.suggestedKm.toFixed(2)
-          : "";
-      const input = window.prompt("Approve missing checkout KM", defaultKm);
-      if (input === null) return;
+      const input = options.manualOverride
+        ? options.approvedKm
+        : window.prompt(
+            "Approve missing checkout KM",
+            evidence.suggestedKm !== null ? evidence.suggestedKm.toFixed(2) : "",
+          );
+      if (input === null || input === undefined) return { ok: false };
       approvedKm = Number(input);
       if (!Number.isFinite(approvedKm) || approvedKm < 0) {
         window.alert("Approved KM must be a number greater than or equal to 0.");
@@ -12209,7 +12324,9 @@ export default function FOActivities() {
         );
         if (!adminOverride) return;
       }
-      remarks = window.prompt("Approval remarks (optional)", "") || "";
+      remarks = options.manualOverride
+        ? String(options.remarks || "").trim()
+        : window.prompt("Approval remarks (optional)", "") || "";
     } else if (normalizedAction === "reject") {
       remarks = window.prompt("Rejection reason is required", "") || "";
       if (!remarks.trim()) {
@@ -12244,6 +12361,7 @@ export default function FOActivities() {
             review_source: "fo_activities_dashboard",
             admin_override: adminOverride,
             elevated_override: adminOverride,
+            manual_override: options.manualOverride === true,
           }),
         },
       );
@@ -12261,9 +12379,12 @@ export default function FOActivities() {
       }
       setRefreshToken((value) => value + 1);
       setSummaryRefreshToken((value) => value + 1);
+      await loadSelectedEmployeeRange();
+      return { ok: true, payload };
     } catch (error) {
       console.warn("[myQPMS FO] Checkout missing KM review failed.", error);
       window.alert(error.message || "Checkout review update failed.");
+      return { ok: false, error };
     } finally {
       setCheckoutReviewBusyVisitId(null);
     }

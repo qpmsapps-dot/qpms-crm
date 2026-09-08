@@ -9678,6 +9678,7 @@ app.post(
           remarks: request.body?.remarks,
           requested_clarification: request.body?.requested_clarification || request.body?.clarification,
           elevated_override: request.body?.elevated_override === true || request.body?.admin_override === true,
+          manual_override: request.body?.manual_override === true,
         },
         {
           email: request.profile?.email || request.authUser?.email || null,

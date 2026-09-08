@@ -4258,6 +4258,81 @@ export async function syncAttendanceApprovedKmTotals(client, attendanceId) {
   };
 }
 
+function manualApprovalRoleKey(value) {
+  return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+export function missingKmManualApprovalUpperBound(review = {}) {
+  const metadata = review.metadata && typeof review.metadata === 'object' && !Array.isArray(review.metadata)
+    ? review.metadata
+    : {};
+  const candidates = [
+    metadata.detected_missing_km,
+    review.filtered_gps_km,
+    review.google_route_km,
+    review.suggested_missing_km,
+  ]
+    .map(normalizeNumber)
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  return candidates.length ? Number(Math.max(...candidates).toFixed(2)) : null;
+}
+
+export function validateMissingKmManualApproval(review = {}, payload = {}, actor = {}) {
+  if (manualApprovalRoleKey(actor.role) !== 'ADMIN') {
+    const error = new Error('Only an Admin can manually approve clarification-required Missing KM.');
+    error.statusCode = 403;
+    throw error;
+  }
+  const remarks = String(payload.remarks || payload.review_remarks || '').trim();
+  if (!remarks) {
+    const error = new Error('Approval remarks are required for manual Missing KM approval.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!actor.employee_code || !(actor.full_name || actor.display_name || actor.email)) {
+    const error = new Error('Authorized reviewer identity is required for manual Missing KM approval.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const approvedKm = normalizeNumber(payload.approved_missing_km ?? payload.approved_km);
+  if (!Number.isFinite(approvedKm) || approvedKm < 0) {
+    const error = new Error('approved_missing_km must be a non-negative number.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const upperBoundKm = missingKmManualApprovalUpperBound(review);
+  if (!Number.isFinite(upperBoundKm)) {
+    const error = new Error('Manual approval is unavailable because no defensible route evidence is recorded.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (approvedKm > upperBoundKm + 0.001) {
+    const error = new Error(`Approved Missing KM cannot exceed the defensible evidence limit of ${upperBoundKm.toFixed(2)} km.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  const rate = normalizeNumber(review.rate_per_km);
+  if (![RATE_PER_KM, CAR_RATE_PER_KM].includes(rate)) {
+    const error = new Error('Missing KM cannot be approved because its transport mode rate is unavailable.');
+    error.statusCode = 409;
+    throw error;
+  }
+  return { approvedKm: Number(approvedKm.toFixed(2)), remarks, rate, upperBoundKm };
+}
+
+export function missingKmApprovedAmount(approvedKm, rate) {
+  return Number((Number(approvedKm) * Number(rate)).toFixed(2));
+}
+
+export function classifyMissingKmApprovalRetry(review = {}, payload = {}) {
+  if (String(review.status || '').trim().toLowerCase() !== 'approved') return 'new_decision';
+  const requestedKm = normalizeNumber(payload.approved_missing_km ?? payload.approved_km);
+  const existingKm = normalizeNumber(review.approved_missing_km) || 0;
+  return Number.isFinite(requestedKm) && Math.abs(requestedKm - existingKm) <= 0.001
+    ? 'same_value_retry'
+    : 'financial_adjustment';
+}
+
 export async function decideMissingKmReview(client, reviewId, action, payload = {}, actor = {}) {
   const normalizedAction = String(action || '').trim().toLowerCase();
   if (!['approve', 'reject', 'clarification'].includes(normalizedAction)) {
@@ -4274,23 +4349,45 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
   const remarks = String(payload.remarks || payload.review_remarks || '').trim();
   const clarification = String(payload.requested_clarification || payload.clarification || '').trim();
   const now = new Date().toISOString();
-  const rate = normalizeNumber(review.rate_per_km) || RATE_PER_KM;
+  const manualOverride = payload.manual_override === true;
+  const persistedRate = normalizeNumber(review.rate_per_km);
+  const rate = persistedRate;
   let approvedKm = 0;
   let status = 'rejected';
   if (normalizedAction === 'approve') {
-    if (review.metadata?.incremental_determination === 'requires_review') {
+    const retryClassification = classifyMissingKmApprovalRetry(review, payload);
+    if (retryClassification !== 'new_decision') {
+      if (retryClassification === 'financial_adjustment') {
+        const error = new Error('This review is already approved. Financial adjustments require a separate review.');
+        error.statusCode = 409;
+        throw error;
+      }
+      const totals = await syncAttendanceApprovedKmTotals(client, review.attendance_id);
+      return { review, totals, no_change: true };
+    }
+    if (review.metadata?.incremental_determination === 'requires_review' && !manualOverride) {
       const error = new Error('Incremental Missing KM is not defensible yet. Request clarification before approval.');
       error.statusCode = 409;
       throw error;
     }
-    approvedKm = normalizeNumber(payload.approved_missing_km ?? payload.approved_km);
-    if (!Number.isFinite(approvedKm) || approvedKm < 0) {
-      const error = new Error('approved_missing_km must be a non-negative number.');
-      error.statusCode = 400;
-      throw error;
+    if (manualOverride) {
+      const manual = validateMissingKmManualApproval(review, payload, actor);
+      approvedKm = manual.approvedKm;
+    } else {
+      approvedKm = normalizeNumber(payload.approved_missing_km ?? payload.approved_km);
+      if (!Number.isFinite(approvedKm) || approvedKm < 0) {
+        const error = new Error('approved_missing_km must be a non-negative number.');
+        error.statusCode = 400;
+        throw error;
+      }
+      if (![RATE_PER_KM, CAR_RATE_PER_KM].includes(rate)) {
+        const error = new Error('Missing KM cannot be approved because its transport mode rate is unavailable.');
+        error.statusCode = 409;
+        throw error;
+      }
     }
     const suggestedKm = normalizeNumber(review.suggested_missing_km) || 0;
-    if (approvedKm > suggestedKm + MISSING_KM_APPROVAL_TOLERANCE_KM && !payload.elevated_override) {
+    if (!manualOverride && approvedKm > suggestedKm + MISSING_KM_APPROVAL_TOLERANCE_KM && !payload.elevated_override) {
       const error = new Error('Approved KM above suggestion requires elevated_override and justification.');
       error.statusCode = 400;
       throw error;
@@ -4319,7 +4416,7 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
   const update = {
     status,
     approved_missing_km: status === 'approved' ? Number(approvedKm.toFixed(2)) : 0,
-    approved_amount: status === 'approved' ? Number((approvedKm * rate).toFixed(2)) : 0,
+    approved_amount: status === 'approved' ? missingKmApprovedAmount(approvedKm, rate) : 0,
     requested_clarification: status === 'clarification_required' ? clarification : null,
     reviewer_employee_code: actor.employee_code || null,
     reviewer_name: actor.full_name || actor.display_name || actor.email || null,
@@ -4330,6 +4427,9 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
       ...(review.metadata || {}),
       review_action: normalizedAction,
       reviewed_by_role: actor.role || null,
+      manual_override: manualOverride,
+      approval_source: manualOverride ? 'MANUAL_REVIEW' : 'CALCULATED_REVIEW',
+      ...(manualOverride ? { manual_approval_upper_bound_km: missingKmManualApprovalUpperBound(review) } : {}),
     },
   };
   const { data: updated, error: updateError } = await client

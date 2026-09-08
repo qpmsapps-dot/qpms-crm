@@ -927,6 +927,8 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
           id: review.id,
           status: review.status,
           detected_missing_km: reviewMetadata.detected_missing_km ?? review.filtered_gps_km ?? review.google_route_km,
+          filtered_gps_km: review.filtered_gps_km,
+          google_route_km: review.google_route_km,
           already_included_km: reviewMetadata.already_included_km ?? null,
           incremental_determination: reviewMetadata.incremental_determination ?? null,
           suggested_missing_km: review.suggested_missing_km,
@@ -940,6 +942,8 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
           reviewer_employee_code: review.reviewer_employee_code,
           reviewer_name: review.reviewer_name,
           reviewed_at: review.reviewed_at,
+          review_remarks: review.review_remarks,
+          approval_source: reviewMetadata.approval_source ?? null,
         },
       },
     };
