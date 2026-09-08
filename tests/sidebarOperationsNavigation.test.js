@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
+  canAccessFoCommandCenter,
   canAccessNavRoute,
   canAccessRoute,
   usesOperationsSidebar,
@@ -21,11 +22,11 @@ test('Branch Head receives the Operations sidebar and can open the Command Cente
   assert.match(sidebarSource, /label: 'Operations', to: '\/fo-activities'/);
 });
 
-test('managerial Operations roles use the Operations sidebar without changing other role presets', () => {
-  for (const role of ['Operations Manager', 'Business Head', 'Branch Head', 'South Head', 'KAM']) {
+test('Command Center navigation stops at Branch Head while operational employees keep reviewer navigation', () => {
+  for (const role of ['Business Head', 'Branch Head', 'South Head']) {
     assert.equal(usesOperationsSidebar(user(role)), true, role);
   }
-  for (const role of ['Operations Team', 'Manager', 'Commercial Reviewer', 'HR Reviewer', 'Finance Reviewer']) {
+  for (const role of ['Operations Team', 'Operations Manager', 'KAM', 'FO', 'Manager', 'Commercial Reviewer', 'HR Reviewer', 'Finance Reviewer']) {
     assert.equal(usesOperationsSidebar(user(role)), false, role);
   }
   for (const role of ['Admin', 'GM', 'COO', 'Executive Assistant']) {
@@ -33,6 +34,18 @@ test('managerial Operations roles use the Operations sidebar without changing ot
     assert.equal(canAccessRoute(user(role), '/fo-activities'), true, role);
   }
   assert.equal(canAccessRoute(user('Commercial Reviewer'), '/fo-activities'), false);
+});
+
+test('Command Center route actor access is separate from operational employee roles', () => {
+  for (const role of ['Admin', 'GM', 'South Head', 'Business Head', 'Branch Head', 'COO', 'Executive Assistant']) {
+    assert.equal(canAccessFoCommandCenter(user(role)), true, role);
+    assert.equal(canAccessRoute(user(role), '/fo-activities'), true, role);
+  }
+  for (const role of ['Operations', 'Operations Team', 'Operations Manager', 'KAM', 'FO', 'Field Officer']) {
+    assert.equal(canAccessFoCommandCenter(user(role)), false, role);
+    assert.equal(canAccessRoute(user(role), '/fo-activities'), false, role);
+    assert.equal(canAccessNavRoute(user(role), '/fo-activities'), false, role);
+  }
 });
 
 test('Operations sidebar remains filtered by route authorization and keeps Fault Tracker append logic', () => {

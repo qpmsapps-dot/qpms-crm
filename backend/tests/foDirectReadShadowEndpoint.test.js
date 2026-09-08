@@ -154,14 +154,14 @@ describe('FO employee drill-down endpoint hardening', () => {
     assert.equal(allowed.has('NIMS'), false);
   });
 
-  test('Suresh target scope remains TN Standalone only', () => {
+  test('Operations Manager cannot use the Suresh Command Center drill-down override', () => {
     const actor = active({ employee_code: 'QPMSTN3082', role: 'Operations Manager', state: 'TN', business: 'Standalone' });
     const profiles = [
       active({ employee_code: 'TN_ST', role: 'FO', state: 'TN', business: 'Standalone' }),
       active({ employee_code: 'TN_RR', role: 'FO', state: 'TN', business: 'Reliance Retail' }),
       active({ employee_code: 'KA_ST', role: 'FO', state: 'KA', business: 'Standalone' }),
     ];
-    assert.equal(isProfileInOperationsCommandCenterScope(actor, { employee_code: 'TN_ST' }, profiles, []), true);
+    assert.equal(isProfileInOperationsCommandCenterScope(actor, { employee_code: 'TN_ST' }, profiles, []), false);
     assert.equal(isProfileInOperationsCommandCenterScope(actor, { employee_code: 'TN_RR' }, profiles, []), false);
     assert.equal(isProfileInOperationsCommandCenterScope(actor, { employee_code: 'KA_ST' }, profiles, []), false);
   });

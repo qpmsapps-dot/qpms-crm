@@ -134,11 +134,11 @@ test('Arun Prasad Command Center override sees Reliance Retail in all five state
   assert.equal(codes.has('NIMS1'), false);
 });
 
-test('Suresh B Command Center override sees TN Standalone only', () => {
+test('Operations Manager cannot use the Suresh Command Center override', () => {
   const actor = active({ employee_code: 'QPMSTN3082', role: 'OPERATIONS_MANAGER', state: 'TN', business: 'Standalone' });
   const codes = operationsCommandCenterAllowedEmployeeCodes(actor, commandCenterProfiles, []);
 
-  assert.equal(codes.has('TN_ST'), true);
+  assert.equal(codes.has('TN_ST'), false);
   assert.equal(codes.has('TN_RR'), false);
   assert.equal(codes.has('KA_ST'), false);
 });
@@ -220,17 +220,17 @@ test('Branch Head Missing KM approval target must be inside Command Center scope
   );
 });
 
-test('Field Operations access preview is read-only and calculated by backend resolver', () => {
+test('Field Operations access preview denies Command Center actor access below Branch Head', () => {
   const actor = active({ employee_code: 'QPMSTN3082', role: 'OPERATIONS_MANAGER', state: 'TN', business: 'Standalone' });
   const preview = buildFieldOperationsAccessPreview(actor, commandCenterProfiles, []);
 
   assert.equal(preview.employee.employee_code, 'QPMSTN3082');
   assert.equal(preview.read_only, undefined);
-  assert.equal(preview.capabilities.command_center_view, true);
+  assert.equal(preview.capabilities.command_center_view, false);
   assert.equal(preview.capabilities.missing_km_approve, true);
-  assert.equal(preview.effective_scope.scope_type, 'TN_STANDALONE_OVERRIDE');
-  assert.equal(preview.visible_employee_count, 1);
-  assert.deepEqual(preview.visible_employees.map((employee) => employee.employee_code), ['TN_ST']);
+  assert.equal(preview.effective_scope.scope_type, 'NONE');
+  assert.equal(preview.visible_employee_count, 0);
+  assert.deepEqual(preview.visible_employees, []);
 });
 
 test('configured Field Operations access overrides legacy profile scope without changing profile fields', () => {

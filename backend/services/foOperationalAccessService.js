@@ -18,6 +18,11 @@ const OPERATIONS_ROLES = new Set([
   'BUSINESSHEAD', 'KAM', 'KEYACCOUNTMANAGER', 'FO', 'FIELDOFFICER',
 ]);
 
+const OPERATIONS_COMMAND_CENTER_ACTOR_ROLES = new Set([
+  ...FULL_VISIBILITY_ROLES,
+  'GM', 'GENERALMANAGER', 'SOUTHHEAD', 'BRANCHHEAD', 'BH', 'BUSINESSHEAD',
+]);
+
 const OPERATIONAL_EMPLOYEE_ROLES = new Set([
   'GM', 'GENERALMANAGER', 'SOUTHHEAD', 'BRANCHHEAD', 'BH',
   'OPERATIONSMANAGER', 'OPERATIONMANAGER', 'OM', 'MANAGER',
@@ -350,7 +355,7 @@ export function foOperationalAllowedEmployeeCodes(actor, profiles = [], hierarch
 }
 
 export function resolveOperationsCommandCenterScope(actor = {}) {
-  if (!canAccessFoOperations(actor)) {
+  if (!canAccessOperationsCommandCenter(actor)) {
     return {
       scopeType: 'NONE',
       allowedStates: [],
@@ -479,6 +484,7 @@ export function resolveOperationsCommandCenterScope(actor = {}) {
 }
 
 function profileMatchesOperationsCommandCenterScope(profile = {}, scope = {}) {
+  if (scope.scopeType === 'NONE' || scope.scopeType === 'CONFIGURED_INVALID') return false;
   if (scope.configured && (!scope.allowedStates?.length || !scope.allowedBusinessGroups?.length)) return false;
   if (!activeProfile(profile) || !isOperationalEmployeeProfile(profile)) return false;
   if (scope.scopeType === 'GLOBAL') return true;
@@ -624,7 +630,7 @@ export function buildFieldOperationsAccessPreview(actor, profiles = [], hierarch
       web_access_enabled: actor?.web_access_enabled !== false,
     },
     capabilities: {
-      command_center_view: canFoUser(actor, 'MAP_VIEW'),
+      command_center_view: canAccessOperationsCommandCenter(actor),
       employee_details_view: canFoUser(actor, 'VISITS_VIEW'),
       visit_history_view: canFoUser(actor, 'VISITS_VIEW'),
       km_view: canFoUser(actor, 'KM_VIEW'),
@@ -664,6 +670,13 @@ export function canFoUser(actor, featureKey) {
   if (featureKey === 'NEW_BUSINESS') return LEAD_ROLES.has(role);
   if (featureKey === 'TRAINING') return ['ADMIN', 'QPMSADMIN', 'DEVELOPER', 'MD', 'COO', 'EXECUTIVEASSISTANT', 'GM', 'BUSINESSHEAD', 'BRANCHHEAD', 'OPERATIONSMANAGER', 'KAM', 'FO'].includes(role);
   return false;
+}
+
+export function canAccessOperationsCommandCenter(actor) {
+  if (hasCooWebVisibility(actor?.role) && actor?.web_access_enabled === false) return false;
+  if (!activeProfile(actor)) return false;
+  const role = normalizeFoOperationalRole(actor?.role);
+  return OPERATIONS_COMMAND_CENTER_ACTOR_ROLES.has(role) || hasCooWebVisibility(actor?.role);
 }
 
 function cellFor(roleRow, feature) {

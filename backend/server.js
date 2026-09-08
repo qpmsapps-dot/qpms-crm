@@ -85,6 +85,7 @@ import {
 import {
   buildFieldOperationsAccessPreview,
   buildFoAccessMatrix,
+  canAccessOperationsCommandCenter,
   foEmployeeKey,
   isProfileInOperationsCommandCenterScope,
   operationsCommandCenterAllowedEmployeeCodes,
@@ -1658,6 +1659,17 @@ async function requireSupabaseJwt(request, response, next) {
         : {}),
     });
   }
+}
+
+function requireFoOperationsCommandCenter(request, response, next) {
+  if (!canAccessOperationsCommandCenter(request.profile || {})) {
+    response.status(403).json({
+      ok: false,
+      message: 'Your role cannot access the Operations Command Center.',
+    });
+    return;
+  }
+  next();
 }
 
 async function requireSupabaseJwtAllowMissingProfile(request, response, next) {
@@ -10008,7 +10020,7 @@ app.post(
   },
 );
 
-app.get('/api/fo/operations/summary', requireSupabaseJwtOrDemoApiRead, async (request, response) => {
+app.get('/api/fo/operations/summary', requireSupabaseJwtOrDemoApiRead, requireFoOperationsCommandCenter, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     const actorConfig = await loadFieldOperationsConfiguredAccess(client, [request.profile?.id]);
@@ -10034,7 +10046,7 @@ app.get('/api/fo/operations/summary', requireSupabaseJwtOrDemoApiRead, async (re
   }
 });
 
-app.get('/api/fo/operations/employee-range', requireSupabaseJwt, async (request, response) => {
+app.get('/api/fo/operations/employee-range', requireSupabaseJwt, requireFoOperationsCommandCenter, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     const actorConfig = await loadFieldOperationsConfiguredAccess(client, [request.profile?.id]);
@@ -10124,7 +10136,7 @@ app.post(
   },
 );
 
-app.get('/api/fo/reports/consolidated-travel-claims/pdf', requireSupabaseJwt, async (request, response) => {
+app.get('/api/fo/reports/consolidated-travel-claims/pdf', requireSupabaseJwt, requireFoOperationsCommandCenter, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     const actorConfig = await loadFieldOperationsConfiguredAccess(client, [request.profile?.id]);
@@ -10228,7 +10240,7 @@ function demoMaskedFoRows({ profiles = [], attendances = [], siteVisits = [], li
   };
 }
 
-app.get('/api/fo/operations/dashboard', requireSupabaseJwtOrDemoApiRead, async (request, response) => {
+app.get('/api/fo/operations/dashboard', requireSupabaseJwtOrDemoApiRead, requireFoOperationsCommandCenter, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     const filters = normalizeOperationsSummaryFilters(request.query || {}, currentIndiaDateInput());
@@ -10318,7 +10330,7 @@ app.get('/api/fo/operations/dashboard', requireSupabaseJwtOrDemoApiRead, async (
   }
 });
 
-app.get('/api/fo/operations/employee-drilldown', requireSupabaseJwt, async (request, response) => {
+app.get('/api/fo/operations/employee-drilldown', requireSupabaseJwt, requireFoOperationsCommandCenter, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     await assertServiceRoleAuthAdminAccess(client);
@@ -10386,7 +10398,7 @@ app.get('/api/fo/operations/employee-drilldown', requireSupabaseJwt, async (requ
   }
 });
 
-app.get('/api/fo/operations/demo-date-range', requireSupabaseJwtOrDemoApiRead, async (request, response) => {
+app.get('/api/fo/operations/demo-date-range', requireSupabaseJwtOrDemoApiRead, requireFoOperationsCommandCenter, async (request, response) => {
   try {
     if (!isDemoUser(request.profile)) {
       response.status(403).json({ ok: false, message: 'Demo date range is available only for demo users.' });

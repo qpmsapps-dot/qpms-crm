@@ -90,12 +90,30 @@ export function hasAnyRole(user, allowedRoles = []) {
 
 export function usesOperationsSidebar(user) {
   return new Set([
-    'Operations Manager',
     'Business Head',
     'Branch Head',
     'South Head',
-    'KAM',
   ]).has(normalizeCanonicalRole(user?.rawRole || user?.role));
+}
+
+export function canAccessFoCommandCenter(user) {
+  if (!user) return false;
+  return new Set([
+    'Admin',
+    'QPMS Admin',
+    'Developer',
+    'DEMO_ADMIN',
+    'DEMO_VIEWER',
+    'Management',
+    'MD',
+    'COO',
+    EXECUTIVE_ASSISTANT_ROLE,
+    'GM',
+    'Top Management',
+    'Business Head',
+    'South Head',
+    'Branch Head',
+  ]).has(normalizeCanonicalRole(user.rawRole || user.role));
 }
 
 export function routeAllowedRoles(pathname = '') {
@@ -211,6 +229,7 @@ export function canAccessRoute(user, pathname) {
   if (pathname.startsWith('/settings/user-management')) return canAccessUserManagementAdmin(user);
   if (pathname.startsWith('/store-master')) return canAccessStoreMaster(user);
   if (pathname.startsWith('/fault-tracker')) return canAccessFaultTracker(user);
+  if (pathname.startsWith('/fo-activities')) return canAccessFoCommandCenter(user);
   if (pathname.startsWith('/crm') && ['Business Head', 'Branch Head'].includes(normalizeCanonicalRole(user?.rawRole || user?.role))) return true;
   return hasAnyRole(user, routeAllowedRoles(pathname));
 }

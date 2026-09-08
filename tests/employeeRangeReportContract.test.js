@@ -10,7 +10,7 @@ const reportUtility = await readFile(
 );
 
 test('employee range endpoints require JWT authentication', () => {
-  assert.match(server, /app\.get\('\/api\/fo\/operations\/employee-range',\s*requireSupabaseJwt/);
+  assert.match(server, /app\.get\('\/api\/fo\/operations\/employee-range',\s*requireSupabaseJwt,\s*requireFoOperationsCommandCenter/);
   assert.match(server, /app\.post\('\/api\/fo\/km\/recalculate-employee-range',\s*requireSupabaseJwt/);
 });
 

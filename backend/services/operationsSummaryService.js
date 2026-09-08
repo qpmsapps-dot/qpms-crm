@@ -1,5 +1,5 @@
 import {
-  canAccessFoOperations,
+  canAccessOperationsCommandCenter,
   operationsCommandCenterAllowedEmployeeCodes,
 } from './foOperationalAccessService.js';
 
@@ -162,7 +162,7 @@ export function normalizeOperationsSummaryFilters(query = {}, today) {
 }
 
 export function canAccessOperationsSummary(profile) {
-  return canAccessFoOperations(profile);
+  return canAccessOperationsCommandCenter(profile);
 }
 
 export function operationsSummaryAllowedEmployeeCodes(actor, profiles = [], hierarchyRows = []) {

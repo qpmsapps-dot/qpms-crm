@@ -230,7 +230,7 @@ test('mixed date state business status summary uses canonical attendance payable
 test('inactive and non-operations manager profiles cannot access totals', () => {
   assert.equal(canAccessOperationsSummary({ role: 'Operations Manager', is_active: false }), false);
   assert.equal(canAccessOperationsSummary({ role: 'Manager', department: 'Finance', is_active: true }), false);
-  assert.equal(canAccessOperationsSummary({ role: 'Manager', department: 'Operations', is_active: true }), true);
+  assert.equal(canAccessOperationsSummary({ role: 'Manager', department: 'Operations', is_active: true }), false);
 });
 
 test('empty result returns zero totals', () => {

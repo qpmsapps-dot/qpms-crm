@@ -515,7 +515,7 @@ test('PDF route requires Supabase authentication and Excel export remains in the
     readFile(new URL('../server.js', import.meta.url), 'utf8'),
     readFile(new URL('../../src/pages/FOActivities.jsx', import.meta.url), 'utf8'),
   ]);
-  assert.match(serverSource, /app\.get\('\/api\/fo\/reports\/consolidated-travel-claims\/pdf', requireSupabaseJwt,/);
+  assert.match(serverSource, /app\.get\('\/api\/fo\/reports\/consolidated-travel-claims\/pdf', requireSupabaseJwt, requireFoOperationsCommandCenter,/);
   assert.match(pageSource, /Export Excel/);
   assert.match(pageSource, /Export Travel Claim PDF/);
 });
