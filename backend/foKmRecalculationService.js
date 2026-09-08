@@ -4333,6 +4333,16 @@ export function classifyMissingKmApprovalRetry(review = {}, payload = {}) {
     : 'financial_adjustment';
 }
 
+export function assertMissingKmReviewerNotTarget(review = {}, actor = {}) {
+  const reviewerEmployeeCode = String(actor.employee_code || actor.username || '').trim().toUpperCase();
+  const targetEmployeeCode = String(review.employee_code || '').trim().toUpperCase();
+  if (reviewerEmployeeCode && targetEmployeeCode && reviewerEmployeeCode === targetEmployeeCode) {
+    const error = new Error('You cannot approve your own Missing KM review.');
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
 export async function decideMissingKmReview(client, reviewId, action, payload = {}, actor = {}) {
   const normalizedAction = String(action || '').trim().toLowerCase();
   if (!['approve', 'reject', 'clarification'].includes(normalizedAction)) {
@@ -4355,6 +4365,7 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
   let approvedKm = 0;
   let status = 'rejected';
   if (normalizedAction === 'approve') {
+    assertMissingKmReviewerNotTarget(review, actor);
     const retryClassification = classifyMissingKmApprovalRetry(review, payload);
     if (retryClassification !== 'new_decision') {
       if (retryClassification === 'financial_adjustment') {
