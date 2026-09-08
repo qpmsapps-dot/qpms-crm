@@ -208,6 +208,8 @@ const foKmRecalculateAllLockStartedAt = new Map();
 const FO_STALE_CLEANUP_INTERVAL_MS = Number(process.env.FO_STALE_CLEANUP_INTERVAL_MS || 30 * 60 * 1000);
 const END_DAY_KM_AUTO_RECALC_INTERVAL_MS = 5 * 60 * 1000;
 const END_DAY_KM_AUTO_RECALC_LIMIT = 50;
+const FO_DRILLDOWN_PAGE_SIZE = 1000;
+const FO_DRILLDOWN_MAX_SITE_VISIT_IDS = 100;
 
 function currentIndiaDateInput(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -2127,6 +2129,305 @@ function requireRoles(roles) {
     }
     next();
   };
+}
+
+function foDrilldownText(value) {
+  return String(value ?? '').trim();
+}
+
+function foDrilldownKey(value) {
+  return foDrilldownText(value).toUpperCase();
+}
+
+function isFoDrilldownDate(value) {
+  const text = foDrilldownText(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
+  const [year, month, day] = text.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day;
+}
+
+function foDrilldownDateBounds(query = {}) {
+  const dateFrom = foDrilldownText(query.date_from || query.from_date);
+  const dateTo = foDrilldownText(query.date_to || query.to_date);
+  if (!isFoDrilldownDate(dateFrom) || !isFoDrilldownDate(dateTo)) {
+    throw userManagementHttpError(400, 'date_from and date_to must use YYYY-MM-DD.');
+  }
+  if (dateFrom > dateTo) throw userManagementHttpError(400, 'date_from cannot be after date_to.');
+  return {
+    date_from: dateFrom,
+    date_to: dateTo,
+    from_iso: new Date(`${dateFrom}T00:00:00+05:30`).toISOString(),
+    to_iso: new Date(`${dateTo}T23:59:59.999+05:30`).toISOString(),
+    same_day: dateFrom === dateTo,
+  };
+}
+
+function foDrilldownCsvValues(value, limit = FO_DRILLDOWN_MAX_SITE_VISIT_IDS) {
+  return [...new Set(String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean))]
+    .slice(0, limit);
+}
+
+function isFoDrilldownMissingColumnError(error, columnName) {
+  const message = String(error?.message || '').toLowerCase();
+  return error?.code === '42703' ||
+    error?.code === 'PGRST204' ||
+    message.includes('column') ||
+    message.includes(String(columnName || '').toLowerCase());
+}
+
+async function fetchFoDrilldownPages(queryFactory, pageSize = FO_DRILLDOWN_PAGE_SIZE) {
+  const rows = [];
+  const seen = new Set();
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await queryFactory().range(from, from + pageSize - 1);
+    if (error) throw error;
+    const page = data || [];
+    for (const row of page) {
+      const rowKey = foDrilldownText(row?.id) || JSON.stringify(row);
+      if (seen.has(rowKey)) continue;
+      seen.add(rowKey);
+      rows.push(row);
+    }
+    if (page.length < pageSize) break;
+  }
+  return rows;
+}
+
+async function fetchFoDrilldownRowsByColumn(client, {
+  table,
+  idColumn,
+  idValue,
+  timeColumn,
+  fromIso,
+  toIso,
+  ascending = true,
+  limit = 10000,
+}) {
+  try {
+    return await fetchFoDrilldownPages(() => client
+      .from(table)
+      .select('*')
+      .eq(idColumn, idValue)
+      .gte(timeColumn, fromIso)
+      .lte(timeColumn, toIso)
+      .order(timeColumn, { ascending })
+      .order('id', { ascending }), Math.min(limit, FO_DRILLDOWN_PAGE_SIZE));
+  } catch (error) {
+    if (isFoDrilldownMissingColumnError(error, idColumn) || isFoDrilldownMissingColumnError(error, timeColumn)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+function dedupeFoDrilldownRows(rows = []) {
+  const byKey = new Map();
+  rows.forEach((row, index) => {
+    const rowKey = foDrilldownText(row?.id || row?.local_id || row?.file_url) || String(index);
+    byKey.set(rowKey, row);
+  });
+  return [...byKey.values()];
+}
+
+async function fetchFoDrilldownLocationLogs(client, { employeeCode, attendanceId, period }) {
+  const fetchedRows = [];
+  let source = 'employee_code_date';
+  if (attendanceId && period.same_day) {
+    try {
+      const attendanceRows = await fetchFoDrilldownRowsByColumn(client, {
+        table: 'fo_location_logs',
+        idColumn: 'attendance_id',
+        idValue: attendanceId,
+        timeColumn: 'captured_at',
+        fromIso: period.from_iso,
+        toIso: period.to_iso,
+        ascending: true,
+        limit: 10000,
+      });
+      fetchedRows.push(...attendanceRows);
+      if (attendanceRows.length) source = 'attendance_id';
+    } catch (error) {
+      if (!isFoDrilldownMissingColumnError(error, 'attendance_id')) throw error;
+    }
+  }
+  if (!fetchedRows.length && employeeCode) {
+    for (const idColumn of ['fo_user_id', 'employee_code', 'username']) {
+      for (const timeColumn of ['captured_at', 'logged_at', 'created_at']) {
+        const rows = await fetchFoDrilldownRowsByColumn(client, {
+          table: 'fo_location_logs',
+          idColumn,
+          idValue: employeeCode,
+          timeColumn,
+          fromIso: period.from_iso,
+          toIso: period.to_iso,
+          ascending: true,
+          limit: 10000,
+        });
+        fetchedRows.push(...rows);
+        if (fetchedRows.length) {
+          source = `${idColumn}_${timeColumn}`;
+          break;
+        }
+      }
+      if (fetchedRows.length) break;
+    }
+  }
+  return {
+    rows: dedupeFoDrilldownRows(fetchedRows).sort((a, b) =>
+      new Date(a.captured_at || a.logged_at || a.created_at || 0).getTime() -
+      new Date(b.captured_at || b.logged_at || b.created_at || 0).getTime()),
+    source,
+  };
+}
+
+async function fetchFoDrilldownActivityRows(client, {
+  table,
+  employeeCode,
+  period,
+  siteVisitIds = [],
+  timeColumn,
+}) {
+  const rows = [];
+  for (const idColumn of ['fo_user_id', 'employee_code']) {
+    rows.push(...(await fetchFoDrilldownRowsByColumn(client, {
+      table,
+      idColumn,
+      idValue: employeeCode,
+      timeColumn,
+      fromIso: period.from_iso,
+      toIso: period.to_iso,
+      ascending: false,
+      limit: 1000,
+    })));
+  }
+  for (const idColumn of ['fo_user_id', 'employee_code']) {
+    for (const siteVisitId of siteVisitIds) {
+      try {
+        rows.push(...(await fetchFoDrilldownPages(() => client
+          .from(table)
+          .select('*')
+          .eq(idColumn, employeeCode)
+          .eq('site_visit_id', siteVisitId)
+          .order(timeColumn, { ascending: false })
+          .order('id', { ascending: true }), FO_DRILLDOWN_PAGE_SIZE)));
+      } catch (error) {
+        if (isFoDrilldownMissingColumnError(error, idColumn) || isFoDrilldownMissingColumnError(error, 'site_visit_id')) continue;
+        throw error;
+      }
+    }
+  }
+  return dedupeFoDrilldownRows(rows).sort((a, b) =>
+    new Date(b[timeColumn] || b.created_at || 0).getTime() -
+    new Date(a[timeColumn] || a.created_at || 0).getTime());
+}
+
+async function attachAuthorizedFoUploadUrl(client, upload = {}) {
+  const fileUrl = foDrilldownText(upload.file_url);
+  if (!fileUrl || /^https?:\/\//i.test(fileUrl)) {
+    return { ...upload, authorized_signed_url: fileUrl || null };
+  }
+  const bucket = foDrilldownText(upload.storage_bucket) || 'fo-activity-uploads';
+  const path = fileUrl.replace(new RegExp(`^${bucket}/`), '').replace(/^\/+/, '');
+  const { data, error } = await client.storage.from(bucket).createSignedUrl(path, 60 * 60);
+  if (error) {
+    console.warn('[myQPMS FO Drilldown] Authorized upload URL could not be created.', {
+      upload_id: upload.id || null,
+      bucket,
+      message: error.message,
+    });
+  }
+  return { ...upload, authorized_signed_url: error ? null : data?.signedUrl || null };
+}
+
+async function resolveFoDrilldownTarget(client, actorProfile, employeeIdentifier) {
+  const employeeKey = foDrilldownKey(employeeIdentifier);
+  if (!employeeKey) throw userManagementHttpError(400, 'employee is required.');
+  const [profilesRes, hierarchyRes] = await Promise.all([
+    client
+      .from('profiles')
+      .select('id,full_name,display_name,employee_code,username,role,department,designation,business,state,status,is_active,web_access_enabled,metadata')
+      .eq('is_active', true)
+      .limit(5000),
+    client
+      .from('employee_hierarchy')
+      .select('*')
+      .eq('is_active', true)
+      .limit(5000),
+  ]);
+  if (profilesRes.error) throw profilesRes.error;
+  if (hierarchyRes.error) throw hierarchyRes.error;
+  const profiles = profilesRes.data || [];
+  const target = profiles.find((profile) => [
+    profile.id,
+    profile.employee_code,
+    profile.username,
+  ].some((value) => foDrilldownKey(value) === employeeKey));
+  if (!target) throw userManagementHttpError(404, 'Employee not found.');
+  const actorConfig = await loadFieldOperationsConfiguredAccess(client, [actorProfile?.id]);
+  const actor = attachFoConfiguredAccess(actorProfile || {}, actorConfig);
+  if (!isProfileInOperationsCommandCenterScope(actor, target, profiles, hierarchyRes.data || [])) {
+    throw userManagementHttpError(403, 'You cannot access this employee drill-down outside your Field Operations scope.');
+  }
+  return { actor, target, profiles, hierarchyRows: hierarchyRes.data || [] };
+}
+
+function foDrilldownRowBelongsToTarget(row = {}, target = {}) {
+  const targetKeys = new Set([
+    target.id,
+    target.employee_code,
+    target.username,
+  ].map(foDrilldownKey).filter(Boolean));
+  return [row.fo_user_id, row.employee_code, row.username, row.profile_id]
+    .map(foDrilldownKey)
+    .filter(Boolean)
+    .some((value) => targetKeys.has(value));
+}
+
+async function validateFoDrilldownContext(client, target, attendanceId, siteVisitIds = [], period = {}) {
+  if (attendanceId) {
+    const { data: attendance, error } = await client
+      .from('fo_attendance')
+      .select('*')
+      .eq('id', attendanceId)
+      .maybeSingle();
+    if (error) throw error;
+    const attendanceDate = foDrilldownText(attendance?.attendance_date).slice(0, 10);
+    if (
+      !attendance ||
+      !foDrilldownRowBelongsToTarget(attendance, target) ||
+      attendanceDate < period.date_from ||
+      attendanceDate > period.date_to
+    ) {
+      throw userManagementHttpError(403, 'Attendance is outside the authorized employee scope.');
+    }
+  }
+
+  if (siteVisitIds.length) {
+    const { data: visits, error } = await client
+      .from('fo_site_visits')
+      .select('*')
+      .in('id', siteVisitIds);
+    if (error) throw error;
+    const visitsById = new Map((visits || []).map((visit) => [foDrilldownText(visit.id), visit]));
+    const invalidVisit = siteVisitIds.find((id) => {
+      const visit = visitsById.get(id);
+      const visitTime = new Date(visit?.check_in_time || visit?.created_at || 0).getTime();
+      return !visit ||
+        !foDrilldownRowBelongsToTarget(visit, target) ||
+        !Number.isFinite(visitTime) ||
+        visitTime < new Date(period.from_iso).getTime() ||
+        visitTime > new Date(period.to_iso).getTime();
+    });
+    if (invalidVisit) {
+      throw userManagementHttpError(403, 'Site visit is outside the authorized employee scope.');
+    }
+  }
 }
 
 function normalizeMobileLeadRole(role) {
@@ -9826,9 +10127,11 @@ app.post(
 app.get('/api/fo/reports/consolidated-travel-claims/pdf', requireSupabaseJwt, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
+    const actorConfig = await loadFieldOperationsConfiguredAccess(client, [request.profile?.id]);
+    const actor = attachFoConfiguredAccess(request.profile || {}, actorConfig);
     const report = await buildConsolidatedTravelClaimPdf(
       client,
-      request.profile,
+      actor,
       request.query || {},
       currentIndiaDateInput(),
     );
@@ -10010,6 +10313,74 @@ app.get('/api/fo/operations/dashboard', requireSupabaseJwtOrDemoApiRead, async (
       ok: false,
       message: status >= 500
         ? 'Operations dashboard is temporarily unavailable. Please retry.'
+        : error.message,
+    });
+  }
+});
+
+app.get('/api/fo/operations/employee-drilldown', requireSupabaseJwt, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    await assertServiceRoleAuthAdminAccess(client);
+    const employeeIdentifier = foDrilldownText(
+      request.query?.employee || request.query?.employee_code || request.query?.fo_user_id,
+    );
+    const period = foDrilldownDateBounds(request.query || {});
+    const attendanceId = foDrilldownText(request.query?.attendance_id);
+    const siteVisitIds = foDrilldownCsvValues(request.query?.site_visit_ids);
+    const { actor, target } = await resolveFoDrilldownTarget(
+      client,
+      request.profile,
+      employeeIdentifier,
+    );
+    await validateFoDrilldownContext(client, target, attendanceId, siteVisitIds, period);
+    const employeeCode = foDrilldownText(target.employee_code || target.username);
+    const [locationResult, activitySubmissions, activityUploadRows] = await Promise.all([
+      fetchFoDrilldownLocationLogs(client, { employeeCode, attendanceId, period }),
+      fetchFoDrilldownActivityRows(client, {
+        table: 'fo_activity_submissions',
+        employeeCode,
+        period,
+        siteVisitIds,
+        timeColumn: 'submitted_at',
+      }),
+      fetchFoDrilldownActivityRows(client, {
+        table: 'fo_activity_uploads',
+        employeeCode,
+        period,
+        siteVisitIds,
+        timeColumn: 'uploaded_at',
+      }),
+    ]);
+    const activityUploads = await Promise.all(
+      activityUploadRows.map((upload) => attachAuthorizedFoUploadUrl(client, upload)),
+    );
+    response.json({
+      ok: true,
+      employee: {
+        id: target.id || null,
+        employee_code: target.employee_code || target.username || null,
+        full_name: target.full_name || target.display_name || null,
+        role: target.role || null,
+        state: target.state || target.metadata?.state || null,
+        business: target.business || target.metadata?.business || null,
+      },
+      period,
+      access_scope: resolveOperationsCommandCenterScope(actor),
+      location_logs: locationResult.rows,
+      location_log_source: locationResult.source,
+      activity_submissions: activitySubmissions,
+      activity_uploads: activityUploads,
+    });
+  } catch (error) {
+    const status = Number(error?.statusCode || 500);
+    if (status >= 500) {
+      console.error('[myQPMS FO Drilldown] request failed', sanitizeSupabaseDiagnosticError(error));
+    }
+    response.status(status).json({
+      ok: false,
+      message: status >= 500
+        ? 'Employee drill-down data is temporarily unavailable. Please retry.'
         : error.message,
     });
   }

@@ -5482,22 +5482,11 @@ function activityUploadRole(type, kind, categoryKey = "") {
 }
 
 async function signedActivityUploadUrl(upload) {
+  if (upload?.authorized_signed_url) return upload.authorized_signed_url;
   const fileUrl = upload?.file_url;
   if (!fileUrl) return null;
   if (/^https?:\/\//i.test(fileUrl)) return fileUrl;
-  if (!supabase?.storage) return null;
-  const bucket = upload.storage_bucket || "fo-activity-uploads";
-  const path = fileUrl.replace(new RegExp(`^${bucket}/`), "").replace(/^\/+/, "");
-  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 60);
-  if (error) {
-    console.warn("[myQPMS FO] Activity upload signed URL failed.", {
-      uploadId: upload.id,
-      bucket,
-      message: error.message,
-    });
-    return null;
-  }
-  return data?.signedUrl || null;
+  return null;
 }
 
 function uploadMatchesSelectedContext(upload, { attendanceId, siteVisitIds }) {
@@ -5508,6 +5497,30 @@ function uploadMatchesSelectedContext(upload, { attendanceId, siteVisitIds }) {
     return true;
   }
   return !upload.attendance_id && !upload.site_visit_id;
+}
+
+async function loadFoDrilldown({
+  employee,
+  fromDate,
+  toDate,
+  attendanceId = "",
+  siteVisitIds = [],
+}) {
+  const query = new URLSearchParams({
+    employee,
+    date_from: fromDate,
+    date_to: toDate,
+  });
+  if (attendanceId) query.set("attendance_id", attendanceId);
+  if (siteVisitIds.length) query.set("site_visit_ids", siteVisitIds.join(","));
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/operations/employee-drilldown?${query}`);
+  const payload = await response.json();
+  if (!response.ok || payload.ok === false) {
+    const error = new Error(payload.message || "Employee drill-down request failed.");
+    error.httpStatus = response.status;
+    throw error;
+  }
+  return { ...payload, __httpStatus: response.status };
 }
 
 function isMissingColumnError(error, columnName) {
@@ -11645,45 +11658,34 @@ export default function FOActivities() {
         setSelectedRouteLogs([]);
         return;
       }
-      const fromIso = formatDateForDb(selectedRange.from);
-      const toIso = formatDateForDb(selectedRange.to);
       const operationalFoId = operationalFoIdForOfficer(routeOfficer);
       const attendanceId =
         selectedRange.fromDate === selectedRange.toDate
           ? routeOfficer.attendance?.id || null
           : null;
-      const fetchedRows = [];
-      const timeColumns = ["captured_at", "logged_at", "created_at"];
-      let source = "employee_code_date";
-
       try {
-        if (attendanceId) {
-          try {
-            fetchedRows.push(...(await fetchLocationLogsByAttendanceId(attendanceId, { fromIso, toIso })));
-          } catch (attendanceError) {
-            console.warn("[myQPMS FO] Attendance GPS lookup failed; using employee/date fallback.", attendanceError);
-          }
-          if (fetchedRows.length) source = "attendance_id";
-        }
-        if (!fetchedRows.length && operationalFoId) {
-          for (const idColumn of ["fo_user_id", "employee_code", "username"]) {
-            for (const timeColumn of timeColumns) {
-              const rows = await fetchLocationLogsByColumn({
-                idColumn,
-                idValue: operationalFoId,
-                timeColumn,
-                fromIso,
-                toIso,
-              });
-              fetchedRows.push(...rows);
-              if (fetchedRows.length) {
-                source = `${idColumn}_${timeColumn}`;
-                break;
-              }
-            }
-            if (fetchedRows.length) break;
-          }
-        }
+        const drilldown = await loadFoDrilldown({
+          employee: operationalFoId,
+          fromDate: selectedRange.fromDate,
+          toDate: selectedRange.toDate,
+          attendanceId: attendanceId || "",
+          siteVisitIds: (routeOfficer.visits || []).map((visit) => String(visit.id || "")).filter(Boolean),
+        });
+        const fetchedRows = drilldown.location_logs || [];
+        const source = drilldown.location_log_source || "backend_authorized";
+        if (cancelled) return;
+        const routeRowsById = new Map();
+        fetchedRows.forEach((row, index) => {
+          routeRowsById.set(
+            row.id ||
+              `${row.captured_at || row.logged_at || row.created_at || index}-${row.latitude}-${row.longitude}`,
+            row,
+          );
+        });
+        const selectedLogs = Array.from(routeRowsById.values()).sort(
+          (a, b) => routePointTime(a) - routePointTime(b),
+        );
+        setSelectedRouteLogs(selectedLogs);
       } catch (error) {
         if (!cancelled) {
           console.warn("[myQPMS FO] Selected FO route logs fetch failed.", error);
@@ -11691,34 +11693,12 @@ export default function FOActivities() {
         }
         return;
       }
-      if (cancelled) return;
-      const routeRowsById = new Map();
-      fetchedRows.forEach((row, index) => {
-        routeRowsById.set(
-          row.id ||
-            `${row.captured_at || row.logged_at || row.created_at || index}-${row.latitude}-${row.longitude}`,
-          row,
-        );
-      });
-      const selectedLogs = Array.from(routeRowsById.values()).sort(
-        (a, b) => routePointTime(a) - routePointTime(b),
-      );
-      console.debug("FO_GPS_AUDIT_DIAGNOSTICS", {
-        "profile.id": routeOfficer.profile?.id || null,
-        employee_code: routeOfficer.profile?.employee_code || routeOfficer.employeeCode || null,
-        operationalFoId,
-        attendance_id: attendanceId,
-        gps_logs_count_result: selectedLogs.length,
-        source,
-        dateRange: `${selectedRange.fromDate} to ${selectedRange.toDate}`,
-      });
-      setSelectedRouteLogs(selectedLogs);
     }
     loadSelectedRouteLogs();
     return () => {
       cancelled = true;
     };
-  }, [hasDemoBackendReadSession, routeOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate, shouldLoadRouteLogs]);
+  }, [hasDemoBackendReadSession, routeOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate, shouldLoadRouteLogs, user]);
 
   useEffect(() => {
     let cancelled = false;
@@ -11734,8 +11714,6 @@ export default function FOActivities() {
         setSelectedActivityUploads([]);
         return;
       }
-      const fromIso = formatDateForDb(selectedRange.from);
-      const toIso = formatDateForDb(selectedRange.to);
       const attendanceId =
         selectedRange.fromDate === selectedRange.toDate && selectedOfficer.attendance?.id
           ? String(selectedOfficer.attendance.id)
@@ -11746,65 +11724,20 @@ export default function FOActivities() {
       const siteVisitIdList = Array.from(siteVisitIds);
 
       try {
-        const [
-          submissionsRes,
-          uploadsRes,
-          visitSubmissionsRes,
-          visitUploadsRes,
-        ] = await Promise.all([
-          supabase
-            .from("fo_activity_submissions")
-            .select("*")
-            .or(`fo_user_id.eq.${selectedFoId},employee_code.eq.${selectedFoId}`)
-            .gte("submitted_at", fromIso)
-            .lte("submitted_at", toIso)
-            .order("submitted_at", { ascending: false })
-            .limit(1000),
-          supabase
-            .from("fo_activity_uploads")
-            .select("*")
-            .or(`fo_user_id.eq.${selectedFoId},employee_code.eq.${selectedFoId}`)
-            .gte("uploaded_at", fromIso)
-            .lte("uploaded_at", toIso)
-            .order("uploaded_at", { ascending: false })
-            .limit(1000),
-          siteVisitIdList.length
-            ? supabase
-                .from("fo_activity_submissions")
-                .select("*")
-                .or(`fo_user_id.eq.${selectedFoId},employee_code.eq.${selectedFoId}`)
-                .in("site_visit_id", siteVisitIdList)
-                .order("submitted_at", { ascending: false })
-                .limit(1000)
-            : Promise.resolve({ data: [], error: null }),
-          siteVisitIdList.length
-            ? supabase
-                .from("fo_activity_uploads")
-                .select("*")
-                .or(`fo_user_id.eq.${selectedFoId},employee_code.eq.${selectedFoId}`)
-                .in("site_visit_id", siteVisitIdList)
-                .order("uploaded_at", { ascending: false })
-                .limit(1000)
-            : Promise.resolve({ data: [], error: null }),
-        ]);
-        if (submissionsRes.error) throw submissionsRes.error;
-        if (uploadsRes.error) throw uploadsRes.error;
-        if (visitSubmissionsRes.error) throw visitSubmissionsRes.error;
-        if (visitUploadsRes.error) throw visitUploadsRes.error;
+        const drilldown = await loadFoDrilldown({
+          employee: selectedFoId,
+          fromDate: selectedRange.fromDate,
+          toDate: selectedRange.toDate,
+          attendanceId: attendanceId || "",
+          siteVisitIds: siteVisitIdList,
+        });
         if (cancelled) return;
-
-        const submissionRows = [
-          ...(submissionsRes.data || []),
-          ...(visitSubmissionsRes.data || []),
-        ];
+        const submissionRows = drilldown.activity_submissions || [];
         const submissionsByUniqueId = new Map();
         submissionRows.forEach((row, index) => {
           submissionsByUniqueId.set(String(row.id || row.local_id || index), row);
         });
-        const uploadRows = [
-          ...(uploadsRes.data || []),
-          ...(visitUploadsRes.data || []),
-        ];
+        const uploadRows = drilldown.activity_uploads || [];
         const uploadsByUniqueId = new Map();
         uploadRows.forEach((row, index) => {
           uploadsByUniqueId.set(String(row.id || row.local_id || row.file_url || index), row);
@@ -11856,7 +11789,7 @@ export default function FOActivities() {
     return () => {
       cancelled = true;
     };
-  }, [hasDemoBackendReadSession, selectedActivityReloadToken, selectedOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate]);
+  }, [hasDemoBackendReadSession, selectedActivityReloadToken, selectedOfficer, selectedRange.from, selectedRange.fromDate, selectedRange.to, selectedRange.toDate, user]);
 
   async function loadSupportContext(officer) {
     if (!officer || !isSupabaseConfigured || !supabase) {
