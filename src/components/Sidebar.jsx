@@ -26,7 +26,7 @@ import {
   isManagement,
   isOperationsTeam,
 } from '../data/mockUsers.js';
-import { canAccessNavRoute } from '../utils/authRoles.js';
+import { canAccessNavRoute, usesOperationsSidebar } from '../utils/authRoles.js';
 import { isDemoUser } from '../utils/demoAccess.js';
 import Logo from './Logo.jsx';
 
@@ -190,10 +190,10 @@ export default function Sidebar({ isOpen, onClose }) {
     ? adminDemoNavGroups
     : executiveViewer
     ? executiveNavGroups
-    : isApprovalReviewer(user)
-      ? reviewNavGroups
-      : isExistingBusinessOperations(user)
+    : usesOperationsSidebar(user) || isExistingBusinessOperations(user)
         ? operationsNavGroups
+      : isApprovalReviewer(user)
+        ? reviewNavGroups
         : businessNavGroups;
   const canSeeFaultTracker = canAccessNavRoute(user, '/fault-tracker');
   const navGroups = canSeeFaultTracker && !baseNavGroups.some((group) => group.items.some((item) => item.to === '/fault-tracker'))

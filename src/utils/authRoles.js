@@ -88,6 +88,16 @@ export function hasAnyRole(user, allowedRoles = []) {
   return allowedRoles.some((role) => normalizeAppRole(role) === normalized || role === user.role);
 }
 
+export function usesOperationsSidebar(user) {
+  return new Set([
+    'Operations Manager',
+    'Business Head',
+    'Branch Head',
+    'South Head',
+    'KAM',
+  ]).has(normalizeCanonicalRole(user?.rawRole || user?.role));
+}
+
 export function routeAllowedRoles(pathname = '') {
   if (pathname.startsWith('/dashboard')) return [];
   if (pathname.startsWith('/store-master')) return ['StoreMasterAdmin'];
