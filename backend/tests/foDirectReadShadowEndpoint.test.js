@@ -185,7 +185,11 @@ describe('FO employee drill-down endpoint hardening', () => {
       active({ employee_code: 'KA_RR', role: 'FO', state: 'KA', business: 'Reliance Retail' }),
       active({ employee_code: 'KA_ST', role: 'FO', state: 'KA', business: 'Standalone' }),
     ];
-    assert.equal(isProfileInOperationsCommandCenterScope(actor, profiles[0], profiles, []), true);
-    assert.equal(isProfileInOperationsCommandCenterScope(actor, profiles[1], profiles, []), false);
+    const hierarchy = [
+      { employee_code: 'KA_RR', manager_employee_code: 'QPMSKL0318', is_active: true },
+      { employee_code: 'KA_ST', manager_employee_code: 'QPMSKL0318', is_active: true },
+    ];
+    assert.equal(isProfileInOperationsCommandCenterScope(actor, profiles[0], profiles, hierarchy), true);
+    assert.equal(isProfileInOperationsCommandCenterScope(actor, profiles[1], profiles, hierarchy), false);
   });
 });

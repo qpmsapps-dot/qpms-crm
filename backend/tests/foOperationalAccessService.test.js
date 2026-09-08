@@ -247,8 +247,12 @@ test('configured Field Operations access overrides legacy profile scope without 
       source: 'access_user_assignments',
     },
   });
-  const codes = operationsCommandCenterAllowedEmployeeCodes(actor, commandCenterProfiles, []);
-  const preview = buildFieldOperationsAccessPreview(actor, commandCenterProfiles, []);
+  const hierarchy = [
+    { employee_code: 'AP_RR', manager_employee_code: 'BH_TN_ST_LEGACY', is_active: true },
+    { employee_code: 'KA_RR', manager_employee_code: 'AP_RR', is_active: true },
+  ];
+  const codes = operationsCommandCenterAllowedEmployeeCodes(actor, commandCenterProfiles, hierarchy);
+  const preview = buildFieldOperationsAccessPreview(actor, commandCenterProfiles, hierarchy);
 
   assert.equal(preview.effective_scope.configured, true);
   assert.equal(preview.effective_scope.source, 'access_user_assignments');

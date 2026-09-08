@@ -262,6 +262,36 @@ function hierarchyCodesForActor(actorCode, hierarchyRows = []) {
   return codes;
 }
 
+function hierarchyDescendantCodesForActor(actorCode, hierarchyRows = [], maxDepth = 50) {
+  const normalizedActorCode = text(actorCode).toUpperCase();
+  if (!normalizedActorCode) return new Set();
+
+  const childrenByManager = new Map();
+  for (const row of hierarchyRows) {
+    if (row?.is_active === false) continue;
+    const employeeCode = employeeKey(row);
+    const managerCode = text(row?.manager_employee_code).toUpperCase();
+    if (!employeeCode || !managerCode || employeeCode === managerCode) continue;
+    if (!childrenByManager.has(managerCode)) childrenByManager.set(managerCode, new Set());
+    childrenByManager.get(managerCode).add(employeeCode);
+  }
+
+  const descendants = new Set();
+  let frontier = [normalizedActorCode];
+  for (let depth = 0; frontier.length && depth < maxDepth; depth += 1) {
+    const next = [];
+    for (const managerCode of frontier) {
+      for (const employeeCode of childrenByManager.get(managerCode) || []) {
+        if (employeeCode === normalizedActorCode || descendants.has(employeeCode)) continue;
+        descendants.add(employeeCode);
+        next.push(employeeCode);
+      }
+    }
+    frontier = next;
+  }
+  return descendants;
+}
+
 export function foOperationalAllowedEmployeeCodes(actor, profiles = [], hierarchyRows = []) {
   if (!canAccessFoOperations(actor)) return new Set();
   const actorRole = normalizeFoOperationalRole(actor.role);
@@ -463,9 +493,18 @@ export function operationsCommandCenterAllowedEmployeeCodes(actor, profiles = []
   const scope = resolveOperationsCommandCenterScope(actor);
   if (scope.legacyFallback) return foOperationalAllowedEmployeeCodes(actor, profiles, hierarchyRows);
   const allowed = new Set();
+  const actorCode = employeeKey(actor);
+  const configuredBranchHeadDescendants = scope.scopeType === 'CONFIGURED_BRANCH_HEAD'
+    ? hierarchyDescendantCodesForActor(actorCode, hierarchyRows)
+    : null;
   for (const profile of profiles) {
     if (!profileMatchesOperationsCommandCenterScope(profile, scope)) continue;
     const code = employeeKey(profile);
+    if (
+      configuredBranchHeadDescendants &&
+      code !== actorCode &&
+      !configuredBranchHeadDescendants.has(code)
+    ) continue;
     if (code) allowed.add(code);
   }
   return allowed;
