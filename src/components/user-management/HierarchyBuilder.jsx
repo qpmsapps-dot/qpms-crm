@@ -11,8 +11,20 @@ import {
   Sparkles,
   UserRound,
 } from 'lucide-react';
-import { createElement, useEffect, useMemo, useState } from 'react';
-import { getAdminUsersHierarchy } from '../../services/api.js';
+import { createElement, useCallback, useEffect, useMemo, useState } from 'react';
+import { getAdminUsersHierarchy, updateAdminUsersHierarchy } from '../../services/api.js';
+
+const OPERATIONAL_HIERARCHY_ROLES = new Set([
+  'SOUTHHEAD',
+  'BUSINESSHEAD',
+  'BRANCHHEAD',
+  'OPERATIONSMANAGER',
+  'OPERATIONMANAGER',
+  'KAM',
+  'KEYACCOUNTMANAGER',
+  'FO',
+  'FIELDOFFICER',
+]);
 
 function employeeInitials(name = '') {
   return name
@@ -25,6 +37,14 @@ function employeeInitials(name = '') {
 
 function normalizeCode(value = '') {
   return String(value || '').trim().toUpperCase();
+}
+
+function normalizeRole(value = '') {
+  return String(value || '').replace(/[^a-z0-9]/gi, '').toUpperCase();
+}
+
+function isOperationalHierarchyProfile(profile) {
+  return OPERATIONAL_HIERARCHY_ROLES.has(normalizeRole(profile?.role));
 }
 
 function displayNameForProfile(profile) {
@@ -254,34 +274,48 @@ export default function HierarchyBuilder({ onMessage }) {
   const [error, setError] = useState('');
   const [localManagerByCode, setLocalManagerByCode] = useState({});
   const [dropTarget, setDropTarget] = useState('');
+  const [search, setSearch] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const loadHierarchy = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const result = await getAdminUsersHierarchy();
+      setProfiles(Array.isArray(result.users) ? result.users : []);
+      setLocalManagerByCode({});
+    } catch (loadError) {
+      setProfiles([]);
+      setError(apiErrorMessage(loadError));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    async function loadHierarchy() {
-      setLoading(true);
-      setError('');
-      try {
-        const result = await getAdminUsersHierarchy();
-        if (cancelled) return;
-        setProfiles(Array.isArray(result.users) ? result.users : []);
-        setLocalManagerByCode({});
-      } catch (loadError) {
-        if (cancelled) return;
-        setProfiles([]);
-        setError(apiErrorMessage(loadError));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
     loadHierarchy();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [loadHierarchy]);
 
   const hierarchyView = useMemo(
     () => buildHierarchyView(profiles, localManagerByCode),
     [profiles, localManagerByCode],
+  );
+
+  const editableProfiles = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return profiles
+      .filter(isOperationalHierarchyProfile)
+      .filter((profile) => {
+        if (!query) return true;
+        return [displayNameForProfile(profile), profile.employee_code, profile.role, profile.state, profile.business]
+          .some((value) => String(value || '').toLowerCase().includes(query));
+      })
+      .sort(sortProfiles);
+  }, [profiles, search]);
+
+  const managerOptions = useMemo(
+    () => profiles.filter((profile) => normalizeCode(profile.employee_code)).sort(sortProfiles),
+    [profiles],
   );
 
   function handleDragStart(event, id) {
@@ -307,6 +341,30 @@ export default function HierarchyBuilder({ onMessage }) {
     onMessage('Hierarchy layout reset locally. No backend changes were made.');
   }
 
+  async function saveHierarchy() {
+    const assignments = Object.entries(localManagerByCode).map(([employeeCode, managerCode]) => ({
+      employee_code: normalizeCode(employeeCode),
+      manager_employee_code: normalizeCode(managerCode) || null,
+    }));
+    if (!assignments.length) {
+      onMessage('No hierarchy changes to save.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const result = await updateAdminUsersHierarchy(assignments);
+      await loadHierarchy();
+      onMessage(`Hierarchy saved: ${result.updated || 0} updated, ${result.inserted || 0} created.`);
+    } catch (saveError) {
+      const message = apiErrorMessage(saveError);
+      setError(message);
+      onMessage(message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-4 xl:flex-row xl:items-center xl:justify-between">
@@ -318,8 +376,8 @@ export default function HierarchyBuilder({ onMessage }) {
           <p className="mt-1 text-sm font-semibold text-slate-500">Drag and drop employees to define reporting structure.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => onMessage('Hierarchy save API is not connected yet.')} className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl bg-qpms-600 px-4 text-sm font-bold text-white shadow-sm">
-            <Save className="h-4 w-4" /> Save Hierarchy
+          <button type="button" disabled={saving || loading} onClick={saveHierarchy} className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl bg-qpms-600 px-4 text-sm font-bold text-white shadow-sm disabled:opacity-60">
+            <Save className="h-4 w-4" /> {saving ? 'Saving...' : 'Save Hierarchy'}
           </button>
           <button type="button" onClick={resetCanvas} className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700">
             <RotateCcw className="h-4 w-4" /> Reset
@@ -428,6 +486,58 @@ export default function HierarchyBuilder({ onMessage }) {
           </aside>
         </div>
       )}
+
+      {!loading && !error ? (
+        <div className="border-t border-slate-200 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h3 className="text-sm font-black text-slate-950">Immediate Manager Assignments</h3>
+              <p className="mt-1 text-xs font-semibold text-slate-500">Edit reporting relationships directly or continue using drag and drop above.</p>
+            </div>
+            <label className="block w-full sm:w-80">
+              <span className="text-[11px] font-bold uppercase text-slate-500">Search employees</span>
+              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name, code, role, state or business" className="mt-1 h-10 w-full rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100" />
+            </label>
+          </div>
+          <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+            <table className="min-w-[980px] w-full text-left text-xs">
+              <thead className="bg-slate-50 text-[11px] font-black uppercase text-slate-500">
+                <tr><th className="px-3 py-3">Employee</th><th className="px-3 py-3">Role</th><th className="px-3 py-3">State</th><th className="px-3 py-3">Business</th><th className="px-3 py-3">Reports To</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {editableProfiles.map((profile) => {
+                  const employeeCode = normalizeCode(profile.employee_code);
+                  const managerCode = hierarchyManagerCode(profile, localManagerByCode);
+                  return (
+                    <tr key={profile.id || employeeCode}>
+                      <td className="px-3 py-3"><p className="font-bold text-slate-900">{displayNameForProfile(profile)}</p><p className="mt-0.5 text-slate-500">{employeeCode}</p></td>
+                      <td className="px-3 py-3 font-semibold text-slate-700">{profile.role || '-'}</td>
+                      <td className="px-3 py-3 font-semibold text-slate-700">{profile.state || '-'}</td>
+                      <td className="px-3 py-3 font-semibold text-slate-700">{profile.business || '-'}</td>
+                      <td className="px-3 py-3">
+                        <select
+                          aria-label={`Reports To for ${employeeCode}`}
+                          value={managerCode}
+                          onChange={(event) => setLocalManagerByCode((current) => ({ ...current, [employeeCode]: normalizeCode(event.target.value) }))}
+                          className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 font-semibold text-slate-700 outline-none focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
+                        >
+                          <option value="">No manager</option>
+                          {managerOptions.filter((manager) => normalizeCode(manager.employee_code) !== employeeCode).map((manager) => (
+                            <option key={manager.id || manager.employee_code} value={normalizeCode(manager.employee_code)}>
+                              {displayNameForProfile(manager)} / {normalizeCode(manager.employee_code)} / {manager.role || 'Role not set'}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-[11px] text-slate-500">Manager code: {managerCode || 'Not assigned'}</p>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 px-4 py-3 text-xs font-semibold text-slate-500">
         <span className="inline-flex items-center gap-1"><GitBranch className="h-4 w-4 text-qpms-600" /> Real hierarchy data</span>

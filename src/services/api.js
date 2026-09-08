@@ -249,6 +249,14 @@ export function getAdminUsersHierarchy() {
   });
 }
 
+export function updateAdminUsersHierarchy(assignments) {
+  return adminApiRequest({
+    method: 'PATCH',
+    url: '/api/admin/users/hierarchy',
+    data: { assignments },
+  });
+}
+
 export function getAdminUser(profileId) {
   return adminApiRequest({
     method: 'GET',
