@@ -36,9 +36,27 @@ test('managerial Operations roles use the Operations sidebar without changing ot
 });
 
 test('Operations sidebar remains filtered by route authorization and keeps Fault Tracker append logic', () => {
-  assert.match(sidebarSource, /items\.filter\(\(item\) => \{[\s\S]*canAccessNavRoute\(user, routePath\)/);
+  assert.match(sidebarSource, /items\.filter\(\(item\) => \{[\s\S]*TEMPORARILY_HIDDEN_NAV_ROUTES\.has\(routePath\)[\s\S]*canAccessNavRoute\(user, routePath\)/);
   assert.match(sidebarSource, /const canSeeFaultTracker = canAccessNavRoute\(user, '\/fault-tracker'\)/);
   assert.match(sidebarSource, /canSeeFaultTracker && !baseNavGroups\.some/);
   assert.equal(canAccessNavRoute(user('Branch Head'), '/store-master'), false);
   assert.equal(canAccessNavRoute(user('Branch Head'), '/fo-activities'), true);
+});
+
+test('unfinished modules are centrally hidden from every sidebar preset', () => {
+  const hiddenRoutesSource = sidebarSource.match(/const TEMPORARILY_HIDDEN_NAV_ROUTES = new Set\(\[([\s\S]*?)\]\);/)?.[1] || '';
+
+  for (const route of [
+    '/existing-business',
+    '/tickets',
+    '/operations/hospital-feedback/dashboard',
+    '/assets',
+    '/reports',
+  ]) {
+    assert.match(hiddenRoutesSource, new RegExp(`['\"]${route.replaceAll('/', '\\/')}['\"]`));
+  }
+
+  for (const retainedRoute of ['/dashboard', '/fo-activities', '/fault-tracker', '/deep-cleaning', '/settings']) {
+    assert.doesNotMatch(hiddenRoutesSource, new RegExp(`['\"]${retainedRoute.replaceAll('/', '\\/')}['\"]`));
+  }
 });

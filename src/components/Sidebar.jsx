@@ -30,6 +30,14 @@ import { canAccessNavRoute, usesOperationsSidebar } from '../utils/authRoles.js'
 import { isDemoUser } from '../utils/demoAccess.js';
 import Logo from './Logo.jsx';
 
+const TEMPORARILY_HIDDEN_NAV_ROUTES = new Set([
+  '/existing-business',
+  '/tickets',
+  '/operations/hospital-feedback/dashboard',
+  '/assets',
+  '/reports',
+]);
+
 const executiveNavGroups = [
   {
     title: 'Command Center',
@@ -209,7 +217,7 @@ export default function Sidebar({ isOpen, onClose }) {
     ...group,
     items: group.items.filter((item) => {
       const routePath = item.to.split('?')[0];
-      return canAccessNavRoute(user, routePath);
+      return !TEMPORARILY_HIDDEN_NAV_ROUTES.has(routePath) && canAccessNavRoute(user, routePath);
     }),
   })).filter((group) => group.items.length);
 
