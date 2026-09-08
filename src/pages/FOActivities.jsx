@@ -5033,6 +5033,11 @@ function missingCheckoutEvidence(visit) {
     metadata.missing_km_review?.incremental_determination ||
     metadata.missing_checkout_incremental_determination ||
     null;
+  const reviewStatus = normalizeRoleKey(
+    metadata.missing_km_review?.status ||
+      metadata.checkout_review_status ||
+      visit?.review_status,
+  );
   const filteredGpsKm = numberOrNull(
     metadata.missing_km_review?.filtered_gps_km ?? metadata.filtered_missing_checkout_gps_km,
   );
@@ -5075,6 +5080,7 @@ function missingCheckoutEvidence(visit) {
     detectedKm,
     alreadyIncludedKm,
     incrementalDetermination,
+    reviewStatus,
     filteredGpsKm,
     googleRouteKm,
     ratePerKm,
@@ -7853,8 +7859,9 @@ function FieldOfficerDetailsView({
         "Approval saving requires backend support. This is currently a UI preview only.",
     });
   };
-  const manualMissingKmAdmin = String(generatedByRole || "")
-    .trim().toUpperCase().replace(/[^A-Z0-9]+/g, "") === "ADMIN";
+  const manualMissingKmAdmin = canApproveCheckoutMissingKm(
+    generatedUserRole(generatedByUser),
+  );
   const openManualMissingKmReview = (visit) => {
     setManualMissingKmReview(visit);
     setManualMissingKmValue("");
@@ -7868,7 +7875,10 @@ function FieldOfficerDetailsView({
   };
   const handleCheckoutReviewAction = (visit, action) => {
     const evidence = missingCheckoutEvidence(visit);
-    if (action === "Approve" && evidence.incrementalDetermination === "requires_review") {
+    const requiresManualReview =
+      evidence.reviewStatus === "clarification required" ||
+      !evidence.approvalDefensible;
+    if (action === "Approve" && requiresManualReview) {
       if (manualMissingKmAdmin) openManualMissingKmReview(visit);
       return;
     }
