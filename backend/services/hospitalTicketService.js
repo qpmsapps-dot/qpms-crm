@@ -1223,101 +1223,16 @@ async function requireCompletionEvidence(client, ticketId) {
 export async function performClientTicketCancellation(client, actor, ticket, payload = {}) {
   const reasonCode = cleanHospitalText(payload.reason_code || payload.reasonCode, 80);
   const reasonText = cleanHospitalText(payload.reason_text || payload.reasonText || cancellationReasonLabel(reasonCode), 500);
-  const now = new Date().toISOString();
-  const updated = await client
-    .from('hospital_tickets')
-    .update({
-      status_code: 'cancelled',
-      escalation_due_at: null,
-      acceptance_status: ticket.acceptance_status === 'awaiting'
-        ? 'not_required'
-        : ticket.acceptance_status || 'not_required',
-      version: ticket.version + 1,
-      updated_at: now,
-      metadata: {
-        ...(ticket.metadata || {}),
-        cancellation: {
-          by_user_id: actor.user.id,
-          by_role: actor.user.role_code,
-          reason_code: reasonCode,
-          reason_text: reasonText,
-          cancelled_at: now,
-        },
-      },
-    })
-    .eq('id', ticket.id)
-    .eq('version', ticket.version)
-    .select(TICKET_SELECT)
-    .maybeSingle();
-  if (updated.error) throw updated.error;
-  if (!updated.data) {
-    const error = new Error('Ticket version conflict.');
-    error.code = '40001';
-    throw error;
-  }
-
-  const event = await client.from('hospital_ticket_events').insert({
-    ticket_id: ticket.id,
-    event_type: 'ticket_cancelled_by_client',
-    from_status: ticket.status_code,
-    to_status: 'cancelled',
-    actor_user_id: actor.user.id,
-    actor_name: actor.user.display_name,
-    actor_role: actor.user.role_code,
-    remarks: reasonText,
-    event_data: {
-      reason_code: reasonCode,
-      cancelled_by_client: true,
-      is_client_visible: true,
-    },
+  const cancelled = await client.rpc('rpc_cancel_hospital_contact_ticket', {
+    p_contact_id: actor.user.id,
+    p_ticket_id: ticket.id,
+    p_expected_version: Number(ticket.version),
+    p_reason_code: reasonCode,
+    p_reason_text: reasonText,
   });
-  if (event.error) throw event.error;
+  if (cancelled.error) throw cancelled.error;
 
-  const incomingRecipients = await client
-    .from('hospital_ticket_notifications')
-    .select('recipient_user_id')
-    .eq('ticket_id', ticket.id)
-    .eq('notification_type', 'incoming_supervisor_ticket')
-    .eq('action_status', 'active');
-  if (incomingRecipients.error) throw incomingRecipients.error;
-  const recipientIds = [
-    ticket.current_assignee_user_id,
-    ...(incomingRecipients.data || []).map((row) => row.recipient_user_id),
-  ].filter(Boolean);
-  const uniqueRecipients = [...new Set(recipientIds)];
-  if (uniqueRecipients.length) {
-    const notificationRows = uniqueRecipients.map((recipientId) => ({
-      ticket_id: ticket.id,
-      recipient_user_id: recipientId,
-      notification_type: 'ticket_cancelled',
-      title: 'Ticket Cancelled by Client',
-      body: `${ticket.ticket_no} was cancelled by the client.`,
-      priority: ticket.priority,
-      current_owner_role: ticket.current_assignee_role,
-      escalation_level: ticket.current_escalation_level_no,
-      metadata: {
-        ticket_id: ticket.id,
-        ticket_no: ticket.ticket_no,
-        reason_code: reasonCode,
-        app_scope: 'myqpms_internal',
-        target_screen: 'ticket_detail',
-      },
-    }));
-    const notification = await client.from('hospital_ticket_notifications').insert(notificationRows);
-    if (notification.error) throw notification.error;
-  }
-  const notifications = await client.from('hospital_ticket_notifications')
-    .update({
-      action_status: 'superseded',
-      superseded_at: now,
-      superseded_reason: 'ticket_cancelled_by_client',
-    })
-    .eq('ticket_id', ticket.id)
-    .eq('notification_type', 'incoming_supervisor_ticket')
-    .eq('action_status', 'active');
-  if (notifications.error) throw notifications.error;
-
-  return getHospitalTicket(client, actor, ticket.id);
+  return cancelled.data;
 }
 
 function cancellationReasonLabel(code) {

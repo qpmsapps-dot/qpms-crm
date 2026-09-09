@@ -11,6 +11,7 @@ import '../../core/widgets/client_bottom_nav.dart';
 import '../../core/widgets/client_ui.dart';
 import '../../models/ticket.dart';
 import '../../models/ticket_update.dart';
+import '../../services/hospital_ticket_api.dart';
 import '../../state/ticket_controller.dart';
 import '../../state/auth_controller.dart';
 
@@ -25,6 +26,7 @@ class TicketDetailsScreen extends StatefulWidget {
 class _TicketDetailsScreenState extends State<TicketDetailsScreen>
     with WidgetsBindingObserver {
   Timer? _pollTimer;
+  bool _isCancelling = false;
 
   @override
   void initState() {
@@ -87,17 +89,14 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen>
         centerTitle: true,
         title: const _QpmsWordmark(),
         actions: [
-          if (canCancel)
+          if (canCancel && !_isCancelling)
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert_rounded),
               onSelected: (value) {
                 if (value == 'cancel') _showCancelTicket(ticket);
               },
               itemBuilder: (_) => const [
-                PopupMenuItem(
-                  value: 'cancel',
-                  child: Text('Cancel Ticket'),
-                ),
+                PopupMenuItem(value: 'cancel', child: Text('Cancel Ticket')),
               ],
             )
           else
@@ -116,7 +115,7 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen>
                 AppRoutes.feedback,
                 arguments: ticket.number,
               ),
-              onCancel: () => _showCancelTicket(ticket),
+              onCancel: _isCancelling ? null : () => _showCancelTicket(ticket),
             ),
           const ClientBottomNav(currentRoute: AppRoutes.tickets),
         ],
@@ -248,11 +247,13 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen>
   }
 
   Future<void> _showCancelTicket(Ticket ticket) async {
+    if (_isCancelling) return;
     final result = await showDialog<_CancellationChoice>(
       context: context,
       builder: (_) => const _CancelTicketDialog(),
     );
     if (result == null || !mounted) return;
+    setState(() => _isCancelling = true);
     try {
       await context.read<TicketController>().cancelTicket(
         ticketNumber: ticket.number,
@@ -260,9 +261,10 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen>
         reasonText: result.text,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Ticket cancelled.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Ticket cancelled.')));
+      await context.read<TicketController>().resolveTicket(ticket.number);
     } catch (error) {
       if (!mounted) return;
       debugPrint('[Client Ticket Cancel] failed: $error');
@@ -270,8 +272,10 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen>
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Unable to Cancel'),
-          content: const Text(
-            'Unable to cancel this ticket right now. Please try again.',
+          content: Text(
+            error is HospitalApiException
+                ? error.message
+                : 'Unable to cancel this ticket right now. Please try again.',
           ),
           actions: [
             TextButton(
@@ -281,6 +285,8 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen>
           ],
         ),
       );
+    } finally {
+      if (mounted) setState(() => _isCancelling = false);
     }
   }
 }
@@ -292,6 +298,7 @@ bool _canCancelTicket(TicketStatus status) => switch (status) {
   TicketStatus.inProgress ||
   TicketStatus.escalatedOperations ||
   TicketStatus.escalatedFacilityManager ||
+  TicketStatus.escalatedProjectHead ||
   TicketStatus.reopened => true,
   TicketStatus.awaitingConfirmation ||
   TicketStatus.closed ||
@@ -1047,7 +1054,7 @@ class _TicketBottomActions extends StatelessWidget {
   final bool canConfirm;
   final bool canCancel;
   final VoidCallback onConfirm;
-  final VoidCallback onCancel;
+  final VoidCallback? onCancel;
 
   @override
   Widget build(BuildContext context) => SafeArea(

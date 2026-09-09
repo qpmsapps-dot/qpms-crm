@@ -1028,12 +1028,12 @@ app.post('/api/hospital-client/tickets/:ticketId/cancel', async (request, respon
       response.status(404).json({ ok: false, code: 'ticket_not_found', message: 'Ticket was not found for this registered mobile number.' });
       return;
     }
-    if (['closed', 'cancelled', 'resolved_awaiting_confirmation'].includes(ticket.status_code)) {
-      response.status(409).json({ ok: false, code: 'ticket_not_cancellable', message: 'This ticket can no longer be cancelled.' });
+    if (['closed', 'resolved_awaiting_confirmation'].includes(ticket.status_code)) {
+      response.status(409).json({ ok: false, code: 'ticket_not_cancellable', message: 'Ticket has already been closed and cannot be cancelled.' });
       return;
     }
     const expectedVersion = Number(request.body?.version || ticket.version);
-    if (!Number.isInteger(expectedVersion) || expectedVersion !== Number(ticket.version)) {
+    if (!Number.isInteger(expectedVersion) || (ticket.status_code !== 'cancelled' && expectedVersion !== Number(ticket.version))) {
       response.status(409).json({ ok: false, code: 'ticket_version_conflict', message: 'This ticket was updated. Please refresh and try again.' });
       return;
     }

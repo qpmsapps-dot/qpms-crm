@@ -38,6 +38,7 @@ import {
   hospitalTicketIdentifierColumn,
   listHospitalNotifications,
   listHospitalTickets,
+  performClientTicketCancellation,
   safeWriteHospitalRequesterClosedNotification,
 } from '../services/hospitalTicketService.js';
 
@@ -1225,7 +1226,7 @@ test('service keeps resolve owner and completion evidence checks before RPC', ()
   assert.match(source, /Upload completion evidence before resolving this ticket\./);
 });
 
-test('client cancellation service is soft and auditable', () => {
+test('client cancellation service delegates all durable writes to the atomic RPC', () => {
   const source = readFileSync(
     new URL('../services/hospitalTicketService.js', import.meta.url),
     'utf8',
@@ -1234,11 +1235,49 @@ test('client cancellation service is soft and auditable', () => {
     source.indexOf('async function performClientTicketCancellation'),
     source.indexOf('async function performManualHospitalReassignment'),
   );
-  assert.match(helper, /status_code: 'cancelled'/);
-  assert.match(helper, /event_type: 'ticket_cancelled_by_client'/);
-  assert.match(helper, /notification_type: 'ticket_cancelled'/);
-  assert.match(helper, /superseded_reason: 'ticket_cancelled_by_client'/);
-  assert.doesNotMatch(helper, /\.delete\(/);
+  assert.match(helper, /client\.rpc\('rpc_cancel_hospital_contact_ticket'/);
+  assert.match(helper, /p_contact_id: actor\.user\.id/);
+  assert.match(helper, /p_expected_version: Number\(ticket\.version\)/);
+  assert.doesNotMatch(helper, /\.from\('hospital_tickets'\)/);
+  assert.doesNotMatch(helper, /\.from\('hospital_ticket_events'\)/);
+  assert.doesNotMatch(helper, /\.from\('hospital_ticket_notifications'\)/);
+});
+
+test('client cancellation returns the authoritative RPC result without internal-user reauthorization', async () => {
+  const rpcResult = {
+    ticket: {
+      id: uuid.ticket,
+      ticket_no: 'QPMS-HK-2026-RUNTIME',
+      status_code: 'cancelled',
+      cancelled_at: '2026-09-09T03:25:44.086Z',
+      version: 2,
+    },
+    notification_id: '99999999-9999-4999-8999-999999999999',
+    idempotent_replay: false,
+  };
+  const calls = [];
+  const client = {
+    async rpc(name, payload) {
+      calls.push({ name, payload });
+      return { data: rpcResult, error: null };
+    },
+    from() {
+      assert.fail('Cancellation must not reload through internal hospital-user authorization.');
+    },
+  };
+
+  const result = await performClientTicketCancellation(
+    client,
+    { user: { id: uuid.actor, profile_type: 'client', role_code: 'client_contact' } },
+    { id: uuid.ticket, version: 1 },
+    { reason_code: 'other', reason_text: 'Runtime cancellation' },
+  );
+
+  assert.deepEqual(result, rpcResult);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, 'rpc_cancel_hospital_contact_ticket');
+  assert.equal(calls[0].payload.p_contact_id, uuid.actor);
+  assert.equal(calls[0].payload.p_ticket_id, uuid.ticket);
 });
 
 test('supervisor reassignment resets SLA while preserving escalation continuation', () => {
