@@ -290,6 +290,31 @@ export async function resolveWebHospitalClientFilter(client, access, filters = {
   return next;
 }
 
+export async function listWebHospitalClientContacts(client, access, filters = {}) {
+  const scopedFilters = await resolveWebHospitalClientFilter(client, access, {
+    ...filters,
+    presentation: 'client',
+  });
+  if (!scopedFilters.client_id) {
+    throw httpError(400, 'hospital_client_required', 'A Hospital Ticketing client is required.');
+  }
+
+  const { data, error } = await client
+    .from('hospital_client_contacts')
+    .select('full_name,designation,mobile')
+    .eq('client_id', scopedFilters.client_id)
+    .eq('is_active', true)
+    .order('full_name', { ascending: true });
+  if (error) throw error;
+
+  const contacts = (data || []).map((contact) => ({
+    full_name: clean(contact.full_name, 160),
+    designation: clean(contact.designation, 160),
+    mobile: clean(contact.mobile, 40),
+  }));
+  return { contacts, total: contacts.length };
+}
+
 function applyFilters(query, filters = {}, { includePaginationFilters = true } = {}) {
   const search = escapeLike(filters.search);
   if (search) query = query.or(`ticket_no.ilike.%${search}%,title.ilike.%${search}%,description.ilike.%${search}%`);

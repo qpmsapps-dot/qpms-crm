@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { canAccessRoute, normalizeCanonicalRole } from '../src/utils/authRoles.js';
+import { filterHospitalClientContacts } from '../src/utils/hospitalClientContacts.js';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 const [routes, sidebar, page, api, guard, accessHook, dashboard] = await Promise.all([
@@ -45,11 +46,41 @@ test('NIMS requests use the canonical client code and authenticated web APIs', (
     '/api/web/hospital-tickets/access',
     '/api/web/hospital-tickets/summary',
     '/api/web/hospital-tickets',
+    '/api/web/hospital-tickets/client-contacts',
   ]) assert.match(api, new RegExp(endpoint.replaceAll('/', '\\/')));
   assert.match(page, /client_code: NIMS_HOSPITAL_CLIENT_CODE/);
   assert.match(guard, /if \(!access\.allowed\)/);
   assert.match(guard, /pathname\.includes\('\/client'\) \? 'client' : 'qpms'/);
   assert.match(accessHook, /presentation/);
+});
+
+test('Client View replaces status and category charts with registered users beside block analytics', () => {
+  const clientChartsStart = page.indexOf('if (clientView) {', page.indexOf('function TicketCharts'));
+  const qpmsChartsStart = page.indexOf('return (', page.indexOf('RegisteredUsersPanel', clientChartsStart));
+  const clientCharts = page.slice(clientChartsStart, qpmsChartsStart);
+  assert.match(clientCharts, /Ticket Trend[\s\S]*Tickets by Block[\s\S]*RegisteredUsersPanel/);
+  assert.doesNotMatch(clientCharts, /Tickets by Status|Tickets by Category/);
+  assert.match(page, /NIMS Registered Users/);
+  assert.match(page, /Full Name/);
+  assert.match(page, /Designation/);
+  assert.match(page, /Mobile/);
+  assert.match(page, /max-h-44 overflow-y-auto/);
+  assert.match(page, /title=\{clientView \? 'Recent Tickets'/);
+  assert.match(page, /getHospitalClientContacts\(\{[\s\S]*presentation: 'client'/);
+  assert.match(page, /\}, \[clientView\]\);/);
+  assert.match(page, /<Panel title="Tickets by Status"/);
+  assert.match(page, /<Panel title="Tickets by Category"/);
+});
+
+test('registered-user search matches name, designation and mobile without another API request', () => {
+  const contacts = [
+    { full_name: 'Dr. Bhargavi', designation: 'Senior RMO', mobile: '9412345678' },
+    { full_name: 'Dr. Vineeth Andrews', designation: 'RMO', mobile: '9612345678' },
+  ];
+  assert.deepEqual(filterHospitalClientContacts(contacts, 'bhargavi'), [contacts[0]]);
+  assert.deepEqual(filterHospitalClientContacts(contacts, 'senior'), [contacts[0]]);
+  assert.deepEqual(filterHospitalClientContacts(contacts, '9612'), [contacts[1]]);
+  assert.equal(filterHospitalClientContacts(contacts, '').length, 2);
 });
 
 test('QPMS and Client dashboards use live grouped statuses and real drilldowns', () => {

@@ -6,6 +6,7 @@ import {
   assignmentAllowsInternalView,
   getWebHospitalTicketDetail,
   hospitalWebAccessAllowsClient,
+  listWebHospitalClientContacts,
   resolveHospitalWebAccess,
   resolveWebHospitalClientFilter,
   scopedAccessFromAssignments,
@@ -303,6 +304,81 @@ test('an assignment with no usable client or resource scope remains fail-closed'
   assert.deepEqual(access.clientIds, []);
   assert.deepEqual(access.blockIds, []);
   assert.deepEqual(access.locationIds, []);
+});
+
+test('client contacts are scoped to the requested hospital and return only display fields', async () => {
+  const calls = [];
+  const client = {
+    from(table) {
+      if (table === 'hospital_clients') return queryResult({ id: 'client-nims', client_code: 'NIMS_HYDERABAD', client_name: 'NIMS', is_active: true });
+      assert.equal(table, 'hospital_client_contacts');
+      return {
+        select(columns) { calls.push(['select', columns]); return this; },
+        eq(column, value) { calls.push(['eq', column, value]); return this; },
+        order(column, options) {
+          calls.push(['order', column, options]);
+          return Promise.resolve({
+            data: [{ full_name: 'Runtime Contact', designation: 'RMO', mobile: '9876543210', id: 'hidden', normalized_mobile: 'hidden' }],
+            error: null,
+          });
+        },
+      };
+    },
+  };
+  const result = await listWebHospitalClientContacts(client, {
+    broad: true, clientViewAllowed: true, qpmsViewAllowed: true,
+  }, { client_code: 'NIMS_HYDERABAD' });
+  assert.deepEqual(result.contacts, [{ full_name: 'Runtime Contact', designation: 'RMO', mobile: '9876543210' }]);
+  assert.equal(result.total, 1);
+  assert.deepEqual(calls, [
+    ['select', 'full_name,designation,mobile'],
+    ['eq', 'client_id', 'client-nims'],
+    ['eq', 'is_active', true],
+    ['order', 'full_name', { ascending: true }],
+  ]);
+});
+
+test('an authorized NIMS-scoped user can retrieve NIMS client contacts', async () => {
+  const client = {
+    from(table) {
+      if (table === 'hospital_clients') return queryResult({ id: 'client-nims', client_code: 'NIMS_HYDERABAD', is_active: true });
+      if (table === 'hospital_client_contacts') return queryResult([
+        { full_name: 'Scoped Contact', designation: 'RMO', mobile: '9000000000' },
+      ]);
+      assert.fail(`Unexpected table query: ${table}`);
+    },
+  };
+  const result = await listWebHospitalClientContacts(client, {
+    broad: false,
+    clientViewAllowed: true,
+    qpmsViewAllowed: false,
+    authorizedClientIds: ['client-nims'],
+    clientIds: ['client-nims'],
+  }, { client_code: 'NIMS_HYDERABAD' });
+  assert.equal(result.total, 1);
+  assert.equal(result.contacts[0].full_name, 'Scoped Contact');
+});
+
+test('client contacts reject cross-client access and internal-only client view access', async () => {
+  const client = {
+    from(table) {
+      if (table === 'hospital_clients') return queryResult({ id: 'client-other', client_code: 'OTHER_HOSPITAL', is_active: true });
+      assert.fail(`Unexpected table query: ${table}`);
+    },
+  };
+  await assert.rejects(
+    () => listWebHospitalClientContacts(client, {
+      broad: false, clientViewAllowed: true, qpmsViewAllowed: true,
+      authorizedClientIds: ['client-nims'],
+    }, { client_code: 'OTHER_HOSPITAL' }),
+    (error) => error.statusCode === 403 && error.code === 'hospital_client_access_denied',
+  );
+  await assert.rejects(
+    () => listWebHospitalClientContacts({}, {
+      broad: true, clientViewAllowed: false, qpmsViewAllowed: true,
+    }, { client_id: 'client-nims' }),
+    (error) => error.statusCode === 403 && error.code === 'hospital_client_view_access_denied',
+  );
 });
 
 test('ticket queries apply narrow block and location scope without widening to client access', () => {

@@ -12,10 +12,12 @@ import {
 import { usePageTitle } from '../../hooks/usePageTitle.js';
 import { NIMS_HOSPITAL_CLIENT_CODE } from '../../hooks/useHospitalTicketAccess.js';
 import {
+  getHospitalClientContacts,
   getHospitalTicketDetail,
   getHospitalTicketSummary,
   getHospitalTickets,
 } from '../../services/hospitalTicketsApi.js';
+import { filterHospitalClientContacts } from '../../utils/hospitalClientContacts.js';
 
 const STATUS_OPTIONS = [
   ['open', 'Open'],
@@ -162,8 +164,59 @@ function KpiGrid({ counts, clientView }) {
   );
 }
 
-function TicketCharts({ analytics, clientView }) {
+function RegisteredUsersPanel({ contacts, loading, error }) {
+  const [search, setSearch] = useState('');
+  const visibleContacts = useMemo(
+    () => filterHospitalClientContacts(contacts, search),
+    [contacts, search],
+  );
+  return (
+    <Panel
+      title="NIMS Registered Users"
+      action={<span className="text-xs font-bold text-slate-500">Total Users: {contacts.length}</span>}
+    >
+      <label className="relative block">
+        <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+        <input
+          aria-label="Search registered users"
+          className="h-9 w-full rounded-md border border-slate-200 pl-9 pr-3 text-xs"
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search name, designation or mobile"
+          value={search}
+        />
+      </label>
+      {error ? <p className="mt-3 text-xs font-semibold text-rose-600">{error}</p> : null}
+      {loading ? <p className="mt-3 text-xs font-semibold text-slate-400">Loading registered users...</p> : null}
+      {!loading && !error ? (
+        <div className="mt-3 max-h-44 overflow-y-auto">
+          <div className="sticky top-0 grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(6.5rem,0.8fr)] gap-2 border-b border-slate-200 bg-white px-2 py-2 text-[10px] font-bold uppercase text-slate-400">
+            <span>Full Name</span><span>Designation</span><span>Mobile</span>
+          </div>
+          {visibleContacts.map((contact, index) => (
+            <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(6.5rem,0.8fr)] gap-2 border-b border-slate-100 px-2 py-2.5 text-xs" key={`${contact.mobile}-${index}`}>
+              <span className="truncate font-semibold text-slate-800" title={contact.full_name}>{contact.full_name || '-'}</span>
+              <span className="truncate text-slate-600" title={contact.designation}>{contact.designation || '-'}</span>
+              <span className="whitespace-nowrap text-slate-600">{contact.mobile || '-'}</span>
+            </div>
+          ))}
+          {!visibleContacts.length ? <p className="py-6 text-center text-xs font-semibold text-slate-400">No registered users found.</p> : null}
+        </div>
+      ) : null}
+    </Panel>
+  );
+}
+
+function TicketCharts({ analytics, clientView, contacts, contactsLoading, contactsError }) {
   const statusData = (analytics.status || []).map((item) => ({ ...item, label: statusLabel(item.key, clientView) }));
+  if (clientView) {
+    return (
+      <section className="grid min-w-0 gap-3 lg:grid-cols-2 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,1.2fr)]">
+        <Panel title="Ticket Trend"><div className="h-52"><ResponsiveContainer width="100%" height="100%"><LineChart data={analytics.trend || []}><CartesianGrid stroke="#e2e8f0" vertical={false} /><XAxis dataKey="date" tick={{ fontSize: 9 }} /><YAxis allowDecimals={false} tick={{ fontSize: 9 }} /><Tooltip /><Legend /><Line dataKey="raised" name="Raised" stroke="#2563eb" strokeWidth={2} /><Line dataKey="closed" name="Closed" stroke="#059669" strokeWidth={2} /></LineChart></ResponsiveContainer></div></Panel>
+        <Panel title="Tickets by Block"><div className="h-52"><ResponsiveContainer width="100%" height="100%"><BarChart data={(analytics.block || []).slice(0, 8)}><CartesianGrid stroke="#e2e8f0" vertical={false} /><XAxis dataKey="label" tick={{ fontSize: 9 }} /><YAxis allowDecimals={false} tick={{ fontSize: 9 }} /><Tooltip /><Bar dataKey="count" fill="#0891b2" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div></Panel>
+        <RegisteredUsersPanel contacts={contacts} loading={contactsLoading} error={contactsError} />
+      </section>
+    );
+  }
   return (
     <section className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-4">
       <Panel title="Ticket Trend"><div className="h-52"><ResponsiveContainer width="100%" height="100%"><LineChart data={analytics.trend || []}><CartesianGrid stroke="#e2e8f0" vertical={false} /><XAxis dataKey="date" tick={{ fontSize: 9 }} /><YAxis allowDecimals={false} tick={{ fontSize: 9 }} /><Tooltip /><Legend /><Line dataKey="raised" name="Raised" stroke="#2563eb" strokeWidth={2} /><Line dataKey="closed" name="Closed" stroke="#059669" strokeWidth={2} /></LineChart></ResponsiveContainer></div></Panel>
@@ -204,6 +257,9 @@ function DashboardView({ view }) {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [contacts, setContacts] = useState([]);
+  const [contactsLoading, setContactsLoading] = useState(clientView);
+  const [contactsError, setContactsError] = useState('');
   const requestRef = useRef(0);
 
   useEffect(() => {
@@ -236,13 +292,31 @@ function DashboardView({ view }) {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    if (!clientView) return undefined;
+    let active = true;
+    setContactsLoading(true);
+    setContactsError('');
+    getHospitalClientContacts({
+      client_code: NIMS_HOSPITAL_CLIENT_CODE,
+      presentation: 'client',
+    }).then((result) => {
+      if (active) setContacts(result.contacts || []);
+    }).catch((contactsLoadError) => {
+      if (active) setContactsError(contactsLoadError?.response?.data?.message || 'Unable to load NIMS registered users.');
+    }).finally(() => {
+      if (active) setContactsLoading(false);
+    });
+    return () => { active = false; };
+  }, [clientView]);
+
   return (
     <div className="space-y-4">
       <TicketingHeader view={view} />
       <Panel title="Filters" action={<button className="inline-flex items-center gap-1 text-xs font-bold text-blue-600" onClick={load}><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />Refresh</button>}><Filters filters={filters} setFilters={setFilters} facets={summary.facets || {}} clientView={clientView} /></Panel>
       {error ? <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-700">{error}</div> : null}
       {loading && !tickets.length ? <EmptyState text="Loading live NIMS ticket data..." /> : null}
-      {!error && (!loading || tickets.length) ? <><KpiGrid counts={summary.counts || {}} clientView={clientView} /><TicketCharts analytics={summary.analytics || {}} clientView={clientView} />{!clientView ? <NeedsAttention counts={summary.counts || {}} /> : null}<TicketTable tickets={tickets} view={view} expanded={expanded} onToggle={() => setExpanded((value) => !value)} /></> : null}
+      {!error && (!loading || tickets.length) ? <><KpiGrid counts={summary.counts || {}} clientView={clientView} /><TicketCharts analytics={summary.analytics || {}} clientView={clientView} contacts={contacts} contactsLoading={contactsLoading} contactsError={contactsError} />{!clientView ? <NeedsAttention counts={summary.counts || {}} /> : null}<TicketTable tickets={tickets} view={view} expanded={expanded} onToggle={() => setExpanded((value) => !value)} /></> : null}
     </div>
   );
 }

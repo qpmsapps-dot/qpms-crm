@@ -20,6 +20,14 @@ export async function getHospitalTicketSummary(params = {}) {
   }).then(dataOrThrow);
 }
 
+export async function getHospitalClientContacts(params = {}) {
+  return authenticatedApiRequest({
+    method: 'GET',
+    url: '/api/web/hospital-tickets/client-contacts',
+    params,
+  }).then(dataOrThrow);
+}
+
 export async function getHospitalTickets(params = {}) {
   return authenticatedApiRequest({
     method: 'GET',

@@ -60,6 +60,7 @@ import {
 import {
   getWebHospitalTicketDetail,
   hospitalWebAccessResponse,
+  listWebHospitalClientContacts,
   listWebHospitalTickets,
   resolveHospitalWebAccess,
   resolveWebHospitalClientFilter,
@@ -5599,6 +5600,29 @@ app.get('/api/web/hospital-tickets/summary', requireSupabaseJwtAllowMissingProfi
       ok: false,
       code: 'hospital_web_summary_failed',
       message: 'Unable to load Hospital Ticket summary.',
+    });
+  }
+});
+
+app.get('/api/web/hospital-tickets/client-contacts', requireSupabaseJwtAllowMissingProfile, requireHospitalWebAccess, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const result = await listWebHospitalClientContacts(client, request.hospitalWebAccess, request.query || {});
+    response.json({
+      ok: true,
+      ...result,
+      access: hospitalWebAccessResponse(request.hospitalWebAccess),
+    });
+  } catch (error) {
+    const safeError = sanitizeSupabaseDiagnosticError(error);
+    console.warn('[Hospital Web Tickets] Client contacts failed', {
+      code: safeError.code,
+      message: safeError.message,
+    });
+    response.status(error.statusCode || 500).json({
+      ok: false,
+      code: error.code || 'hospital_web_client_contacts_failed',
+      message: error.statusCode && error.statusCode < 500 ? error.message : 'Unable to load NIMS registered users.',
     });
   }
 });
