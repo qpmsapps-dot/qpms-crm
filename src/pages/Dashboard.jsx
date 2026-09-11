@@ -13,6 +13,7 @@ import {
   MapPin,
   MessageSquareWarning,
   Search,
+  TicketCheck,
   TimerReset,
   TrendingUp,
   UserCheck,
@@ -72,6 +73,7 @@ import {
   isOperationsTeam,
 } from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
+import { useHospitalTicketAccess } from '../hooks/useHospitalTicketAccess.js';
 import { isDemoMode } from '../config/demoMode.js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 
@@ -1504,6 +1506,7 @@ function NewBusinessPipeline({ visibleLeads, visibleSiteVisits, user }) {
 
 function ExecutiveOperationsCommandCenter({ leads, siteVisits }) {
   const [region, setRegion] = useState('All States');
+  const hospitalAccess = useHospitalTicketAccess();
   const operationsRows = useMemo(() => filterOperationSummary('All Businesses', region), [region]);
   const operationsKpis = useMemo(() => buildOperationsKpis(operationsRows), [operationsRows]);
   const pipeline = useMemo(() => buildPipelineCommandData(leads, siteVisits, []), [leads, siteVisits]);
@@ -1687,14 +1690,13 @@ function ExecutiveOperationsCommandCenter({ leads, siteVisits }) {
           )}
         </section>
         <section className="command-panel">
-          <div className="command-panel-head"><h2 className="command-title">Ticket Overview</h2></div>
-          <div className="p-4">
-            <p className="text-3xl font-bold">{kpiValue('openTickets')}</p>
-            <p className="command-label">Total Tickets</p>
-            <div className="mt-5 grid grid-cols-3 gap-2">
-              {[['Open', kpiValue('openTickets'), 'text-qpms-600'], ['In Progress', kpiValue('pendingTasks'), 'text-amber-600'], ['Resolved', kpiValue('siteVisitsCompleted'), 'text-emerald-600']].map(([label, value, tone]) => (
-                <div className="command-muted-surface p-2" key={label}><p className={`text-[10px] font-bold ${tone}`}>{label}</p><p className="mt-1 text-lg font-bold">{value}</p></div>
-              ))}
+          <div className="command-panel-head"><h2 className="command-title">Hospital Ticketing</h2></div>
+          <div className="grid min-h-52 place-items-center p-5 text-center">
+            <div>
+              <TicketCheck className="mx-auto h-8 w-8 text-qpms-600" />
+              <p className="mt-3 text-sm font-bold text-slate-950 dark:text-white">NIMS Ticketing System</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">Live hospital service tickets and SLA monitoring.</p>
+              {hospitalAccess.loading ? <p className="mt-4 text-[11px] font-semibold text-slate-400">Verifying Hospital Ticketing access...</p> : hospitalAccess.allowed ? <Link className="mt-4 inline-flex items-center rounded-md bg-qpms-600 px-3 py-2 text-xs font-bold text-white" to="/hospital-ticketing/nims/qpms">Open Dashboard</Link> : <p className="mt-4 text-[11px] font-semibold text-slate-400">{hospitalAccess.error || 'Hospital ticket scope is not assigned.'}</p>}
             </div>
           </div>
         </section>

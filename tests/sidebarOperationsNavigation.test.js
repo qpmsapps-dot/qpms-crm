@@ -51,7 +51,7 @@ test('Command Center route actor access is separate from operational employee ro
 test('Operations sidebar remains filtered by route authorization and keeps Fault Tracker append logic', () => {
   assert.match(sidebarSource, /items\.filter\(\(item\) => \{[\s\S]*TEMPORARILY_HIDDEN_NAV_ROUTES\.has\(routePath\)[\s\S]*canAccessNavRoute\(user, routePath\)/);
   assert.match(sidebarSource, /const canSeeFaultTracker = canAccessNavRoute\(user, '\/fault-tracker'\)/);
-  assert.match(sidebarSource, /canSeeFaultTracker && !baseNavGroups\.some/);
+  assert.match(sidebarSource, /canSeeFaultTracker && !authorizedNavGroups\.some/);
   assert.equal(canAccessNavRoute(user('Branch Head'), '/store-master'), false);
   assert.equal(canAccessNavRoute(user('Branch Head'), '/fo-activities'), true);
 });

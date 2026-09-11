@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   Sparkles,
   Store,
+  TicketCheck,
   Wrench,
   Workflow,
 } from 'lucide-react';
@@ -28,6 +29,7 @@ import {
 } from '../data/mockUsers.js';
 import { canAccessNavRoute, usesOperationsSidebar } from '../utils/authRoles.js';
 import { isDemoUser } from '../utils/demoAccess.js';
+import { useHospitalTicketAccess } from '../hooks/useHospitalTicketAccess.js';
 import Logo from './Logo.jsx';
 
 const TEMPORARILY_HIDDEN_NAV_ROUTES = new Set([
@@ -37,6 +39,22 @@ const TEMPORARILY_HIDDEN_NAV_ROUTES = new Set([
   '/assets',
   '/reports',
 ]);
+
+const hospitalTicketingNavGroup = {
+  title: 'Hospital Ticketing System',
+  items: [{ label: 'NIMS Ticketing System', to: '/hospital-ticketing/nims/qpms', icon: TicketCheck }],
+};
+
+function insertHospitalTicketingGroup(groups) {
+  const demoReviewsIndex = groups.findIndex((group) => group.title === 'Demo Reviews');
+  const operationsIndex = groups.findIndex((group) => group.title === 'Operations');
+  const insertionIndex = demoReviewsIndex >= 0
+    ? demoReviewsIndex + 1
+    : operationsIndex >= 0
+      ? operationsIndex
+      : groups.length;
+  return [...groups.slice(0, insertionIndex), hospitalTicketingNavGroup, ...groups.slice(insertionIndex)];
+}
 
 const executiveNavGroups = [
   {
@@ -189,6 +207,7 @@ function navLabelForRole(item, user) {
 
 export default function Sidebar({ isOpen, onClose }) {
   const { user } = useAuth();
+  const hospitalAccess = useHospitalTicketAccess();
   const location = useLocation();
   const currentTarget = `${location.pathname}${location.search}`;
   const executiveViewer = isManagement(user) || isFinanceLeadership(user);
@@ -203,16 +222,17 @@ export default function Sidebar({ isOpen, onClose }) {
       : isApprovalReviewer(user)
         ? reviewNavGroups
         : businessNavGroups;
+  const authorizedNavGroups = hospitalAccess.allowed ? insertHospitalTicketingGroup(baseNavGroups) : baseNavGroups;
   const canSeeFaultTracker = canAccessNavRoute(user, '/fault-tracker');
-  const navGroups = canSeeFaultTracker && !baseNavGroups.some((group) => group.items.some((item) => item.to === '/fault-tracker'))
+  const navGroups = canSeeFaultTracker && !authorizedNavGroups.some((group) => group.items.some((item) => item.to === '/fault-tracker'))
     ? [
-      ...baseNavGroups,
+      ...authorizedNavGroups,
       {
         title: 'Operations',
         items: [{ label: 'Fault Tracker', to: '/fault-tracker', icon: ClipboardList }],
       },
     ]
-    : baseNavGroups;
+    : authorizedNavGroups;
   const visibleNavGroups = navGroups.map((group) => ({
     ...group,
     items: group.items.filter((item) => {

@@ -16,7 +16,8 @@ import Tasks from '../pages/Tasks.jsx';
 import Employees from '../pages/Employees.jsx';
 import Settings from '../pages/Settings.jsx';
 import StoreMaster from '../pages/StoreMaster.jsx';
-import Tickets from '../pages/Tickets.jsx';
+import HospitalTicketRouteGuard from '../components/hospital-ticketing/HospitalTicketRouteGuard.jsx';
+import NimsTicketingPage, { LegacyHospitalTicketsRedirect } from '../pages/hospital-ticketing/NimsTicketingPage.jsx';
 import FaultTracker from '../pages/FaultTracker.jsx';
 import DeepCleaning from '../pages/DeepCleaning.jsx';
 import UserManagement from '../pages/settings/UserManagement.jsx';
@@ -80,8 +81,15 @@ const productionRoutes = [
           { path: 'proposals', element: <ProposalCenterPage /> },
           { path: 'approvals', element: <ApprovalCenterPage /> },
           { path: 'existing-business', element: <ExistingBusinessPage /> },
-          { path: 'tickets', element: <Tickets /> },
-          { path: 'tickets/:ticketId', element: <Tickets /> },
+          { path: 'hospital-ticketing', element: <Navigate to="/hospital-ticketing/nims/qpms" replace /> },
+          { path: 'hospital-ticketing/nims', element: <Navigate to="/hospital-ticketing/nims/qpms" replace /> },
+          { path: 'hospital-ticketing/nims/qpms', element: <HospitalTicketRouteGuard><NimsTicketingPage /></HospitalTicketRouteGuard> },
+          { path: 'hospital-ticketing/nims/client', element: <HospitalTicketRouteGuard><NimsTicketingPage /></HospitalTicketRouteGuard> },
+          { path: 'hospital-ticketing/nims/qpms/tickets/:ticketId', element: <HospitalTicketRouteGuard><NimsTicketingPage /></HospitalTicketRouteGuard> },
+          { path: 'hospital-ticketing/nims/client/tickets/:ticketId', element: <HospitalTicketRouteGuard><NimsTicketingPage /></HospitalTicketRouteGuard> },
+          { path: 'hospital-ticketing/nims/*', element: <Navigate to="/hospital-ticketing/nims/qpms" replace /> },
+          { path: 'tickets', element: <HospitalTicketRouteGuard><LegacyHospitalTicketsRedirect /></HospitalTicketRouteGuard> },
+          { path: 'tickets/:ticketId', element: <HospitalTicketRouteGuard><LegacyHospitalTicketsRedirect /></HospitalTicketRouteGuard> },
           { path: 'fault-tracker', element: <FaultTracker /> },
           { path: 'deep-cleaning', element: <DeepCleaning /> },
           { path: 'assets', element: <AssetCenterPage /> },

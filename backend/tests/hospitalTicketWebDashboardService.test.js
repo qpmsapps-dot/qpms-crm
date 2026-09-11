@@ -2,8 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  applyAccessScope,
+  assignmentAllowsInternalView,
   getWebHospitalTicketDetail,
+  hospitalWebAccessAllowsClient,
   resolveHospitalWebAccess,
+  resolveWebHospitalClientFilter,
+  scopedAccessFromAssignments,
+  summarizeWebHospitalTickets,
 } from '../services/hospitalTicketWebDashboardService.js';
 
 function queryResult(data, error = null, count = null) {
@@ -13,6 +19,7 @@ function queryResult(data, error = null, count = null) {
     order() { return this; },
     limit() { return this; },
     in() { return this; },
+    or() { return this; },
     maybeSingle() { return Promise.resolve({ data, error }); },
     then(resolve) { return Promise.resolve({ data, error, count }).then(resolve); },
   };
@@ -110,6 +117,31 @@ function mockClientForAccess() {
   };
 }
 
+function mockClientForScopedOperationalAccess({ authUserId = 'auth-om', profileId = 'profile-om' } = {}) {
+  const rows = {
+    access_user_assignments: [{
+      id: 'assignment-1', auth_user_id: authUserId, profile_id: profileId,
+      role_id: 'role-om', module_id: 'module-hospital', client_id: 'client-nims',
+      business_vertical_id: 'vertical-hospital', verification_status: 'verified', active: true,
+    }],
+    access_user_scopes: [],
+    access_roles: [{ id: 'role-om', code: 'operations_manager', name: 'Operations Manager', user_type: 'internal', active: true }],
+    access_modules: [{ id: 'module-hospital', code: 'hospital_operations', name: 'Hospital Operations', application_target: 'web', active: true }],
+    access_clients: [{ id: 'client-nims', code: 'NIMS_HYDERABAD', name: 'NIMS', active: true }],
+    access_business_verticals: [{ id: 'vertical-hospital', code: 'hospital', name: 'Hospital', active: true }],
+    access_business_vertical_modules: [{ business_vertical_id: 'vertical-hospital', module_id: 'module-hospital', enabled: true }],
+    access_client_modules: [{ client_id: 'client-nims', module_id: 'module-hospital', enabled: true }],
+    access_role_permissions: [{ role_id: 'role-om', permission_id: 'permission-view' }],
+    access_permissions: [{ id: 'permission-view', code: 'hospital_ticket.view' }],
+  };
+  return {
+    from(table) {
+      if (table === 'hospital_ticket_users') return queryResult(null);
+      return queryResult(rows[table] || []);
+    },
+  };
+}
+
 test('web management profile can use compatibility access without a hospital actor', async () => {
   const access = await resolveHospitalWebAccess({
     client: mockClientForAccess(),
@@ -117,8 +149,207 @@ test('web management profile can use compatibility access without a hospital act
     profile: { id: 'profile-1', auth_user_id: 'auth-1', role: 'Admin', is_active: true, web_access_enabled: true, status: 'Active' },
   });
   assert.equal(access.allowed, true);
-  assert.equal(access.source, 'legacy_web_management');
+  assert.equal(access.source, 'global_web_management');
   assert.equal(access.broad, true);
+});
+
+test('Admin global access does not depend on unified Hospital Ticket assignments', async () => {
+  const access = await resolveHospitalWebAccess({
+    client: {
+      from() {
+        assert.fail('Global Admin access must be resolved before assignment queries.');
+      },
+    },
+    authUser: { id: 'auth-admin-no-ticket-assignment', email: 'admin@example.com' },
+    profile: {
+      id: 'profile-admin-no-ticket-assignment',
+      auth_user_id: 'auth-admin-no-ticket-assignment',
+      role: 'Admin',
+      is_active: true,
+      web_access_enabled: true,
+      status: 'Active',
+    },
+  });
+  assert.deepEqual({
+    allowed: access.allowed,
+    source: access.source,
+    broad: access.broad,
+    qpms: access.qpmsViewAllowed,
+    client: access.clientViewAllowed,
+  }, {
+    allowed: true,
+    source: 'global_web_management',
+    broad: true,
+    qpms: true,
+    client: true,
+  });
+});
+
+test('Operations Manager is denied without an assignment and allowed only for an assigned NIMS client', async () => {
+  const profile = {
+    id: 'profile-om', auth_user_id: 'auth-om', role: 'Operations Manager',
+    is_active: true, web_access_enabled: true, status: 'Active',
+  };
+  const denied = await resolveHospitalWebAccess({
+    client: mockClientForAccess(), authUser: { id: 'auth-om' }, profile,
+  });
+  assert.equal(denied.allowed, false);
+
+  const allowed = await resolveHospitalWebAccess({
+    client: mockClientForScopedOperationalAccess(), authUser: { id: 'auth-om' }, profile,
+  });
+  assert.equal(allowed.allowed, true);
+  assert.equal(allowed.broad, false);
+  assert.deepEqual(allowed.clientIds, ['client-nims']);
+  assert.equal(allowed.qpmsViewAllowed, true);
+  assert.equal(hospitalWebAccessAllowsClient(allowed, 'client-other'), false);
+});
+
+test('only approved active web management roles receive global compatibility access', async () => {
+  for (const role of [
+    'Admin', 'ADMIN', 'admin', 'QPMS Admin', 'IT Admin', 'Management (IT Admin)',
+    'GM', 'COO', 'MD', 'Executive Assistant', 'Executive Assistant to COO',
+  ]) {
+    const access = await resolveHospitalWebAccess({
+      client: mockClientForAccess(),
+      authUser: { id: `auth-${role}` },
+      profile: { id: `profile-${role}`, role, is_active: true, web_access_enabled: true, status: 'Active' },
+    });
+    assert.equal(access.allowed, true, role);
+    assert.equal(access.broad, true, role);
+  }
+
+  for (const role of ['South Head', 'Business Head', 'Branch Head', 'Operations Manager', 'KAM', 'FO']) {
+    const access = await resolveHospitalWebAccess({
+      client: mockClientForAccess(),
+      authUser: { id: `auth-${role}` },
+      profile: { id: `profile-${role}`, role, is_active: true, web_access_enabled: true, status: 'Active' },
+    });
+    assert.equal(access.allowed, false, role);
+  }
+});
+
+test('inactive and web-disabled profiles are denied before ticket scope resolution', async () => {
+  for (const profile of [
+    { role: 'Admin', is_active: false, web_access_enabled: true, status: 'Inactive' },
+    { role: 'Admin', is_active: true, web_access_enabled: false, status: 'Active' },
+  ]) {
+    const access = await resolveHospitalWebAccess({
+      client: mockClientForAccess(), authUser: { id: 'auth-disabled' }, profile,
+    });
+    assert.equal(access.allowed, false);
+    assert.equal(access.code, 'hospital_web_profile_inactive');
+  }
+});
+
+test('unified Hospital Ticket assignments preserve client, block and location scope', () => {
+  const clientWide = scopedAccessFromAssignments([{
+    client: { id: 'client-nims' }, permissions: ['hospital_ticket.view'], scopes: [],
+  }]);
+  assert.deepEqual(clientWide.clientIds, ['client-nims']);
+  assert.equal(hospitalWebAccessAllowsClient(clientWide, 'client-nims'), true);
+  assert.equal(hospitalWebAccessAllowsClient(clientWide, 'client-other'), false);
+
+  const narrow = scopedAccessFromAssignments([{
+    client: { id: 'client-nims' },
+    scopes: [
+      { scope_type: 'hospital_block', scope_id: 'block-a' },
+      { scope_type: 'location', scope_id: 'location-a' },
+    ],
+  }]);
+  assert.deepEqual(narrow.clientIds, []);
+  assert.deepEqual(narrow.blockIds, ['block-a']);
+  assert.deepEqual(narrow.locationIds, ['location-a']);
+  assert.equal(hospitalWebAccessAllowsClient(narrow, 'client-nims'), true);
+  assert.equal(hospitalWebAccessAllowsClient(narrow, 'client-other'), false);
+});
+
+test('client hospital assignments cannot open the internal QPMS presentation', async () => {
+  const clientAssignment = {
+    role: { user_type: 'client' },
+    module: { application_target: 'client_mobile' },
+  };
+  const internalAssignment = {
+    role: { user_type: 'internal' },
+    module: { application_target: 'web' },
+  };
+  assert.equal(assignmentAllowsInternalView(clientAssignment), false);
+  assert.equal(assignmentAllowsInternalView(internalAssignment), true);
+
+  await assert.rejects(
+    () => resolveWebHospitalClientFilter({}, {
+      qpmsViewAllowed: false,
+      clientViewAllowed: true,
+      broad: false,
+      authorizedClientIds: ['client-nims'],
+    }, { presentation: 'qpms', client_id: 'client-nims' }),
+    (error) => error.statusCode === 403 && error.code === 'hospital_qpms_view_access_denied',
+  );
+  const filters = await resolveWebHospitalClientFilter({}, {
+    qpmsViewAllowed: false,
+    clientViewAllowed: true,
+    broad: false,
+    authorizedClientIds: ['client-nims'],
+  }, { presentation: 'client', client_id: 'client-nims' });
+  assert.equal(filters.client_id, 'client-nims');
+});
+
+test('an assignment with no usable client or resource scope remains fail-closed', () => {
+  const access = scopedAccessFromAssignments([{
+    client: null,
+    scopes: [{ scope_type: 'state', scope_id: 'TN' }],
+  }]);
+  assert.equal(access.broad, false);
+  assert.deepEqual(access.clientIds, []);
+  assert.deepEqual(access.blockIds, []);
+  assert.deepEqual(access.locationIds, []);
+});
+
+test('ticket queries apply narrow block and location scope without widening to client access', () => {
+  const calls = [];
+  const query = {
+    in(column, values) { calls.push(['in', column, values]); return this; },
+    or(value) { calls.push(['or', value]); return this; },
+  };
+  applyAccessScope(query, { broad: false, clientIds: [], blockIds: ['block-a'], locationIds: [] });
+  assert.deepEqual(calls, [['in', 'block_id', ['block-a']]]);
+  calls.length = 0;
+  applyAccessScope(query, { broad: false, clientIds: [], blockIds: ['block-a'], locationIds: ['location-a'] });
+  assert.deepEqual(calls, [['or', 'block_id.in.(block-a),location_id.in.(location-a)']]);
+  assert.throws(
+    () => applyAccessScope(query, { broad: false, clientIds: [], blockIds: [], locationIds: [] }),
+    (error) => error.statusCode === 403 && error.code === 'hospital_web_scope_required',
+  );
+});
+
+test('summary groups canonical active, escalation, confirmation, closed and cancelled states', async () => {
+  const rows = [
+    { id: '1', status_code: 'open', raised_at: new Date().toISOString() },
+    { id: '2', status_code: 'assigned', current_assignee_user_id: 'user-1', raised_at: new Date().toISOString() },
+    { id: '3', status_code: 'accepted', current_assignee_user_id: 'user-1', raised_at: new Date().toISOString() },
+    { id: '4', status_code: 'in_progress', current_assignee_user_id: 'user-1', raised_at: new Date().toISOString() },
+    { id: '5', status_code: 'escalated_hospital_dean', current_assignee_user_id: 'user-2', raised_at: new Date().toISOString() },
+    { id: '6', status_code: 'resolved_awaiting_confirmation', raised_at: new Date().toISOString() },
+    { id: '7', status_code: 'closed', raised_at: new Date().toISOString(), closed_at: new Date().toISOString() },
+    { id: '8', status_code: 'cancelled', raised_at: new Date().toISOString() },
+  ];
+  const client = {
+    from(table) {
+      if (table === 'hospital_tickets') return queryResult(rows, null, rows.length);
+      if (table === 'hospital_ticket_users') return queryResult([], null, 2);
+      return queryResult([]);
+    },
+  };
+  const result = await summarizeWebHospitalTickets(client, {
+    broad: true, qpmsViewAllowed: true, clientViewAllowed: true,
+  });
+  assert.equal(result.counts.total, 8);
+  assert.equal(result.counts.active, 6);
+  assert.equal(result.counts.under_process, 3);
+  assert.equal(result.counts.escalated, 1);
+  assert.equal(result.counts.awaiting_client_confirmation, 1);
+  assert.equal(result.counts.closed, 1);
+  assert.equal(result.counts.cancelled, 1);
 });
 
 test('client doctor profile is not promoted into web management access', async () => {
@@ -132,11 +363,39 @@ test('client doctor profile is not promoted into web management access', async (
 });
 
 test('ticket detail returns signed URLs without private storage paths', async () => {
-  const detail = await getWebHospitalTicketDetail(mockClientForDetail(), { broad: true }, 'QPMS-HK-2026-000001');
+  const detail = await getWebHospitalTicketDetail(mockClientForDetail(), {
+    broad: true, qpmsViewAllowed: true, clientViewAllowed: true,
+  }, 'QPMS-HK-2026-000001');
   assert.equal(detail.ticket.ticket_no, 'QPMS-HK-2026-000001');
   assert.equal(detail.ticket.unassigned, true);
   assert.equal(detail.ticket.uat, true);
   assert.equal(detail.attachments[0].signed_url, 'https://signed.example/photo.jpg');
   assert.equal('storage_path' in detail.attachments[0], false);
   assert.equal('storage_bucket' in detail.attachments[0], false);
+});
+
+test('client ticket detail excludes internal operational fields and non-visible records', async () => {
+  const client = mockClientForDetail();
+  const detail = await getWebHospitalTicketDetail(
+    client,
+    { broad: true, qpmsViewAllowed: true, clientViewAllowed: true },
+    'QPMS-HK-2026-000001',
+    { presentation: 'client' },
+  );
+
+  for (const field of [
+    'current_assignee', 'accepted_by', 'supervisor', 'current_escalation_level',
+    'supervisor_sla_due_at', 'escalation_due_at', 'sla', 'unassigned', 'overdue',
+    'uat', 'assignment_failure_reason',
+  ]) {
+    assert.equal(field in detail.ticket, false, field);
+  }
+  assert.equal(detail.ticket.raised_by.role, null);
+  assert.equal(detail.ticket.resolved_by, null);
+  assert.deepEqual(detail.assignment_history, []);
+  assert.equal('actor_name' in detail.timeline[0], false);
+  assert.equal('actor_role' in detail.timeline[0], false);
+  assert.equal(detail.comments[0].comment_text, 'Checked');
+  assert.equal('author_name' in detail.comments[0], false);
+  assert.equal('author_role' in detail.comments[0], false);
 });

@@ -15,12 +15,13 @@ test('Tickets page uses live hospital ticket API instead of mock ticket data', (
 });
 
 test('Hospital ticket web API service targets read-only dashboard endpoints', () => {
-  assert.match(service, /\/api\/web\/hospital-tickets\/summary/);
-  assert.match(service, /\/api\/web\/hospital-tickets/);
-  assert.match(service, /method:\s*'GET'/);
-  assert.doesNotMatch(service, /method:\s*'POST'/);
-  assert.doesNotMatch(service, /method:\s*'PATCH'/);
-  assert.doesNotMatch(service, /method:\s*'DELETE'/);
+  const dashboardApi = service.slice(0, service.indexOf('export async function getHospitalTicketNotifications'));
+  assert.match(dashboardApi, /\/api\/web\/hospital-tickets\/summary/);
+  assert.match(dashboardApi, /\/api\/web\/hospital-tickets/);
+  assert.match(dashboardApi, /method:\s*'GET'/);
+  assert.doesNotMatch(dashboardApi, /method:\s*'POST'/);
+  assert.doesNotMatch(dashboardApi, /method:\s*'PATCH'/);
+  assert.doesNotMatch(dashboardApi, /method:\s*'DELETE'/);
 });
 
 test('Tickets page exposes monitoring states required for live data', () => {

@@ -4,6 +4,14 @@ function dataOrThrow(response) {
   return response.data;
 }
 
+export async function getHospitalTicketAccess(params = {}) {
+  return authenticatedApiRequest({
+    method: 'GET',
+    url: '/api/web/hospital-tickets/access',
+    params,
+  }).then(dataOrThrow);
+}
+
 export async function getHospitalTicketSummary(params = {}) {
   return authenticatedApiRequest({
     method: 'GET',
@@ -20,10 +28,11 @@ export async function getHospitalTickets(params = {}) {
   }).then(dataOrThrow);
 }
 
-export async function getHospitalTicketDetail(ticketId) {
+export async function getHospitalTicketDetail(ticketId, params = {}) {
   return authenticatedApiRequest({
     method: 'GET',
     url: `/api/web/hospital-tickets/${encodeURIComponent(ticketId)}`,
+    params,
   }).then(dataOrThrow);
 }
 

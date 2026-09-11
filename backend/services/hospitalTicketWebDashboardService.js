@@ -1,27 +1,24 @@
 import { resolveCurrentUserAccess } from './accessControlService.js';
-import { hospitalSlaState } from './hospitalTicketService.js';
-import { activeWebProfile, hasCooWebVisibility } from './webRoleAccessService.js';
+import {
+  clientCanSeeHospitalEvent,
+  clientHospitalEventView,
+  hospitalSlaState,
+} from './hospitalTicketService.js';
+import { activeWebProfile, hasCooWebVisibility, normalizeWebRoleKey } from './webRoleAccessService.js';
 
-const WEB_ROLE_KEYS = new Set([
+const GLOBAL_WEB_ROLE_KEYS = new Set([
   'ADMIN',
   'QPMSADMIN',
   'DEVELOPER',
+  'ITADMIN',
+  'MANAGEMENTITADMIN',
   'MANAGEMENT',
   'MD',
   'COO',
   'GM',
   'TOPMANAGEMENT',
-  'PROJECTCOORDINATOR',
-  'BRANCHHEAD',
-  'OPERATIONSMANAGER',
-  'OPERATIONSMANAGER',
-  'OPERATIONS',
-  'OPERATIONSEXECUTIVE',
-  'FACILITYMANAGER',
-  'PROJECTHEAD',
-  'HOSPITALDEAN',
-  'EXISTINGBUSINESSOPERATIONSTEAM',
-  'DEMOVIEWER',
+  'EXECUTIVEASSISTANT',
+  'EXECUTIVEASSISTANTTOCOO',
 ]);
 
 const SAFE_PAGE_SIZE_MAX = 100;
@@ -45,7 +42,7 @@ function clean(value, maxLength = 160) {
 }
 
 function roleKey(role) {
-  return clean(role, 80).toUpperCase().replace(/[^A-Z0-9]+/g, '');
+  return normalizeWebRoleKey(role);
 }
 
 function parsePositiveInt(value, fallback, max) {
@@ -77,7 +74,7 @@ function escapeLike(value) {
 function isWebManagementProfile(profile) {
   if (!activeWebProfile(profile)) return false;
   if (hasCooWebVisibility(profile.role)) return true;
-  return WEB_ROLE_KEYS.has(roleKey(profile.role));
+  return GLOBAL_WEB_ROLE_KEYS.has(roleKey(profile.role));
 }
 
 function scopeValue(scope = {}) {
@@ -93,13 +90,95 @@ function assignmentModuleAllowed(assignment) {
   return ['client_ticketing', 'hospital_operations'].includes(moduleCode);
 }
 
+export function assignmentAllowsInternalView(assignment) {
+  const userType = clean(assignment.role?.user_type, 40).toLowerCase();
+  const applicationTarget = clean(assignment.module?.application_target, 40).toLowerCase();
+  return !['client', 'hospital_client', 'requester'].includes(userType) && applicationTarget !== 'client_mobile';
+}
+
 function unique(values) {
   return [...new Set(values.filter(Boolean).map(String))];
+}
+
+function httpError(statusCode, code, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
+}
+
+export function scopedAccessFromAssignments(assignments = []) {
+  const clientIds = [];
+  const blockIds = [];
+  const locationIds = [];
+  const authorizedClientIds = [];
+  let broad = false;
+
+  for (const assignment of assignments) {
+    const assignmentClientId = clean(assignment.client?.id, 80);
+    if (assignmentClientId) authorizedClientIds.push(assignmentClientId);
+    const scopes = assignment.scopes || [];
+    if (!scopes.length) {
+      if (assignmentClientId) clientIds.push(assignmentClientId);
+      continue;
+    }
+    for (const scope of scopes) {
+      const type = clean(scope.scope_type, 40).toLowerCase();
+      const value = scopeValue(scope);
+      if (type === 'global') broad = true;
+      else if (type === 'client') {
+        clientIds.push(value || assignmentClientId);
+        authorizedClientIds.push(value || assignmentClientId);
+      } else if (type === 'all_client') {
+        clientIds.push(assignmentClientId || value);
+        authorizedClientIds.push(assignmentClientId || value);
+      }
+      else if (type === 'hospital_block') blockIds.push(value);
+      else if (type === 'location') locationIds.push(value);
+    }
+  }
+
+  return {
+    broad,
+    clientIds: unique(clientIds),
+    blockIds: unique(blockIds),
+    locationIds: unique(locationIds),
+    authorizedClientIds: unique(authorizedClientIds),
+  };
+}
+
+function hasUsableScope(access = {}) {
+  return access.broad === true || Boolean(
+    access.clientIds?.length || access.blockIds?.length || access.locationIds?.length,
+  );
 }
 
 export async function resolveHospitalWebAccess({ client, authUser, profile }) {
   if (!authUser?.id) {
     return { allowed: false, status: 401, code: 'authentication_required', message: 'Supabase Bearer token required.' };
+  }
+  if (!profile || !activeWebProfile(profile) || profile.web_access_enabled !== true) {
+    return {
+      allowed: false,
+      status: 403,
+      code: 'hospital_web_profile_inactive',
+      message: 'An active web-enabled profile is required for Hospital Ticketing.',
+    };
+  }
+
+  if (isWebManagementProfile(profile)) {
+    return {
+      allowed: true,
+      source: 'global_web_management',
+      broad: true,
+      assignments: [],
+      clientIds: [],
+      blockIds: [],
+      locationIds: [],
+      authorizedClientIds: [],
+      qpmsViewAllowed: true,
+      clientViewAllowed: true,
+    };
   }
 
   const unified = await resolveCurrentUserAccess({
@@ -114,15 +193,22 @@ export async function resolveHospitalWebAccess({ client, authUser, profile }) {
     .filter((assignment) => assignmentHasPermission(assignment, 'hospital_ticket.view'));
 
   if (unifiedAssignments.length) {
+    const scope = scopedAccessFromAssignments(unifiedAssignments);
+    if (!hasUsableScope(scope)) {
+      return {
+        allowed: false,
+        status: 403,
+        code: 'hospital_web_scope_required',
+        message: 'Hospital Ticketing access requires a valid client, block, location, or global scope.',
+      };
+    }
     return {
       allowed: true,
       source: 'unified',
-      broad: unifiedAssignments.some((assignment) => (assignment.scopes || []).some((scope) => scope.scope_type === 'global')),
       assignments: unifiedAssignments,
-      clientIds: unique(unifiedAssignments.map((assignment) => assignment.client?.id)),
-      blockIds: unique(unifiedAssignments.flatMap((assignment) => (assignment.scopes || [])
-        .filter((scope) => scope.scope_type === 'hospital_block')
-        .map(scopeValue))),
+      qpmsViewAllowed: unifiedAssignments.some(assignmentAllowsInternalView),
+      clientViewAllowed: true,
+      ...scope,
     };
   }
 
@@ -130,44 +216,78 @@ export async function resolveHospitalWebAccess({ client, authUser, profile }) {
     return { allowed: false, status: 403, code: unified.code || 'access_denied', message: unified.message || 'Hospital ticket dashboard access denied.' };
   }
 
-  if (isWebManagementProfile(profile)) {
-    return { allowed: true, source: 'legacy_web_management', broad: true, assignments: [] };
-  }
-
   const legacyAssignments = (unified.assignments || [])
     .filter((assignment) => assignment.assignment_source === 'legacy_hospital' || assignment.source === 'legacy_hospital')
     .filter((assignment) => assignmentHasPermission(assignment, 'hospital_ticket.view'));
 
   if (legacyAssignments.length) {
+    const scope = scopedAccessFromAssignments(legacyAssignments);
+    if (!hasUsableScope(scope)) {
+      return {
+        allowed: false,
+        status: 403,
+        code: 'hospital_web_scope_required',
+        message: 'Hospital Ticketing access requires a valid client, block, or location scope.',
+      };
+    }
     return {
       allowed: true,
       source: 'legacy_hospital',
-      broad: false,
       assignments: legacyAssignments,
-      clientIds: unique(legacyAssignments.map((assignment) => assignment.client?.id)),
-      blockIds: unique(legacyAssignments.flatMap((assignment) => (assignment.scopes || [])
-        .filter((scope) => scope.scope_type === 'hospital_block')
-        .map(scopeValue))),
-      locationIds: unique(legacyAssignments.flatMap((assignment) => (assignment.scopes || [])
-        .filter((scope) => scope.scope_type === 'location')
-        .map(scopeValue))),
+      qpmsViewAllowed: legacyAssignments.some(assignmentAllowsInternalView),
+      clientViewAllowed: true,
+      ...scope,
     };
   }
 
   return { allowed: false, status: 403, code: 'hospital_web_access_denied', message: 'Hospital ticket dashboard access denied.' };
 }
 
-function applyAccessScope(query, access) {
+export function applyAccessScope(query, access) {
   if (access.broad) return query;
-  if (access.clientIds?.length) query = query.in('client_id', access.clientIds);
-  if (access.blockIds?.length && access.locationIds?.length) {
-    query = query.or(`block_id.in.(${access.blockIds.join(',')}),location_id.in.(${access.locationIds.join(',')})`);
-  } else if (access.blockIds?.length) {
-    query = query.in('block_id', access.blockIds);
-  } else if (access.locationIds?.length) {
-    query = query.in('location_id', access.locationIds);
+  const clauses = [];
+  if (access.clientIds?.length) clauses.push(`client_id.in.(${access.clientIds.join(',')})`);
+  if (access.blockIds?.length) clauses.push(`block_id.in.(${access.blockIds.join(',')})`);
+  if (access.locationIds?.length) clauses.push(`location_id.in.(${access.locationIds.join(',')})`);
+  if (!clauses.length) throw httpError(403, 'hospital_web_scope_required', 'Hospital Ticketing scope is unavailable.');
+  if (clauses.length > 1) return query.or(clauses.join(','));
+  if (access.clientIds?.length) return query.in('client_id', access.clientIds);
+  if (access.blockIds?.length) return query.in('block_id', access.blockIds);
+  return query.in('location_id', access.locationIds);
+}
+
+export function hospitalWebAccessAllowsClient(access = {}, clientId) {
+  if (access.broad === true) return true;
+  const id = clean(clientId, 80);
+  return Boolean(id && (access.authorizedClientIds || []).includes(id));
+}
+
+export async function resolveWebHospitalClientFilter(client, access, filters = {}) {
+  const next = { ...filters };
+  const presentation = clean(filters.presentation || 'qpms', 20).toLowerCase();
+  if (presentation === 'qpms' && access.qpmsViewAllowed !== true) {
+    throw httpError(403, 'hospital_qpms_view_access_denied', 'Internal QPMS Hospital Ticketing access is required.');
   }
-  return query;
+  if (presentation === 'client' && access.clientViewAllowed !== true) {
+    throw httpError(403, 'hospital_client_view_access_denied', 'Hospital Client View access is required.');
+  }
+  const requestedCode = clean(filters.client_code || filters.clientCode, 80).toUpperCase();
+  if (requestedCode) {
+    const { data, error } = await client
+      .from('hospital_clients')
+      .select('id,client_code,client_name,is_active')
+      .eq('client_code', requestedCode)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw httpError(404, 'hospital_client_not_found', 'Hospital Ticketing client was not found.');
+    next.client_id = data.id;
+    next.client = data;
+  }
+  if (next.client_id && !hospitalWebAccessAllowsClient(access, next.client_id)) {
+    throw httpError(403, 'hospital_client_access_denied', 'Hospital Ticketing access is not available for this client.');
+  }
+  return next;
 }
 
 function applyFilters(query, filters = {}, { includePaginationFilters = true } = {}) {
@@ -288,6 +408,32 @@ function listRow(ticket, attachmentCount = 0, beforeImage = null) {
   };
 }
 
+function clientSafeListRow(ticket, attachmentCount = 0) {
+  const row = listRow(ticket, attachmentCount);
+  delete row.current_assignee;
+  delete row.accepted_by;
+  delete row.supervisor;
+  delete row.current_escalation_level;
+  delete row.current_escalation_level_no;
+  delete row.acceptance_status;
+  delete row.acceptance_due_at;
+  delete row.acceptance_timeout_at;
+  delete row.broadcasted_at;
+  delete row.supervisor_sla_due_at;
+  delete row.operations_sla_due_at;
+  delete row.escalation_due_at;
+  delete row.project_head_sla_due_at;
+  delete row.dean_sla_due_at;
+  delete row.dean_escalated_at;
+  delete row.ticket_source;
+  delete row.final_escalation;
+  delete row.sla;
+  delete row.unassigned;
+  delete row.overdue;
+  delete row.uat;
+  return row;
+}
+
 function safeEvent(event) {
   return {
     id: event.id,
@@ -345,6 +491,26 @@ async function attachmentCounts(client, ticketIds) {
   return counts;
 }
 
+function clientSafeEvent(event) {
+  return {
+    id: event.id,
+    event_type: event.event_type,
+    from_status: event.from_status,
+    to_status: event.to_status,
+    remarks: event.remarks,
+    created_at: event.created_at,
+  };
+}
+
+function clientSafeComment(comment) {
+  return {
+    id: comment.id,
+    comment_type: comment.comment_type,
+    comment_text: comment.comment_text,
+    created_at: comment.created_at,
+  };
+}
+
 async function firstComplaintAttachments(client, ticketIds) {
   if (!ticketIds.length) return new Map();
   const { data, error } = await client
@@ -363,6 +529,7 @@ async function firstComplaintAttachments(client, ticketIds) {
 }
 
 export async function listWebHospitalTickets(client, access, filters = {}) {
+  filters = await resolveWebHospitalClientFilter(client, access, filters);
   const page = parsePositiveInt(filters.page, 1, 100000);
   const pageSize = parsePositiveInt(filters.page_size || filters.pageSize, 25, SAFE_PAGE_SIZE_MAX);
   const from = (page - 1) * pageSize;
@@ -378,16 +545,16 @@ export async function listWebHospitalTickets(client, access, filters = {}) {
   const { data, error, count } = await query;
   if (error) throw error;
   const ids = (data || []).map((ticket) => ticket.id);
+  const includeImages = truthy(filters.include_images);
   const [counts, complaintAttachments] = await Promise.all([
     attachmentCounts(client, ids),
-    firstComplaintAttachments(client, ids),
+    includeImages ? firstComplaintAttachments(client, ids) : Promise.resolve(new Map()),
   ]);
+  const clientPresentation = clean(filters.presentation, 20).toLowerCase() === 'client';
   return {
-    tickets: (data || []).map((ticket) => listRow(
-      ticket,
-      counts.get(ticket.id) || 0,
-      complaintAttachments.get(ticket.id) || null,
-    )),
+    tickets: (data || []).map((ticket) => clientPresentation
+      ? clientSafeListRow(ticket, counts.get(ticket.id) || 0)
+      : listRow(ticket, counts.get(ticket.id) || 0, complaintAttachments.get(ticket.id) || null)),
     pagination: {
       page,
       page_size: pageSize,
@@ -398,26 +565,38 @@ export async function listWebHospitalTickets(client, access, filters = {}) {
 }
 
 export async function summarizeWebHospitalTickets(client, access, filters = {}) {
-  let query = client.from('hospital_tickets').select('id,status_code,current_assignee_user_id,current_assignee_role,current_escalation_level_no,supervisor_sla_due_at,operations_sla_due_at,project_head_sla_due_at,dean_sla_due_at,dean_escalated_at,escalation_due_at,final_escalation,reopen_count,acceptance_status,acceptance_due_at', { count: 'exact' });
+  filters = await resolveWebHospitalClientFilter(client, access, filters);
+  let query = client.from('hospital_tickets').select(`
+    id,status_code,priority,current_assignee_user_id,current_assignee_role,current_escalation_level_no,
+    supervisor_sla_due_at,operations_sla_due_at,project_head_sla_due_at,dean_sla_due_at,dean_escalated_at,
+    escalation_due_at,final_escalation,reopen_count,acceptance_status,acceptance_due_at,raised_at,closed_at,updated_at,
+    category:hospital_ticket_categories(id,category_name),
+    block:hospital_blocks(id,block_name),
+    assignee:hospital_ticket_users!hospital_tickets_current_assignee_user_id_fkey(id,display_name)
+  `, { count: 'exact' });
   query = applyAccessScope(query, access);
   query = applyFilters(query, filters, { includePaginationFilters: false });
   const { data, error } = await query.limit(10000);
   if (error) throw error;
   const rows = data || [];
-  let onDutyQuery = client
-    .from('hospital_ticket_users')
-    .select('id', { count: 'exact', head: true })
-    .eq('role_code', 'housekeeping_supervisor')
-    .eq('profile_type', 'internal')
-    .eq('is_active', true)
-    .eq('duty_status', 'on_duty');
-  if (!access.broad && access.clientIds?.length) onDutyQuery = onDutyQuery.in('client_id', access.clientIds);
-  const onDutyResult = await onDutyQuery;
-  if (onDutyResult.error && onDutyResult.error.code !== '42703') throw onDutyResult.error;
+  let onDutyCount = 0;
+  if (access.broad || access.clientIds?.length) {
+    let onDutyQuery = client
+      .from('hospital_ticket_users')
+      .select('id', { count: 'exact', head: true })
+      .eq('role_code', 'housekeeping_supervisor')
+      .eq('profile_type', 'internal')
+      .eq('is_active', true)
+      .eq('duty_status', 'on_duty');
+    if (!access.broad) onDutyQuery = onDutyQuery.in('client_id', access.clientIds);
+    const onDutyResult = await onDutyQuery;
+    if (onDutyResult.error && onDutyResult.error.code !== '42703') throw onDutyResult.error;
+    onDutyCount = onDutyResult.count || 0;
+  }
   const now = new Date();
   const isOverdue = (ticket) => hospitalSlaState(ticket, now).state === 'breached';
   const countStatus = (status) => rows.filter((ticket) => ticket.status_code === status).length;
-  return {
+  const counts = {
     total: rows.length,
     open: countStatus('open'),
     assigned: countStatus('assigned'),
@@ -431,15 +610,78 @@ export async function summarizeWebHospitalTickets(client, access, filters = {}) 
     dean_escalations: rows.filter((ticket) => ticket.dean_escalated_at || ticket.current_escalation_level_no === 5).length,
     overdue: rows.filter(isOverdue).length,
     unassigned: rows.filter((ticket) => !ticket.current_assignee_user_id && !CLOSED_STATUSES.includes(ticket.status_code)).length,
-    on_duty_supervisors: onDutyResult.count || 0,
+    on_duty_supervisors: onDutyCount,
+    cancelled: countStatus('cancelled'),
+    active: rows.filter((ticket) => !CLOSED_STATUSES.includes(ticket.status_code)).length,
+    under_process: rows.filter((ticket) => ['assigned', 'accepted', 'in_progress'].includes(ticket.status_code)).length,
+    awaiting_client_confirmation: countStatus('resolved_awaiting_confirmation'),
+  };
+  const grouped = (values, keyFor, labelFor) => {
+    const map = new Map();
+    for (const value of values) {
+      const key = keyFor(value);
+      if (!key) continue;
+      const current = map.get(key) || { key, label: labelFor(value), count: 0 };
+      current.count += 1;
+      map.set(key, current);
+    }
+    return [...map.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  };
+  const activeRows = rows.filter((ticket) => !CLOSED_STATUSES.includes(ticket.status_code));
+  const ageing = [
+    { key: 'under_1_day', label: '< 1 day', min: 0, max: 1, count: 0 },
+    { key: '1_3_days', label: '1-3 days', min: 1, max: 4, count: 0 },
+    { key: '4_7_days', label: '4-7 days', min: 4, max: 8, count: 0 },
+    { key: 'over_7_days', label: '> 7 days', min: 8, max: Number.POSITIVE_INFINITY, count: 0 },
+  ];
+  for (const ticket of activeRows) {
+    const ageDays = Math.max(0, (now.getTime() - new Date(ticket.raised_at).getTime()) / 86400000);
+    const bucket = ageing.find((item) => ageDays >= item.min && ageDays < item.max);
+    if (bucket) bucket.count += 1;
+  }
+  const trendDays = Array.from({ length: 14 }, (_, index) => {
+    const date = new Date(now);
+    date.setUTCHours(0, 0, 0, 0);
+    date.setUTCDate(date.getUTCDate() - (13 - index));
+    return date.toISOString().slice(0, 10);
+  });
+  const trend = trendDays.map((date) => ({
+    date,
+    raised: rows.filter((ticket) => String(ticket.raised_at || '').slice(0, 10) === date).length,
+    closed: rows.filter((ticket) => String(ticket.closed_at || '').slice(0, 10) === date).length,
+  }));
+  const facets = {
+    blocks: grouped(rows, (ticket) => ticket.block?.id, (ticket) => ticket.block?.block_name || 'Unknown block'),
+    categories: grouped(rows, (ticket) => ticket.category?.id, (ticket) => ticket.category?.category_name || 'Uncategorised'),
+    assignees: grouped(rows, (ticket) => ticket.assignee?.id, (ticket) => ticket.assignee?.display_name || 'Unassigned'),
+  };
+  const clientPresentation = clean(filters.presentation, 20).toLowerCase() === 'client';
+  const responseCounts = clientPresentation
+    ? Object.fromEntries([
+      'total', 'active', 'under_process', 'escalated',
+      'awaiting_client_confirmation', 'closed', 'cancelled',
+    ].map((key) => [key, counts[key]]))
+    : counts;
+  return {
+    counts: responseCounts,
+    analytics: {
+      trend,
+      status: grouped(rows, (ticket) => ticket.status_code, (ticket) => ticket.status_code),
+      category: facets.categories,
+      block: facets.blocks,
+      ageing: ageing.map(({ key, label, count }) => ({ key, label, count })),
+    },
+    facets: clientPresentation ? { ...facets, assignees: [] } : facets,
   };
 }
 
-export async function getWebHospitalTicketDetail(client, access, ticketId) {
+export async function getWebHospitalTicketDetail(client, access, ticketId, filters = {}) {
+  filters = await resolveWebHospitalClientFilter(client, access, filters);
   const identifier = clean(ticketId, 80);
   const column = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(identifier) ? 'id' : 'ticket_no';
   let query = client.from('hospital_tickets').select(TICKET_WEB_SELECT).eq(column, identifier);
   query = applyAccessScope(query, access);
+  if (filters.client_id) query = query.eq('client_id', filters.client_id);
   const { data: ticket, error } = await query.maybeSingle();
   if (error) throw error;
   if (!ticket) {
@@ -457,28 +699,42 @@ export async function getWebHospitalTicketDetail(client, access, ticketId) {
     if (result.error) throw result.error;
   }
   if (assignmentHistory.error && assignmentHistory.error.code !== '42P01') throw assignmentHistory.error;
-  const safeAttachments = await Promise.all((attachments.data || []).map((attachment) => safeAttachment(client, attachment)));
-  return {
-    ticket: {
-      ...listRow(ticket, safeAttachments.length),
+  const clientPresentation = clean(filters.presentation, 20).toLowerCase() === 'client';
+  const visibleEvents = clientPresentation
+    ? (events.data || []).filter(clientCanSeeHospitalEvent).map(clientHospitalEventView)
+    : events.data || [];
+  const visibleComments = (comments.data || []).filter((comment) => !clientPresentation || comment.is_client_visible === true);
+  const visibleAttachments = (attachments.data || []).filter((attachment) => !clientPresentation || attachment.is_client_visible === true);
+  const safeAttachments = await Promise.all(visibleAttachments.map((attachment) => safeAttachment(client, attachment)));
+  const baseTicket = clientPresentation
+    ? clientSafeListRow(ticket, safeAttachments.length)
+    : listRow(ticket, safeAttachments.length);
+  const responseTicket = {
+      ...baseTicket,
       description: ticket.description,
       raised_by: {
         name: ticket.raised_by_name,
-        role: ticket.raised_by_role,
+        role: clientPresentation ? null : ticket.raised_by_role,
       },
-      resolved_by: safeUser(ticket.resolved_by),
+      resolved_by: clientPresentation ? null : safeUser(ticket.resolved_by),
       resolution_action: ticket.resolution_action || null,
       resolution_remarks: ticket.resolution_remarks || null,
       client_feedback: ticket.client_feedback || null,
       awaiting_confirmation_at: ticket.awaiting_confirmation_at || null,
       reopened_at: ticket.reopened_at || null,
       cancelled_at: ticket.cancelled_at || null,
-      assignment_failure_reason: ticket.metadata?.assignment_failure_reason || null,
-    },
-    timeline: (events.data || []).map(safeEvent),
-    comments: (comments.data || []).map(safeComment),
+    };
+  if (!clientPresentation) {
+    responseTicket.assignment_failure_reason = ticket.metadata?.assignment_failure_reason || null;
+  } else {
+    delete responseTicket.resolution_action;
+  }
+  return {
+    ticket: responseTicket,
+    timeline: visibleEvents.map(clientPresentation ? clientSafeEvent : safeEvent),
+    comments: visibleComments.map(clientPresentation ? clientSafeComment : safeComment),
     attachments: safeAttachments,
-    assignment_history: assignmentHistory.data || [],
+    assignment_history: clientPresentation ? [] : assignmentHistory.data || [],
   };
 }
 
@@ -488,5 +744,10 @@ export function hospitalWebAccessResponse(access) {
     broad: access.broad === true,
     client_ids: access.clientIds || [],
     block_ids: access.blockIds || [],
+    location_ids: access.locationIds || [],
+    views: {
+      qpms: access.qpmsViewAllowed === true,
+      client: access.clientViewAllowed === true,
+    },
   };
 }

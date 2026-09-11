@@ -24,7 +24,7 @@ export const roleGroups = {
   DemoViewer: ['DEMO_VIEWER'],
 };
 
-export const protectedNavRoutes = ['/dashboard', '/crm', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/fault-tracker', '/deep-cleaning', '/assets', '/reports', '/employees', '/store-master', '/settings', '/hospital-feedback', '/operations/hospital-feedback'];
+export const protectedNavRoutes = ['/dashboard', '/crm', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/hospital-ticketing', '/fault-tracker', '/deep-cleaning', '/assets', '/reports', '/employees', '/store-master', '/settings', '/hospital-feedback', '/operations/hospital-feedback'];
 
 function normalizedRoleKey(role = '') {
   return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
@@ -67,6 +67,7 @@ export function normalizeCanonicalRole(role = '') {
     DEMOVIEWER: 'DEMO_VIEWER',
     COO: 'COO',
     EXECUTIVEASSISTANT: EXECUTIVE_ASSISTANT_ROLE,
+    EXECUTIVEASSISTANTTOCOO: EXECUTIVE_ASSISTANT_ROLE,
     GM: 'GM',
     GENERALMANAGER: 'GM',
     GMTOPMANAGEMENT: 'GM',
@@ -230,6 +231,7 @@ export function canAccessRoute(user, pathname) {
   if (pathname.startsWith('/store-master')) return canAccessStoreMaster(user);
   if (pathname.startsWith('/fault-tracker')) return canAccessFaultTracker(user);
   if (pathname.startsWith('/fo-activities')) return canAccessFoCommandCenter(user);
+  if (pathname.startsWith('/hospital-ticketing') || pathname.startsWith('/tickets')) return Boolean(user);
   if (pathname.startsWith('/crm') && ['Business Head', 'Branch Head'].includes(normalizeCanonicalRole(user?.rawRole || user?.role))) return true;
   return hasAnyRole(user, routeAllowedRoles(pathname));
 }

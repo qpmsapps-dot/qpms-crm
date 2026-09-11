@@ -62,6 +62,7 @@ import {
   hospitalWebAccessResponse,
   listWebHospitalTickets,
   resolveHospitalWebAccess,
+  resolveWebHospitalClientFilter,
   summarizeWebHospitalTickets,
 } from './services/hospitalTicketWebDashboardService.js';
 import {
@@ -98,6 +99,7 @@ import {
   hasCooWebVisibility,
   normalizeWebRoleKey,
 } from './services/webRoleAccessService.js';
+import { createCorsOptions, resolveAllowedOrigins } from './services/corsPolicyService.js';
 import {
   loadAuthorizedEmployeeRange,
   recalculateEmployeeRange,
@@ -163,20 +165,9 @@ const app = express();
 const port = Number(process.env.PORT || 4000);
 const demoBackendAuthEnabled =
   String(process.env.ENABLE_DEMO_AUTH || '').trim().toLowerCase() === 'true';
-const allowedOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+const allowedOrigins = resolveAllowedOrigins(process.env.FRONTEND_ORIGIN);
 
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    return callback(new Error(`CORS blocked for origin: ${origin}`));
-  },
-  credentials: true,
-}));
+app.use(cors(createCorsOptions(allowedOrigins)));
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -5570,13 +5561,32 @@ async function requireHospitalWebAccess(request, response, next) {
   }
 }
 
+app.get('/api/web/hospital-tickets/access', requireSupabaseJwtAllowMissingProfile, requireHospitalWebAccess, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const filters = await resolveWebHospitalClientFilter(client, request.hospitalWebAccess, request.query || {});
+    response.json({
+      ok: true,
+      allowed: true,
+      client: filters.client || null,
+      access: hospitalWebAccessResponse(request.hospitalWebAccess),
+    });
+  } catch (error) {
+    response.status(error.statusCode || 500).json({
+      ok: false,
+      code: error.code || 'hospital_web_access_failed',
+      message: error.statusCode && error.statusCode < 500 ? error.message : 'Unable to verify Hospital Ticketing access.',
+    });
+  }
+});
+
 app.get('/api/web/hospital-tickets/summary', requireSupabaseJwtAllowMissingProfile, requireHospitalWebAccess, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
-    const counts = await summarizeWebHospitalTickets(client, request.hospitalWebAccess, request.query || {});
+    const summary = await summarizeWebHospitalTickets(client, request.hospitalWebAccess, request.query || {});
     response.json({
       ok: true,
-      counts,
+      ...summary,
       access: hospitalWebAccessResponse(request.hospitalWebAccess),
     });
   } catch (error) {
@@ -5619,7 +5629,7 @@ app.get('/api/web/hospital-tickets', requireSupabaseJwtAllowMissingProfile, requ
 app.get('/api/web/hospital-tickets/:ticketId', requireSupabaseJwtAllowMissingProfile, requireHospitalWebAccess, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
-    const detail = await getWebHospitalTicketDetail(client, request.hospitalWebAccess, request.params.ticketId);
+    const detail = await getWebHospitalTicketDetail(client, request.hospitalWebAccess, request.params.ticketId, request.query || {});
     response.json({
       ok: true,
       ...detail,
