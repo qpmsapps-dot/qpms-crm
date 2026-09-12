@@ -435,6 +435,7 @@ function listRow(ticket, attachmentCount = 0, beforeImage = null) {
 
 function clientSafeListRow(ticket, attachmentCount = 0) {
   const row = listRow(ticket, attachmentCount);
+  row.raised_by = { name: clean(ticket.raised_by_name, 160) || null };
   delete row.current_assignee;
   delete row.accepted_by;
   delete row.supervisor;

@@ -7,6 +7,7 @@ import {
   getWebHospitalTicketDetail,
   hospitalWebAccessAllowsClient,
   listWebHospitalClientContacts,
+  listWebHospitalTickets,
   resolveHospitalWebAccess,
   resolveWebHospitalClientFilter,
   scopedAccessFromAssignments,
@@ -21,6 +22,7 @@ function queryResult(data, error = null, count = null) {
     limit() { return this; },
     in() { return this; },
     or() { return this; },
+    range() { return this; },
     maybeSingle() { return Promise.resolve({ data, error }); },
     then(resolve) { return Promise.resolve({ data, error, count }).then(resolve); },
   };
@@ -426,6 +428,36 @@ test('summary groups canonical active, escalation, confirmation, closed and canc
   assert.equal(result.counts.awaiting_client_confirmation, 1);
   assert.equal(result.counts.closed, 1);
   assert.equal(result.counts.cancelled, 1);
+});
+
+test('client ticket list exposes only the canonical requester name and keeps QPMS list unchanged', async () => {
+  const rows = [
+    { id: 'ticket-with-name', ticket_no: 'QPMS-HK-2026-000076', raised_by_name: 'DR. ANANDA KRISHNA', status_code: 'open' },
+    { id: 'ticket-without-name', ticket_no: 'QPMS-HK-2026-000077', raised_by_name: null, status_code: 'open' },
+  ];
+  const client = {
+    from(table) {
+      if (table === 'hospital_tickets') return queryResult(rows, null, rows.length);
+      if (table === 'hospital_ticket_attachments') return queryResult([]);
+      return queryResult([]);
+    },
+  };
+  const access = { broad: true, qpmsViewAllowed: true, clientViewAllowed: true };
+  const clientResult = await listWebHospitalTickets(client, access, {
+    client_id: 'client-nims', presentation: 'client',
+  });
+  assert.deepEqual(clientResult.tickets[0].raised_by, { name: 'DR. ANANDA KRISHNA' });
+  assert.deepEqual(clientResult.tickets[1].raised_by, { name: null });
+  for (const ticket of clientResult.tickets) {
+    assert.equal('raised_by_name' in ticket, false);
+    assert.equal('raised_by_client_contact_id' in ticket, false);
+    assert.deepEqual(Object.keys(ticket.raised_by), ['name']);
+  }
+
+  const qpmsResult = await listWebHospitalTickets(client, access, {
+    client_id: 'client-nims', presentation: 'qpms',
+  });
+  assert.equal('raised_by' in qpmsResult.tickets[0], false);
 });
 
 test('client doctor profile is not promoted into web management access', async () => {

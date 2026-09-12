@@ -83,6 +83,16 @@ test('registered-user search matches name, designation and mobile without anothe
   assert.equal(filterHospitalClientContacts(contacts, '').length, 2);
 });
 
+test('Client View recent tickets show the requester name with a safe missing-name fallback', () => {
+  const ticketTableStart = page.indexOf('function TicketTable');
+  const ticketTableEnd = page.indexOf('function DashboardView', ticketTableStart);
+  const ticketTable = page.slice(ticketTableStart, ticketTableEnd);
+  assert.match(ticketTable, /'Category \/ Issue', \.\.\.\(clientView \? \['Raised By'\] : \[\]\), 'Status'/);
+  assert.match(ticketTable, /ticket\.raised_by\?\.name \|\| '—'/);
+  assert.match(ticketTable, /max-w-40 truncate/);
+  assert.doesNotMatch(ticketTable, /raised_by.*(?:id|mobile|designation|email|role)/);
+});
+
 test('QPMS and Client dashboards use live grouped statuses and real drilldowns', () => {
   for (const label of [
     'Total Tickets', 'Active Tickets', 'Awaiting Supervisor', 'Under Process',
