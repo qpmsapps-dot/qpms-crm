@@ -8,6 +8,7 @@ import {
   hospitalAllowedActions,
   isActiveHospitalUser,
   isAdminApplicationRole,
+  isHospitalTicketOperationalSupervisor,
   normalizeHospitalRole,
   resolveAdminHospitalActor,
   scopeAllows,
@@ -28,6 +29,8 @@ import {
   allowedActionsForTicket,
   buildHospitalLifecycleNotificationRows,
   buildHospitalRequesterClosedNotificationRows,
+  completeAttachment,
+  createAttachmentUpload,
   createHospitalTicket,
   getHospitalTicket,
   hospitalLifecycleNotificationDedupeKey,
@@ -38,6 +41,7 @@ import {
   hospitalTicketIdentifierColumn,
   listHospitalNotifications,
   listHospitalTickets,
+  performHospitalAction,
   performClientTicketCancellation,
   safeWriteHospitalRequesterClosedNotification,
 } from '../services/hospitalTicketService.js';
@@ -692,7 +696,7 @@ test('Block A client and Supervisor cannot access Block B', () => {
   }
 });
 
-test('client-wide escalation roles see only their current actionable owner level', () => {
+test('client-wide escalation roles and designated Supervisor see their actionable tickets only', () => {
   const supervisorTicket = {
     client_id: 'client-a',
     block_id: 'block-a',
@@ -705,6 +709,7 @@ test('client-wide escalation roles see only their current actionable owner level
     status_code: 'escalated_operations_executive',
     current_assignee_role: 'operations_executive',
     current_assignee_user_id: 'ops-user',
+    supervisor_user_id: 'sup-user',
   };
   const facilityTicket = {
     client_id: 'client-a',
@@ -712,6 +717,7 @@ test('client-wide escalation roles see only their current actionable owner level
     status_code: 'escalated_facility_manager',
     current_assignee_role: 'facility_manager',
     current_assignee_user_id: 'facility-user',
+    supervisor_user_id: 'sup-user',
   };
   const projectTicket = {
     client_id: 'client-a',
@@ -719,6 +725,7 @@ test('client-wide escalation roles see only their current actionable owner level
     status_code: 'escalated_project_head',
     current_assignee_role: 'project_head',
     current_assignee_user_id: 'project-user',
+    supervisor_user_id: 'sup-user',
   };
   const clientScope = { client_id: 'client-a', scope_type: 'client', can_view: true };
 
@@ -728,10 +735,14 @@ test('client-wide escalation roles see only their current actionable owner level
   assert.equal(canViewHospitalTicket({ user: activeUser('project_head', 'project-user'), scopes: [clientScope] }, supervisorTicket), false);
 
   assert.equal(canViewHospitalTicket({ user: activeUser('operations_executive', 'ops-user'), scopes: [clientScope] }, operationsTicket), true);
+  assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor', 'sup-user'), scopes: [clientScope] }, operationsTicket), true);
+  assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor', 'other-sup'), scopes: [clientScope] }, operationsTicket), false);
   assert.equal(canViewHospitalTicket({ user: activeUser('facility_manager', 'facility-user'), scopes: [clientScope] }, operationsTicket), false);
   assert.equal(canViewHospitalTicket({ user: activeUser('facility_manager', 'facility-user'), scopes: [clientScope] }, facilityTicket), true);
+  assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor', 'sup-user'), scopes: [clientScope] }, facilityTicket), true);
   assert.equal(canViewHospitalTicket({ user: activeUser('project_head', 'project-user'), scopes: [clientScope] }, facilityTicket), false);
   assert.equal(canViewHospitalTicket({ user: activeUser('project_head', 'project-user'), scopes: [clientScope] }, projectTicket), true);
+  assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor', 'sup-user'), scopes: [clientScope] }, projectTicket), true);
   assert.equal(canViewHospitalTicket({ user: activeUser('operations_executive', 'other-ops'), scopes: [clientScope] }, operationsTicket), false);
 });
 
@@ -839,6 +850,20 @@ test('status transitions reject arbitrary frontend statuses', () => {
   assert.ok(validateHospitalAction({ role: 'admin', status: 'closed', action: 'progress', payload: { remarks: 'x' } }).length > 0);
 });
 
+test('designated operational Supervisor keeps work actions on escalated statuses only with explicit context', () => {
+  for (const status of ['escalated_operations_executive', 'escalated_facility_manager', 'escalated_project_head']) {
+    assert.ok(validateHospitalAction({ role: 'housekeeping_supervisor', status, action: 'resolve', payload: { resolution_action: 'Mopped', resolution_remarks: 'Dry and inspected' } }).length > 0);
+    assert.deepEqual(validateHospitalAction({ role: 'housekeeping_supervisor', status, action: 'start_work', payload: { operational_supervisor: true } }), []);
+    assert.deepEqual(validateHospitalAction({ role: 'housekeeping_supervisor', status, action: 'progress', payload: { remarks: 'Work continuing', operational_supervisor: true } }), []);
+    assert.deepEqual(validateHospitalAction({ role: 'housekeeping_supervisor', status, action: 'request_assistance', payload: { remarks: 'Need support', operational_supervisor: true } }), []);
+    assert.deepEqual(validateHospitalAction({ role: 'housekeeping_supervisor', status, action: 'resolve', payload: { resolution_action: 'Mopped', resolution_remarks: 'Dry and inspected', operational_supervisor: true } }), []);
+  }
+  for (const status of ['closed', 'cancelled', 'resolved_awaiting_confirmation']) {
+    assert.ok(validateHospitalAction({ role: 'housekeeping_supervisor', status, action: 'progress', payload: { remarks: 'x', operational_supervisor: true } }).length > 0);
+    assert.ok(validateHospitalAction({ role: 'housekeeping_supervisor', status, action: 'resolve', payload: { resolution_action: 'x', resolution_remarks: 'x', operational_supervisor: true } }).length > 0);
+  }
+});
+
 test('takeover exposes operational work actions without duplicate takeover', () => {
   const actor = {
     user: { ...activeUser('operations_executive', 'ops-user'), profile_type: 'internal' },
@@ -867,6 +892,45 @@ test('takeover exposes operational work actions without duplicate takeover', () 
   assert.ok(allowedActionsForTicket(actor, accepted).includes('resolve'));
   assert.ok(allowedActionsForTicket(actor, accepted).includes('reassign_supervisor'));
   assert.ok(!allowedActionsForTicket(actor, started).includes('start_work'));
+});
+
+test('designated Supervisor sees escalated work actions while unrelated Supervisors and test users do not', () => {
+  const ticket = {
+    id: 'ticket-escalated',
+    client_id: 'client-a',
+    block_id: 'block-a',
+    status_code: 'escalated_facility_manager',
+    current_assignee_role: 'facility_manager',
+    current_assignee_user_id: 'facility-user',
+    supervisor_user_id: 'sup-user',
+    acceptance_status: 'awaiting',
+    work_started_at: null,
+  };
+  const scope = { client_id: 'client-a', scope_type: 'client', can_view: true, can_update: true };
+  const supervisor = { user: { ...activeUser('housekeeping_supervisor', 'sup-user'), profile_type: 'internal' }, scopes: [scope] };
+  const otherSupervisor = { user: { ...activeUser('housekeeping_supervisor', 'other-sup'), profile_type: 'internal' }, scopes: [scope] };
+  const testSupervisor = { user: { ...activeUser('housekeeping_supervisor', 'sup-user'), profile_type: 'internal', metadata: { test_user: true } }, scopes: [scope] };
+  const facility = { user: { ...activeUser('facility_manager', 'facility-user'), profile_type: 'internal' }, scopes: [scope] };
+
+  assert.equal(isHospitalTicketOperationalSupervisor(supervisor, ticket), true);
+  assert.equal(canViewHospitalTicket(supervisor, ticket), true);
+  assert.equal(canViewHospitalTicket(otherSupervisor, ticket), false);
+  assert.equal(canViewHospitalTicket(testSupervisor, ticket), false);
+  assert.equal(canViewHospitalTicket(facility, ticket), true);
+  assert.equal(canViewHospitalTicket(supervisor, { ...ticket, supervisor_user_id: null }), false);
+  assert.equal(canViewHospitalTicket(supervisor, { ...ticket, supervisor_user_id: 'new-sup' }), false);
+  assert.equal(canViewHospitalTicket({ user: { ...activeUser('housekeeping_supervisor', 'new-sup'), profile_type: 'internal' }, scopes: [scope] }, { ...ticket, supervisor_user_id: 'new-sup' }), true);
+
+  const actions = allowedActionsForTicket(supervisor, ticket);
+  assert.ok(actions.includes('start_work'));
+  assert.ok(actions.includes('progress'));
+  assert.ok(actions.includes('request_assistance'));
+  assert.ok(actions.includes('resolve'));
+  assert.ok(!actions.includes('take_over'));
+
+  assert.deepEqual(allowedActionsForTicket(otherSupervisor, ticket).filter((action) => ['start_work', 'progress', 'resolve'].includes(action)), []);
+  assert.deepEqual(allowedActionsForTicket(testSupervisor, ticket).filter((action) => ['start_work', 'progress', 'resolve'].includes(action)), []);
+  assert.ok(allowedActionsForTicket(facility, ticket).includes('take_over'));
 });
 
 test('resolution and feedback validation enforce production requirements', () => {
@@ -1191,6 +1255,178 @@ test('Admin can use scoped ticket list, detail, dashboard and privileged actions
   assert.ok(detail.allowed_actions.includes('resolve'));
   const dashboard = await hospitalDashboard(client, actor);
   assert.equal(dashboard.counts.escalated, 1);
+});
+
+test('designated Supervisor resolves escalated Facility Manager ticket without changing escalation owner', async () => {
+  const actor = {
+    user: { ...activeUser('housekeeping_supervisor', 'sup-user'), profile_type: 'internal', display_name: 'Ramu' },
+    scopes: [{ client_id: 'client-a', scope_type: 'client', can_view: true, can_update: true }],
+  };
+  let ticket = {
+    id: 'ticket-escalated',
+    ticket_no: 'QPMS-HK-2026-000999',
+    client_id: 'client-a',
+    block_id: 'block-a',
+    location_id: 'loc-a',
+    status_code: 'escalated_facility_manager',
+    current_escalation_level: 'facility_manager',
+    current_escalation_level_no: 3,
+    current_assignee_user_id: 'facility-user',
+    current_assignee_role: 'facility_manager',
+    facility_manager_user_id: 'facility-user',
+    supervisor_user_id: 'sup-user',
+    accepted_by_user_id: 'sup-user',
+    priority: 'medium',
+    version: 7,
+    metadata: {},
+  };
+  const writes = [];
+  const completionAttachment = { id: 'completion-photo' };
+  const client = {
+    from(table) {
+      if (table === 'hospital_tickets') {
+        return {
+          select() { if (this.mode !== 'update') this.mode = 'select'; return this; },
+          update(values) { this.mode = 'update'; this.values = values; return this; },
+          eq() { return this; },
+          order() { return this; },
+          async maybeSingle() {
+            if (this.mode === 'update') {
+              ticket = {
+                ...ticket,
+                ...this.values,
+                assignee: { id: 'facility-user', display_name: 'Alli Chandrika', role_code: 'facility_manager' },
+                accepted_by: { id: 'sup-user', display_name: 'Ramu', role_code: 'housekeeping_supervisor' },
+              };
+              writes.push({ table, values: this.values });
+            }
+            return { data: ticket, error: null };
+          },
+        };
+      }
+      if (table === 'hospital_ticket_attachments') {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          order() { return this; },
+          limit() { return this; },
+          then(resolve) { return Promise.resolve({ data: [completionAttachment], error: null }).then(resolve); },
+        };
+      }
+      if (table === 'hospital_ticket_events' || table === 'hospital_ticket_comments') {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          order() { return this; },
+          insert(row) {
+            writes.push({ table, row });
+            return { error: null };
+          },
+          then(resolve) { return Promise.resolve({ data: [], error: null }).then(resolve); },
+        };
+      }
+      if (table === 'hospital_ticket_notifications') {
+        return {
+          upsert(row) {
+            writes.push({ table, row });
+            return { error: null };
+          },
+        };
+      }
+      return query([]);
+    },
+  };
+
+  const detail = await performHospitalAction(client, actor, ticket.id, 'resolve', 7, {
+    resolution_action: 'Cleaned and disinfected',
+    resolution_remarks: 'Area cleaned and verified with nursing desk.',
+  });
+
+  assert.equal(detail.ticket.status_code, 'resolved_awaiting_confirmation');
+  assert.equal(detail.ticket.current_assignee_user_id, 'facility-user');
+  assert.equal(detail.ticket.current_assignee_role, 'facility_manager');
+  assert.equal(detail.ticket.resolved_by_user_id, 'sup-user');
+  assert.equal(detail.ticket.metadata.resolved_by_operational_supervisor, true);
+  assert.equal(detail.ticket.metadata.preserved_escalation_owner_user_id, 'facility-user');
+  assert.ok(writes.some((write) => write.table === 'hospital_ticket_events' && write.row.event_type === 'ticket_resolved'));
+  assert.ok(writes.some((write) => write.table === 'hospital_ticket_events' && write.row.event_type === 'awaiting_client_confirmation'));
+  assert.ok(writes.some((write) => write.table === 'hospital_ticket_comments' && write.row.comment_type === 'resolution_note'));
+});
+
+test('designated Supervisor can register completion photo on escalated ticket', async () => {
+  const actor = {
+    user: { ...activeUser('housekeeping_supervisor', 'sup-user'), profile_type: 'internal', display_name: 'Ramu' },
+    scopes: [{ client_id: 'client-a', scope_type: 'client', can_view: true, can_update: true }],
+  };
+  const ticket = {
+    id: 'ticket-escalated',
+    ticket_no: 'QPMS-HK-2026-001000',
+    client_id: 'client-a',
+    block_id: 'block-a',
+    location_id: 'loc-a',
+    status_code: 'escalated_project_head',
+    current_assignee_user_id: 'project-user',
+    current_assignee_role: 'project_head',
+    project_head_user_id: 'project-user',
+    supervisor_user_id: 'sup-user',
+    accepted_by_user_id: 'sup-user',
+    version: 3,
+  };
+  const rpcCalls = [];
+  const client = {
+    from(table) {
+      if (table === 'hospital_tickets') {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          async maybeSingle() { return { data: ticket, error: null }; },
+        };
+      }
+      if (table === 'hospital_ticket_events' || table === 'hospital_ticket_comments') return query([]);
+      if (table === 'hospital_ticket_attachments') {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          order() { return this; },
+          then(resolve) { return Promise.resolve({ data: [], error: null }).then(resolve); },
+        };
+      }
+      return query([]);
+    },
+    storage: {
+      from() {
+        return {
+          createSignedUploadUrl: async (path) => ({
+            data: { signedUrl: `https://storage.example/${path}`, token: 'signed-token' },
+            error: null,
+          }),
+          list: async () => ({ data: [{ name: 'completion.jpg' }], error: null }),
+        };
+      },
+    },
+    rpc: async (name, payload) => {
+      rpcCalls.push({ name, payload });
+      return { data: { id: 'attachment-1', ...payload }, error: null };
+    },
+  };
+
+  const signed = await createAttachmentUpload(client, actor, ticket.id, {
+    attachment_type: 'completion_photo',
+    mime_type: 'image/jpeg',
+  });
+  assert.match(signed.storage_path, /^client-a\/ticket-escalated\/completion_photo\//);
+
+  const attachment = await completeAttachment(client, actor, ticket.id, {
+    storage_path: 'client-a/ticket-escalated/completion_photo/completion.jpg',
+    attachment_type: 'completion_photo',
+    original_filename: 'completion.jpg',
+    mime_type: 'image/jpeg',
+    size_bytes: 1000,
+    is_client_visible: true,
+  });
+  assert.equal(attachment.p_actor_user_id, 'sup-user');
+  assert.equal(rpcCalls[0].name, 'rpc_complete_hospital_attachment');
+  assert.equal(rpcCalls[0].payload.p_attachment_type, 'completion_photo');
 });
 
 test('client cancellation metadata is exposed safely and final statuses cannot cancel', () => {

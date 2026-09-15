@@ -94,6 +94,31 @@ const STATUS_OWNER_ROLE = {
   escalated_project_head: 'project_head',
 };
 
+const OPERATIONAL_SUPERVISOR_STATUSES = new Set([
+  'accepted',
+  'in_progress',
+  'reopened',
+  'escalated_operations_executive',
+  'escalated_facility_manager',
+  'escalated_project_head',
+]);
+
+export function isHospitalTicketOperationalSupervisor(actor, ticket) {
+  const user = actor?.user;
+  if (!isActiveHospitalUser(user)) return false;
+  if (normalizeHospitalRole(user.role_code) !== 'housekeeping_supervisor') return false;
+  if (!ticket?.supervisor_user_id || ticket.supervisor_user_id !== user.id) return false;
+  if (!OPERATIONAL_SUPERVISOR_STATUSES.has(String(ticket?.status_code || '').trim().toLowerCase())) return false;
+  const metadata = user.metadata || {};
+  if (
+    metadata.test_user === true
+    || metadata.demo_user === true
+    || metadata.uat_only === true
+    || metadata.do_not_use_for_real_staff === true
+  ) return false;
+  return true;
+}
+
 export function currentHospitalTicketOwnerRole(ticket) {
   const assignedRole = normalizeHospitalRole(ticket?.current_assignee_role);
   if (OPERATIONAL_ROLES.has(assignedRole)) return assignedRole;
@@ -118,6 +143,7 @@ export function canViewHospitalTicket(actor, ticket) {
   })) return false;
   const role = normalizeHospitalRole(actor.user.role_code);
   if (role === 'admin' || role === 'doctor' || role === 'hospital_management' || role === 'hospital_dean') return true;
+  if (isHospitalTicketOperationalSupervisor(actor, ticket)) return true;
   if (OPERATIONAL_ROLES.has(role)) return isAssignedHospitalTicketOwner(actor, ticket);
   return false;
 }

@@ -70,6 +70,9 @@ export function validateHospitalTicketCreate(payload) {
 }
 
 export function validateHospitalAction({ role, status, action, payload = {} }) {
+  const operationalSupervisor = payload?.operational_supervisor === true;
+  const supervisorWorkStatus = ['accepted', 'in_progress', 'reopened'].includes(status)
+    || (operationalSupervisor && ['escalated_operations_executive', 'escalated_facility_manager', 'escalated_project_head'].includes(status));
   const allowed = {
     accept:
       (role === 'housekeeping_supervisor' && ['awaiting_supervisor_acceptance', 'open', 'assigned', 'reopened'].includes(status))
@@ -77,16 +80,16 @@ export function validateHospitalAction({ role, status, action, payload = {} }) {
       || (role === 'facility_manager' && status === 'escalated_facility_manager')
       || (role === 'project_head' && status === 'escalated_project_head'),
     start_work:
-      (role === 'housekeeping_supervisor' && ['accepted', 'reopened'].includes(status))
+      (role === 'housekeeping_supervisor' && (['accepted', 'reopened'].includes(status) || (operationalSupervisor && ['escalated_operations_executive', 'escalated_facility_manager', 'escalated_project_head'].includes(status))))
       || ESCALATED_STATUS_FOR_ROLE[role] === status,
     progress:
-      (role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status) && status !== 'awaiting_supervisor_acceptance')
+      (role === 'housekeeping_supervisor' && supervisorWorkStatus)
       || (role === 'operations_executive' && status === 'escalated_operations_executive')
       || (role === 'facility_manager' && ['escalated_facility_manager', 'reopened'].includes(status))
       || (role === 'project_head' && status === 'escalated_project_head')
       || (role === 'hospital_dean' && status === 'escalated_hospital_dean')
       || (role === 'admin' && !['closed', 'cancelled', 'resolved_awaiting_confirmation'].includes(status)),
-    request_assistance: role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status) && status !== 'awaiting_supervisor_acceptance',
+    request_assistance: role === 'housekeeping_supervisor' && supervisorWorkStatus,
     manual_escalation: ['housekeeping_supervisor', 'admin'].includes(role) && ACTIVE_STATUSES.has(status) && status !== 'awaiting_supervisor_acceptance',
     escalate_facility: ['operations_executive', 'admin'].includes(role) && status === 'escalated_operations_executive',
     take_over:
@@ -99,7 +102,7 @@ export function validateHospitalAction({ role, status, action, payload = {} }) {
     assign_support: ['facility_manager', 'admin'].includes(role)
       && !['closed', 'cancelled', 'resolved_awaiting_confirmation'].includes(status),
     resolve:
-      (role === 'housekeeping_supervisor' && ['accepted', 'in_progress', 'reopened'].includes(status))
+      (role === 'housekeeping_supervisor' && supervisorWorkStatus)
       || (role === 'operations_executive' && status === 'escalated_operations_executive')
       || (role === 'facility_manager' && ['escalated_facility_manager', 'reopened'].includes(status))
       || (role === 'project_head' && status === 'escalated_project_head')

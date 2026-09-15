@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
-import { canViewHospitalTicket, hospitalAllowedActions, scopeAllows } from './hospitalTicketAuthService.js';
+import {
+  canViewHospitalTicket,
+  hospitalAllowedActions,
+  isHospitalTicketOperationalSupervisor,
+  scopeAllows,
+} from './hospitalTicketAuthService.js';
 import { nimsRosterCoverageMatrix } from './hospitalTicketRoutingService.js';
 import {
   cleanHospitalText,
@@ -480,7 +485,9 @@ function applyTicketFilters(query, filters = {}) {
   if (filters.category) query = query.eq('category_id', cleanHospitalText(filters.category, 80));
   if (filters.date_from) query = query.gte('raised_at', `${filters.date_from}T00:00:00+05:30`);
   if (filters.date_to) query = query.lte('raised_at', `${filters.date_to}T23:59:59.999+05:30`);
-  if (filters.assigned_to_me === 'true') query = query.eq('current_assignee_user_id', filters.actorUserId);
+  if (filters.assigned_to_me === 'true') {
+    query = query.or(`current_assignee_user_id.eq.${filters.actorUserId},supervisor_user_id.eq.${filters.actorUserId}`);
+  }
   if (filters.escalated === 'true') query = query.in('status_code', ['escalated_operations_executive', 'escalated_facility_manager', 'escalated_project_head']);
   if (filters.awaiting_confirmation === 'true') query = query.eq('status_code', 'resolved_awaiting_confirmation');
   if (filters.reopened === 'true') query = query.eq('status_code', 'reopened');
@@ -933,7 +940,11 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
     error.code = '42501';
     throw error;
   }
-  const errors = validateHospitalAction({ role: actor.user.role_code, status: current.ticket.status_code, action: effectiveAction, payload });
+  const isOperationalSupervisor = isHospitalTicketOperationalSupervisor(actor, current.ticket);
+  const actionPayload = isOperationalSupervisor
+    ? { ...payload, operational_supervisor: true }
+    : payload;
+  const errors = validateHospitalAction({ role: actor.user.role_code, status: current.ticket.status_code, action: effectiveAction, payload: actionPayload });
   if (errors.length) { const error = new Error(errors.join(' ')); error.code = '42501'; throw error; }
   if (!Number.isInteger(Number(expectedVersion))) { const error = new Error('Ticket version is required.'); error.code = '22023'; throw error; }
   if (current.ticket.version !== Number(expectedVersion)) {
@@ -993,6 +1004,20 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
   ) {
     return performEscalationOwnerStartWork(client, actor, current.ticket);
   }
+  if (
+    effectiveAction === 'start_work'
+    && isOperationalSupervisor
+    && Object.values(ESCALATED_STATUS_FOR_ROLE).includes(current.ticket.status_code)
+  ) {
+    return performEscalationOwnerStartWork(client, actor, current.ticket);
+  }
+  if (
+    ['progress', 'request_assistance'].includes(effectiveAction)
+    && isOperationalSupervisor
+    && Object.values(ESCALATED_STATUS_FOR_ROLE).includes(current.ticket.status_code)
+  ) {
+    return performOperationalSupervisorProgress(client, actor, current.ticket, effectiveAction, payload);
+  }
   if (effectiveAction === 'reassign_supervisor') {
     return performManualHospitalReassignment(client, actor, current.ticket, {
       targetRole: 'housekeeping_supervisor',
@@ -1013,6 +1038,12 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
   if (effectiveAction === 'resolve') {
     await requireCurrentOperationalOwner(client, actor, current.ticket);
     await requireCompletionEvidence(client, current.ticket.id);
+    if (
+      isOperationalSupervisor
+      && Object.values(ESCALATED_STATUS_FOR_ROLE).includes(current.ticket.status_code)
+    ) {
+      return performOperationalSupervisorResolve(client, actor, current.ticket, payload);
+    }
   }
   const requiredRole = ['manual_escalation', 'escalate_operations'].includes(effectiveAction)
     ? 'operations_executive'
@@ -1145,6 +1176,169 @@ async function performEscalationOwnerStartWork(client, actor, ticket) {
   return detail;
 }
 
+async function performOperationalSupervisorProgress(client, actor, ticket, action, payload = {}) {
+  const remarks = cleanHospitalText(payload.remarks, 500);
+  if (!remarks) {
+    const error = new Error('Remarks are required.');
+    error.code = '22023';
+    throw error;
+  }
+  const now = new Date().toISOString();
+  const updated = await client.from('hospital_tickets')
+    .update({
+      version: ticket.version + 1,
+      updated_at: now,
+      metadata: {
+        ...(ticket.metadata || {}),
+        operational_supervisor_update_at: now,
+      },
+    })
+    .eq('id', ticket.id)
+    .eq('version', ticket.version)
+    .select(TICKET_SELECT)
+    .maybeSingle();
+  if (updated.error) throw updated.error;
+  if (!updated.data) {
+    const error = new Error('Ticket version conflict.');
+    error.code = '40001';
+    throw error;
+  }
+
+  const eventType = action === 'request_assistance' ? 'assistance_requested' : 'progress_update';
+  const event = await client.from('hospital_ticket_events').insert({
+    ticket_id: ticket.id,
+    event_type: eventType,
+    from_status: ticket.status_code,
+    to_status: ticket.status_code,
+    actor_user_id: actor.user.id,
+    actor_name: actor.user.display_name,
+    actor_role: actor.user.role_code,
+    remarks,
+    event_data: {
+      ...(payload || {}),
+      operational_supervisor: true,
+      escalation_owner_user_id: ticket.current_assignee_user_id || null,
+      escalation_owner_role: ticket.current_assignee_role || null,
+    },
+  });
+  if (event.error) throw event.error;
+
+  const comment = await client.from('hospital_ticket_comments').insert({
+    ticket_id: ticket.id,
+    author_user_id: actor.user.id,
+    author_name: actor.user.display_name,
+    author_role: actor.user.role_code,
+    comment_type: 'internal_update',
+    comment_text: remarks,
+    is_client_visible: payload.is_client_visible === true,
+  });
+  if (comment.error) throw comment.error;
+
+  return getHospitalTicket(client, actor, ticket.id);
+}
+
+async function performOperationalSupervisorResolve(client, actor, ticket, payload = {}) {
+  const resolutionAction = cleanHospitalText(payload.resolution_action, 500);
+  const resolutionRemarks = cleanHospitalText(payload.resolution_remarks, 1500);
+  if (!resolutionAction || !resolutionRemarks) {
+    const error = new Error('Resolution action and remarks are required.');
+    error.code = '22023';
+    throw error;
+  }
+  const now = new Date().toISOString();
+  const updated = await client.from('hospital_tickets')
+    .update({
+      status_code: 'resolved_awaiting_confirmation',
+      current_escalation_level: 'client_confirmation',
+      escalation_due_at: null,
+      sla_status: 'resolved',
+      resolved_at: now,
+      resolved_by_user_id: actor.user.id,
+      resolution_action: resolutionAction,
+      resolution_remarks: resolutionRemarks,
+      awaiting_confirmation_at: now,
+      version: ticket.version + 1,
+      updated_at: now,
+      metadata: {
+        ...(ticket.metadata || {}),
+        resolved_by_operational_supervisor: true,
+        preserved_escalation_owner_user_id: ticket.current_assignee_user_id || null,
+        preserved_escalation_owner_role: ticket.current_assignee_role || null,
+      },
+    })
+    .eq('id', ticket.id)
+    .eq('version', ticket.version)
+    .select(TICKET_SELECT)
+    .maybeSingle();
+  if (updated.error) throw updated.error;
+  if (!updated.data) {
+    const error = new Error('Ticket version conflict.');
+    error.code = '40001';
+    throw error;
+  }
+
+  const event = await client.from('hospital_ticket_events').insert({
+    ticket_id: ticket.id,
+    event_type: 'ticket_resolved',
+    from_status: ticket.status_code,
+    to_status: 'resolved_awaiting_confirmation',
+    actor_user_id: actor.user.id,
+    actor_name: actor.user.display_name,
+    actor_role: actor.user.role_code,
+    remarks: null,
+    event_data: {
+      resolution_action: resolutionAction,
+      resolution_remarks: resolutionRemarks,
+      operational_supervisor: true,
+      escalation_owner_user_id: ticket.current_assignee_user_id || null,
+      escalation_owner_role: ticket.current_assignee_role || null,
+    },
+  });
+  if (event.error) throw event.error;
+
+  const comment = await client.from('hospital_ticket_comments').insert({
+    ticket_id: ticket.id,
+    author_user_id: actor.user.id,
+    author_name: actor.user.display_name,
+    author_role: actor.user.role_code,
+    comment_type: 'resolution_note',
+    comment_text: resolutionRemarks,
+    is_client_visible: true,
+  });
+  if (comment.error) throw comment.error;
+
+  const awaiting = await client.from('hospital_ticket_events').insert({
+    ticket_id: ticket.id,
+    event_type: 'awaiting_client_confirmation',
+    from_status: 'resolved_awaiting_confirmation',
+    to_status: 'resolved_awaiting_confirmation',
+    actor_name: 'QPMS Workflow',
+    actor_role: 'system',
+    remarks: 'Waiting for client confirmation.',
+  });
+  if (awaiting.error) throw awaiting.error;
+
+  const resolvedTicket = updated.data;
+  await safeWriteContactAwaitingConfirmationNotification(client, {
+    beforeTicket: ticket,
+    afterTicket: resolvedTicket,
+  });
+  await safeWriteHospitalLifecycleNotifications(client, {
+    action: 'resolve',
+    actor,
+    beforeTicket: ticket,
+    afterTicket: resolvedTicket,
+  });
+  return {
+    ticket: hospitalTicketForActor(actor, resolvedTicket),
+    timeline: [],
+    comments: [],
+    attachments: [],
+    sla: hospitalSlaState(resolvedTicket),
+    allowed_actions: allowedActionsForTicket(actor, resolvedTicket),
+  };
+}
+
 async function safeWriteContactAwaitingConfirmationNotification(client, { beforeTicket = null, afterTicket = null } = {}) {
   const ticket = afterTicket || beforeTicket || {};
   if (ticket.status_code !== 'resolved_awaiting_confirmation' || !ticket.raised_by_client_contact_id) return { inserted: 0 };
@@ -1201,6 +1395,7 @@ async function safeWriteContactAwaitingConfirmationNotification(client, { before
 async function requireCurrentOperationalOwner(client, actor, ticket) {
   if (actor.user.profile_type !== 'internal' || actor.user.role_code === 'admin') return;
   if (ticket.current_assignee_user_id === actor.user.id) return;
+  if (isHospitalTicketOperationalSupervisor(actor, ticket)) return;
   const error = new Error('Only the current operational owner can resolve this ticket.');
   error.code = '42501';
   throw error;
@@ -1722,10 +1917,15 @@ export function hospitalSlaState(ticket, now = new Date()) {
 }
 
 export function allowedActionsForTicket(actor, ticket) {
+  const operationalSupervisor = isHospitalTicketOperationalSupervisor(actor, ticket);
   return hospitalAllowedActions(actor.user).filter((action) => {
     if (action === 'take_over' && ticket.acceptance_status !== 'awaiting') return false;
-    if (action === 'start_work' && ESCALATED_STATUS_FOR_ROLE[actor.user.role_code] === ticket.status_code) {
-      if (ticket.acceptance_status !== 'accepted' || ticket.work_started_at) return false;
+    if (
+      action === 'start_work'
+      && (ESCALATED_STATUS_FOR_ROLE[actor.user.role_code] === ticket.status_code || operationalSupervisor)
+    ) {
+      if (ticket.work_started_at) return false;
+      if (!operationalSupervisor && ticket.acceptance_status !== 'accepted') return false;
     }
     const mapped = action === 'manual_escalation' ? 'manual_escalation' : action;
     return validateHospitalAction({
@@ -1733,14 +1933,18 @@ export function allowedActionsForTicket(actor, ticket) {
       status: ticket.status_code,
       action: mapped,
       payload: action === 'progress'
-        ? { remarks: 'check' }
+        ? { remarks: 'check', ...(operationalSupervisor ? { operational_supervisor: true } : {}) }
+        : action === 'request_assistance'
+          ? { remarks: 'check', ...(operationalSupervisor ? { operational_supervisor: true } : {}) }
         : action === 'resolve'
-          ? { resolution_action: 'check', resolution_remarks: 'check' }
+          ? { resolution_action: 'check', resolution_remarks: 'check', ...(operationalSupervisor ? { operational_supervisor: true } : {}) }
           : action === 'feedback'
             ? { rating: 5, satisfaction_status: 'satisfied' }
             : action === 'cancel'
               ? { reason_code: 'raised_by_mistake' }
-              : {},
+              : operationalSupervisor
+                ? { operational_supervisor: true }
+                : {},
     }).length === 0;
   });
 }
