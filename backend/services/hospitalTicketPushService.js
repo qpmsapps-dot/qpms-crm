@@ -7,6 +7,11 @@ import { cleanHospitalText } from './hospitalTicketWorkflowService.js';
 export const HOSPITAL_PUSH_APP_SCOPES = new Set(['myqpms_internal', 'qpms_client']);
 const INTERNAL_PUSH_ROLES = new Set(['housekeeping_supervisor', 'operations_executive', 'facility_manager', 'project_head', 'admin']);
 const CLIENT_PUSH_ROLES = new Set(['doctor', 'hospital_management']);
+const HOSPITAL_PUSH_NOTIFICATION_SELECT = 'id,ticket_id,recipient_user_id,recipient_client_contact_id,notification_type,title,body,priority,current_owner_role,escalation_level,action_status,action_expires_at,metadata,created_at,recipient:hospital_ticket_users!hospital_ticket_notifications_recipient_user_id_fkey(id,profile_type,role_code,is_active,client_id),contact:hospital_client_contacts!hospital_ticket_notifications_recipient_client_contact_id_fkey(id,is_active,client_id)';
+const DEFAULT_PUSH_QUEUE_LIMIT = 200;
+const DEFAULT_PUSH_QUEUE_SCAN_BATCH_SIZE = 200;
+const DEFAULT_PUSH_QUEUE_MAX_SCAN = 5000;
+const DEFAULT_STALE_PROCESSING_MS = 15 * 60 * 1000;
 
 export function appScopeForHospitalUser(user) {
   const role = normalizeHospitalRole(user?.role_code);
@@ -300,18 +305,55 @@ export async function dispatchHospitalNotificationPushes(client, options = {}) {
   }
 }
 
-export async function queueHospitalPushDeliveries(client, { notificationIds = null, limit = 200 } = {}) {
+export async function queueHospitalPushDeliveries(client, {
+  notificationIds = null,
+  limit = DEFAULT_PUSH_QUEUE_LIMIT,
+  scanBatchSize = DEFAULT_PUSH_QUEUE_SCAN_BATCH_SIZE,
+  maxScan = DEFAULT_PUSH_QUEUE_MAX_SCAN,
+} = {}) {
+  const queueLimit = Math.min(Math.max(Number(limit) || DEFAULT_PUSH_QUEUE_LIMIT, 1), 500);
+  const batchSize = Math.min(Math.max(Number(scanBatchSize) || DEFAULT_PUSH_QUEUE_SCAN_BATCH_SIZE, 1), 500);
+  const scanLimit = Math.max(Number(maxScan) || DEFAULT_PUSH_QUEUE_MAX_SCAN, batchSize);
+  const targetedIds = Array.isArray(notificationIds) && notificationIds.length
+    ? Array.from(new Set(notificationIds.filter(Boolean)))
+    : null;
+  let queued = 0;
+  let offset = 0;
+  let scanned = 0;
+  while (queued < queueLimit) {
+    const notifications = await fetchHospitalPushNotificationBatch(client, {
+      notificationIds: targetedIds,
+      limit: targetedIds ? Math.min(targetedIds.length, 500) : batchSize,
+      offset,
+    });
+    if (notifications.error) throw notifications.error;
+    const batch = notifications.data || [];
+    for (const notification of batch) {
+      if (queued >= queueLimit) break;
+      const created = await queueHospitalPushDeliveryForNotification(client, notification, queueLimit - queued);
+      queued += created;
+    }
+    if (targetedIds || batch.length < batchSize) break;
+    scanned += batch.length;
+    if (scanned >= scanLimit) break;
+    offset += batch.length;
+  }
+  return queued;
+}
+
+async function fetchHospitalPushNotificationBatch(client, { notificationIds, limit, offset }) {
   let query = client
     .from('hospital_ticket_notifications')
-    .select('id,ticket_id,recipient_user_id,recipient_client_contact_id,notification_type,title,body,priority,current_owner_role,escalation_level,action_status,action_expires_at,metadata,created_at,recipient:hospital_ticket_users!hospital_ticket_notifications_recipient_user_id_fkey(id,profile_type,role_code,is_active,client_id),contact:hospital_client_contacts!hospital_ticket_notifications_recipient_client_contact_id_fkey(id,is_active,client_id)')
+    .select(HOSPITAL_PUSH_NOTIFICATION_SELECT)
     .order('created_at', { ascending: true })
-    .limit(Math.min(Math.max(Number(limit) || 200, 1), 500));
-  if (Array.isArray(notificationIds) && notificationIds.length) query = query.in('id', notificationIds);
-  const notifications = await query;
-  if (notifications.error) throw notifications.error;
+    .order('id', { ascending: true });
+  if (Array.isArray(notificationIds) && notificationIds.length) {
+    return query.in('id', notificationIds).limit(limit);
+  }
+  return query.range(offset, offset + limit - 1);
+}
 
-  let queued = 0;
-  for (const notification of notifications.data || []) {
+async function queueHospitalPushDeliveryForNotification(client, notification, remainingLimit) {
     const appScope = appScopeForNotification(notification);
     const skipReason = pushNotificationSkipReason(notification, appScope);
     if (skipReason) {
@@ -326,7 +368,7 @@ export async function queueHospitalPushDeliveries(client, { notificationIds = nu
         deliveryRowsCreated: 0,
         skipReason,
       });
-      continue;
+      return 0;
     }
     const deviceOwnerColumn = notification.recipient_client_contact_id
       ? 'hospital_client_contact_id'
@@ -365,14 +407,38 @@ export async function queueHospitalPushDeliveries(client, { notificationIds = nu
         deliveryRowsCreated: 0,
         skipReason: 'no_eligible_devices',
       });
-      continue;
+      return 0;
+    }
+    const existing = await client
+      .from('hospital_ticket_push_deliveries')
+      .select('device_id')
+      .eq('notification_id', notification.id)
+      .in('device_id', rows.map((row) => row.device_id));
+    if (existing.error) throw existing.error;
+    const alreadyQueued = new Set((existing.data || []).map((row) => row.device_id));
+    const missingRows = rows
+      .filter((row) => !alreadyQueued.has(row.device_id))
+      .slice(0, Math.max(Number(remainingLimit) || 0, 0));
+    if (!missingRows.length) {
+      console.info('[Hospital Push] Delivery fanout skipped', {
+        notificationId: notification.id,
+        notificationType: notification.notification_type,
+        ticketId: notification.ticket_id,
+        recipientIdentityType: notification.recipient_client_contact_id ? 'client_contact' : 'hospital_user',
+        recipientId: deviceOwnerId,
+        appScope,
+        eligibleDeviceCount: rows.length,
+        deliveryRowsCreated: 0,
+        skipReason: 'already_queued',
+      });
+      return 0;
     }
     const inserted = await client
       .from('hospital_ticket_push_deliveries')
-      .upsert(rows, { onConflict: 'notification_id,device_id', ignoreDuplicates: true })
+      .upsert(missingRows, { onConflict: 'notification_id,device_id', ignoreDuplicates: true })
       .select('id');
     if (inserted.error) throw inserted.error;
-    const deliveryRowsCreated = Array.isArray(inserted.data) ? inserted.data.length : rows.length;
+    const deliveryRowsCreated = Array.isArray(inserted.data) ? inserted.data.length : missingRows.length;
     console.info('[Hospital Push] Delivery fanout completed', {
       notificationId: notification.id,
       notificationType: notification.notification_type,
@@ -384,13 +450,58 @@ export async function queueHospitalPushDeliveries(client, { notificationIds = nu
       deliveryRowsCreated,
       skipReason: null,
     });
-    queued += deliveryRowsCreated;
-  }
-  return queued;
+    return deliveryRowsCreated;
 }
 
-export async function processHospitalPushDeliveries(client, { limit = 100, firebaseSender = sendFirebaseMessage, now = new Date() } = {}) {
+export async function recoverStaleHospitalPushDeliveries(client, {
+  now = new Date(),
+  staleProcessingMs = DEFAULT_STALE_PROCESSING_MS,
+  limit = 100,
+} = {}) {
   const due = now.toISOString();
+  const staleCutoff = new Date(
+    now.getTime() - Math.max(Number(staleProcessingMs) || DEFAULT_STALE_PROCESSING_MS, 60 * 1000),
+  ).toISOString();
+  const stale = await client
+    .from('hospital_ticket_push_deliveries')
+    .select('id,last_attempt_at')
+    .eq('status', 'processing')
+    .eq('retryable', true)
+    .is('sent_at', null)
+    .lte('claimed_at', staleCutoff)
+    .order('claimed_at', { ascending: true })
+    .limit(Math.min(Math.max(Number(limit) || 100, 1), 500));
+  if (stale.error) throw stale.error;
+  const recoverableIds = (stale.data || [])
+    .filter((row) => !row.last_attempt_at || new Date(row.last_attempt_at) <= new Date(staleCutoff))
+    .map((row) => row.id);
+  if (!recoverableIds.length) return 0;
+  const recovered = await client
+    .from('hospital_ticket_push_deliveries')
+    .update({
+      status: 'pending',
+      claimed_at: null,
+      claim_token: null,
+      next_attempt_at: due,
+      error_code: 'stale_processing_recovered',
+      updated_at: due,
+    })
+    .in('id', recoverableIds)
+    .eq('status', 'processing')
+    .is('sent_at', null)
+    .select('id');
+  if (recovered.error) throw recovered.error;
+  return Array.isArray(recovered.data) ? recovered.data.length : recoverableIds.length;
+}
+
+export async function processHospitalPushDeliveries(client, {
+  limit = 100,
+  firebaseSender = sendFirebaseMessage,
+  now = new Date(),
+  staleProcessingMs = DEFAULT_STALE_PROCESSING_MS,
+} = {}) {
+  const due = now.toISOString();
+  const recovered = await recoverStaleHospitalPushDeliveries(client, { now, staleProcessingMs, limit });
   const pending = await client
     .from('hospital_ticket_push_deliveries')
     .select('*,notification:hospital_ticket_notifications(*,ticket:hospital_tickets(id,ticket_no,version,priority,title,floor_name,department_name,location_text,description,current_assignee_role,acceptance_due_at,status_code,category:hospital_ticket_categories(category_name),block:hospital_blocks(block_name))),device:hospital_ticket_push_devices(id,fcm_token,token_hash,app_scope,enabled,notification_permission)')
@@ -401,7 +512,7 @@ export async function processHospitalPushDeliveries(client, { limit = 100, fireb
     .limit(Math.min(Math.max(Number(limit) || 100, 1), 500));
   if (pending.error) throw pending.error;
 
-  const stats = { sent: 0, failed: 0, skipped: 0, invalid_token: 0 };
+  const stats = { sent: 0, failed: 0, skipped: 0, invalid_token: 0, recovered };
   for (const delivery of pending.data || []) {
     const claimToken = randomUUID();
     const claimed = await client

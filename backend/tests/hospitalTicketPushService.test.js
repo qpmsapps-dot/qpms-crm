@@ -12,6 +12,7 @@ import {
   isPushActionableNotification,
   processHospitalPushDeliveries,
   queueHospitalPushDeliveries,
+  recoverStaleHospitalPushDeliveries,
   registerHospitalPushDevice,
   validateRequestedAppScope,
 } from '../services/hospitalTicketPushService.js';
@@ -419,7 +420,7 @@ test('contact-created incoming supervisor notification queues one delivery and p
     },
   });
 
-  assert.deepEqual(processed, { sent: 1, failed: 0, skipped: 0, invalid_token: 0 });
+  assert.deepEqual(processed, { sent: 1, failed: 0, skipped: 0, invalid_token: 0, recovered: 0 });
   assert.equal(state.deliveries[0].status, 'sent');
   assert.equal(state.deliveries[0].attempt_count, 1);
   assert.equal(state.deliveries[0].last_attempt_at, now.toISOString());
@@ -488,7 +489,7 @@ test('work completed notification queues and sends one delivery to registered co
     },
   });
 
-  assert.deepEqual(processed, { sent: 1, failed: 0, skipped: 0, invalid_token: 0 });
+  assert.deepEqual(processed, { sent: 1, failed: 0, skipped: 0, invalid_token: 0, recovered: 0 });
   assert.equal(state.deliveries[0].status, 'sent');
   assert.equal(state.deliveries[0].attempt_count, 1);
 });
@@ -535,6 +536,185 @@ test('client feedback notifications are actionable for internal myQPMS devices',
   assert.equal(state.deliveries.every((row) => row.app_scope === 'myqpms_internal'), true);
 });
 
+test('queued notifications do not starve newer unqueued escalation fanout past the first scan page', async () => {
+  const createdAt = (index) => new Date(Date.UTC(2026, 8, 15, 5, 0, index)).toISOString();
+  const notifications = [];
+  const deliveries = [];
+  const supervisorDevice = {
+    id: 'device-supervisor',
+    hospital_ticket_user_id: 'supervisor-user',
+    fcm_token: 'supervisor-token',
+    app_scope: 'myqpms_internal',
+    enabled: true,
+    notification_permission: 'granted',
+  };
+  for (let index = 1; index <= 350; index += 1) {
+    const notification = {
+      id: `notification-${String(index).padStart(3, '0')}`,
+      ticket_id: `ticket-${index}`,
+      recipient_user_id: index <= 300 ? 'supervisor-user' : `unused-user-${index}`,
+      notification_type: 'assignment_alert',
+      title: 'Assignment',
+      body: 'Ticket assignment.',
+      priority: 'medium',
+      action_status: 'active',
+      created_at: createdAt(index),
+      recipient: {
+        id: index <= 300 ? 'supervisor-user' : `unused-user-${index}`,
+        profile_type: 'internal',
+        role_code: 'housekeeping_supervisor',
+        is_active: true,
+        client_id: 'client-a',
+      },
+    };
+    notifications.push(notification);
+    if (index <= 300) {
+      deliveries.push({
+        id: `delivery-existing-${index}`,
+        notification_id: notification.id,
+        device_id: supervisorDevice.id,
+        ticket_id: notification.ticket_id,
+        app_scope: 'myqpms_internal',
+        status: 'sent',
+        retryable: false,
+      });
+    }
+  }
+  notifications[305] = {
+    ...notifications[305],
+    id: 'notification-306-koduri',
+    ticket_id: 'ticket-000082',
+    recipient_user_id: 'koduri-user',
+    notification_type: 'supervisor_acceptance_timeout',
+    title: 'Supervisor Acceptance Timeout',
+    body: 'QPMS-HK-2026-000082 escalated to Operations Executive.',
+    current_owner_role: 'operations_executive',
+    escalation_level: 2,
+    recipient: {
+      id: 'koduri-user',
+      profile_type: 'internal',
+      role_code: 'operations_executive',
+      is_active: true,
+      client_id: 'client-a',
+    },
+  };
+  notifications[306] = {
+    ...notifications[306],
+    id: 'notification-307-alli',
+    ticket_id: 'ticket-000082',
+    recipient_user_id: 'alli-user',
+    notification_type: 'sla_escalation',
+    title: 'Ticket Escalated',
+    body: 'QPMS-HK-2026-000082 escalated to Facility Manager.',
+    current_owner_role: 'facility_manager',
+    escalation_level: 3,
+    recipient: {
+      id: 'alli-user',
+      profile_type: 'internal',
+      role_code: 'facility_manager',
+      is_active: true,
+      client_id: 'client-a',
+    },
+  };
+  const state = {
+    notifications,
+    devices: [
+      supervisorDevice,
+      {
+        id: 'device-koduri',
+        hospital_ticket_user_id: 'koduri-user',
+        fcm_token: 'koduri-token',
+        app_scope: 'myqpms_internal',
+        enabled: true,
+        notification_permission: 'granted',
+      },
+      {
+        id: 'device-alli',
+        hospital_ticket_user_id: 'alli-user',
+        fcm_token: 'alli-token',
+        app_scope: 'myqpms_internal',
+        enabled: true,
+        notification_permission: 'granted',
+      },
+    ],
+    deliveries,
+  };
+
+  const queued = await queueHospitalPushDeliveries(fakePushClient(state), {
+    limit: 200,
+    scanBatchSize: 200,
+    maxScan: 500,
+  });
+
+  assert.equal(queued, 2);
+  assert.equal(
+    state.deliveries.some((row) =>
+      row.notification_id === 'notification-306-koduri' && row.device_id === 'device-koduri'
+    ),
+    true,
+  );
+  assert.equal(
+    state.deliveries.some((row) =>
+      row.notification_id === 'notification-307-alli' && row.device_id === 'device-alli'
+    ),
+    true,
+  );
+  const queuedAgain = await queueHospitalPushDeliveries(fakePushClient(state), {
+    limit: 200,
+    scanBatchSize: 200,
+    maxScan: 500,
+  });
+  assert.equal(queuedAgain, 0);
+});
+
+test('push fanout skips missing, wrong-scope, and disabled devices safely', async () => {
+  const base = {
+    ticket_id: 'ticket-1',
+    recipient_user_id: 'ops-user',
+    notification_type: 'sla_escalation',
+    title: 'Ticket Escalated',
+    body: 'Escalated.',
+    current_owner_role: 'operations_executive',
+    recipient: {
+      id: 'ops-user',
+      profile_type: 'internal',
+      role_code: 'operations_executive',
+      is_active: true,
+      client_id: 'client-a',
+    },
+  };
+  const noDevice = { notifications: [{ ...base, id: 'notification-no-device' }], devices: [], deliveries: [] };
+  assert.equal(await queueHospitalPushDeliveries(fakePushClient(noDevice)), 0);
+
+  const wrongScope = {
+    notifications: [{ ...base, id: 'notification-wrong-scope' }],
+    devices: [{
+      id: 'device-client-app',
+      hospital_ticket_user_id: 'ops-user',
+      fcm_token: 'client-token',
+      app_scope: 'qpms_client',
+      enabled: true,
+      notification_permission: 'granted',
+    }],
+    deliveries: [],
+  };
+  assert.equal(await queueHospitalPushDeliveries(fakePushClient(wrongScope)), 0);
+
+  const disabled = {
+    notifications: [{ ...base, id: 'notification-disabled-device' }],
+    devices: [{
+      id: 'device-disabled',
+      hospital_ticket_user_id: 'ops-user',
+      fcm_token: 'internal-token',
+      app_scope: 'myqpms_internal',
+      enabled: false,
+      notification_permission: 'granted',
+    }],
+    deliveries: [],
+  };
+  assert.equal(await queueHospitalPushDeliveries(fakePushClient(disabled)), 0);
+});
+
 test('temporary Firebase failure keeps delivery retryable with backoff', async () => {
   const now = new Date('2026-08-11T00:10:28Z');
   const state = {
@@ -566,7 +746,7 @@ test('temporary Firebase failure keeps delivery retryable with backoff', async (
     }),
   });
 
-  assert.deepEqual(processed, { sent: 0, failed: 1, skipped: 0, invalid_token: 0 });
+  assert.deepEqual(processed, { sent: 0, failed: 1, skipped: 0, invalid_token: 0, recovered: 0 });
   assert.equal(state.deliveries[0].status, 'failed');
   assert.equal(state.deliveries[0].attempt_count, 1);
   assert.equal(state.deliveries[0].retryable, true);
@@ -605,11 +785,91 @@ test('permanent invalid Firebase token disables only that device', async () => {
     }),
   });
 
-  assert.deepEqual(processed, { sent: 0, failed: 0, skipped: 0, invalid_token: 1 });
+  assert.deepEqual(processed, { sent: 0, failed: 0, skipped: 0, invalid_token: 1, recovered: 0 });
   assert.equal(state.deliveries[0].status, 'invalid_token');
   assert.equal(state.deliveries[0].retryable, false);
   assert.equal(state.devices[0].enabled, false);
   assert.equal(state.devices[0].disable_reason, 'messaging/registration-token-not-registered');
+});
+
+test('stale processing delivery is recovered and processed once', async () => {
+  const now = new Date('2026-08-11T00:30:00Z');
+  const state = {
+    notifications: [pushNotificationFixture()],
+    devices: [pushDeviceFixture()],
+    deliveries: [{
+      id: 'delivery-stale-processing',
+      notification_id: 'notification-supervisor',
+      device_id: 'device-1',
+      ticket_id: 'ticket-1',
+      app_scope: 'myqpms_internal',
+      status: 'processing',
+      attempt_count: 0,
+      max_attempts: 5,
+      claimed_at: '2026-08-11T00:00:00Z',
+      claim_token: 'old-claim',
+      last_attempt_at: null,
+      sent_at: null,
+      next_attempt_at: '2026-08-11T00:00:00Z',
+      retryable: true,
+      notification: pushNotificationFixture(),
+      device: pushDeviceFixture(),
+    }],
+  };
+
+  const processed = await processHospitalPushDeliveries(fakePushClient(state), {
+    now,
+    staleProcessingMs: 15 * 60 * 1000,
+    firebaseSender: async () => ({ ok: true, messageId: 'projects/demo/messages/recovered' }),
+  });
+
+  assert.deepEqual(processed, { sent: 1, failed: 0, skipped: 0, invalid_token: 0, recovered: 1 });
+  assert.equal(state.deliveries[0].status, 'sent');
+  assert.equal(state.deliveries[0].attempt_count, 1);
+  assert.equal(state.deliveries[0].fcm_message_id, 'projects/demo/messages/recovered');
+});
+
+test('recent processing delivery is not recovered or retried prematurely', async () => {
+  const now = new Date('2026-08-11T00:10:00Z');
+  const state = {
+    notifications: [pushNotificationFixture()],
+    devices: [pushDeviceFixture()],
+    deliveries: [{
+      id: 'delivery-active-processing',
+      notification_id: 'notification-supervisor',
+      device_id: 'device-1',
+      ticket_id: 'ticket-1',
+      app_scope: 'myqpms_internal',
+      status: 'processing',
+      attempt_count: 0,
+      max_attempts: 5,
+      claimed_at: '2026-08-11T00:06:00Z',
+      claim_token: 'fresh-claim',
+      last_attempt_at: null,
+      sent_at: null,
+      next_attempt_at: '2026-08-11T00:00:00Z',
+      retryable: true,
+      notification: pushNotificationFixture(),
+      device: pushDeviceFixture(),
+    }],
+  };
+
+  const recovered = await recoverStaleHospitalPushDeliveries(fakePushClient(state), {
+    now,
+    staleProcessingMs: 15 * 60 * 1000,
+  });
+  const processed = await processHospitalPushDeliveries(fakePushClient(state), {
+    now,
+    staleProcessingMs: 15 * 60 * 1000,
+    firebaseSender: async () => {
+      throw new Error('fresh processing claim should not be sent');
+    },
+  });
+
+  assert.equal(recovered, 0);
+  assert.deepEqual(processed, { sent: 0, failed: 0, skipped: 0, invalid_token: 0, recovered: 0 });
+  assert.equal(state.deliveries[0].status, 'processing');
+  assert.equal(state.deliveries[0].claim_token, 'fresh-claim');
 });
 
 test('Firebase Admin initialization uses modular getApps instead of undefined admin.apps', () => {
@@ -703,13 +963,30 @@ class FakePushQuery {
     this.filters = [];
     this.patch = null;
     this.insertRows = null;
+    this.orders = [];
+    this.limitCount = null;
+    this.rangeBounds = null;
   }
 
   select() { return this; }
-  order() { return this; }
-  limit() { return this; }
+  order(column, options = {}) {
+    this.orders.push({ column, ascending: options.ascending !== false });
+    return this;
+  }
+  limit(count) {
+    this.limitCount = count;
+    return this;
+  }
+  range(from, to) {
+    this.rangeBounds = [from, to];
+    return this;
+  }
   lte(column, value) {
     this.filters.push(['lte', column, value]);
+    return this;
+  }
+  is(column, value) {
+    this.filters.push(['is', column, value]);
     return this;
   }
   eq(column, value) {
@@ -774,13 +1051,32 @@ class FakePushQuery {
       : this.table === 'hospital_ticket_push_devices'
         ? this.state.devices
         : this.state.deliveries;
-    return source.filter((row) => this.filters.every(([op, column, value]) => {
+    let rows = source.filter((row) => this.filters.every(([op, column, value]) => {
       if (op === 'eq') return row[column] === value;
       if (op === 'neq') return row[column] !== value;
       if (op === 'in') return value.includes(row[column]);
       if (op === 'lte') return !row[column] || new Date(row[column]) <= new Date(value);
+      if (op === 'is') return row[column] === value;
       return true;
     }));
+    if (this.orders.length) {
+      rows = [...rows].sort((left, right) => {
+        for (const { column, ascending } of this.orders) {
+          const leftValue = left[column] ?? '';
+          const rightValue = right[column] ?? '';
+          if (leftValue < rightValue) return ascending ? -1 : 1;
+          if (leftValue > rightValue) return ascending ? 1 : -1;
+        }
+        return 0;
+      });
+    }
+    if (this.rangeBounds) {
+      const [from, to] = this.rangeBounds;
+      rows = rows.slice(from, to + 1);
+    } else if (this.limitCount !== null) {
+      rows = rows.slice(0, this.limitCount);
+    }
+    return rows;
   }
 }
 
