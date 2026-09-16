@@ -558,15 +558,6 @@ function isTerminalTicket(ticket) {
   return ['closed', 'cancelled'].includes(clean(ticket?.status_code, 80).toLowerCase());
 }
 
-function resendOwnerRoleForTicket(ticket) {
-  const status = clean(ticket?.status_code, 80).toLowerCase();
-  if (status === 'awaiting_supervisor_acceptance') return 'housekeeping_supervisor';
-  if (status === 'escalated_operations_executive') return 'operations_executive';
-  if (status === 'escalated_facility_manager') return 'facility_manager';
-  if (status === 'escalated_project_head') return 'project_head';
-  return clean(ticket?.current_assignee_role, 80).toLowerCase();
-}
-
 function isValidInternalNotificationRecipient(user, { clientId, role }) {
   if (!user?.id || user.client_id !== clientId || user.profile_type !== 'internal' || user.is_active !== true) return false;
   if (role && clean(user.role_code, 80).toLowerCase() !== role) return false;
@@ -580,47 +571,17 @@ function isValidInternalNotificationRecipient(user, { clientId, role }) {
   );
 }
 
-async function loadValidCurrentRecipient(client, ticket, role) {
-  if (!ticket.current_assignee_user_id) return null;
-  const result = await client
-    .from('hospital_ticket_users')
-    .select('id,client_id,profile_type,role_code,display_name,is_active,metadata')
-    .eq('id', ticket.current_assignee_user_id)
-    .maybeSingle();
-  if (result.error) throw result.error;
-  if (isValidInternalNotificationRecipient(result.data, { clientId: ticket.client_id, role })) return result.data;
-  return null;
-}
-
-async function pickCanonicalRecipient(client, ticket, role) {
-  if (!role || role === 'housekeeping_supervisor') return null;
-  const picked = await client.rpc('hospital_pick_ticket_owner', {
-    p_client_id: ticket.client_id,
-    p_role: role,
-  });
-  if (picked.error) throw picked.error;
-  const user = picked.data || null;
-  return isValidInternalNotificationRecipient(user, { clientId: ticket.client_id, role }) ? user : null;
-}
-
 async function currentResendRecipients(client, ticket) {
-  const role = resendOwnerRoleForTicket(ticket);
-  if (role === 'housekeeping_supervisor' && ticket.status_code === 'awaiting_supervisor_acceptance') {
-    const supervisors = await client.rpc('hospital_ticket_on_duty_supervisors', {
-      p_client_id: ticket.client_id,
-      p_block_id: ticket.block_id || null,
-      p_location_id: ticket.location_id || null,
-    });
-    if (supervisors.error) throw supervisors.error;
-    return (supervisors.data || []).filter((user) => isValidInternalNotificationRecipient(user, {
-      clientId: ticket.client_id,
-      role: 'housekeeping_supervisor',
-    }));
-  }
-  const current = await loadValidCurrentRecipient(client, ticket, role);
-  if (current) return [current];
-  const canonical = await pickCanonicalRecipient(client, ticket, role);
-  return canonical ? [canonical] : [];
+  const supervisors = await client.rpc('hospital_ticket_on_duty_supervisors', {
+    p_client_id: ticket.client_id,
+    p_block_id: ticket.block_id || null,
+    p_location_id: ticket.location_id || null,
+  });
+  if (supervisors.error) throw supervisors.error;
+  return (supervisors.data || []).filter((user) => isValidInternalNotificationRecipient(user, {
+    clientId: ticket.client_id,
+    role: 'housekeeping_supervisor',
+  }));
 }
 
 export async function resendWebHospitalTicketNotification(client, access, ticketId, filters = {}, actor = {}) {

@@ -247,6 +247,8 @@ function pushStatusLabel(push) {
 }
 
 function recipientLabel(recipients = []) {
+  const supervisors = recipients.filter((recipient) => recipient.role_code === 'housekeeping_supervisor');
+  if (supervisors.length) return `${supervisors.length} eligible Supervisor${supervisors.length === 1 ? '' : 's'}`;
   const names = recipients.map((recipient) => recipient.display_name).filter(Boolean);
   if (!names.length) return 'current recipient';
   if (names.length === 1) return names[0];

@@ -625,7 +625,7 @@ for (const [status, role, userId, displayName] of [
   ['escalated_facility_manager', 'facility_manager', 'fm-1', 'Alli Chandrika'],
   ['escalated_project_head', 'project_head', 'ph-1', 'Manesh Kumar'],
 ]) {
-  test(`notify again at ${role} creates a fresh notification for the current owner without workflow changes`, async () => {
+  test(`notify again at ${role} broadcasts to eligible supervisors without notifying the current owner`, async () => {
     const ticket = resendTicket({
       status_code: status,
       current_assignee_user_id: userId,
@@ -633,16 +633,24 @@ for (const [status, role, userId, displayName] of [
       current_escalation_level: role,
       current_escalation_level_no: role === 'operations_executive' ? 2 : role === 'facility_manager' ? 3 : 4,
     });
-    const recipient = resendUser({ id: userId, role_code: role, display_name: displayName });
-    const client = mockClientForResend({ ticket, users: [recipient] });
+    const currentOwner = resendUser({ id: userId, role_code: role, display_name: displayName });
+    const supervisorOne = resendUser({ id: 'supervisor-one', role_code: 'housekeeping_supervisor', display_name: 'Supervisor One' });
+    const supervisorTwo = resendUser({ id: 'supervisor-two', role_code: 'housekeeping_supervisor', display_name: 'Supervisor Two' });
+    const client = mockClientForResend({ ticket, users: [currentOwner], supervisors: [supervisorOne, supervisorTwo] });
 
     const result = await resendWebHospitalTicketNotification(client, webAccess, ticket.id, { client_id: 'client-nims' }, webActor);
 
-    assert.deepEqual(result.recipients.map((user) => user.display_name), [displayName]);
-    assert.equal(client.writes.hospital_ticket_notifications.length, 1);
+    assert.deepEqual(result.recipients.map((user) => user.display_name), ['Supervisor One', 'Supervisor Two']);
+    assert.equal(client.writes.hospital_ticket_notifications.length, 2);
     assert.equal(client.writes.hospital_ticket_notifications[0].notification_type, 'manual_resend');
+    assert.equal(client.writes.hospital_ticket_notifications[0].action_status, 'not_actionable');
+    assert.equal(client.writes.hospital_ticket_notifications[0].action_expires_at, null);
     assert.equal(client.writes.hospital_ticket_notifications[0].metadata.notification_reason, 'manual_resend');
-    assert.equal(client.writes.hospital_ticket_notifications[0].recipient_user_id, userId);
+    assert.deepEqual(
+      client.writes.hospital_ticket_notifications.map((row) => row.recipient_user_id),
+      ['supervisor-one', 'supervisor-two'],
+    );
+    assert.equal(client.writes.hospital_ticket_notifications.some((row) => row.recipient_user_id === userId), false);
     assert.equal(client.writes.hospital_ticket_events.length, 1);
     assert.equal(client.writes.hospital_ticket_events[0].event_type, 'notification_resent');
     assert.equal(client.writes.hospital_tickets, undefined);
@@ -673,7 +681,7 @@ test('notify again broadcasts awaiting-supervisor tickets only to eligible on-du
   assert.equal(client.writes.hospital_ticket_notifications[0].action_status, 'active');
 });
 
-test('notify again rejects invalid current owners and uses canonical picker for escalated tickets', async () => {
+test('notify again ignores invalid current owners and filters the supervisor pool for escalated tickets', async () => {
   const ticket = resendTicket({
     status_code: 'escalated_project_head',
     current_assignee_user_id: 'test-ph',
@@ -681,20 +689,21 @@ test('notify again rejects invalid current owners and uses canonical picker for 
     current_escalation_level: 'project_head',
     current_escalation_level_no: 4,
   });
-  const invalid = resendUser({ id: 'test-ph', role_code: 'project_head', display_name: 'TEST NIMS PROJECT HEAD', metadata: { test_user: true } });
-  const manesh = resendUser({ id: 'ph-real', role_code: 'project_head', display_name: 'Manesh Kumar' });
-  const client = mockClientForResend({ ticket, users: [invalid, manesh], picker: { project_head: manesh } });
+  const valid = resendUser({ id: 'supervisor-valid', role_code: 'housekeeping_supervisor', display_name: 'Valid Supervisor' });
+  const testUser = resendUser({ id: 'supervisor-test', role_code: 'housekeeping_supervisor', display_name: 'TEST Supervisor', metadata: { test_user: true } });
+  const wrongRole = resendUser({ id: 'ph-real', role_code: 'project_head', display_name: 'Manesh Kumar' });
+  const client = mockClientForResend({ ticket, supervisors: [valid, testUser, wrongRole] });
 
   const result = await resendWebHospitalTicketNotification(client, webAccess, ticket.id, { client_id: 'client-nims' }, webActor);
 
-  assert.deepEqual(result.recipients.map((user) => user.display_name), ['Manesh Kumar']);
-  assert.equal(client.writes.hospital_ticket_notifications[0].recipient_user_id, 'ph-real');
+  assert.deepEqual(result.recipients.map((user) => user.display_name), ['Valid Supervisor']);
+  assert.equal(client.writes.hospital_ticket_notifications[0].recipient_user_id, 'supervisor-valid');
 });
 
 test('manual notify again is repeatable and creates separate notification rows', async () => {
   const ticket = resendTicket();
-  const recipient = resendUser();
-  const client = mockClientForResend({ ticket, users: [recipient] });
+  const recipient = resendUser({ id: 'supervisor-valid', role_code: 'housekeeping_supervisor', display_name: 'Valid Supervisor' });
+  const client = mockClientForResend({ ticket, supervisors: [recipient] });
 
   await resendWebHospitalTicketNotification(client, webAccess, ticket.id, { client_id: 'client-nims' }, webActor);
   await resendWebHospitalTicketNotification(client, webAccess, ticket.id, { client_id: 'client-nims' }, webActor);
