@@ -1,4 +1,5 @@
 import { resolveCurrentUserAccess } from './accessControlService.js';
+import { randomUUID } from 'node:crypto';
 import {
   clientCanSeeHospitalEvent,
   clientHospitalEventView,
@@ -534,6 +535,181 @@ function clientSafeComment(comment) {
     comment_type: comment.comment_type,
     comment_text: comment.comment_text,
     created_at: comment.created_at,
+  };
+}
+
+function webActorName(actor = {}) {
+  return clean(
+    actor.profile?.display_name
+      || actor.profile?.full_name
+      || actor.profile?.employee_code
+      || actor.profile?.email
+      || actor.authUser?.email
+      || 'QPMS Web User',
+    160,
+  );
+}
+
+function webActorRole(actor = {}) {
+  return clean(actor.profile?.role || 'web_user', 80) || 'web_user';
+}
+
+function isTerminalTicket(ticket) {
+  return ['closed', 'cancelled'].includes(clean(ticket?.status_code, 80).toLowerCase());
+}
+
+function resendOwnerRoleForTicket(ticket) {
+  const status = clean(ticket?.status_code, 80).toLowerCase();
+  if (status === 'awaiting_supervisor_acceptance') return 'housekeeping_supervisor';
+  if (status === 'escalated_operations_executive') return 'operations_executive';
+  if (status === 'escalated_facility_manager') return 'facility_manager';
+  if (status === 'escalated_project_head') return 'project_head';
+  return clean(ticket?.current_assignee_role, 80).toLowerCase();
+}
+
+function isValidInternalNotificationRecipient(user, { clientId, role }) {
+  if (!user?.id || user.client_id !== clientId || user.profile_type !== 'internal' || user.is_active !== true) return false;
+  if (role && clean(user.role_code, 80).toLowerCase() !== role) return false;
+  const metadata = user.metadata || {};
+  return !(
+    metadata.test_user === true
+    || metadata.demo === true
+    || metadata.demo_user === true
+    || metadata.uat_only === true
+    || metadata.do_not_use_for_real_staff === true
+  );
+}
+
+async function loadValidCurrentRecipient(client, ticket, role) {
+  if (!ticket.current_assignee_user_id) return null;
+  const result = await client
+    .from('hospital_ticket_users')
+    .select('id,client_id,profile_type,role_code,display_name,is_active,metadata')
+    .eq('id', ticket.current_assignee_user_id)
+    .maybeSingle();
+  if (result.error) throw result.error;
+  if (isValidInternalNotificationRecipient(result.data, { clientId: ticket.client_id, role })) return result.data;
+  return null;
+}
+
+async function pickCanonicalRecipient(client, ticket, role) {
+  if (!role || role === 'housekeeping_supervisor') return null;
+  const picked = await client.rpc('hospital_pick_ticket_owner', {
+    p_client_id: ticket.client_id,
+    p_role: role,
+  });
+  if (picked.error) throw picked.error;
+  const user = picked.data || null;
+  return isValidInternalNotificationRecipient(user, { clientId: ticket.client_id, role }) ? user : null;
+}
+
+async function currentResendRecipients(client, ticket) {
+  const role = resendOwnerRoleForTicket(ticket);
+  if (role === 'housekeeping_supervisor' && ticket.status_code === 'awaiting_supervisor_acceptance') {
+    const supervisors = await client.rpc('hospital_ticket_on_duty_supervisors', {
+      p_client_id: ticket.client_id,
+      p_block_id: ticket.block_id || null,
+      p_location_id: ticket.location_id || null,
+    });
+    if (supervisors.error) throw supervisors.error;
+    return (supervisors.data || []).filter((user) => isValidInternalNotificationRecipient(user, {
+      clientId: ticket.client_id,
+      role: 'housekeeping_supervisor',
+    }));
+  }
+  const current = await loadValidCurrentRecipient(client, ticket, role);
+  if (current) return [current];
+  const canonical = await pickCanonicalRecipient(client, ticket, role);
+  return canonical ? [canonical] : [];
+}
+
+export async function resendWebHospitalTicketNotification(client, access, ticketId, filters = {}, actor = {}) {
+  if (access.qpmsViewAllowed !== true) {
+    throw httpError(403, 'hospital_notify_again_denied', 'Internal QPMS Hospital Ticketing access is required to resend notifications.');
+  }
+  filters = await resolveWebHospitalClientFilter(client, access, {
+    ...filters,
+    presentation: 'qpms',
+  });
+  const identifier = clean(ticketId, 80);
+  const column = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(identifier) ? 'id' : 'ticket_no';
+  let query = client.from('hospital_tickets').select(TICKET_WEB_SELECT).eq(column, identifier);
+  query = applyAccessScope(query, access);
+  if (filters.client_id) query = query.eq('client_id', filters.client_id);
+  const ticketResult = await query.maybeSingle();
+  if (ticketResult.error) throw ticketResult.error;
+  const ticket = ticketResult.data;
+  if (!ticket?.id) throw httpError(404, 'hospital_ticket_not_found', 'Ticket was not found in your authorised scope.');
+  if (isTerminalTicket(ticket)) {
+    throw httpError(409, 'hospital_ticket_notification_resend_not_allowed', 'Notifications can only be resent for active tickets.');
+  }
+  const recipients = await currentResendRecipients(client, ticket);
+  if (!recipients.length) {
+    throw httpError(409, 'hospital_notification_recipient_unavailable', 'No valid current recipient is available for this ticket.');
+  }
+  const now = new Date().toISOString();
+  const resendId = randomUUID();
+  const notificationRows = recipients.map((recipient) => ({
+    ticket_id: ticket.id,
+    recipient_user_id: recipient.id,
+    notification_type: ticket.status_code === 'awaiting_supervisor_acceptance' ? 'incoming_supervisor_ticket' : 'manual_resend',
+    title: 'Ticket Notification Reminder',
+    body: `Ticket ${ticket.ticket_no} needs your attention.`,
+    priority: ticket.priority || null,
+    current_owner_role: recipient.role_code || ticket.current_assignee_role || null,
+    escalation_level: Number(ticket.current_escalation_level_no || 0) || null,
+    action_status: ticket.status_code === 'awaiting_supervisor_acceptance' ? 'active' : null,
+    action_expires_at: ticket.status_code === 'awaiting_supervisor_acceptance' ? ticket.acceptance_due_at || null : null,
+    dedupe_key: `hospital_ticket_manual_resend:${ticket.id}:${recipient.id}:${resendId}`,
+    metadata: {
+      notification_reason: 'manual_resend',
+      resend_id: resendId,
+      ticket_id: ticket.id,
+      ticket_no: ticket.ticket_no,
+      recipient_user_id: recipient.id,
+      recipient_role: recipient.role_code,
+      triggered_at: now,
+      triggered_by_auth_user_id: actor.authUser?.id || null,
+      triggered_by_profile_id: actor.profile?.id || null,
+      app_scope: 'myqpms_internal',
+      target_screen: ticket.status_code === 'awaiting_supervisor_acceptance' ? 'incoming_ticket' : 'ticket_detail',
+    },
+  }));
+  const inserted = await client
+    .from('hospital_ticket_notifications')
+    .insert(notificationRows)
+    .select('id,recipient_user_id,notification_type');
+  if (inserted.error) throw inserted.error;
+  const notificationIds = (inserted.data || []).map((row) => row.id).filter(Boolean);
+  const event = await client.from('hospital_ticket_events').insert({
+    ticket_id: ticket.id,
+    event_type: 'notification_resent',
+    from_status: ticket.status_code,
+    to_status: ticket.status_code,
+    actor_user_id: null,
+    actor_name: webActorName(actor),
+    actor_role: webActorRole(actor),
+    remarks: `Notification resent to ${recipients.map((recipient) => recipient.display_name).filter(Boolean).join(', ') || 'current recipient'}.`,
+    event_data: {
+      notification_reason: 'manual_resend',
+      resend_id: resendId,
+      recipient_user_ids: recipients.map((recipient) => recipient.id),
+      recipient_roles: recipients.map((recipient) => recipient.role_code),
+      triggered_at: now,
+      triggered_by_auth_user_id: actor.authUser?.id || null,
+      triggered_by_profile_id: actor.profile?.id || null,
+      workflow_state_unchanged: true,
+    },
+  });
+  if (event.error) throw event.error;
+  return {
+    ticket: listRow(ticket),
+    notification_ids: notificationIds,
+    recipients: recipients.map((recipient) => ({
+      id: recipient.id,
+      display_name: recipient.display_name,
+      role_code: recipient.role_code,
+    })),
   };
 }
 

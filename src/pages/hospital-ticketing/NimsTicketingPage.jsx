@@ -1,7 +1,7 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
-  AlertTriangle, ArrowLeft, BarChart3, CheckCircle2, Clock3, ExternalLink,
+  AlertTriangle, ArrowLeft, BarChart3, Bell, CheckCircle2, Clock3, ExternalLink,
   Image as ImageIcon, MessageSquareText, RefreshCw, Search, ShieldCheck,
   TicketCheck, UserRound, UsersRound,
 } from 'lucide-react';
@@ -16,6 +16,7 @@ import {
   getHospitalTicketDetail,
   getHospitalTicketSummary,
   getHospitalTickets,
+  notifyHospitalTicketAgain,
 } from '../../services/hospitalTicketsApi.js';
 import { filterHospitalClientContacts } from '../../utils/hospitalClientContacts.js';
 
@@ -237,17 +238,86 @@ function NeedsAttention({ counts }) {
   return <Panel title="Needs Attention"><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">{rows.map(([label, value]) => <div className="rounded-md bg-slate-50 p-3" key={label}><p className="text-xs font-semibold text-slate-500">{label}</p><p className="mt-1 text-xl font-black text-slate-900">{value || 0}</p></div>)}</div></Panel>;
 }
 
-function TicketTable({ tickets, view, expanded, onToggle }) {
+function pushStatusLabel(push) {
+  if (!push) return 'Queued';
+  if (Number(push.sent || 0) > 0) return 'Sent';
+  if (Number(push.failed || 0) > 0) return 'Failed';
+  if (Number(push.queued || 0) > 0 || Number(push.inserted || 0) > 0) return 'Queued';
+  return 'Queued';
+}
+
+function recipientLabel(recipients = []) {
+  const names = recipients.map((recipient) => recipient.display_name).filter(Boolean);
+  if (!names.length) return 'current recipient';
+  if (names.length === 1) return names[0];
+  return `${names.length} supervisors`;
+}
+
+function NotifyAgainButton({ ticket, state, onNotify }) {
+  return (
+    <div className="flex min-w-32 flex-col items-start gap-1">
+      <button
+        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-blue-200 px-2.5 text-[11px] font-bold text-blue-700 hover:bg-blue-50 disabled:cursor-wait disabled:opacity-60"
+        disabled={state?.loading}
+        onClick={(event) => {
+          event.stopPropagation();
+          onNotify(ticket);
+        }}
+        title="Resend notification to the current responsible user"
+        type="button"
+      >
+        <Bell className="h-3.5 w-3.5" />
+        {state?.loading ? 'Sending...' : 'Notify Again'}
+      </button>
+      {state?.message ? <span className={`text-[11px] font-semibold ${state.error ? 'text-rose-600' : 'text-emerald-700'}`}>{state.message}</span> : null}
+      {state?.delivery ? <span className="text-[11px] font-semibold text-slate-500">{state.delivery}</span> : null}
+    </div>
+  );
+}
+
+function TicketTable({ tickets, view, expanded, onToggle, notifyState = {}, onNotifyAgain }) {
   const navigate = useNavigate();
   const clientView = view === 'client';
   const openTicket = (ticket) => navigate(`/hospital-ticketing/nims/${view}/tickets/${encodeURIComponent(ticket.id)}`);
   return (
     <Panel title={clientView ? 'Recent Tickets' : 'Recent / Active Tickets'} action={<button className="inline-flex items-center gap-1 text-xs font-bold text-blue-600" onClick={onToggle}>{expanded ? 'Show recent' : 'View all tickets'}<ExternalLink className="h-3.5 w-3.5" /></button>}>
-      {!tickets.length ? <EmptyState text="No NIMS tickets match these filters." /> : <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left text-xs"><thead><tr className="border-b border-slate-200 text-[10px] uppercase text-slate-400">{['Ticket No', 'Block / Location', 'Category / Issue', ...(clientView ? ['Raised By'] : []), 'Status', ...(clientView ? [] : ['Assignee']), 'Age', ...(clientView ? [] : ['SLA']), 'Updated', 'Action'].map((heading) => <th className="px-2 py-2" key={heading}>{heading}</th>)}</tr></thead><tbody>{tickets.map((ticket) => <tr className="cursor-pointer border-b border-slate-100 hover:bg-slate-50" key={ticket.id} onClick={() => openTicket(ticket)}><td className="px-2 py-3 font-bold text-blue-700">{ticket.ticket_no}</td><td className="max-w-56 px-2 py-3 text-slate-600">{locationLabel(ticket)}</td><td className="max-w-48 px-2 py-3 text-slate-700">{ticket.category?.name || ticket.title || '-'}</td>{clientView ? <td className="max-w-40 truncate px-2 py-3 font-semibold text-slate-600" title={ticket.raised_by?.name || undefined}>{ticket.raised_by?.name || '—'}</td> : null}<td className="px-2 py-3"><StatusPill status={ticket.status_code} clientView={clientView} /></td>{!clientView ? <td className="px-2 py-3 text-slate-600">{ticket.current_assignee?.display_name || 'Unassigned'}</td> : null}<td className="px-2 py-3 text-slate-600">{ageLabel(ticket.raised_at)}</td>{!clientView ? <td className="px-2 py-3 font-semibold text-slate-600">{ticket.overdue ? 'Breached' : titleCase(ticket.sla?.state || 'Not applicable')}</td> : null}<td className="px-2 py-3 text-slate-500">{formatDate(ticket.updated_at)}</td><td className="px-2 py-3"><ExternalLink className="h-4 w-4 text-blue-600" /></td></tr>)}</tbody></table></div>}
+      {!tickets.length ? <EmptyState text="No NIMS tickets match these filters." /> : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[980px] text-left text-xs">
+            <thead>
+              <tr className="border-b border-slate-200 text-[10px] uppercase text-slate-400">
+                {['Ticket No', 'Block / Location', 'Category / Issue', ...(clientView ? ['Raised By'] : []), 'Status', ...(clientView ? [] : ['Assignee']), 'Age', ...(clientView ? [] : ['SLA']), 'Updated', 'Action'].map((heading) => <th className="px-2 py-2" key={heading}>{heading}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {tickets.map((ticket) => (
+                <tr className="cursor-pointer border-b border-slate-100 hover:bg-slate-50" key={ticket.id} onClick={() => openTicket(ticket)}>
+                  <td className="px-2 py-3 font-bold text-blue-700">{ticket.ticket_no}</td>
+                  <td className="max-w-56 px-2 py-3 text-slate-600">{locationLabel(ticket)}</td>
+                  <td className="max-w-48 px-2 py-3 text-slate-700">{ticket.category?.name || ticket.title || '-'}</td>
+                  {clientView ? <td className="max-w-40 truncate px-2 py-3 font-semibold text-slate-600" title={ticket.raised_by?.name || undefined}>{ticket.raised_by?.name || '-'}</td> : null}
+                  <td className="px-2 py-3"><StatusPill status={ticket.status_code} clientView={clientView} /></td>
+                  {!clientView ? <td className="px-2 py-3 text-slate-600">{ticket.current_assignee?.display_name || 'Unassigned'}</td> : null}
+                  <td className="px-2 py-3 text-slate-600">{ageLabel(ticket.raised_at)}</td>
+                  {!clientView ? <td className="px-2 py-3 font-semibold text-slate-600">{ticket.overdue ? 'Breached' : titleCase(ticket.sla?.state || 'Not applicable')}</td> : null}
+                  <td className="px-2 py-3 text-slate-500">{formatDate(ticket.updated_at)}</td>
+                  <td className="px-2 py-3">
+                    {clientView ? <ExternalLink className="h-4 w-4 text-blue-600" /> : (
+                      <div className="flex items-center gap-2">
+                        <NotifyAgainButton ticket={ticket} state={notifyState[ticket.id]} onNotify={onNotifyAgain} />
+                        <ExternalLink className="h-4 w-4 text-blue-600" />
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Panel>
   );
 }
-
 function DashboardView({ view }) {
   const clientView = view === 'client';
   const [filters, setFilters] = useState({ search: '', date_from: '', date_to: '', block_id: '', category_id: '', status: '', priority: '', assigned_user_id: '', escalation_level: '' });
@@ -260,6 +330,7 @@ function DashboardView({ view }) {
   const [contacts, setContacts] = useState([]);
   const [contactsLoading, setContactsLoading] = useState(clientView);
   const [contactsError, setContactsError] = useState('');
+  const [notifyState, setNotifyState] = useState({});
   const requestRef = useRef(0);
 
   useEffect(() => {
@@ -289,7 +360,6 @@ function DashboardView({ view }) {
   }, [params]);
 
   // The callback owns request cancellation and loading state for both effects and manual refresh.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
@@ -310,13 +380,46 @@ function DashboardView({ view }) {
     return () => { active = false; };
   }, [clientView]);
 
+  const handleNotifyAgain = useCallback(async (ticket) => {
+    setNotifyState((current) => ({
+      ...current,
+      [ticket.id]: { loading: true, message: '', delivery: '', error: false },
+    }));
+    try {
+      const result = await notifyHospitalTicketAgain(ticket.id, {
+        client_code: NIMS_HOSPITAL_CLIENT_CODE,
+        presentation: view,
+      });
+      const recipient = recipientLabel(result.recipients || []);
+      setNotifyState((current) => ({
+        ...current,
+        [ticket.id]: {
+          loading: false,
+          message: `Notification sent to ${recipient}`,
+          delivery: pushStatusLabel(result.push),
+          error: false,
+        },
+      }));
+    } catch (notifyError) {
+      setNotifyState((current) => ({
+        ...current,
+        [ticket.id]: {
+          loading: false,
+          message: notifyError?.response?.data?.message || 'Unable to send notification.',
+          delivery: '',
+          error: true,
+        },
+      }));
+    }
+  }, [view]);
+
   return (
     <div className="space-y-4">
       <TicketingHeader view={view} />
       <Panel title="Filters" action={<button className="inline-flex items-center gap-1 text-xs font-bold text-blue-600" onClick={load}><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />Refresh</button>}><Filters filters={filters} setFilters={setFilters} facets={summary.facets || {}} clientView={clientView} /></Panel>
       {error ? <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-700">{error}</div> : null}
       {loading && !tickets.length ? <EmptyState text="Loading live NIMS ticket data..." /> : null}
-      {!error && (!loading || tickets.length) ? <><KpiGrid counts={summary.counts || {}} clientView={clientView} /><TicketCharts analytics={summary.analytics || {}} clientView={clientView} contacts={contacts} contactsLoading={contactsLoading} contactsError={contactsError} />{!clientView ? <NeedsAttention counts={summary.counts || {}} /> : null}<TicketTable tickets={tickets} view={view} expanded={expanded} onToggle={() => setExpanded((value) => !value)} /></> : null}
+      {!error && (!loading || tickets.length) ? <><KpiGrid counts={summary.counts || {}} clientView={clientView} /><TicketCharts analytics={summary.analytics || {}} clientView={clientView} contacts={contacts} contactsLoading={contactsLoading} contactsError={contactsError} />{!clientView ? <NeedsAttention counts={summary.counts || {}} /> : null}<TicketTable tickets={tickets} view={view} expanded={expanded} notifyState={notifyState} onNotifyAgain={handleNotifyAgain} onToggle={() => setExpanded((value) => !value)} /></> : null}
     </div>
   );
 }
@@ -337,6 +440,7 @@ function DetailView({ view, ticketId }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [notifyState, setNotifyState] = useState({ loading: false, message: '', delivery: '', error: false });
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try { setDetail(await getHospitalTicketDetail(ticketId, { client_code: NIMS_HOSPITAL_CLIENT_CODE, presentation: view })); }
@@ -345,6 +449,29 @@ function DetailView({ view, ticketId }) {
   }, [ticketId, view]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
+  const handleNotifyAgain = useCallback(async () => {
+    if (!detail?.ticket?.id) return;
+    setNotifyState({ loading: true, message: '', delivery: '', error: false });
+    try {
+      const result = await notifyHospitalTicketAgain(detail.ticket.id, {
+        client_code: NIMS_HOSPITAL_CLIENT_CODE,
+        presentation: view,
+      });
+      setNotifyState({
+        loading: false,
+        message: `Notification sent to ${recipientLabel(result.recipients || [])}`,
+        delivery: pushStatusLabel(result.push),
+        error: false,
+      });
+    } catch (notifyError) {
+      setNotifyState({
+        loading: false,
+        message: notifyError?.response?.data?.message || 'Unable to send notification.',
+        delivery: '',
+        error: true,
+      });
+    }
+  }, [detail, view]);
   if (loading) return <EmptyState text="Loading ticket details..." />;
   if (error || !detail?.ticket) return <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error || 'Ticket was not found.'}</div>;
   const ticket = detail.ticket;
@@ -354,7 +481,7 @@ function DetailView({ view, ticketId }) {
   return (
     <div className="space-y-4">
       <div className="text-xs font-semibold text-slate-500">Hospital Ticketing System / NIMS Ticketing System / {clientView ? 'Client View' : 'QPMS View'} / Ticket Details</div>
-      <header className="flex flex-wrap items-start justify-between gap-3"><div><button className="mb-3 inline-flex items-center gap-1 text-xs font-bold text-blue-600" onClick={() => navigate(backPath)}><ArrowLeft className="h-4 w-4" />Back</button><h1 className="text-2xl font-black text-slate-950">Ticket Details - {ticket.ticket_no}</h1><p className="mt-1 text-sm text-slate-500">{ticket.title || ticket.category?.name || 'Hospital service ticket'}</p></div><div className="flex items-center gap-2"><StatusPill status={ticket.status_code} clientView={clientView} /><button aria-label="Refresh ticket" className="rounded-md border border-slate-200 p-2" onClick={load}><RefreshCw className="h-4 w-4" /></button></div></header>
+      <header className="flex flex-wrap items-start justify-between gap-3"><div><button className="mb-3 inline-flex items-center gap-1 text-xs font-bold text-blue-600" onClick={() => navigate(backPath)}><ArrowLeft className="h-4 w-4" />Back</button><h1 className="text-2xl font-black text-slate-950">Ticket Details - {ticket.ticket_no}</h1><p className="mt-1 text-sm text-slate-500">{ticket.title || ticket.category?.name || 'Hospital service ticket'}</p></div><div className="flex flex-wrap items-start justify-end gap-2"><StatusPill status={ticket.status_code} clientView={clientView} />{!clientView ? <NotifyAgainButton ticket={ticket} state={notifyState} onNotify={handleNotifyAgain} /> : null}<button aria-label="Refresh ticket" className="rounded-md border border-slate-200 p-2" onClick={load}><RefreshCw className="h-4 w-4" /></button></div></header>
       <section className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">{[
         ['Status', statusLabel(ticket.status_code, clientView)], ['Age', ageLabel(ticket.raised_at)],
         ...(!clientView ? [['SLA', ticket.overdue ? 'Breached' : titleCase(ticket.sla?.state || 'Not applicable')]] : []),

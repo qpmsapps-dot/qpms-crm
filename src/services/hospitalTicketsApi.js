@@ -44,6 +44,14 @@ export async function getHospitalTicketDetail(ticketId, params = {}) {
   }).then(dataOrThrow);
 }
 
+export async function notifyHospitalTicketAgain(ticketId, params = {}) {
+  return authenticatedApiRequest({
+    method: 'POST',
+    url: `/api/web/hospital-tickets/${encodeURIComponent(ticketId)}/notify-again`,
+    params,
+  }).then(dataOrThrow);
+}
+
 export async function getHospitalTicketNotifications() {
   return authenticatedApiRequest({
     method: 'GET',

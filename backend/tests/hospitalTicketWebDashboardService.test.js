@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -8,6 +9,7 @@ import {
   hospitalWebAccessAllowsClient,
   listWebHospitalClientContacts,
   listWebHospitalTickets,
+  resendWebHospitalTicketNotification,
   resolveHospitalWebAccess,
   resolveWebHospitalClientFilter,
   scopedAccessFromAssignments,
@@ -506,4 +508,214 @@ test('client ticket detail excludes internal operational fields and non-visible 
   assert.equal(detail.comments[0].comment_text, 'Checked');
   assert.equal('author_name' in detail.comments[0], false);
   assert.equal('author_role' in detail.comments[0], false);
+});
+
+function resendTicket(overrides = {}) {
+  return {
+    id: '11111111-1111-4111-8111-111111111111',
+    ticket_no: 'QPMS-HK-2026-000083',
+    client_id: 'client-nims',
+    block_id: 'block-a',
+    location_id: 'location-a',
+    category_id: 'category-a',
+    title: 'Housekeeping follow-up',
+    priority: 'medium',
+    status_code: 'escalated_facility_manager',
+    current_escalation_level_no: 3,
+    current_escalation_level: 'facility_manager',
+    current_assignee_user_id: 'fm-1',
+    current_assignee_role: 'facility_manager',
+    supervisor_user_id: 'supervisor-1',
+    raised_at: '2026-09-16T08:00:00.000Z',
+    updated_at: '2026-09-16T08:20:00.000Z',
+    supervisor_sla_due_at: '2026-09-16T08:20:00.000Z',
+    operations_sla_due_at: '2026-09-16T08:40:00.000Z',
+    facility_manager_sla_due_at: '2026-09-16T09:00:00.000Z',
+    escalation_due_at: '2026-09-16T09:00:00.000Z',
+    assignee: { id: 'fm-1', display_name: 'Alli Chandrika', role_code: 'facility_manager' },
+    supervisor: { id: 'supervisor-1', display_name: 'Ramu', role_code: 'housekeeping_supervisor' },
+    client: { id: 'client-nims', client_name: 'NIMS Hyderabad', client_code: 'NIMS_HYDERABAD' },
+    block: { id: 'block-a', block_name: 'Block A', block_code: 'A' },
+    category: { id: 'category-a', category_name: 'Housekeeping', category_code: 'HK' },
+    ...overrides,
+  };
+}
+
+function resendUser(overrides = {}) {
+  return {
+    id: 'fm-1',
+    client_id: 'client-nims',
+    profile_type: 'internal',
+    role_code: 'facility_manager',
+    display_name: 'Alli Chandrika',
+    is_active: true,
+    metadata: {},
+    ...overrides,
+  };
+}
+
+function mockClientForResend({
+  ticket = resendTicket(),
+  users = [resendUser()],
+  supervisors = [],
+  picker = {},
+  writes = { hospital_ticket_notifications: [], hospital_ticket_events: [] },
+} = {}) {
+  const filtersFor = [];
+  const makeQuery = (table) => ({
+    filters: [],
+    select() { return this; },
+    eq(column, value) { this.filters.push([column, value]); return this; },
+    maybeSingle() {
+      if (table === 'hospital_tickets') {
+        const idFilter = this.filters.find(([column]) => column === 'id' || column === 'ticket_no');
+        const clientFilter = this.filters.find(([column]) => column === 'client_id');
+        const matchesId = !idFilter || ticket[idFilter[0]] === idFilter[1];
+        const matchesClient = !clientFilter || ticket.client_id === clientFilter[1];
+        return Promise.resolve({ data: matchesId && matchesClient ? ticket : null, error: null });
+      }
+      if (table === 'hospital_ticket_users') {
+        const id = this.filters.find(([column]) => column === 'id')?.[1];
+        return Promise.resolve({ data: users.find((user) => user.id === id) || null, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    },
+    insert(payload) {
+      const rows = Array.isArray(payload) ? payload : [payload];
+      if (!writes[table]) writes[table] = [];
+      const stored = rows.map((row, index) => ({
+        id: row.id || `${table}-${writes[table].length + index + 1}`,
+        ...row,
+      }));
+      writes[table].push(...stored);
+      return {
+        select() { return Promise.resolve({ data: stored, error: null }); },
+        then(resolve) { return Promise.resolve({ data: stored, error: null }).then(resolve); },
+      };
+    },
+  });
+  return {
+    writes,
+    filtersFor,
+    from(table) {
+      filtersFor.push(table);
+      return makeQuery(table);
+    },
+    rpc(name, args) {
+      if (name === 'hospital_ticket_on_duty_supervisors') {
+        assert.equal(args.p_client_id, ticket.client_id);
+        return Promise.resolve({ data: supervisors, error: null });
+      }
+      if (name === 'hospital_pick_ticket_owner') {
+        return Promise.resolve({ data: picker[args.p_role] || null, error: null });
+      }
+      assert.fail(`Unexpected RPC ${name}`);
+    },
+  };
+}
+
+const webAccess = { broad: true, qpmsViewAllowed: true, clientViewAllowed: true };
+const webActor = {
+  authUser: { id: 'auth-admin', email: 'admin@example.com' },
+  profile: { id: 'profile-admin', role: 'Admin', display_name: 'Admin User' },
+};
+
+for (const [status, role, userId, displayName] of [
+  ['escalated_operations_executive', 'operations_executive', 'oe-1', 'Koduri Kishore Kumar'],
+  ['escalated_facility_manager', 'facility_manager', 'fm-1', 'Alli Chandrika'],
+  ['escalated_project_head', 'project_head', 'ph-1', 'Manesh Kumar'],
+]) {
+  test(`notify again at ${role} creates a fresh notification for the current owner without workflow changes`, async () => {
+    const ticket = resendTicket({
+      status_code: status,
+      current_assignee_user_id: userId,
+      current_assignee_role: role,
+      current_escalation_level: role,
+      current_escalation_level_no: role === 'operations_executive' ? 2 : role === 'facility_manager' ? 3 : 4,
+    });
+    const recipient = resendUser({ id: userId, role_code: role, display_name: displayName });
+    const client = mockClientForResend({ ticket, users: [recipient] });
+
+    const result = await resendWebHospitalTicketNotification(client, webAccess, ticket.id, { client_id: 'client-nims' }, webActor);
+
+    assert.deepEqual(result.recipients.map((user) => user.display_name), [displayName]);
+    assert.equal(client.writes.hospital_ticket_notifications.length, 1);
+    assert.equal(client.writes.hospital_ticket_notifications[0].notification_type, 'manual_resend');
+    assert.equal(client.writes.hospital_ticket_notifications[0].metadata.notification_reason, 'manual_resend');
+    assert.equal(client.writes.hospital_ticket_notifications[0].recipient_user_id, userId);
+    assert.equal(client.writes.hospital_ticket_events.length, 1);
+    assert.equal(client.writes.hospital_ticket_events[0].event_type, 'notification_resent');
+    assert.equal(client.writes.hospital_tickets, undefined);
+    assert.equal(ticket.current_assignee_user_id, userId);
+    assert.equal(ticket.status_code, status);
+    assert.equal(ticket.escalation_due_at, '2026-09-16T09:00:00.000Z');
+  });
+}
+
+test('notify again broadcasts awaiting-supervisor tickets only to eligible on-duty supervisors', async () => {
+  const ticket = resendTicket({
+    status_code: 'awaiting_supervisor_acceptance',
+    current_assignee_user_id: null,
+    current_assignee_role: 'housekeeping_supervisor',
+    current_escalation_level: 'supervisor',
+    current_escalation_level_no: 1,
+    acceptance_due_at: '2026-09-16T08:02:00.000Z',
+  });
+  const valid = resendUser({ id: 'supervisor-valid', role_code: 'housekeeping_supervisor', display_name: 'Valid Supervisor' });
+  const testUser = resendUser({ id: 'supervisor-test', role_code: 'housekeeping_supervisor', display_name: 'TEST Supervisor', metadata: { test_user: true } });
+  const wrongRole = resendUser({ id: 'fm-wrong', role_code: 'facility_manager', display_name: 'Wrong Role' });
+  const client = mockClientForResend({ ticket, supervisors: [valid, testUser, wrongRole] });
+
+  const result = await resendWebHospitalTicketNotification(client, webAccess, ticket.id, { client_id: 'client-nims' }, webActor);
+
+  assert.deepEqual(result.recipients.map((user) => user.id), ['supervisor-valid']);
+  assert.equal(client.writes.hospital_ticket_notifications[0].notification_type, 'incoming_supervisor_ticket');
+  assert.equal(client.writes.hospital_ticket_notifications[0].action_status, 'active');
+});
+
+test('notify again rejects invalid current owners and uses canonical picker for escalated tickets', async () => {
+  const ticket = resendTicket({
+    status_code: 'escalated_project_head',
+    current_assignee_user_id: 'test-ph',
+    current_assignee_role: 'project_head',
+    current_escalation_level: 'project_head',
+    current_escalation_level_no: 4,
+  });
+  const invalid = resendUser({ id: 'test-ph', role_code: 'project_head', display_name: 'TEST NIMS PROJECT HEAD', metadata: { test_user: true } });
+  const manesh = resendUser({ id: 'ph-real', role_code: 'project_head', display_name: 'Manesh Kumar' });
+  const client = mockClientForResend({ ticket, users: [invalid, manesh], picker: { project_head: manesh } });
+
+  const result = await resendWebHospitalTicketNotification(client, webAccess, ticket.id, { client_id: 'client-nims' }, webActor);
+
+  assert.deepEqual(result.recipients.map((user) => user.display_name), ['Manesh Kumar']);
+  assert.equal(client.writes.hospital_ticket_notifications[0].recipient_user_id, 'ph-real');
+});
+
+test('manual notify again is repeatable and creates separate notification rows', async () => {
+  const ticket = resendTicket();
+  const recipient = resendUser();
+  const client = mockClientForResend({ ticket, users: [recipient] });
+
+  await resendWebHospitalTicketNotification(client, webAccess, ticket.id, { client_id: 'client-nims' }, webActor);
+  await resendWebHospitalTicketNotification(client, webAccess, ticket.id, { client_id: 'client-nims' }, webActor);
+
+  assert.equal(client.writes.hospital_ticket_notifications.length, 2);
+  assert.notEqual(
+    client.writes.hospital_ticket_notifications[0].dedupe_key,
+    client.writes.hospital_ticket_notifications[1].dedupe_key,
+  );
+  assert.equal(client.writes.hospital_ticket_events.length, 2);
+});
+
+test('notify again is blocked for unauthorized web actors', async () => {
+  await assert.rejects(
+    () => resendWebHospitalTicketNotification(mockClientForResend(), { qpmsViewAllowed: false }, 'ticket-resend'),
+    /Internal QPMS Hospital Ticketing access is required/,
+  );
+});
+
+test('web notify again route queues the fresh notification through hospital push fanout', () => {
+  const serverSource = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  assert.match(serverSource, /\/api\/web\/hospital-tickets\/:ticketId\/notify-again/);
+  assert.match(serverSource, /dispatchHospitalNotificationPushes\(client,\s*\{\s*notificationIds:\s*result\.notification_ids\s*\}\)/);
 });

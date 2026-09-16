@@ -62,6 +62,7 @@ import {
   hospitalWebAccessResponse,
   listWebHospitalClientContacts,
   listWebHospitalTickets,
+  resendWebHospitalTicketNotification,
   resolveHospitalWebAccess,
   resolveWebHospitalClientFilter,
   summarizeWebHospitalTickets,
@@ -5669,6 +5670,33 @@ app.get('/api/web/hospital-tickets/:ticketId', requireSupabaseJwtAllowMissingPro
       ok: false,
       code: error.statusCode === 404 ? 'hospital_ticket_not_found' : 'hospital_web_detail_failed',
       message: error.statusCode === 404 ? error.message : 'Unable to load Hospital Ticket details.',
+    });
+  }
+});
+
+app.post('/api/web/hospital-tickets/:ticketId/notify-again', requireSupabaseJwtAllowMissingProfile, requireHospitalWebAccess, async (request, response) => {
+  try {
+    const client = requireServiceRoleSupabase();
+    const result = await resendWebHospitalTicketNotification(client, request.hospitalWebAccess, request.params.ticketId, request.query || {}, {
+      authUser: request.authUser,
+      profile: request.profile,
+    });
+    const push = await dispatchHospitalNotificationPushes(client, { notificationIds: result.notification_ids });
+    response.status(201).json({
+      ok: true,
+      ...result,
+      push,
+    });
+  } catch (error) {
+    const safeError = sanitizeSupabaseDiagnosticError(error);
+    console.warn('[Hospital Web Tickets] Notify again failed', {
+      code: safeError.code,
+      message: safeError.message,
+    });
+    response.status(error.statusCode || 500).json({
+      ok: false,
+      code: error.code || 'hospital_web_notify_again_failed',
+      message: error.statusCode && error.statusCode < 500 ? error.message : 'Unable to resend Hospital Ticket notification.',
     });
   }
 });
