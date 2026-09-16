@@ -1491,8 +1491,7 @@ class _TasksScreenState extends State<TasksScreen>
           stackTrace: stackTrace,
         );
         if (_isSessionExpiredError(error)) {
-          _toast('Session expired. Please login again.');
-          await widget.onLogout();
+          _toast(AuthSessionExpiredException.message);
           return;
         }
         _toast(
@@ -1569,8 +1568,7 @@ class _TasksScreenState extends State<TasksScreen>
         stackTrace: stackTrace,
       );
       if (_isSessionExpiredError(error)) {
-        _toast('Session expired. Please login again.');
-        await widget.onLogout();
+        _toast(AuthSessionExpiredException.message);
         return;
       }
       _toast('Check Out failed.');
@@ -1580,7 +1578,9 @@ class _TasksScreenState extends State<TasksScreen>
   }
 
   bool _isSessionExpiredError(Object error) {
-    return error.toString().contains('Session expired. Please login again.');
+    return error is AuthSessionExpiredException ||
+        error.toString().contains(AuthSessionExpiredException.message) ||
+        error.toString().contains('Session expired. Please login again.');
   }
 
   double? _checkoutDistanceMeters(SiteVisit visit, Position position) {

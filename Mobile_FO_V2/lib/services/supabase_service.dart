@@ -55,6 +55,16 @@ class StoreCreateException implements Exception {
   String toString() => message;
 }
 
+class AuthSessionExpiredException implements Exception {
+  const AuthSessionExpiredException();
+
+  static const message =
+      'Your login session expired. Please login again and retry checkout.';
+
+  @override
+  String toString() => message;
+}
+
 typedef StorePageLoader =
     Future<List<Map<String, dynamic>>> Function(int from, int to);
 
@@ -205,8 +215,8 @@ class SupabaseService {
     required String screen,
     required String action,
   }) async {
-    final session = isReady ? client.auth.currentSession : null;
-    final authUser = isReady ? client.auth.currentUser : null;
+    var session = isReady ? client.auth.currentSession : null;
+    var authUser = isReady ? client.auth.currentUser : null;
     final accessTokenExists = session?.accessToken.trim().isNotEmpty == true;
     final expiresAt = session?.expiresAt;
     final sessionExpired =
@@ -214,24 +224,57 @@ class SupabaseService {
         DateTime.now().millisecondsSinceEpoch >= expiresAt * 1000;
     final profileAuthUserId = user.authUserId.trim();
     final supabaseAuthUserId = authUser?.id.trim() ?? '';
-    final sessionUserMatchesProfile =
+
+    if (session != null &&
+        authUser != null &&
+        (!accessTokenExists || sessionExpired)) {
+      try {
+        await CrashLogService.record(
+          employeeCode: user.employeeCode,
+          screen: screen,
+          action: '${action}_REFRESH_STARTED',
+          error:
+              'access_token_exists=$accessTokenExists session_expired=$sessionExpired profile_auth_user_id=${profileAuthUserId.isEmpty ? '--' : profileAuthUserId} supabase_auth_user_id=${supabaseAuthUserId.isEmpty ? '--' : supabaseAuthUserId}',
+        );
+        final refreshed = await client.auth.refreshSession();
+        session = refreshed.session ?? client.auth.currentSession;
+        authUser = refreshed.user ?? client.auth.currentUser;
+      } catch (error, stackTrace) {
+        await CrashLogService.record(
+          employeeCode: user.employeeCode,
+          screen: screen,
+          action: '${action}_REFRESH_FAILED',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    }
+
+    final finalAccessTokenExists =
+        session?.accessToken.trim().isNotEmpty == true;
+    final finalExpiresAt = session?.expiresAt;
+    final finalSessionExpired =
+        finalExpiresAt != null &&
+        DateTime.now().millisecondsSinceEpoch >= finalExpiresAt * 1000;
+    final finalSupabaseAuthUserId = authUser?.id.trim() ?? '';
+    final finalSessionUserMatchesProfile =
         profileAuthUserId.isEmpty ||
-        (supabaseAuthUserId.isNotEmpty &&
-            profileAuthUserId == supabaseAuthUserId);
+        (finalSupabaseAuthUserId.isNotEmpty &&
+            profileAuthUserId == finalSupabaseAuthUserId);
 
     if (session == null ||
         authUser == null ||
-        !accessTokenExists ||
-        sessionExpired ||
-        !sessionUserMatchesProfile) {
+        !finalAccessTokenExists ||
+        finalSessionExpired ||
+        !finalSessionUserMatchesProfile) {
       await CrashLogService.record(
         employeeCode: user.employeeCode,
         screen: screen,
         action: action,
         error:
-            'session_exists=${session != null} access_token_exists=$accessTokenExists session_expired=$sessionExpired profile_auth_user_id=${profileAuthUserId.isEmpty ? '--' : profileAuthUserId} supabase_auth_user_id=${supabaseAuthUserId.isEmpty ? '--' : supabaseAuthUserId} session_user_matches_profile=$sessionUserMatchesProfile',
+            'session_exists=${session != null} access_token_exists=$finalAccessTokenExists session_expired=$finalSessionExpired profile_auth_user_id=${profileAuthUserId.isEmpty ? '--' : profileAuthUserId} supabase_auth_user_id=${finalSupabaseAuthUserId.isEmpty ? '--' : finalSupabaseAuthUserId} session_user_matches_profile=$finalSessionUserMatchesProfile',
       );
-      throw StateError('Session expired. Please login again.');
+      throw const AuthSessionExpiredException();
     }
   }
 
