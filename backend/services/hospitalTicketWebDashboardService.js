@@ -649,17 +649,18 @@ export async function resendWebHospitalTicketNotification(client, access, ticket
   }
   const now = new Date().toISOString();
   const resendId = randomUUID();
+  const awaitingSupervisorAcceptance = ticket.status_code === 'awaiting_supervisor_acceptance';
   const notificationRows = recipients.map((recipient) => ({
     ticket_id: ticket.id,
     recipient_user_id: recipient.id,
-    notification_type: ticket.status_code === 'awaiting_supervisor_acceptance' ? 'incoming_supervisor_ticket' : 'manual_resend',
+    notification_type: awaitingSupervisorAcceptance ? 'incoming_supervisor_ticket' : 'manual_resend',
     title: 'Ticket Notification Reminder',
     body: `Ticket ${ticket.ticket_no} needs your attention.`,
     priority: ticket.priority || null,
     current_owner_role: recipient.role_code || ticket.current_assignee_role || null,
     escalation_level: Number(ticket.current_escalation_level_no || 0) || null,
-    action_status: ticket.status_code === 'awaiting_supervisor_acceptance' ? 'active' : null,
-    action_expires_at: ticket.status_code === 'awaiting_supervisor_acceptance' ? ticket.acceptance_due_at || null : null,
+    action_status: awaitingSupervisorAcceptance ? 'active' : 'not_actionable',
+    action_expires_at: awaitingSupervisorAcceptance ? ticket.acceptance_due_at || null : null,
     dedupe_key: `hospital_ticket_manual_resend:${ticket.id}:${recipient.id}:${resendId}`,
     metadata: {
       notification_reason: 'manual_resend',
