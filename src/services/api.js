@@ -543,6 +543,15 @@ export async function generateHospitalFeedbackQr(locationId) {
   return data.qr;
 }
 
+export async function generateUrlQr(url) {
+  const data = await hospitalFeedbackQrRequest({
+    method: 'POST',
+    url: '/api/hospital-feedback/qr/url-preview',
+    data: { url },
+  });
+  return data;
+}
+
 export async function listHospitalFeedbackQrs(params = {}) {
   const data = await hospitalFeedbackQrRequest({
     method: 'GET',

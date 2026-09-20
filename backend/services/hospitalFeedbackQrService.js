@@ -224,6 +224,62 @@ export async function generateQrPngDataUrl(url, options = {}) {
   return `data:image/png;base64,${buffer.toString('base64')}`;
 }
 
+const GENERIC_URL_MAX_LENGTH = 2048;
+
+function genericUrlError(message, code) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  error.code = code;
+  return error;
+}
+
+export function normalizeGenericQrUrl(rawUrl) {
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) {
+    throw genericUrlError('Enter a valid web URL.', 'invalid_url');
+  }
+  const trimmed = rawUrl.trim();
+  if (trimmed.length > GENERIC_URL_MAX_LENGTH) {
+    throw genericUrlError('URL must be 2048 characters or fewer.', 'url_too_long');
+  }
+
+  const hasScheme = /^[a-z][a-z\d+.-]*:/i.test(trimmed);
+  const candidate = hasScheme ? trimmed : `https://${trimmed}`;
+  let parsed;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    throw genericUrlError('Enter a valid web URL.', 'invalid_url');
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw genericUrlError('Only HTTP and HTTPS URLs are supported.', 'unsupported_url_protocol');
+  }
+  if (!parsed.hostname || (!parsed.hostname.includes('.') && parsed.hostname !== 'localhost')) {
+    throw genericUrlError('Enter a valid web URL.', 'invalid_url');
+  }
+  return parsed.href;
+}
+
+function genericQrFilename(url) {
+  const hostname = new URL(url).hostname
+    .replace(/^www\./i, '')
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+  return `QPMS-QR-${hostname || 'url'}.png`;
+}
+
+export async function generateGenericUrlQrPreview(rawUrl, {
+  createQrPng = generateQrPngDataUrl,
+} = {}) {
+  const url = normalizeGenericQrUrl(rawUrl);
+  const qrPngDataUrl = await createQrPng(url);
+  return {
+    url,
+    qr_png_data_url: qrPngDataUrl,
+    suggested_filename: genericQrFilename(url),
+  };
+}
+
 function genericInvalidQr() {
   return {
     valid: false,
@@ -359,6 +415,25 @@ function isPlatformQrAdmin(profile = {}) {
 
 function hasPlatformQrReadVisibility(profile = {}) {
   return activeWebProfile(profile) && hasCooWebVisibility(profile.role);
+}
+
+export async function assertGenericUrlQrAccess({ client, authUser, profile }) {
+  if (isPlatformQrAdmin(profile)) return { allowed: true, source: 'platform_role' };
+  const access = await resolveCurrentUserAccess({
+    client,
+    authUser,
+    profile,
+    requestedModule: 'hospital_feedback',
+    requestedPermission: 'hospital_feedback_qr.generate',
+    requestedScopes: {},
+  });
+  if (access.ok !== false && access.access_granted !== false && access.assignments?.length) {
+    return { allowed: true, source: access.source || 'unified' };
+  }
+  const error = new Error('You do not have permission for this hospital feedback QR action.');
+  error.statusCode = 403;
+  error.code = 'hospital_feedback_qr_access_denied';
+  throw error;
 }
 
 function scopeAllowsQr(scopes, location, permission) {

@@ -4,6 +4,7 @@ import PageHeader from '../components/PageHeader.jsx';
 import {
   deleteHospitalFeedbackQr,
   generateHospitalFeedbackQr,
+  generateUrlQr,
   getHospitalFeedbackQrLocations,
   listHospitalFeedbackQrs,
   previewHospitalFeedbackQr,
@@ -581,6 +582,102 @@ function QrRegistry({ locations, refreshVersion, canManageQr, onQrDeleted }) {
   );
 }
 
+function UrlQrGenerator() {
+  const [urlInput, setUrlInput] = useState('');
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  async function generate() {
+    if (!urlInput.trim() || loading) return;
+    setLoading(true);
+    setError('');
+    setCopied(false);
+    try {
+      setResult(await generateUrlQr(urlInput));
+    } catch (generateError) {
+      setError(generateError.message || 'Unable to generate the QR code. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function copyUrl() {
+    if (!result?.url || !navigator.clipboard) return;
+    await navigator.clipboard.writeText(result.url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  }
+
+  function download() {
+    if (!result?.qr_png_data_url) return;
+    const link = document.createElement('a');
+    link.href = result.qr_png_data_url;
+    link.download = result.suggested_filename || 'QPMS-URL-QR.png';
+    link.click();
+  }
+
+  return (
+    <section className="enterprise-card-compact overflow-hidden">
+      <div className="border-b border-slate-100 bg-white px-5 py-4">
+        <h2 className="text-base font-bold text-slate-950">URL QR Generator</h2>
+        <p className="mt-1 text-sm text-slate-500">Generate a branded QPMS QR code for any web URL.</p>
+      </div>
+      <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="space-y-4">
+          <label className="block">
+            <span className="text-xs font-bold uppercase tracking-wide text-slate-500">URL</span>
+            <input
+              type="text"
+              inputMode="url"
+              value={urlInput}
+              onChange={(event) => {
+                setUrlInput(event.target.value);
+                setError('');
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') generate();
+              }}
+              placeholder="https://example.com"
+              maxLength={2049}
+              className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
+            />
+          </label>
+          <button type="button" onClick={generate} disabled={!urlInput.trim() || loading} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-qpms-700 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-qpms-800 disabled:bg-slate-400">
+            {loading ? <span className="button-spinner" /> : <QrCode className="h-4 w-4" />}
+            Generate QR
+          </button>
+          {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">{error}</div> : null}
+        </div>
+
+        <div>
+          <h3 className="text-sm font-bold text-slate-950">QR Preview</h3>
+          <div className="mt-2 grid aspect-square place-items-center rounded-2xl border border-slate-200 bg-white p-4 shadow-inner">
+            {result?.qr_png_data_url ? <img src={result.qr_png_data_url} alt="URL QR" className="h-full w-full object-contain" /> : <QrCode className="h-12 w-12 text-slate-300" />}
+          </div>
+          {result?.url ? (
+            <div className="mt-4 space-y-3">
+              <label className="block">
+                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">URL</span>
+                <div className="mt-2 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <LinkIcon className="h-4 w-4 shrink-0 text-slate-400" />
+                  <input readOnly value={result.url} className="min-w-0 flex-1 bg-transparent text-xs font-semibold text-slate-700 outline-none" />
+                </div>
+              </label>
+              <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
+                <button type="button" onClick={copyUrl} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700"><Clipboard className="h-4 w-4" />{copied ? 'Copied' : 'Copy URL'}</button>
+                <button type="button" onClick={download} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-bold text-white"><Download className="h-4 w-4" />Download PNG</button>
+                <button type="button" onClick={generate} disabled={loading} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 disabled:text-slate-400"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function HospitalFeedbackQrGenerator() {
   usePageTitle('Client Feedback QR Generator');
   const { user } = useAuth();
@@ -830,6 +927,8 @@ export default function HospitalFeedbackQrGenerator() {
           </div>
         </aside>
       </section>
+
+      {canManageQr ? <UrlQrGenerator /> : null}
 
       <QrRegistry locations={locations} refreshVersion={registryRefresh} canManageQr={canManageQr} onQrDeleted={onRegistryQrDeleted} />
     </div>

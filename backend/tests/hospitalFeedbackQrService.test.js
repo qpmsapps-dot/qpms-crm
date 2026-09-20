@@ -5,6 +5,7 @@ import sharp from 'sharp';
 
 import {
   assertHospitalFeedbackQrAccess,
+  assertGenericUrlQrAccess,
   aggregateHospitalFeedbackDashboardRows,
   clearPublicFeedbackSessions,
   createPublicFeedbackSession,
@@ -12,11 +13,13 @@ import {
   encryptPublicQrToken,
   generateBrandedQrPngBuffer,
   generateHospitalFeedbackQr,
+  generateGenericUrlQrPreview,
   generatePlainQrPngBuffer,
   generatePublicQrToken,
   hashPublicQrToken,
   invalidQrResponse,
   listHospitalFeedbackQrs,
+  normalizeGenericQrUrl,
   previewHospitalFeedbackQr,
   QR_ERROR_CORRECTION_LEVEL,
   QR_PNG_WIDTH,
@@ -47,6 +50,7 @@ const appRoutes = readFileSync(new URL('../../src/routes/AppRoutes.jsx', import.
 const publicPage = readFileSync(new URL('../../src/pages/PublicFeedbackQrPage.jsx', import.meta.url), 'utf8');
 const dashboardPage = readFileSync(new URL('../../src/pages/HospitalFeedbackDashboard.jsx', import.meta.url), 'utf8');
 const api = readFileSync(new URL('../../src/services/api.js', import.meta.url), 'utf8');
+const generatorPage = readFileSync(new URL('../../src/pages/HospitalFeedbackQrGenerator.jsx', import.meta.url), 'utf8');
 
 const env = {
   HOSPITAL_FEEDBACK_PUBLIC_BASE_URL: 'https://myqpms.example',
@@ -236,6 +240,7 @@ test('unauthenticated public resolution is routed without auth, but generation r
   assert.match(routes, /router\.get\('\/qr\/:token', noStoreNoIndex, publicQrRateLimit/);
   assert.match(routes, /router\.get\('\/qr', requireAuth/);
   assert.match(routes, /router\.post\('\/qr', requireAuth/);
+  assert.match(routes, /router\.post\('\/qr\/url-preview', requireAuth/);
   assert.match(routes, /router\.get\('\/qr\/:qrId\/preview', requireAuth/);
   assert.match(routes, /router\.post\('\/qr\/:qrId\/reprint', requireAuth/);
   assert.match(routes, /router\.delete\('\/qr\/:qrId', requireAuth/);
@@ -899,6 +904,62 @@ test('public feedback submission returns existing row only for an identical retr
   assert.equal(result.submission.rating, 4);
   assert.equal(result.submission.needsAttention, false);
   assert.equal(insertCount, 0);
+});
+
+test('generic URL QR validation normalizes web URLs and preserves URL components', () => {
+  assert.equal(normalizeGenericQrUrl('https://example.com/test'), 'https://example.com/test');
+  assert.equal(normalizeGenericQrUrl('http://example.com'), 'http://example.com/');
+  assert.equal(normalizeGenericQrUrl('example.com'), 'https://example.com/');
+  assert.equal(normalizeGenericQrUrl(' www.google.com/search?q=qpms '), 'https://www.google.com/search?q=qpms');
+  assert.equal(normalizeGenericQrUrl('https://example.com/?id=123&source=qpms'), 'https://example.com/?id=123&source=qpms');
+  assert.equal(normalizeGenericQrUrl('https://example.com/page#feedback'), 'https://example.com/page#feedback');
+  assert.equal(normalizeGenericQrUrl('https://example.com/a%20b'), 'https://example.com/a%20b');
+  assert.equal(normalizeGenericQrUrl('https://feedback.example.com:8443/test'), 'https://feedback.example.com:8443/test');
+});
+
+test('generic URL QR validation rejects empty, invalid, unsafe, and oversized values', () => {
+  for (const value of ['', 'random text', 'javascript:alert(1)', 'data:text/html,test', 'file:///C:/test.html', 'mailto:test@example.com', 'tel:+911234567890']) {
+    assert.throws(() => normalizeGenericQrUrl(value));
+  }
+  assert.throws(() => normalizeGenericQrUrl(`https://example.com/${'a'.repeat(2049)}`), /2048/);
+});
+
+test('generic URL QR generation is stateless and uses the branded QR callback only', async () => {
+  let encodedUrl = '';
+  const result = await generateGenericUrlQrPreview('example.com', {
+    createQrPng: async (url) => {
+      encodedUrl = url;
+      return 'data:image/png;base64,BRANDED';
+    },
+  });
+  assert.equal(encodedUrl, 'https://example.com/');
+  assert.deepEqual(result, {
+    url: 'https://example.com/',
+    qr_png_data_url: 'data:image/png;base64,BRANDED',
+    suggested_filename: 'QPMS-QR-example-com.png',
+  });
+});
+
+test('generic URL QR access uses the existing generate authority', async () => {
+  assert.deepEqual(await assertGenericUrlQrAccess({ client: null, authUser: { id: 'auth-admin' }, profile: { role: 'Admin' } }), { allowed: true, source: 'platform_role' });
+  await assert.rejects(
+    () => assertGenericUrlQrAccess({
+      client: fakeClient(async () => ({ data: [], error: null })),
+      authUser: { id: 'auth-user' },
+      profile: { role: 'Operations' },
+    }),
+    /permission/,
+  );
+});
+
+test('generic URL QR frontend uses one backend PNG for preview and download without entering hospital history', () => {
+  assert.match(api, /export async function generateUrlQr\(url\)/);
+  assert.match(generatorPage, /URL QR Generator/);
+  assert.match(generatorPage, /src=\{result\.qr_png_data_url\}/);
+  assert.match(generatorPage, /link\.href = result\.qr_png_data_url/);
+  assert.match(generatorPage, /navigator\.clipboard\.writeText\(result\.url\)/);
+  assert.doesNotMatch(generatorPage, /setRegistryRefresh[\s\S]{0,300}generateUrlQr/);
+  assert.doesNotMatch(generateGenericUrlQrPreview.toString(), /fetch|axios|http\.get|https\.get/);
 });
 
 test('not clean public submission requires comments and creates one linked ticket through RPC', async () => {

@@ -1,7 +1,9 @@
 import express from 'express';
 
 import {
+  assertGenericUrlQrAccess,
   deleteHospitalFeedbackQr,
+  generateGenericUrlQrPreview,
   getHospitalFeedbackDashboard,
   generateHospitalFeedbackQr,
   invalidQrResponse,
@@ -115,6 +117,20 @@ export function createHospitalFeedbackQrRouter({
         request,
       });
       response.status(result.existing ? 200 : 201).json({ ok: true, qr: result });
+    } catch (error) {
+      safeInternalError(response, error);
+    }
+  });
+
+  router.post('/qr/url-preview', requireAuth, async (request, response) => {
+    try {
+      await assertGenericUrlQrAccess({
+        client: serviceClient,
+        authUser: request.authUser,
+        profile: request.profile,
+      });
+      const result = await generateGenericUrlQrPreview(request.body?.url);
+      response.json({ ok: true, ...result });
     } catch (error) {
       safeInternalError(response, error);
     }
