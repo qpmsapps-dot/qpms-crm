@@ -13,6 +13,9 @@ const INCLUDED_EXPENSE_CLAIM_STATUSES = new Set([
   'approved',
 ]);
 const EXPENSE_CLAIM_QUERY_STATUSES = [...INCLUDED_EXPENSE_CLAIM_STATUSES];
+const TRAVEL_CLAIM_PROOF_BUCKET = 'travel-claim-proofs';
+const TRAVEL_CLAIM_PROOF_SIGNED_URL_SECONDS = 15 * 60;
+const TRAVEL_CLAIM_IMAGE_EXTENSION = /\.(png|jpe?g|webp|gif|bmp|heic|heif)$/i;
 const DISTANCE_REIMBURSEMENT_MODES = new Set(['bike', 'own_vehicle', 'car']);
 const TICKET_REIMBURSEMENT_MODES = new Set(['auto', 'bus', 'train', 'other']);
 const COMPLETED_STATUS_PATTERN =
@@ -487,6 +490,82 @@ function reimbursementModes({ attendance, legs, claims }) {
   return modes;
 }
 
+export function travelClaimProofStoragePath(reference) {
+  const value = text(reference);
+  if (!value) return null;
+  const withoutQuery = value.split(/[?#]/, 1)[0].replace(/^\/+/, '');
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const parsed = new URL(value);
+      const marker = `/storage/v1/object/${TRAVEL_CLAIM_PROOF_BUCKET}/`;
+      const signedMarker = `/storage/v1/object/sign/${TRAVEL_CLAIM_PROOF_BUCKET}/`;
+      const publicMarker = `/storage/v1/object/public/${TRAVEL_CLAIM_PROOF_BUCKET}/`;
+      const path = [marker, signedMarker, publicMarker]
+        .map((candidate) => parsed.pathname.indexOf(candidate))
+        .find((index) => index >= 0);
+      if (path === undefined) return null;
+      const matchedMarker = [marker, signedMarker, publicMarker]
+        .find((candidate) => parsed.pathname.indexOf(candidate) === path);
+      return decodeURIComponent(parsed.pathname.slice(path + matchedMarker.length)) || null;
+    } catch {
+      return null;
+    }
+  }
+  if (withoutQuery.startsWith(`${TRAVEL_CLAIM_PROOF_BUCKET}/`)) {
+    return withoutQuery.slice(TRAVEL_CLAIM_PROOF_BUCKET.length + 1) || null;
+  }
+  return withoutQuery || null;
+}
+
+function travelClaimProofMimeType(path, row = {}) {
+  const stored = text(row.mime_type || row.content_type || row.file_type).toLowerCase();
+  if (stored) return stored;
+  const extension = text(path).split('.').pop()?.toLowerCase();
+  if (extension === 'png') return 'image/png';
+  if (extension === 'webp') return 'image/webp';
+  if (extension === 'gif') return 'image/gif';
+  if (extension === 'bmp') return 'image/bmp';
+  if (extension === 'heic' || extension === 'heif') return `image/${extension}`;
+  if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg';
+  return null;
+}
+
+export async function attachAuthorizedTravelClaimProofs(client, claims = []) {
+  const proofs = (claims || []).flatMap((claim) => {
+    const storagePath = travelClaimProofStoragePath(claim.proof_reference || claim.proof_file_url);
+    if (!storagePath || !TRAVEL_CLAIM_IMAGE_EXTENSION.test(storagePath)) return [];
+    return [{
+      id: claim.id,
+      attendance_id: claim.attendance_id,
+      date: claim.attendance_date,
+      attendance_date: claim.attendance_date,
+      travel_mode: claim.travel_mode,
+      claim_type: claim.claim_type,
+      amount: claim.eligible_amount ?? claim.claimed_amount ?? claim.fare_amount ?? 0,
+      parking_amount: claim.parking_amount ?? 0,
+      status: claim.approval_status || claim.status || null,
+      filename: storagePath.split('/').pop() || null,
+      mime_type: travelClaimProofMimeType(storagePath, claim),
+      storage_bucket: TRAVEL_CLAIM_PROOF_BUCKET,
+      storage_path: storagePath,
+      authorized_signed_url: null,
+    }];
+  });
+  return Promise.all(proofs.map(async (proof) => {
+    try {
+      const signed = await client.storage
+        .from(TRAVEL_CLAIM_PROOF_BUCKET)
+        .createSignedUrl(proof.storage_path, TRAVEL_CLAIM_PROOF_SIGNED_URL_SECONDS);
+      return {
+        ...proof,
+        authorized_signed_url: signed.error ? null : signed.data?.signedUrl || null,
+      };
+    } catch {
+      return proof;
+    }
+  }));
+}
+
 function completedDistanceLegs(legs = []) {
   return legs.filter((leg) =>
     Boolean(leg.ended_at) &&
@@ -898,6 +977,10 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
     travelLegs,
     expenseClaims: linkedExpenseClaims,
   });
+  dataset.travel_claim_proofs = await attachAuthorizedTravelClaimProofs(
+    client,
+    dataset.expense_claims,
+  );
   const reviews = attendanceIds.length
     ? await fetchByAttendanceIds(client, 'fo_missing_km_reviews', attendanceIds, 'created_at')
     : [];

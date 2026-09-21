@@ -79,8 +79,12 @@ import {
   activityUploadIsInRange,
   activityUploadIsPhoto,
   buildActivityPhotoExportRows,
-  getEmployeeActivityPhotosForRange,
 } from "../utils/activityPhotoExport.js";
+import {
+  buildReportEvidence,
+  buildReportEvidenceRows,
+  reportEvidenceKey,
+} from "../utils/reportEvidence.js";
 
 const SOUTH_INDIA_CENTER = [13.0827, 80.2707];
 const INDIA_TIME_ZONE = "Asia/Kolkata";
@@ -4449,13 +4453,14 @@ async function imageBitmapFromBlob(blob) {
   }
 }
 
-async function fetchOptimizedActivityThumbnail(url) {
+async function fetchOptimizedActivityThumbnail(url, options = {}) {
   const response = await fetch(url);
   if (!response.ok) throw new Error("Image unavailable");
   const sourceBlob = await response.blob();
   const bitmap = await imageBitmapFromBlob(sourceBlob);
   try {
-    const optimizedSize = fitWithinBox(bitmap.width, bitmap.height, 1200, 1200);
+    const maxDimension = options.maxDimension || 1200;
+    const optimizedSize = fitWithinBox(bitmap.width, bitmap.height, maxDimension, maxDimension);
     const canvas = document.createElement("canvas");
     canvas.width = optimizedSize.width;
     canvas.height = optimizedSize.height;
@@ -4463,8 +4468,13 @@ async function fetchOptimizedActivityThumbnail(url) {
     context.fillStyle = "#ffffff";
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    const thumbnailBlob = await canvasToBlob(canvas, "image/jpeg", 0.82);
-    const displaySize = fitWithinBox(bitmap.width, bitmap.height, 180, 135);
+    const thumbnailBlob = await canvasToBlob(canvas, "image/jpeg", options.quality || 0.82);
+    const displaySize = fitWithinBox(
+      bitmap.width,
+      bitmap.height,
+      options.displayMaxWidth || 180,
+      options.displayMaxHeight || 135,
+    );
     return {
       buffer: await thumbnailBlob.arrayBuffer(),
       extension: "jpeg",
@@ -4475,6 +4485,16 @@ async function fetchOptimizedActivityThumbnail(url) {
   } finally {
     if (typeof bitmap.close === "function") bitmap.close();
   }
+}
+
+function arrayBufferToDataUrl(buffer, mimeType = "image/jpeg") {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return `data:${mimeType};base64,${window.btoa(binary)}`;
 }
 
 async function mapWithConcurrency(items, concurrency, mapper) {
@@ -4573,6 +4593,86 @@ async function appendActivityPhotosWorksheet(workbook, uploads = [], options = {
   };
 }
 
+function signedTravelClaimProofUrl(proof = {}) {
+  return proof.authorized_signed_url || proof.signed_url || null;
+}
+
+async function appendTravelClaimProofsWorksheet(workbook, proofs = [], options = {}, onProgress = () => {}) {
+  const proofRows = buildReportEvidenceRows({ travelClaimProofs: proofs }, {
+    formatDate: formatDateOnly,
+    travelMode: travelModeLabel,
+  }).travelClaimProofs;
+  const worksheet = appendExcelJsSheet(
+    workbook,
+    "Travel Claim Proofs",
+    proofRows.map((row) => {
+      const worksheetRow = { ...row };
+      delete worksheetRow.proof;
+      return worksheetRow;
+    }),
+    ["Date", "Travel Mode", "Claim / Expense Type", "Amount", "Status", "Proof", "View Original"],
+  );
+  worksheet.getColumn("Travel Mode").width = 18;
+  worksheet.getColumn("Claim / Expense Type").width = 24;
+  worksheet.getColumn("Amount").width = 14;
+  worksheet.getColumn("Status").width = 18;
+  worksheet.getColumn("Proof").width = 28;
+  worksheet.getColumn("View Original").width = 16;
+
+  let embedded = 0;
+  let skipped = 0;
+  let optimizedBytes = 0;
+  await mapWithConcurrency(proofRows, 4, async (row, index) => {
+    const excelRowNumber = index + 2;
+    const originalUrl = signedTravelClaimProofUrl(row.proof);
+    if (options.includePhotoDetails !== false && originalUrl) {
+      const cell = worksheet.getCell(excelRowNumber, 7);
+      cell.value = { text: "Open", hyperlink: originalUrl };
+      cell.font = { color: { argb: "FF2563EB" }, underline: true };
+    }
+    if (options.includeImages === false) {
+      worksheet.getCell(excelRowNumber, 6).value = "Image not embedded";
+      return;
+    }
+    if (!originalUrl) {
+      worksheet.getCell(excelRowNumber, 6).value = "Image unavailable";
+      skipped += 1;
+      return;
+    }
+    try {
+      onProgress(`Processing ${index + 1} of ${proofRows.length} travel claim proofs`);
+      const image = await fetchOptimizedActivityThumbnail(originalUrl, { displayMaxHeight: 180 });
+      const imageId = workbook.addImage({ buffer: image.buffer, extension: image.extension });
+      worksheet.getRow(excelRowNumber).height = Math.max(106, Math.ceil(image.height * 0.75) + 8);
+      worksheet.getCell(excelRowNumber, 6).value = "";
+      worksheet.addImage(imageId, {
+        tl: { col: 5.15, row: excelRowNumber - 0.85 },
+        ext: { width: image.width, height: image.height },
+        editAs: "oneCell",
+      });
+      embedded += 1;
+      optimizedBytes += image.bytes;
+    } catch (error) {
+      console.warn("[myQPMS FO] Travel claim proof export failed.", error);
+      worksheet.getCell(excelRowNumber, 6).value = "Image unavailable";
+      skipped += 1;
+    }
+  });
+
+  if (!proofRows.length) {
+    worksheet.addRow({
+      "Date": "",
+      "Travel Mode": "No travel claim proofs found for the selected period.",
+      "Claim / Expense Type": "",
+      "Amount": "",
+      "Status": "",
+      "Proof": "",
+      "View Original": "",
+    });
+  }
+  return { found: proofRows.length, embedded, skipped, optimizedBytes };
+}
+
 function saveExcelBuffer(buffer, filename) {
   const blob = new Blob(
     [buffer],
@@ -4592,6 +4692,7 @@ function saveExcelBuffer(buffer, filename) {
 async function exportEmployeeRangeExcelWithOptions({
   dataset,
   activityUploads = [],
+  travelClaimProofs = [],
   options = {},
   onProgress = () => {},
 }) {
@@ -4617,6 +4718,17 @@ async function exportEmployeeRangeExcelWithOptions({
     photoResult = await appendActivityPhotosWorksheet(workbook, activityUploads, options, onProgress);
   }
 
+  let travelProofResult = { found: travelClaimProofs.length, embedded: 0, skipped: 0, optimizedBytes: 0 };
+  if (options.travelClaimProofs !== false) {
+    onProgress("Loading travel claim proofs");
+    travelProofResult = await appendTravelClaimProofsWorksheet(
+      workbook,
+      travelClaimProofs,
+      options,
+      onProgress,
+    );
+  }
+
   onProgress("Building workbook");
   const employeeCode = sanitizeReportFilenamePart(
     dataset?.employee?.employee_code || "Employee",
@@ -4629,7 +4741,12 @@ async function exportEmployeeRangeExcelWithOptions({
     `${employeeCode}_Field_Activity_KM_Report_${fromDate}_to_${toDate}.xlsx`,
   );
   return {
-    ...photoResult,
+    found: photoResult.found + travelProofResult.found,
+    embedded: photoResult.embedded + travelProofResult.embedded,
+    skipped: photoResult.skipped + travelProofResult.skipped,
+    optimizedBytes: photoResult.optimizedBytes + travelProofResult.optimizedBytes,
+    activityPhotos: photoResult,
+    travelClaimProofs: travelProofResult,
     workbookBytes,
   };
 }
@@ -7244,11 +7361,14 @@ function FieldOfficerDetailsView({
   const [excelExporting, setExcelExporting] = useState(false);
   const [excelExportProgress, setExcelExportProgress] = useState("");
   const [excelExportMessage, setExcelExportMessage] = useState("");
+  const [pdfEvidencePreparing, setPdfEvidencePreparing] = useState(false);
+  const [pdfEvidenceImages, setPdfEvidenceImages] = useState({});
   const [excelExportOptions, setExcelExportOptions] = useState({
     reportSummary: true,
     attendanceKm: true,
     siteVisits: true,
     activityPhotos: true,
+    travelClaimProofs: true,
     includePhotoDetails: true,
     includeImages: true,
   });
@@ -7489,14 +7609,28 @@ function FieldOfficerDetailsView({
     filteredActivityCards.find((card) => card.id === selectedActivityCardId) ||
     filteredActivityCards[0] ||
     null;
-  const exportActivityPhotos = useMemo(
-    () => getEmployeeActivityPhotosForRange(selectedEmployeeRangeActivityUploads, {
+  const reportEvidence = useMemo(
+    () => buildReportEvidence({
+      activityUploads: selectedEmployeeRangeActivityUploads,
+      travelClaimProofs: rangeDataset?.travel_claim_proofs || [],
       fromDate,
       toDate,
       visits,
       attendances,
     }),
-    [attendances, fromDate, selectedEmployeeRangeActivityUploads, toDate, visits],
+    [attendances, fromDate, rangeDataset?.travel_claim_proofs, selectedEmployeeRangeActivityUploads, toDate, visits],
+  );
+  const exportActivityPhotos = reportEvidence.activityPhotos;
+  const exportTravelClaimProofs = reportEvidence.travelClaimProofs;
+  const reportEvidenceRows = useMemo(
+    () => buildReportEvidenceRows(reportEvidence, {
+      formatDate: formatDateOnly,
+      formatTime,
+      activityType: normalizeActivityGroup,
+      travelMode: travelModeLabel,
+      money: reportMoneyLabel,
+    }),
+    [reportEvidence],
   );
   const exportPeriodLabel = `${formatDateOnly(fromDate)} - ${formatDateOnly(toDate)}`;
   const exportedEmployeeId = displayValue(officer?.employeeCode || officer?.foId);
@@ -7504,12 +7638,13 @@ function FieldOfficerDetailsView({
   function setExcelOption(key, checked) {
     setExcelExportOptions((current) => {
       const next = { ...current, [key]: checked };
-      if (key === "activityPhotos" && !checked) {
+      if ((key === "activityPhotos" || key === "travelClaimProofs") && !checked && !next.activityPhotos && !next.travelClaimProofs) {
         next.includePhotoDetails = false;
         next.includeImages = false;
       }
       if ((key === "includePhotoDetails" || key === "includeImages") && checked) {
         next.activityPhotos = true;
+        next.travelClaimProofs = true;
       }
       return next;
     });
@@ -7521,6 +7656,7 @@ function FieldOfficerDetailsView({
       attendanceKm: true,
       siteVisits: true,
       activityPhotos: true,
+      travelClaimProofs: true,
       includePhotoDetails: true,
       includeImages: true,
     });
@@ -7531,7 +7667,7 @@ function FieldOfficerDetailsView({
 
   async function handleExcelExport() {
     if (!onExport || excelExporting) return;
-    if (!excelExportOptions.reportSummary && !excelExportOptions.attendanceKm && !excelExportOptions.siteVisits && !excelExportOptions.activityPhotos) {
+    if (!excelExportOptions.reportSummary && !excelExportOptions.attendanceKm && !excelExportOptions.siteVisits && !excelExportOptions.activityPhotos && !excelExportOptions.travelClaimProofs) {
       setExcelExportMessage("Select at least one report section to export.");
       return;
     }
@@ -7542,6 +7678,7 @@ function FieldOfficerDetailsView({
       const result = await onExport({
         options: excelExportOptions,
         activityUploads: exportActivityPhotos,
+        travelClaimProofs: exportTravelClaimProofs,
         onProgress: setExcelExportProgress,
       });
       const skipped = result?.skipped || 0;
@@ -8340,20 +8477,55 @@ function FieldOfficerDetailsView({
     ) {
       return undefined;
     }
+    let cancelled = false;
     let secondFrame = null;
     const firstFrame = window.requestAnimationFrame(() => {
       secondFrame = window.requestAnimationFrame(() => {
-        setPrintRequested(false);
-        printReport();
+        const images = Array.from(document.querySelectorAll(".fo-report-evidence-image"));
+        Promise.allSettled(images.map((image) => image.decode?.() || Promise.resolve()))
+          .then(() => {
+            if (cancelled) return;
+            setPrintRequested(false);
+            printReport();
+          });
       });
     });
     return () => {
+      cancelled = true;
       window.cancelAnimationFrame(firstFrame);
       if (secondFrame !== null) window.cancelAnimationFrame(secondFrame);
     };
   }, [activeDetailTab, printReport, printRequested, reportState]);
-  const openPrintReport = () => {
-    if (reportState !== "ready") return;
+  const openPrintReport = async () => {
+    if (reportState !== "ready" || pdfEvidencePreparing) return;
+    setPdfEvidencePreparing(true);
+    const prepared = {};
+    const evidenceItems = [
+      ...reportEvidence.activityPhotos.map((record, index) => ({ domain: "activity", record, index })),
+      ...reportEvidence.travelClaimProofs.map((record, index) => ({ domain: "travel", record, index })),
+    ];
+    await mapWithConcurrency(evidenceItems, 3, async ({ domain, record, index }) => {
+      const key = reportEvidenceKey(domain, record, index);
+      const url = domain === "activity"
+        ? await signedActivityUploadUrl(record)
+        : signedTravelClaimProofUrl(record);
+      if (!url) {
+        prepared[key] = null;
+        return;
+      }
+      try {
+        const image = await fetchOptimizedActivityThumbnail(url, {
+          maxDimension: 1400,
+          quality: 0.86,
+        });
+        prepared[key] = arrayBufferToDataUrl(image.buffer);
+      } catch (error) {
+        console.warn(`[myQPMS FO] ${domain} PDF evidence image failed.`, error);
+        prepared[key] = null;
+      }
+    });
+    setPdfEvidenceImages(prepared);
+    setPdfEvidencePreparing(false);
     setDrillDownOpen(true);
     setActiveTab("report");
     setPrintRequested(true);
@@ -8554,7 +8726,6 @@ function FieldOfficerDetailsView({
                     ["reportSummary", "Report Summary"],
                     ["attendanceKm", "Attendance & KM"],
                     ["siteVisits", "Site Visits"],
-                    ["activityPhotos", "Activity Photos"],
                   ].map(([key, label]) => (
                     <label key={key} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700">
                       <input
@@ -8571,13 +8742,30 @@ function FieldOfficerDetailsView({
               </div>
 
               <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
-                <p className="text-sm font-black text-emerald-800">
-                  {exportActivityPhotos.length
-                    ? `${exportActivityPhotos.length} activity photos found`
-                    : "No activity photos found for the selected period."}
-                </p>
+                <p className="text-xs font-black uppercase tracking-wide text-emerald-800">Supporting Evidence</p>
+                <div className="mt-2 grid gap-2">
+                  {[
+                    ["activityPhotos", "Activity Photos", exportActivityPhotos.length],
+                    ["travelClaimProofs", "Travel Claim Proofs", exportTravelClaimProofs.length],
+                  ].map(([key, label, count]) => (
+                    <label key={key} className="flex items-center justify-between gap-3 rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm font-bold text-slate-700">
+                      <span className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={excelExportOptions[key]}
+                          onChange={(event) => setExcelOption(key, event.target.checked)}
+                          disabled={excelExporting}
+                          className="h-4 w-4 accent-qpms-700"
+                        />
+                        {label}
+                      </span>
+                      <span className="text-xs text-emerald-700">{count} found</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="mt-3 text-sm font-black text-emerald-800">Total evidence images: {reportEvidence.totalEvidenceCount}</p>
                 <p className="mt-1 text-xs font-semibold leading-5 text-emerald-700">
-                  Photos will be embedded as optimized thumbnails. Original image links use the current authorized signed URL and may expire according to storage policy.
+                  Images will be embedded as optimized thumbnails. Original links use the current authorized signed URL and may expire according to storage policy.
                 </p>
               </div>
 
@@ -8587,7 +8775,7 @@ function FieldOfficerDetailsView({
                   ["includeImages", "Include images inside Excel"],
                 ].map(([key, label]) => (
                   <label key={key} className={`flex items-center gap-3 rounded-xl border px-3 py-2 text-sm font-bold ${
-                    excelExportOptions.activityPhotos
+                    excelExportOptions.activityPhotos || excelExportOptions.travelClaimProofs
                       ? "border-slate-200 bg-white text-slate-700"
                       : "border-slate-100 bg-slate-50 text-slate-400"
                   }`}>
@@ -8595,7 +8783,7 @@ function FieldOfficerDetailsView({
                       type="checkbox"
                       checked={excelExportOptions[key]}
                       onChange={(event) => setExcelOption(key, event.target.checked)}
-                      disabled={excelExporting || !excelExportOptions.activityPhotos}
+                      disabled={excelExporting || (!excelExportOptions.activityPhotos && !excelExportOptions.travelClaimProofs)}
                       className="h-4 w-4 accent-qpms-700"
                     />
                     {label}
@@ -10410,10 +10598,14 @@ function FieldOfficerDetailsView({
             <button
               type="button"
               onClick={openPrintReport}
-              disabled={reportState !== "ready"}
+              disabled={reportState !== "ready" || pdfEvidencePreparing}
               className="focus-ring rounded-lg bg-qpms-700 px-4 py-2 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {rangeDatasetLoading ? "Loading report..." : "Export PDF"}
+              {rangeDatasetLoading
+                ? "Loading report..."
+                : pdfEvidencePreparing
+                  ? "Preparing evidence..."
+                  : "Export PDF"}
             </button>
           </div>
           {rangeDatasetLoading ? (
@@ -10666,6 +10858,101 @@ function FieldOfficerDetailsView({
               Total Amount includes distance reimbursement, eligible other-transport fare and
               eligible parking reimbursement.
             </p>
+
+            <section className="fo-report-evidence-appendix mt-8">
+              <div className="border-b-2 border-qpms-700 pb-3">
+                <h2 className="text-xl font-black text-slate-950">SUPPORTING EVIDENCE</h2>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {reportEvidence.totalEvidenceCount} evidence image{reportEvidence.totalEvidenceCount === 1 ? "" : "s"} for the selected period
+                </p>
+              </div>
+
+              <div className="mt-5">
+                <h3 className="text-base font-black text-slate-900">Activity Photos</h3>
+                {!reportEvidenceRows.activityPhotos.length ? (
+                  <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-600">
+                    No activity photos available for the selected period.
+                  </p>
+                ) : (
+                  <div className="mt-3 space-y-5">
+                    {reportEvidenceRows.activityPhotos.map((row, index) => {
+                      const key = reportEvidenceKey("activity", row.upload, index);
+                      const prepared = Object.hasOwn(pdfEvidenceImages, key);
+                      const imageSource = prepared
+                        ? pdfEvidenceImages[key]
+                        : row.upload.authorized_signed_url || row.upload.displayUrl || null;
+                      return (
+                        <article key={key} className="fo-report-evidence-card rounded-lg border border-slate-200 p-4">
+                          <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-5">
+                            {[
+                              ["Date", row.Date],
+                              ["Site / Client", row["Site / Client"]],
+                              ["Activity Type", row["Activity Type"]],
+                              ["Time", row["Activity Time"]],
+                              ["Remarks", row.Remarks],
+                            ].map(([label, value]) => (
+                              <div key={label}>
+                                <p className="font-bold text-slate-400">{label}</p>
+                                <p className="mt-1 font-bold text-slate-800">{displayValue(value)}</p>
+                              </div>
+                            ))}
+                          </div>
+                          {imageSource ? (
+                            <img src={imageSource} alt={`Activity evidence ${index + 1}`} className="fo-report-evidence-image mt-3 max-h-[520px] w-full object-contain" />
+                          ) : (
+                            <p className="mt-3 grid min-h-32 place-items-center rounded-lg bg-slate-100 text-sm font-bold text-slate-500">Activity image unavailable</p>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-7">
+                <h3 className="text-base font-black text-slate-900">Travel Claim Proofs</h3>
+                {!reportEvidenceRows.travelClaimProofs.length ? (
+                  <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-600">
+                    No travel claim proofs available for the selected period.
+                  </p>
+                ) : (
+                  <div className="mt-3 space-y-5">
+                    {reportEvidenceRows.travelClaimProofs.map((row, index) => {
+                      const key = reportEvidenceKey("travel", row.proof, index);
+                      const prepared = Object.hasOwn(pdfEvidenceImages, key);
+                      const imageSource = prepared
+                        ? pdfEvidenceImages[key]
+                        : signedTravelClaimProofUrl(row.proof);
+                      return (
+                        <article key={key} className="fo-report-evidence-card rounded-lg border border-slate-200 p-4">
+                          <p className="text-sm font-black text-slate-950">Travel Claim Proof</p>
+                          <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-5">
+                            {[
+                              ["Date", row.Date],
+                              ["Travel Mode", row["Travel Mode"]],
+                              ["Claim / Expense Type", row["Claim / Expense Type"]],
+                              ["Amount", row.Amount],
+                              ["Status", row.Status],
+                            ].map(([label, value]) => (
+                              <div key={label}>
+                                <p className="font-bold text-slate-400">{label}</p>
+                                <p className="mt-1 font-bold text-slate-800">{displayValue(value)}</p>
+                              </div>
+                            ))}
+                          </div>
+                          {imageSource ? (
+                            <img src={imageSource} alt={`Travel claim proof ${index + 1}`} className="fo-report-evidence-image mt-3 max-h-[620px] w-full object-contain" />
+                          ) : (
+                            <p className="mt-3 grid min-h-32 place-items-center rounded-lg bg-slate-100 text-sm font-bold text-slate-500">Proof image unavailable</p>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </section>
+
             <div className="fo-print-page-number" aria-hidden="true" />
           </article>
           ) : null}
@@ -13014,10 +13301,11 @@ export default function FOActivities() {
         onDraftToDate={setDetailDraftToDate}
         onApplyDate={applyDetailDateRange}
         onBack={() => setSelectedOfficerId(null)}
-        onExport={readOnlyDemo ? null : ({ options, activityUploads, onProgress } = {}) =>
+        onExport={readOnlyDemo ? null : ({ options, activityUploads, travelClaimProofs, onProgress } = {}) =>
           exportEmployeeRangeExcelWithOptions({
             dataset: employeeRangeDataset,
             activityUploads,
+            travelClaimProofs,
             options,
             onProgress,
           })}

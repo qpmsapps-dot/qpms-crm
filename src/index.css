@@ -527,6 +527,21 @@
     min-height: 150px;
   }
 
+  .fo-report-evidence-appendix {
+    break-before: page;
+    page-break-before: always;
+  }
+
+  .fo-report-evidence-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .fo-report-evidence-image {
+    max-width: 100% !important;
+    object-fit: contain;
+  }
+
   .fo-report-shell {
     border: 0 !important;
     padding: 0 !important;

@@ -7,8 +7,10 @@ import {
   deriveVisitDurationMinutes,
   fetchEmployeeRangePages,
   kolkataPeriodBounds,
+  attachAuthorizedTravelClaimProofs,
   loadOptionalExpenseClaims,
   recalculateEmployeeRange,
+  travelClaimProofStoragePath,
 } from '../services/employeeRangeReportService.js';
 
 function attendance(date, km, overrides = {}) {
@@ -624,6 +626,50 @@ test('selected_period_recalculation_returns_partial_failures_by_day', async () =
   assert.equal(result.failed, 1);
   assert.deepEqual(result.results.map((row) => row.outcome), ['updated', 'failed']);
   assert.equal(result.results[1].reason, 'KM recalculation failed for this attendance.');
+});
+
+test('travel claim proof path accepts only a path in the private proof bucket', () => {
+  assert.equal(
+    travelClaimProofStoragePath('travel-claim-proofs/QPMSAP2213/a/claim.jpg'),
+    'QPMSAP2213/a/claim.jpg',
+  );
+  assert.equal(
+    travelClaimProofStoragePath('https://example.invalid/arbitrary/claim.jpg'),
+    null,
+  );
+});
+
+test('authorized travel claim proofs stay private and retain a row when signing fails', async () => {
+  const calls = [];
+  const client = {
+    storage: {
+      from(bucket) {
+        calls.push({ bucket });
+        return {
+          async createSignedUrl(path, expiresIn) {
+            calls.push({ path, expiresIn });
+            return { data: null, error: { message: 'temporary storage failure' } };
+          },
+        };
+      },
+    },
+  };
+  const rows = await attachAuthorizedTravelClaimProofs(client, [{
+    id: 'claim-1',
+    attendance_id: 'attendance-1',
+    attendance_date: '2026-09-01',
+    travel_mode: 'bus',
+    claim_type: 'travel',
+    eligible_amount: 45,
+    approval_status: 'submitted',
+    proof_reference: 'QPMSAP2213/attendance-1/claim.jpg',
+  }]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].storage_bucket, 'travel-claim-proofs');
+  assert.equal(rows[0].authorized_signed_url, null);
+  assert.deepEqual(calls[0], { bucket: 'travel-claim-proofs' });
+  assert.equal(calls[1].path, 'QPMSAP2213/attendance-1/claim.jpg');
+  assert.equal(calls[1].expiresIn, 900);
 });
 
 test('site_visit_summary exposes the resolved final leg on End Day', () => {
