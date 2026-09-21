@@ -75,6 +75,12 @@ import {
   employeeRangeMetric,
   reportReadiness,
 } from "../utils/employeeRangeReport.js";
+import {
+  activityUploadIsInRange,
+  activityUploadIsPhoto,
+  buildActivityPhotoExportRows,
+  getEmployeeActivityPhotosForRange,
+} from "../utils/activityPhotoExport.js";
 
 const SOUTH_INDIA_CENTER = [13.0827, 80.2707];
 const INDIA_TIME_ZONE = "Asia/Kolkata";
@@ -4399,35 +4405,11 @@ function appendExcelJsSheet(workbook, name, rows = [], headers = []) {
 }
 
 function activityPhotoExportRows(uploads = []) {
-  return uploads
-    .filter(activityUploadIsImage)
-    .map((upload) => {
-      const metadata = activityUploadMetadata(upload);
-      const submission = upload.submission || {};
-      const siteName = firstNonEmptyText(
-        upload.site_name,
-        upload.store_name,
-        submission.site_name,
-        submission.store_name,
-        upload.store_code,
-        submission.store_code,
-      );
-      const clientName = firstNonEmptyText(
-        upload.client_name,
-        submission.client_name,
-        metadata.client_name,
-      );
-      return {
-        upload,
-        "Date": formatDateOnly(activityUploadTime(upload)),
-        "Site / Client": [siteName, clientName].filter(Boolean).join(" / ") || "--",
-        "Activity Type": upload.activityGroup || normalizeActivityGroup(upload.activity_type || upload.upload_role || submission.activity_type),
-        "Activity Time": formatTime(activityUploadTime(upload)),
-        "Photo": "Image pending",
-        "View Original": "",
-        "Remarks": firstNonEmptyText(upload.remarks, submission.remarks, metadata.remarks, "-"),
-      };
-    });
+  return buildActivityPhotoExportRows(uploads, {
+    formatDate: formatDateOnly,
+    formatTime,
+    activityType: normalizeActivityGroup,
+  });
 }
 
 function fitWithinBox(width, height, maxWidth, maxHeight) {
@@ -5489,9 +5471,7 @@ function normalizeActivityGroup(value, uploadRole = "") {
 }
 
 function activityUploadIsImage(upload) {
-  const type = String(upload?.file_type || "").toLowerCase();
-  const name = String(upload?.file_name || upload?.file_url || "").toLowerCase();
-  return type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(name);
+  return activityUploadIsPhoto(upload);
 }
 
 function activityUploadName(upload) {
@@ -7382,27 +7362,36 @@ function FieldOfficerDetailsView({
       }),
     [activityUploads, rowMatchesSelectedEmployee, selectedEmployeeActivitySubmissionIds],
   );
+  const selectedEmployeeRangeActivityUploads = useMemo(
+    () => selectedEmployeeActivityUploads.filter((upload) => activityUploadIsInRange(upload, {
+      fromDate,
+      toDate,
+      visits,
+      attendances,
+    })),
+    [attendances, fromDate, selectedEmployeeActivityUploads, toDate, visits],
+  );
   const visibleActivityUploads = useMemo(() => {
     const selectedVisitId = selectedVisit?.id ? String(selectedVisit.id) : null;
     const siteScopedUploads = selectedVisitId
-      ? selectedEmployeeActivityUploads.filter((upload) => {
+      ? selectedEmployeeRangeActivityUploads.filter((upload) => {
           const uploadVisitId = upload.site_visit_id || upload.submission?.site_visit_id;
           return uploadVisitId && String(uploadVisitId) === selectedVisitId;
         })
-      : selectedEmployeeActivityUploads;
+      : selectedEmployeeRangeActivityUploads;
     return filteredActivityUploads(siteScopedUploads, photoFilter);
-  }, [photoFilter, selectedEmployeeActivityUploads, selectedVisit]);
+  }, [photoFilter, selectedEmployeeRangeActivityUploads, selectedVisit]);
   const webUploadEnabled = canUseWebActivityUpload(generatedByUser);
   const activityUploadsBySubmissionId = useMemo(() => {
     const map = new Map();
-    selectedEmployeeActivityUploads.forEach((upload) => {
+    selectedEmployeeRangeActivityUploads.forEach((upload) => {
       const key = upload.submission_id ? String(upload.submission_id) : "";
       if (!key) return;
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(upload);
     });
     return map;
-  }, [selectedEmployeeActivityUploads]);
+  }, [selectedEmployeeRangeActivityUploads]);
   const activityCards = useMemo(() => {
     const cards = [];
     const submissionIdsWithCards = new Set();
@@ -7443,7 +7432,7 @@ function FieldOfficerDetailsView({
       });
       submissionIdsWithCards.add(String(submission.id));
     });
-    selectedEmployeeActivityUploads.forEach((upload) => {
+    selectedEmployeeRangeActivityUploads.forEach((upload) => {
       if (upload.submission_id && submissionIdsWithCards.has(String(upload.submission_id))) return;
       const metadata = objectMetadata(upload);
       const activityGroup = activityTypeLabel(upload.activity_type || upload.upload_role || metadata.activity_type);
@@ -7476,7 +7465,7 @@ function FieldOfficerDetailsView({
     return cards.sort(
       (a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime(),
     );
-  }, [selectedEmployeeActivitySubmissions, selectedEmployeeActivityUploads, activityUploadsBySubmissionId, officer?.name]);
+  }, [selectedEmployeeActivitySubmissions, selectedEmployeeRangeActivityUploads, activityUploadsBySubmissionId, officer?.name]);
   const filteredActivityCards = useMemo(() => {
     const search = photoSearch.trim().toLowerCase();
     return activityCards.filter((card) => {
@@ -7501,8 +7490,13 @@ function FieldOfficerDetailsView({
     filteredActivityCards[0] ||
     null;
   const exportActivityPhotos = useMemo(
-    () => selectedEmployeeActivityUploads.filter(activityUploadIsImage),
-    [selectedEmployeeActivityUploads],
+    () => getEmployeeActivityPhotosForRange(selectedEmployeeRangeActivityUploads, {
+      fromDate,
+      toDate,
+      visits,
+      attendances,
+    }),
+    [attendances, fromDate, selectedEmployeeRangeActivityUploads, toDate, visits],
   );
   const exportPeriodLabel = `${formatDateOnly(fromDate)} - ${formatDateOnly(toDate)}`;
   const exportedEmployeeId = displayValue(officer?.employeeCode || officer?.foId);
