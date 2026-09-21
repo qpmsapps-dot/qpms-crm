@@ -101,6 +101,24 @@ test('bike-only attendance produces distance reimbursement without other transpo
   assert.equal(row.total_claim, 60);
 });
 
+test('pending canonical Bike row does not silently finalize zero reimbursement', () => {
+  const report = dataset({
+    attendances: [attendance('a-pending', 'BIKE1', '2026-08-14', 74.48, 0, {
+      payable_km_allowed: true,
+      route_sync_status: 'pending_canonical_end_day_recalculation',
+      metadata: {
+        canonical_recalculation_pending: true,
+        km_recalculation_status: 'pending',
+      },
+    })],
+    claims: [],
+  });
+  const row = report.rows.find((item) => item.employee_code === 'BIKE1');
+  assert.equal(row.total_km_travelled, 74.48);
+  assert.equal(row.distance_reimbursement, 297.92);
+  assert.equal(row.total_claim, 297.92);
+});
+
 test('train-only claim contributes other transport and zero kilometers', () => {
   const row = dataset().rows.find((item) => item.employee_code === 'TRAIN1');
   assert.equal(row.total_km_travelled, 0);
@@ -525,7 +543,7 @@ test('attendance query uses only real fo_attendance columns', async () => {
     new URL('../services/operationsSummaryService.js', import.meta.url),
     'utf8',
   );
-  assert.match(source, /from\('fo_attendance'\)[\s\S]*?\.select\('id,fo_user_id,employee_code,display_name,username,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,actual_km,petrol_amount,rate_per_km,travel_mode'\)/);
+  assert.match(source, /from\('fo_attendance'\)[\s\S]*?\.select\('id,fo_user_id,employee_code,display_name,username,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,actual_km,petrol_amount,rate_per_km,travel_mode,payable_km_allowed,route_sync_status,metadata'\)/);
   assert.match(source, /from\('fo_attendance'\)[\s\S]*?\.gte\('attendance_date', filters\.date_from\)[\s\S]*?\.lte\('attendance_date', filters\.date_to\)[\s\S]*?\.order\('attendance_date', \{ ascending: true \}\)[\s\S]*?\.order\('id', \{ ascending: true \}\)/);
   assert.doesNotMatch(source, /fo_attendance'[\s\S]*?\.select\('[^']*full_name/);
   assert.doesNotMatch(source, /from\('fo_attendance'\)[\s\S]*?\.gte\('(?:login_time|created_at|updated_at|reviewed_at)'/);

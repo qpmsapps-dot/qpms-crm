@@ -23,6 +23,7 @@ function attendance(date, km, overrides = {}) {
     status: 'Completed',
     travel_mode: 'bike',
     rate_per_km: 4,
+    payable_km_allowed: true,
     total_route_km: km,
     eligible_km: km,
     total_approved_km: km,
@@ -34,6 +35,30 @@ function attendance(date, km, overrides = {}) {
     ...overrides,
   };
 }
+
+test('employee range does not silently finalize zero for pending payable Bike KM', () => {
+  const row = attendance('2026-08-14', 74.48, {
+    petrol_amount: 0,
+    route_sync_status: 'pending_canonical_end_day_recalculation',
+    metadata: {
+      canonical_recalculation_pending: true,
+      km_recalculation_status: 'pending',
+    },
+  });
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'QPMSTNC16998' },
+    period: kolkataPeriodBounds('2026-08-14', '2026-08-14'),
+    attendances: [row],
+  });
+
+  assert.equal(dataset.daily_summary[0].distance_amount, 297.92);
+  assert.equal(dataset.daily_summary[0].petrol_amount, 297.92);
+  assert.equal(
+    dataset.daily_summary[0].reimbursement_consistency_status,
+    'pending_recalculation_amount_derived',
+  );
+  assert.equal(dataset.period_summary.distance_amount, 297.92);
+});
 
 function travelLeg(attendanceId, mode, payableKm, ratePerKm, overrides = {}) {
   return {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildOperationsSummary,
+  attendanceReimbursementConsistency,
   canAccessOperationsSummary,
   normalizeOperationsSummaryFilters,
   operationsSummaryAllowedEmployeeCodes,
@@ -146,6 +147,87 @@ test('stored petrol wins and rate fallback applies only when stored petrol is ab
   assert.equal(storedAttendancePetrolAmount({ petrol_amount: 0, rate_per_km: 4 }, 15), 0);
   assert.equal(storedAttendancePetrolAmount({ petrol_amount: null, rate_per_km: 4 }, 15), 60);
   assert.equal(storedAttendancePetrolAmount({ rate_per_km: 4 }, 15), 60);
+});
+
+function pendingPrivateAttendance(overrides = {}) {
+  return {
+    travel_mode: 'bike',
+    rate_per_km: 4,
+    payable_km_allowed: true,
+    total_approved_km: 1,
+    petrol_amount: 0,
+    route_sync_status: 'pending_canonical_end_day_recalculation',
+    metadata: {
+      canonical_recalculation_pending: true,
+      km_recalculation_status: 'pending',
+    },
+    ...overrides,
+  };
+}
+
+test('pending Bike reimbursement derives 74.48 km at four rupees', () => {
+  const row = pendingPrivateAttendance({ total_approved_km: 74.48 });
+  assert.equal(storedAttendancePetrolAmount(row), 297.92);
+  assert.equal(attendanceReimbursementConsistency(row).status, 'pending_recalculation_amount_derived');
+});
+
+test('pending Bike reimbursement derives 62.23 km at four rupees', () => {
+  assert.equal(storedAttendancePetrolAmount(
+    pendingPrivateAttendance({ total_approved_km: 62.23 }),
+  ), 248.92);
+});
+
+test('pending Bike reimbursement derives 1072.16 km at four rupees', () => {
+  assert.equal(storedAttendancePetrolAmount(
+    pendingPrivateAttendance({ total_approved_km: 1072.16 }),
+  ), 4288.64);
+});
+
+test('pending Car reimbursement uses the eight rupee default rate', () => {
+  const row = pendingPrivateAttendance({
+    travel_mode: 'car',
+    rate_per_km: null,
+    total_approved_km: 12.5,
+  });
+  assert.equal(storedAttendancePetrolAmount(row), 100);
+});
+
+test('zero payable KM remains a valid zero reimbursement', () => {
+  const row = pendingPrivateAttendance({ total_approved_km: 0 });
+  assert.equal(storedAttendancePetrolAmount(row), 0);
+  assert.equal(attendanceReimbursementConsistency(row).status, 'not_applicable');
+});
+
+test('explicitly non-payable pending row remains zero', () => {
+  const row = pendingPrivateAttendance({ payable_km_allowed: false, total_approved_km: 74.48 });
+  assert.equal(storedAttendancePetrolAmount(row), 0);
+  assert.equal(attendanceReimbursementConsistency(row).status, 'not_applicable');
+});
+
+test('public transport does not receive private-mode reimbursement fallback', () => {
+  const row = pendingPrivateAttendance({ travel_mode: 'train', total_approved_km: 74.48 });
+  assert.equal(storedAttendancePetrolAmount(row), 0);
+  assert.equal(attendanceReimbursementConsistency(row).status, 'not_applicable');
+});
+
+test('legitimate positive stored petrol remains authoritative', () => {
+  const row = pendingPrivateAttendance({ total_approved_km: 74.48, petrol_amount: 296 });
+  assert.equal(storedAttendancePetrolAmount(row), 296);
+  assert.equal(attendanceReimbursementConsistency(row).status, 'stored_amount_variance');
+});
+
+test('Venkataraman August regression totals 1072.16 km and 4288.64 rupees', () => {
+  const augustRows = [
+    { ...pendingPrivateAttendance({ total_approved_km: 935.45 }), petrol_amount: 3741.8 },
+    pendingPrivateAttendance({ total_approved_km: 74.48 }),
+    pendingPrivateAttendance({ total_approved_km: 62.23 }),
+  ];
+  const kilometer = augustRows.reduce((sum, row) => sum + storedAttendancePayableKm(row), 0);
+  const amount = augustRows.reduce((sum, row) => (
+    sum + storedAttendancePetrolAmount(row)
+  ), 0);
+  assert.equal(Number(kilometer.toFixed(2)), 1072.16);
+  assert.equal(Number(amount.toFixed(2)), 4288.64);
 });
 
 test('payable_km_allowed=false contributes zero even with historical route KM and metadata', () => {

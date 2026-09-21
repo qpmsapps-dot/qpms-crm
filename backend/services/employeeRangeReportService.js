@@ -1,6 +1,7 @@
 import {
   canAccessOperationsSummary,
   operationsSummaryAllowedEmployeeCodes,
+  attendanceReimbursementConsistency,
   storedAttendancePayableKm,
   storedAttendancePetrolAmount,
 } from './operationsSummaryService.js';
@@ -288,6 +289,7 @@ function safeAttendance(row = {}) {
     eligible_km: row.eligible_km ?? null,
     total_approved_km: row.total_approved_km ?? null,
     petrol_amount: row.petrol_amount ?? null,
+    payable_km_allowed: row.payable_km_allowed ?? null,
     route_sync_status: row.route_sync_status || null,
     updated_at: row.updated_at || null,
     metadata: safeMetadata(row.metadata, SAFE_ATTENDANCE_METADATA_KEYS),
@@ -816,6 +818,7 @@ export function buildEmployeeRangeDataset({
     const rowLegs = legsByAttendance.get(row.id) || [];
     const rowClaims = claimsByAttendance.get(row.id) || [];
     const distance = distanceReimbursement(row, rowLegs);
+    const reimbursementConsistency = attendanceReimbursementConsistency(row);
     const otherTransportAmount = rounded(
       rowClaims.reduce((sum, claim) => sum + number(claim.ticket_amount), 0),
     );
@@ -841,6 +844,7 @@ export function buildEmployeeRangeDataset({
       actual_travel_km: rounded(row.actual_travel_km),
       payable_km: rounded(storedAttendancePayableKm(row)),
       petrol_amount: rounded(storedAttendancePetrolAmount(row)),
+      reimbursement_consistency_status: reimbursementConsistency.status,
       kilometer: distance.kilometer,
       distance_amount: distance.amount,
       claim_amount: eligibleTicketParkingAmount,

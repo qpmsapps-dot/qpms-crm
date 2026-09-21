@@ -61,6 +61,90 @@ function rounded(value) {
   return Number(number(value).toFixed(2));
 }
 
+const PRIVATE_TRAVEL_RATE_BY_MODE = Object.freeze({
+  bike: 4,
+  own_vehicle: 4,
+  car: 8,
+});
+
+function normalizedTravelMode(value) {
+  return comparable(value).replace(/[\s-]+/g, '_');
+}
+
+function payableKmExplicitlyAllowed(row = {}) {
+  return row.payable_km_allowed === true || comparable(row.payable_km_allowed) === 'true';
+}
+
+function canonicalRecalculationPending(row = {}) {
+  const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+    ? row.metadata
+    : {};
+  return comparable(row.route_sync_status) === 'pending_canonical_end_day_recalculation' ||
+    metadata.canonical_recalculation_pending === true ||
+    comparable(metadata.km_recalculation_status) === 'pending';
+}
+
+function privateTravelRate(row = {}) {
+  const mode = normalizedTravelMode(row.travel_mode);
+  const configuredRate = Number(row.rate_per_km);
+  if (Number.isFinite(configuredRate) && configuredRate > 0) return configuredRate;
+  return PRIVATE_TRAVEL_RATE_BY_MODE[mode] || 0;
+}
+
+export function attendanceReimbursementConsistency(
+  row = {},
+  payableKm = storedAttendancePayableKm(row),
+) {
+  const mode = normalizedTravelMode(row.travel_mode);
+  const rate = privateTravelRate(row);
+  const storedPresent = hasStoredValue(row.petrol_amount);
+  const storedAmount = Number(row.petrol_amount);
+  const expectedAmount = rounded(Math.max(0, payableKm) * rate);
+  const privateMode = Object.hasOwn(PRIVATE_TRAVEL_RATE_BY_MODE, mode);
+
+  if (!payableKmExplicitlyAllowed(row) || payableKm <= 0 || !privateMode || rate <= 0) {
+    return {
+      status: 'not_applicable',
+      expected_amount: expectedAmount,
+      stored_amount: storedPresent && Number.isFinite(storedAmount) ? Math.max(0, storedAmount) : null,
+      effective_amount: storedPresent && Number.isFinite(storedAmount) ? Math.max(0, storedAmount) : 0,
+      derived_for_pending_recalculation: false,
+    };
+  }
+
+  const pending = canonicalRecalculationPending(row);
+  if (pending && (!storedPresent || !Number.isFinite(storedAmount) || storedAmount <= 0)) {
+    return {
+      status: 'pending_recalculation_amount_derived',
+      expected_amount: expectedAmount,
+      stored_amount: storedPresent && Number.isFinite(storedAmount) ? Math.max(0, storedAmount) : null,
+      effective_amount: expectedAmount,
+      derived_for_pending_recalculation: true,
+    };
+  }
+
+  if (!storedPresent || !Number.isFinite(storedAmount)) {
+    return {
+      status: 'missing_stored_amount_derived',
+      expected_amount: expectedAmount,
+      stored_amount: null,
+      effective_amount: expectedAmount,
+      derived_for_pending_recalculation: false,
+    };
+  }
+
+  const normalizedStoredAmount = rounded(Math.max(0, storedAmount));
+  return {
+    status: normalizedStoredAmount === expectedAmount
+      ? 'consistent'
+      : 'stored_amount_variance',
+    expected_amount: expectedAmount,
+    stored_amount: normalizedStoredAmount,
+    effective_amount: normalizedStoredAmount,
+    derived_for_pending_recalculation: false,
+  };
+}
+
 export function normalizeTravelClaimReportState(value) {
   const raw = text(value);
   if (!raw) return { state_name: 'Unknown', state_code: 'Unknown', state_key: 'UNKNOWN' };
@@ -185,11 +269,15 @@ export function storedAttendancePetrolAmount(row = {}, payableKm = storedAttenda
   if (row.payable_km_allowed === false || String(row.payable_km_allowed).toLowerCase() === 'false') {
     return 0;
   }
+  const consistency = attendanceReimbursementConsistency(row, payableKm);
+  if (consistency.derived_for_pending_recalculation) return consistency.effective_amount;
   const hasStoredAmount = hasStoredValue(row.petrol_amount);
   const stored = Number(row.petrol_amount);
   if (hasStoredAmount && Number.isFinite(stored)) return Math.max(0, stored);
-  const rate = Number(row.rate_per_km);
-  return Math.max(0, payableKm * (Number.isFinite(rate) ? rate : 4));
+  const mode = normalizedTravelMode(row.travel_mode);
+  if (mode && !Object.hasOwn(PRIVATE_TRAVEL_RATE_BY_MODE, mode)) return 0;
+  const rate = privateTravelRate(row) || 4;
+  return rounded(Math.max(0, payableKm) * rate);
 }
 
 function liveStatusKey(row = {}, employeeCodeByProfileId = new Map()) {
@@ -489,7 +577,7 @@ export async function buildConsolidatedTravelClaimReport(client, actor, query, t
     fetchPaged(() => client.from('employee_hierarchy').select('*').eq('is_active', true)),
     fetchPaged(() => client
       .from('fo_attendance')
-      .select('id,fo_user_id,employee_code,display_name,username,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,actual_km,petrol_amount,rate_per_km,travel_mode')
+      .select('id,fo_user_id,employee_code,display_name,username,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,actual_km,petrol_amount,rate_per_km,travel_mode,payable_km_allowed,route_sync_status,metadata')
       .gte('attendance_date', filters.date_from)
       .lte('attendance_date', filters.date_to)
       .order('attendance_date', { ascending: true })
@@ -544,7 +632,7 @@ export async function buildOperationsSummary(client, actor, query, today) {
     fetchPaged(() => client.from('employee_hierarchy').select('*').eq('is_active', true)),
     fetchPaged(() => client
       .from('fo_attendance')
-      .select('id,fo_user_id,employee_code,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,petrol_amount,rate_per_km,payable_km_allowed')
+      .select('id,fo_user_id,employee_code,attendance_date,status,logout_time,total_approved_km,eligible_km,total_route_km,petrol_amount,rate_per_km,travel_mode,payable_km_allowed,route_sync_status,metadata')
       .gte('attendance_date', filters.date_from)
       .lte('attendance_date', filters.date_to)
       .order('attendance_date', { ascending: true })
