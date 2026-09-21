@@ -51,6 +51,7 @@ import {
   useMap,
   useMapEvents,
 } from "react-leaflet";
+import ExcelJS from "exceljs";
 import * as XLSX from "xlsx";
 import "leaflet/dist/leaflet.css";
 import qpmsLogo from "../assets/qpms-logo.png";
@@ -4332,22 +4333,323 @@ async function _exportFoOperationsExcel({
   );
 }
 
-function exportEmployeeRangeExcel(dataset) {
+function excelJsColumnHeaders(rows = [], headers = []) {
+  if (headers?.length) return headers;
+  const keys = new Set();
+  rows.forEach((row) => {
+    Object.keys(row || {}).forEach((key) => keys.add(key));
+  });
+  return Array.from(keys);
+}
+
+function styleExcelJsHeader(row) {
+  row.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  row.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF166534" },
+  };
+  row.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  row.eachCell((cell) => {
+    cell.border = {
+      top: { style: "thin", color: { argb: "FFD1D5DB" } },
+      left: { style: "thin", color: { argb: "FFD1D5DB" } },
+      bottom: { style: "thin", color: { argb: "FFD1D5DB" } },
+      right: { style: "thin", color: { argb: "FFD1D5DB" } },
+    };
+  });
+}
+
+function appendExcelJsSheet(workbook, name, rows = [], headers = []) {
+  const worksheet = workbook.addWorksheet(name);
+  const columnHeaders = excelJsColumnHeaders(rows, headers);
+  worksheet.columns = columnHeaders.map((header) => ({
+    header,
+    key: header,
+    width: Math.min(Math.max(String(header).length + 4, 14), 32),
+  }));
+  rows.forEach((row) => worksheet.addRow(row || {}));
+  worksheet.views = [{ state: "frozen", ySplit: 1 }];
+  styleExcelJsHeader(worksheet.getRow(1));
+  worksheet.eachRow((row, rowNumber) => {
+    row.height = rowNumber === 1 ? 22 : 18;
+    row.eachCell((cell) => {
+      cell.alignment = { vertical: "top", wrapText: true };
+      cell.border = {
+        top: { style: "thin", color: { argb: "FFE5E7EB" } },
+        left: { style: "thin", color: { argb: "FFE5E7EB" } },
+        bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
+        right: { style: "thin", color: { argb: "FFE5E7EB" } },
+      };
+    });
+  });
+  worksheet.columns.forEach((column) => {
+    const maxLength = Math.min(
+      42,
+      Math.max(
+        column.width || 12,
+        ...column.values
+          .slice(1)
+          .map((value) => String(value?.text || value || "").length + 2),
+      ),
+    );
+    column.width = maxLength;
+  });
+  return worksheet;
+}
+
+function activityPhotoExportRows(uploads = []) {
+  return uploads
+    .filter(activityUploadIsImage)
+    .map((upload) => {
+      const metadata = activityUploadMetadata(upload);
+      const submission = upload.submission || {};
+      const siteName = firstNonEmptyText(
+        upload.site_name,
+        upload.store_name,
+        submission.site_name,
+        submission.store_name,
+        upload.store_code,
+        submission.store_code,
+      );
+      const clientName = firstNonEmptyText(
+        upload.client_name,
+        submission.client_name,
+        metadata.client_name,
+      );
+      return {
+        upload,
+        "Date": formatDateOnly(activityUploadTime(upload)),
+        "Site / Client": [siteName, clientName].filter(Boolean).join(" / ") || "--",
+        "Activity Type": upload.activityGroup || normalizeActivityGroup(upload.activity_type || upload.upload_role || submission.activity_type),
+        "Activity Time": formatTime(activityUploadTime(upload)),
+        "Photo": "Image pending",
+        "View Original": "",
+        "Remarks": firstNonEmptyText(upload.remarks, submission.remarks, metadata.remarks, "-"),
+      };
+    });
+}
+
+function fitWithinBox(width, height, maxWidth, maxHeight) {
+  const sourceWidth = Number(width) || maxWidth;
+  const sourceHeight = Number(height) || maxHeight;
+  const scale = Math.min(maxWidth / sourceWidth, maxHeight / sourceHeight, 1);
+  return {
+    width: Math.max(1, Math.round(sourceWidth * scale)),
+    height: Math.max(1, Math.round(sourceHeight * scale)),
+  };
+}
+
+function canvasToBlob(canvas, type, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Unable to optimize image."));
+    }, type, quality);
+  });
+}
+
+async function imageBitmapFromBlob(blob) {
+  if (typeof createImageBitmap === "function") {
+    return createImageBitmap(blob);
+  }
+  const url = URL.createObjectURL(blob);
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const img = new window.Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Unable to decode image."));
+      img.src = url;
+    });
+    return image;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function fetchOptimizedActivityThumbnail(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("Image unavailable");
+  const sourceBlob = await response.blob();
+  const bitmap = await imageBitmapFromBlob(sourceBlob);
+  try {
+    const optimizedSize = fitWithinBox(bitmap.width, bitmap.height, 1200, 1200);
+    const canvas = document.createElement("canvas");
+    canvas.width = optimizedSize.width;
+    canvas.height = optimizedSize.height;
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const thumbnailBlob = await canvasToBlob(canvas, "image/jpeg", 0.82);
+    const displaySize = fitWithinBox(bitmap.width, bitmap.height, 180, 135);
+    return {
+      buffer: await thumbnailBlob.arrayBuffer(),
+      extension: "jpeg",
+      width: displaySize.width,
+      height: displaySize.height,
+      bytes: thumbnailBlob.size,
+    };
+  } finally {
+    if (typeof bitmap.close === "function") bitmap.close();
+  }
+}
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+async function appendActivityPhotosWorksheet(workbook, uploads = [], options = {}, onProgress = () => {}) {
+  const photoRows = activityPhotoExportRows(uploads);
+  const worksheet = appendExcelJsSheet(
+    workbook,
+    "Activity Photos",
+    photoRows.map((row) => {
+      const worksheetRow = { ...row };
+      delete worksheetRow.upload;
+      return worksheetRow;
+    }),
+    ["Date", "Site / Client", "Activity Type", "Activity Time", "Photo", "View Original", "Remarks"],
+  );
+  worksheet.getColumn("Site / Client").width = 30;
+  worksheet.getColumn("Activity Type").width = 18;
+  worksheet.getColumn("Photo").width = 28;
+  worksheet.getColumn("View Original").width = 16;
+  worksheet.getColumn("Remarks").width = 28;
+
+  let embedded = 0;
+  let skipped = 0;
+  let optimizedBytes = 0;
+
+  await mapWithConcurrency(photoRows, 4, async (row, index) => {
+    const excelRowNumber = index + 2;
+    const originalUrl = await signedActivityUploadUrl(row.upload);
+    if (options.includePhotoDetails !== false && originalUrl) {
+      const cell = worksheet.getCell(excelRowNumber, 6);
+      cell.value = { text: "Open", hyperlink: originalUrl };
+      cell.font = { color: { argb: "FF2563EB" }, underline: true };
+    }
+    if (options.includeImages === false) {
+      worksheet.getCell(excelRowNumber, 5).value = "Image not embedded";
+      return;
+    }
+    if (!originalUrl) {
+      worksheet.getCell(excelRowNumber, 5).value = "Image unavailable";
+      skipped += 1;
+      return;
+    }
+    try {
+      onProgress(`Processing ${index + 1} of ${photoRows.length} photos`);
+      const image = await fetchOptimizedActivityThumbnail(originalUrl);
+      const imageId = workbook.addImage({
+        buffer: image.buffer,
+        extension: image.extension,
+      });
+      worksheet.getRow(excelRowNumber).height = 106;
+      worksheet.getCell(excelRowNumber, 5).value = "";
+      worksheet.addImage(imageId, {
+        tl: { col: 4.15, row: excelRowNumber - 0.85 },
+        ext: { width: image.width, height: image.height },
+        editAs: "oneCell",
+      });
+      embedded += 1;
+      optimizedBytes += image.bytes;
+    } catch (error) {
+      console.warn("[myQPMS FO] Activity image export failed.", error);
+      worksheet.getCell(excelRowNumber, 5).value = "Image unavailable";
+      skipped += 1;
+    }
+  });
+
+  if (!photoRows.length) {
+    worksheet.addRow({
+      "Date": "",
+      "Site / Client": "No activity photos found for the selected period.",
+      "Activity Type": "",
+      "Activity Time": "",
+      "Photo": "",
+      "View Original": "",
+      "Remarks": "",
+    });
+  }
+
+  return {
+    found: photoRows.length,
+    embedded,
+    skipped,
+    optimizedBytes,
+  };
+}
+
+function saveExcelBuffer(buffer, filename) {
+  const blob = new Blob(
+    [buffer],
+    { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+  );
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  return blob.size;
+}
+
+async function exportEmployeeRangeExcelWithOptions({
+  dataset,
+  activityUploads = [],
+  options = {},
+  onProgress = () => {},
+}) {
   const rows = buildEmployeeRangeExcelRows(dataset);
-  const workbook = XLSX.utils.book_new();
-  appendSheet(workbook, "Period Summary", rows.periodSummary);
-  appendSheet(workbook, "Daily Attendance", rows.dailyAttendance);
-  appendSheet(workbook, "Site Visits", rows.siteVisits);
-  appendSheet(workbook, "Travel Claims", rows.travelClaims);
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "myQPMS";
+  workbook.created = new Date();
+
+  if (options.reportSummary !== false) {
+    appendExcelJsSheet(workbook, "Period Summary", rows.periodSummary);
+  }
+  if (options.attendanceKm !== false) {
+    appendExcelJsSheet(workbook, "Daily Attendance", rows.dailyAttendance);
+    appendExcelJsSheet(workbook, "Travel Claims", rows.travelClaims);
+  }
+  if (options.siteVisits !== false) {
+    appendExcelJsSheet(workbook, "Site Visits", rows.siteVisits);
+  }
+
+  let photoResult = { found: activityPhotoExportRows(activityUploads).length, embedded: 0, skipped: 0, optimizedBytes: 0 };
+  if (options.activityPhotos !== false) {
+    onProgress("Loading activity photos");
+    photoResult = await appendActivityPhotosWorksheet(workbook, activityUploads, options, onProgress);
+  }
+
+  onProgress("Building workbook");
   const employeeCode = sanitizeReportFilenamePart(
     dataset?.employee?.employee_code || "Employee",
   );
   const fromDate = sanitizeReportFilenamePart(dataset?.period?.from_date);
   const toDate = sanitizeReportFilenamePart(dataset?.period?.to_date);
-  XLSX.writeFile(
-    workbook,
+  const buffer = await workbook.xlsx.writeBuffer();
+  const workbookBytes = saveExcelBuffer(
+    buffer,
     `${employeeCode}_Field_Activity_KM_Report_${fromDate}_to_${toDate}.xlsx`,
   );
+  return {
+    ...photoResult,
+    workbookBytes,
+  };
 }
 
 function legAuditValue(leg, field) {
@@ -6958,6 +7260,18 @@ function FieldOfficerDetailsView({
   const [manualMissingKmValue, setManualMissingKmValue] = useState("");
   const [manualMissingKmRemarks, setManualMissingKmRemarks] = useState("");
   const [manualMissingKmError, setManualMissingKmError] = useState("");
+  const [excelExportModalOpen, setExcelExportModalOpen] = useState(false);
+  const [excelExporting, setExcelExporting] = useState(false);
+  const [excelExportProgress, setExcelExportProgress] = useState("");
+  const [excelExportMessage, setExcelExportMessage] = useState("");
+  const [excelExportOptions, setExcelExportOptions] = useState({
+    reportSummary: true,
+    attendanceKm: true,
+    siteVisits: true,
+    activityPhotos: true,
+    includePhotoDetails: true,
+    includeImages: true,
+  });
   const activityMenuRef = useRef(null);
   const activityPreviewRequestRef = useRef(0);
   const visits = useMemo(() => sortedOfficerVisits(officer), [officer]);
@@ -7186,6 +7500,72 @@ function FieldOfficerDetailsView({
     filteredActivityCards.find((card) => card.id === selectedActivityCardId) ||
     filteredActivityCards[0] ||
     null;
+  const exportActivityPhotos = useMemo(
+    () => selectedEmployeeActivityUploads.filter(activityUploadIsImage),
+    [selectedEmployeeActivityUploads],
+  );
+  const exportPeriodLabel = `${formatDateOnly(fromDate)} - ${formatDateOnly(toDate)}`;
+  const exportedEmployeeId = displayValue(officer?.employeeCode || officer?.foId);
+
+  function setExcelOption(key, checked) {
+    setExcelExportOptions((current) => {
+      const next = { ...current, [key]: checked };
+      if (key === "activityPhotos" && !checked) {
+        next.includePhotoDetails = false;
+        next.includeImages = false;
+      }
+      if ((key === "includePhotoDetails" || key === "includeImages") && checked) {
+        next.activityPhotos = true;
+      }
+      return next;
+    });
+  }
+
+  function openExcelExportModal() {
+    setExcelExportOptions({
+      reportSummary: true,
+      attendanceKm: true,
+      siteVisits: true,
+      activityPhotos: true,
+      includePhotoDetails: true,
+      includeImages: true,
+    });
+    setExcelExportProgress("");
+    setExcelExportMessage("");
+    setExcelExportModalOpen(true);
+  }
+
+  async function handleExcelExport() {
+    if (!onExport || excelExporting) return;
+    if (!excelExportOptions.reportSummary && !excelExportOptions.attendanceKm && !excelExportOptions.siteVisits && !excelExportOptions.activityPhotos) {
+      setExcelExportMessage("Select at least one report section to export.");
+      return;
+    }
+    setExcelExporting(true);
+    setExcelExportMessage("");
+    setExcelExportProgress("Preparing Excel report...");
+    try {
+      const result = await onExport({
+        options: excelExportOptions,
+        activityUploads: exportActivityPhotos,
+        onProgress: setExcelExportProgress,
+      });
+      const skipped = result?.skipped || 0;
+      const embedded = result?.embedded || 0;
+      const message = skipped
+        ? `Excel exported successfully. ${embedded} photos embedded. ${skipped} photos could not be loaded.`
+        : `Excel exported successfully. ${embedded} photos embedded.`;
+      setExcelExportMessage(message);
+      setExcelExportProgress("");
+      window.setTimeout(() => setExcelExportModalOpen(false), 900);
+    } catch (error) {
+      console.warn("[myQPMS FO] Employee Excel export failed.", error);
+      setExcelExportMessage("Unable to export the report. Please try again.");
+      setExcelExportProgress("");
+    } finally {
+      setExcelExporting(false);
+    }
+  }
 
   useEffect(() => {
     function handlePointerDown(event) {
@@ -8152,6 +8532,120 @@ function FieldOfficerDetailsView({
 
   return (
     <div className="fo-activity-detail min-h-screen space-y-4 bg-slate-50/70 p-1 sm:p-2">
+      {excelExportModalOpen ? (
+        <div className="fixed inset-0 z-[1400] grid place-items-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="field-activity-export-title">
+          <div className="w-full max-w-xl rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-200 p-5">
+              <div>
+                <h2 id="field-activity-export-title" className="text-lg font-black text-slate-950">Export Field Activity Report</h2>
+                <p className="mt-2 text-sm font-black text-slate-800">{officer?.name || "--"}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">Employee ID: {exportedEmployeeId}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">Period: {exportPeriodLabel}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !excelExporting && setExcelExportModalOpen(false)}
+                disabled={excelExporting}
+                className="focus-ring grid h-9 w-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+                aria-label="Close export modal"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="space-y-4 p-5">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wide text-slate-500">Include in export</p>
+                <div className="mt-3 grid gap-2">
+                  {[
+                    ["reportSummary", "Report Summary"],
+                    ["attendanceKm", "Attendance & KM"],
+                    ["siteVisits", "Site Visits"],
+                    ["activityPhotos", "Activity Photos"],
+                  ].map(([key, label]) => (
+                    <label key={key} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={excelExportOptions[key]}
+                        onChange={(event) => setExcelOption(key, event.target.checked)}
+                        disabled={excelExporting}
+                        className="h-4 w-4 accent-qpms-700"
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+                <p className="text-sm font-black text-emerald-800">
+                  {exportActivityPhotos.length
+                    ? `${exportActivityPhotos.length} activity photos found`
+                    : "No activity photos found for the selected period."}
+                </p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-emerald-700">
+                  Photos will be embedded as optimized thumbnails. Original image links use the current authorized signed URL and may expire according to storage policy.
+                </p>
+              </div>
+
+              <div className="grid gap-2">
+                {[
+                  ["includePhotoDetails", "Include photo details"],
+                  ["includeImages", "Include images inside Excel"],
+                ].map(([key, label]) => (
+                  <label key={key} className={`flex items-center gap-3 rounded-xl border px-3 py-2 text-sm font-bold ${
+                    excelExportOptions.activityPhotos
+                      ? "border-slate-200 bg-white text-slate-700"
+                      : "border-slate-100 bg-slate-50 text-slate-400"
+                  }`}>
+                    <input
+                      type="checkbox"
+                      checked={excelExportOptions[key]}
+                      onChange={(event) => setExcelOption(key, event.target.checked)}
+                      disabled={excelExporting || !excelExportOptions.activityPhotos}
+                      className="h-4 w-4 accent-qpms-700"
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+
+              {excelExportProgress ? (
+                <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-black text-blue-700">
+                  {excelExportProgress}
+                </div>
+              ) : null}
+              {excelExportMessage ? (
+                <div className={`rounded-xl border px-3 py-2 text-xs font-black ${
+                  excelExportMessage.startsWith("Unable") || excelExportMessage.startsWith("Select")
+                    ? "border-rose-100 bg-rose-50 text-rose-700"
+                    : "border-emerald-100 bg-emerald-50 text-emerald-700"
+                }`}>
+                  {excelExportMessage}
+                </div>
+              ) : null}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 p-5">
+              <button
+                type="button"
+                onClick={() => setExcelExportModalOpen(false)}
+                disabled={excelExporting}
+                className="focus-ring rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-black text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleExcelExport}
+                disabled={excelExporting}
+                className="focus-ring inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FileSpreadsheet className="h-4 w-4" />
+                {excelExporting ? "Exporting..." : "Export Excel"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {manualMissingKmReview ? (
         <div className="fixed inset-0 z-[1300] grid place-items-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="manual-missing-km-title">
           <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white shadow-2xl">
@@ -8280,11 +8774,11 @@ function FieldOfficerDetailsView({
                 </button>
                 <button
                   type="button"
-                  onClick={onExport}
-                  disabled={reportState !== "ready"}
+                  onClick={openExcelExportModal}
+                  disabled={reportState !== "ready" || excelExporting}
                   className="focus-ring inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2.5 text-xs font-black text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <FileSpreadsheet className="h-4 w-4" /> Export Excel
+                  <FileSpreadsheet className="h-4 w-4" /> {excelExporting ? "Exporting..." : "Export Excel"}
                 </button>
               </>
             ) : null}
@@ -8369,11 +8863,11 @@ function FieldOfficerDetailsView({
                 </button>
                 <button
                   type="button"
-                  onClick={onExport}
-                  disabled={reportState !== "ready"}
+                  onClick={openExcelExportModal}
+                  disabled={reportState !== "ready" || excelExporting}
                   className="focus-ring inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <FileSpreadsheet className="h-4 w-4" /> Export Excel
+                  <FileSpreadsheet className="h-4 w-4" /> {excelExporting ? "Exporting..." : "Export Excel"}
                 </button>
               </>
             ) : null}
@@ -12526,7 +13020,13 @@ export default function FOActivities() {
         onDraftToDate={setDetailDraftToDate}
         onApplyDate={applyDetailDateRange}
         onBack={() => setSelectedOfficerId(null)}
-        onExport={readOnlyDemo ? null : () => exportEmployeeRangeExcel(employeeRangeDataset)}
+        onExport={readOnlyDemo ? null : ({ options, activityUploads, onProgress } = {}) =>
+          exportEmployeeRangeExcelWithOptions({
+            dataset: employeeRangeDataset,
+            activityUploads,
+            options,
+            onProgress,
+          })}
         onRecalculateKm={fullTechnicalAccess ? recalculateSelectedOfficerKm : null}
         onTemporarySwitchKm={
           canRunTemporarySwitchKm
