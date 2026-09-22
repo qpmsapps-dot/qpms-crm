@@ -14,6 +14,7 @@ import { useAuth } from '../context/auth-context.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { canManageHospitalFeedbackQr } from '../utils/authRoles.js';
 import { naturalOptionCompare } from '../utils/naturalSort.js';
+import { composeQrHeadingPng, QR_HEADING_MAX_LENGTH } from '../utils/qrHeadingImage.js';
 
 const QR_PAGE_SIZE = 20;
 const STATUS_OPTIONS = ['', 'active', 'inactive', 'replaced', 'revoked'];
@@ -584,6 +585,7 @@ function QrRegistry({ locations, refreshVersion, canManageQr, onQrDeleted }) {
 
 function UrlQrGenerator() {
   const [urlInput, setUrlInput] = useState('');
+  const [headingInput, setHeadingInput] = useState('');
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -595,7 +597,9 @@ function UrlQrGenerator() {
     setError('');
     setCopied(false);
     try {
-      setResult(await generateUrlQr(urlInput));
+      const generated = await generateUrlQr(urlInput);
+      const qrPngDataUrl = await composeQrHeadingPng(generated.qr_png_data_url, headingInput);
+      setResult({ ...generated, qr_png_data_url: qrPngDataUrl });
     } catch (generateError) {
       setError(generateError.message || 'Unable to generate the QR code. Please try again.');
     } finally {
@@ -643,6 +647,24 @@ function UrlQrGenerator() {
               maxLength={2049}
               className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
             />
+          </label>
+          <label className="block">
+            <span className="text-xs font-bold uppercase tracking-wide text-slate-500">QR Heading / Display Text</span>
+            <input
+              type="text"
+              value={headingInput}
+              onChange={(event) => {
+                setHeadingInput(event.target.value);
+                setError('');
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') generate();
+              }}
+              placeholder="Scan here to share your feedback"
+              maxLength={QR_HEADING_MAX_LENGTH}
+              className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100"
+            />
+            <span className="mt-1 block text-right text-xs font-medium text-slate-400">{headingInput.length}/{QR_HEADING_MAX_LENGTH}</span>
           </label>
           <button type="button" onClick={generate} disabled={!urlInput.trim() || loading} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-qpms-700 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-qpms-800 disabled:bg-slate-400">
             {loading ? <span className="button-spinner" /> : <QrCode className="h-4 w-4" />}
