@@ -169,7 +169,11 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
         (ticket.status == HospitalTicketStatus.awaitingSupervisorAcceptance ||
             ticket.status == HospitalTicketStatus.open ||
             ticket.status == HospitalTicketStatus.assigned ||
-            ticket.status == HospitalTicketStatus.reopened)) {
+            ticket.status == HospitalTicketStatus.reopened ||
+            ticket.status ==
+                HospitalTicketStatus.escalatedOperationsExecutive ||
+            ticket.status == HospitalTicketStatus.escalatedFacilityManager ||
+            ticket.status == HospitalTicketStatus.escalatedProjectHead)) {
       return const _PrimaryAction(
         HospitalTicketAction.accept,
         'Accept Ticket',
@@ -177,7 +181,11 @@ class _HospitalTicketDetailScreenState extends State<HospitalTicketDetailScreen>
       );
     }
     if (actions.contains(HospitalTicketAction.startWork) &&
-        ticket.status == HospitalTicketStatus.accepted) {
+        (ticket.status == HospitalTicketStatus.accepted ||
+            ticket.status ==
+                HospitalTicketStatus.escalatedOperationsExecutive ||
+            ticket.status == HospitalTicketStatus.escalatedFacilityManager ||
+            ticket.status == HospitalTicketStatus.escalatedProjectHead)) {
       return const _PrimaryAction(
         HospitalTicketAction.startWork,
         'Start Work',

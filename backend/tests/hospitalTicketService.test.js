@@ -688,15 +688,16 @@ test('full ticket lifecycle notification sequence supports reopen cycles without
   assert.equal(rows.filter((row) => row.notification_type === 'ticket_closed').length, 1);
 });
 
-test('Block A client and Supervisor cannot access Block B', () => {
+test('client block scope stays isolated while an eligible Supervisor has the active client queue', () => {
   const ticketB = { client_id: 'client-a', block_id: 'block-b', location_id: 'location-b' };
-  for (const role of ['doctor', 'housekeeping_supervisor']) {
-    const actor = { user: activeUser(role), scopes: [blockScope('block-a', { can_create: true, can_update: true })] };
-    assert.equal(canViewHospitalTicket(actor, ticketB), false);
-  }
+  const scope = blockScope('block-a', { can_create: true, can_update: true });
+  assert.equal(canViewHospitalTicket({ user: activeUser('doctor'), scopes: [scope] }, ticketB), false);
+  assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor'), scopes: [scope] }, ticketB), true);
+  assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor'), scopes: [scope] }, { ...ticketB, status_code: 'closed' }), false);
+  assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor'), scopes: [scope] }, { ...ticketB, client_id: 'client-b' }), false);
 });
 
-test('client-wide escalation roles and designated Supervisor see their actionable tickets only', () => {
+test('Facility Manager sees every client ticket while Operations and Supervisors see every active ticket', () => {
   const supervisorTicket = {
     client_id: 'client-a',
     block_id: 'block-a',
@@ -730,20 +731,26 @@ test('client-wide escalation roles and designated Supervisor see their actionabl
   const clientScope = { client_id: 'client-a', scope_type: 'client', can_view: true };
 
   assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor', 'sup-user'), scopes: [clientScope] }, supervisorTicket), true);
-  assert.equal(canViewHospitalTicket({ user: activeUser('operations_executive', 'ops-user'), scopes: [clientScope] }, supervisorTicket), false);
-  assert.equal(canViewHospitalTicket({ user: activeUser('facility_manager', 'facility-user'), scopes: [clientScope] }, supervisorTicket), false);
+  assert.equal(canViewHospitalTicket({ user: activeUser('operations_executive', 'ops-user'), scopes: [clientScope] }, supervisorTicket), true);
+  assert.equal(canViewHospitalTicket({ user: activeUser('facility_manager', 'facility-user'), scopes: [clientScope] }, supervisorTicket), true);
   assert.equal(canViewHospitalTicket({ user: activeUser('project_head', 'project-user'), scopes: [clientScope] }, supervisorTicket), false);
 
   assert.equal(canViewHospitalTicket({ user: activeUser('operations_executive', 'ops-user'), scopes: [clientScope] }, operationsTicket), true);
   assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor', 'sup-user'), scopes: [clientScope] }, operationsTicket), true);
-  assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor', 'other-sup'), scopes: [clientScope] }, operationsTicket), false);
-  assert.equal(canViewHospitalTicket({ user: activeUser('facility_manager', 'facility-user'), scopes: [clientScope] }, operationsTicket), false);
+  assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor', 'other-sup'), scopes: [clientScope] }, operationsTicket), true);
+  assert.equal(canViewHospitalTicket({ user: activeUser('facility_manager', 'facility-user'), scopes: [clientScope] }, operationsTicket), true);
   assert.equal(canViewHospitalTicket({ user: activeUser('facility_manager', 'facility-user'), scopes: [clientScope] }, facilityTicket), true);
   assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor', 'sup-user'), scopes: [clientScope] }, facilityTicket), true);
   assert.equal(canViewHospitalTicket({ user: activeUser('project_head', 'project-user'), scopes: [clientScope] }, facilityTicket), false);
   assert.equal(canViewHospitalTicket({ user: activeUser('project_head', 'project-user'), scopes: [clientScope] }, projectTicket), true);
   assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor', 'sup-user'), scopes: [clientScope] }, projectTicket), true);
-  assert.equal(canViewHospitalTicket({ user: activeUser('operations_executive', 'other-ops'), scopes: [clientScope] }, operationsTicket), false);
+  assert.equal(canViewHospitalTicket({ user: activeUser('operations_executive', 'other-ops'), scopes: [clientScope] }, operationsTicket), true);
+  for (const status_code of ['resolved_awaiting_confirmation', 'closed', 'cancelled']) {
+    const historical = { ...projectTicket, status_code };
+    assert.equal(canViewHospitalTicket({ user: activeUser('facility_manager', 'facility-user'), scopes: [clientScope] }, historical), true);
+    assert.equal(canViewHospitalTicket({ user: activeUser('operations_executive', 'ops-user'), scopes: [clientScope] }, historical), status_code === 'resolved_awaiting_confirmation');
+    assert.equal(canViewHospitalTicket({ user: activeUser('housekeeping_supervisor', 'sup-user'), scopes: [clientScope] }, historical), status_code === 'resolved_awaiting_confirmation');
+  }
 });
 
 test('creation scope is independent from view scope', () => {
@@ -894,7 +901,7 @@ test('takeover exposes operational work actions without duplicate takeover', () 
   assert.ok(!allowedActionsForTicket(actor, started).includes('start_work'));
 });
 
-test('designated Supervisor sees escalated work actions while unrelated Supervisors and test users do not', () => {
+test('all eligible Supervisors see escalated tickets but only the operational owner receives work actions', () => {
   const ticket = {
     id: 'ticket-escalated',
     client_id: 'client-a',
@@ -914,11 +921,11 @@ test('designated Supervisor sees escalated work actions while unrelated Supervis
 
   assert.equal(isHospitalTicketOperationalSupervisor(supervisor, ticket), true);
   assert.equal(canViewHospitalTicket(supervisor, ticket), true);
-  assert.equal(canViewHospitalTicket(otherSupervisor, ticket), false);
+  assert.equal(canViewHospitalTicket(otherSupervisor, ticket), true);
   assert.equal(canViewHospitalTicket(testSupervisor, ticket), false);
   assert.equal(canViewHospitalTicket(facility, ticket), true);
-  assert.equal(canViewHospitalTicket(supervisor, { ...ticket, supervisor_user_id: null }), false);
-  assert.equal(canViewHospitalTicket(supervisor, { ...ticket, supervisor_user_id: 'new-sup' }), false);
+  assert.equal(canViewHospitalTicket(supervisor, { ...ticket, supervisor_user_id: null }), true);
+  assert.equal(canViewHospitalTicket(supervisor, { ...ticket, supervisor_user_id: 'new-sup' }), true);
   assert.equal(canViewHospitalTicket({ user: { ...activeUser('housekeeping_supervisor', 'new-sup'), profile_type: 'internal' }, scopes: [scope] }, { ...ticket, supervisor_user_id: 'new-sup' }), true);
 
   const actions = allowedActionsForTicket(supervisor, ticket);
@@ -998,6 +1005,7 @@ function query(data, error = null) {
     select() { return this; },
     eq() { return this; },
     in() { return this; },
+    not() { return this; },
     is() { return this; },
     order() { return this; },
     limit() { return this; },
@@ -1458,7 +1466,7 @@ test('service keeps resolve owner and completion evidence checks before RPC', ()
   assert.match(source, /if \(effectiveAction === 'resolve'\) \{/);
   assert.match(source, /await requireCurrentOperationalOwner\(client, actor, current\.ticket\);/);
   assert.match(source, /await requireCompletionEvidence\(client, current\.ticket\.id\);/);
-  assert.match(source, /Only the current operational owner can resolve this ticket\./);
+  assert.match(source, /Only the current operational owner can perform this action\./);
   assert.match(source, /Upload completion evidence before resolving this ticket\./);
 });
 

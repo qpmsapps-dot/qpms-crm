@@ -7,6 +7,8 @@ import 'hospital_ticket_card.dart';
 import 'hospital_ticket_detail_screen.dart';
 import 'hospital_tickets_screen.dart';
 
+const _hospitalDashboardBorder = Color(0xFFE2E8F0);
+
 class HospitalDashboardScreen extends StatelessWidget {
   const HospitalDashboardScreen({required this.controller, super.key});
 
@@ -550,7 +552,7 @@ class _SupervisorAvailabilityRow extends StatelessWidget {
           : BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: qpmsBorder),
+              border: Border.all(color: _hospitalDashboardBorder),
             ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,

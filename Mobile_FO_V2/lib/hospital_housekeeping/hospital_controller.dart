@@ -569,11 +569,29 @@ class HospitalController extends ChangeNotifier {
     if (productionMode) {
       return _remoteAction(ticket, 'accept', {'confirmed_location': true});
     }
+    final operationalUserId = session.userId.trim().isNotEmpty
+        ? session.userId.trim()
+        : session.loginId.trim();
+    final escalated =
+        ticket.status == HospitalTicketStatus.escalatedOperationsExecutive ||
+        ticket.status == HospitalTicketStatus.escalatedFacilityManager ||
+        ticket.status == HospitalTicketStatus.escalatedProjectHead;
     _replace(
       ticket.copyWith(
-        status: HospitalTicketStatus.accepted,
-        responsiblePerson: session.displayName,
-        responsibleRole: session.role.label,
+        status: escalated ? ticket.status : HospitalTicketStatus.accepted,
+        responsiblePerson: escalated
+            ? ticket.responsiblePerson
+            : session.displayName,
+        responsibleRole: escalated
+            ? ticket.responsibleRole
+            : session.role.label,
+        currentAssigneeUserId: escalated
+            ? ticket.currentAssigneeUserId
+            : operationalUserId,
+        supervisorUserId: operationalUserId,
+        acceptedByUserId: operationalUserId,
+        acceptanceStatus: 'accepted',
+        acceptedByName: session.displayName,
         events: [
           ...ticket.events,
           _event('Accepted', 'Complaint accepted for action.'),

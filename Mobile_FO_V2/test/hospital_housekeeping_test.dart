@@ -40,35 +40,169 @@ void main() {
       );
     });
 
-    test('Block A Supervisor sees only Block A tickets', () {
+    test('Block A Supervisor sees the full active hospital queue', () {
+      final tickets = controller('sup.blocka@qpmsdemo.com').visibleTickets;
+      expect(tickets.any((ticket) => ticket.block != 'Block A'), isTrue);
+      expect(tickets.every((ticket) => !ticket.isFinal), isTrue);
+    });
+
+    test('Block B Supervisor sees the full active hospital queue', () {
+      final tickets = controller('sup.blockb@qpmsdemo.com').visibleTickets;
+      expect(tickets.any((ticket) => ticket.block != 'Block B'), isTrue);
+      expect(tickets.every((ticket) => !ticket.isFinal), isTrue);
+    });
+
+    test('Assigned to me remains personal inside the shared active queue', () {
+      final value = controller('sup.blocka@qpmsdemo.com');
+      final all = value.filteredTickets();
+      final mine = value.filteredTickets(assignedToMe: true);
+
+      expect(all.any((ticket) => ticket.block == 'Block B'), isTrue);
+      expect(mine, isNotEmpty);
+      expect(mine.length, lessThan(all.length));
       expect(
-        controller(
-          'sup.blocka@qpmsdemo.com',
-        ).visibleTickets.every((ticket) => ticket.block == 'Block A'),
+        mine.every(
+          (ticket) =>
+              ticket.responsiblePerson.trim().toLowerCase() ==
+              value.session.displayName.trim().toLowerCase(),
+        ),
         isTrue,
       );
     });
 
-    test('Block B Supervisor sees only Block B tickets', () {
-      expect(
-        controller(
-          'sup.blockb@qpmsdemo.com',
-        ).visibleTickets.every((ticket) => ticket.block == 'Block B'),
-        isTrue,
-      );
-    });
+    test(
+      'role visibility is independent from management escalation ownership',
+      () {
+        const policy = HospitalAccessPolicy();
+        const supervisor = HospitalDemoSession(
+          loginId: 'sup@test',
+          displayName: 'Supervisor',
+          role: HospitalDemoRole.supervisor,
+          assignedBlock: 'Block A',
+        );
+        const operations = HospitalDemoSession(
+          loginId: 'ops@test',
+          displayName: 'Operations',
+          role: HospitalDemoRole.operationsExecutive,
+          userId: 'ops-user',
+        );
+        const facility = HospitalDemoSession(
+          loginId: 'fm@test',
+          displayName: 'Facility',
+          role: HospitalDemoRole.facilityManager,
+          userId: 'facility-user',
+        );
+        const project = HospitalDemoSession(
+          loginId: 'ph@test',
+          displayName: 'Project',
+          role: HospitalDemoRole.projectHead,
+          userId: 'project-user',
+        );
+        final fresh = _policyTicket(
+          status: HospitalTicketStatus.awaitingSupervisorAcceptance,
+          role: 'housekeeping_supervisor',
+        );
+        final opsTicket = _policyTicket(
+          status: HospitalTicketStatus.escalatedOperationsExecutive,
+          role: 'operations_executive',
+          assigneeUserId: 'ops-user',
+        );
+        final facilityTicket = _policyTicket(
+          status: HospitalTicketStatus.escalatedFacilityManager,
+          role: 'facility_manager',
+          assigneeUserId: 'facility-user',
+        );
+        final projectTicket = _policyTicket(
+          status: HospitalTicketStatus.escalatedProjectHead,
+          role: 'project_head',
+          assigneeUserId: 'project-user',
+        );
 
-    test('Operations Executive and Facility Manager see all blocks', () {
-      for (final id in [
-        'ops.exec@qpmsdemo.com',
-        'facility.manager@qpmsdemo.com',
-      ]) {
-        final blocks = controller(
-          id,
-        ).visibleTickets.map((t) => t.block).toSet();
-        expect(blocks, {'Block A', 'Block B'});
-      }
-    });
+        expect(policy.canView(supervisor, fresh), isTrue);
+        expect(policy.canView(operations, fresh), isTrue);
+        expect(policy.canView(facility, fresh), isTrue);
+        expect(policy.canView(project, fresh), isFalse);
+        expect(policy.canView(operations, opsTicket), isTrue);
+        expect(policy.canView(supervisor, opsTicket), isTrue);
+        expect(policy.canView(facility, opsTicket), isTrue);
+        expect(policy.canView(facility, facilityTicket), isTrue);
+        expect(policy.canView(operations, facilityTicket), isTrue);
+        expect(policy.canView(supervisor, facilityTicket), isTrue);
+        expect(policy.canView(project, facilityTicket), isFalse);
+        expect(policy.canView(project, projectTicket), isTrue);
+        expect(policy.canView(operations, projectTicket), isTrue);
+        expect(policy.canView(supervisor, projectTicket), isTrue);
+      },
+    );
+
+    test(
+      'higher escalation owners get takeover then work actions after acceptance',
+      () {
+        const policy = HospitalAccessPolicy();
+        const operations = HospitalDemoSession(
+          loginId: 'ops@test',
+          displayName: 'Operations',
+          role: HospitalDemoRole.operationsExecutive,
+          userId: 'ops-user',
+        );
+        const facility = HospitalDemoSession(
+          loginId: 'fm@test',
+          displayName: 'Facility',
+          role: HospitalDemoRole.facilityManager,
+          userId: 'facility-user',
+        );
+        const project = HospitalDemoSession(
+          loginId: 'ph@test',
+          displayName: 'Project',
+          role: HospitalDemoRole.projectHead,
+          userId: 'project-user',
+        );
+
+        final opsTicket = _policyTicket(
+          status: HospitalTicketStatus.escalatedOperationsExecutive,
+          role: 'operations_executive',
+          assigneeUserId: 'ops-user',
+          acceptanceStatus: 'accepted',
+        );
+        final awaitingOpsTicket = _policyTicket(
+          status: HospitalTicketStatus.escalatedOperationsExecutive,
+          role: 'operations_executive',
+          assigneeUserId: 'ops-user',
+          acceptanceStatus: 'awaiting',
+        );
+        final facilityTicket = _policyTicket(
+          status: HospitalTicketStatus.escalatedFacilityManager,
+          role: 'facility_manager',
+          assigneeUserId: 'facility-user',
+          acceptanceStatus: 'accepted',
+        );
+        final projectTicket = _policyTicket(
+          status: HospitalTicketStatus.escalatedProjectHead,
+          role: 'project_head',
+          assigneeUserId: 'project-user',
+          acceptanceStatus: 'accepted',
+        );
+
+        expect(
+          policy.allowedActions(operations, awaitingOpsTicket),
+          contains(HospitalTicketAction.takeOver),
+        );
+
+        for (final entry in [
+          (operations, opsTicket),
+          (facility, facilityTicket),
+          (project, projectTicket),
+        ]) {
+          final actions = policy.allowedActions(entry.$1, entry.$2);
+          expect(actions, isNot(contains(HospitalTicketAction.takeOver)));
+          expect(actions, contains(HospitalTicketAction.startWork));
+          expect(actions, contains(HospitalTicketAction.addProgress));
+          expect(actions, contains(HospitalTicketAction.uploadCompletionPhoto));
+          expect(actions, contains(HospitalTicketAction.resolve));
+          expect(actions, contains(HospitalTicketAction.reassignSupervisor));
+        }
+      },
+    );
   });
 
   group('ticket workflow', () {
@@ -178,9 +312,17 @@ void main() {
         'raised_by_name': 'Doctor',
         'raised_at': seed.toIso8601String(),
         'status_code': 'escalated_project_head',
+        'current_assignee_role': 'project_head',
         'allowed_actions': ['progress', 'resolve'],
       });
-      final value = controller('facility.manager@qpmsdemo.com');
+      final value = HospitalController(
+        session: const HospitalDemoSession(
+          loginId: 'project@test',
+          displayName: 'Project Head',
+          role: HospitalDemoRole.projectHead,
+          isDemo: false,
+        ),
+      );
       expect(
         value.actionsFor(ticket),
         contains(HospitalTicketAction.uploadCompletionPhoto),
@@ -247,19 +389,22 @@ void main() {
       expect(source, contains('session.clientName'));
     });
 
-    test('ticket detail labels completion flow without exposing close action', () {
-      final source = File(
-        'lib/hospital_housekeeping/hospital_ticket_detail_screen.dart',
-      ).readAsStringSync();
-      expect(source, contains("'Upload Completion Photo'"));
-      expect(source, contains("'Completion Evidence'"));
-      expect(source, contains("'Resolve Ticket'"));
-      expect(
-        source,
-        contains('Work completion sent to client for confirmation.'),
-      );
-      expect(source, isNot(contains("'Close Ticket'")));
-    });
+    test(
+      'ticket detail labels completion flow without exposing close action',
+      () {
+        final source = File(
+          'lib/hospital_housekeeping/hospital_ticket_detail_screen.dart',
+        ).readAsStringSync();
+        expect(source, contains("'Upload Completion Photo'"));
+        expect(source, contains("'Completion Evidence'"));
+        expect(source, contains("'Resolve Ticket'"));
+        expect(
+          source,
+          contains('Work completion sent to client for confirmation.'),
+        );
+        expect(source, isNot(contains("'Close Ticket'")));
+      },
+    );
   });
 
   group('Phase 2B hospital ticket compatibility', () {
@@ -414,3 +559,31 @@ void main() {
     expect(const HospitalAccessPolicy(), isNotNull);
   });
 }
+
+HospitalTicket _policyTicket({
+  required HospitalTicketStatus status,
+  required String role,
+  String assigneeUserId = '',
+  String acceptanceStatus = '',
+  DateTime? workStartedAt,
+}) => HospitalTicket(
+  id: 'ticket-${status.code}',
+  ticketNumber: 'QPMS-HK-2026-000001',
+  block: 'Block A',
+  floor: 'Second Floor',
+  location: 'Ward',
+  category: 'Housekeeping',
+  priority: HospitalPriority.low,
+  description: 'Test',
+  reportedBy: 'Doctor',
+  raisedAt: DateTime(2026, 7, 16, 10),
+  status: status,
+  responsiblePerson: 'Owner',
+  responsibleRole: role,
+  currentAssigneeUserId: assigneeUserId,
+  acceptanceStatus: acceptanceStatus,
+  workStartedAt: workStartedAt,
+  supervisorName: 'Supervisor',
+  supervisorDueAt: DateTime(2026, 7, 16, 10, 20),
+  events: const [],
+);

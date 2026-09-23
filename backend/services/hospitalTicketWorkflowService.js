@@ -1,4 +1,14 @@
-const ACTIVE_STATUSES = new Set(['open', 'awaiting_supervisor_acceptance', 'assigned', 'accepted', 'in_progress', 'reopened']);
+const ACTIVE_STATUSES = new Set([
+  'open',
+  'awaiting_supervisor_acceptance',
+  'assigned',
+  'accepted',
+  'in_progress',
+  'reopened',
+  'escalated_operations_executive',
+  'escalated_facility_manager',
+  'escalated_project_head',
+]);
 const CANCELLABLE_STATUSES = new Set([
   'open',
   'awaiting_supervisor_acceptance',
@@ -75,7 +85,7 @@ export function validateHospitalAction({ role, status, action, payload = {} }) {
     || (operationalSupervisor && ['escalated_operations_executive', 'escalated_facility_manager', 'escalated_project_head'].includes(status));
   const allowed = {
     accept:
-      (role === 'housekeeping_supervisor' && ['awaiting_supervisor_acceptance', 'open', 'assigned', 'reopened'].includes(status))
+      (role === 'housekeeping_supervisor' && ACTIVE_STATUSES.has(status))
       || (role === 'operations_executive' && status === 'escalated_operations_executive')
       || (role === 'facility_manager' && status === 'escalated_facility_manager')
       || (role === 'project_head' && status === 'escalated_project_head'),
@@ -169,12 +179,15 @@ export function hospitalEscalationRoleForLevel(level) {
 
 export function safeHospitalError(response, error) {
   const conflict = error?.code === '40001' || /version conflict/i.test(error?.message || '');
+  const alreadyAccepted = conflict && /already been accepted|already accepted/i.test(error?.message || '');
   const forbidden = error?.code === '42501';
   const invalid = error?.code === '22023';
   response.status(conflict ? 409 : forbidden ? 403 : invalid ? 400 : error?.statusCode || 500).json({
     ok: false,
-    code: conflict ? 'ticket_version_conflict' : forbidden ? 'hospital_access_denied' : invalid ? 'invalid_ticket_request' : 'hospital_ticket_failed',
-    message: conflict
+    code: alreadyAccepted ? 'ticket_already_accepted' : conflict ? 'ticket_version_conflict' : forbidden ? 'hospital_access_denied' : invalid ? 'invalid_ticket_request' : 'hospital_ticket_failed',
+    message: alreadyAccepted
+      ? error.message
+      : conflict
       ? 'This ticket changed after it was loaded. Refresh and try again.'
       : forbidden || invalid
         ? error.message

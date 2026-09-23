@@ -39,6 +39,18 @@ export function isActiveHospitalUser(user) {
     && ROLE_CODES.has(normalizeHospitalRole(user.role_code));
 }
 
+export function isEligibleHospitalOperationsUser(user) {
+  if (!isActiveHospitalUser(user)) return false;
+  const metadata = user.metadata || {};
+  return !(
+    metadata.test_user === true
+    || metadata.demo === true
+    || metadata.demo_user === true
+    || metadata.uat_only === true
+    || metadata.do_not_use_for_real_staff === true
+  );
+}
+
 export function hospitalAllowedActions(actor) {
   const role = normalizeHospitalRole(actor?.role_code);
   if (['doctor', 'hospital_management'].includes(role)) {
@@ -103,6 +115,27 @@ const OPERATIONAL_SUPERVISOR_STATUSES = new Set([
   'escalated_project_head',
 ]);
 
+const FINAL_HOSPITAL_TICKET_STATUSES = new Set(['closed', 'cancelled']);
+
+export function isActiveHospitalTicket(ticket) {
+  return !FINAL_HOSPITAL_TICKET_STATUSES.has(
+    String(ticket?.status_code || '').trim().toLowerCase(),
+  );
+}
+
+export function hasHospitalClientPermission(actor, clientId, permission = 'view') {
+  const permissionKey = permission === 'create'
+    ? 'can_create'
+    : permission === 'update'
+      ? 'can_update'
+      : 'can_view';
+  return Boolean(
+    actor?.user?.client_id
+    && actor.user.client_id === clientId
+    && (actor.scopes || []).some((scope) => scope?.client_id === clientId && scope?.[permissionKey] === true),
+  );
+}
+
 export function isHospitalTicketOperationalSupervisor(actor, ticket) {
   const user = actor?.user;
   if (!isActiveHospitalUser(user)) return false;
@@ -135,13 +168,19 @@ export function isAssignedHospitalTicketOwner(actor, ticket) {
 
 export function canViewHospitalTicket(actor, ticket) {
   if (!isActiveHospitalUser(actor?.user)) return false;
+  const role = normalizeHospitalRole(actor.user.role_code);
+  if (['housekeeping_supervisor', 'operations_executive', 'facility_manager'].includes(role)) {
+    if (!isEligibleHospitalOperationsUser(actor.user)) return false;
+    if (!hasHospitalClientPermission(actor, ticket?.client_id, 'view')) return false;
+    if (role === 'facility_manager') return true;
+    return isActiveHospitalTicket(ticket);
+  }
   if (!scopeAllows(actor.scopes, {
     clientId: ticket?.client_id,
     blockId: ticket?.block_id,
     locationId: ticket?.location_id,
     permission: 'view',
   })) return false;
-  const role = normalizeHospitalRole(actor.user.role_code);
   if (role === 'admin' || role === 'doctor' || role === 'hospital_management' || role === 'hospital_dean') return true;
   if (isHospitalTicketOperationalSupervisor(actor, ticket)) return true;
   if (OPERATIONAL_ROLES.has(role)) return isAssignedHospitalTicketOwner(actor, ticket);

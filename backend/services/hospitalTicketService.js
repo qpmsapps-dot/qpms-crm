@@ -2,8 +2,12 @@ import { randomUUID } from 'node:crypto';
 
 import {
   canViewHospitalTicket,
+  hasHospitalClientPermission,
   hospitalAllowedActions,
+  isActiveHospitalTicket,
+  isEligibleHospitalOperationsUser,
   isHospitalTicketOperationalSupervisor,
+  normalizeHospitalRole,
   scopeAllows,
 } from './hospitalTicketAuthService.js';
 import { nimsRosterCoverageMatrix } from './hospitalTicketRoutingService.js';
@@ -604,7 +608,12 @@ export async function listHospitalNotifications(client, actor, limit = 200) {
 
 export async function listHospitalTickets(client, actor, filters = {}) {
   let query = client.from('hospital_tickets').select(TICKET_SELECT)
-    .eq('client_id', actor.user.client_id)
+    .eq('client_id', actor.user.client_id);
+  const role = normalizeHospitalRole(actor.user.role_code);
+  if (['housekeeping_supervisor', 'operations_executive'].includes(role)) {
+    query = query.not('status_code', 'in', '(closed,cancelled)');
+  }
+  query = query
     .order('created_at', { ascending: false })
     .order('raised_at', { ascending: false })
     .order('ticket_no', { ascending: false })
@@ -929,18 +938,36 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
     && current.ticket.status_code === 'escalated_operations_executive'
     ? 'escalate_facility'
     : action;
+  const isOperationalSupervisor = isHospitalTicketOperationalSupervisor(actor, current.ticket);
+  const isAvailableSupervisorAcceptance = effectiveAction === 'accept'
+    && actor.user.role_code === 'housekeeping_supervisor'
+    && isEligibleHospitalOperationsUser(actor.user)
+    && isActiveHospitalTicket(current.ticket)
+    && current.ticket.status_code !== 'resolved_awaiting_confirmation'
+    && !current.ticket.supervisor_user_id;
   const requiredPermission = actor.user.profile_type === 'client' ? 'view' : 'update';
-  if (!scopeAllows(actor.scopes, {
+  const hasExactScope = scopeAllows(actor.scopes, {
     clientId: current.ticket.client_id,
     blockId: current.ticket.block_id,
     locationId: current.ticket.location_id,
     permission: requiredPermission,
-  })) {
+  });
+  const hasOperationalOwnerScope = isOperationalSupervisor
+    && hasHospitalClientPermission(actor, current.ticket.client_id, 'update');
+  const hasAcceptanceScope = isAvailableSupervisorAcceptance
+    && hasHospitalClientPermission(actor, current.ticket.client_id, 'update');
+  if (!hasExactScope && !hasOperationalOwnerScope && !hasAcceptanceScope) {
     const error = new Error('This action is outside your authorized scope.');
     error.code = '42501';
     throw error;
   }
-  const isOperationalSupervisor = isHospitalTicketOperationalSupervisor(actor, current.ticket);
+  if (
+    actor.user.profile_type === 'internal'
+    && ['housekeeping_supervisor', 'operations_executive', 'facility_manager', 'project_head'].includes(actor.user.role_code)
+    && effectiveAction !== 'accept'
+  ) {
+    await requireCurrentOperationalOwner(client, actor, current.ticket);
+  }
   const actionPayload = isOperationalSupervisor
     ? { ...payload, operational_supervisor: true }
     : payload;
@@ -952,8 +979,13 @@ export async function performHospitalAction(client, actor, ticketId, action, exp
     error.code = '40001';
     throw error;
   }
-  if (effectiveAction === 'accept' && current.ticket.status_code === 'awaiting_supervisor_acceptance') {
-    const result = await client.rpc('rpc_accept_hospital_supervisor_ticket', {
+  if (effectiveAction === 'accept' && actor.user.role_code === 'housekeeping_supervisor') {
+    if (!isAvailableSupervisorAcceptance) {
+      const error = new Error('Ticket has already been accepted by another Supervisor or is no longer open.');
+      error.code = '40001';
+      throw error;
+    }
+    const result = await client.rpc('rpc_accept_hospital_operational_ticket', {
       p_ticket_id: current.ticket.id,
       p_actor_user_id: actor.user.id,
       p_expected_version: Number(expectedVersion),
@@ -1396,7 +1428,7 @@ async function requireCurrentOperationalOwner(client, actor, ticket) {
   if (actor.user.profile_type !== 'internal' || actor.user.role_code === 'admin') return;
   if (ticket.current_assignee_user_id === actor.user.id) return;
   if (isHospitalTicketOperationalSupervisor(actor, ticket)) return;
-  const error = new Error('Only the current operational owner can resolve this ticket.');
+  const error = new Error('Only the current operational owner can perform this action.');
   error.code = '42501';
   throw error;
 }
@@ -1918,7 +1950,21 @@ export function hospitalSlaState(ticket, now = new Date()) {
 
 export function allowedActionsForTicket(actor, ticket) {
   const operationalSupervisor = isHospitalTicketOperationalSupervisor(actor, ticket);
+  const ownsOperationalWork = actor.user.role_code === 'admin'
+    || ticket.current_assignee_user_id === actor.user.id
+    || operationalSupervisor;
   return hospitalAllowedActions(actor.user).filter((action) => {
+    if (action === 'accept' && actor.user.role_code === 'housekeeping_supervisor') {
+      return isEligibleHospitalOperationsUser(actor.user)
+        && isActiveHospitalTicket(ticket)
+        && ticket.status_code !== 'resolved_awaiting_confirmation'
+        && !ticket.supervisor_user_id;
+    }
+    if (
+      actor.user.profile_type === 'internal'
+      && ['housekeeping_supervisor', 'operations_executive', 'facility_manager', 'project_head'].includes(actor.user.role_code)
+      && !ownsOperationalWork
+    ) return false;
     if (action === 'take_over' && ticket.acceptance_status !== 'awaiting') return false;
     if (
       action === 'start_work'
@@ -1978,6 +2024,9 @@ export async function createAttachmentUpload(client, actor, ticketId, body) {
   const detail = await getHospitalTicket(client, actor, ticketId);
   const type = cleanHospitalText(body.attachment_type, 40);
   if (!['complaint_photo', 'progress_photo', 'completion_photo', 'supporting_document'].includes(type)) { const error = new Error('Unsupported attachment type.'); error.code = '22023'; throw error; }
+  if (actor.user.profile_type === 'internal' && type !== 'complaint_photo') {
+    await requireCurrentOperationalOwner(client, actor, detail.ticket);
+  }
   const mime = cleanHospitalText(body.mime_type, 80).toLowerCase();
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) { const error = new Error('Only JPEG, PNG, and WebP images are supported.'); error.code = '22023'; throw error; }
   const existing = await client.from('hospital_ticket_attachments').select('id').eq('ticket_id', detail.ticket.id).eq('attachment_type', type);
@@ -1992,6 +2041,9 @@ export async function createAttachmentUpload(client, actor, ticketId, body) {
 
 export async function completeAttachment(client, actor, ticketId, body) {
   const detail = await getHospitalTicket(client, actor, ticketId);
+  if (actor.user.profile_type === 'internal' && body.attachment_type !== 'complaint_photo') {
+    await requireCurrentOperationalOwner(client, actor, detail.ticket);
+  }
   const path = cleanHospitalText(body.storage_path, 500);
   if (!path.startsWith(`${actor.user.client_id}/${detail.ticket.id}/`)) { const error = new Error('Attachment path is outside this ticket.'); error.code = '42501'; throw error; }
   const size = Number(body.size_bytes);
