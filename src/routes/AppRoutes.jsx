@@ -10,7 +10,13 @@ import SetPassword from '../pages/SetPassword.jsx';
 import TenderDemoLogin from '../pages/TenderDemoLogin.jsx';
 import TenderDemoWorkspace from '../pages/TenderDemoWorkspace.jsx';
 import Dashboard from '../pages/Dashboard.jsx';
-import CRM from '../pages/CRM.jsx';
+import LegacyCrmRoute from './LegacyCrmRoute.jsx';
+import PreSalesDashboard from '../pages/preSales/PreSalesDashboard.jsx';
+import PreSalesLeads from '../pages/preSales/PreSalesLeads.jsx';
+import PreSalesLeadDetails from '../pages/preSales/PreSalesLeadDetails.jsx';
+import PreSalesLeadCreate from '../pages/preSales/PreSalesLeadCreate.jsx';
+import PreSalesLeadEdit from '../pages/preSales/PreSalesLeadEdit.jsx';
+import PreSalesWorkQueue from '../pages/preSales/PreSalesWorkQueue.jsx';
 import Sites from '../pages/Sites.jsx';
 import Tasks from '../pages/Tasks.jsx';
 import Employees from '../pages/Employees.jsx';
@@ -74,7 +80,16 @@ const productionRoutes = [
         element: <MainLayout />,
         children: [
           { path: 'dashboard', element: <Dashboard /> },
-          { path: 'crm', element: <CRM /> },
+          { path: 'crm', element: <LegacyCrmRoute /> },
+          { path: 'pre-sales', element: <PreSalesDashboard /> },
+          { path: 'pre-sales/leads', element: <PreSalesLeads /> },
+          { path: 'pre-sales/leads/new', element: <PreSalesLeadCreate /> },
+          { path: 'pre-sales/leads/:leadId/edit', element: <PreSalesLeadEdit /> },
+          { path: 'pre-sales/leads/:leadId', element: <PreSalesLeadDetails /> },
+          { path: 'pre-sales/followups', element: <PreSalesWorkQueue /> },
+          { path: 'pre-sales/meetings', element: <PreSalesWorkQueue /> },
+          { path: 'pre-sales/handover', element: <PreSalesWorkQueue /> },
+          { path: 'pre-sales/reports', element: <PreSalesWorkQueue /> },
           { path: 'sites', element: isSiteVisitV2Enabled ? <Sites /> : <Navigate to="/dashboard" replace /> },
           { path: 'site-visit/:id', element: isSiteVisitV2Enabled ? <Sites /> : <Navigate to="/dashboard" replace /> },
           { path: 'site-monitoring', element: <SiteMonitoringPage /> },

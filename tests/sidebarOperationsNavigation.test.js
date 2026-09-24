@@ -73,3 +73,35 @@ test('unfinished modules are centrally hidden from every sidebar preset', () => 
     assert.doesNotMatch(hiddenRoutesSource, new RegExp(`['\"]${retainedRoute.replaceAll('/', '\\/')}['\"]`));
   }
 });
+
+test('Admin sidebar preserves unrelated modules while Pre-Sales remains a single item', () => {
+  const adminPreset = sidebarSource.slice(
+    sidebarSource.indexOf('const adminDemoNavGroups'),
+    sidebarSource.indexOf('const businessNavGroups'),
+  );
+  const preSalesDefinition = sidebarSource.slice(
+    sidebarSource.indexOf('const preSalesNavItem'),
+    sidebarSource.indexOf('function insertHospitalTicketingGroup'),
+  );
+
+  for (const label of [
+    'Dashboard', 'Site Visit + Estimation', 'HR Review', 'Commercial Review',
+    'Finance Review', 'Proposals', 'Approvals', 'Operations', 'Fault Tracker',
+  ]) assert.match(adminPreset, new RegExp(`label: '${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
+
+  assert.match(adminPreset, /preSalesNavItem/);
+  assert.match(preSalesDefinition, /label: 'Pre-Sales'/);
+  assert.doesNotMatch(preSalesDefinition, /Leads|Follow-ups|Meetings|Handover|Reports/);
+  assert.doesNotMatch(adminPreset, /label: 'Lead Management'/);
+  assert.match(sidebarSource, /title: 'Hospital Ticketing System'/);
+  assert.match(sidebarSource, /label: 'NIMS Ticketing System', to: '\/hospital-ticketing\/nims\/qpms'/);
+  assert.match(sidebarSource, /hasStaticHospitalTicketingAccess = isAdmin\(user\)/);
+});
+
+test('Pre-Sales and non-Pre-Sales role presets retain their established scope', () => {
+  assert.equal(canAccessNavRoute(user('Pre-Sales Executive'), '/pre-sales'), true);
+  assert.equal(canAccessNavRoute(user('Pre-Sales Executive'), '/fo-activities'), false);
+  assert.equal(canAccessNavRoute(user('Commercial Reviewer'), '/pre-sales'), false);
+  assert.equal(canAccessNavRoute(user('Commercial Reviewer'), '/tasks'), true);
+  assert.equal(canAccessNavRoute(user('Branch Head'), '/fo-activities'), true);
+});

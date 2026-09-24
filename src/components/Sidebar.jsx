@@ -45,6 +45,8 @@ const hospitalTicketingNavGroup = {
   items: [{ label: 'NIMS Ticketing System', to: '/hospital-ticketing/nims/qpms', icon: TicketCheck }],
 };
 
+const preSalesNavItem = { label: 'Pre-Sales', to: '/pre-sales', icon: Workflow, matchPrefix: true };
+
 function insertHospitalTicketingGroup(groups) {
   const demoReviewsIndex = groups.findIndex((group) => group.title === 'Demo Reviews');
   const operationsIndex = groups.findIndex((group) => group.title === 'Operations');
@@ -61,7 +63,7 @@ const executiveNavGroups = [
     title: 'Command Center',
     items: [
       { label: 'Dashboard', to: '/dashboard', icon: Home },
-      { label: 'Lead Management', to: '/crm', icon: Workflow },
+      preSalesNavItem,
       { label: 'Site Visit + Estimation', to: '/site-monitoring', icon: ClipboardCheck },
       { label: 'Proposals', to: '/proposals', icon: FileText },
       { label: 'Approvals', to: '/approvals', icon: ShieldCheck },
@@ -94,7 +96,7 @@ const adminDemoNavGroups = [
     title: 'Workspace',
     items: [
       { label: 'Dashboard', to: '/dashboard', icon: Home },
-      { label: 'Lead Management', to: '/crm', icon: Workflow },
+      preSalesNavItem,
       { label: 'Site Visit + Estimation', to: '/sites', icon: ClipboardCheck },
     ],
   },
@@ -135,7 +137,7 @@ const businessNavGroups = [
     title: 'Workspace',
     items: [
       { label: 'Dashboard', to: '/dashboard', icon: Home },
-      { label: 'Lead Management', to: '/crm', icon: Workflow },
+      preSalesNavItem,
       { label: 'Site Visit + Estimation', to: '/sites', icon: ClipboardCheck },
       { label: 'Proposals', to: '/proposals', icon: FileText },
       { label: 'Settings', to: '/settings', icon: Settings },
@@ -222,7 +224,12 @@ export default function Sidebar({ isOpen, onClose }) {
       : isApprovalReviewer(user)
         ? reviewNavGroups
         : businessNavGroups;
-  const authorizedNavGroups = hospitalAccess.allowed ? insertHospitalTicketingGroup(baseNavGroups) : baseNavGroups;
+  const hasStaticHospitalTicketingAccess = isAdmin(user)
+    && canAccessNavRoute(user, '/hospital-ticketing/nims/qpms');
+  const canShowHospitalTicketing = hospitalAccess.allowed || hasStaticHospitalTicketingAccess;
+  const authorizedNavGroups = canShowHospitalTicketing
+    ? insertHospitalTicketingGroup(baseNavGroups)
+    : baseNavGroups;
   const canSeeFaultTracker = canAccessNavRoute(user, '/fault-tracker');
   const navGroups = canSeeFaultTracker && !authorizedNavGroups.some((group) => group.items.some((item) => item.to === '/fault-tracker'))
     ? [
@@ -280,9 +287,13 @@ export default function Sidebar({ isOpen, onClose }) {
             <div key={group.title} className="space-y-1">
               <p className="px-3 pb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400 dark:text-slate-500">{group.title}</p>
               {group.items.map((item) => {
-                const active = item.to.includes('?')
-                  ? currentTarget === item.to
-                  : location.pathname === item.to && !currentTarget.startsWith(`${item.to}?workspace=`);
+                const active = item.matchPrefix
+                  ? location.pathname === item.to
+                    || location.pathname.startsWith(`${item.to}/`)
+                    || (item.to === '/pre-sales' && currentTarget.startsWith('/crm?workspace=pre-sales'))
+                  : item.to.includes('?')
+                    ? currentTarget === item.to
+                    : location.pathname === item.to && !currentTarget.startsWith(`${item.to}?workspace=`);
                 return (
                   <NavLink
                     key={item.to}

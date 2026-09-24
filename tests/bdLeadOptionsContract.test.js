@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const crmPath = new URL('../src/pages/CRM.jsx', import.meta.url);
+const leadFormPath = new URL('../src/components/preSales/LeadForm.jsx', import.meta.url);
+const leadFormModelPath = new URL('../src/components/preSales/leadFormModel.js', import.meta.url);
 
 test('web lead form uses the approved industry dropdown and service checkboxes', async () => {
-  const source = await readFile(crmPath, 'utf8');
+  const source = (await Promise.all([crmPath, leadFormPath, leadFormModelPath].map((path) => readFile(path, 'utf8')))).join('\n');
   const industryList = "['Manufacturing', 'Educational', 'Retail', 'Commercial', 'Electronics', 'Hospital']";
   const serviceList = "['Soft Services', 'Hard Services', 'Security Services', 'Pest Control Services', 'Landscaping Services', 'Waste Management', 'Other Services']";
 

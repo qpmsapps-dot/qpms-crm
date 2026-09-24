@@ -10,6 +10,7 @@ import {
 } from './routes/hospitalFeedbackQrRoutes.js';
 import { createClientDeepCleaningRouter } from './routes/clientDeepCleaningRoutes.js';
 import { createHospitalTicketRouter } from './routes/hospitalTicketRoutes.js';
+import { registerPreSalesRoutes } from './routes/preSalesRoutes.js';
 import {
   cleanHospitalText,
   normalizeHospitalTicketCreate,
@@ -102,6 +103,7 @@ import {
   normalizeWebRoleKey,
 } from './services/webRoleAccessService.js';
 import { createCorsOptions, resolveAllowedOrigins } from './services/corsPolicyService.js';
+import { startAutomaticBackgroundWorkers } from './services/readOnlyUatMode.js';
 import {
   loadAuthorizedEmployeeRange,
   recalculateEmployeeRange,
@@ -1362,8 +1364,6 @@ app.use(
     environment: process.env,
   }),
 );
-
-startHospitalSlaScheduler(serviceRoleSupabase, process.env);
 
 try {
   const parsedSupabaseUrl = new URL(supabaseUrl);
@@ -8987,6 +8987,14 @@ app.post(
   requireSupabaseJwt,
   runSiteVisitWorkflowOperation,
 );
+registerPreSalesRoutes({
+  app,
+  requireJwt: requireSupabaseJwt,
+  requireLeadAccess: requireLeadManagementAccess,
+  getClient: requireServiceRoleSupabase,
+  createLeadHandler: createLeadManagement,
+  updateLeadHandler: updateLeadManagement,
+});
 
 // Backward-compatible mobile aliases use the same production authorization and
 // persistence handlers. The legacy declarations below are therefore unreachable
@@ -11140,6 +11148,15 @@ function startEndDayKmAutoRecalcScheduler() {
   }, END_DAY_KM_AUTO_RECALC_INTERVAL_MS).unref?.();
 }
 
+function startFoStaleSessionCleanupScheduler() {
+  runFoStaleSessionCleanup('startup');
+  if (Number.isFinite(FO_STALE_CLEANUP_INTERVAL_MS) && FO_STALE_CLEANUP_INTERVAL_MS > 0) {
+    setInterval(() => {
+      runFoStaleSessionCleanup('interval');
+    }, FO_STALE_CLEANUP_INTERVAL_MS).unref?.();
+  }
+}
+
 app.listen(port, () => {
   console.log('[myQPMS Mail API] Startup complete', {
     port,
@@ -11151,13 +11168,15 @@ app.listen(port, () => {
     serviceRoleClientAvailable: Boolean(serviceRoleSupabase),
     serviceRoleSupabaseInitialized: Boolean(serviceRoleSupabase),
   });
-  verifyMailTransporter();
-  startDailyOperationsReportScheduler();
-  startEndDayKmAutoRecalcScheduler();
-  runFoStaleSessionCleanup('startup');
-  if (Number.isFinite(FO_STALE_CLEANUP_INTERVAL_MS) && FO_STALE_CLEANUP_INTERVAL_MS > 0) {
-    setInterval(() => {
-      runFoStaleSessionCleanup('interval');
-    }, FO_STALE_CLEANUP_INTERVAL_MS).unref?.();
-  }
+  startAutomaticBackgroundWorkers({
+    environment: process.env,
+    logger: console,
+    workers: {
+      hospital_ticket_sla_scheduler: () => startHospitalSlaScheduler(serviceRoleSupabase, process.env),
+      smtp_transport_verification: verifyMailTransporter,
+      daily_operations_report_scheduler: startDailyOperationsReportScheduler,
+      end_day_km_auto_recalculation: startEndDayKmAutoRecalcScheduler,
+      fo_stale_session_cleanup: startFoStaleSessionCleanupScheduler,
+    },
+  });
 });

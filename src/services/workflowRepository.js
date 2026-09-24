@@ -412,6 +412,7 @@ async function fetchWorkflowDataOnce() {
       ...lead,
       lead_contacts: lead.contacts || [],
       activity_logs: lead.activity_logs || [],
+      lead_mom: lead.lead_mom || [],
     })),
     error: null,
   };
@@ -425,16 +426,10 @@ async function fetchWorkflowDataOnce() {
       grouped[lead.id] = lead.lead_contacts || [];
       return grouped;
     }, {});
-    const momResponse = await supabase.from('lead_mom').select('*').in('lead_id', leadIds);
-
-    if (momResponse.error) {
-      console.warn('[myQPMS Supabase] lead_mom fetch skipped/failed', momResponse.error);
-    } else {
-      momByLeadId = groupBy(momResponse.data || [], 'lead_id');
-      console.info('[myQPMS Supabase] lead_mom fetch success', {
-        moms: momResponse.data?.length || 0,
-      });
-    }
+    momByLeadId = (leadsResponse.data || []).reduce((grouped, lead) => {
+      grouped[lead.id] = lead.lead_mom || [];
+      return grouped;
+    }, {});
   }
 
   const siteWorkflowResponse = await getSiteVisitWorkflowData();

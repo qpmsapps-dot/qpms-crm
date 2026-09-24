@@ -41,7 +41,7 @@ const emptyForm = {
 };
 
 const roleOptions = [
-  'MD', 'COO', 'GM', 'South Head', 'Business Head', 'Branch Head', 'Operations Manager', 'KAM', 'FO', 'Admin',
+  'MD', 'COO', 'GM', 'South Head', 'Business Head', 'Branch Head', 'Operations Manager', 'KAM', 'FO', 'Pre-Sales Manager', 'Pre-Sales Executive', 'Admin',
 ];
 const stateOptions = ['TN', 'AP', 'KA', 'KL', 'TG'];
 const businessOptions = [

@@ -34,7 +34,9 @@ test('sidebar inserts the NIMS module after Demo Reviews and retains route filte
   assert.match(sidebar, /title: 'Hospital Ticketing System'/);
   assert.match(sidebar, /label: 'NIMS Ticketing System', to: '\/hospital-ticketing\/nims\/qpms'/);
   assert.match(sidebar, /demoReviewsIndex \+ 1/);
-  assert.match(sidebar, /hospitalAccess\.allowed \? insertHospitalTicketingGroup/);
+  assert.match(sidebar, /hasStaticHospitalTicketingAccess = isAdmin\(user\)/);
+  assert.match(sidebar, /canShowHospitalTicketing = hospitalAccess\.allowed \|\| hasStaticHospitalTicketingAccess/);
+  assert.match(sidebar, /canShowHospitalTicketing[\s\S]*\? insertHospitalTicketingGroup/);
   assert.match(sidebar, /canAccessNavRoute\(user, routePath\)/);
   assert.match(sidebar, /'\/tickets'/);
 });

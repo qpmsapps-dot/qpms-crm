@@ -10,6 +10,7 @@ export const EXECUTIVE_ASSISTANT_ROLE = 'Executive Assistant';
 
 export const roleGroups = {
   BD: ['BD', 'BD Team', 'BD Executive', 'BD Head'],
+  PreSales: ['Pre-Sales Executive', 'Pre-Sales Manager'],
   Operations: ['Operations', 'Operations Team', 'Operations Manager', 'Branch Head', 'Business Head', 'South Head', 'KAM'],
   Coordinator: ['Coordinator'],
   HR: ['HR', 'HR Reviewer', 'HR GM'],
@@ -24,7 +25,7 @@ export const roleGroups = {
   DemoViewer: ['DEMO_VIEWER'],
 };
 
-export const protectedNavRoutes = ['/dashboard', '/crm', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/hospital-ticketing', '/fault-tracker', '/deep-cleaning', '/assets', '/reports', '/employees', '/store-master', '/settings', '/hospital-feedback', '/operations/hospital-feedback'];
+export const protectedNavRoutes = ['/dashboard', '/crm', '/pre-sales', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/hospital-ticketing', '/fault-tracker', '/deep-cleaning', '/assets', '/reports', '/employees', '/store-master', '/settings', '/hospital-feedback', '/operations/hospital-feedback'];
 
 function normalizedRoleKey(role = '') {
   return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
@@ -50,6 +51,8 @@ export function normalizeCanonicalRole(role = '') {
     BUSINESSDEVELOPMENTEXECUTIVE: 'BD Executive',
     BDHEAD: 'BD Head',
     BUSINESSDEVELOPMENTHEAD: 'BD Head',
+    PRESALESEXECUTIVE: 'Pre-Sales Executive',
+    PRESALESMANAGER: 'Pre-Sales Manager',
     BUSINESSHEAD: 'Business Head',
     BRANCHHEAD: 'Branch Head',
     BH: 'Branch Head',
@@ -131,6 +134,7 @@ export function routeAllowedRoles(pathname = '') {
   }
   if (pathname.startsWith('/settings')) return [];
   if (pathname.startsWith('/crm')) return ['Admin', 'Management', 'FinanceLeadership', 'BD', 'DemoViewer'];
+  if (pathname.startsWith('/pre-sales')) return ['Admin', 'Management', 'BD', 'PreSales', 'DemoViewer'];
   if (pathname.startsWith('/sites') || pathname.startsWith('/site-visit')) return ['Admin', 'BD', 'DemoViewer'];
   if (pathname.startsWith('/site-monitoring')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'DemoViewer'];
   if (pathname.startsWith('/proposals')) return ['Admin', 'Management', 'FinanceLeadership', 'BD', 'DemoViewer'];
@@ -157,12 +161,30 @@ function canonicalUserRole(user) {
 
 export function canCreateLead(user) {
   if (normalizeAppRole(user?.rawRole || user?.role) === 'DemoViewer') return false;
-  return new Set(['BD Executive', 'Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
+  return new Set(['BD Executive', 'Pre-Sales Executive', 'Pre-Sales Manager', 'Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
 }
 
 export function canAssignLead(user) {
   if (normalizeAppRole(user?.rawRole || user?.role) === 'DemoViewer') return false;
-  return new Set(['Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
+  return new Set(['Pre-Sales Manager', 'Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
+}
+
+export function canEditPreSalesLead(user) {
+  if (!user || normalizeAppRole(user?.rawRole || user?.role) === 'DemoViewer') return false;
+  return new Set([
+    'BD Executive',
+    'Pre-Sales Executive',
+    'Pre-Sales Manager',
+    'BD Head',
+    'Business Head',
+    'Branch Head',
+    'Admin',
+    'QPMS Admin',
+    'Developer',
+    'COO',
+    'GM',
+    'MD',
+  ]).has(canonicalUserRole(user));
 }
 
 export function canSendLeadMom(user) {

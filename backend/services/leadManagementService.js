@@ -11,6 +11,8 @@ const FULL_VISIBILITY_ROLES = new Set([
 
 const LEAD_ACCESS_ROLES = new Set([
   'BD Executive',
+  'Pre-Sales Executive',
+  'Pre-Sales Manager',
   'BD Head',
   'Business Head',
   'Branch Head',
@@ -20,6 +22,8 @@ const LEAD_ACCESS_ROLES = new Set([
 
 const CREATE_ROLES = new Set([
   'BD Executive',
+  'Pre-Sales Executive',
+  'Pre-Sales Manager',
   'Admin',
   'COO',
   'GM',
@@ -27,6 +31,7 @@ const CREATE_ROLES = new Set([
 ]);
 
 const ASSIGNMENT_ROLES = new Set([
+  'Pre-Sales Manager',
   'Admin',
   'COO',
   'GM',
@@ -62,7 +67,7 @@ const INDUSTRIES = new Set(approvedIndustries);
 const SERVICE_SCOPES = new Set(approvedServiceScopes);
 const SOURCES = new Set(['LinkedIn', 'Website', 'Campaign', 'Referral', 'Direct Visit', 'Email', 'Phone Enquiry']);
 const PRIORITIES = new Set(['High', 'Medium', 'Low']);
-const STATUSES = new Set(['Active', 'Pending', 'Escalated', 'Completed', 'MOM Sent', 'Converted to Assessment', 'Archived', 'Lost']);
+const STATUSES = new Set(['Active', 'Pending', 'Escalated', 'Completed', 'Qualified', 'Invalid', 'Converted', 'MOM Sent', 'Converted to Assessment', 'Archived', 'Lost']);
 const STAGES = new Set(['New Lead', 'Lead MOM Sent', 'Converted', 'Site Visit Scheduled', 'Proposal Sent', 'Lost']);
 
 function roleKey(value) {
@@ -75,6 +80,8 @@ export function normalizeLeadRole(value) {
     BUSINESSDEVELOPMENTEXECUTIVE: 'BD Executive',
     BDHEAD: 'BD Head',
     BUSINESSDEVELOPMENTHEAD: 'BD Head',
+    PRESALESEXECUTIVE: 'Pre-Sales Executive',
+    PRESALESMANAGER: 'Pre-Sales Manager',
     BUSINESSHEAD: 'Business Head',
     BRANCHHEAD: 'Branch Head',
     BH: 'Branch Head',
@@ -177,10 +184,18 @@ export function canViewLead(actor, lead) {
   if (!actor || !lead) return false;
   if (actor.role === 'DEMO_VIEWER') return true;
   if (FULL_VISIBILITY_ROLES.has(actor.role)) return true;
-  if (actor.role === 'BD Executive') {
+  if (actor.role === 'BD Executive' || actor.role === 'Pre-Sales Executive') {
     return normalizeEmail(lead.assigned_bd_email) === actor.email
+      || String(lead.pre_sales_owner_profile_id || '') === actor.profileId
       || String(lead.created_by_user_id || '') === actor.authUserId
       || String(lead.created_by_user_id || '') === actor.profileId;
+  }
+  if (actor.role === 'Pre-Sales Manager') {
+    const hasScope = Boolean(actor.business || actor.state || actor.branch);
+    return hasScope
+      && (!actor.business || !lead.business || normalizedText(lead.business) === normalizedText(actor.business))
+      && (!actor.state || !lead.state || normalizedText(lead.state) === normalizedText(actor.state))
+      && (!actor.branch || !lead.branch || normalizedText(lead.branch) === normalizedText(actor.branch));
   }
   if (actor.role === 'Business Head') {
     return Boolean(actor.business) && normalizedText(lead.business) === normalizedText(actor.business);
@@ -199,9 +214,12 @@ export function canViewLead(actor, lead) {
 export function canEditLead(actor, lead) {
   if (actor?.role === 'DEMO_VIEWER') return false;
   if (!canViewLead(actor, lead)) return false;
-  if (actor.role === 'BD Executive') return true;
+  if (actor.role === 'BD Executive' || actor.role === 'Pre-Sales Executive') return true;
   if (actor.role === 'Executive Assistant') return false;
-  return FULL_VISIBILITY_ROLES.has(actor.role) || actor.role === 'Business Head' || actor.role === 'Branch Head';
+  return FULL_VISIBILITY_ROLES.has(actor.role)
+    || actor.role === 'Pre-Sales Manager'
+    || actor.role === 'Business Head'
+    || actor.role === 'Branch Head';
 }
 
 export function cleanText(value) {
@@ -357,16 +375,19 @@ export function duplicateScore(candidate, contacts, lead) {
 }
 
 export async function loadLeadRelations(client, leadIds) {
-  if (!leadIds.length) return { contacts: {}, activities: {} };
-  const [contactResult, activityResult] = await Promise.all([
+  if (!leadIds.length) return { contacts: {}, activities: {}, moms: {} };
+  const [contactResult, activityResult, momResult] = await Promise.all([
     client.from('lead_contacts').select('*').in('lead_id', leadIds).order('created_at'),
     client.from('activity_logs').select('*').in('lead_id', leadIds).order('created_at', { ascending: false }),
+    client.from('lead_mom').select('*').in('lead_id', leadIds),
   ]);
   if (contactResult.error) throw contactResult.error;
   if (activityResult.error) throw activityResult.error;
+  if (momResult.error) throw momResult.error;
   return {
     contacts: groupBy(contactResult.data || [], 'lead_id'),
     activities: groupBy(activityResult.data || [], 'lead_id'),
+    moms: groupBy(momResult.data || [], 'lead_id'),
   };
 }
 
@@ -379,6 +400,7 @@ export function leadResponse(lead, relations = {}) {
     contacts,
     primary_contact: primaryContact,
     activity_logs: relations.activities?.[lead.id] || lead.activity_logs || [],
+    lead_mom: relations.moms?.[lead.id] || lead.lead_mom || [],
   };
 }
 
