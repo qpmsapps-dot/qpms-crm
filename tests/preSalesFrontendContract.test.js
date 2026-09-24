@@ -48,7 +48,7 @@ test('feedback form uses canonical outcomes, renders conditional scheduling, and
     read('src/components/preSales/AddCallUpdateForm.jsx'),
     read('src/pages/preSales/PreSalesLeadDetails.jsx'),
     read('src/services/preSalesApi.js'),
-    read('shared/preSalesConstants.js'),
+    read('backend/shared/preSalesConstants.js'),
   ]);
   for (const value of ['RNR', 'CALL_BACK', 'FUTURE_FOLLOWUP', 'NO_REQUIREMENT', 'INVALID_LEAD', 'INTERESTED']) assert.match(constants, new RegExp(`${value}:`));
   assert.match(form, /FEEDBACK_REQUIRING_FOLLOWUP/);

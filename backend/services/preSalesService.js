@@ -7,7 +7,7 @@ import {
   PRE_SALES_FEEDBACK,
   PRE_SALES_FEEDBACK_LABELS,
   PRE_SALES_STAGES,
-} from '../../shared/preSalesConstants.js';
+} from '../shared/preSalesConstants.js';
 import {
   canAssignLead,
   canEditLead,
