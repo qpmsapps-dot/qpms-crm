@@ -45,7 +45,7 @@ test('call update uses one atomic database RPC after authorization', async () =>
 test('executive scoping is applied at query level rather than browser filtering', () => {
   const operations = [];
   const query = { or(value) { operations.push(['or', value]); return this; }, eq(...args) { operations.push(['eq', ...args]); return this; } };
-  applyPreSalesLeadScope(query, { role: 'Pre-Sales Executive', profileId: 'profile-1', authUserId: 'auth-1', email: 'user@example.com' });
+  applyPreSalesLeadScope(query, { role: 'Pre-Sales Executive', profileId: 'profile-1', authUserId: 'auth-1', email: 'user@example.com', state: 'All States', business: 'All Businesses' });
   assert.equal(operations[0][0], 'or');
   assert.match(operations[0][1], /pre_sales_owner_profile_id/);
 });
@@ -53,7 +53,7 @@ test('executive scoping is applied at query level rather than browser filtering'
 test('legacy Pre-Sales Manager uses the same owned-lead scope as canonical Pre-Sales', () => {
   const operations = [];
   const query = { or(value) { operations.push(['or', value]); return this; }, eq(...args) { operations.push(['eq', ...args]); return this; } };
-  applyPreSalesLeadScope(query, { role: 'Pre-Sales Manager', profileId: 'manager-1' });
+  applyPreSalesLeadScope(query, { role: 'Pre-Sales Manager', profileId: 'manager-1', state: 'All States', business: 'All Businesses' });
   assert.equal(operations[0][0], 'or');
   assert.match(operations[0][1], /pre_sales_owner_profile_id\.eq\.manager-1/);
 });

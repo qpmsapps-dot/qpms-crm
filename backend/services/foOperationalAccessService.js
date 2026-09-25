@@ -1,4 +1,10 @@
 import { hasCooWebVisibility, normalizeWebRoleKey } from './webRoleAccessService.js';
+import {
+  businessScopeAllows,
+  isAllBusinessesScope,
+  isAllStatesScope,
+  stateScopeAllows,
+} from './workMappingScope.js';
 
 export const FO_ACCESS_MODES = Object.freeze({
   LEGACY: 'legacy',
@@ -303,8 +309,8 @@ export function foOperationalAllowedEmployeeCodes(actor, profiles = [], hierarch
   const actorCode = employeeKey(actor);
   const configured = configuredFoAccess(actor);
   const descendants = hierarchyCodesForActor(actorCode, hierarchyRows);
-  const actorState = comparable(profileValue(actor, 'state'));
-  const actorBusiness = comparable(profileValue(actor, 'business'));
+  const actorState = profileValue(actor, 'state');
+  const actorBusiness = profileValue(actor, 'business');
   const actorBranch = comparable(profileValue(actor, 'branch'));
   const allowed = new Set();
 
@@ -326,25 +332,41 @@ export function foOperationalAllowedEmployeeCodes(actor, profiles = [], hierarch
       ) allowed.add(code);
       continue;
     }
-    const profileState = comparable(profileValue(profile, 'state'));
-    const profileBusiness = comparable(profileValue(profile, 'business'));
+    const profileState = profileValue(profile, 'state');
+    const profileBusiness = profileValue(profile, 'business');
     const profileBranch = comparable(profileValue(profile, 'branch'));
     if (actorRole === 'BUSINESSHEAD') {
-      if (actorBusiness && profileBusiness === actorBusiness) allowed.add(code);
+      if (isAllBusinessesScope(actorBusiness)) {
+        if (descendants.has(code)) allowed.add(code);
+      } else if (businessScopeAllows(actorBusiness, profileBusiness)) allowed.add(code);
       continue;
     }
     if (actorRole === 'BRANCHHEAD') {
+      const stateMatches = isAllStatesScope(actorState)
+        ? descendants.has(code)
+        : stateScopeAllows(actorState, profileState);
       if (
-        actorState && profileState === actorState &&
-        (!actorBusiness || profileBusiness === actorBusiness) &&
+        stateMatches &&
+        (isAllBusinessesScope(actorBusiness) || businessScopeAllows(actorBusiness, profileBusiness)) &&
         (!actorBranch || profileBranch === actorBranch)
       ) allowed.add(code);
       continue;
     }
     if (['GM', 'SOUTHHEAD'].includes(actorRole)) {
+      const geographicScopeIsBounded = Boolean(actorState) && !isAllStatesScope(actorState);
       if (
         descendants.has(code) ||
-        (actorState && profileState === actorState && (!actorBusiness || profileBusiness === actorBusiness))
+        (geographicScopeIsBounded
+          && stateScopeAllows(actorState, profileState)
+          && businessScopeAllows(actorBusiness, profileBusiness))
+      ) allowed.add(code);
+      continue;
+    }
+    if (['OPERATIONSMANAGER', 'OPERATIONMANAGER', 'OM', 'MANAGER'].includes(actorRole)) {
+      if (
+        descendants.has(code)
+        && stateScopeAllows(actorState, profileState)
+        && businessScopeAllows(actorBusiness, profileBusiness)
       ) allowed.add(code);
       continue;
     }

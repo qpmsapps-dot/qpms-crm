@@ -1,3 +1,10 @@
+import {
+  businessScopeAllows,
+  isAllBusinessesScope,
+  isAllStatesScope,
+  stateScopeAllows,
+} from './workMappingScope.js';
+
 const FULL_VISIBILITY_ROLES = new Set([
   'BD Head',
   'Admin',
@@ -183,22 +190,31 @@ export function canViewLead(actor, lead) {
   const role = normalizeLeadRole(actor.role);
   if (role === 'DEMO_VIEWER') return true;
   if (FULL_VISIBILITY_ROLES.has(role)) return true;
-  if (role === 'BD Executive' || role === 'Pre-Sales') {
+  if (role === 'BD Executive') {
     return normalizeEmail(lead.assigned_bd_email) === actor.email
-      || String(lead.pre_sales_owner_profile_id || '') === actor.profileId
       || String(lead.created_by_user_id || '') === actor.authUserId
       || String(lead.created_by_user_id || '') === actor.profileId;
   }
-  if (actor.role === 'Business Head') {
-    return Boolean(actor.business) && normalizedText(lead.business) === normalizedText(actor.business);
+  if (role === 'Pre-Sales') {
+    const associated = String(lead.pre_sales_owner_profile_id || '') === actor.profileId
+      || String(lead.created_by_user_id || '') === actor.authUserId
+      || String(lead.created_by_user_id || '') === actor.profileId;
+    return associated && leadMatchesActorWorkMapping(actor, lead);
   }
-  if (actor.role === 'Branch Head') {
-    const stateMatches = Boolean(actor.state) && normalizedText(lead.state) === normalizedText(actor.state);
+  if (role === 'Business Head') {
+    if (isAllBusinessesScope(actor.business)) return false;
+    return businessScopeAllows(actor.business, lead.business);
+  }
+  if (role === 'Branch Head') {
+    if (isAllStatesScope(actor.state) && !actor.branch) return false;
+    const stateMatches = stateScopeAllows(actor.state, lead.state);
     const leadBusiness = cleanText(lead.business);
     const leadBranch = cleanText(lead.branch);
     return stateMatches
       && (!actor.branch || !leadBranch || normalizedText(leadBranch) === normalizedText(actor.branch))
-      && (!actor.business || !leadBusiness || normalizedText(leadBusiness) === normalizedText(actor.business));
+      && (isAllBusinessesScope(actor.business)
+        || (!actor.business && !leadBusiness)
+        || businessScopeAllows(actor.business, leadBusiness));
   }
   return false;
 }
@@ -212,6 +228,12 @@ export function canEditLead(actor, lead) {
   return FULL_VISIBILITY_ROLES.has(role)
     || role === 'Business Head'
     || role === 'Branch Head';
+}
+
+export function leadMatchesActorWorkMapping(actor, lead) {
+  if (normalizeLeadRole(actor?.role) !== 'Pre-Sales') return true;
+  return stateScopeAllows(actor?.state, lead?.state)
+    && businessScopeAllows(actor?.business, lead?.business);
 }
 
 export function cleanText(value) {

@@ -105,6 +105,13 @@ import {
 import { createCorsOptions, resolveAllowedOrigins } from './services/corsPolicyService.js';
 import { startAutomaticBackgroundWorkers } from './services/readOnlyUatMode.js';
 import {
+  businessScopeAllows,
+  isAllBusinessesScope,
+  normalizeBusinessScopeValue,
+  normalizeStateScopeValue,
+  stateScopeAllows,
+} from './services/workMappingScope.js';
+import {
   loadAuthorizedEmployeeRange,
   recalculateEmployeeRange,
 } from './services/employeeRangeReportService.js';
@@ -120,6 +127,7 @@ import {
   isActiveLeadProfile,
   leadMomContactRecipients,
   leadActor,
+  leadMatchesActorWorkMapping,
   leadListResponse,
   leadResponse,
   loadLeadRelations,
@@ -2701,11 +2709,11 @@ function profileCreatePayload(body, authUserId, usedTemporaryPassword) {
     display_name: textOrNull(body.display_name) || fullName,
     mobile: textOrNull(body.mobile),
     email,
-    state: textOrNull(body.state),
+    state: textOrNull(normalizeStateScopeValue(body.state)),
     role,
     designation: textOrNull(body.designation),
     department: textOrNull(body.department),
-    business: textOrNull(body.business),
+    business: textOrNull(normalizeBusinessScopeValue(body.business)),
     status: 'Active',
     is_active: true,
     metadata: {
@@ -2780,7 +2788,9 @@ function selfProfilePatchPayload(body, currentProfile) {
   }
   for (const field of editableTextFields) {
     if (!hasOwn(body, field)) continue;
-    patch[field] = textOrNull(body[field]);
+    if (field === 'state') patch[field] = textOrNull(normalizeStateScopeValue(body[field]));
+    else if (field === 'business') patch[field] = textOrNull(normalizeBusinessScopeValue(body[field]));
+    else patch[field] = textOrNull(body[field]);
   }
 
   const currentMetadata =
@@ -2829,6 +2839,10 @@ function profilePatchPayload(body) {
       payload[field] = normalizeEmail(body[field]) || null;
     } else if (field === 'role') {
       payload[field] = canonicalProfileRoleForWrite(body[field]);
+    } else if (field === 'state') {
+      payload[field] = textOrNull(normalizeStateScopeValue(body[field]));
+    } else if (field === 'business') {
+      payload[field] = textOrNull(normalizeBusinessScopeValue(body[field]));
     } else {
       payload[field] = textOrNull(body[field]);
     }
@@ -3679,12 +3693,6 @@ function isIfmsBusiness(value) {
   return IFMS_BUSINESS_KEYS.has(businessKey(value));
 }
 
-function normalizedHierarchyBusiness(value) {
-  const key = businessKey(value);
-  if (IFMS_BUSINESS_KEYS.has(key)) return 'IFMS';
-  return key;
-}
-
 function isActiveProfileForHierarchy(profile) {
   return profile?.is_active === true &&
     String(profile.status || '').trim().toLowerCase() === 'active';
@@ -3693,8 +3701,8 @@ function isActiveProfileForHierarchy(profile) {
 function profileMatchesStateBusiness(profile, state, business) {
   const requestedState = textOrNull(state);
   const requestedBusiness = textOrNull(business);
-  if (requestedState && String(profile.state || '').trim() !== requestedState) return false;
-  if (requestedBusiness && normalizedHierarchyBusiness(profile.business) !== normalizedHierarchyBusiness(requestedBusiness)) return false;
+  if (requestedState && !stateScopeAllows(requestedState, profile.state)) return false;
+  if (requestedBusiness && !businessScopeAllows(requestedBusiness, profile.business)) return false;
   return true;
 }
 
@@ -4014,11 +4022,11 @@ function profileOnlyMdPayload(body) {
     display_name: textOrNull(body.display_name) || fullName,
     mobile: textOrNull(body.mobile),
     email: email || null,
-    state: textOrNull(body.state),
+    state: textOrNull(normalizeStateScopeValue(body.state)),
     role: 'MD',
     designation: textOrNull(body.designation),
     department: textOrNull(body.department),
-    business: textOrNull(body.business),
+    business: textOrNull(normalizeBusinessScopeValue(body.business)),
     status: 'Active',
     is_active: true,
     metadata: {
@@ -8736,7 +8744,12 @@ async function createLeadManagement(request, response) {
 
     const rpcLead = {
       ...lead,
-      business: String(request.body?.business || assignee?.business || actor.business || '').trim(),
+      business: String(
+        request.body?.business
+        || assignee?.business
+        || (isAllBusinessesScope(actor.business) ? '' : actor.business)
+        || '',
+      ).trim(),
       branch: String(request.body?.branch || assignee?.branch || '').trim(),
       assigned_bd_executive: assignee?.name || null,
       assigned_bd_email: assignee?.email || null,
@@ -8751,6 +8764,14 @@ async function createLeadManagement(request, response) {
         duplicate_restricted_match: duplicates.some((item) => item.restricted === true),
       },
     };
+    if (!leadMatchesActorWorkMapping(actor, rpcLead)) {
+      response.status(403).json({
+        ok: false,
+        code: 'lead_work_mapping_denied',
+        message: 'The lead is outside your assigned State or Business work mapping.',
+      });
+      return;
+    }
     const rpc = await client.rpc('rpc_create_bd_lead_atomic', {
       p_lead: rpcLead,
       p_contacts: lead.contacts,
@@ -8866,6 +8887,14 @@ async function updateLeadManagement(request, response) {
       updated_at: new Date().toISOString(),
       ...(requestedAssignee ? { assigned_bd_executive: assignee?.name || null, assigned_bd_email: assignee?.email || null } : {}),
     };
+    if (!leadMatchesActorWorkMapping(request.leadActor, { ...existing, ...patch })) {
+      response.status(403).json({
+        ok: false,
+        code: 'lead_work_mapping_denied',
+        message: 'The lead is outside your assigned State or Business work mapping.',
+      });
+      return;
+    }
     const updateResult = await client.rpc('rpc_update_bd_lead_atomic', {
       p_lead_id: existing.id,
       p_lead: patch,

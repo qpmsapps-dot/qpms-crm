@@ -17,6 +17,12 @@ import {
   loadLeadRelations,
   normalizeLeadRole,
 } from './leadManagementService.js';
+import {
+  applyStateBusinessScope,
+  isAllBusinessesScope,
+  isAllStatesScope,
+  stateScopeQueryValues,
+} from './workMappingScope.js';
 
 const FULL_PRE_SALES_ROLES = new Set([
   'BD Head', 'Admin', 'QPMS Admin', 'Developer', 'COO', 'Executive Assistant', 'GM', 'MD',
@@ -57,12 +63,15 @@ function indiaDayBounds(date = new Date()) {
 }
 
 function actorOwnFilters(actor) {
-  return [
+  const ownershipFilters = [
     actor?.profileId ? `pre_sales_owner_profile_id.eq.${actor.profileId}` : '',
-    actor?.email ? `assigned_bd_email.eq.${actor.email}` : '',
     actor?.authUserId ? `created_by_user_id.eq.${actor.authUserId}` : '',
     actor?.profileId ? `created_by_user_id.eq.${actor.profileId}` : '',
-  ].filter(Boolean).join(',');
+  ];
+  if (!isPreSalesActor(actor) && actor?.email) {
+    ownershipFilters.push(`assigned_bd_email.eq.${actor.email}`);
+  }
+  return ownershipFilters.filter(Boolean).join(',');
 }
 
 function isPreSalesActor(actor) {
@@ -71,15 +80,28 @@ function isPreSalesActor(actor) {
 
 export function applyPreSalesLeadScope(query, actor) {
   if (FULL_PRE_SALES_ROLES.has(actor?.role)) return query;
-  if (actor?.role === 'Business Head') return query.eq('business', actor.business || '__NO_SCOPE__');
+  if (actor?.role === 'Business Head') {
+    if (isAllBusinessesScope(actor.business)) return query.eq('id', '00000000-0000-0000-0000-000000000000');
+    return query.eq('business', actor.business || '__NO_SCOPE__');
+  }
   if (actor?.role === 'Branch Head') {
-    query = query.eq('state', actor.state || '__NO_SCOPE__');
+    if (isAllStatesScope(actor.state) && !actor.branch) {
+      return query.eq('id', '00000000-0000-0000-0000-000000000000');
+    }
+    if (!isAllStatesScope(actor.state)) {
+      const states = stateScopeQueryValues(actor.state);
+      query = states.length > 1 ? query.in('state', states) : query.eq('state', states[0] || '__NO_SCOPE__');
+    }
     if (actor.branch) query = query.eq('branch', actor.branch);
-    if (actor.business) query = query.eq('business', actor.business);
+    if (actor.business && !isAllBusinessesScope(actor.business)) query = query.eq('business', actor.business);
     return query;
   }
   const filters = actorOwnFilters(actor);
-  return filters ? query.or(filters) : query.eq('id', '00000000-0000-0000-0000-000000000000');
+  if (!filters) return query.eq('id', '00000000-0000-0000-0000-000000000000');
+  query = query.or(filters);
+  return isPreSalesActor(actor)
+    ? applyStateBusinessScope(query, actor)
+    : query;
 }
 
 async function firstRow(query) {

@@ -44,8 +44,9 @@ const roleOptions = [
   'MD', 'COO', 'GM', 'South Head', 'Business Head', 'Branch Head', 'Operations Manager', 'KAM', 'FO', 'Pre-Sales', 'Admin',
 ];
 const legacyPreSalesRoles = new Set(['Pre-Sales Executive', 'Pre-Sales Manager']);
-const stateOptions = ['TN', 'AP', 'KA', 'KL', 'TG'];
+const stateOptions = ['All States', 'TN', 'KL', 'KA', 'TG', 'AP-1', 'AP-2'];
 const businessOptions = [
+  'All Businesses',
   'Standalone',
   'Reliance Retail',
   'IFMS',
@@ -218,7 +219,14 @@ function businessOptionsWithCurrent(currentBusiness) {
   const current = String(currentBusiness || '').trim();
   if (!current) return businessOptions;
   const exists = businessOptions.some((option) => option.toLowerCase() === current.toLowerCase());
-  return exists ? businessOptions : [current, ...businessOptions];
+  return exists ? businessOptions : [...businessOptions, current];
+}
+
+function stateOptionsWithCurrent(currentState) {
+  const current = String(currentState || '').trim();
+  if (!current) return stateOptions;
+  const exists = stateOptions.some((option) => option.toLowerCase() === current.toLowerCase());
+  return exists ? stateOptions : [...stateOptions, current];
 }
 
 function scopeTypeLabel(scopeType) {
@@ -437,6 +445,10 @@ export default function UserFormDrawer({
   const resolvedBusinessOptions = useMemo(
     () => businessOptionsWithCurrent(values.business),
     [values.business],
+  );
+  const resolvedStateOptions = useMemo(
+    () => stateOptionsWithCurrent(values.state),
+    [values.state],
   );
   const filteredClients = useMemo(
     () => foundation.clients
@@ -904,7 +916,7 @@ export default function UserFormDrawer({
               {values.user_type !== 'nims_contact' ? <section className="rounded-xl border border-slate-200 p-4">
                 <h3 className="text-sm font-bold text-slate-950">Work Mapping</h3>
                 <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                  <SelectField name="state" label="State" required={needsState(values.role)} value={values.state} options={stateOptions} error={errors.state} onChange={update} />
+                  <SelectField name="state" label="State" required={needsState(values.role)} value={values.state} options={resolvedStateOptions} error={errors.state} onChange={update} />
                   <SelectField name="business" label="Business" required={needsBusiness(values.role)} value={values.business} options={resolvedBusinessOptions} error={errors.business} onChange={update} />
                   <SelectField name="role" label="Base/Application Role" required value={values.role} options={selectableRoleOptions} error={errors.role} onChange={update} />
                 </div>
@@ -1102,7 +1114,7 @@ export default function UserFormDrawer({
                 </p>
                 <TextField name="email" label="Email" required type="email" value={values.email} error={errors.email} onChange={update} />
                 <TextField name="mobile" label="Mobile" required value={values.mobile} error={errors.mobile} onChange={update} />
-                <SelectField name="state" label="State" value={values.state} options={stateOptions} onChange={update} />
+                <SelectField name="state" label="State" value={values.state} options={resolvedStateOptions} onChange={update} />
                 <SelectField name="business" label="Business" value={values.business} options={resolvedBusinessOptions} onChange={update} />
                 <SelectField name="role" label="Role" required value={values.role} options={selectableRoleOptions} error={errors.role} onChange={update} />
               </div>
