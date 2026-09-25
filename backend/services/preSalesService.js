@@ -15,6 +15,7 @@ import {
   cleanText,
   leadResponse,
   loadLeadRelations,
+  normalizeLeadRole,
 } from './leadManagementService.js';
 
 const FULL_PRE_SALES_ROLES = new Set([
@@ -64,15 +65,12 @@ function actorOwnFilters(actor) {
   ].filter(Boolean).join(',');
 }
 
+function isPreSalesActor(actor) {
+  return normalizeLeadRole(actor?.role) === 'Pre-Sales';
+}
+
 export function applyPreSalesLeadScope(query, actor) {
   if (FULL_PRE_SALES_ROLES.has(actor?.role)) return query;
-  if (actor?.role === 'Pre-Sales Manager') {
-    if (!actor.business && !actor.state && !actor.branch) return query.eq('id', '00000000-0000-0000-0000-000000000000');
-    if (actor.business) query = query.eq('business', actor.business);
-    if (actor.state) query = query.eq('state', actor.state);
-    if (actor.branch) query = query.eq('branch', actor.branch);
-    return query;
-  }
   if (actor?.role === 'Business Head') return query.eq('business', actor.business || '__NO_SCOPE__');
   if (actor?.role === 'Branch Head') {
     query = query.eq('state', actor.state || '__NO_SCOPE__');
@@ -82,6 +80,66 @@ export function applyPreSalesLeadScope(query, actor) {
   }
   const filters = actorOwnFilters(actor);
   return filters ? query.or(filters) : query.eq('id', '00000000-0000-0000-0000-000000000000');
+}
+
+async function firstRow(query) {
+  const result = await query.limit(1);
+  if (result.error) throw result.error;
+  return result.data?.[0] || null;
+}
+
+export async function getPostHandoverState(client, lead) {
+  const terminalStatus = new Set(['Converted to Assessment', 'Converted', 'Lost', 'Archived']);
+  const terminal = terminalStatus.has(String(lead?.status || '')) || terminalStatus.has(String(lead?.lead_stage || ''));
+  const stageAccepted = lead?.pre_sales_stage === PRE_SALES_STAGES.BD_ACCEPTED;
+  const [acceptedHandoff, siteVisit, workflow] = await Promise.all([
+    firstRow(client.from('lead_handoffs').select('id,created_at,accepted_at').eq('lead_id', lead.id).eq('handoff_status', 'accepted').order('accepted_at', { ascending: false })),
+    firstRow(client.from('site_visits').select('id,created_at,updated_at').eq('lead_id', lead.id).order('created_at', { ascending: false })),
+    firstRow(client.from('workflow_instances').select('id,created_at,updated_at').eq('lead_id', lead.id).order('created_at', { ascending: false })),
+  ]);
+  return {
+    post_handover: Boolean(terminal || stageAccepted || acceptedHandoff || siteVisit || workflow),
+    markers: {
+      accepted_handoff: Boolean(acceptedHandoff),
+      bd_accepted_stage: stageAccepted,
+      site_visit: Boolean(siteVisit),
+      workflow: Boolean(workflow),
+      terminal_status: terminal,
+    },
+  };
+}
+
+export async function preSalesLeadPermissions(client, actor, lead) {
+  const canView = canViewLead(actor, lead);
+  const state = canView && isPreSalesActor(actor)
+    ? await getPostHandoverState(client, lead)
+    : { post_handover: false, markers: {} };
+  const baseCanEdit = canEditLead(actor, lead);
+  const preSalesReadOnly = isPreSalesActor(actor) && state.post_handover;
+  const canAct = baseCanEdit && !preSalesReadOnly;
+  const qualified = lead.status === 'Qualified' || lead.pre_sales_stage === PRE_SALES_STAGES.PENDING_HANDOVER;
+  return {
+    can_view: canView,
+    can_edit_pre_sales: canAct,
+    can_add_call_update: canAct,
+    can_manage_followups: canAct,
+    can_manage_meetings: canAct,
+    can_qualify: canAct,
+    can_handover: canAct && qualified,
+    can_view_opportunity_progress: canView,
+    can_mutate_downstream: false,
+    access_mode: preSalesReadOnly ? 'read_only' : 'action',
+    post_handover_markers: state.markers,
+  };
+}
+
+export async function assertPreSalesLeadMutable(client, actor, leadId) {
+  const lead = await authorizedLead(client, actor, leadId);
+  const permissions = await preSalesLeadPermissions(client, actor, lead);
+  if (!permissions.can_edit_pre_sales) {
+    throw httpError(409, 'pre_sales_opportunity_read_only', 'This opportunity is read-only after handover to Business Development.');
+  }
+  return lead;
 }
 
 async function authorizedLead(client, actor, leadId, { edit = false } = {}) {
@@ -115,7 +173,7 @@ function publicLead(lead, relations = {}, extras = {}) {
 }
 
 async function leadIdsForActor(client, actor) {
-  let query = client.from('leads').select('id,status,pre_sales_stage,updated_at');
+  let query = client.from('leads').select('id,status,lead_stage,pre_sales_stage,updated_at');
   query = applyPreSalesLeadScope(query, actor);
   const result = await query;
   if (result.error) throw result.error;
@@ -188,7 +246,9 @@ export async function getPreSalesLead(client, actor, leadId) {
     client.from('lead_handoffs').select('id', { count: 'exact', head: true }).eq('lead_id', lead.id),
   ]);
   for (const result of [calls, followups, meetings, handoffs]) if (result.error) throw result.error;
+  const permissions = await preSalesLeadPermissions(client, actor, lead);
   return publicLead(lead, relations, {
+    permissions,
     summary_counts: {
       calls: calls.count || 0,
       followups: followups.count || 0,
@@ -202,33 +262,40 @@ export async function getPreSalesDashboard(client, actor) {
   const visible = await leadIdsForActor(client, actor);
   const ids = visible.map((row) => row.id);
   const empty = {
-    summary: { today_followups: 0, today_meetings: 0, callbacks_due: 0, overdue_followups: 0, qualified_leads: 0, pending_handover: 0 },
+    summary: { my_leads: 0, today_followups: 0, today_meetings: 0, callbacks_due: 0, overdue_followups: 0, qualified_leads: 0, pending_handover: 0, proposal_in_progress: 0, proposal_success: 0 },
     my_leads: [], today_schedule: [], upcoming_followups: [],
   };
   if (!ids.length) return empty;
   const { from, to } = indiaDayBounds();
   const now = new Date().toISOString();
-  const [leadList, todayFollowups, overdue, upcoming, todayMeetings, pendingHandoffs] = await Promise.all([
+  const [leadList, todayFollowups, overdue, upcoming, todayMeetings, pendingHandoffs, workflows] = await Promise.all([
     listPreSalesLeads(client, actor, { page: 1, page_size: 5, sort_by: 'updated_at', sort_direction: 'desc' }),
     client.from('lead_followups').select('*,lead:leads(id,client_name,company_name)').in('lead_id', ids).eq('status', 'pending').gte('scheduled_at', from).lte('scheduled_at', to).order('scheduled_at'),
     client.from('lead_followups').select('id,followup_type').in('lead_id', ids).eq('status', 'pending').lt('scheduled_at', now),
     client.from('lead_followups').select('*,lead:leads(id,client_name,company_name)').in('lead_id', ids).eq('status', 'pending').gt('scheduled_at', to).order('scheduled_at').limit(5),
     client.from('lead_meetings').select('*,lead:leads(id,client_name,company_name)').in('lead_id', ids).in('meeting_status', ['scheduled', 'rescheduled']).gte('scheduled_at', from).lte('scheduled_at', to).order('scheduled_at'),
     client.from('lead_handoffs').select('id').in('lead_id', ids).eq('handoff_status', 'pending'),
+    client.from('workflow_instances').select('lead_id,status').in('lead_id', ids),
   ]);
-  for (const result of [todayFollowups, overdue, upcoming, todayMeetings, pendingHandoffs]) if (result.error) throw result.error;
+  for (const result of [todayFollowups, overdue, upcoming, todayMeetings, pendingHandoffs, workflows]) if (result.error) throw result.error;
   const schedule = [
     ...(todayFollowups.data || []).map((row) => ({ ...row, item_type: row.followup_type === 'call_back' ? 'Call' : 'Follow-up' })),
     ...(todayMeetings.data || []).map((row) => ({ ...row, item_type: 'Meeting', purpose: row.meeting_notes || row.meeting_mode })),
   ].sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
   return {
     summary: {
+      my_leads: visible.length,
       today_followups: todayFollowups.data?.length || 0,
       today_meetings: todayMeetings.data?.length || 0,
       callbacks_due: (todayFollowups.data || []).filter((row) => row.followup_type === 'call_back').length,
       overdue_followups: overdue.data?.length || 0,
       qualified_leads: visible.filter((row) => row.status === 'Qualified' || row.pre_sales_stage === PRE_SALES_STAGES.PENDING_HANDOVER).length,
       pending_handover: pendingHandoffs.data?.length || 0,
+      proposal_in_progress: new Set((workflows.data || []).filter((row) => {
+        const lead = visible.find((item) => item.id === row.lead_id);
+        return row.status !== 'Cancelled' && !['Converted', 'Lost'].includes(lead?.status) && !['Converted', 'Lost'].includes(lead?.lead_stage);
+      }).map((row) => row.lead_id)).size,
+      proposal_success: visible.filter((row) => row.status === 'Converted' || row.lead_stage === 'Converted').length,
     },
     my_leads: leadList.items,
     today_schedule: schedule,
@@ -277,7 +344,7 @@ function stageForCall(input) {
 }
 
 export async function addCallUpdate(client, actor, leadId, payload) {
-  await authorizedLead(client, actor, leadId, { edit: true });
+  await assertPreSalesLeadMutable(client, actor, leadId);
   const input = validateCallUpdate(payload);
   const stage = stageForCall(input);
   const result = await client.rpc('rpc_add_pre_sales_call_update', {
@@ -320,7 +387,7 @@ async function authorizedFollowup(client, actor, followupId) {
   const result = await client.from('lead_followups').select('*').eq('id', followupId).maybeSingle();
   if (result.error) throw result.error;
   if (!result.data) throw httpError(404, 'followup_not_found', 'Follow-up not found.');
-  await authorizedLead(client, actor, result.data.lead_id, { edit: true });
+  await assertPreSalesLeadMutable(client, actor, result.data.lead_id);
   return result.data;
 }
 
@@ -368,7 +435,7 @@ export async function listMeetings(client, actor, leadId) {
 }
 
 export async function createMeeting(client, actor, leadId, payload = {}) {
-  await authorizedLead(client, actor, leadId, { edit: true });
+  await assertPreSalesLeadMutable(client, actor, leadId);
   const mode = cleanText(payload.meeting_mode);
   if (!MEETING_MODES.includes(mode)) throw httpError(400, 'invalid_meeting_mode', 'Select a valid meeting mode.');
   const scheduledAt = isoTimestamp(payload.scheduled_at, 'Meeting date/time', { required: true, future: true });
@@ -388,7 +455,7 @@ export async function updateMeeting(client, actor, meetingId, payload = {}) {
   const existing = await client.from('lead_meetings').select('*').eq('id', meetingId).maybeSingle();
   if (existing.error) throw existing.error;
   if (!existing.data) throw httpError(404, 'meeting_not_found', 'Meeting not found.');
-  await authorizedLead(client, actor, existing.data.lead_id, { edit: true });
+  await assertPreSalesLeadMutable(client, actor, existing.data.lead_id);
   const status = cleanText(payload.meeting_status || existing.data.meeting_status);
   if (!MEETING_STATUSES.includes(status)) throw httpError(400, 'invalid_meeting_status', 'Select a valid meeting status.');
   const patch = {
@@ -418,7 +485,7 @@ export async function listHandoffs(client, actor, leadId) {
 }
 
 export async function createHandoff(client, actor, leadId, payload = {}) {
-  const lead = await authorizedLead(client, actor, leadId, { edit: true });
+  const lead = await assertPreSalesLeadMutable(client, actor, leadId);
   if (lead.status !== 'Qualified' && lead.pre_sales_stage !== PRE_SALES_STAGES.PENDING_HANDOVER) {
     throw httpError(409, 'lead_not_qualified', 'Qualify the lead before handing it over to Business Development.');
   }
@@ -445,6 +512,36 @@ export async function createHandoff(client, actor, leadId, payload = {}) {
   return result.data;
 }
 
+export async function decideHandoff(client, actor, handoffId, decision, payload = {}) {
+  const role = normalizeLeadRole(actor?.role);
+  if (!['BD Executive', 'BD Head'].includes(role)) {
+    throw httpError(403, 'handoff_decision_denied', 'Only an authorized Business Development user can decide this handover.');
+  }
+  const normalizedDecision = cleanText(decision).toLowerCase();
+  if (!['accepted', 'rejected'].includes(normalizedDecision)) {
+    throw httpError(400, 'invalid_handoff_decision', 'Select a valid handover decision.');
+  }
+  const rejectionReason = cleanText(payload.rejection_reason) || null;
+  if (normalizedDecision === 'rejected' && !rejectionReason) {
+    throw httpError(400, 'handoff_rejection_reason_required', 'A rejection reason is required.');
+  }
+  const result = await client.rpc('rpc_decide_pre_sales_handoff', {
+    p_handoff_id: handoffId,
+    p_actor_profile_id: actor.profileId,
+    p_decision: normalizedDecision,
+    p_rejection_reason: rejectionReason,
+  });
+  if (result.error) {
+    if (result.error.code === '40001' || result.error.message === 'handoff_already_decided') {
+      throw httpError(409, 'handoff_already_decided', 'This handover has already been decided.');
+    }
+    if (result.error.code === '42501') throw httpError(403, 'handoff_decision_denied', 'You cannot decide this handover.');
+    if (result.error.code === 'P0002') throw httpError(404, 'handoff_not_found', 'Handover not found.');
+    throw result.error;
+  }
+  return result.data;
+}
+
 export async function listBdHandoffAssignees(client) {
   const result = await client.from('profiles').select('id,full_name,employee_code,role').in('role', ['BD Executive', 'BD Head']).eq('is_active', true).ilike('status', 'active').order('full_name');
   if (result.error) throw result.error;
@@ -452,13 +549,8 @@ export async function listBdHandoffAssignees(client) {
 }
 
 export async function listPreSalesOwners(client, actor) {
-  let query = client.from('profiles').select('id,full_name,employee_code,role,state,business,branch').in('role', ['Pre-Sales Executive', 'Pre-Sales Manager', 'BD Executive']).eq('is_active', true).ilike('status', 'active');
-  if (actor.role === 'Pre-Sales Manager') {
-    if (!actor.business && !actor.state && !actor.branch) return [];
-    if (actor.business) query = query.eq('business', actor.business);
-    if (actor.state) query = query.eq('state', actor.state);
-    if (actor.branch) query = query.eq('branch', actor.branch);
-  } else if (!FULL_PRE_SALES_ROLES.has(actor.role)) {
+  let query = client.from('profiles').select('id,full_name,employee_code,role,state,business,branch').in('role', ['Pre-Sales', 'Pre-Sales Executive', 'Pre-Sales Manager', 'BD Executive']).eq('is_active', true).ilike('status', 'active');
+  if (!FULL_PRE_SALES_ROLES.has(actor.role)) {
     query = query.eq('id', actor.profileId || '00000000-0000-0000-0000-000000000000');
   }
   const result = await query.order('full_name');
@@ -468,11 +560,11 @@ export async function listPreSalesOwners(client, actor) {
 
 export async function assignPreSalesOwner(client, actor, leadId, ownerProfileId) {
   if (!canAssignLead(actor)) throw httpError(403, 'pre_sales_assignment_denied', 'You do not have permission to assign Pre-Sales leads.');
-  const lead = await authorizedLead(client, actor, leadId, { edit: true });
+  const lead = await assertPreSalesLeadMutable(client, actor, leadId);
   const ownerId = cleanText(ownerProfileId);
   const owner = await client.from('profiles').select('id,full_name,employee_code,role,status,is_active').eq('id', ownerId).maybeSingle();
   if (owner.error) throw owner.error;
-  if (!owner.data || owner.data.is_active !== true || String(owner.data.status || '').toLowerCase() !== 'active' || !['Pre-Sales Executive', 'Pre-Sales Manager', 'BD Executive'].includes(owner.data.role)) {
+  if (!owner.data || owner.data.is_active !== true || String(owner.data.status || '').toLowerCase() !== 'active' || !['Pre-Sales', 'Pre-Sales Executive', 'Pre-Sales Manager', 'BD Executive'].includes(owner.data.role)) {
     throw httpError(400, 'invalid_pre_sales_owner', 'Select an active Pre-Sales owner.');
   }
   const now = new Date().toISOString();

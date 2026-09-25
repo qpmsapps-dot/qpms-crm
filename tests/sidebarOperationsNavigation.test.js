@@ -99,8 +99,13 @@ test('Admin sidebar preserves unrelated modules while Pre-Sales remains a single
 });
 
 test('Pre-Sales and non-Pre-Sales role presets retain their established scope', () => {
+  assert.equal(canAccessNavRoute(user('Pre-Sales'), '/pre-sales'), true);
   assert.equal(canAccessNavRoute(user('Pre-Sales Executive'), '/pre-sales'), true);
   assert.equal(canAccessNavRoute(user('Pre-Sales Executive'), '/fo-activities'), false);
+  for (const path of ['/sites', '/fo-activities', '/fault-tracker', '/hospital-ticketing/nims/qpms', '/tasks', '/settings', '/settings/user-management']) {
+    assert.equal(canAccessNavRoute(user('Pre-Sales'), path), false, path);
+    assert.equal(canAccessNavRoute(user('Pre-Sales Manager'), path), false, `${path} legacy alias`);
+  }
   assert.equal(canAccessNavRoute(user('Commercial Reviewer'), '/pre-sales'), false);
   assert.equal(canAccessNavRoute(user('Commercial Reviewer'), '/tasks'), true);
   assert.equal(canAccessNavRoute(user('Branch Head'), '/fo-activities'), true);

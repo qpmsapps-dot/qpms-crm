@@ -25,6 +25,7 @@ export const getBdHandoffAssignees = () => request({ method: 'GET', url: '/api/p
 export const getPreSalesOwners = () => request({ method: 'GET', url: '/api/pre-sales/owners' });
 export const getPreSalesLeads = (params = {}) => request({ method: 'GET', url: '/api/pre-sales/leads', params });
 export const getPreSalesLead = (leadId) => request({ method: 'GET', url: `/api/pre-sales/leads/${encodeURIComponent(leadId)}` });
+export const getOpportunityProgress = (leadId) => request({ method: 'GET', url: `/api/pre-sales/leads/${encodeURIComponent(leadId)}/opportunity-progress` });
 export const createPreSalesLead = (payload, idempotencyKey) => request({ method: 'POST', url: '/api/pre-sales/leads', data: payload, headers: { 'Idempotency-Key': idempotencyKey } });
 export const updatePreSalesLead = (leadId, payload) => request({ method: 'PATCH', url: `/api/pre-sales/leads/${encodeURIComponent(leadId)}`, data: payload });
 export const assignPreSalesOwner = (leadId, ownerProfileId) => request({ method: 'PATCH', url: `/api/pre-sales/leads/${encodeURIComponent(leadId)}/owner`, data: { owner_profile_id: ownerProfileId } });
@@ -38,3 +39,5 @@ export const createMeeting = (leadId, payload) => request({ method: 'POST', url:
 export const updateMeeting = (id, payload) => request({ method: 'PATCH', url: `/api/pre-sales/meetings/${encodeURIComponent(id)}`, data: payload });
 export const getHandoffs = (leadId) => request({ method: 'GET', url: `/api/pre-sales/leads/${encodeURIComponent(leadId)}/handoffs` });
 export const createHandoff = (leadId, payload) => request({ method: 'POST', url: `/api/pre-sales/leads/${encodeURIComponent(leadId)}/handover`, data: payload });
+export const acceptHandoff = (handoffId) => request({ method: 'POST', url: `/api/pre-sales/handoffs/${encodeURIComponent(handoffId)}/accept` });
+export const rejectHandoff = (handoffId, rejectionReason) => request({ method: 'POST', url: `/api/pre-sales/handoffs/${encodeURIComponent(handoffId)}/reject`, data: { rejection_reason: rejectionReason } });

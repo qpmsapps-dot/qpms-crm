@@ -163,7 +163,7 @@ test('all registered Pre-Sales mutation routes authenticate and then stop at the
   try {
     const routes = capturePreSalesRoutes();
     const mutations = routes.filter((route) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(route.method));
-    assert.equal(mutations.length, 9);
+    assert.equal(mutations.length, 11);
     for (const route of mutations) {
       const result = executeMiddlewareStack(route);
       assert.equal(result.request.testAuthChecks, 1, `${route.method} ${route.path} must authenticate`);

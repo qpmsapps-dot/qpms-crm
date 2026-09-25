@@ -69,10 +69,14 @@ export function booleanValue(value, fallback = false) {
 export function canonicalProfileRole(value, fallback = null) {
   const text = textOrNull(value);
   if (!text) return fallback;
-  const normalized = text
-    .replace(/[\s_-]+/g, '')
-    .toUpperCase();
+  const normalized = normalizeRoleKey(text);
   const canonicalByNormalized = {
+    ADMIN: 'Admin',
+    QPMSADMIN: 'QPMS Admin',
+    DEVELOPER: 'Developer',
+    DEV: 'Dev',
+    ITADMIN: 'IT Admin',
+    MANAGEMENTITADMIN: 'Management IT Admin',
     FO: 'FO',
     FIELDOFFICER: 'FO',
     SUPERVISOR: 'Supervisor',
@@ -80,6 +84,8 @@ export function canonicalProfileRole(value, fallback = null) {
     KEYACCOUNTMANAGER: 'KAM',
     OM: 'Operations Manager',
     OPERATIONSMANAGER: 'Operations Manager',
+    OPERATIONMANAGER: 'Operations Manager',
+    OPSMANAGER: 'Operations Manager',
     BRANCHHEAD: 'Branch Head',
     BUSINESSHEAD: 'Business Head',
     SOUTHHEAD: 'South Head',
@@ -88,12 +94,95 @@ export function canonicalProfileRole(value, fallback = null) {
     COO: 'COO',
     EXECUTIVEASSISTANT: 'Executive Assistant',
     MD: 'MD',
+    MANAGEMENT: 'Management',
     BDEXECUTIVE: 'BD Executive',
     BUSINESSDEVELOPMENTEXECUTIVE: 'BD Executive',
     BDHEAD: 'BD Head',
     BUSINESSDEVELOPMENTHEAD: 'BD Head',
+    PRESALES: 'Pre-Sales',
+    PRESALESEXECUTIVE: 'Pre-Sales Executive',
+    PRESALESMANAGER: 'Pre-Sales Manager',
+    HOSPITALMANAGEMENT: 'Hospital Management',
+    RMO: 'RMO',
+    DOCTOR: 'Doctor',
+    OPERATIONSTEAM: 'Operations Team',
+    COORDINATOR: 'Coordinator',
+    COMMERCIAL: 'Commercial',
+    COMMERCIALTEAM: 'Commercial Team',
+    COMMERCIALREVIEWER: 'Commercial Reviewer',
+    FINANCE: 'Finance',
+    FINANCETEAM: 'Finance Team',
+    FINANCEREVIEWER: 'Finance Reviewer',
+    HRREVIEWER: 'HR Reviewer',
+    HR: 'HR',
+    HRGM: 'HR GM',
+    FINANCEGM: 'Finance GM',
+    DEMOVIEWER: 'DEMO_VIEWER',
   };
   return canonicalByNormalized[normalized] || text;
+}
+
+export const CANONICAL_PROFILE_ROLES = Object.freeze([
+  'Admin',
+  'QPMS Admin',
+  'Developer',
+  'Dev',
+  'IT Admin',
+  'Management IT Admin',
+  'MD',
+  'COO',
+  'Executive Assistant',
+  'GM',
+  'General Manager',
+  'South Head',
+  'Business Head',
+  'Branch Head',
+  'Operations Manager',
+  'Manager',
+  'KAM',
+  'FO',
+  'Field Officer',
+  'Supervisor',
+  'BD Executive',
+  'BD Head',
+  'Pre-Sales',
+  'Pre-Sales Executive',
+  'Pre-Sales Manager',
+  'Hospital Management',
+  'RMO',
+  'Doctor',
+  'Operations Team',
+  'Coordinator',
+  'Commercial',
+  'Commercial Team',
+  'Commercial Reviewer',
+  'Finance',
+  'Finance Team',
+  'Finance Reviewer',
+  'HR Reviewer',
+  'HR',
+  'HR GM',
+  'Finance GM',
+  'Management',
+  'DEMO_VIEWER',
+]);
+
+const CANONICAL_PROFILE_ROLE_SET = new Set(CANONICAL_PROFILE_ROLES);
+
+export function isAllowedProfileRole(value) {
+  return CANONICAL_PROFILE_ROLE_SET.has(canonicalProfileRole(value));
+}
+
+export function canonicalProfileRoleForWrite(value, fallback = null) {
+  const role = canonicalProfileRole(value, fallback);
+  if (!role || !CANONICAL_PROFILE_ROLE_SET.has(role)) {
+    const error = new Error('Role could not be updated because the selected role is not supported.');
+    error.statusCode = 400;
+    error.code = 'unsupported_profile_role';
+    error.details = { role: textOrNull(value) };
+    throw error;
+  }
+  return role;
 }
 
 export function hasOwn(object, key) {
@@ -122,6 +211,9 @@ export function isUserManagementSchemaError(error) {
 export function userManagementErrorMessage(error) {
   if (isUserManagementSchemaError(error)) {
     return 'User Management database foundation is unavailable. Apply supabase/migrations_2_0/009_user_management_foundation.sql and retry.';
+  }
+  if (/profiles_role_check|violates check constraint/i.test(String(error?.message || ''))) {
+    return 'Role could not be updated because the selected role is not supported.';
   }
   return error?.message || 'User Management operation failed.';
 }
@@ -1148,3 +1240,4 @@ export function isAuthUserNotFoundError(error) {
     /user not found|not found/i.test(String(error?.message || ''))
   );
 }
+import { normalizeRoleKey } from './services/roleNormalizationService.js';

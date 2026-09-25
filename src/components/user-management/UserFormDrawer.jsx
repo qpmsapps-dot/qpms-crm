@@ -41,8 +41,9 @@ const emptyForm = {
 };
 
 const roleOptions = [
-  'MD', 'COO', 'GM', 'South Head', 'Business Head', 'Branch Head', 'Operations Manager', 'KAM', 'FO', 'Pre-Sales Manager', 'Pre-Sales Executive', 'Admin',
+  'MD', 'COO', 'GM', 'South Head', 'Business Head', 'Branch Head', 'Operations Manager', 'KAM', 'FO', 'Pre-Sales', 'Admin',
 ];
+const legacyPreSalesRoles = new Set(['Pre-Sales Executive', 'Pre-Sales Manager']);
 const stateOptions = ['TN', 'AP', 'KA', 'KL', 'TG'];
 const businessOptions = [
   'Standalone',
@@ -243,6 +244,12 @@ export default function UserFormDrawer({
   onSave,
 }) {
   const [values, setValues] = useState(() => normalizeInitial(initialUser));
+  const selectableRoleOptions = useMemo(() => {
+    const existingRole = String(initialUser?.role || '').trim();
+    return legacyPreSalesRoles.has(existingRole) && !roleOptions.includes(existingRole)
+      ? [...roleOptions, existingRole]
+      : roleOptions;
+  }, [initialUser?.role]);
   const [errors, setErrors] = useState({});
   const [hierarchyOptions, setHierarchyOptions] = useState({
     operationsManagers: [],
@@ -899,7 +906,7 @@ export default function UserFormDrawer({
                 <div className="mt-3 grid gap-3 sm:grid-cols-3">
                   <SelectField name="state" label="State" required={needsState(values.role)} value={values.state} options={stateOptions} error={errors.state} onChange={update} />
                   <SelectField name="business" label="Business" required={needsBusiness(values.role)} value={values.business} options={resolvedBusinessOptions} error={errors.business} onChange={update} />
-                  <SelectField name="role" label="Base/Application Role" required value={values.role} options={roleOptions} error={errors.role} onChange={update} />
+                  <SelectField name="role" label="Base/Application Role" required value={values.role} options={selectableRoleOptions} error={errors.role} onChange={update} />
                 </div>
                 {values.role === 'MD' ? (
                   <label className="mt-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900">
@@ -1097,7 +1104,7 @@ export default function UserFormDrawer({
                 <TextField name="mobile" label="Mobile" required value={values.mobile} error={errors.mobile} onChange={update} />
                 <SelectField name="state" label="State" value={values.state} options={stateOptions} onChange={update} />
                 <SelectField name="business" label="Business" value={values.business} options={resolvedBusinessOptions} onChange={update} />
-                <SelectField name="role" label="Role" required value={values.role} options={roleOptions} error={errors.role} onChange={update} />
+                <SelectField name="role" label="Role" required value={values.role} options={selectableRoleOptions} error={errors.role} onChange={update} />
               </div>
             </section>
           )}

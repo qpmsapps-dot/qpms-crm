@@ -46,6 +46,9 @@ export default function PreSalesLeadFormPage({ mode }) {
         canAssign ? getPreSalesOwners() : Promise.resolve({ items: [] }),
       ]);
       if (leadResponse?.lead) {
+        if (editing && leadResponse.lead.permissions?.can_edit_pre_sales === false) {
+          throw new Error('View only — this opportunity has been handed over to Business Development.');
+        }
         const next = leadToFormValues(leadResponse.lead);
         originalOwner.current = next.pre_sales_owner_profile_id;
         setForm(next);

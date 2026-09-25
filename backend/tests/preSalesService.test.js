@@ -50,9 +50,10 @@ test('executive scoping is applied at query level rather than browser filtering'
   assert.match(operations[0][1], /pre_sales_owner_profile_id/);
 });
 
-test('Pre-Sales Manager hierarchy scope fails closed when profile scope is missing', () => {
+test('legacy Pre-Sales Manager uses the same owned-lead scope as canonical Pre-Sales', () => {
   const operations = [];
   const query = { or(value) { operations.push(['or', value]); return this; }, eq(...args) { operations.push(['eq', ...args]); return this; } };
   applyPreSalesLeadScope(query, { role: 'Pre-Sales Manager', profileId: 'manager-1' });
-  assert.deepEqual(operations[0], ['eq', 'id', '00000000-0000-0000-0000-000000000000']);
+  assert.equal(operations[0][0], 'or');
+  assert.match(operations[0][1], /pre_sales_owner_profile_id\.eq\.manager-1/);
 });

@@ -24,7 +24,8 @@ test('all Pre-Sales endpoints use the shared JWT and lead-access guards', async 
     assert.doesNotMatch(routeLine || '', /mutationGuards/, `${readEndpoint} must not be blocked in UAT mode`);
   }
   assert.match(source, /app\.post\('\/api\/pre-sales\/leads', \.\.\.mutationGuards, createLeadHandler\)/);
-  assert.match(source, /app\.patch\('\/api\/pre-sales\/leads\/:leadId', \.\.\.mutationGuards, updateLeadHandler\)/);
+  assert.match(source, /app\.patch\('\/api\/pre-sales\/leads\/:leadId', \.\.\.mutationGuards, requireMutableLead, updateLeadHandler\)/);
+  assert.match(source, /app\.get\('\/api\/pre-sales\/leads\/:leadId\/opportunity-progress', \.\.\.guards/);
   for (const mutationEndpoint of [
     "app.post('/api/pre-sales/leads'",
     "app.patch('/api/pre-sales/leads/:leadId'",
@@ -35,6 +36,8 @@ test('all Pre-Sales endpoints use the shared JWT and lead-access guards', async 
     "app.post('/api/pre-sales/leads/:leadId/meetings'",
     "app.patch('/api/pre-sales/meetings/:meetingId'",
     "app.post('/api/pre-sales/leads/:leadId/handover'",
+    "app.post('/api/pre-sales/handoffs/:handoffId/accept'",
+    "app.post('/api/pre-sales/handoffs/:handoffId/reject'",
   ]) {
     const routeLine = source.split('\n').find((line) => line.includes(mutationEndpoint));
     assert.match(routeLine || '', /\.\.\.mutationGuards/, `${mutationEndpoint} must use the UAT mutation guard`);
@@ -62,4 +65,21 @@ test('follow-up completion preserves history and reschedule creates a linked suc
   assert.match(source, /source_type: 'reschedule', source_id: current\.id/);
   assert.match(source, /status: 'cancelled', outcome: 'rescheduled'/);
   assert.doesNotMatch(source, /from\('lead_followups'\)\.delete/);
+});
+
+test('all lead mutation paths enforce the centralized post-handover boundary', async () => {
+  const source = await readFile(serviceUrl, 'utf8');
+  for (const signature of [
+    'export async function addCallUpdate',
+    'async function authorizedFollowup',
+    'export async function createMeeting',
+    'export async function updateMeeting',
+    'export async function createHandoff',
+    'export async function assignPreSalesOwner',
+  ]) {
+    const start = source.indexOf(signature);
+    assert.notEqual(start, -1, signature);
+    const body = source.slice(start, source.indexOf('\n}', start) + 2);
+    assert.match(body, /assertPreSalesLeadMutable/, `${signature} must enforce post-handover read-only`);
+  }
 });

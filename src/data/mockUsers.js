@@ -237,11 +237,11 @@ export function isApprovalReviewer(user) {
 }
 
 export function canManageLeads(user) {
-  return ['BD Head', 'BD Executive', 'Pre-Sales Executive', 'Pre-Sales Manager', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer', 'DEMO_ADMIN', 'COO', 'GM', 'MD', 'Management', 'Top Management', 'GM / Top Management'].includes(user?.role);
+  return ['BD Head', 'BD Executive', 'Pre-Sales', 'Pre-Sales Executive', 'Pre-Sales Manager', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer', 'DEMO_ADMIN', 'COO', 'GM', 'MD', 'Management', 'Top Management', 'GM / Top Management'].includes(user?.role);
 }
 
 export function canViewBdTeam(user) {
-  return ['BD Head', 'Pre-Sales Manager', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer', 'DEMO_VIEWER'].includes(user?.role) || isManagement(user) || isFinanceLeadership(user);
+  return ['BD Head', 'Business Head', 'Branch Head', 'Admin', 'QPMS Admin', 'Developer', 'DEMO_VIEWER'].includes(user?.role) || isManagement(user) || isFinanceLeadership(user);
 }
 
 export function findMockUser(email, password) {

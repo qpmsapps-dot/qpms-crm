@@ -10,7 +10,7 @@ export const EXECUTIVE_ASSISTANT_ROLE = 'Executive Assistant';
 
 export const roleGroups = {
   BD: ['BD', 'BD Team', 'BD Executive', 'BD Head'],
-  PreSales: ['Pre-Sales Executive', 'Pre-Sales Manager'],
+  PreSales: ['Pre-Sales'],
   Operations: ['Operations', 'Operations Team', 'Operations Manager', 'Branch Head', 'Business Head', 'South Head', 'KAM'],
   Coordinator: ['Coordinator'],
   HR: ['HR', 'HR Reviewer', 'HR GM'],
@@ -51,8 +51,9 @@ export function normalizeCanonicalRole(role = '') {
     BUSINESSDEVELOPMENTEXECUTIVE: 'BD Executive',
     BDHEAD: 'BD Head',
     BUSINESSDEVELOPMENTHEAD: 'BD Head',
-    PRESALESEXECUTIVE: 'Pre-Sales Executive',
-    PRESALESMANAGER: 'Pre-Sales Manager',
+    PRESALES: 'Pre-Sales',
+    PRESALESEXECUTIVE: 'Pre-Sales',
+    PRESALESMANAGER: 'Pre-Sales',
     BUSINESSHEAD: 'Business Head',
     BRANCHHEAD: 'Branch Head',
     BH: 'Branch Head',
@@ -161,20 +162,19 @@ function canonicalUserRole(user) {
 
 export function canCreateLead(user) {
   if (normalizeAppRole(user?.rawRole || user?.role) === 'DemoViewer') return false;
-  return new Set(['BD Executive', 'Pre-Sales Executive', 'Pre-Sales Manager', 'Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
+  return new Set(['BD Executive', 'Pre-Sales', 'Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
 }
 
 export function canAssignLead(user) {
   if (normalizeAppRole(user?.rawRole || user?.role) === 'DemoViewer') return false;
-  return new Set(['Pre-Sales Manager', 'Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
+  return new Set(['Admin', 'COO', 'GM', 'MD']).has(canonicalUserRole(user));
 }
 
 export function canEditPreSalesLead(user) {
   if (!user || normalizeAppRole(user?.rawRole || user?.role) === 'DemoViewer') return false;
   return new Set([
     'BD Executive',
-    'Pre-Sales Executive',
-    'Pre-Sales Manager',
+    'Pre-Sales',
     'BD Head',
     'Business Head',
     'Branch Head',
@@ -245,6 +245,9 @@ export function canManageHospitalFeedbackQr(user) {
 }
 
 export function canAccessRoute(user, pathname) {
+  if (normalizeAppRole(user?.rawRole || user?.role) === 'PreSales') {
+    return pathname.startsWith('/dashboard') || pathname.startsWith('/pre-sales');
+  }
   if (normalizeAppRole(user?.rawRole || user?.role) === 'DemoViewer') {
     if (pathname.startsWith('/store-master') || pathname.startsWith('/settings') || pathname.startsWith('/employees')) return false;
   }

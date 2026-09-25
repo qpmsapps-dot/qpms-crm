@@ -141,6 +141,7 @@ import {
   buildEmployeeCodeRepairPreview,
   buildHardDeletePreview,
   canonicalProfileRole,
+  canonicalProfileRoleForWrite,
   hasOwn,
   hierarchyPayloadFromBody,
   loadHierarchy,
@@ -2687,7 +2688,7 @@ function profileCreatePayload(body, authUserId, usedTemporaryPassword) {
   const employeeCode = normalizeEmployeeCode(body.employee_code);
   const fullName = textOrNull(body.full_name);
   const email = normalizeEmail(body.email);
-  const role = canonicalProfileRole(body.role, 'FO');
+  const role = canonicalProfileRoleForWrite(body.role, 'FO');
   const sourceMetadata =
     body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
       ? body.metadata
@@ -2827,7 +2828,7 @@ function profilePatchPayload(body) {
     if (field === 'email') {
       payload[field] = normalizeEmail(body[field]) || null;
     } else if (field === 'role') {
-      payload[field] = canonicalProfileRole(body[field]);
+      payload[field] = canonicalProfileRoleForWrite(body[field]);
     } else {
       payload[field] = textOrNull(body[field]);
     }
@@ -2926,6 +2927,7 @@ const CREATE_USER_ROLE_OPTIONS = new Set([
   'KAM',
   'FO',
   'SUPERVISOR',
+  'PRESALES',
   'ADMIN',
 ]);
 
@@ -3807,7 +3809,7 @@ function hierarchyWarningsForOptions(roleKey, options) {
 }
 
 async function buildCreateHierarchyMetadata(client, body, employeeCode) {
-  const role = canonicalProfileRole(body.role, 'FO');
+  const role = canonicalProfileRoleForWrite(body.role, 'FO');
   const roleKey = createUserRoleKey(role);
   const state = textOrNull(body.state);
   const business = textOrNull(body.business);
@@ -3981,7 +3983,7 @@ function validateCreateUserBody(body) {
     return;
   }
   if (!CREATE_USER_ROLE_OPTIONS.has(roleKey)) {
-    throw userManagementHttpError(400, 'role must be one of MD, COO, Executive Assistant, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, Supervisor, or Admin.');
+    throw userManagementHttpError(400, 'role must be one of MD, COO, Executive Assistant, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, Supervisor, Pre-Sales, or Admin.');
   }
   if (body.create_profile_only === true && roleKey === 'MD') return;
   if (!textOrNull(body.mobile)) throw userManagementHttpError(400, 'mobile is required.');
@@ -7199,7 +7201,7 @@ app.post(
         full_name: fullName,
         display_name: textOrNull(createBody.display_name) || fullName,
         mobile: textOrNull(body.mobile),
-        role: canonicalProfileRole(createBody.role, 'FO'),
+        role: canonicalProfileRoleForWrite(createBody.role, 'FO'),
         designation: textOrNull(body.designation),
         department: textOrNull(body.department),
         business: textOrNull(body.business),

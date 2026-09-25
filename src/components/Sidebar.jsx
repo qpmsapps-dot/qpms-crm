@@ -27,7 +27,7 @@ import {
   isManagement,
   isOperationsTeam,
 } from '../data/mockUsers.js';
-import { canAccessNavRoute, usesOperationsSidebar } from '../utils/authRoles.js';
+import { canAccessNavRoute, normalizeAppRole, usesOperationsSidebar } from '../utils/authRoles.js';
 import { isDemoUser } from '../utils/demoAccess.js';
 import { useHospitalTicketAccess } from '../hooks/useHospitalTicketAccess.js';
 import Logo from './Logo.jsx';
@@ -198,6 +198,16 @@ const tenderDemoNavGroups = [
   },
 ];
 
+const preSalesOnlyNavGroups = [
+  {
+    title: 'Workspace',
+    items: [
+      { label: 'Dashboard', to: '/dashboard', icon: Home },
+      preSalesNavItem,
+    ],
+  },
+];
+
 function navLabelForRole(item, user) {
   if (item.to !== '/tasks') return item.label;
   if (isFinanceTeam(user)) return 'Finance Review';
@@ -213,7 +223,10 @@ export default function Sidebar({ isOpen, onClose }) {
   const location = useLocation();
   const currentTarget = `${location.pathname}${location.search}`;
   const executiveViewer = isManagement(user) || isFinanceLeadership(user);
-  const baseNavGroups = isDemoUser(user)
+  const preSalesUser = normalizeAppRole(user?.rawRole || user?.role) === 'PreSales';
+  const baseNavGroups = preSalesUser
+    ? preSalesOnlyNavGroups
+    : isDemoUser(user)
     ? tenderDemoNavGroups
     : isAdmin(user)
     ? adminDemoNavGroups

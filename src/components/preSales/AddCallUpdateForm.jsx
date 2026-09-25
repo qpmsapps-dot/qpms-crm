@@ -9,7 +9,7 @@ function combine(date, time, defaultTime = '') {
   return date && (time || defaultTime) ? new Date(`${date}T${time || defaultTime}`).toISOString() : null;
 }
 
-export default function AddCallUpdateForm({ onSubmit, saving }) {
+export default function AddCallUpdateForm({ onSubmit, saving, allowed = true }) {
   const { user } = useAuth();
   const [form, setForm] = useState(initial);
   const [error, setError] = useState('');
@@ -25,7 +25,7 @@ export default function AddCallUpdateForm({ onSubmit, saving }) {
         : ['Follow-up Date *', 'Follow-up Time *'];
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
 
-  if (!canEditPreSalesLead(user)) {
+  if (!allowed || !canEditPreSalesLead(user)) {
     return <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-600">You have read-only access to this lead.</p>;
   }
 

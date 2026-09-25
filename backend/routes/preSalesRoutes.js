@@ -15,7 +15,10 @@ import {
   listPreSalesOwners,
   rescheduleFollowup,
   updateMeeting,
+  assertPreSalesLeadMutable,
+  decideHandoff,
 } from '../services/preSalesService.js';
+import { getOpportunityProgress } from '../services/preSalesOpportunityProgressService.js';
 import { createRequireWritablePreSalesEnvironment } from '../services/readOnlyUatMode.js';
 
 function respondError(response, error) {
@@ -51,6 +54,14 @@ export function registerPreSalesRoutes({
 }) {
   const guards = [requireJwt, requireLeadAccess];
   const mutationGuards = [...guards, createRequireWritablePreSalesEnvironment()];
+  const requireMutableLead = async (request, response, next) => {
+    try {
+      await assertPreSalesLeadMutable(getClient(), request.leadActor, request.params.leadId);
+      next();
+    } catch (error) {
+      respondError(response, error);
+    }
+  };
 
   app.get('/api/pre-sales/dashboard', ...guards, handler(getClient, async (client, actor) => ({ dashboard: await getPreSalesDashboard(client, actor) })));
   app.get('/api/pre-sales/bd-assignees', ...guards, handler(getClient, async (client) => ({ items: await listBdHandoffAssignees(client) })));
@@ -58,7 +69,8 @@ export function registerPreSalesRoutes({
   app.get('/api/pre-sales/leads', ...guards, handler(getClient, async (client, actor, request) => listPreSalesLeads(client, actor, request.query)));
   app.post('/api/pre-sales/leads', ...mutationGuards, createLeadHandler);
   app.get('/api/pre-sales/leads/:leadId', ...guards, handler(getClient, async (client, actor, request) => ({ lead: await getPreSalesLead(client, actor, request.params.leadId) })));
-  app.patch('/api/pre-sales/leads/:leadId', ...mutationGuards, updateLeadHandler);
+  app.get('/api/pre-sales/leads/:leadId/opportunity-progress', ...guards, handler(getClient, async (client, actor, request) => ({ progress: await getOpportunityProgress(client, actor, request.params.leadId) })));
+  app.patch('/api/pre-sales/leads/:leadId', ...mutationGuards, requireMutableLead, updateLeadHandler);
   app.patch('/api/pre-sales/leads/:leadId/owner', ...mutationGuards, handler(getClient, async (client, actor, request) => ({ lead: await assignPreSalesOwner(client, actor, request.params.leadId, request.body?.owner_profile_id) })));
 
   app.get('/api/pre-sales/leads/:leadId/call-history', ...guards, handler(getClient, async (client, actor, request) => ({ items: await listCallHistory(client, actor, request.params.leadId) })));
@@ -74,4 +86,6 @@ export function registerPreSalesRoutes({
 
   app.get('/api/pre-sales/leads/:leadId/handoffs', ...guards, handler(getClient, async (client, actor, request) => ({ items: await listHandoffs(client, actor, request.params.leadId) })));
   app.post('/api/pre-sales/leads/:leadId/handover', ...mutationGuards, handler(getClient, async (client, actor, request) => ({ handoff: await createHandoff(client, actor, request.params.leadId, request.body) })));
+  app.post('/api/pre-sales/handoffs/:handoffId/accept', ...mutationGuards, handler(getClient, async (client, actor, request) => ({ handoff: await decideHandoff(client, actor, request.params.handoffId, 'accepted', request.body) })));
+  app.post('/api/pre-sales/handoffs/:handoffId/reject', ...mutationGuards, handler(getClient, async (client, actor, request) => ({ handoff: await decideHandoff(client, actor, request.params.handoffId, 'rejected', request.body) })));
 }

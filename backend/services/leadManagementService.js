@@ -11,8 +11,7 @@ const FULL_VISIBILITY_ROLES = new Set([
 
 const LEAD_ACCESS_ROLES = new Set([
   'BD Executive',
-  'Pre-Sales Executive',
-  'Pre-Sales Manager',
+  'Pre-Sales',
   'BD Head',
   'Business Head',
   'Branch Head',
@@ -22,8 +21,7 @@ const LEAD_ACCESS_ROLES = new Set([
 
 const CREATE_ROLES = new Set([
   'BD Executive',
-  'Pre-Sales Executive',
-  'Pre-Sales Manager',
+  'Pre-Sales',
   'Admin',
   'COO',
   'GM',
@@ -31,7 +29,6 @@ const CREATE_ROLES = new Set([
 ]);
 
 const ASSIGNMENT_ROLES = new Set([
-  'Pre-Sales Manager',
   'Admin',
   'COO',
   'GM',
@@ -80,8 +77,9 @@ export function normalizeLeadRole(value) {
     BUSINESSDEVELOPMENTEXECUTIVE: 'BD Executive',
     BDHEAD: 'BD Head',
     BUSINESSDEVELOPMENTHEAD: 'BD Head',
-    PRESALESEXECUTIVE: 'Pre-Sales Executive',
-    PRESALESMANAGER: 'Pre-Sales Manager',
+    PRESALES: 'Pre-Sales',
+    PRESALESEXECUTIVE: 'Pre-Sales',
+    PRESALESMANAGER: 'Pre-Sales',
     BUSINESSHEAD: 'Business Head',
     BRANCHHEAD: 'Branch Head',
     BH: 'Branch Head',
@@ -124,17 +122,17 @@ export function leadActor(profile, authUser = {}) {
 
 export function canAccessLeadModule(actor) {
   if (actor?.role === 'Executive Assistant' && actor.webAccessEnabled === false) return false;
-  return isActiveLeadProfile({ is_active: true, status: 'Active', ...actor }) && LEAD_ACCESS_ROLES.has(actor?.role);
+  return isActiveLeadProfile({ is_active: true, status: 'Active', ...actor }) && LEAD_ACCESS_ROLES.has(normalizeLeadRole(actor?.role));
 }
 
 export function canCreateLead(actor) {
   if (actor?.role === 'DEMO_VIEWER') return false;
-  return CREATE_ROLES.has(actor?.role);
+  return CREATE_ROLES.has(normalizeLeadRole(actor?.role));
 }
 
 export function canAssignLead(actor) {
   if (actor?.role === 'DEMO_VIEWER') return false;
-  return ASSIGNMENT_ROLES.has(actor?.role);
+  return ASSIGNMENT_ROLES.has(normalizeLeadRole(actor?.role));
 }
 
 export function leadListResponse(actor, leads = []) {
@@ -142,7 +140,7 @@ export function leadListResponse(actor, leads = []) {
     ok: true,
     count: leads.length,
     role: actor?.role || null,
-    scope: actor?.role === 'BD Executive'
+    scope: ['BD Executive', 'Pre-Sales'].includes(normalizeLeadRole(actor?.role))
       ? 'own'
       : actor?.role === 'Branch Head'
         ? 'state'
@@ -182,20 +180,14 @@ export function leadMomContactRecipients(contacts = []) {
 
 export function canViewLead(actor, lead) {
   if (!actor || !lead) return false;
-  if (actor.role === 'DEMO_VIEWER') return true;
-  if (FULL_VISIBILITY_ROLES.has(actor.role)) return true;
-  if (actor.role === 'BD Executive' || actor.role === 'Pre-Sales Executive') {
+  const role = normalizeLeadRole(actor.role);
+  if (role === 'DEMO_VIEWER') return true;
+  if (FULL_VISIBILITY_ROLES.has(role)) return true;
+  if (role === 'BD Executive' || role === 'Pre-Sales') {
     return normalizeEmail(lead.assigned_bd_email) === actor.email
       || String(lead.pre_sales_owner_profile_id || '') === actor.profileId
       || String(lead.created_by_user_id || '') === actor.authUserId
       || String(lead.created_by_user_id || '') === actor.profileId;
-  }
-  if (actor.role === 'Pre-Sales Manager') {
-    const hasScope = Boolean(actor.business || actor.state || actor.branch);
-    return hasScope
-      && (!actor.business || !lead.business || normalizedText(lead.business) === normalizedText(actor.business))
-      && (!actor.state || !lead.state || normalizedText(lead.state) === normalizedText(actor.state))
-      && (!actor.branch || !lead.branch || normalizedText(lead.branch) === normalizedText(actor.branch));
   }
   if (actor.role === 'Business Head') {
     return Boolean(actor.business) && normalizedText(lead.business) === normalizedText(actor.business);
@@ -212,14 +204,14 @@ export function canViewLead(actor, lead) {
 }
 
 export function canEditLead(actor, lead) {
-  if (actor?.role === 'DEMO_VIEWER') return false;
+  const role = normalizeLeadRole(actor?.role);
+  if (role === 'DEMO_VIEWER') return false;
   if (!canViewLead(actor, lead)) return false;
-  if (actor.role === 'BD Executive' || actor.role === 'Pre-Sales Executive') return true;
-  if (actor.role === 'Executive Assistant') return false;
-  return FULL_VISIBILITY_ROLES.has(actor.role)
-    || actor.role === 'Pre-Sales Manager'
-    || actor.role === 'Business Head'
-    || actor.role === 'Branch Head';
+  if (role === 'BD Executive' || role === 'Pre-Sales') return true;
+  if (role === 'Executive Assistant') return false;
+  return FULL_VISIBILITY_ROLES.has(role)
+    || role === 'Business Head'
+    || role === 'Branch Head';
 }
 
 export function cleanText(value) {

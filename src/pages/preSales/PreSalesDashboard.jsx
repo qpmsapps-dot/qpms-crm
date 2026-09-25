@@ -1,5 +1,5 @@
 import { createElement, useCallback, useEffect, useState } from 'react';
-import { CalendarClock, CalendarDays, ClockAlert, Handshake, PhoneCall, Plus, Target } from 'lucide-react';
+import { BriefcaseBusiness, CalendarClock, CalendarDays, ChartNoAxesCombined, CheckCircle2, ClockAlert, Handshake, PhoneCall, Plus, Target } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import PageHeader from '../../components/PageHeader.jsx';
 import { EmptyState, ErrorState, LeadTable, LoadingState, PreSalesBreadcrumbs, PreSalesStatCard, SectionHeader } from '../../components/preSales/PreSalesUi.jsx';
@@ -8,12 +8,15 @@ import { getPreSalesDashboard } from '../../services/preSalesApi.js';
 import { formatDateTime } from '../../utils/preSalesFormat.js';
 
 const cards = [
+  { key: 'my_leads', label: 'My Leads', icon: BriefcaseBusiness, tone: 'blue', to: '/pre-sales/leads' },
   { key: 'today_followups', label: 'Today Follow-ups', icon: CalendarClock, tone: 'blue', to: '/pre-sales/followups?filter=today' },
   { key: 'today_meetings', label: 'Today Meetings', icon: CalendarDays, tone: 'teal', to: '/pre-sales/meetings' },
   { key: 'callbacks_due', label: 'Callbacks Due', icon: PhoneCall, tone: 'amber', to: '/pre-sales/followups?filter=callbacks' },
   { key: 'overdue_followups', label: 'Overdue Follow-ups', icon: ClockAlert, tone: 'red', to: '/pre-sales/followups?filter=overdue' },
   { key: 'qualified_leads', label: 'Qualified Leads', icon: Target, tone: 'green', to: '/pre-sales/leads?stage=qualification' },
   { key: 'pending_handover', label: 'Pending Handover', icon: Handshake, tone: 'slate', to: '/pre-sales/handover' },
+  { key: 'proposal_in_progress', label: 'Proposal in Progress', icon: ChartNoAxesCombined, tone: 'amber', to: '/pre-sales/leads' },
+  { key: 'proposal_success', label: 'Proposal Success', icon: CheckCircle2, tone: 'green', to: '/pre-sales/leads' },
 ];
 
 export default function PreSalesDashboard() {
@@ -46,7 +49,7 @@ export default function PreSalesDashboard() {
         actions={<button type="button" onClick={() => navigate('/pre-sales/leads/new')} className="inline-flex items-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white"><Plus className="h-4 w-4" /> Add Lead</button>}
       />
 
-      <section aria-label="Pre-Sales summary" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+      <section aria-label="Pre-Sales summary" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
         {cards.map((card) => <PreSalesStatCard key={card.key} icon={card.icon} label={card.label} value={data.summary[card.key]} tone={card.tone} to={card.to} />)}
       </section>
 
