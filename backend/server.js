@@ -116,6 +116,10 @@ import {
   recalculateEmployeeRange,
 } from './services/employeeRangeReportService.js';
 import {
+  BUSINESS_DEVELOPMENT_CAPABILITIES,
+  normalizeBusinessDevelopmentCapability,
+} from './shared/businessDevelopmentRoles.js';
+import {
   canAccessLeadModule,
   canAssignLead,
   canCreateLead,
@@ -2942,6 +2946,8 @@ const CREATE_USER_ROLE_OPTIONS = new Set([
   'FO',
   'SUPERVISOR',
   'PRESALES',
+  'BUSINESSDEVELOPMENTHEAD',
+  'BUSINESSDEVELOPMENTEXECUTIVE',
   'ADMIN',
 ]);
 
@@ -3775,6 +3781,11 @@ function buildHierarchyOptionsFromProfiles(profiles, { state, business } = {}) {
       .filter((profile) => createUserRoleKey(profile.role) === createUserRoleKey(role))
       .map(profileOption)
       .filter(Boolean);
+  const byBusinessDevelopmentCapability = (capability) =>
+    filteredByMapping
+      .filter((profile) => normalizeBusinessDevelopmentCapability(profile.role) === capability)
+      .map(profileOption)
+      .filter(Boolean);
   return {
     operationsManagers: byRole('Operations Manager'),
     branchHeads: byRole('Branch Head'),
@@ -3782,6 +3793,7 @@ function buildHierarchyOptionsFromProfiles(profiles, { state, business } = {}) {
     gms: allByRole('GM'),
     southHeads: allByRole('South Head'),
     kams: byRole('KAM'),
+    businessDevelopmentHeads: byBusinessDevelopmentCapability(BUSINESS_DEVELOPMENT_CAPABILITIES.HEAD),
     coo: profileOption(pickPreferredLeader(profiles, 'COO', 'QPMSTN16278')),
     md: profileOption(pickPreferredLeader(profiles, 'MD', 'QPMSTN15789')),
   };
@@ -3799,6 +3811,7 @@ function requiredReportingLabel(roleKey) {
   if (roleKey === 'BRANCHHEAD') return 'GM / South Head';
   if (roleKey === 'BUSINESSHEAD' || roleKey === 'GM' || roleKey === 'SOUTHHEAD') return 'COO';
   if (roleKey === 'COO') return 'MD';
+  if (['BUSINESSDEVELOPMENTEXECUTIVE', 'BDEXECUTIVE'].includes(roleKey)) return 'Business Development Head';
   return null;
 }
 
@@ -3844,6 +3857,7 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
       ...options.gms,
       ...options.southHeads,
       ...options.businessHeads,
+      ...options.businessDevelopmentHeads,
       options.coo,
       options.md,
     ].filter(Boolean), code);
@@ -3915,6 +3929,10 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
     reportingManager = optionByCode(gmLevelOptions, reportingManagerCode);
     if (!reportingManager) throw userManagementHttpError(400, `${gmLevelLabel} is required for KAM.`);
     assignGmLevel(reportingManager);
+  } else if (['BUSINESSDEVELOPMENTEXECUTIVE', 'BDEXECUTIVE'].includes(roleKey)) {
+    reportingManager = optionByCode(options.businessDevelopmentHeads, reportingManagerCode);
+    if (!reportingManager) throw userManagementHttpError(400, 'Business Development Head is required for Business Development Executive.');
+    inheritExecutiveChain(reportingManager);
   }
 
   if (roleKey === 'BRANCHHEAD' || roleKey === 'KAM') {
@@ -3940,6 +3958,7 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
 
   const hierarchyPath = [
     employeeCode,
+    ['BUSINESSDEVELOPMENTEXECUTIVE', 'BDEXECUTIVE'].includes(roleKey) ? reportingManager?.employee_code : null,
     roleKey === 'FO' ? operationsManager?.employee_code : null,
     ['FO', 'OPERATIONSMANAGER'].includes(roleKey) ? branchHead?.employee_code : null,
     ['FO', 'OPERATIONSMANAGER', 'BRANCHHEAD', 'KAM'].includes(roleKey)
@@ -3991,7 +4010,7 @@ function validateCreateUserBody(body) {
     return;
   }
   if (!CREATE_USER_ROLE_OPTIONS.has(roleKey)) {
-    throw userManagementHttpError(400, 'role must be one of MD, COO, Executive Assistant, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, Supervisor, Pre-Sales, or Admin.');
+    throw userManagementHttpError(400, 'role must be one of MD, COO, Executive Assistant, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, Supervisor, Pre-Sales, Business Development Head, Business Development Executive, or Admin.');
   }
   if (body.create_profile_only === true && roleKey === 'MD') return;
   if (!textOrNull(body.mobile)) throw userManagementHttpError(400, 'mobile is required.');
@@ -4002,7 +4021,7 @@ function validateCreateUserBody(body) {
     throw userManagementHttpError(400, 'business is required for this role.');
   }
   const requiredLabel = requiredReportingLabel(roleKey);
-  if (requiredLabel && ['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD'].includes(roleKey) && !textOrNull(body.reporting_manager_employee_code || body.manager_employee_code)) {
+  if (requiredLabel && ['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD', 'BUSINESSDEVELOPMENTEXECUTIVE', 'BDEXECUTIVE'].includes(roleKey) && !textOrNull(body.reporting_manager_employee_code || body.manager_employee_code)) {
     throw userManagementHttpError(400, `${requiredLabel} is required.`);
   }
 }

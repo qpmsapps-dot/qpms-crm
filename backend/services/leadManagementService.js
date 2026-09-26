@@ -4,6 +4,10 @@ import {
   isAllStatesScope,
   stateScopeAllows,
 } from './workMappingScope.js';
+import {
+  BUSINESS_DEVELOPMENT_CAPABILITIES,
+  normalizeBusinessDevelopmentCapability,
+} from '../shared/businessDevelopmentRoles.js';
 
 const FULL_VISIBILITY_ROLES = new Set([
   'BD Head',
@@ -79,11 +83,10 @@ function roleKey(value) {
 }
 
 export function normalizeLeadRole(value) {
+  const bdCapability = normalizeBusinessDevelopmentCapability(value);
+  if (bdCapability === BUSINESS_DEVELOPMENT_CAPABILITIES.HEAD) return 'BD Head';
+  if (bdCapability === BUSINESS_DEVELOPMENT_CAPABILITIES.EXECUTIVE) return 'BD Executive';
   const aliases = {
-    BDEXECUTIVE: 'BD Executive',
-    BUSINESSDEVELOPMENTEXECUTIVE: 'BD Executive',
-    BDHEAD: 'BD Head',
-    BUSINESSDEVELOPMENTHEAD: 'BD Head',
     PRESALES: 'Pre-Sales',
     PRESALESEXECUTIVE: 'Pre-Sales',
     PRESALESMANAGER: 'Pre-Sales',

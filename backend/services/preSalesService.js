@@ -9,6 +9,10 @@ import {
   PRE_SALES_STAGES,
 } from '../shared/preSalesConstants.js';
 import {
+  BUSINESS_DEVELOPMENT_PROFILE_ROLES,
+  canonicalBusinessDevelopmentRoleLabel,
+} from '../shared/businessDevelopmentRoles.js';
+import {
   canAssignLead,
   canEditLead,
   canViewLead,
@@ -560,7 +564,7 @@ export async function createHandoff(client, actor, leadId, payload = {}) {
   if (pending.data) throw httpError(409, 'handoff_already_pending', 'This lead already has a pending Business Development handover.');
   const assignee = await client.from('profiles').select('id,role,status,is_active,full_name,employee_code').eq('id', toProfileId).maybeSingle();
   if (assignee.error) throw assignee.error;
-  if (!assignee.data || assignee.data.is_active !== true || String(assignee.data.status || '').toLowerCase() !== 'active' || !['BD Executive', 'BD Head'].includes(assignee.data.role)) {
+  if (!assignee.data || assignee.data.is_active !== true || String(assignee.data.status || '').toLowerCase() !== 'active' || !['BD Executive', 'BD Head'].includes(normalizeLeadRole(assignee.data.role))) {
     throw httpError(400, 'invalid_bd_owner', 'Select an active Business Development owner.');
   }
   const result = await client.from('lead_handoffs').insert({
@@ -606,9 +610,16 @@ export async function decideHandoff(client, actor, handoffId, decision, payload 
 }
 
 export async function listBdHandoffAssignees(client) {
-  const result = await client.from('profiles').select('id,full_name,employee_code,role').in('role', ['BD Executive', 'BD Head']).eq('is_active', true).ilike('status', 'active').order('full_name');
+  const result = await client.from('profiles').select('id,full_name,employee_code,role').in('role', BUSINESS_DEVELOPMENT_PROFILE_ROLES).eq('is_active', true).ilike('status', 'active').order('full_name');
   if (result.error) throw result.error;
-  return (result.data || []).map((profile) => ({ id: profile.id, full_name: profile.full_name || profile.employee_code, employee_code: profile.employee_code, role: profile.role }));
+  return (result.data || [])
+    .map((profile) => ({
+      id: profile.id,
+      full_name: profile.full_name || profile.employee_code,
+      employee_code: profile.employee_code,
+      role: canonicalBusinessDevelopmentRoleLabel(profile.role),
+    }))
+    .filter((profile) => profile.role);
 }
 
 export async function listPreSalesOwners(client, actor) {

@@ -217,7 +217,7 @@ export default function AddCallUpdateForm({
               <option value="">Select BD user</option>
               {availableBdAssignees.map((person) => (
                 <option key={person.id} value={person.id}>
-                  {person.full_name} — {person.role}
+                  {person.full_name}{' — '}{person.role}
                 </option>
               ))}
             </select>

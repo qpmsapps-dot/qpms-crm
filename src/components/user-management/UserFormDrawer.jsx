@@ -41,9 +41,9 @@ const emptyForm = {
 };
 
 const roleOptions = [
-  'MD', 'COO', 'GM', 'South Head', 'Business Head', 'Branch Head', 'Operations Manager', 'KAM', 'FO', 'Pre-Sales', 'Admin',
+  'MD', 'COO', 'GM', 'South Head', 'Business Head', 'Branch Head', 'Operations Manager', 'KAM', 'FO', 'Pre-Sales', 'Business Development Head', 'Business Development Executive', 'Admin',
 ];
-const legacyPreSalesRoles = new Set(['Pre-Sales Executive', 'Pre-Sales Manager']);
+const compatibilityRoleOptions = new Set(['Pre-Sales Executive', 'Pre-Sales Manager', 'BD Head', 'BD Executive']);
 const stateOptions = ['All States', 'TN', 'KL', 'KA', 'TG', 'AP-1', 'AP-2'];
 const businessOptions = [
   'All Businesses',
@@ -62,7 +62,10 @@ const businessOptions = [
   'Government',
   'Private Hospital',
 ];
-const reportingRequiredRoles = new Set(['FO', 'KAM', 'Operations Manager', 'Branch Head']);
+const reportingRequiredRoles = new Set([
+  'FO', 'KAM', 'Operations Manager', 'Branch Head',
+  'Business Development Executive', 'BD Executive',
+]);
 const userTypeOptions = [
   { value: 'internal', label: 'QPMS Employee' },
   { value: 'nims_contact', label: 'NIMS Client Person' },
@@ -254,7 +257,7 @@ export default function UserFormDrawer({
   const [values, setValues] = useState(() => normalizeInitial(initialUser));
   const selectableRoleOptions = useMemo(() => {
     const existingRole = String(initialUser?.role || '').trim();
-    return legacyPreSalesRoles.has(existingRole) && !roleOptions.includes(existingRole)
+    return compatibilityRoleOptions.has(existingRole) && !roleOptions.includes(existingRole)
       ? [...roleOptions, existingRole]
       : roleOptions;
   }, [initialUser?.role]);
@@ -266,6 +269,7 @@ export default function UserFormDrawer({
     gms: [],
     southHeads: [],
     kams: [],
+    businessDevelopmentHeads: [],
     coo: null,
     md: null,
     warnings: [],
@@ -346,6 +350,7 @@ export default function UserFormDrawer({
           gms: result.gms || [],
           southHeads: result.southHeads || [],
           kams: result.kams || [],
+          businessDevelopmentHeads: result.businessDevelopmentHeads || [],
           coo: result.coo || null,
           md: result.md || null,
           warnings: result.warnings || [],
@@ -409,8 +414,9 @@ export default function UserFormDrawer({
     if (values.role === 'KAM') return gmLevelOptions;
     if (values.role === 'Operations Manager') return hierarchyOptions.branchHeads;
     if (values.role === 'Branch Head') return gmLevelOptions;
+    if (['Business Development Executive', 'BD Executive'].includes(values.role)) return hierarchyOptions.businessDevelopmentHeads;
     return [];
-  }, [gmLevelOptions, hierarchyOptions.branchHeads, hierarchyOptions.operationsManagers, values.role]);
+  }, [gmLevelOptions, hierarchyOptions.branchHeads, hierarchyOptions.businessDevelopmentHeads, hierarchyOptions.operationsManagers, values.role]);
 
   const selectedReportingUser = useMemo(
     () => reportingOptions.find((option) => option.employee_code === values.manager_employee_code) || null,
@@ -663,6 +669,7 @@ export default function UserFormDrawer({
     if (role === 'KAM') return isIfmsBusiness(values.business) ? 'South Head' : 'GM';
     if (role === 'Operations Manager') return 'Branch Head';
     if (role === 'Branch Head') return isIfmsBusiness(values.business) ? 'South Head' : 'GM';
+    if (['Business Development Executive', 'BD Executive'].includes(role)) return 'Business Development Head';
     if (role === 'Business Head' || role === 'GM' || role === 'South Head') return 'COO';
     if (role === 'COO') return 'Reporting To';
     return 'Reporting To';

@@ -13,8 +13,10 @@ test('canonical and legacy Pre-Sales roles normalize to one minimal module capab
   assert.match(roles, /PRESALESMANAGER: 'Pre-Sales'/);
   assert.match(sidebar, /const preSalesOnlyNavGroups/);
   assert.match(sidebar, /normalizeAppRole\(user\?\.rawRole \|\| user\?\.role\) === 'PreSales'/);
-  assert.match(drawer, /'Pre-Sales', 'Admin'/);
-  assert.match(drawer, /legacyPreSalesRoles/);
+  assert.match(drawer, /['"]Pre-Sales['"]/);
+  assert.match(drawer, /compatibilityRoleOptions/);
+  assert.match(drawer, /Pre-Sales Executive/);
+  assert.match(drawer, /Pre-Sales Manager/);
 });
 
 test('lead details obey server permissions and expose sanitized Opportunity Progress', async () => {
