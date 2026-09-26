@@ -13,6 +13,8 @@ import {
 } from '../services/preSalesService.js';
 import {
   prepareOpportunityProposal,
+  recordProposalOutcome,
+  sendOpportunityProposal,
   submitBdMeetingMom,
 } from '../services/opportunityWorkflowService.js';
 import {
@@ -46,8 +48,8 @@ test('User Management accepts canonical BD roles while preserving legacy stored 
 test('Pre-Sales BD assignee list includes all aliases, emits canonical labels, and excludes non-BD rows', async () => {
   const calls = [];
   const rows = [
-    { id: 'bd-1', full_name: 'Canonical Executive', employee_code: 'BD1', role: 'Business Development Executive' },
-    { id: 'bd-2', full_name: 'Legacy Executive', employee_code: 'BD2', role: 'BD Executive' },
+    { id: 'bd-1', full_name: 'Canonical Executive', employee_code: 'BD1', role: 'Business Development Executive', manager_employee_code: null },
+    { id: 'bd-2', full_name: 'Legacy Executive', employee_code: 'BD2', role: 'BD Executive', manager_employee_code: null },
     { id: 'bd-3', full_name: 'Canonical Head', employee_code: 'BD3', role: 'Business Development Head' },
     { id: 'bd-4', full_name: 'Legacy Head', employee_code: 'BD4', role: 'BD Head' },
     { id: 'finance-1', full_name: 'Not BD', employee_code: 'FIN1', role: 'Finance Reviewer' },
@@ -91,6 +93,44 @@ test('assigned canonical and legacy BD actors reach existing handoff, MOM, and p
     'rpc_submit_bd_meeting_mom',
     'rpc_prepare_opportunity_proposal',
   ]);
+});
+
+test('assigned BD Executive without a reporting manager can complete the full BD workflow', async () => {
+  const calls = [];
+  const client = {
+    async rpc(name, payload) {
+      calls.push({ name, payload });
+      return { data: { ok: true }, error: null };
+    },
+  };
+  const actor = {
+    role: 'BD Executive',
+    profileId: 'bd-without-manager',
+    manager_employee_code: null,
+  };
+
+  await decideHandoff(client, actor, 'handoff-1', 'accepted');
+  await decideHandoff(client, actor, 'handoff-2', 'rejected', { rejection_reason: 'UAT rejection' });
+  await submitBdMeetingMom(client, actor, 'meeting-1', {
+    requirement_discussed: 'Scope',
+    site_survey_required: true,
+    preferred_survey_date: '2026-10-01',
+  });
+  await prepareOpportunityProposal(client, actor, 'lead-1', {}, 'prepare-key');
+  await sendOpportunityProposal(client, actor, 'proposal-1', 'send-key');
+  await recordProposalOutcome(client, actor, 'proposal-1', { outcome: 'Converted' }, 'outcome-key');
+  await recordProposalOutcome(client, actor, 'proposal-2', { outcome: 'Lost', reason: 'Client declined' }, 'lost-key');
+
+  assert.deepEqual(calls.map((call) => call.name), [
+    'rpc_decide_pre_sales_handoff',
+    'rpc_decide_pre_sales_handoff',
+    'rpc_submit_bd_meeting_mom',
+    'rpc_prepare_opportunity_proposal',
+    'rpc_send_opportunity_proposal',
+    'rpc_record_proposal_outcome',
+    'rpc_record_proposal_outcome',
+  ]);
+  assert.ok(calls.every((call) => call.payload.p_actor_profile_id === actor.profileId));
 });
 
 test('canonical BD actor receives a controlled denial when the atomic RPC rejects assignment', async () => {

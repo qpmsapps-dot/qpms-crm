@@ -3929,9 +3929,12 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
     reportingManager = optionByCode(gmLevelOptions, reportingManagerCode);
     if (!reportingManager) throw userManagementHttpError(400, `${gmLevelLabel} is required for KAM.`);
     assignGmLevel(reportingManager);
-  } else if (['BUSINESSDEVELOPMENTEXECUTIVE', 'BDEXECUTIVE'].includes(roleKey)) {
+  } else if (
+    ['BUSINESSDEVELOPMENTEXECUTIVE', 'BDEXECUTIVE'].includes(roleKey)
+    && reportingManagerCode
+  ) {
     reportingManager = optionByCode(options.businessDevelopmentHeads, reportingManagerCode);
-    if (!reportingManager) throw userManagementHttpError(400, 'Business Development Head is required for Business Development Executive.');
+    if (!reportingManager) throw userManagementHttpError(400, 'Select a valid Business Development Head.');
     inheritExecutiveChain(reportingManager);
   }
 
@@ -4021,7 +4024,7 @@ function validateCreateUserBody(body) {
     throw userManagementHttpError(400, 'business is required for this role.');
   }
   const requiredLabel = requiredReportingLabel(roleKey);
-  if (requiredLabel && ['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD', 'BUSINESSDEVELOPMENTEXECUTIVE', 'BDEXECUTIVE'].includes(roleKey) && !textOrNull(body.reporting_manager_employee_code || body.manager_employee_code)) {
+  if (requiredLabel && ['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD'].includes(roleKey) && !textOrNull(body.reporting_manager_employee_code || body.manager_employee_code)) {
     throw userManagementHttpError(400, `${requiredLabel} is required.`);
   }
 }

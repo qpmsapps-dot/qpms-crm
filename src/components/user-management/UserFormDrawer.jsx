@@ -64,8 +64,8 @@ const businessOptions = [
 ];
 const reportingRequiredRoles = new Set([
   'FO', 'KAM', 'Operations Manager', 'Branch Head',
-  'Business Development Executive', 'BD Executive',
 ]);
+const reportingOptionalRoles = new Set(['Business Development Executive', 'BD Executive']);
 const userTypeOptions = [
   { value: 'internal', label: 'QPMS Employee' },
   { value: 'nims_contact', label: 'NIMS Client Person' },
@@ -1070,13 +1070,13 @@ export default function UserFormDrawer({
                   {hierarchyLoading ? <span className="text-xs font-bold text-slate-400">Loading...</span> : null}
                 </div>
 
-                {reportingRequiredRoles.has(values.role) ? (
+                {(reportingRequiredRoles.has(values.role) || reportingOptionalRoles.has(values.role)) ? (
                   <div className="mt-3">
                     <HierarchySelect
                       label={reportingLabel(values.role)}
                       value={values.manager_employee_code}
                       options={reportingOptions}
-                      required
+                      required={reportingRequiredRoles.has(values.role)}
                       error={errors.manager_employee_code}
                       onChange={(value) => update('manager_employee_code', value)}
                     />
