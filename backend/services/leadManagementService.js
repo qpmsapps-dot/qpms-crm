@@ -232,8 +232,7 @@ export function canEditLead(actor, lead) {
 
 export function leadMatchesActorWorkMapping(actor, lead) {
   if (normalizeLeadRole(actor?.role) !== 'Pre-Sales') return true;
-  return stateScopeAllows(actor?.state, lead?.state)
-    && businessScopeAllows(actor?.business, lead?.business);
+  return stateScopeAllows(actor?.state, lead?.state);
 }
 
 export function cleanText(value) {

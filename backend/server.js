@@ -8744,12 +8744,12 @@ async function createLeadManagement(request, response) {
 
     const rpcLead = {
       ...lead,
-      business: String(
-        request.body?.business
-        || assignee?.business
-        || (isAllBusinessesScope(actor.business) ? '' : actor.business)
-        || '',
-      ).trim(),
+      business: String(actor.role === 'Pre-Sales'
+        ? request.body?.business || ''
+        : request.body?.business
+          || assignee?.business
+          || (isAllBusinessesScope(actor.business) ? '' : actor.business)
+          || '').trim(),
       branch: String(request.body?.branch || assignee?.branch || '').trim(),
       assigned_bd_executive: assignee?.name || null,
       assigned_bd_email: assignee?.email || null,
@@ -8768,7 +8768,9 @@ async function createLeadManagement(request, response) {
       response.status(403).json({
         ok: false,
         code: 'lead_work_mapping_denied',
-        message: 'The lead is outside your assigned State or Business work mapping.',
+        message: actor.role === 'Pre-Sales'
+          ? 'The lead is outside your assigned State work mapping.'
+          : 'The lead is outside your assigned work mapping.',
       });
       return;
     }
@@ -8891,7 +8893,9 @@ async function updateLeadManagement(request, response) {
       response.status(403).json({
         ok: false,
         code: 'lead_work_mapping_denied',
-        message: 'The lead is outside your assigned State or Business work mapping.',
+        message: request.leadActor.role === 'Pre-Sales'
+          ? 'The lead is outside your assigned State work mapping.'
+          : 'The lead is outside your assigned work mapping.',
       });
       return;
     }

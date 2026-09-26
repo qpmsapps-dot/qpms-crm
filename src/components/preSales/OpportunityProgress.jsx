@@ -28,12 +28,22 @@ export default function OpportunityProgress({ leadId }) {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Summary label="Current Stage" value={progress.current_stage_label} />
         <Summary label="Status" value={progress.current_status} />
+        <Summary label="Pending With" value={progress.pending_with_department || progress.responsible_department} />
         <Summary label="Responsible Department" value={progress.responsible_department} />
-        <Summary label="Responsible User" value={progress.responsible_user} />
+        <Summary label="Responsible User" value={progress.pending_with_user || progress.pending_with_user_safe_label || progress.responsible_user} />
         <Summary label="Last Updated" value={formatDateTime(progress.last_updated)} />
         <Summary label="Next Stage" value={label(progress.next_stage)} />
         <Summary label="Proposal Status" value={progress.proposal_status} />
+        <Summary label="Client Decision" value={progress.client_decision_status} />
         <Summary label="Final Outcome" value={progress.final_outcome === 'Converted' ? 'Success / Converted' : progress.final_outcome} />
+        <Summary label="Meeting" value={label(progress.meeting_status)} />
+        <Summary label="BD Handover" value={label(progress.handover_status || progress.bd_handover_status)} />
+        <Summary label="MOM" value={label(progress.mom_status)} />
+        <Summary label="Site Survey" value={progress.site_survey_required === false ? 'Not required' : progress.site_survey_status || (progress.site_survey_required ? 'Required' : null)} />
+        <Summary label="Branch Assignment" value={label(progress.branch_head_status || progress.branch_assignment_status)} />
+        <Summary label="Operations Assignment" value={label(progress.operations_manager_status || progress.operations_manager_assignment_status)} />
+        <Summary label="Assessment" value={label(progress.assessment_status)} />
+        <Summary label="Approval Stage" value={label(progress.approval_stage)} />
       </div>
     </section>
     <section className="enterprise-card p-5">

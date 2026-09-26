@@ -121,6 +121,8 @@ function capturePreSalesRoutes({ createLeadHandler = () => assert.fail('mutation
     app,
     requireJwt: (request, response, next) => {
       request.testAuthChecks = (request.testAuthChecks || 0) + 1;
+      request.profile = { id: 'bd-profile-1', auth_user_id: 'bd-auth-1', role: 'BD Executive', is_active: true, status: 'Active' };
+      request.authUser = { id: 'bd-auth-1', email: 'bd@example.com' };
       next();
     },
     requireLeadAccess: (request, response, next) => {
@@ -163,11 +165,20 @@ test('all registered Pre-Sales mutation routes authenticate and then stop at the
   try {
     const routes = capturePreSalesRoutes();
     const mutations = routes.filter((route) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(route.method));
-    assert.equal(mutations.length, 11);
+    for (const path of [
+      '/api/pre-sales/leads/:leadId/meeting-handover',
+      '/api/pre-sales/meetings/:meetingId/mom',
+      '/api/pre-sales/leads/:leadId/proposals',
+      '/api/pre-sales/proposals/:proposalId/send',
+      '/api/pre-sales/proposals/:proposalId/outcome',
+      '/api/pre-sales/site-surveys/:siteVisitId/assign-operations-manager',
+    ]) {
+      assert.ok(mutations.some((route) => route.path === path), `${path} must be registered as a guarded mutation`);
+    }
     for (const route of mutations) {
       const result = executeMiddlewareStack(route);
       assert.equal(result.request.testAuthChecks, 1, `${route.method} ${route.path} must authenticate`);
-      assert.equal(result.request.testAccessChecks, 1, `${route.method} ${route.path} must authorize`);
+      assert.ok(result.request.testAccessChecks === 1 || result.request.leadActor?.profileId === 'bd-profile-1', `${route.method} ${route.path} must authorize`);
       assert.equal(result.status, 423, `${route.method} ${route.path} must be blocked`);
       assert.equal(result.body?.error, 'READ_ONLY_UAT_MODE');
     }

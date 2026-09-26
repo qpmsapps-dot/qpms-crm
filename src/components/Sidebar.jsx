@@ -161,6 +161,7 @@ const operationsNavGroups = [
     title: 'Operations',
     items: [
       { label: 'Dashboard', to: '/dashboard', icon: Home },
+      { label: 'Site Survey Requests', to: '/site-survey-requests', icon: ClipboardCheck },
       { label: 'Existing Business', to: '/existing-business', icon: ListChecks },
       { label: 'Operations', to: '/fo-activities', icon: MapPinned },
       { label: 'Tickets', to: '/tickets', icon: FileText },

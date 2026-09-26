@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { applyPreSalesLeadScope, decideHandoff, preSalesLeadPermissions } from '../services/preSalesService.js';
-import { canViewLead, leadMatchesActorWorkMapping, normalizeLeadRole } from '../services/leadManagementService.js';
+import { canViewLead, leadMatchesActorWorkMapping, normalizeLeadPayload, normalizeLeadRole, validateLeadPayload } from '../services/leadManagementService.js';
 import { canonicalProfileRoleForWrite } from '../userManagementService.js';
+
+const serverSource = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
 
 test('User Management accepts canonical Pre-Sales and preserves legacy aliases', () => {
   assert.equal(canonicalProfileRoleForWrite('Pre-Sales'), 'Pre-Sales');
@@ -41,12 +44,12 @@ function scopedQueryOperations(actor) {
   return operations;
 }
 
-test('Pre-Sales work mapping combines ownership with independent state and business predicates', () => {
+test('Pre-Sales query scope combines ownership with State only and never applies Business', () => {
   const base = { role: 'Pre-Sales', profileId: 'profile-1', authUserId: 'auth-1' };
   const specific = scopedQueryOperations({ ...base, state: 'TN', business: 'Reliance Retail' });
   assert.deepEqual(specific[0][0], 'or');
   assert.deepEqual(specific[1], ['in', 'state', ['TN', 'Tamil Nadu']]);
-  assert.deepEqual(specific[2], ['eq', 'business', 'Reliance Retail']);
+  assert.equal(specific.some((operation) => operation[1] === 'business'), false);
 
   const allBusinesses = scopedQueryOperations({ ...base, state: 'TN', business: 'All Businesses' });
   assert.equal(allBusinesses.some((operation) => operation[1] === 'business'), false);
@@ -54,7 +57,7 @@ test('Pre-Sales work mapping combines ownership with independent state and busin
 
   const allStates = scopedQueryOperations({ ...base, state: 'All States', business: 'Reliance Retail' });
   assert.equal(allStates.some((operation) => operation[1] === 'state'), false);
-  assert.deepEqual(allStates.at(-1), ['eq', 'business', 'Reliance Retail']);
+  assert.equal(allStates.some((operation) => operation[1] === 'business'), false);
 
   const all = scopedQueryOperations({ ...base, state: 'All States', business: 'All Businesses' });
   assert.deepEqual(all.map((operation) => operation[0]), ['or']);
@@ -68,13 +71,32 @@ test('Pre-Sales work mapping never bypasses creator or owner association', () =>
   assert.equal(canViewLead(actor, { created_by_user_id: 'other-auth', pre_sales_owner_profile_id: 'profile-2', state: 'TN', business: 'Reliance Retail' }), false);
 });
 
-test('specific Pre-Sales state and business mappings remain restrictive', () => {
+test('specific Pre-Sales State remains restrictive while Business and NULL Business are equivalent', () => {
   const actor = { role: 'Pre-Sales', profileId: 'profile-1', authUserId: 'auth-1', state: 'TN', business: 'Reliance Retail' };
   const associated = { created_by_user_id: 'auth-1' };
   assert.equal(canViewLead(actor, { ...associated, state: 'Tamil Nadu', business: 'Reliance Retail' }), true);
+  assert.equal(canViewLead(actor, { ...associated, state: 'TN', business: null }), true);
+  assert.equal(canViewLead(actor, { ...associated, state: 'TN', business: 'Standalone' }), true);
+  assert.equal(canViewLead(actor, { ...associated, state: 'TN', business: 'Hospital' }), true);
   assert.equal(canViewLead(actor, { ...associated, state: 'KA', business: 'Reliance Retail' }), false);
-  assert.equal(canViewLead(actor, { ...associated, state: 'TN', business: 'Standalone' }), false);
   assert.equal(leadMatchesActorWorkMapping(actor, { state: 'KA', business: 'Reliance Retail' }), false);
+});
+
+test('assigned BD visibility is unchanged by NULL or arbitrary Business', () => {
+  const actor = { role: 'BD Executive', email: 'bd@example.com', state: 'TN', business: 'Reliance Retail' };
+  assert.equal(canViewLead(actor, { assigned_bd_email: 'bd@example.com', state: 'TN', business: null }), true);
+  assert.equal(canViewLead(actor, { assigned_bd_email: 'bd@example.com', state: 'TN', business: 'Future Business' }), true);
+  assert.equal(canViewLead(actor, { assigned_bd_email: 'other@example.com', state: 'TN', business: null }), false);
+});
+
+test('new-business lead validation accepts no Business and Pre-Sales creation does not infer profile Business', () => {
+  const lead = normalizeLeadPayload({
+    company: 'New Client', industry: 'Manufacturing', source: 'Referral', location: 'Site',
+    state: 'TN', city: 'Chennai', priority: 'High', serviceScope: [],
+    contacts: [{ name: 'Client Contact', phone: '9876543210', isPrimary: true }],
+  });
+  assert.deepEqual(validateLeadPayload(lead), []);
+  assert.match(serverSource, /actor\.role === 'Pre-Sales'[\s\S]*?request\.body\?\.business \|\| ''/);
 });
 
 test('Branch Head All Businesses keeps state and branch hierarchy restrictions', () => {
@@ -115,7 +137,9 @@ test('Pre-Sales capabilities change from action to read-only after authoritative
   const before = await preSalesLeadPermissions(postHandoverClient(), actor, lead);
   assert.equal(before.access_mode, 'action');
   assert.equal(before.can_edit_pre_sales, true);
-  assert.equal(before.can_handover, true);
+  // The approved flow creates the handoff atomically with the client meeting;
+  // the legacy standalone qualification/handover action is intentionally gone.
+  assert.equal(before.can_handover, false);
   const after = await preSalesLeadPermissions(postHandoverClient({ workflow: true }), actor, lead);
   assert.equal(after.access_mode, 'read_only');
   assert.equal(after.can_view, true);

@@ -18,6 +18,7 @@ import PreSalesLeadCreate from '../pages/preSales/PreSalesLeadCreate.jsx';
 import PreSalesLeadEdit from '../pages/preSales/PreSalesLeadEdit.jsx';
 import PreSalesWorkQueue from '../pages/preSales/PreSalesWorkQueue.jsx';
 import Sites from '../pages/Sites.jsx';
+import SiteSurveyRequests from '../pages/SiteSurveyRequests.jsx';
 import Tasks from '../pages/Tasks.jsx';
 import Employees from '../pages/Employees.jsx';
 import Settings from '../pages/Settings.jsx';
@@ -90,6 +91,7 @@ const productionRoutes = [
           { path: 'pre-sales/meetings', element: <PreSalesWorkQueue /> },
           { path: 'pre-sales/handover', element: <PreSalesWorkQueue /> },
           { path: 'pre-sales/reports', element: <PreSalesWorkQueue /> },
+          { path: 'site-survey-requests', element: <SiteSurveyRequests /> },
           { path: 'sites', element: isSiteVisitV2Enabled ? <Sites /> : <Navigate to="/dashboard" replace /> },
           { path: 'site-visit/:id', element: isSiteVisitV2Enabled ? <Sites /> : <Navigate to="/dashboard" replace /> },
           { path: 'site-monitoring', element: <SiteMonitoringPage /> },

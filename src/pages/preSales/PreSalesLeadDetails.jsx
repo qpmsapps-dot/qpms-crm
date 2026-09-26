@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, BriefcaseBusiness, Mail, MapPin, Pencil, Phone } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import AddCallUpdateForm from '../../components/preSales/AddCallUpdateForm.jsx';
@@ -23,6 +23,7 @@ import {
   getPreSalesLead,
   getPreSalesOwners,
   rescheduleFollowup,
+  scheduleMeetingAndHandoff,
   updateMeeting,
 } from '../../services/preSalesApi.js';
 
@@ -32,16 +33,17 @@ export default function PreSalesLeadDetails() {
   const { leadId } = useParams();
   const { user } = useAuth();
   usePageTitle('Lead Details');
-  const [leadState, setLeadState] = useState({ loading: true, error: '', lead: null, owners: [] });
+  const [leadState, setLeadState] = useState({ loading: true, error: '', lead: null, owners: [], bdAssignees: [] });
   const [activeTab, setActiveTab] = useState('Overview');
   const [tabState, setTabState] = useState({});
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState('');
+  const meetingHandoffKey = useRef('');
 
   const loadLead = useCallback(async () => {
     setLeadState((current) => ({ ...current, loading: true, error: '' }));
-    try { const [response, ownerResponse] = await Promise.all([getPreSalesLead(leadId), getPreSalesOwners()]); setLeadState({ loading: false, error: '', lead: response.lead, owners: ownerResponse.items || [] }); }
-    catch (error) { setLeadState({ loading: false, error: error.message, lead: null, owners: [] }); }
+    try { const [response, ownerResponse, bdResponse] = await Promise.all([getPreSalesLead(leadId), getPreSalesOwners(), getBdHandoffAssignees()]); setLeadState({ loading: false, error: '', lead: response.lead, owners: ownerResponse.items || [], bdAssignees: bdResponse.items || [] }); }
+    catch (error) { setLeadState({ loading: false, error: error.message, lead: null, owners: [], bdAssignees: [] }); }
   }, [leadId]);
   useEffect(() => { void loadLead(); }, [loadLead]);
 
@@ -65,7 +67,27 @@ export default function PreSalesLeadDetails() {
 
   async function saveCall(payload) {
     setSaving(true); setNotice('');
-    try { await addCallUpdate(leadId, payload); setNotice('Call update saved.'); await Promise.all([loadLead(), loadTab('Call History', true), loadTab('Follow-ups', true), loadTab('Meetings & MOM', true)]); }
+    try {
+      if (payload.feedback_type === 'interested' && payload.meeting_required && payload.meeting) {
+        meetingHandoffKey.current ||= globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+        await scheduleMeetingAndHandoff(leadId, {
+          scheduled_at: payload.meeting.scheduled_at,
+          meeting_mode: payload.meeting.meeting_mode,
+          location_or_link: payload.meeting.location_or_link,
+          client_contact_person: payload.meeting.client_contact_person,
+          client_contact_number: payload.meeting.client_contact_number,
+          requirement_summary: payload.notes,
+          bd_profile_id: payload.meeting.bd_profile_id,
+          handoff_notes: payload.meeting.handoff_notes,
+        }, meetingHandoffKey.current);
+        meetingHandoffKey.current = '';
+        setNotice('Meeting scheduled and sent to Business Development for acceptance.');
+      } else {
+        await addCallUpdate(leadId, payload);
+        setNotice('Call update saved.');
+      }
+      await Promise.all([loadLead(), loadTab('Call History', true), loadTab('Follow-ups', true), loadTab('Meetings & MOM', true), loadTab('Handover', true)]);
+    }
     finally { setSaving(false); }
   }
 
@@ -124,7 +146,7 @@ function Handover({ items, editable, assignees = [], lead, onCreate }) {
 function Card({ title, children }) { return <section className="enterprise-card p-5"><h2 className="mb-4 text-lg font-bold text-slate-950">{title}</h2>{children}</section>; }
 function ReadOnlyMeetings({ items, leadMom }) { return <div className="space-y-5"><Card title="Meeting History">{items.length ? <div className="space-y-3">{items.map((item) => <div key={item.id} className="rounded-xl border border-slate-100 p-4"><p className="font-semibold">{formatDateTime(item.scheduled_at)} · {item.meeting_mode}</p><p className="mt-1 text-sm text-slate-500">{item.location_or_link || 'No location/link'} · {item.meeting_status}</p><p className="mt-2 text-sm">{item.meeting_notes}</p></div>)}</div> : <p className="text-sm text-slate-500">No meetings yet.</p>}</Card><Card title="Existing Lead MOM">{leadMom.length ? <Rows rows={[["Status", leadMom[0].mom_status], ["Subject", leadMom[0].subject], ["Discussion", leadMom[0].discussion_summary], ["Sent", formatDateTime(leadMom[0].sent_at)]]} /> : <p className="text-sm text-slate-500">No existing Lead MOM.</p>}</Card></div>; }
 function HandoverHistory({ items, readOnly = false }) { return <Card title="Handover History">{readOnly ? <p className="mb-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">You have read-only access to handover history.</p> : null}{items.length ? <div className="space-y-3">{items.map((item) => <div key={item.id} className="rounded-xl border border-slate-100 p-4"><p className="font-semibold capitalize">{item.handoff_status}</p><p className="mt-1 text-sm text-slate-600">{item.qualification_summary}</p><p className="mt-1 text-xs text-slate-500">{formatDateTime(item.created_at)} · {item.to_profile?.full_name || 'BD owner'}</p>{item.rejection_reason ? <p className="mt-2 text-sm text-rose-600">{item.rejection_reason}</p> : null}</div>)}</div> : <p className="text-sm text-slate-500">No handover history.</p>}</Card>; }
-function Rows({ rows }) { return <dl className="space-y-3">{rows.map(([label, value]) => <div key={label} className="grid grid-cols-[130px_1fr] gap-3 text-sm"><dt className="font-semibold text-slate-500">{label}</dt><dd className="text-slate-800">{value || '—'}</dd></div>)}</dl>; }
+function Rows({ rows }) { return <dl className="space-y-3">{rows.map(([label, value]) => <div key={label} className="grid grid-cols-[130px_1fr] gap-3 text-sm"><dt className="font-semibold text-slate-500">{label}</dt><dd className="text-slate-800">{value || (label === 'Business' ? 'To be finalized' : '—')}</dd></div>)}</dl>; }
 function Summary({ label, value }) { return <div><p className="text-xs font-bold uppercase tracking-wide text-slate-400">{label}</p><p className="mt-1 text-sm font-semibold text-slate-800">{value || '—'}</p></div>; }
 function Input({ label, type = 'text', value, onChange }) { return <label className="block text-sm font-semibold text-slate-700">{label}<input required={label === 'Qualification Summary'} type={type} value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5" /></label>; }
 function OwnerAssignment({ owners, current, onAssign }) { const { user } = useAuth(); const [value, setValue] = useState(current || ''); if (!canAssignLead(user)) return null; return <div className="mt-5 flex flex-col gap-2 border-t border-slate-100 pt-5 sm:flex-row sm:items-end"><label className="flex-1 text-sm font-semibold text-slate-700">Pre-Sales Owner<select value={value} onChange={(event) => setValue(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5"><option value="">Select owner</option>{owners.map((owner) => <option key={owner.id} value={owner.id}>{owner.full_name} — {owner.employee_code}</option>)}</select></label><button type="button" disabled={!value || value === current} onClick={() => onAssign(value)} className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40">Assign Owner</button></div>; }

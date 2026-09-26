@@ -20,6 +20,20 @@ import {
 } from '../services/preSalesService.js';
 import { getOpportunityProgress } from '../services/preSalesOpportunityProgressService.js';
 import { createRequireWritablePreSalesEnvironment } from '../services/readOnlyUatMode.js';
+import { isActiveLeadProfile, leadActor, normalizeLeadRole } from '../services/leadManagementService.js';
+import {
+  assignSurveyOperationsManager,
+  listBdOpportunityWork,
+  listBranchHeadSurveyRequests,
+  listBranchOperationsManagers,
+  listOperationsManagerSurveyTasks,
+  listOpportunityNotifications,
+  prepareOpportunityProposal,
+  recordProposalOutcome,
+  scheduleMeetingAndHandoff,
+  sendOpportunityProposal,
+  submitBdMeetingMom,
+} from '../services/opportunityWorkflowService.js';
 
 function respondError(response, error) {
   const status = Number(error?.statusCode || error?.status || 500);
@@ -54,6 +68,21 @@ export function registerPreSalesRoutes({
 }) {
   const guards = [requireJwt, requireLeadAccess];
   const mutationGuards = [...guards, createRequireWritablePreSalesEnvironment()];
+  const requireOpportunityWorkflowActor = (request, response, next) => {
+    if (!isActiveLeadProfile(request.profile)) {
+      response.status(403).json({ ok: false, code: 'inactive_profile', message: 'Your active employee profile is required.' });
+      return;
+    }
+    const actor = leadActor(request.profile, request.authUser);
+    if (!['Pre-Sales', 'BD Executive', 'BD Head', 'Branch Head', 'Operations Manager'].includes(normalizeLeadRole(actor.role))) {
+      response.status(403).json({ ok: false, code: 'opportunity_workflow_denied', message: 'You do not have access to this opportunity workflow.' });
+      return;
+    }
+    request.leadActor = actor;
+    next();
+  };
+  const workflowGuards = [requireJwt, requireOpportunityWorkflowActor];
+  const workflowMutationGuards = [...workflowGuards, createRequireWritablePreSalesEnvironment()];
   const requireMutableLead = async (request, response, next) => {
     try {
       await assertPreSalesLeadMutable(getClient(), request.leadActor, request.params.leadId);
@@ -88,4 +117,24 @@ export function registerPreSalesRoutes({
   app.post('/api/pre-sales/leads/:leadId/handover', ...mutationGuards, handler(getClient, async (client, actor, request) => ({ handoff: await createHandoff(client, actor, request.params.leadId, request.body) })));
   app.post('/api/pre-sales/handoffs/:handoffId/accept', ...mutationGuards, handler(getClient, async (client, actor, request) => ({ handoff: await decideHandoff(client, actor, request.params.handoffId, 'accepted', request.body) })));
   app.post('/api/pre-sales/handoffs/:handoffId/reject', ...mutationGuards, handler(getClient, async (client, actor, request) => ({ handoff: await decideHandoff(client, actor, request.params.handoffId, 'rejected', request.body) })));
+
+  app.post('/api/pre-sales/leads/:leadId/meeting-handover', ...mutationGuards, handler(getClient, async (client, actor, request) => ({
+    result: await scheduleMeetingAndHandoff(
+      client,
+      actor,
+      request.params.leadId,
+      request.body,
+      request.get?.('Idempotency-Key') || request.headers?.['idempotency-key'],
+    ),
+  })));
+  app.get('/api/pre-sales/bd/opportunity-work', ...workflowGuards, handler(getClient, async (client, actor) => ({ items: await listBdOpportunityWork(client, actor) })));
+  app.get('/api/pre-sales/opportunity-notifications', ...workflowGuards, handler(getClient, async (client, actor, request) => ({ items: await listOpportunityNotifications(client, actor, request.query?.limit) })));
+  app.post('/api/pre-sales/meetings/:meetingId/mom', ...workflowMutationGuards, handler(getClient, async (client, actor, request) => ({ result: await submitBdMeetingMom(client, actor, request.params.meetingId, request.body) })));
+  app.post('/api/pre-sales/leads/:leadId/proposals', ...workflowMutationGuards, handler(getClient, async (client, actor, request) => ({ result: await prepareOpportunityProposal(client, actor, request.params.leadId, request.body, request.get?.('Idempotency-Key') || request.headers?.['idempotency-key']) })));
+  app.post('/api/pre-sales/proposals/:proposalId/send', ...workflowMutationGuards, handler(getClient, async (client, actor, request) => ({ result: await sendOpportunityProposal(client, actor, request.params.proposalId, request.get?.('Idempotency-Key') || request.headers?.['idempotency-key']) })));
+  app.post('/api/pre-sales/proposals/:proposalId/outcome', ...workflowMutationGuards, handler(getClient, async (client, actor, request) => ({ result: await recordProposalOutcome(client, actor, request.params.proposalId, request.body, request.get?.('Idempotency-Key') || request.headers?.['idempotency-key']) })));
+  app.get('/api/pre-sales/site-surveys', ...workflowGuards, handler(getClient, async (client, actor) => ({ items: await listBranchHeadSurveyRequests(client, actor) })));
+  app.get('/api/pre-sales/site-surveys/assigned', ...workflowGuards, handler(getClient, async (client, actor) => ({ items: await listOperationsManagerSurveyTasks(client, actor) })));
+  app.get('/api/pre-sales/site-surveys/:siteVisitId/operations-managers', ...workflowGuards, handler(getClient, async (client, actor, request) => ({ items: await listBranchOperationsManagers(client, actor, request.params.siteVisitId) })));
+  app.post('/api/pre-sales/site-surveys/:siteVisitId/assign-operations-manager', ...workflowMutationGuards, handler(getClient, async (client, actor, request) => ({ result: await assignSurveyOperationsManager(client, actor, request.params.siteVisitId, request.body?.operations_manager_profile_id) })));
 }

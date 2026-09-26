@@ -25,7 +25,7 @@ export const roleGroups = {
   DemoViewer: ['DEMO_VIEWER'],
 };
 
-export const protectedNavRoutes = ['/dashboard', '/crm', '/pre-sales', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/hospital-ticketing', '/fault-tracker', '/deep-cleaning', '/assets', '/reports', '/employees', '/store-master', '/settings', '/hospital-feedback', '/operations/hospital-feedback'];
+export const protectedNavRoutes = ['/dashboard', '/crm', '/pre-sales', '/site-survey-requests', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/hospital-ticketing', '/fault-tracker', '/deep-cleaning', '/assets', '/reports', '/employees', '/store-master', '/settings', '/hospital-feedback', '/operations/hospital-feedback'];
 
 function normalizedRoleKey(role = '') {
   return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
@@ -136,7 +136,8 @@ export function routeAllowedRoles(pathname = '') {
   if (pathname.startsWith('/settings')) return [];
   if (pathname.startsWith('/crm')) return ['Admin', 'Management', 'FinanceLeadership', 'BD', 'DemoViewer'];
   if (pathname.startsWith('/pre-sales')) return ['Admin', 'Management', 'BD', 'PreSales', 'DemoViewer'];
-  if (pathname.startsWith('/sites') || pathname.startsWith('/site-visit')) return ['Admin', 'BD', 'DemoViewer'];
+  if (pathname.startsWith('/site-survey-requests')) return ['Admin', 'Operations'];
+  if (pathname.startsWith('/sites') || pathname.startsWith('/site-visit')) return ['Admin', 'BD', 'Operations', 'DemoViewer'];
   if (pathname.startsWith('/site-monitoring')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'DemoViewer'];
   if (pathname.startsWith('/proposals')) return ['Admin', 'Management', 'FinanceLeadership', 'BD', 'DemoViewer'];
   if (pathname.startsWith('/approvals')) return ['Admin', 'Management', 'FinanceLeadership', 'DemoViewer'];

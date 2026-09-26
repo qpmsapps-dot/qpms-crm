@@ -41,3 +41,14 @@ export const getHandoffs = (leadId) => request({ method: 'GET', url: `/api/pre-s
 export const createHandoff = (leadId, payload) => request({ method: 'POST', url: `/api/pre-sales/leads/${encodeURIComponent(leadId)}/handover`, data: payload });
 export const acceptHandoff = (handoffId) => request({ method: 'POST', url: `/api/pre-sales/handoffs/${encodeURIComponent(handoffId)}/accept` });
 export const rejectHandoff = (handoffId, rejectionReason) => request({ method: 'POST', url: `/api/pre-sales/handoffs/${encodeURIComponent(handoffId)}/reject`, data: { rejection_reason: rejectionReason } });
+export const scheduleMeetingAndHandoff = (leadId, payload, idempotencyKey) => request({ method: 'POST', url: `/api/pre-sales/leads/${encodeURIComponent(leadId)}/meeting-handover`, data: payload, headers: { 'Idempotency-Key': idempotencyKey } });
+export const getBdOpportunityWork = () => request({ method: 'GET', url: '/api/pre-sales/bd/opportunity-work' });
+export const getOpportunityNotifications = (limit = 20) => request({ method: 'GET', url: '/api/pre-sales/opportunity-notifications', params: { limit } });
+export const submitBdMeetingMom = (meetingId, payload) => request({ method: 'POST', url: `/api/pre-sales/meetings/${encodeURIComponent(meetingId)}/mom`, data: payload });
+export const prepareOpportunityProposal = (leadId, payload, idempotencyKey) => request({ method: 'POST', url: `/api/pre-sales/leads/${encodeURIComponent(leadId)}/proposals`, data: payload, headers: { 'Idempotency-Key': idempotencyKey } });
+export const sendOpportunityProposal = (proposalId, idempotencyKey) => request({ method: 'POST', url: `/api/pre-sales/proposals/${encodeURIComponent(proposalId)}/send`, headers: { 'Idempotency-Key': idempotencyKey } });
+export const recordProposalOutcome = (proposalId, payload, idempotencyKey) => request({ method: 'POST', url: `/api/pre-sales/proposals/${encodeURIComponent(proposalId)}/outcome`, data: payload, headers: { 'Idempotency-Key': idempotencyKey } });
+export const getBranchHeadSiteSurveys = () => request({ method: 'GET', url: '/api/pre-sales/site-surveys' });
+export const getAssignedOperationsSiteSurveys = () => request({ method: 'GET', url: '/api/pre-sales/site-surveys/assigned' });
+export const getBranchOperationsManagers = (siteVisitId) => request({ method: 'GET', url: `/api/pre-sales/site-surveys/${encodeURIComponent(siteVisitId)}/operations-managers` });
+export const assignSiteSurveyOperationsManager = (siteVisitId, operationsManagerProfileId) => request({ method: 'POST', url: `/api/pre-sales/site-surveys/${encodeURIComponent(siteVisitId)}/assign-operations-manager`, data: { operations_manager_profile_id: operationsManagerProfileId } });

@@ -1,7 +1,8 @@
 import { createElement, useCallback, useEffect, useState } from 'react';
-import { BriefcaseBusiness, CalendarClock, CalendarDays, ChartNoAxesCombined, CheckCircle2, ClockAlert, Handshake, PhoneCall, Plus, Target } from 'lucide-react';
+import { BriefcaseBusiness, CalendarClock, CalendarDays, ChartNoAxesCombined, CheckCircle2, ClipboardCheck, ClockAlert, FileCheck2, Handshake, PhoneCall, Plus, Target, XCircle } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import PageHeader from '../../components/PageHeader.jsx';
+import OpportunityNotifications from '../../components/preSales/OpportunityNotifications.jsx';
 import { EmptyState, ErrorState, LeadTable, LoadingState, PreSalesBreadcrumbs, PreSalesStatCard, SectionHeader } from '../../components/preSales/PreSalesUi.jsx';
 import { usePageTitle } from '../../hooks/usePageTitle.js';
 import { getPreSalesDashboard } from '../../services/preSalesApi.js';
@@ -14,9 +15,14 @@ const cards = [
   { key: 'callbacks_due', label: 'Callbacks Due', icon: PhoneCall, tone: 'amber', to: '/pre-sales/followups?filter=callbacks' },
   { key: 'overdue_followups', label: 'Overdue Follow-ups', icon: ClockAlert, tone: 'red', to: '/pre-sales/followups?filter=overdue' },
   { key: 'qualified_leads', label: 'Qualified Leads', icon: Target, tone: 'green', to: '/pre-sales/leads?stage=qualification' },
-  { key: 'pending_handover', label: 'Pending Handover', icon: Handshake, tone: 'slate', to: '/pre-sales/handover' },
+  { key: 'pending_bd_acceptance', label: 'Pending BD Acceptance', icon: Handshake, tone: 'slate', to: '/pre-sales/handover' },
+  { key: 'bd_meeting_mom_pending', label: 'BD Meeting / MOM Pending', icon: CalendarDays, tone: 'amber', to: '/pre-sales/leads' },
+  { key: 'site_survey', label: 'Site Survey', icon: ClipboardCheck, tone: 'blue', to: '/pre-sales/leads' },
+  { key: 'approval_in_progress', label: 'Approval in Progress', icon: FileCheck2, tone: 'amber', to: '/pre-sales/leads' },
   { key: 'proposal_in_progress', label: 'Proposal in Progress', icon: ChartNoAxesCombined, tone: 'amber', to: '/pre-sales/leads' },
-  { key: 'proposal_success', label: 'Proposal Success', icon: CheckCircle2, tone: 'green', to: '/pre-sales/leads' },
+  { key: 'proposal_sent', label: 'Proposal Sent', icon: FileCheck2, tone: 'blue', to: '/pre-sales/leads' },
+  { key: 'proposal_success', label: 'Won / Converted', icon: CheckCircle2, tone: 'green', to: '/pre-sales/leads' },
+  { key: 'lost', label: 'Lost', icon: XCircle, tone: 'red', to: '/pre-sales/leads' },
 ];
 
 export default function PreSalesDashboard() {
@@ -43,6 +49,7 @@ export default function PreSalesDashboard() {
   return (
     <div className="space-y-7">
       <PreSalesBreadcrumbs items={[{ label: 'Workspace', to: '/dashboard' }, { label: 'Pre-Sales' }]} />
+      <OpportunityNotifications />
       <PageHeader
         title="Pre-Sales Dashboard"
         subtitle="Track calls, follow-ups, meetings, and handovers from one place."

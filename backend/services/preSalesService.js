@@ -18,7 +18,6 @@ import {
   normalizeLeadRole,
 } from './leadManagementService.js';
 import {
-  applyStateBusinessScope,
   isAllBusinessesScope,
   isAllStatesScope,
   stateScopeQueryValues,
@@ -99,9 +98,10 @@ export function applyPreSalesLeadScope(query, actor) {
   const filters = actorOwnFilters(actor);
   if (!filters) return query.eq('id', '00000000-0000-0000-0000-000000000000');
   query = query.or(filters);
-  return isPreSalesActor(actor)
-    ? applyStateBusinessScope(query, actor)
-    : query;
+  if (!isPreSalesActor(actor) || isAllStatesScope(actor.state)) return query;
+  const states = stateScopeQueryValues(actor.state);
+  if (!states.length) return query.eq('state', '__NO_STATE_SCOPE__');
+  return states.length > 1 ? query.in('state', states) : query.eq('state', states[0]);
 }
 
 async function firstRow(query) {
@@ -139,7 +139,6 @@ export async function preSalesLeadPermissions(client, actor, lead) {
   const baseCanEdit = canEditLead(actor, lead);
   const preSalesReadOnly = isPreSalesActor(actor) && state.post_handover;
   const canAct = baseCanEdit && !preSalesReadOnly;
-  const qualified = lead.status === 'Qualified' || lead.pre_sales_stage === PRE_SALES_STAGES.PENDING_HANDOVER;
   return {
     can_view: canView,
     can_edit_pre_sales: canAct,
@@ -147,7 +146,11 @@ export async function preSalesLeadPermissions(client, actor, lead) {
     can_manage_followups: canAct,
     can_manage_meetings: canAct,
     can_qualify: canAct,
-    can_handover: canAct && qualified,
+    // Pre-Sales handover is created atomically with the client meeting. The
+    // legacy standalone handover flow remains available to existing elevated
+    // roles, but must not be offered to canonical/compatibility Pre-Sales users.
+    can_handover: canAct && !isPreSalesActor(actor)
+      && (lead.status === 'Qualified' || lead.pre_sales_stage === PRE_SALES_STAGES.PENDING_HANDOVER),
     can_view_opportunity_progress: canView,
     can_mutate_downstream: false,
     access_mode: preSalesReadOnly ? 'read_only' : 'action',
@@ -284,26 +287,40 @@ export async function getPreSalesDashboard(client, actor) {
   const visible = await leadIdsForActor(client, actor);
   const ids = visible.map((row) => row.id);
   const empty = {
-    summary: { my_leads: 0, today_followups: 0, today_meetings: 0, callbacks_due: 0, overdue_followups: 0, qualified_leads: 0, pending_handover: 0, proposal_in_progress: 0, proposal_success: 0 },
+    summary: { my_leads: 0, today_followups: 0, today_meetings: 0, callbacks_due: 0, overdue_followups: 0, qualified_leads: 0, pending_handover: 0, pending_bd_acceptance: 0, bd_meeting_mom_pending: 0, site_survey: 0, approval_in_progress: 0, proposal_in_progress: 0, proposal_sent: 0, proposal_success: 0, lost: 0 },
     my_leads: [], today_schedule: [], upcoming_followups: [],
   };
   if (!ids.length) return empty;
   const { from, to } = indiaDayBounds();
   const now = new Date().toISOString();
-  const [leadList, todayFollowups, overdue, upcoming, todayMeetings, pendingHandoffs, workflows] = await Promise.all([
+  const [leadList, todayFollowups, overdue, upcoming, todayMeetings, pendingHandoffs, acceptedHandoffs, moms, visits, workflows, proposals] = await Promise.all([
     listPreSalesLeads(client, actor, { page: 1, page_size: 5, sort_by: 'updated_at', sort_direction: 'desc' }),
     client.from('lead_followups').select('*,lead:leads(id,client_name,company_name)').in('lead_id', ids).eq('status', 'pending').gte('scheduled_at', from).lte('scheduled_at', to).order('scheduled_at'),
     client.from('lead_followups').select('id,followup_type').in('lead_id', ids).eq('status', 'pending').lt('scheduled_at', now),
     client.from('lead_followups').select('*,lead:leads(id,client_name,company_name)').in('lead_id', ids).eq('status', 'pending').gt('scheduled_at', to).order('scheduled_at').limit(5),
     client.from('lead_meetings').select('*,lead:leads(id,client_name,company_name)').in('lead_id', ids).in('meeting_status', ['scheduled', 'rescheduled']).gte('scheduled_at', from).lte('scheduled_at', to).order('scheduled_at'),
     client.from('lead_handoffs').select('id').in('lead_id', ids).eq('handoff_status', 'pending'),
-    client.from('workflow_instances').select('lead_id,status').in('lead_id', ids),
+    client.from('lead_handoffs').select('lead_id').in('lead_id', ids).eq('handoff_status', 'accepted'),
+    client.from('lead_mom').select('lead_id,mom_status,site_survey_required').in('lead_id', ids),
+    client.from('site_visits').select('lead_id,status').in('lead_id', ids),
+    client.from('workflow_instances').select('lead_id,status,current_stage_code,approval_status').in('lead_id', ids),
+    client.from('proposals').select('lead_id,proposal_status').in('lead_id', ids),
   ]);
-  for (const result of [todayFollowups, overdue, upcoming, todayMeetings, pendingHandoffs, workflows]) if (result.error) throw result.error;
+  for (const result of [todayFollowups, overdue, upcoming, todayMeetings, pendingHandoffs, acceptedHandoffs, moms, visits, workflows, proposals]) if (result.error) throw result.error;
   const schedule = [
     ...(todayFollowups.data || []).map((row) => ({ ...row, item_type: row.followup_type === 'call_back' ? 'Call' : 'Follow-up' })),
     ...(todayMeetings.data || []).map((row) => ({ ...row, item_type: 'Meeting', purpose: row.meeting_notes || row.meeting_mode })),
   ].sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
+  const momCompletedLeadIds = new Set((moms.data || []).filter((row) => row.mom_status === 'Sent').map((row) => row.lead_id));
+  const acceptedLeadIds = new Set((acceptedHandoffs.data || []).map((row) => row.lead_id));
+  const activeApprovalStages = new Set(['operations_review', 'coordinator_costing', 'hr_validation', 'commercial_review', 'finance_review']);
+  const proposalSentLeadIds = new Set((proposals.data || []).filter((row) => row.proposal_status === 'Sent').map((row) => row.lead_id));
+  const proposalInProgressLeadIds = new Set([
+    ...(proposals.data || []).filter((row) => row.proposal_status !== 'Sent').map((row) => row.lead_id),
+    ...(workflows.data || []).filter((row) => ['returned_to_bd', 'proposal'].includes(row.current_stage_code) && row.status !== 'Cancelled').map((row) => row.lead_id),
+    ...(moms.data || []).filter((row) => row.mom_status === 'Sent' && row.site_survey_required === false && acceptedLeadIds.has(row.lead_id)).map((row) => row.lead_id),
+  ]);
+  const finalLeadIds = new Set(visible.filter((row) => ['Converted', 'Lost'].includes(row.status) || ['Converted', 'Lost'].includes(row.lead_stage)).map((row) => row.id));
   return {
     summary: {
       my_leads: visible.length,
@@ -313,11 +330,19 @@ export async function getPreSalesDashboard(client, actor) {
       overdue_followups: overdue.data?.length || 0,
       qualified_leads: visible.filter((row) => row.status === 'Qualified' || row.pre_sales_stage === PRE_SALES_STAGES.PENDING_HANDOVER).length,
       pending_handover: pendingHandoffs.data?.length || 0,
-      proposal_in_progress: new Set((workflows.data || []).filter((row) => {
-        const lead = visible.find((item) => item.id === row.lead_id);
-        return row.status !== 'Cancelled' && !['Converted', 'Lost'].includes(lead?.status) && !['Converted', 'Lost'].includes(lead?.lead_stage);
-      }).map((row) => row.lead_id)).size,
+      pending_bd_acceptance: pendingHandoffs.data?.length || 0,
+      bd_meeting_mom_pending: [...acceptedLeadIds].filter((leadId) => !momCompletedLeadIds.has(leadId)).length,
+      site_survey: new Set((visits.data || []).filter((row) => !finalLeadIds.has(row.lead_id)).map((row) => row.lead_id)).size,
+      approval_in_progress: new Set((workflows.data || []).filter((row) => activeApprovalStages.has(row.current_stage_code) && !finalLeadIds.has(row.lead_id)).map((row) => row.lead_id)).size,
+      proposal_in_progress: [...proposalInProgressLeadIds].filter((leadId) => {
+        const lead = visible.find((item) => item.id === leadId);
+        return !proposalSentLeadIds.has(leadId)
+          && !['Converted', 'Lost'].includes(lead?.status)
+          && !['Converted', 'Lost'].includes(lead?.lead_stage);
+      }).length,
+      proposal_sent: [...proposalSentLeadIds].filter((leadId) => !finalLeadIds.has(leadId)).length,
       proposal_success: visible.filter((row) => row.status === 'Converted' || row.lead_stage === 'Converted').length,
+      lost: visible.filter((row) => row.status === 'Lost' || row.lead_stage === 'Lost').length,
     },
     my_leads: leadList.items,
     today_schedule: schedule,
@@ -367,6 +392,9 @@ function stageForCall(input) {
 
 export async function addCallUpdate(client, actor, leadId, payload) {
   await assertPreSalesLeadMutable(client, actor, leadId);
+  if (isPreSalesActor(actor) && payload?.qualified === true) {
+    throw httpError(409, 'meeting_handover_required', 'Schedule the client meeting and assign Business Development instead of using the legacy qualification handover.');
+  }
   const input = validateCallUpdate(payload);
   const stage = stageForCall(input);
   const result = await client.rpc('rpc_add_pre_sales_call_update', {
@@ -458,6 +486,9 @@ export async function listMeetings(client, actor, leadId) {
 
 export async function createMeeting(client, actor, leadId, payload = {}) {
   await assertPreSalesLeadMutable(client, actor, leadId);
+  if (isPreSalesActor(actor)) {
+    throw httpError(409, 'meeting_handover_required', 'Use Schedule Meeting & Handover to BD so the meeting and pending handover are created together.');
+  }
   const mode = cleanText(payload.meeting_mode);
   if (!MEETING_MODES.includes(mode)) throw httpError(400, 'invalid_meeting_mode', 'Select a valid meeting mode.');
   const scheduledAt = isoTimestamp(payload.scheduled_at, 'Meeting date/time', { required: true, future: true });
@@ -480,6 +511,9 @@ export async function updateMeeting(client, actor, meetingId, payload = {}) {
   await assertPreSalesLeadMutable(client, actor, existing.data.lead_id);
   const status = cleanText(payload.meeting_status || existing.data.meeting_status);
   if (!MEETING_STATUSES.includes(status)) throw httpError(400, 'invalid_meeting_status', 'Select a valid meeting status.');
+  if (isPreSalesActor(actor) && status === 'completed') {
+    throw httpError(403, 'bd_meeting_completion_required', 'The assigned Business Development user must complete the client meeting and MOM.');
+  }
   const patch = {
     meeting_status: status,
     meeting_notes: Object.hasOwn(payload, 'meeting_notes') ? cleanText(payload.meeting_notes) || null : existing.data.meeting_notes,
@@ -508,6 +542,13 @@ export async function listHandoffs(client, actor, leadId) {
 
 export async function createHandoff(client, actor, leadId, payload = {}) {
   const lead = await assertPreSalesLeadMutable(client, actor, leadId);
+  if (isPreSalesActor(actor)) {
+    throw httpError(
+      409,
+      'meeting_handover_required',
+      'Schedule the client meeting and assign Business Development in one action.',
+    );
+  }
   if (lead.status !== 'Qualified' && lead.pre_sales_stage !== PRE_SALES_STAGES.PENDING_HANDOVER) {
     throw httpError(409, 'lead_not_qualified', 'Qualify the lead before handing it over to Business Development.');
   }
