@@ -231,32 +231,106 @@ export async function submitBdMeetingMom(client, actor, meetingId, payload = {})
 export async function listBranchHeadSurveyRequests(client, actor) {
   requireRole(actor, ['Branch Head'], 'branch_survey_denied', 'Branch Head access is required.');
   const result = await client.from('site_visits')
-    .select('id,lead_id,client_name,site_name,site_location,scheduled_visit_date,status,current_stage,pending_with,source_lead_mom_id,branch_head_profile_id,assigned_operations_manager_profile_id,routing_status,metadata,created_at,updated_at')
+    .select('id,lead_id,client_name,site_name,site_location,owner_state,scheduled_visit_date,status,current_stage,pending_with,source_lead_mom_id,branch_head_profile_id,assigned_operations_manager_profile_id,routing_status,created_at,updated_at')
     .eq('branch_head_profile_id', actor.profileId)
     .order('created_at', { ascending: false });
   if (result.error) throw result.error;
-  return enrichSurveyRequestsWithMom(client, result.data || []);
+  return enrichSurveyRequestsWithContext(client, result.data || []);
 }
 
 export async function listOperationsManagerSurveyTasks(client, actor) {
   requireRole(actor, ['Operations Manager'], 'operations_survey_denied', 'Operations Manager access is required.');
   const result = await client.from('site_visits')
-    .select('id,lead_id,client_name,site_name,site_location,scheduled_visit_date,status,current_stage,pending_with,source_lead_mom_id,branch_head_profile_id,assigned_operations_manager_profile_id,routing_status,metadata,created_at,updated_at')
+    .select('id,lead_id,client_name,site_name,site_location,owner_state,scheduled_visit_date,status,current_stage,pending_with,source_lead_mom_id,branch_head_profile_id,assigned_operations_manager_profile_id,routing_status,created_at,updated_at')
     .eq('assigned_operations_manager_profile_id', actor.profileId)
     .order('created_at', { ascending: false });
   if (result.error) throw result.error;
-  return enrichSurveyRequestsWithMom(client, result.data || []);
+  return enrichSurveyRequestsWithContext(client, result.data || []);
 }
 
-async function enrichSurveyRequestsWithMom(client, visits) {
+function safeProfileName(profile) {
+  return profile?.full_name || profile?.employee_code || null;
+}
+
+function selectActiveHandoff(handoffs) {
+  return handoffs.find((handoff) => handoff.handoff_status === 'accepted')
+    || handoffs.find((handoff) => handoff.handoff_status === 'pending')
+    || handoffs[0]
+    || null;
+}
+
+async function enrichSurveyRequestsWithContext(client, visits) {
+  if (!visits.length) return [];
   const momIds = [...new Set(visits.map((visit) => visit.source_lead_mom_id).filter(Boolean))];
-  if (!momIds.length) return visits;
-  const moms = await client.from('lead_mom')
-    .select('id,subject,requirement_discussed,scope_summary,key_points,client_expectations,site_survey_required,preferred_survey_date,site_contact,site_address,survey_notes,mom_status,sent_at')
-    .in('id', momIds);
+  const leadIds = [...new Set(visits.map((visit) => visit.lead_id).filter(Boolean))];
+  const [moms, leads, handoffs] = await Promise.all([
+    momIds.length
+      ? client.from('lead_mom')
+        .select('id,subject,requirement_discussed,scope_summary,key_points,client_expectations,site_survey_required,preferred_survey_date,site_contact,site_address,survey_notes,mom_status,sent_at')
+        .in('id', momIds)
+      : { data: [], error: null },
+    leadIds.length
+      ? client.from('leads')
+        .select('id,state,pre_sales_owner_profile_id,created_by_name')
+        .in('id', leadIds)
+      : { data: [], error: null },
+    leadIds.length
+      ? client.from('lead_handoffs')
+        .select('id,lead_id,from_profile_id,to_profile_id,handoff_status,accepted_at,created_at')
+        .in('lead_id', leadIds)
+        .order('created_at', { ascending: false })
+      : { data: [], error: null },
+  ]);
   if (moms.error) throw moms.error;
-  const byId = new Map((moms.data || []).map((mom) => [mom.id, mom]));
-  return visits.map((visit) => ({ ...visit, mom: byId.get(visit.source_lead_mom_id) || null }));
+  if (leads.error) throw leads.error;
+  if (handoffs.error) throw handoffs.error;
+
+  const momById = new Map((moms.data || []).map((mom) => [mom.id, mom]));
+  const leadById = new Map((leads.data || []).map((lead) => [lead.id, lead]));
+  const handoffsByLead = new Map();
+  for (const handoff of handoffs.data || []) {
+    const rows = handoffsByLead.get(handoff.lead_id) || [];
+    rows.push(handoff);
+    handoffsByLead.set(handoff.lead_id, rows);
+  }
+
+  const activeHandoffByLead = new Map(
+    leadIds.map((leadId) => [leadId, selectActiveHandoff(handoffsByLead.get(leadId) || [])]),
+  );
+  const profileIds = [...new Set(visits.flatMap((visit) => {
+    const lead = leadById.get(visit.lead_id);
+    const handoff = activeHandoffByLead.get(visit.lead_id);
+    return [
+      lead?.pre_sales_owner_profile_id,
+      handoff?.from_profile_id,
+      handoff?.to_profile_id,
+      visit.branch_head_profile_id,
+      visit.assigned_operations_manager_profile_id,
+    ];
+  }).filter(Boolean))];
+  const profiles = profileIds.length
+    ? await client.from('profiles').select('id,full_name,employee_code').in('id', profileIds)
+    : { data: [], error: null };
+  if (profiles.error) throw profiles.error;
+  const profileById = new Map((profiles.data || []).map((profile) => [profile.id, profile]));
+
+  return visits.map((visit) => {
+    const mom = momById.get(visit.source_lead_mom_id) || null;
+    const lead = leadById.get(visit.lead_id) || null;
+    const handoff = activeHandoffByLead.get(visit.lead_id) || null;
+    const preSalesProfile = profileById.get(lead?.pre_sales_owner_profile_id)
+      || profileById.get(handoff?.from_profile_id);
+    return {
+      ...visit,
+      lead_state: lead?.state || visit.owner_state || null,
+      preferred_survey_date: mom?.preferred_survey_date || null,
+      assigned_bd_name: safeProfileName(profileById.get(handoff?.to_profile_id)),
+      originating_pre_sales_name: safeProfileName(preSalesProfile) || lead?.created_by_name || null,
+      assigned_branch_head_name: safeProfileName(profileById.get(visit.branch_head_profile_id)),
+      assigned_operations_manager_name: safeProfileName(profileById.get(visit.assigned_operations_manager_profile_id)),
+      mom,
+    };
+  });
 }
 
 export async function listBranchOperationsManagers(client, actor, siteVisitId) {

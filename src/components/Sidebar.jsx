@@ -27,7 +27,12 @@ import {
   isManagement,
   isOperationsTeam,
 } from '../data/mockUsers.js';
-import { canAccessNavRoute, normalizeAppRole, usesOperationsSidebar } from '../utils/authRoles.js';
+import {
+  canAccessNavRoute,
+  normalizeAppRole,
+  normalizeCanonicalRole,
+  usesOperationsSidebar,
+} from '../utils/authRoles.js';
 import { isDemoUser } from '../utils/demoAccess.js';
 import { useHospitalTicketAccess } from '../hooks/useHospitalTicketAccess.js';
 import Logo from './Logo.jsx';
@@ -199,6 +204,18 @@ const tenderDemoNavGroups = [
   },
 ];
 
+const operationsManagerNavGroups = [
+  {
+    title: 'Operations Workbench',
+    items: [
+      { label: 'Dashboard', to: '/dashboard', icon: Home },
+      { label: 'Site Survey Requests', to: '/site-survey-requests', icon: ClipboardCheck },
+      { label: 'Assigned Approvals', to: '/tasks', icon: ShieldCheck },
+      { label: 'Settings', to: '/settings', icon: Settings },
+    ],
+  },
+];
+
 const preSalesOnlyNavGroups = [
   {
     title: 'Workspace',
@@ -225,6 +242,7 @@ export default function Sidebar({ isOpen, onClose }) {
   const currentTarget = `${location.pathname}${location.search}`;
   const executiveViewer = isManagement(user) || isFinanceLeadership(user);
   const preSalesUser = normalizeAppRole(user?.rawRole || user?.role) === 'PreSales';
+  const canonicalRole = normalizeCanonicalRole(user?.rawRole || user?.role);
   const baseNavGroups = preSalesUser
     ? preSalesOnlyNavGroups
     : isDemoUser(user)
@@ -233,6 +251,8 @@ export default function Sidebar({ isOpen, onClose }) {
     ? adminDemoNavGroups
     : executiveViewer
     ? executiveNavGroups
+    : canonicalRole === 'Operations Manager'
+      ? operationsManagerNavGroups
     : usesOperationsSidebar(user) || isExistingBusinessOperations(user)
         ? operationsNavGroups
       : isApprovalReviewer(user)

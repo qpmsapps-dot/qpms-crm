@@ -38,10 +38,31 @@ test('BD owns handoff decisions, meeting MOM, survey decision, and final outcome
 test('Branch Head and Operations Manager use an assignment-specific queue', () => {
   const page = source('src/pages/SiteSurveyRequests.jsx');
   const roles = source('src/utils/authRoles.js');
+  const service = source('backend/services/opportunityWorkflowService.js');
+  const surveyProjection = service.slice(
+    service.indexOf('export async function listBranchHeadSurveyRequests'),
+    service.indexOf('export async function listBranchOperationsManagers'),
+  );
   assert.match(page, /getBranchHeadSiteSurveys/);
   assert.match(page, /getAssignedOperationsSiteSurveys/);
   assert.match(page, /Only validated direct reports are available/);
+  assert.match(page, /Lead State/);
+  assert.match(page, /Preferred Survey Date/);
+  assert.match(page, /Assigned BD/);
+  assert.match(page, /Originating Pre-Sales/);
+  assert.match(page, /Assigned Branch Head/);
   assert.match(roles, /site-survey-requests/);
+  assert.match(surveyProjection, /\.eq\('branch_head_profile_id', actor\.profileId\)/);
+  assert.match(surveyProjection, /\.eq\('assigned_operations_manager_profile_id', actor\.profileId\)/);
+  assert.match(surveyProjection, /lead_state/);
+  assert.match(surveyProjection, /preferred_survey_date/);
+  assert.match(surveyProjection, /assigned_bd_name/);
+  assert.match(surveyProjection, /originating_pre_sales_name/);
+  assert.match(surveyProjection, /assigned_branch_head_name/);
+  assert.doesNotMatch(surveyProjection, /\bbusiness\b/i);
+  for (const sensitive of ['proposal_value', 'margin_percent', 'finance_remarks', 'commercial_remarks', 'proposal_payload', 'kyc']) {
+    assert.doesNotMatch(surveyProjection, new RegExp(sensitive, 'i'));
+  }
 });
 
 test('READ_ONLY_UAT_MODE still guards every new mutation route', () => {

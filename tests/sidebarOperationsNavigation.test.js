@@ -56,6 +56,32 @@ test('Operations sidebar remains filtered by route authorization and keeps Fault
   assert.equal(canAccessNavRoute(user('Branch Head'), '/fo-activities'), true);
 });
 
+test('Operations Manager receives only the assigned Site Survey navigation within established access', () => {
+  const operationsManagerPreset = sidebarSource.slice(
+    sidebarSource.indexOf('const operationsManagerNavGroups'),
+    sidebarSource.indexOf('const preSalesOnlyNavGroups'),
+  );
+  const preSalesPreset = sidebarSource.slice(
+    sidebarSource.indexOf('const preSalesOnlyNavGroups'),
+    sidebarSource.indexOf('function navLabelForRole'),
+  );
+  const businessPreset = sidebarSource.slice(
+    sidebarSource.indexOf('const businessNavGroups'),
+    sidebarSource.indexOf('const reviewNavGroups'),
+  );
+
+  assert.match(operationsManagerPreset, /label: 'Site Survey Requests', to: '\/site-survey-requests'/);
+  assert.doesNotMatch(operationsManagerPreset, /to: '\/fo-activities'/);
+  assert.doesNotMatch(operationsManagerPreset, /User Management|Finance Review|HR Review|Commercial Review/);
+  assert.match(sidebarSource, /canonicalRole === 'Operations Manager'[\s\S]*\? operationsManagerNavGroups/);
+  assert.equal(canAccessNavRoute(user('Operations Manager'), '/site-survey-requests'), true);
+  assert.equal(canAccessNavRoute(user('Branch Head'), '/site-survey-requests'), true);
+  assert.equal(canAccessNavRoute(user('Pre-Sales'), '/site-survey-requests'), false);
+  assert.equal(canAccessNavRoute(user('BD Executive'), '/site-survey-requests'), false);
+  assert.doesNotMatch(preSalesPreset, /site-survey-requests/);
+  assert.doesNotMatch(businessPreset, /site-survey-requests/);
+});
+
 test('unfinished modules are centrally hidden from every sidebar preset', () => {
   const hiddenRoutesSource = sidebarSource.match(/const TEMPORARILY_HIDDEN_NAV_ROUTES = new Set\(\[([\s\S]*?)\]\);/)?.[1] || '';
 

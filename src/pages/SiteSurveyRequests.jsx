@@ -14,6 +14,12 @@ import {
 import { normalizeCanonicalRole } from '../utils/authRoles.js';
 import { formatDateTime } from '../utils/preSalesFormat.js';
 
+function formatDate(value) {
+  if (!value) return 'Not recorded';
+  const date = new Date(`${String(value).slice(0, 10)}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? 'Not recorded' : date.toLocaleDateString('en-IN', { dateStyle: 'medium' });
+}
+
 export default function SiteSurveyRequests() {
   const { user } = useAuth();
   const role = normalizeCanonicalRole(user?.rawRole || user?.role);
@@ -79,6 +85,13 @@ export default function SiteSurveyRequests() {
               <div>
                 <p className="text-lg font-bold text-slate-950">{item.client_name || item.site_name || 'Site Survey'}</p>
                 <p className="mt-1 text-sm text-slate-500">{item.site_location || 'Location not recorded'}</p>
+                <dl className="mt-3 grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
+                  <div><dt className="font-semibold text-slate-500">Lead State</dt><dd>{item.lead_state || 'Not recorded'}</dd></div>
+                  <div><dt className="font-semibold text-slate-500">Preferred Survey Date</dt><dd>{formatDate(item.preferred_survey_date)}</dd></div>
+                  <div><dt className="font-semibold text-slate-500">Assigned BD</dt><dd>{item.assigned_bd_name || 'Not recorded'}</dd></div>
+                  <div><dt className="font-semibold text-slate-500">Originating Pre-Sales</dt><dd>{item.originating_pre_sales_name || 'Not recorded'}</dd></div>
+                  {!isBranchHead ? <div><dt className="font-semibold text-slate-500">Assigned Branch Head</dt><dd>{item.assigned_branch_head_name || 'Not recorded'}</dd></div> : null}
+                </dl>
                 {item.mom ? <div className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-700"><p className="font-bold text-slate-900">{item.mom.subject || 'BD Meeting MOM'}</p><p className="mt-1">{item.mom.requirement_discussed || item.mom.scope_summary || 'Requirement summary not recorded.'}</p>{item.mom.survey_notes ? <p className="mt-1 text-slate-500">Survey notes: {item.mom.survey_notes}</p> : null}</div> : null}
                 <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-600">
                   <span className="rounded-full bg-slate-100 px-3 py-1">{item.status}</span>
