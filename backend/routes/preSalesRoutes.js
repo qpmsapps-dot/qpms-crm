@@ -34,13 +34,20 @@ import {
   sendOpportunityProposal,
   submitBdMeetingMom,
 } from '../services/opportunityWorkflowService.js';
+import { isPlatformAdmin } from '../shared/platformAdmin.js';
 
 function respondError(response, error) {
-  const status = Number(error?.statusCode || error?.status || 500);
+  const databaseContractCodes = new Set(['42P01', '42703', '42883', 'PGRST202', 'PGRST204']);
+  const contractMismatch = databaseContractCodes.has(String(error?.code || '').toUpperCase());
+  const status = contractMismatch ? 503 : Number(error?.statusCode || error?.status || 500);
   response.status(status).json({
     ok: false,
-    code: error?.code || 'pre_sales_request_failed',
-    message: status >= 500 ? 'Pre-Sales service is temporarily unavailable.' : error.message,
+    code: contractMismatch ? 'pre_sales_backend_contract_mismatch' : error?.code || 'pre_sales_request_failed',
+    message: contractMismatch
+      ? 'The Pre-Sales backend/database contract is unavailable. Please contact support with this error code.'
+      : status >= 500
+        ? 'The Pre-Sales request failed unexpectedly. Please contact support with the response error code.'
+        : error.message,
   });
 }
 
@@ -74,7 +81,8 @@ export function registerPreSalesRoutes({
       return;
     }
     const actor = leadActor(request.profile, request.authUser);
-    if (!['Pre-Sales', 'BD Executive', 'BD Head', 'Branch Head', 'Operations Manager'].includes(normalizeLeadRole(actor.role))) {
+    if (!isPlatformAdmin(actor)
+      && !['Pre-Sales', 'BD Executive', 'BD Head', 'Branch Head', 'Operations Manager'].includes(normalizeLeadRole(actor.role))) {
       response.status(403).json({ ok: false, code: 'opportunity_workflow_denied', message: 'You do not have access to this opportunity workflow.' });
       return;
     }

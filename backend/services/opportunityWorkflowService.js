@@ -1,6 +1,7 @@
 import { normalizeLeadRole } from './leadManagementService.js';
 import { assertPreSalesLeadMutable } from './preSalesService.js';
 import { normalizedStateKey } from './workMappingScope.js';
+import { isPlatformAdmin } from '../shared/platformAdmin.js';
 
 function httpError(statusCode, code, message) {
   const error = new Error(message);
@@ -55,6 +56,7 @@ function rpcError(error) {
 }
 
 function requireRole(actor, roles, code, message) {
+  if (isPlatformAdmin(actor)) return 'Admin';
   const role = normalizeLeadRole(actor?.role);
   if (!roles.includes(role)) throw httpError(403, code, message);
   return role;
@@ -93,7 +95,7 @@ export async function listBdOpportunityWork(client, actor) {
   let handoffQuery = client.from('lead_handoffs')
     .select('*,from_profile:profiles!lead_handoffs_from_profile_id_fkey(id,full_name,employee_code),to_profile:profiles!lead_handoffs_to_profile_id_fkey(id,full_name,employee_code)')
     .order('created_at', { ascending: false });
-  handoffQuery = handoffQuery.eq('to_profile_id', actor.profileId);
+  if (!isPlatformAdmin(actor)) handoffQuery = handoffQuery.eq('to_profile_id', actor.profileId);
   const handoffResult = await handoffQuery;
   if (handoffResult.error) throw handoffResult.error;
   const handoffs = handoffResult.data || [];
@@ -192,11 +194,11 @@ export async function sendOpportunityProposal(client, actor, proposalId, idempot
 
 export async function listOpportunityNotifications(client, actor, limit = 20) {
   if (!actor?.profileId) throw httpError(403, 'opportunity_notifications_denied', 'An active employee profile is required.');
-  const result = await client.from('opportunity_notifications')
+  let query = client.from('opportunity_notifications')
     .select('id,lead_id,notification_type,title,message,action_url,read_at,metadata,created_at')
-    .eq('recipient_profile_id', actor.profileId)
-    .order('created_at', { ascending: false })
-    .limit(Math.min(50, Math.max(1, Number(limit) || 20)));
+    .order('created_at', { ascending: false });
+  if (!isPlatformAdmin(actor)) query = query.eq('recipient_profile_id', actor.profileId);
+  const result = await query.limit(Math.min(50, Math.max(1, Number(limit) || 20)));
   if (result.error) throw result.error;
   return result.data || [];
 }
@@ -235,20 +237,22 @@ export async function submitBdMeetingMom(client, actor, meetingId, payload = {})
 
 export async function listBranchHeadSurveyRequests(client, actor) {
   requireRole(actor, ['Branch Head'], 'branch_survey_denied', 'Branch Head access is required.');
-  const result = await client.from('site_visits')
+  let query = client.from('site_visits')
     .select('id,lead_id,client_name,site_name,site_location,owner_state,scheduled_visit_date,status,current_stage,pending_with,source_lead_mom_id,branch_head_profile_id,assigned_operations_manager_profile_id,routing_status,created_at,updated_at')
-    .eq('branch_head_profile_id', actor.profileId)
     .order('created_at', { ascending: false });
+  if (!isPlatformAdmin(actor)) query = query.eq('branch_head_profile_id', actor.profileId);
+  const result = await query;
   if (result.error) throw result.error;
   return enrichSurveyRequestsWithContext(client, result.data || []);
 }
 
 export async function listOperationsManagerSurveyTasks(client, actor) {
   requireRole(actor, ['Operations Manager'], 'operations_survey_denied', 'Operations Manager access is required.');
-  const result = await client.from('site_visits')
+  let query = client.from('site_visits')
     .select('id,lead_id,client_name,site_name,site_location,owner_state,scheduled_visit_date,status,current_stage,pending_with,source_lead_mom_id,branch_head_profile_id,assigned_operations_manager_profile_id,routing_status,created_at,updated_at')
-    .eq('assigned_operations_manager_profile_id', actor.profileId)
     .order('created_at', { ascending: false });
+  if (!isPlatformAdmin(actor)) query = query.eq('assigned_operations_manager_profile_id', actor.profileId);
+  const result = await query;
   if (result.error) throw result.error;
   return enrichSurveyRequestsWithContext(client, result.data || []);
 }
@@ -343,8 +347,18 @@ export async function listBranchOperationsManagers(client, actor, siteVisitId) {
   const visit = await client.from('site_visits').select('id,branch_head_profile_id,owner_state').eq('id', siteVisitId).maybeSingle();
   if (visit.error) throw visit.error;
   if (!visit.data) throw httpError(404, 'site_survey_not_found', 'Site Survey request not found.');
-  if (visit.data.branch_head_profile_id !== actor.profileId) throw httpError(403, 'site_survey_not_assigned_to_branch_head', 'This Site Survey request is assigned to another Branch Head.');
-  const hierarchy = await client.from('employee_hierarchy').select('employee_code').eq('manager_employee_code', actor.employeeCode).eq('is_active', true);
+  if (!isPlatformAdmin(actor) && visit.data.branch_head_profile_id !== actor.profileId) throw httpError(403, 'site_survey_not_assigned_to_branch_head', 'This Site Survey request is assigned to another Branch Head.');
+  let routedBranchEmployeeCode = actor.employeeCode;
+  if (isPlatformAdmin(actor)) {
+    const routedBranch = await client.from('profiles')
+      .select('employee_code')
+      .eq('id', visit.data.branch_head_profile_id)
+      .maybeSingle();
+    if (routedBranch.error) throw routedBranch.error;
+    if (!routedBranch.data?.employee_code) throw httpError(409, 'branch_head_unresolved', 'The routed Branch Head is not available.');
+    routedBranchEmployeeCode = routedBranch.data.employee_code;
+  }
+  const hierarchy = await client.from('employee_hierarchy').select('employee_code').eq('manager_employee_code', routedBranchEmployeeCode).eq('is_active', true);
   if (hierarchy.error) throw hierarchy.error;
   const codes = [...new Set((hierarchy.data || []).map((row) => row.employee_code).filter(Boolean))];
   if (!codes.length) return [];

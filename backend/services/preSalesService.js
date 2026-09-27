@@ -26,6 +26,7 @@ import {
   isAllStatesScope,
   stateScopeQueryValues,
 } from './workMappingScope.js';
+import { isPlatformAdmin } from '../shared/platformAdmin.js';
 
 const FULL_PRE_SALES_ROLES = new Set([
   'BD Head', 'Admin', 'QPMS Admin', 'Developer', 'COO', 'Executive Assistant', 'GM', 'MD',
@@ -82,6 +83,7 @@ function isPreSalesActor(actor) {
 }
 
 export function applyPreSalesLeadScope(query, actor) {
+  if (isPlatformAdmin(actor)) return query;
   if (FULL_PRE_SALES_ROLES.has(actor?.role)) return query;
   if (actor?.role === 'Business Head') {
     if (isAllBusinessesScope(actor.business)) return query.eq('id', '00000000-0000-0000-0000-000000000000');
@@ -137,11 +139,12 @@ export async function getPostHandoverState(client, lead) {
 
 export async function preSalesLeadPermissions(client, actor, lead) {
   const canView = canViewLead(actor, lead);
-  const state = canView && isPreSalesActor(actor)
+  const stageBoundActor = isPreSalesActor(actor) || isPlatformAdmin(actor);
+  const state = canView && stageBoundActor
     ? await getPostHandoverState(client, lead)
     : { post_handover: false, markers: {} };
   const baseCanEdit = canEditLead(actor, lead);
-  const preSalesReadOnly = isPreSalesActor(actor) && state.post_handover;
+  const preSalesReadOnly = stageBoundActor && state.post_handover;
   const canAct = baseCanEdit && !preSalesReadOnly;
   return {
     can_view: canView,
@@ -404,7 +407,12 @@ export async function addCallUpdate(client, actor, leadId, payload) {
   const result = await client.rpc('rpc_add_pre_sales_call_update', {
     p_lead_id: leadId,
     p_payload: { ...input, pre_sales_stage: stage, feedback_label: PRE_SALES_FEEDBACK_LABELS[input.feedback_type] },
-    p_actor: { profile_id: actor.profileId || null, name: actor.name || actor.employeeCode || actor.email || 'Unknown' },
+    p_actor: {
+      profile_id: actor.profileId || null,
+      name: actor.name || actor.employeeCode || actor.email || 'Unknown',
+      role: actor.role || null,
+      admin_override: isPlatformAdmin(actor),
+    },
   });
   if (result.error) throw result.error;
   return result.data;

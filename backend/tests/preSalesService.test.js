@@ -30,8 +30,16 @@ test('call update uses one atomic database RPC after authorization', async () =>
   const lead = { id: 'lead-1', status: 'Active', pre_sales_owner_profile_id: 'actor-1' };
   const client = {
     from(table) {
-      assert.equal(table, 'leads');
-      return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: lead, error: null }) }) }) };
+      if (table === 'leads') {
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: lead, error: null }) }) }) };
+      }
+      return {
+        select: () => ({
+          eq() { return this; },
+          order() { return this; },
+          limit: async () => ({ data: [], error: null }),
+        }),
+      };
     },
     async rpc(name, payload) { calls.push({ name, payload }); return { data: { lead }, error: null }; },
   };
@@ -40,6 +48,28 @@ test('call update uses one atomic database RPC after authorization', async () =>
   assert.equal(calls.length, 1);
   assert.equal(calls[0].name, 'rpc_add_pre_sales_call_update');
   assert.equal(calls[0].payload.p_payload.pre_sales_stage, 'follow_up');
+  assert.equal(calls[0].payload.p_actor.admin_override, true);
+  assert.equal(calls[0].payload.p_actor.role, 'Admin');
+});
+
+test('Admin lead scope is global while post-handover mutation stage remains read-only', async () => {
+  const operations = [];
+  const query = { or(value) { operations.push(['or', value]); return this; }, eq(...args) { operations.push(['eq', ...args]); return this; } };
+  assert.equal(applyPreSalesLeadScope(query, { role: 'Admin', profileId: 'admin-1' }), query);
+  assert.deepEqual(operations, []);
+
+  const acceptedLead = { id: 'lead-accepted', status: 'Active', pre_sales_stage: 'bd_accepted' };
+  const client = {
+    from(table) {
+      if (table === 'leads') return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: acceptedLead, error: null }) }) }) };
+      return { select: () => ({ eq() { return this; }, order() { return this; }, limit: async () => ({ data: [], error: null }) }) };
+    },
+    async rpc() { throw new Error('RPC must not run after handover'); },
+  };
+  await assert.rejects(
+    addCallUpdate(client, { role: 'Admin', profileId: 'admin-1' }, acceptedLead.id, { feedback_type: 'no_requirement', notes: 'Not allowed after handover' }),
+    (error) => error.statusCode === 409 && error.code === 'pre_sales_opportunity_read_only',
+  );
 });
 
 test('executive scoping is applied at query level rather than browser filtering', () => {

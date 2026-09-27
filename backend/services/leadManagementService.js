@@ -8,6 +8,7 @@ import {
   BUSINESS_DEVELOPMENT_CAPABILITIES,
   normalizeBusinessDevelopmentCapability,
 } from '../shared/businessDevelopmentRoles.js';
+import { isPlatformAdmin } from '../shared/platformAdmin.js';
 
 const FULL_VISIBILITY_ROLES = new Set([
   'BD Head',
@@ -132,16 +133,19 @@ export function leadActor(profile, authUser = {}) {
 
 export function canAccessLeadModule(actor) {
   if (actor?.role === 'Executive Assistant' && actor.webAccessEnabled === false) return false;
+  if (isPlatformAdmin(actor)) return isActiveLeadProfile({ is_active: true, status: 'Active', ...actor });
   return isActiveLeadProfile({ is_active: true, status: 'Active', ...actor }) && LEAD_ACCESS_ROLES.has(normalizeLeadRole(actor?.role));
 }
 
 export function canCreateLead(actor) {
   if (actor?.role === 'DEMO_VIEWER') return false;
+  if (isPlatformAdmin(actor)) return true;
   return CREATE_ROLES.has(normalizeLeadRole(actor?.role));
 }
 
 export function canAssignLead(actor) {
   if (actor?.role === 'DEMO_VIEWER') return false;
+  if (isPlatformAdmin(actor)) return true;
   return ASSIGNMENT_ROLES.has(normalizeLeadRole(actor?.role));
 }
 
@@ -163,6 +167,7 @@ export function leadListResponse(actor, leads = []) {
 
 export function canManageLeadMom(actor, lead) {
   if (actor?.role === 'DEMO_VIEWER') return false;
+  if (isPlatformAdmin(actor)) return canViewLead(actor, lead);
   return MOM_ROLES.has(actor?.role) && canViewLead(actor, lead);
 }
 
@@ -190,6 +195,7 @@ export function leadMomContactRecipients(contacts = []) {
 
 export function canViewLead(actor, lead) {
   if (!actor || !lead) return false;
+  if (isPlatformAdmin(actor)) return true;
   const role = normalizeLeadRole(actor.role);
   if (role === 'DEMO_VIEWER') return true;
   if (FULL_VISIBILITY_ROLES.has(role)) return true;
@@ -225,6 +231,7 @@ export function canViewLead(actor, lead) {
 export function canEditLead(actor, lead) {
   const role = normalizeLeadRole(actor?.role);
   if (role === 'DEMO_VIEWER') return false;
+  if (isPlatformAdmin(actor)) return Boolean(lead);
   if (!canViewLead(actor, lead)) return false;
   if (role === 'BD Executive' || role === 'Pre-Sales') return true;
   if (role === 'Executive Assistant') return false;

@@ -11,7 +11,7 @@ import {
   getBranchHeadSiteSurveys,
   getBranchOperationsManagers,
 } from '../services/preSalesApi.js';
-import { normalizeCanonicalRole } from '../utils/authRoles.js';
+import { isPlatformAdmin, normalizeCanonicalRole } from '../utils/authRoles.js';
 import { formatDateTime } from '../utils/preSalesFormat.js';
 
 function formatDate(value) {
@@ -24,6 +24,7 @@ export default function SiteSurveyRequests() {
   const { user } = useAuth();
   const role = normalizeCanonicalRole(user?.rawRole || user?.role);
   const isBranchHead = role === 'Branch Head';
+  const canAssignOperationsManager = isBranchHead || isPlatformAdmin(user);
   const [state, setState] = useState({ loading: true, error: '', items: [] });
   const [assignment, setAssignment] = useState({ siteVisitId: '', options: [], selected: '', loading: false, error: '' });
   usePageTitle('Site Survey Requests');
@@ -31,14 +32,14 @@ export default function SiteSurveyRequests() {
   const load = useCallback(async () => {
     setState((current) => ({ ...current, loading: true, error: '' }));
     try {
-      const response = isBranchHead
+      const response = canAssignOperationsManager
         ? await getBranchHeadSiteSurveys()
         : await getAssignedOperationsSiteSurveys();
       setState({ loading: false, error: '', items: response.items || [] });
     } catch (error) {
       setState({ loading: false, error: error.message, items: [] });
     }
-  }, [isBranchHead]);
+  }, [canAssignOperationsManager]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -70,8 +71,8 @@ export default function SiteSurveyRequests() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={isBranchHead ? 'Site Survey Requests' : 'Assigned Site Surveys'}
-        subtitle={isBranchHead
+        title={canAssignOperationsManager ? 'Site Survey Requests' : 'Assigned Site Surveys'}
+        subtitle={canAssignOperationsManager
           ? 'Assign routed requests only to Operations Managers in your reporting hierarchy.'
           : 'Complete the Site Visit and assessment tasks assigned to you.'}
       />
@@ -99,7 +100,7 @@ export default function SiteSurveyRequests() {
                   <span className="rounded-full bg-slate-100 px-3 py-1">Updated {formatDateTime(item.updated_at)}</span>
                 </div>
               </div>
-              {isBranchHead && !item.assigned_operations_manager_profile_id ? (
+              {canAssignOperationsManager && !item.assigned_operations_manager_profile_id ? (
                 <button type="button" onClick={() => openAssignment(item.id)} className="rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white">Assign Operations Manager</button>
               ) : (
                 <Link to={`/site-visit/${encodeURIComponent(item.id)}`} className="rounded-xl bg-blue-700 px-4 py-2.5 text-center text-sm font-bold text-white">Open Site Visit</Link>

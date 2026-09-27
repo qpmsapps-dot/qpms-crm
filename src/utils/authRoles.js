@@ -31,6 +31,22 @@ function normalizedRoleKey(role = '') {
   return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
 }
 
+const PLATFORM_ADMIN_ROLE_KEYS = new Set([
+  'ADMIN',
+  'QPMSADMIN',
+  'DEVELOPER',
+  'DEV',
+  'ITADMIN',
+  'MANAGEMENTITADMIN',
+]);
+
+export function isPlatformAdmin(roleOrUser = '') {
+  const role = typeof roleOrUser === 'object' && roleOrUser !== null
+    ? roleOrUser.rawRole || roleOrUser.raw_role || roleOrUser.role
+    : roleOrUser;
+  return PLATFORM_ADMIN_ROLE_KEYS.has(normalizedRoleKey(role));
+}
+
 export function hasCooWebVisibility(roleOrUser = '') {
   const role = typeof roleOrUser === 'object' && roleOrUser !== null
     ? roleOrUser.rawRole || roleOrUser.role
@@ -246,6 +262,8 @@ export function canManageHospitalFeedbackQr(user) {
 }
 
 export function canAccessRoute(user, pathname) {
+  if (!user) return false;
+  if (isPlatformAdmin(user)) return true;
   if (normalizeAppRole(user?.rawRole || user?.role) === 'PreSales') {
     return pathname.startsWith('/dashboard') || pathname.startsWith('/pre-sales');
   }

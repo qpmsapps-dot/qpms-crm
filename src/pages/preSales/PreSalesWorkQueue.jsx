@@ -7,7 +7,7 @@ import { useAuth } from '../../context/auth-context.js';
 import { usePageTitle } from '../../hooks/usePageTitle.js';
 import { getFollowups, getPreSalesDashboard, getPreSalesLeads } from '../../services/preSalesApi.js';
 import { formatDateTime } from '../../utils/preSalesFormat.js';
-import { normalizeCanonicalRole } from '../../utils/authRoles.js';
+import { isPlatformAdmin, normalizeCanonicalRole } from '../../utils/authRoles.js';
 
 const queueCopy = {
   today: { title: 'Today Follow-ups', subtitle: 'Follow-ups scheduled for today.' },
@@ -26,7 +26,7 @@ export default function PreSalesWorkQueue() {
   const title = routeMode === 'meetings' ? 'Today Meetings' : routeMode === 'handover' ? 'Handover to BD' : routeMode === 'reports' ? 'Pre-Sales Reports' : queueCopy[filter].title;
   const subtitle = routeMode === 'meetings' ? "Today's scheduled Pre-Sales meetings." : routeMode === 'handover' ? 'Qualified leads waiting for Business Development handover.' : routeMode === 'reports' ? 'Pre-Sales operational summary and handover status.' : queueCopy[filter].subtitle;
   const canonicalRole = normalizeCanonicalRole(user?.rawRole || user?.role);
-  const isBdActor = ['BD Executive', 'BD Head'].includes(canonicalRole);
+  const isBdActor = isPlatformAdmin(user) || ['BD Executive', 'BD Head'].includes(canonicalRole);
   usePageTitle(title);
   const [state, setState] = useState({ loading: true, error: '', items: [], summary: null });
 

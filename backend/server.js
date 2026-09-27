@@ -119,6 +119,7 @@ import {
   BUSINESS_DEVELOPMENT_CAPABILITIES,
   normalizeBusinessDevelopmentCapability,
 } from './shared/businessDevelopmentRoles.js';
+import { isPlatformAdmin } from './shared/platformAdmin.js';
 import {
   canAccessLeadModule,
   canAssignLead,
@@ -1821,7 +1822,7 @@ function normalizePermissionRole(role) {
 }
 
 function requirePostmanTestResetAdmin(request, response, next) {
-  if (normalizePermissionRole(request.profile?.role) !== 'ADMIN') {
+  if (!isPlatformAdmin(request.profile)) {
     response.status(403).json({
       ok: false,
       message: 'Admin permission is required.',
@@ -1837,7 +1838,7 @@ function hasUserManagementPermission(profile) {
   if (['INACTIVE', 'DISABLED', 'DEACTIVATED'].includes(normalizePermissionRole(profile.status))) {
     return false;
   }
-  return USER_MANAGEMENT_ROLE_KEYS.has(normalizePermissionRole(profile.role));
+  return isPlatformAdmin(profile) || USER_MANAGEMENT_ROLE_KEYS.has(normalizePermissionRole(profile.role));
 }
 
 function requireUserManagementPermission(request, response, next) {
@@ -2141,7 +2142,7 @@ function storeMasterErrorResponse(response, error) {
 
 function requireRoles(roles) {
   return (request, response, next) => {
-    if (!roles.includes(request.apiUser?.role)) {
+    if (!isPlatformAdmin(request.apiUser) && !roles.includes(request.apiUser?.role)) {
       response.status(403).json({ ok: false, message: `Role ${request.apiUser?.role || 'Unknown'} cannot perform this action.` });
       return;
     }
@@ -9677,7 +9678,7 @@ app.get('/api/approvals/queue', requireApiAuth, async (request, response) => {
       return;
     }
 
-    if (request.apiUser.role !== 'Admin' && reviewerRoleToDepartment[request.apiUser.role] !== requestedDepartment) {
+    if (!isPlatformAdmin(request.apiUser) && reviewerRoleToDepartment[request.apiUser.role] !== requestedDepartment) {
       response.status(403).json({ ok: false, message: `${request.apiUser.role} cannot view ${requestedDepartment} queue.` });
       return;
     }
@@ -9714,7 +9715,7 @@ app.post('/api/approvals/:approvalId/decision', requireApiAuth, async (request, 
     if (fetchError) throw fetchError;
 
     const assignedRole = reviewerRoleForStage(approval.approval_stage);
-    if (request.apiUser.role !== 'Admin' && request.apiUser.role !== assignedRole) {
+    if (!isPlatformAdmin(request.apiUser) && request.apiUser.role !== assignedRole) {
       response.status(403).json({ ok: false, message: `${request.apiUser.role} cannot decide ${stageToDepartment(approval.approval_stage)} approval.` });
       return;
     }

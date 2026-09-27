@@ -18,7 +18,6 @@ import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/auth-context.js';
 import {
   isApprovalReviewer,
-  isAdmin,
   isCoordinator,
   isExistingBusinessOperations,
   isFinanceLeadership,
@@ -29,6 +28,7 @@ import {
 } from '../data/mockUsers.js';
 import {
   canAccessNavRoute,
+  isPlatformAdmin,
   normalizeAppRole,
   normalizeCanonicalRole,
   usesOperationsSidebar,
@@ -102,6 +102,7 @@ const adminDemoNavGroups = [
     items: [
       { label: 'Dashboard', to: '/dashboard', icon: Home },
       preSalesNavItem,
+      { label: 'Site Survey Requests', to: '/site-survey-requests', icon: ClipboardCheck },
       { label: 'Site Visit + Estimation', to: '/sites', icon: ClipboardCheck },
     ],
   },
@@ -247,7 +248,7 @@ export default function Sidebar({ isOpen, onClose }) {
     ? preSalesOnlyNavGroups
     : isDemoUser(user)
     ? tenderDemoNavGroups
-    : isAdmin(user)
+    : isPlatformAdmin(user)
     ? adminDemoNavGroups
     : executiveViewer
     ? executiveNavGroups
@@ -258,7 +259,7 @@ export default function Sidebar({ isOpen, onClose }) {
       : isApprovalReviewer(user)
         ? reviewNavGroups
         : businessNavGroups;
-  const hasStaticHospitalTicketingAccess = isAdmin(user)
+  const hasStaticHospitalTicketingAccess = isPlatformAdmin(user)
     && canAccessNavRoute(user, '/hospital-ticketing/nims/qpms');
   const canShowHospitalTicketing = hospitalAccess.allowed || hasStaticHospitalTicketingAccess;
   const authorizedNavGroups = canShowHospitalTicketing
@@ -278,7 +279,8 @@ export default function Sidebar({ isOpen, onClose }) {
     ...group,
     items: group.items.filter((item) => {
       const routePath = item.to.split('?')[0];
-      return !TEMPORARILY_HIDDEN_NAV_ROUTES.has(routePath) && canAccessNavRoute(user, routePath);
+      return (isPlatformAdmin(user) || !TEMPORARILY_HIDDEN_NAV_ROUTES.has(routePath))
+        && canAccessNavRoute(user, routePath);
     }),
   })).filter((group) => group.items.length);
 
