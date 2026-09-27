@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assignSurveyOperationsManager,
+  listBdOpportunityWork,
   listBranchOperationsManagers,
   prepareOpportunityProposal,
   sendOpportunityProposal,
@@ -39,6 +40,40 @@ function queryClient(fixtures) {
     },
   };
 }
+
+test('assigned BD workspace retains safe downstream opportunity and approval context', async () => {
+  const client = queryClient({
+    lead_handoffs: [{
+      id: 'handoff-1', lead_id: 'lead-1', meeting_id: 'meeting-1', from_profile_id: 'pre-1',
+      to_profile_id: 'bd-profile-1', handoff_status: 'accepted',
+      from_profile: { id: 'pre-1', full_name: 'Pre-Sales Owner', employee_code: 'PRE-1' },
+      to_profile: { id: 'bd-profile-1', full_name: 'Assigned BD', employee_code: 'BD-1' },
+    }],
+    leads: [{ id: 'lead-1', client_name: 'UAT Client', state: 'KA', pre_sales_owner_profile_id: 'pre-1' }],
+    lead_meetings: [{ id: 'meeting-1', scheduled_at: '2026-10-01T10:00:00Z' }],
+    lead_mom: [{ id: 'mom-1', lead_id: 'lead-1', meeting_id: 'meeting-1', mom_status: 'Sent', site_survey_required: true }],
+    site_visits: [{ id: 'visit-1', lead_id: 'lead-1', status: 'In Progress', current_stage: 'operations_review', pending_with: 'Operations Manager', branch_head_profile_id: 'branch-1', assigned_operations_manager_profile_id: 'om-1' }],
+    workflow_instances: [{ id: 'workflow-1', lead_id: 'lead-1', current_stage_code: 'finance_review', approval_status: 'Pending' }],
+    proposals: [],
+    approval_requests: [{ id: 'approval-1', lead_id: 'lead-1', stage_code: 'finance_review', status: 'Pending', pending_with: 'Finance' }],
+    profiles: [
+      { id: 'pre-1', full_name: 'Pre-Sales Owner', employee_code: 'PRE-1' },
+      { id: 'bd-profile-1', full_name: 'Assigned BD', employee_code: 'BD-1' },
+      { id: 'branch-1', full_name: 'State Branch Head', employee_code: 'BH-1' },
+      { id: 'om-1', full_name: 'Assigned OM', employee_code: 'OM-1' },
+    ],
+  });
+
+  const [item] = await listBdOpportunityWork(client, assignedBd);
+  assert.equal(item.pre_sales_owner_name, 'Pre-Sales Owner');
+  assert.equal(item.assigned_bd_name, 'Assigned BD');
+  assert.equal(item.branch_head_name, 'State Branch Head');
+  assert.equal(item.operations_manager_name, 'Assigned OM');
+  assert.deepEqual(item.approvals.map((approval) => approval.stage_code), ['finance_review']);
+  assert.ok(client.calls.some((call) => call.table === 'lead_handoffs'
+    && call.method === 'eq' && call.args[0] === 'to_profile_id' && call.args[1] === assignedBd.profileId));
+  assert.equal(Object.hasOwn(item.approvals[0], 'remarks'), false);
+});
 
 test('assigned BD prepares a proposal through the actor-specific atomic RPC', async () => {
   const client = rpcClient();

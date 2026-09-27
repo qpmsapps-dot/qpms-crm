@@ -101,13 +101,14 @@ export async function listBdOpportunityWork(client, actor) {
   const handoffs = handoffResult.data || [];
   const leadIds = [...new Set(handoffs.map((row) => row.lead_id).filter(Boolean))];
   const meetingIds = [...new Set(handoffs.map((row) => row.meeting_id).filter(Boolean))];
-  const [leadsResult, meetingsResult, momsResult, visitsResult, workflowsResult, proposalsResult] = await Promise.all([
-    leadIds.length ? client.from('leads').select('id,client_name,state,business,site_location,status,pre_sales_stage,pre_sales_owner_profile_id,created_by_name').in('id', leadIds) : { data: [], error: null },
+  const [leadsResult, meetingsResult, momsResult, visitsResult, workflowsResult, proposalsResult, approvalsResult] = await Promise.all([
+    leadIds.length ? client.from('leads').select('id,client_name,state,business,site_location,status,pre_sales_stage,pre_sales_owner_profile_id,created_by_name,created_at,updated_at').in('id', leadIds) : { data: [], error: null },
     meetingIds.length ? client.from('lead_meetings').select('*').in('id', meetingIds) : { data: [], error: null },
-    meetingIds.length ? client.from('lead_mom').select('id,lead_id,meeting_id,mom_status,site_survey_required,sent_at,updated_at').in('meeting_id', meetingIds) : { data: [], error: null },
-    leadIds.length ? client.from('site_visits').select('id,lead_id,status,current_stage,pending_with,routing_status,updated_at').in('lead_id', leadIds) : { data: [], error: null },
+    meetingIds.length ? client.from('lead_mom').select('id,lead_id,meeting_id,mom_status,site_survey_required,preferred_survey_date,sent_at,updated_at').in('meeting_id', meetingIds) : { data: [], error: null },
+    leadIds.length ? client.from('site_visits').select('id,lead_id,status,current_stage,pending_with,routing_status,branch_head_profile_id,assigned_operations_manager_profile_id,updated_at').in('lead_id', leadIds) : { data: [], error: null },
     leadIds.length ? client.from('workflow_instances').select('id,lead_id,current_stage_code,status,pending_role,approval_status,updated_at').in('lead_id', leadIds) : { data: [], error: null },
     leadIds.length ? client.from('proposals').select('id,lead_id,proposal_status,sent_at,updated_at,metadata').in('lead_id', leadIds) : { data: [], error: null },
+    leadIds.length ? client.from('approval_requests').select('id,lead_id,stage_code,approval_stage,pending_with,status,requested_at,decided_at,updated_at').in('lead_id', leadIds).order('created_at', { ascending: true }) : { data: [], error: null },
   ]);
   if (leadsResult.error) throw leadsResult.error;
   if (meetingsResult.error) throw meetingsResult.error;
@@ -115,12 +116,29 @@ export async function listBdOpportunityWork(client, actor) {
   if (visitsResult.error) throw visitsResult.error;
   if (workflowsResult.error) throw workflowsResult.error;
   if (proposalsResult.error) throw proposalsResult.error;
+  if (approvalsResult.error) throw approvalsResult.error;
   const leads = new Map((leadsResult.data || []).map((row) => [row.id, row]));
   const meetings = new Map((meetingsResult.data || []).map((row) => [row.id, row]));
   const moms = new Map((momsResult.data || []).map((row) => [row.meeting_id, row]));
   const visits = new Map((visitsResult.data || []).map((row) => [row.lead_id, row]));
   const workflows = new Map((workflowsResult.data || []).map((row) => [row.lead_id, row]));
   const proposals = new Map((proposalsResult.data || []).map((row) => [row.lead_id, row]));
+  const approvals = new Map();
+  for (const approval of approvalsResult.data || []) {
+    const items = approvals.get(approval.lead_id) || [];
+    items.push(approval);
+    approvals.set(approval.lead_id, items);
+  }
+  const participantIds = [...new Set([
+    ...handoffs.flatMap((row) => [row.from_profile_id, row.to_profile_id]),
+    ...(leadsResult.data || []).map((row) => row.pre_sales_owner_profile_id),
+    ...(visitsResult.data || []).flatMap((row) => [row.branch_head_profile_id, row.assigned_operations_manager_profile_id]),
+  ].filter(Boolean))];
+  const profilesResult = participantIds.length
+    ? await client.from('profiles').select('id,full_name,employee_code').in('id', participantIds)
+    : { data: [], error: null };
+  if (profilesResult.error) throw profilesResult.error;
+  const profileNames = new Map((profilesResult.data || []).map((row) => [row.id, row.full_name || row.employee_code]));
   return handoffs.map((handoff) => ({
     ...handoff,
     lead: leads.get(handoff.lead_id) || null,
@@ -129,6 +147,13 @@ export async function listBdOpportunityWork(client, actor) {
     site_visit: visits.get(handoff.lead_id) || null,
     workflow: workflows.get(handoff.lead_id) || null,
     proposal: proposals.get(handoff.lead_id) || null,
+    approvals: approvals.get(handoff.lead_id) || [],
+    pre_sales_owner_name: profileNames.get(leads.get(handoff.lead_id)?.pre_sales_owner_profile_id)
+      || handoff.from_profile?.full_name || handoff.from_profile?.employee_code || null,
+    assigned_bd_name: profileNames.get(handoff.to_profile_id)
+      || handoff.to_profile?.full_name || handoff.to_profile?.employee_code || null,
+    branch_head_name: profileNames.get(visits.get(handoff.lead_id)?.branch_head_profile_id) || null,
+    operations_manager_name: profileNames.get(visits.get(handoff.lead_id)?.assigned_operations_manager_profile_id) || null,
   }));
 }
 

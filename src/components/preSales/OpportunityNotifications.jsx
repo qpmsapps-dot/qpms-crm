@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { getOpportunityNotifications } from '../../services/preSalesApi.js';
 import { formatDateTime } from '../../utils/preSalesFormat.js';
 
-export default function OpportunityNotifications({ limit = 5 }) {
+export default function OpportunityNotifications({ limit = 5, showEmpty = false }) {
   const [state, setState] = useState({ loading: true, items: [] });
   const load = useCallback(async () => {
     try {
@@ -17,7 +17,10 @@ export default function OpportunityNotifications({ limit = 5 }) {
   }, [limit]);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- initial authenticated API load
   useEffect(() => { void load(); }, [load]);
-  if (state.loading || !state.items.length) return null;
+  if (state.loading) return null;
+  if (!state.items.length) {
+    return showEmpty ? <section className="enterprise-card p-6 text-center text-sm font-semibold text-slate-500">No opportunity notifications.</section> : null;
+  }
   return <section className="enterprise-card p-5">
     <h2 className="text-lg font-bold text-slate-950">Opportunity Updates</h2>
     <div className="mt-4 space-y-3">
