@@ -14,6 +14,10 @@ const opportunityService = readFileSync(
   'backend/services/opportunityWorkflowService.js',
   'utf8',
 );
+const operationsManagerScopeMigration = readFileSync(
+  'supabase/migrations_2_0/110_new_business_operations_manager_state_scope.sql',
+  'utf8',
+);
 const workMappingScope = readFileSync('backend/services/workMappingScope.js', 'utf8');
 
 const confirmedMappings = [
@@ -99,15 +103,17 @@ test('scope storage and routing RPC remain service-role-only', () => {
   assert.match(migration, /grant execute on function public\.rpc_submit_bd_meeting_mom\(uuid,uuid,jsonb\) to service_role/);
 });
 
-test('AP Operations Managers remain a separate explicit eligibility decision', () => {
+test('Migration 109 leaves AP Operations Managers to the separate Migration 110 eligibility model', () => {
   assert.match(workMappingScope, /if \(scopeKey === 'AP'\) return \['AP', 'AP1', 'AP2'\]\.includes\(recordKey\)/);
-  assert.match(opportunityService, /stateScopeAllows\(profile\.state, visit\.data\.owner_state\)/);
   assert.match(
     bridgeMigration,
     /public\.opportunity_state_key\(p\.state\) = public\.opportunity_state_key\(v_visit\.owner_state\)/,
   );
   assert.doesNotMatch(migration, /new_business_operations_manager_state_scope/);
   assert.doesNotMatch(migration, /rpc_assign_site_survey_operations_manager/);
+  assert.match(operationsManagerScopeMigration, /new_business_operations_manager_state_scope/);
+  assert.match(opportunityService, /new_business_operations_manager_state_scope/);
+  assert.doesNotMatch(opportunityService, /stateScopeAllows\(profile\.state, visit\.data\.owner_state\)/);
 });
 
 test('normal operational profile, Business and hierarchy behavior is outside Migration 109', () => {

@@ -1,6 +1,6 @@
 import { normalizeLeadRole } from './leadManagementService.js';
 import { assertPreSalesLeadMutable } from './preSalesService.js';
-import { stateScopeAllows } from './workMappingScope.js';
+import { normalizedStateKey } from './workMappingScope.js';
 
 function httpError(statusCode, code, message) {
   const error = new Error(message);
@@ -29,6 +29,11 @@ function rpcError(error) {
     branch_head_unresolved: [409, 'branch_head_unresolved', 'No Branch Head mapping could be resolved for the lead State.'],
     branch_head_ambiguous: [409, 'branch_head_ambiguous', 'Multiple valid Branch Heads were found; assignment requires review.'],
     site_survey_not_assigned_to_branch_head: [403, 'site_survey_not_assigned_to_branch_head', 'This Site Survey request is assigned to another Branch Head.'],
+    operations_manager_not_eligible: [400, 'operations_manager_not_eligible', 'Select an eligible Operations Manager.'],
+    operations_manager_not_active: [400, 'operations_manager_not_active', 'The selected Operations Manager is not active.'],
+    operations_manager_auth_mapping_missing: [409, 'operations_manager_auth_mapping_missing', 'The selected Operations Manager does not have an active login mapping.'],
+    operations_manager_state_scope_missing: [403, 'operations_manager_state_scope_missing', 'The selected Operations Manager is not configured for this new-business State.'],
+    operations_manager_not_direct_report: [403, 'operations_manager_not_direct_report', 'Select an Operations Manager who reports directly to you.'],
     operations_manager_outside_branch_hierarchy: [403, 'operations_manager_outside_branch_hierarchy', 'Select an Operations Manager in your reporting hierarchy.'],
     operations_manager_already_assigned: [409, 'operations_manager_already_assigned', 'An Operations Manager is already assigned.'],
     proposal_not_owned_by_actor: [403, 'proposal_not_owned_by_actor', 'This opportunity is assigned to another BD user.'],
@@ -343,11 +348,30 @@ export async function listBranchOperationsManagers(client, actor, siteVisitId) {
   if (hierarchy.error) throw hierarchy.error;
   const codes = [...new Set((hierarchy.data || []).map((row) => row.employee_code).filter(Boolean))];
   if (!codes.length) return [];
-  const profiles = await client.from('profiles').select('id,employee_code,full_name,role,state,branch').in('employee_code', codes).eq('role', 'Operations Manager').eq('is_active', true).ilike('status', 'active').order('full_name');
+  const profiles = await client.from('profiles').select('id,employee_code,full_name,role,state,branch,auth_user_id').in('employee_code', codes).eq('role', 'Operations Manager').eq('is_active', true).ilike('status', 'active').order('full_name');
   if (profiles.error) throw profiles.error;
-  return (profiles.data || []).filter((profile) => (
-    stateScopeAllows(profile.state, visit.data.owner_state)
-  ));
+  const authMappedProfiles = (profiles.data || []).filter((profile) => profile.auth_user_id);
+  const profileIds = authMappedProfiles.map((profile) => profile.id);
+  if (!profileIds.length) return [];
+  const scopes = await client.from('new_business_operations_manager_state_scope')
+    .select('operations_manager_profile_id,state')
+    .in('operations_manager_profile_id', profileIds)
+    .eq('is_active', true);
+  if (scopes.error) throw scopes.error;
+  const ownerState = normalizedStateKey(visit.data.owner_state);
+  const scopedProfileIds = new Set((scopes.data || [])
+    .filter((scope) => normalizedStateKey(scope.state) === ownerState)
+    .map((scope) => scope.operations_manager_profile_id));
+  return authMappedProfiles
+    .filter((profile) => scopedProfileIds.has(profile.id))
+    .map((profile) => ({
+      id: profile.id,
+      employee_code: profile.employee_code,
+      full_name: profile.full_name,
+      role: profile.role,
+      state: profile.state,
+      branch: profile.branch,
+    }));
 }
 
 export async function assignSurveyOperationsManager(client, actor, siteVisitId, operationsManagerProfileId) {
