@@ -51,7 +51,7 @@ function belongsInMode(item, mode) {
   if (mode === 'handover') return item.handoff_status === 'pending';
   if (mode === 'meetings') return item.handoff_status === 'accepted' && item.meeting && item.mom?.mom_status !== 'Sent';
   if (mode === 'survey') return item.handoff_status === 'accepted' && item.mom?.site_survey_required === true;
-  if (mode === 'approvals') return item.handoff_status === 'accepted' && (item.workflow || item.approvals?.length);
+  if (mode === 'approvals') return item.handoff_status === 'accepted' && (item.workflow || item.approvals?.length || item.tender);
   if (mode === 'proposals') return item.handoff_status === 'accepted'
     && (item.proposal || item.mom?.site_survey_required === false || item.workflow?.current_stage_code === 'returned_to_bd');
   return item.handoff_status !== 'rejected';
@@ -174,16 +174,19 @@ export default function BdOpportunityWork({ mode = 'all', showNotifications = tr
                 <Summary label="Branch Head" value={item.branch_head_name || 'Not Assigned'} />
                 <Summary label="Operations Manager" value={item.operations_manager_name || 'Not Assigned'} />
                 <Summary label="Survey Status" value={item.site_visit?.status || (item.mom?.site_survey_required === false ? 'Not Required' : 'Not Started')} />
-                <Summary label="Tender Status" value={item.approvals?.some((approval) => String(approval.stage_code || approval.approval_stage).toLowerCase().includes('tender')) ? 'In Progress' : 'Not Started'} />
+                <Summary label="Tender Owner" value={item.tender_owner_name || (item.tender ? 'Waiting for Assignment' : 'Not Assigned')} />
+                <Summary label="Tender Status" value={item.tender?.status || 'Not Started'} />
+                <Summary label="Tender Version" value={item.tender?.current_version ? `V${item.tender.current_version}` : 'Not Started'} />
+                <Summary label="Tender Rework Count" value={item.tender?.rework_count ?? 0} />
                 <Summary label="Approval Status" value={item.workflow?.approval_status || item.approvals?.at(-1)?.status || 'Not Started'} />
                 <Summary label="Proposal Status" value={item.proposal?.proposal_status || 'Not Started'} />
-                <Summary label="Last Updated" value={formatDateTime(item.proposal?.updated_at || item.workflow?.updated_at || item.site_visit?.updated_at || item.mom?.updated_at || item.lead?.updated_at || item.created_at)} />
+                <Summary label="Last Updated" value={formatDateTime(item.proposal?.updated_at || item.tender?.updated_at || item.workflow?.updated_at || item.site_visit?.updated_at || item.mom?.updated_at || item.lead?.updated_at || item.created_at)} />
                 <Summary label="Ageing" value={ageing(item.accepted_at || item.created_at)} />
               </dl>
               <p className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-700">
                 {item.meeting?.requirement_summary || item.qualification_summary || 'No requirement summary recorded.'}
               </p>
-              {mode === 'approvals' ? <ApprovalTracking approvals={item.approvals || []} /> : null}
+              {mode === 'approvals' ? <ApprovalTracking approvals={item.approvals || []} tender={item.tender} /> : null}
               <button
                 type="button"
                 onClick={() => setExpandedLeadId((current) => current === item.lead_id ? '' : item.lead_id)}
@@ -262,12 +265,15 @@ export default function BdOpportunityWork({ mode = 'all', showNotifications = tr
   );
 }
 
-function ApprovalTracking({ approvals }) {
+function ApprovalTracking({ approvals, tender }) {
   return <section className="mt-4 rounded-xl border border-slate-100 p-4">
     <h3 className="text-sm font-bold text-slate-900">Approval Tracking</h3>
     <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
       {approvalStages.map(([key, label]) => {
-        const approval = approvals.find((row) => String(row.stage_code || row.approval_stage || '').toLowerCase().includes(key));
+        const approval = key === 'tender'
+          ? tender
+          : tender?.reviews?.find((row) => String(row.reviewer_role || '').toLowerCase() === key)
+            || approvals.find((row) => String(row.stage_code || row.approval_stage || '').toLowerCase().includes(key));
         return <div key={key} className="rounded-lg bg-slate-50 p-3">
           <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
           <p className="mt-1 text-sm font-semibold text-slate-800">{approval?.status || 'Not Started'}</p>

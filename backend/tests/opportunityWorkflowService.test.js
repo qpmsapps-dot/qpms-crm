@@ -56,11 +56,14 @@ test('assigned BD workspace retains safe downstream opportunity and approval con
     workflow_instances: [{ id: 'workflow-1', lead_id: 'lead-1', current_stage_code: 'finance_review', approval_status: 'Pending' }],
     proposals: [],
     approval_requests: [{ id: 'approval-1', lead_id: 'lead-1', stage_code: 'finance_review', status: 'Pending', pending_with: 'Finance' }],
+    tender_packages: [{ id: 'tender-1', lead_id: 'lead-1', assigned_tender_profile_id: 'tender-owner-1', status: 'Approval Pending', pending_with: 'HR + Commercial + Finance', current_version: 2, rework_count: 1 }],
+    tender_reviews: [{ id: 'review-1', tender_package_id: 'tender-1', reviewer_role: 'Finance', status: 'Pending' }],
     profiles: [
       { id: 'pre-1', full_name: 'Pre-Sales Owner', employee_code: 'PRE-1' },
       { id: 'bd-profile-1', full_name: 'Assigned BD', employee_code: 'BD-1' },
       { id: 'branch-1', full_name: 'State Branch Head', employee_code: 'BH-1' },
       { id: 'om-1', full_name: 'Assigned OM', employee_code: 'OM-1' },
+      { id: 'tender-owner-1', full_name: 'Tender Owner', employee_code: 'T-1' },
     ],
   });
 
@@ -70,6 +73,9 @@ test('assigned BD workspace retains safe downstream opportunity and approval con
   assert.equal(item.branch_head_name, 'State Branch Head');
   assert.equal(item.operations_manager_name, 'Assigned OM');
   assert.deepEqual(item.approvals.map((approval) => approval.stage_code), ['finance_review']);
+  assert.equal(item.tender_owner_name, 'Tender Owner');
+  assert.equal(item.tender.current_version, 2);
+  assert.deepEqual(item.tender.reviews.map((review) => review.reviewer_role), ['Finance']);
   assert.ok(client.calls.some((call) => call.table === 'lead_handoffs'
     && call.method === 'eq' && call.args[0] === 'to_profile_id' && call.args[1] === assignedBd.profileId));
   assert.equal(Object.hasOwn(item.approvals[0], 'remarks'), false);

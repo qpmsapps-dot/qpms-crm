@@ -51,9 +51,14 @@ test('BD workspace composes existing workflow actions and safe downstream progre
   assert.match(work, /Branch Head/);
   assert.match(work, /Operations Manager/);
   assert.match(work, /Tender Review/);
+  assert.match(work, /Tender Owner/);
+  assert.match(work, /Tender Version/);
+  assert.match(work, /Tender Rework Count/);
   assert.match(work, /This section is read-only/);
   assert.match(service, /\.eq\('to_profile_id', actor\.profileId\)/);
   assert.match(service, /approval_requests/);
+  assert.match(service, /tender_packages/);
+  assert.match(service, /tender_reviews/);
   for (const sensitive of ['margin_percent', 'finance_remarks', 'commercial_remarks', 'proposal_payload', 'kyc']) {
     assert.doesNotMatch(service.slice(service.indexOf('export async function listBdOpportunityWork'), service.indexOf('export async function recordProposalOutcome')), new RegExp(sensitive, 'i'));
   }
