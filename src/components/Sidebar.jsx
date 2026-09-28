@@ -52,6 +52,7 @@ const hospitalTicketingNavGroup = {
 
 const preSalesNavItem = { label: 'Pre-Sales', to: '/pre-sales', icon: Workflow, matchPrefix: true };
 const businessDevelopmentNavItem = { label: 'Business Development', to: '/business-development', icon: Workflow, matchPrefix: true };
+const tenderNavItem = { label: 'Tender', to: '/tender', icon: FileText, matchPrefix: true };
 
 function insertHospitalTicketingGroup(groups) {
   const demoReviewsIndex = groups.findIndex((group) => group.title === 'Demo Reviews');
@@ -104,6 +105,7 @@ const adminDemoNavGroups = [
       { label: 'Dashboard', to: '/dashboard', icon: Home },
       preSalesNavItem,
       businessDevelopmentNavItem,
+      tenderNavItem,
       { label: 'Site Survey Requests', to: '/site-survey-requests', icon: ClipboardCheck },
       { label: 'Site Visit + Estimation', to: '/sites', icon: ClipboardCheck },
     ],
@@ -218,6 +220,11 @@ const businessDevelopmentNavGroups = [
   },
 ];
 
+const tenderNavGroups = [{ title: 'Tender', items: [
+  { label: 'Dashboard', to: '/dashboard', icon: Home }, tenderNavItem,
+  { label: 'Settings', to: '/settings', icon: Settings },
+] }];
+
 const operationsManagerNavGroups = [
   {
     title: 'Operations Workbench',
@@ -265,6 +272,8 @@ export default function Sidebar({ isOpen, onClose }) {
     ? adminDemoNavGroups
     : ['BD Executive', 'BD Head'].includes(canonicalRole)
     ? businessDevelopmentNavGroups
+    : canonicalRole === 'Tender'
+    ? tenderNavGroups
     : executiveViewer
     ? executiveNavGroups
     : canonicalRole === 'Operations Manager'

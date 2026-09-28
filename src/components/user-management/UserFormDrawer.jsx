@@ -63,7 +63,7 @@ const businessOptions = [
   'Private Hospital',
 ];
 const reportingRequiredRoles = new Set([
-  'FO', 'KAM', 'Operations Manager', 'Branch Head',
+  'FO', 'KAM', 'Operations Manager', 'Branch Head', 'Tender',
 ]);
 const reportingOptionalRoles = new Set(['Business Development Executive', 'BD Executive']);
 const userTypeOptions = [
@@ -257,9 +257,10 @@ export default function UserFormDrawer({
   const [values, setValues] = useState(() => normalizeInitial(initialUser));
   const selectableRoleOptions = useMemo(() => {
     const existingRole = String(initialUser?.role || '').trim();
-    return compatibilityRoleOptions.has(existingRole) && !roleOptions.includes(existingRole)
-      ? [...roleOptions, existingRole]
-      : roleOptions;
+    const canonicalOptions = roleOptions.includes('Tender') ? roleOptions : [...roleOptions, 'Tender'];
+    return compatibilityRoleOptions.has(existingRole) && !canonicalOptions.includes(existingRole)
+      ? [...canonicalOptions, existingRole]
+      : canonicalOptions;
   }, [initialUser?.role]);
   const [errors, setErrors] = useState({});
   const [hierarchyOptions, setHierarchyOptions] = useState({
@@ -415,8 +416,9 @@ export default function UserFormDrawer({
     if (values.role === 'Operations Manager') return hierarchyOptions.branchHeads;
     if (values.role === 'Branch Head') return gmLevelOptions;
     if (['Business Development Executive', 'BD Executive'].includes(values.role)) return hierarchyOptions.businessDevelopmentHeads;
+    if (values.role === 'Tender') return hierarchyOptions.coo ? [hierarchyOptions.coo] : [];
     return [];
-  }, [gmLevelOptions, hierarchyOptions.branchHeads, hierarchyOptions.businessDevelopmentHeads, hierarchyOptions.operationsManagers, values.role]);
+  }, [gmLevelOptions, hierarchyOptions.branchHeads, hierarchyOptions.businessDevelopmentHeads, hierarchyOptions.coo, hierarchyOptions.operationsManagers, values.role]);
 
   const selectedReportingUser = useMemo(
     () => reportingOptions.find((option) => option.employee_code === values.manager_employee_code) || null,
@@ -670,6 +672,7 @@ export default function UserFormDrawer({
     if (role === 'Operations Manager') return 'Branch Head';
     if (role === 'Branch Head') return isIfmsBusiness(values.business) ? 'South Head' : 'GM';
     if (['Business Development Executive', 'BD Executive'].includes(role)) return 'Business Development Head';
+    if (role === 'Tender') return 'COO';
     if (role === 'Business Head' || role === 'GM' || role === 'South Head') return 'COO';
     if (role === 'COO') return 'Reporting To';
     return 'Reporting To';

@@ -11,6 +11,7 @@ import {
 import { createClientDeepCleaningRouter } from './routes/clientDeepCleaningRoutes.js';
 import { createHospitalTicketRouter } from './routes/hospitalTicketRoutes.js';
 import { registerPreSalesRoutes } from './routes/preSalesRoutes.js';
+import { registerTenderRoutes } from './routes/tenderRoutes.js';
 import {
   cleanHospitalText,
   normalizeHospitalTicketCreate,
@@ -2949,6 +2950,7 @@ const CREATE_USER_ROLE_OPTIONS = new Set([
   'PRESALES',
   'BUSINESSDEVELOPMENTHEAD',
   'BUSINESSDEVELOPMENTEXECUTIVE',
+  'TENDER',
   'ADMIN',
 ]);
 
@@ -3813,6 +3815,7 @@ function requiredReportingLabel(roleKey) {
   if (roleKey === 'BUSINESSHEAD' || roleKey === 'GM' || roleKey === 'SOUTHHEAD') return 'COO';
   if (roleKey === 'COO') return 'MD';
   if (['BUSINESSDEVELOPMENTEXECUTIVE', 'BDEXECUTIVE'].includes(roleKey)) return 'Business Development Head';
+  if (roleKey === 'TENDER') return 'COO';
   return null;
 }
 
@@ -3901,6 +3904,9 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
   } else if (roleKey === 'EXECUTIVEASSISTANT') {
     if (!coo) throw userManagementHttpError(400, 'COO profile not found. Please create COO user first.');
     reportingManager = coo;
+  } else if (roleKey === 'TENDER') {
+    if (!coo) throw userManagementHttpError(400, 'COO profile not found. Please create COO user first.');
+    reportingManager = coo;
   } else if (roleKey === 'BUSINESSHEAD' || roleKey === 'GM' || roleKey === 'SOUTHHEAD') {
     if (!coo) throw userManagementHttpError(400, 'COO profile not found. Please create COO user first.');
     reportingManager = coo;
@@ -3962,7 +3968,7 @@ async function buildCreateHierarchyMetadata(client, body, employeeCode) {
 
   const hierarchyPath = [
     employeeCode,
-    ['BUSINESSDEVELOPMENTEXECUTIVE', 'BDEXECUTIVE'].includes(roleKey) ? reportingManager?.employee_code : null,
+    ['BUSINESSDEVELOPMENTEXECUTIVE', 'BDEXECUTIVE', 'TENDER'].includes(roleKey) ? reportingManager?.employee_code : null,
     roleKey === 'FO' ? operationsManager?.employee_code : null,
     ['FO', 'OPERATIONSMANAGER'].includes(roleKey) ? branchHead?.employee_code : null,
     ['FO', 'OPERATIONSMANAGER', 'BRANCHHEAD', 'KAM'].includes(roleKey)
@@ -4014,7 +4020,7 @@ function validateCreateUserBody(body) {
     return;
   }
   if (!CREATE_USER_ROLE_OPTIONS.has(roleKey)) {
-    throw userManagementHttpError(400, 'role must be one of MD, COO, Executive Assistant, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, Supervisor, Pre-Sales, Business Development Head, Business Development Executive, or Admin.');
+    throw userManagementHttpError(400, 'role must be one of MD, COO, Executive Assistant, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, Supervisor, Pre-Sales, Business Development Head, Business Development Executive, Tender, or Admin.');
   }
   if (body.create_profile_only === true && roleKey === 'MD') return;
   if (!textOrNull(body.mobile)) throw userManagementHttpError(400, 'mobile is required.');
@@ -4025,7 +4031,7 @@ function validateCreateUserBody(body) {
     throw userManagementHttpError(400, 'business is required for this role.');
   }
   const requiredLabel = requiredReportingLabel(roleKey);
-  if (requiredLabel && ['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD'].includes(roleKey) && !textOrNull(body.reporting_manager_employee_code || body.manager_employee_code)) {
+  if (requiredLabel && ['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD', 'TENDER'].includes(roleKey) && !textOrNull(body.reporting_manager_employee_code || body.manager_employee_code)) {
     throw userManagementHttpError(400, `${requiredLabel} is required.`);
   }
 }
@@ -9053,6 +9059,7 @@ registerPreSalesRoutes({
   createLeadHandler: createLeadManagement,
   updateLeadHandler: updateLeadManagement,
 });
+registerTenderRoutes({ app, requireJwt: requireSupabaseJwt, getClient: requireServiceRoleSupabase });
 
 // Backward-compatible mobile aliases use the same production authorization and
 // persistence handlers. The legacy declarations below are therefore unreachable

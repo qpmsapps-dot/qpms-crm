@@ -17,6 +17,7 @@ export const roleGroups = {
   Commercial: ['Commercial', 'Commercial Team', 'Commercial Reviewer'],
   Finance: ['Finance', 'Finance Team', 'Finance Reviewer'],
   FinanceLeadership: ['Finance GM', 'CFO'],
+  Tender: ['Tender'],
   Management: ['Management', 'MD', 'COO', EXECUTIVE_ASSISTANT_ROLE, 'GM', 'Top Management', 'GM / Top Management'],
   ExistingOperations: ['Existing Business Operations Team'],
   FieldOfficer: ['Field Officer', 'FO'],
@@ -25,7 +26,7 @@ export const roleGroups = {
   DemoViewer: ['DEMO_VIEWER'],
 };
 
-export const protectedNavRoutes = ['/dashboard', '/crm', '/pre-sales', '/business-development', '/site-survey-requests', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/hospital-ticketing', '/fault-tracker', '/deep-cleaning', '/assets', '/reports', '/employees', '/store-master', '/settings', '/hospital-feedback', '/operations/hospital-feedback'];
+export const protectedNavRoutes = ['/dashboard', '/crm', '/pre-sales', '/business-development', '/tender', '/site-survey-requests', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/hospital-ticketing', '/fault-tracker', '/deep-cleaning', '/assets', '/reports', '/employees', '/store-master', '/settings', '/hospital-feedback', '/operations/hospital-feedback'];
 
 function normalizedRoleKey(role = '') {
   return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
@@ -70,6 +71,7 @@ export function normalizeCanonicalRole(role = '') {
     PRESALES: 'Pre-Sales',
     PRESALESEXECUTIVE: 'Pre-Sales',
     PRESALESMANAGER: 'Pre-Sales',
+    TENDER: 'Tender',
     BUSINESSHEAD: 'Business Head',
     BRANCHHEAD: 'Branch Head',
     BH: 'Branch Head',
@@ -153,6 +155,7 @@ export function routeAllowedRoles(pathname = '') {
   if (pathname.startsWith('/crm')) return ['Admin', 'Management', 'FinanceLeadership', 'BD', 'DemoViewer'];
   if (pathname.startsWith('/pre-sales')) return ['Admin', 'Management', 'BD', 'PreSales', 'DemoViewer'];
   if (pathname.startsWith('/business-development')) return ['Admin', 'BD'];
+  if (pathname.startsWith('/tender')) return ['Admin', 'Tender', 'BD', 'HR', 'Commercial', 'Finance', 'FinanceLeadership'];
   if (pathname.startsWith('/site-survey-requests')) return ['Admin', 'Operations'];
   if (pathname.startsWith('/sites') || pathname.startsWith('/site-visit')) return ['Admin', 'BD', 'Operations', 'DemoViewer'];
   if (pathname.startsWith('/site-monitoring')) return ['Admin', 'Management', 'FinanceLeadership', 'ExistingOperations', 'Operations', 'DemoViewer'];
@@ -276,6 +279,7 @@ export function canAccessRoute(user, pathname) {
   if (pathname.startsWith('/store-master')) return canAccessStoreMaster(user);
   if (pathname.startsWith('/fault-tracker')) return canAccessFaultTracker(user);
   if (pathname.startsWith('/fo-activities')) return canAccessFoCommandCenter(user);
+  if (pathname.startsWith('/tender') && hasCooAuthority(user)) return true;
   if (pathname.startsWith('/hospital-ticketing') || pathname.startsWith('/tickets')) return Boolean(user);
   if (pathname.startsWith('/crm') && ['Business Head', 'Branch Head'].includes(normalizeCanonicalRole(user?.rawRole || user?.role))) return true;
   return hasAnyRole(user, routeAllowedRoles(pathname));
