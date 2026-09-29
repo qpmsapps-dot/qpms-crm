@@ -141,6 +141,17 @@ bool isBusinessDevelopmentRole(String role) {
   }
 }
 
+bool isRelianceStructuredTrainingRole(String role) {
+  try {
+    return const {
+      'FO',
+      'Operations Manager',
+    }.contains(canonicalMobileRole(role));
+  } catch (_) {
+    return false;
+  }
+}
+
 bool isAdminRole(String role) {
   try {
     return canonicalMobileRole(role) == 'Admin';

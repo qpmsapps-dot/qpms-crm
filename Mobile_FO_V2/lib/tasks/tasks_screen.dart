@@ -19,6 +19,7 @@ import '../services/supabase_service.dart';
 import '../services/travel_leg_lifecycle_service.dart';
 import '../theme/app_theme.dart';
 import '../tracking/tracking_service.dart';
+import '../training/training_launcher.dart';
 import '../ui/fo_ui.dart';
 import '../utils/date_utils.dart';
 import '../utils/local_id.dart';
@@ -1934,7 +1935,7 @@ class _TasksScreenState extends State<TasksScreen>
                     disabledBadgeLabel: 'Check-In Required',
                     onTap: _activeVisit == null
                         ? () => _toast('Please check-in to a site first.')
-                        : () => _openActivity(FoActivityType.training),
+                        : _openTraining,
                   ),
                   _activityCard(
                     width: width,
@@ -2207,6 +2208,34 @@ class _TasksScreenState extends State<TasksScreen>
         ),
       ),
     );
+    if (submitted == true && mounted) {
+      _toast('Activity submitted successfully.');
+    }
+  }
+
+  Future<void> _openTraining() async {
+    final visit = _activeVisit;
+    final attendance = _attendance ?? await LocalStore.getAttendance();
+    if (visit == null || attendance?.isActive != true) {
+      _toast('Please check-in to a site first.');
+      return;
+    }
+    if (!mounted) return;
+    final submitted = await TrainingLauncher.openTrainingFlow(
+      context: context,
+      user: widget.user,
+      attendance: attendance!,
+      siteVisit: visit,
+      historical: false,
+      legacyBuilder: (_) => ActivityFormScreen(
+        type: FoActivityType.training,
+        visit: visit,
+        attendance: attendance,
+        user: widget.user,
+      ),
+    );
+    if (!mounted) return;
+    await _load();
     if (submitted == true && mounted) {
       _toast('Activity submitted successfully.');
     }

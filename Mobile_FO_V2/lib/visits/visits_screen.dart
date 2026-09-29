@@ -12,6 +12,7 @@ import '../services/local_store.dart';
 import '../services/supabase_service.dart';
 import '../tasks/tasks_screen.dart';
 import '../theme/app_theme.dart';
+import '../training/training_launcher.dart';
 import '../ui/fo_ui.dart';
 import '../utils/date_utils.dart';
 
@@ -529,11 +530,7 @@ class _VisitsScreenState extends State<VisitsScreen>
               _visitAction(
                 icon: Icons.co_present_rounded,
                 label: 'Add Training Proof',
-                onTap: () => _openActivityFromVisit(
-                  context,
-                  visit,
-                  FoActivityType.training,
-                ),
+                onTap: () => _openTrainingFromVisit(context, visit),
               ),
               _visitAction(
                 icon: Icons.local_parking_rounded,
@@ -627,6 +624,38 @@ class _VisitsScreenState extends State<VisitsScreen>
         ),
       ),
     );
+    if (submitted == true && mounted) {
+      _toast('Activity saved for selected visit.');
+    }
+  }
+
+  Future<void> _openTrainingFromVisit(
+    BuildContext sheetContext,
+    SiteVisit visit,
+  ) async {
+    final attendance = await _attendanceForVisit(visit);
+    if (!mounted || !sheetContext.mounted) return;
+    if (attendance == null) {
+      _toast('Attendance sync missing for this visit.');
+      return;
+    }
+    Navigator.of(sheetContext).pop();
+    final submitted = await TrainingLauncher.openTrainingFlow(
+      context: context,
+      user: widget.user,
+      attendance: attendance,
+      siteVisit: visit,
+      historical: true,
+      legacyBuilder: (_) => ActivityFormScreen(
+        type: FoActivityType.training,
+        visit: visit,
+        attendance: attendance,
+        user: widget.user,
+        requireActiveVisit: false,
+      ),
+    );
+    if (!mounted) return;
+    await _load();
     if (submitted == true && mounted) {
       _toast('Activity saved for selected visit.');
     }
