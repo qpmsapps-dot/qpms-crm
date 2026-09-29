@@ -31,14 +31,17 @@ class TrainingFlowController extends ChangeNotifier {
   List<TrainingSessionTopic> selectedSessionTopics = [];
   List<TrainingEvidence> evidence = [];
   List<TrainingPendingEvidence> pendingEvidence = [];
+  List<TrainingStaffSuggestion> staffSuggestions = [];
   TrainingFlowStep currentStep = TrainingFlowStep.details;
   TrainingSyncState syncState = TrainingSyncState.synced;
   bool isLoading = false;
   bool isSaving = false;
   bool isUploading = false;
   bool isSubmitting = false;
+  bool isSearchingStaff = false;
   bool isDirty = false;
   TrainingException? error;
+  TrainingException? staffSearchError;
 
   bool get isDraft =>
       session == null || session!.status == TrainingSessionStatus.draft;
@@ -282,6 +285,29 @@ class TrainingFlowController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> searchStaff(String query, {int limit = 20}) async {
+    if (session?.storeId?.trim().isNotEmpty != true) {
+      staffSuggestions = [];
+      return;
+    }
+    isSearchingStaff = true;
+    staffSearchError = null;
+    notifyListeners();
+    try {
+      staffSuggestions = await _repository.searchSiteStaff(
+        session!.storeId!,
+        query: query,
+        limit: limit,
+      );
+    } on TrainingException catch (exception) {
+      staffSearchError = exception;
+      staffSuggestions = [];
+    } finally {
+      isSearchingStaff = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> removeAttendee(String attendeeId) async {
     _ensureServerDraft();
     await _repository.removeAttendee(session!.id, attendeeId);
@@ -359,6 +385,29 @@ class TrainingFlowController extends ChangeNotifier {
       isUploading = false;
       notifyListeners();
     }
+  }
+
+  Future<void> removePendingUpload(String localId) async {
+    _ensureServerDraft();
+    await _repository.removePendingUpload(localId);
+    pendingEvidence = pendingEvidence
+        .where((item) => item.localId != localId)
+        .toList();
+    notifyListeners();
+  }
+
+  Future<TrainingEvidenceView> getEvidenceViewUrl(String evidenceId) {
+    if (session == null) {
+      throw const TrainingValidationException(
+        'Save the Training details before viewing evidence.',
+      );
+    }
+    return _repository.getEvidenceViewUrl(session!.id, evidenceId);
+  }
+
+  void clearError() {
+    error = null;
+    notifyListeners();
   }
 
   Future<void> retryUploads() async {

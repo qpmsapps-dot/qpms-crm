@@ -145,6 +145,9 @@ class TrainingRepository {
   Future<List<TrainingPendingEvidence>> pendingUploads(String sessionId) =>
       _cache.queueForSession(sessionId);
 
+  Future<void> removePendingUpload(String localId) =>
+      _cache.removePendingEvidence(localId);
+
   static const int maxFileBytes = 5 * 1024 * 1024;
   static const _images = {'image/jpeg', 'image/png'};
   static const _pdf = 'application/pdf';
