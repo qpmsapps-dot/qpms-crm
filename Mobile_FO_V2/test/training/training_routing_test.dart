@@ -45,9 +45,12 @@ void main() {
       expect(route(role: 'OM'), TrainingLaunchMode.structuredNew);
     });
 
-    test('Reliance roles outside FO and OM stay on legacy', () {
+    test('Reliance Admin opens structured flow for controlled testing', () {
+      expect(route(role: 'Admin'), TrainingLaunchMode.structuredNew);
+    });
+
+    test('Reliance roles outside FO, OM, and Admin stay on legacy', () {
       for (final role in [
-        'Admin',
         'Branch Head',
         'KAM',
         'GM',
@@ -64,6 +67,7 @@ void main() {
         route(role: 'Operations Manager', business: 'Airport'),
         TrainingLaunchMode.legacy,
       );
+      expect(route(role: 'Admin', business: 'DME'), TrainingLaunchMode.legacy);
     });
 
     test('established Reliance store representations normalize safely', () {
@@ -155,6 +159,14 @@ void main() {
       expect(tasks, contains('TrainingLauncher.openTrainingFlow('));
       expect(tasks, contains('historical: false'));
       expect(tasks, contains('type: FoActivityType.training'));
+    });
+
+    test('Admin module Training delegates through the central launcher', () {
+      final homeShell = File('lib/home/home_shell.dart').readAsStringSync();
+      expect(homeShell, contains('type == FoActivityType.training'));
+      expect(homeShell, contains('TrainingLauncher.openTrainingFlow('));
+      expect(homeShell, contains('historical: false'));
+      expect(homeShell, contains('legacyBuilder: (_) => ActivityFormScreen('));
     });
 
     test('Inspection and Deep Cleaning Tasks routes remain unchanged', () {

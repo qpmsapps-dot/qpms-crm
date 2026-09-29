@@ -11,6 +11,7 @@ import '../profile/profile_screen.dart';
 import '../services/local_store.dart';
 import '../tasks/tasks_screen.dart';
 import '../theme/app_theme.dart';
+import '../training/training_launcher.dart';
 import '../ui/fo_ui.dart';
 import '../visits/visits_screen.dart';
 import '../utils/mobile_roles.dart';
@@ -170,6 +171,22 @@ class _HomeShellState extends State<HomeShell> {
     );
     if (!mounted) return;
     if (attendance?.isActive == true && activeVisit != null) {
+      if (type == FoActivityType.training) {
+        await TrainingLauncher.openTrainingFlow(
+          context: context,
+          user: widget.user,
+          attendance: attendance!,
+          siteVisit: activeVisit,
+          historical: false,
+          legacyBuilder: (_) => ActivityFormScreen(
+            type: type,
+            visit: activeVisit,
+            attendance: attendance,
+            user: widget.user,
+          ),
+        );
+        return;
+      }
       await Navigator.of(context).push<bool>(
         MaterialPageRoute(
           builder: (_) => ActivityFormScreen(

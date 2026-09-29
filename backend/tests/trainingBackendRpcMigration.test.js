@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const sql = readFileSync(new URL('../../supabase/migrations_2_0/116_reliance_training_backend_rpcs.sql', import.meta.url), 'utf8');
+const adminSql = readFileSync(new URL('../../supabase/migrations_2_0/117_reliance_training_admin_test_access.sql', import.meta.url), 'utf8');
 
 const requiredFunctions = [
   'training_assert_draft_editor',
@@ -84,4 +85,30 @@ test('Migration 116 contains no destructive schema or legacy data operations', (
   assert.doesNotMatch(sql, /\btruncate\b/i);
   assert.doesNotMatch(sql, /delete from public\.(fo_activity_submissions|fo_activity_uploads|fo_attendance|fo_site_visits)\b/i);
   assert.doesNotMatch(sql, /alter table public\.(fo_activity_submissions|fo_activity_uploads|fo_attendance|fo_site_visits)\b/i);
+});
+
+test('Migration 117 narrowly adds Admin to backend-only Reliance Training RPC guards', () => {
+  assert.match(adminSql, /^begin;/i);
+  assert.match(adminSql, /commit;\s*$/i);
+  assert.match(adminSql, /not in \('FO', 'OPERATIONSMANAGER', 'ADMIN'\)/i);
+  assert.match(adminSql, /v_actor_role <> 'ADMIN'[\s\S]+training_actor_business_forbidden/i);
+  assert.match(adminSql, /training_attendance_forbidden/i);
+  assert.match(adminSql, /training_site_visit_forbidden/i);
+  assert.match(adminSql, /training_non_reliance_store/i);
+  assert.match(adminSql, /training_cross_state_forbidden/i);
+  assert.match(adminSql, /training_not_session_creator/i);
+});
+
+test('Migration 117 preserves SECURITY DEFINER and service-role-only execution', () => {
+  for (const name of ['training_assert_draft_editor', 'rpc_create_reliance_training_session']) {
+    assert.match(adminSql, new RegExp(`create or replace function public\\.${name}[\\s\\S]+?security definer`, 'i'));
+    assert.match(adminSql, new RegExp(`revoke all on function public\\.${name}[^;]+from public, anon, authenticated`, 'i'));
+    assert.match(adminSql, new RegExp(`grant execute on function public\\.${name}[^;]+to service_role`, 'i'));
+  }
+});
+
+test('Migration 117 does not change schema, legacy data, masters, or existing sessions', () => {
+  assert.doesNotMatch(adminSql, /\b(drop|alter|truncate)\b/i);
+  assert.doesNotMatch(adminSql, /\b(delete|update|insert)\s+(from|into)?\s*public\.(training_categories|training_topics|training_types|profiles|fo_attendance|fo_site_visits)\b/i);
+  assert.doesNotMatch(adminSql, /update\s+public\.training_sessions\b/i);
 });

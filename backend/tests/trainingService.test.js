@@ -67,7 +67,34 @@ test('Reliance Operations Manager create authorization is allowed', () => {
   assert.equal(assertTrainingActor({ ...baseProfile, role: 'Operations Manager' }, { mutation: true }).id, 'profile-1');
 });
 
-for (const role of ['Admin', 'Branch Head', 'KAM', 'Management', 'Executive Assistant']) {
+test('Admin mutation authorization is allowed only with authoritative Reliance context checks', async () => {
+  const admin = { ...baseProfile, role: 'Admin', business: 'QPMS' };
+  assert.equal(assertTrainingActor(admin, { mutation: true }).id, 'profile-1');
+  const result = await loadTrainingCreateContext(fakeClient(contextTables()), admin, {
+    attendance_id: 'attendance-1', site_visit_id: 'visit-1',
+  });
+  assert.equal(result.store.id, 'store-1');
+});
+
+test('Admin cannot create against a verified non-Reliance store', async () => {
+  const admin = { ...baseProfile, role: 'Admin', business: 'QPMS' };
+  await assert.rejects(() => loadTrainingCreateContext(fakeClient(contextTables({
+    store: { business: 'Other', client_name: 'Other' },
+  })), admin, {
+    attendance_id: 'attendance-1', site_visit_id: 'visit-1',
+  }), { code: 'non_reliance_store' });
+});
+
+test('Admin still requires its own valid attendance and site visit', async () => {
+  const admin = { ...baseProfile, role: 'Admin', business: 'QPMS' };
+  await assert.rejects(() => loadTrainingCreateContext(fakeClient(contextTables({
+    attendance: { employee_code: 'OTHER' },
+  })), admin, {
+    attendance_id: 'attendance-1', site_visit_id: 'visit-1',
+  }), { code: 'attendance_forbidden' });
+});
+
+for (const role of ['Branch Head', 'KAM', 'Management', 'Executive Assistant']) {
   test(`${role} cannot create structured Training`, () => {
     assert.throws(() => assertTrainingActor({ ...baseProfile, role }, { mutation: true }), { code: 'forbidden_role' });
   });

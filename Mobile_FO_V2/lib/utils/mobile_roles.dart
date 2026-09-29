@@ -146,6 +146,7 @@ bool isRelianceStructuredTrainingRole(String role) {
     return const {
       'FO',
       'Operations Manager',
+      'Admin',
     }.contains(canonicalMobileRole(role));
   } catch (_) {
     return false;

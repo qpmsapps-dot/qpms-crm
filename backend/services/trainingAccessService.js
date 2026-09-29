@@ -3,7 +3,7 @@ import { foOperationalAllowedEmployeeCodes } from './foOperationalAccessService.
 
 export const RELIANCE_TRAINING_CLIENT_ID = '369d2d5f-396f-49f9-a47d-bfbc8f7cb922';
 export const RELIANCE_TRAINING_CLIENT_CODE = 'reliance_retail';
-export const TRAINING_CREATE_ROLES = new Set(['FO', 'OPERATIONSMANAGER']);
+export const TRAINING_CREATE_ROLES = new Set(['FO', 'OPERATIONSMANAGER', 'ADMIN']);
 
 export class TrainingError extends Error {
   constructor(statusCode, code, message) {
@@ -47,10 +47,11 @@ export function assertTrainingActor(profile, { mutation = false } = {}) {
   if (!isActiveTrainingProfile(profile)) {
     throw trainingError(403, 'inactive_profile', 'An active profile is required.');
   }
-  if (mutation && !TRAINING_CREATE_ROLES.has(canonicalTrainingRole(profile.role))) {
-    throw trainingError(403, 'forbidden_role', 'Only FO and Operations Manager profiles may change structured Training.');
+  const canonicalRole = canonicalTrainingRole(profile.role);
+  if (mutation && !TRAINING_CREATE_ROLES.has(canonicalRole)) {
+    throw trainingError(403, 'forbidden_role', 'This role cannot change structured Training.');
   }
-  if (mutation && !isRelianceRetailValue(profile.business)) {
+  if (mutation && canonicalRole !== 'ADMIN' && !isRelianceRetailValue(profile.business)) {
     throw trainingError(403, 'forbidden_business', 'Reliance Retail authorization is required.');
   }
   if (!profile.id || !trainingEmployeeCode(profile)) {
@@ -79,7 +80,7 @@ export function translateTrainingDatabaseError(error) {
     training_evidence_not_found: [404, 'evidence_not_found', 'Training evidence was not found.'],
     training_session_immutable: [409, 'session_immutable', 'Submitted or cancelled Training sessions cannot be changed.'],
     training_not_session_creator: [403, 'not_session_creator', 'Only the session creator may change this draft.'],
-    training_create_role_forbidden: [403, 'forbidden_role', 'Only FO and Operations Manager profiles may create structured Training.'],
+    training_create_role_forbidden: [403, 'forbidden_role', 'This role cannot create structured Training.'],
     training_mutation_forbidden: [403, 'forbidden_role', 'This profile cannot change structured Training.'],
     training_actor_business_forbidden: [403, 'forbidden_business', 'Reliance Retail authorization is required.'],
     training_attendance_forbidden: [403, 'attendance_forbidden', 'Attendance is outside your authorized scope.'],
