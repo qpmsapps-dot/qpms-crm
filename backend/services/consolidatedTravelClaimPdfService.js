@@ -45,7 +45,9 @@ function number(value) {
 }
 
 function money(value) {
-  return `\u20B9${number(value).toLocaleString('en-IN', {
+  const amount = number(value);
+  const sign = amount < 0 ? '-' : '';
+  return `${sign}\u20B9${Math.abs(amount).toLocaleString('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -124,27 +126,28 @@ function drawFooter(doc, fontName) {
 
 function columnHeaders() {
   return [
-    { key: 'serial', label: 'S.No', width: 34, align: 'right' },
-    { key: 'employee_code', label: 'Employee Code', width: 86 },
-    { key: 'employee_name', label: 'Emp Name', width: 144 },
-    { key: 'total_km_travelled', label: 'Total KM Travelled', width: 82, align: 'right', format: km },
-    { key: 'distance_reimbursement', label: 'Distance Reimbursement', width: 98, align: 'right', format: money },
-    { key: 'other_transport_mode_amount', label: 'Other Transport Mode Amount', width: 112, align: 'right', format: money },
-    { key: 'parking_amount', label: 'Parking Amount', width: 82, align: 'right', format: money },
-    { key: 'total_claim', label: 'Total Claim', width: 92, align: 'right', format: money },
+    { key: 'serial', label: 'S.No', width: 28, align: 'right' },
+    { key: 'employee_code', label: 'Employee Code', width: 72 },
+    { key: 'employee_name', label: 'Employee Name', width: 102 },
+    { key: 'total_km_travelled', label: 'Total KM', width: 58, align: 'right', format: km },
+    { key: 'distance_reimbursement', label: 'Distance Reimbursement', width: 78, align: 'right', format: money },
+    { key: 'other_transport_mode_amount', label: 'Other Transport', width: 72, align: 'right', format: money },
+    { key: 'parking_amount', label: 'Parking', width: 56, align: 'right', format: money },
+    { key: 'calculated_claim', label: 'Calculated Claim', width: 78, align: 'right', format: money },
+    { key: 'finance_adjustment', label: 'Finance Adjustment', width: 80, align: 'right', format: money },
+    { key: 'final_payable', label: 'Final Payable', width: 78, align: 'right', format: money },
   ];
 }
 
 function summaryColumnHeaders() {
   return [
-    { key: 'serial', label: 'S.No', width: 34, align: 'right' },
-    { key: 'state_label', label: 'State', width: 148 },
-    { key: 'employee_count', label: 'Total Employees', width: 76, align: 'right' },
-    { key: 'total_km_travelled', label: 'Total KM Travelled', width: 88, align: 'right', format: km },
-    { key: 'distance_reimbursement', label: 'Distance Reimbursement', width: 108, align: 'right', format: money },
-    { key: 'other_transport_mode_amount', label: 'Other Transport Mode Amount', width: 126, align: 'right', format: money },
-    { key: 'parking_amount', label: 'Parking Amount', width: 88, align: 'right', format: money },
-    { key: 'total_claim', label: 'Total Claim', width: 92, align: 'right', format: money },
+    { key: 'serial', label: 'S.No', width: 32, align: 'right' },
+    { key: 'state_label', label: 'State', width: 120 },
+    { key: 'employee_count', label: 'Employees', width: 66, align: 'right' },
+    { key: 'total_km_travelled', label: 'Total KM', width: 78, align: 'right', format: km },
+    { key: 'calculated_claim', label: 'Calculated Claim', width: 126, align: 'right', format: money },
+    { key: 'finance_adjustment', label: 'Finance Adjustment', width: 126, align: 'right', format: money },
+    { key: 'final_payable', label: 'Final Payable', width: 126, align: 'right', format: money },
   ];
 }
 
@@ -258,6 +261,9 @@ function drawStateSection(doc, dataset, section, columns, fontName, rupeeFontNam
     other_transport_mode_amount: section.totals.other_transport_mode_amount,
     parking_amount: section.totals.parking_amount,
     total_claim: section.totals.total_claim,
+    calculated_claim: section.totals.calculated_claim,
+    finance_adjustment: section.totals.finance_adjustment,
+    final_payable: section.totals.final_payable,
   };
   const totalHeight = Math.max(MIN_TOTAL_ROW_HEIGHT, rowHeight(doc, columns, totalRow, fontName));
   const rows = section.rows.map((item, index) => ({ ...item, serial: index + 1 }));

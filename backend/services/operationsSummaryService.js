@@ -176,6 +176,9 @@ function emptyTravelClaimTotals() {
     other_transport_mode_amount: 0,
     parking_amount: 0,
     total_claim: 0,
+    calculated_claim: 0,
+    finance_adjustment: 0,
+    final_payable: 0,
   };
 }
 
@@ -187,6 +190,9 @@ function addTravelClaimTotals(summary, row) {
     other_transport_mode_amount: rounded(summary.other_transport_mode_amount + row.other_transport_mode_amount),
     parking_amount: rounded(summary.parking_amount + row.parking_amount),
     total_claim: rounded(summary.total_claim + row.total_claim),
+    calculated_claim: rounded(summary.calculated_claim + row.calculated_claim),
+    finance_adjustment: rounded(summary.finance_adjustment + row.finance_adjustment),
+    final_payable: rounded(summary.final_payable + row.final_payable),
   };
 }
 
@@ -198,6 +204,9 @@ function finalizeTravelClaimTotals(totals) {
       totals.other_transport_mode_amount +
       totals.parking_amount,
     ),
+    calculated_claim: rounded(totals.calculated_claim),
+    finance_adjustment: rounded(totals.finance_adjustment),
+    final_payable: rounded(totals.final_payable),
   };
 }
 
@@ -414,6 +423,7 @@ export function buildConsolidatedTravelClaimReportDataset({
   hierarchyRows = [],
   liveRows = [],
   claims = [],
+  settlements = [],
   actor,
   filters,
   generatedBy = {},
@@ -446,6 +456,7 @@ export function buildConsolidatedTravelClaimReportDataset({
     const distanceReimbursement = storedAttendancePetrolAmount(attendance, payableKm);
     const normalizedState = normalizeTravelClaimReportState(profileValue(profile, 'state'));
     const row = rowsByEmployee.get(code) || {
+      profile_id: text(profile.id) || null,
       employee_code: code,
       employee_name: displayNameForEmployee(attendance, profile),
       state_name: normalizedState.state_name,
@@ -483,11 +494,31 @@ export function buildConsolidatedTravelClaimReportDataset({
     }
   }
 
+  const settlementsByProfile = new Map();
+  for (const settlement of settlements) {
+    const profileId = text(settlement.profile_id);
+    const employeeCode = text(settlement.employee_code).toUpperCase();
+    if (!profileId || !employeeCode) continue;
+    if (text(settlement.period_start).slice(0, 10) !== filters.date_from) continue;
+    if (text(settlement.period_end).slice(0, 10) !== filters.date_to) continue;
+    const settlementState = normalizeTravelClaimReportState(settlement.state).state_key;
+    settlementsByProfile.set(profileId, { ...settlement, employee_code: employeeCode, settlement_state: settlementState });
+  }
+
   const rows = [...rowsByEmployee.values()]
     .map((row) => {
       const distance = rounded(row.distance_reimbursement);
       const transport = rounded(row.other_transport_mode_amount);
       const parking = rounded(row.parking_amount);
+      const calculatedClaim = rounded(distance + transport + parking);
+      const settlement = settlementsByProfile.get(text(row.profile_id));
+      const settlementMatches = settlement &&
+        settlement.employee_code === text(row.employee_code).toUpperCase() &&
+        settlement.settlement_state === row.state_key;
+      const approvedPayable = Number(settlement?.approved_payable_amount);
+      const finalPayable = settlementMatches && Number.isFinite(approvedPayable)
+        ? rounded(Math.max(0, approvedPayable))
+        : calculatedClaim;
       return {
         ...row,
         employee_name: row.employee_name || row.employee_code,
@@ -495,7 +526,12 @@ export function buildConsolidatedTravelClaimReportDataset({
         distance_reimbursement: distance,
         other_transport_mode_amount: transport,
         parking_amount: parking,
-        total_claim: rounded(distance + transport + parking),
+        total_claim: calculatedClaim,
+        calculated_claim: calculatedClaim,
+        finance_adjustment: rounded(finalPayable - calculatedClaim),
+        final_payable: finalPayable,
+        finance_settlement_id: settlementMatches ? text(settlement.id) || null : null,
+        finance_settlement_source: settlementMatches ? text(settlement.source_reference) || null : null,
       };
     })
     .sort((left, right) =>
@@ -565,6 +601,15 @@ async function fetchClaimsForAttendanceIds(client, attendanceIds) {
   return rows;
 }
 
+async function fetchMonthlyTravelSettlements(client, filters) {
+  return fetchPaged(() => client
+    .from('fo_monthly_travel_settlements')
+    .select('id,profile_id,employee_code,state,period_start,period_end,calculated_claim_amount,finance_reviewed_amount,approved_payable_amount,adjustment_amount,adjustment_type,adjustment_reason,remarks,source_reference,approved_by,approved_at')
+    .eq('period_start', filters.date_from)
+    .eq('period_end', filters.date_to)
+    .order('employee_code', { ascending: true }));
+}
+
 export async function buildConsolidatedTravelClaimReport(client, actor, query, today, generatedAt = new Date()) {
   if (!canAccessOperationsSummary(actor)) {
     const error = new Error('Your role cannot access Operations travel claim reports.');
@@ -572,7 +617,7 @@ export async function buildConsolidatedTravelClaimReport(client, actor, query, t
     throw error;
   }
   const filters = normalizeOperationsSummaryFilters(query, today);
-  const [profiles, hierarchyRows, attendances] = await Promise.all([
+  const [profiles, hierarchyRows, attendances, settlements] = await Promise.all([
     fetchPaged(() => client.from('profiles').select('*').eq('is_active', true)),
     fetchPaged(() => client.from('employee_hierarchy').select('*').eq('is_active', true)),
     fetchPaged(() => client
@@ -582,6 +627,7 @@ export async function buildConsolidatedTravelClaimReport(client, actor, query, t
       .lte('attendance_date', filters.date_to)
       .order('attendance_date', { ascending: true })
       .order('id', { ascending: true })),
+    fetchMonthlyTravelSettlements(client, filters),
   ]);
   const allowedCodes = operationsSummaryAllowedEmployeeCodes(actor, profiles, hierarchyRows);
   const authorizedLiveIdentifiers = profiles.flatMap((profile) => {
@@ -596,6 +642,7 @@ export async function buildConsolidatedTravelClaimReport(client, actor, query, t
     hierarchyRows,
     liveRows,
     claims: [],
+    settlements,
     actor,
     filters,
     generatedBy: actor,
@@ -613,6 +660,7 @@ export async function buildConsolidatedTravelClaimReport(client, actor, query, t
     hierarchyRows,
     liveRows,
     claims,
+    settlements,
     actor,
     filters,
     generatedBy: actor,

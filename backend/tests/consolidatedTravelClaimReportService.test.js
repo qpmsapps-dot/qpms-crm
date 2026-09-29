@@ -62,6 +62,22 @@ function claim(id, attendanceId, amount, overrides = {}) {
   };
 }
 
+function settlement(id, profileId, employeeCode, calculatedClaim, approvedPayable, overrides = {}) {
+  return {
+    id,
+    profile_id: profileId,
+    employee_code: employeeCode,
+    state: overrides.state || 'KL',
+    period_start: overrides.period_start || '2026-08-01',
+    period_end: overrides.period_end || '2026-08-31',
+    calculated_claim_amount: calculatedClaim,
+    approved_payable_amount: approvedPayable,
+    adjustment_amount: approvedPayable - calculatedClaim,
+    source_reference: 'Finance approval',
+    ...overrides,
+  };
+}
+
 function dataset(overrides = {}) {
   return buildConsolidatedTravelClaimReportDataset({
     actor: admin,
@@ -99,6 +115,104 @@ test('bike-only attendance produces distance reimbursement without other transpo
   assert.equal(row.distance_reimbursement, 60);
   assert.equal(row.other_transport_mode_amount, 0);
   assert.equal(row.total_claim, 60);
+  assert.equal(row.calculated_claim, 60);
+  assert.equal(row.finance_adjustment, 0);
+  assert.equal(row.final_payable, 60);
+});
+
+test('monthly settlement preserves calculated claim and applies Finance final payable', () => {
+  const report = dataset({
+    settlements: [settlement('s-bike', 'p-bike', 'BIKE1', 60, 25)],
+  });
+  const row = report.rows.find((item) => item.employee_code === 'BIKE1');
+  assert.equal(row.total_km_travelled, 15);
+  assert.equal(row.calculated_claim, 60);
+  assert.equal(row.finance_adjustment, -35);
+  assert.equal(row.final_payable, 25);
+  assert.equal(row.finance_settlement_id, 's-bike');
+});
+
+test('full Finance approval leaves final payable equal to calculated claim', () => {
+  const report = dataset({
+    settlements: [settlement('s-bike', 'p-bike', 'BIKE1', 60, 60)],
+  });
+  const row = report.rows.find((item) => item.employee_code === 'BIKE1');
+  assert.equal(row.calculated_claim, 60);
+  assert.equal(row.finance_adjustment, 0);
+  assert.equal(row.final_payable, 60);
+});
+
+test('settlement does not apply to another employee or another report period', () => {
+  const report = dataset({
+    settlements: [
+      settlement('s-other', 'p-bike', 'TRAIN1', 60, 0),
+      settlement('s-september', 'p-bike', 'BIKE1', 60, 0, {
+        period_start: '2026-09-01',
+        period_end: '2026-09-30',
+      }),
+    ],
+  });
+  const row = report.rows.find((item) => item.employee_code === 'BIKE1');
+  assert.equal(row.calculated_claim, 60);
+  assert.equal(row.finance_adjustment, 0);
+  assert.equal(row.final_payable, 60);
+  assert.equal(row.finance_settlement_id, null);
+});
+
+test('Karnataka August Finance settlements total 43541.22 without changing KM or calculated claims', () => {
+  const values = [
+    ['p-abhi', 'QPMSKA3846', 'Abhishek Kutre', 1091.86, 8130.20, 0.00],
+    ['p-bala', 'QPMSKA0958', 'BALAKRISHNA V', 1750.53, 7862.12, 7862.12],
+    ['p-elan', 'QPMSKA2487', 'ELANGOVAN', 323.77, 1295.08, 1295.08],
+    ['p-guru', 'QPMSKA0353', 'GURUBASAPPA', 1357.49, 7129.96, 5049.00],
+    ['p-honna', 'QPMSKAC16966', 'Honnagirigowda', 1043.84, 4175.36, 4175.36],
+    ['p-manju', 'QPMSKA0173', 'Manjunath.S', 1364.19, 6319.76, 6319.76],
+    ['p-naveen', 'QPMSKA1542', 'Naveen H Sakin', 441.31, 3100.24, 2680.40],
+    ['p-ravi', '4176', 'Raviraj', 1438.19, 8841.12, 8841.12],
+    ['p-senthil', 'QPMSKA4324', 'Senthil Kumar', 116.10, 464.40, 464.40],
+    ['p-shiva', 'QPMSKA3715', 'Shiva', 655.17, 4523.78, 4523.78],
+    ['p-vinod', 'QPMSKAC16986', 'VINOD KUMAR B', 582.55, 2330.20, 2330.20],
+  ];
+  const report = buildConsolidatedTravelClaimReportDataset({
+    actor: admin,
+    profiles: values.map(([id, employeeCode, fullName]) => ({
+      id,
+      employee_code: employeeCode,
+      full_name: fullName,
+      role: 'FO',
+      state: 'KA',
+      status: 'active',
+      is_active: true,
+    })),
+    hierarchyRows: [],
+    liveRows: [],
+    attendances: values.map(([id, employeeCode, , kmValue, calculated]) =>
+      attendance(`a-${id}`, employeeCode, '2026-08-15', kmValue, calculated)),
+    claims: [],
+    settlements: values.map(([id, employeeCode, , , calculated, approved]) =>
+      settlement(`s-${id}`, id, employeeCode, calculated, approved, { state: 'KA' })),
+    filters: { date_from: '2026-08-01', date_to: '2026-08-31', state: 'KA', business: null, status: null },
+    generatedBy: admin,
+    generatedAt: new Date('2026-08-31T10:00:00.000Z'),
+  });
+  assert.equal(report.rows.reduce((sum, row) => sum + row.final_payable, 0), 43541.22);
+  assert.equal(report.totals.final_payable, 43541.22);
+
+  const naveen = report.rows.find((row) => row.employee_code === 'QPMSKA1542');
+  assert.deepEqual(
+    [naveen.total_km_travelled, naveen.calculated_claim, naveen.finance_adjustment, naveen.final_payable],
+    [441.31, 3100.24, -419.84, 2680.40],
+  );
+  const gurubasappa = report.rows.find((row) => row.employee_code === 'QPMSKA0353');
+  assert.deepEqual(
+    [gurubasappa.total_km_travelled, gurubasappa.calculated_claim, gurubasappa.finance_adjustment, gurubasappa.final_payable],
+    [1357.49, 7129.96, -2080.96, 5049.00],
+  );
+  const abhishek = report.rows.find((row) => row.employee_code === 'QPMSKA3846');
+  assert.deepEqual(
+    [abhishek.total_km_travelled, abhishek.calculated_claim, abhishek.finance_adjustment, abhishek.final_payable],
+    [1091.86, 8130.20, -8130.20, 0.00],
+  );
 });
 
 test('pending canonical Bike row does not silently finalize zero reimbursement', () => {
@@ -411,6 +525,32 @@ test('PDF text extraction preserves rupee symbol and does not render currency as
   assert.match(extracted.text, /₹\s*40\.00/);
   assert.match(extracted.text, /₹\s*110\.00/);
   assert.doesNotMatch(extracted.text, /¹\s*(40|110)\.00/);
+});
+
+test('PDF exposes calculated claim, Finance adjustment and final payable', async () => {
+  const client = mockClient({
+    profiles,
+    employee_hierarchy: hierarchyRows,
+    fo_live_status: [],
+    fo_attendance: [attendance('a-bike-1', 'BIKE1', '2026-08-01', 10, 40)],
+    fo_travel_expense_claims: [claim('c-bus', 'a-bike-1', 70, { travel_mode: 'bus' })],
+    fo_monthly_travel_settlements: [settlement('s-bike', 'p-bike', 'BIKE1', 110, 90)],
+  });
+  const result = await buildConsolidatedTravelClaimPdf(client, admin, {
+    date_from: '2026-08-01',
+    date_to: '2026-08-31',
+    state: 'All States',
+    business: 'All Business',
+    status: 'All Status',
+  }, '2026-08-31');
+  const parser = new PDFParse({ data: result.buffer });
+  const extracted = await parser.getText();
+  await parser.destroy();
+  assert.match(extracted.text, /Calculated Claim/);
+  assert.match(extracted.text, /Finance Adjustment/);
+  assert.match(extracted.text, /Final Payable/);
+  assert.match(extracted.text, /20\.00/);
+  assert.match(extracted.text, /90\.00/);
 });
 
 test('PDF creates one page per state section plus final all-state summary page', async () => {
