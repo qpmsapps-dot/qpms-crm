@@ -9,6 +9,7 @@ import {
   createPublicHospitalFeedbackQrRouter,
 } from './routes/hospitalFeedbackQrRoutes.js';
 import { createClientDeepCleaningRouter } from './routes/clientDeepCleaningRoutes.js';
+import { createTrainingRouter } from './routes/trainingRoutes.js';
 import { createHospitalTicketRouter } from './routes/hospitalTicketRoutes.js';
 import { registerPreSalesRoutes } from './routes/preSalesRoutes.js';
 import { registerTenderRoutes } from './routes/tenderRoutes.js';
@@ -429,6 +430,14 @@ app.use(
 app.use(
   '/api/client-deep-cleaning',
   createClientDeepCleaningRouter({
+    requireAuth: requireSupabaseJwt,
+    getClient: requireServiceRoleSupabase,
+  }),
+);
+
+app.use(
+  '/api/training',
+  createTrainingRouter({
     requireAuth: requireSupabaseJwt,
     getClient: requireServiceRoleSupabase,
   }),
