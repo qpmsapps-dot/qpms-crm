@@ -2686,9 +2686,21 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
         updated_at: new Date().toISOString(),
       };
       if (leg.persisted_travel_leg_id) {
+        // Existing leg boundaries and mode are historical source evidence. Only
+        // refresh the calculated/payable projection; normalizing a microsecond
+        // boundary to milliseconds can also collide with an older container leg.
+        const derivedValues = {
+          calculated_km: values.calculated_km,
+          payable_km: values.payable_km,
+          payable_amount: values.payable_amount,
+          fare_amount: values.fare_amount,
+          payable_km_allowed: values.payable_km_allowed,
+          rate_per_km: values.rate_per_km,
+          updated_at: values.updated_at,
+        };
         const { error } = await client
           .from('fo_travel_legs')
-          .update(values)
+          .update(derivedValues)
           .eq('id', leg.persisted_travel_leg_id)
           .eq('attendance_id', attendance.id);
         if (error) throw error;
@@ -2702,11 +2714,12 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
         .maybeSingle();
       if (lookupError) throw lookupError;
       if (existing?.id) {
-        await client
+        const { error: existingUpdateError } = await client
           .from('fo_travel_legs')
           .update(values)
           .eq('id', existing.id)
           .eq('attendance_id', attendance.id);
+        if (existingUpdateError) throw existingUpdateError;
         leg.persisted_travel_leg_id = existing.id;
         continue;
       }
@@ -2725,11 +2738,12 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
           .maybeSingle();
         if (raceLookupError) throw raceLookupError;
         if (!raced?.id) throw insertError;
-        await client
+        const { error: raceUpdateError } = await client
           .from('fo_travel_legs')
           .update(values)
           .eq('id', raced.id)
           .eq('attendance_id', attendance.id);
+        if (raceUpdateError) throw raceUpdateError;
         leg.persisted_travel_leg_id = raced.id;
       } else {
         leg.persisted_travel_leg_id = inserted?.id || null;

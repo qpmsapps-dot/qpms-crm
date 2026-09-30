@@ -677,13 +677,15 @@ test('canonical_recalculation_persists_leg_payable_amount', async () => {
     end_latitude: rows.at(-1).latitude,
     end_longitude: rows.at(-1).longitude,
   });
+  const originalStartedAt = '2026-07-16T12:41:20.123456Z';
+  const originalEndedAt = '2026-07-16T12:43:10.654321Z';
   const travelLegs = [{
     id: 'leg-car-persisted',
     attendance_id: row.id,
     travel_mode: 'car',
     payable_km_allowed: true,
-    started_at: row.login_time,
-    ended_at: row.logout_time,
+    started_at: originalStartedAt,
+    ended_at: originalEndedAt,
     start_lat: row.start_latitude,
     start_lng: row.start_longitude,
     end_lat: row.end_latitude,
@@ -701,6 +703,8 @@ test('canonical_recalculation_persists_leg_payable_amount', async () => {
   });
 
   assert.equal(travelLegs[0].travel_mode, 'car');
+  assert.equal(travelLegs[0].started_at, originalStartedAt);
+  assert.equal(travelLegs[0].ended_at, originalEndedAt);
   assert.equal(travelLegs[0].rate_per_km, 8);
   assert.equal(travelLegs[0].payable_amount, result.travel_legs[0].payable_amount);
   assert.equal(
