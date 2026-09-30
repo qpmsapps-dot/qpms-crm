@@ -5,6 +5,7 @@ import {
   correctionKey,
   eligibleCorrectionRows,
 } from '../scripts/applySeptemberMixedModeTravelCorrections.js';
+import fs from 'node:fs';
 
 function report(rows) {
   return {
@@ -35,6 +36,18 @@ test('correction key is stable for idempotent reruns', () => {
   const row = { attendance_id: 'attendance-1', attendance_date: '2026-09-29' };
   assert.equal(correctionKey(row), correctionKey(row));
   assert.equal(correctionKey(row), 'fo-mixed-mode-v1:attendance-1:2026-09-29');
+});
+
+test('applied audit rows are read before any correction insert on rerun', () => {
+  const source = fs.readFileSync(
+    new URL('../scripts/applySeptemberMixedModeTravelCorrections.js', import.meta.url),
+    'utf8',
+  );
+  const existingLookup = source.indexOf(".eq('correction_key', key)");
+  const insert = source.indexOf('.insert(payload)');
+  assert.ok(existingLookup >= 0);
+  assert.ok(insert > existingLookup);
+  assert.match(source, /if \(existing\) return existing;/);
 });
 
 test('wrong project or period fails closed', () => {

@@ -81,6 +81,14 @@ async function loadAttendance(client, attendanceId) {
 
 async function upsertPreviewAudit(client, row, beforeState, dryRunResult) {
   const key = correctionKey(row);
+  const { data: existing, error: existingError } = await client
+    .from('fo_travel_reimbursement_corrections')
+    .select('id,status,applied_state')
+    .eq('correction_key', key)
+    .maybeSingle();
+  if (existingError) throw existingError;
+  if (existing) return existing;
+
   const payload = {
     correction_key: key,
     attendance_id: row.attendance_id,
@@ -108,7 +116,7 @@ async function upsertPreviewAudit(client, row, beforeState, dryRunResult) {
   };
   const { data, error } = await client
     .from('fo_travel_reimbursement_corrections')
-    .upsert(payload, { onConflict: 'correction_key', ignoreDuplicates: true })
+    .insert(payload)
     .select('id,status,applied_state')
     .single();
   if (error) throw error;
