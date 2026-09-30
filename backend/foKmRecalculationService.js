@@ -908,8 +908,7 @@ export function calculateCanonicalRoutePayableKm({
       payable_km_allowed: leg?.payable_km_allowed,
       metadata: {},
     });
-    const legRatePerKm = normalizeNumber(leg?.rate_per_km ?? leg?.ratePerKm) ||
-      ratePerKmForTravelMode(legMode, ratePerKm);
+    const legRatePerKm = ratePerKmForTravelMode(legMode, ratePerKm);
     const payable = leg?.status === 'calculated' && legPolicy.payableKmAllowed && leg?.payable !== false;
     const payableKm = payable && Number.isFinite(Number(leg?.km))
       ? Number(Number(leg.km).toFixed(2))
@@ -1357,12 +1356,11 @@ function isBikeTravelMode(value) {
   return mode === 'bike' || mode === 'own_vehicle';
 }
 
-function ratePerKmForTravelMode(value, fallback = RATE_PER_KM) {
+function ratePerKmForTravelMode(value) {
   const mode = normalizeTravelMode(value);
   if (mode === 'car') return CAR_RATE_PER_KM;
   if (mode === 'bike' || mode === 'own_vehicle') return RATE_PER_KM;
-  const explicit = normalizeNumber(fallback);
-  return Number.isFinite(explicit) && explicit > 0 ? explicit : RATE_PER_KM;
+  return 0;
 }
 
 function truthyMetadataFlag(value) {
@@ -1467,6 +1465,119 @@ async function loadPersistedTravelLegSnapshots(client, attendance) {
     throw error;
   }
   return Array.isArray(data) ? data : [];
+}
+
+function travelLegTimestamp(value) {
+  const parsed = parseValidDate(value);
+  return parsed ? parsed.getTime() : null;
+}
+
+function coveredIntervalMs(intervals = []) {
+  const sorted = intervals
+    .filter(({ start, end }) => Number.isFinite(start) && Number.isFinite(end) && end > start)
+    .sort((left, right) => left.start - right.start);
+  if (!sorted.length) return 0;
+  let covered = 0;
+  let currentStart = sorted[0].start;
+  let currentEnd = sorted[0].end;
+  for (const interval of sorted.slice(1)) {
+    if (interval.start <= currentEnd) {
+      currentEnd = Math.max(currentEnd, interval.end);
+      continue;
+    }
+    covered += currentEnd - currentStart;
+    currentStart = interval.start;
+    currentEnd = interval.end;
+  }
+  return covered + currentEnd - currentStart;
+}
+
+/**
+ * Mobile mode changes can leave a legacy parent leg beside the finer mode
+ * segments that supersede it. Keep the timestamped child chain and reject
+ * unresolved overlaps so a day can never be paid twice.
+ */
+export function canonicalizePersistedTravelLegSnapshots(snapshots = []) {
+  const normalized = snapshots
+    .filter((snapshot) => snapshot && snapshot.status !== 'cancelled')
+    .map((snapshot) => ({
+      ...snapshot,
+      _started_at_ms: travelLegTimestamp(snapshot.started_at),
+      _ended_at_ms: travelLegTimestamp(snapshot.ended_at),
+      _travel_mode: normalizeTravelMode(snapshot.travel_mode),
+    }));
+  const ignoredIds = new Set();
+  for (const parent of normalized) {
+    if (
+      !Number.isFinite(parent._started_at_ms) ||
+      !Number.isFinite(parent._ended_at_ms) ||
+      parent._ended_at_ms <= parent._started_at_ms
+    ) continue;
+    const children = normalized.filter((candidate) => (
+      candidate.id !== parent.id &&
+      Number.isFinite(candidate._started_at_ms) &&
+      Number.isFinite(candidate._ended_at_ms) &&
+      candidate._ended_at_ms > candidate._started_at_ms &&
+      candidate._started_at_ms >= parent._started_at_ms - 1000 &&
+      candidate._ended_at_ms <= parent._ended_at_ms + 1000 &&
+      (
+        candidate._started_at_ms > parent._started_at_ms + 1 ||
+        candidate._ended_at_ms < parent._ended_at_ms - 1
+      )
+    ));
+    const childModes = new Set(children.map((candidate) => candidate._travel_mode));
+    const parentDuration = parent._ended_at_ms - parent._started_at_ms;
+    const coverage = coveredIntervalMs(children.map((candidate) => ({
+      start: candidate._started_at_ms,
+      end: candidate._ended_at_ms,
+    })));
+    if (children.length >= 2 && childModes.size >= 2 && coverage / parentDuration >= 0.95) {
+      ignoredIds.add(parent.id);
+    }
+  }
+  const canonical = normalized
+    .filter((snapshot) => !ignoredIds.has(snapshot.id))
+    .sort((left, right) => (left._started_at_ms || 0) - (right._started_at_ms || 0));
+  const completed = canonical.filter((snapshot) => (
+    Number.isFinite(snapshot._started_at_ms) &&
+    Number.isFinite(snapshot._ended_at_ms) &&
+    snapshot._ended_at_ms > snapshot._started_at_ms
+  ));
+  const active = canonical.filter((snapshot) => !Number.isFinite(snapshot._ended_at_ms));
+  const invalid = canonical.filter((snapshot) => (
+    Number.isFinite(snapshot._ended_at_ms) &&
+    (
+      !Number.isFinite(snapshot._started_at_ms) ||
+      snapshot._ended_at_ms <= snapshot._started_at_ms
+    )
+  ));
+  const overlaps = [];
+  for (let index = 1; index < completed.length; index += 1) {
+    const previous = completed[index - 1];
+    const current = completed[index];
+    const overlapMs = Math.min(previous._ended_at_ms, current._ended_at_ms) - current._started_at_ms;
+    if (overlapMs > 60 * 1000) {
+      overlaps.push({
+        previous_id: previous.id || null,
+        current_id: current.id || null,
+        overlap_ms: overlapMs,
+      });
+    }
+  }
+  const clean = (snapshot) => {
+    const row = { ...snapshot };
+    delete row._started_at_ms;
+    delete row._ended_at_ms;
+    delete row._travel_mode;
+    return row;
+  };
+  return {
+    completed: completed.map(clean),
+    active: active.map(clean),
+    invalid: invalid.map(clean),
+    ignored_superseded_ids: [...ignoredIds],
+    overlaps,
+  };
 }
 
 const PERSISTED_LEG_BOUNDARY_TOLERANCE_MS = 2 * 60 * 1000;
@@ -2387,22 +2498,37 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
   const attendance = await findAttendance(client, { attendance_id: attendanceId });
   const visits = await loadSiteVisits(client, attendance);
   const travelPolicy = travelModeAllowsPayableKm(attendance);
-  const ratePerKm = ratePerKmForTravelMode(attendance.travel_mode, attendance.rate_per_km);
   const effectiveEnd = await resolveEffectiveAttendanceEnd(client, attendance, { includeEvidence: true });
   const persistedLegSnapshots = await loadPersistedTravelLegSnapshots(client, attendance);
-  if (persistedLegSnapshots.some((snapshot) => (
-    snapshot?.status === 'active' || !snapshot?.ended_at
-  ))) {
+  const canonicalSnapshots = canonicalizePersistedTravelLegSnapshots(persistedLegSnapshots);
+  const activePrivateLegs = canonicalSnapshots.active.filter((snapshot) => (
+    travelModeAllowsPayableKm(snapshot).payableKmAllowed
+  ));
+  if (activePrivateLegs.length) {
     const error = new Error(
-      'Final travel leg closure is pending. Retry KM recalculation shortly.',
+      'A private-vehicle travel leg is still open. Close it before KM recalculation.',
     );
     error.statusCode = 409;
     error.code = 'travel_leg_closure_pending';
     throw error;
   }
+  if (canonicalSnapshots.invalid.length || canonicalSnapshots.overlaps.length) {
+    const error = new Error(
+      'Travel-leg boundaries overlap or are invalid. Manual review is required before recalculation.',
+    );
+    error.statusCode = 409;
+    error.code = 'travel_leg_boundaries_ambiguous';
+    error.details = {
+      invalid_leg_ids: canonicalSnapshots.invalid.map((snapshot) => snapshot.id),
+      overlaps: canonicalSnapshots.overlaps,
+    };
+    throw error;
+  }
   const expectedLegs = buildCompletedTravelLegs(attendance, visits, effectiveEnd);
-  const persistedCandidateLegs = completedPersistedTravelLegs(persistedLegSnapshots, expectedLegs);
-  const candidateLegs = reconcileTravelLegCandidates(expectedLegs, persistedLegSnapshots);
+  const persistedCandidateLegs = completedPersistedTravelLegs(canonicalSnapshots.completed, expectedLegs);
+  const candidateLegs = persistedCandidateLegs.length > 0
+    ? persistedCandidateLegs
+    : buildCompletedTravelLegs(attendance, visits, effectiveEnd);
   const legAudit = [];
   const delayedCheckoutAudits = [];
 
@@ -2477,7 +2603,6 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       metadata: {},
     });
     const legRatePerKm =
-      normalizeNumber(persistedLegSnapshot?.rate_per_km) ||
       ratePerKmForTravelMode(legMode, attendance.rate_per_km);
     const legPayable = result.payable === true && legPolicy.payableKmAllowed;
     const legPayableKm = legPayable && Number.isFinite(Number(result.legKm))
@@ -2515,7 +2640,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       to_site_name: leg.toSiteName || null,
       km: roundedKm,
       source,
-      payable: result.payable === true && travelPolicy.payableKmAllowed,
+      payable: legPayable,
       fallback_reason: result.fallbackReason || null,
       gps_log_count: result.gpsLogCount,
       valid_points: result.validPoints,
@@ -2637,6 +2762,12 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
           ? 'HAVERSINE_ROUTE_FALLBACK'
           : 'NO_COMPLETED_TRAVEL_LEGS';
   const reviewFlags = [];
+  if (canonicalSnapshots.ignored_superseded_ids.length) {
+    reviewFlags.push('SUPERSEDED_CONTAINER_TRAVEL_LEGS_IGNORED');
+  }
+  if (canonicalSnapshots.active.length) {
+    reviewFlags.push('OPEN_NON_PAYABLE_TRAVEL_LEG_EXCLUDED');
+  }
   if (
     persistedCandidateLegs.length === 0 &&
     (
@@ -3039,7 +3170,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     persistLegResults: !dryRun,
     auditDelayedCheckout: false,
   });
-  const missingKmReviewResults = dryRun
+  const missingKmReviewResults = dryRun || options.refreshMissingKmReviews === false
     ? []
     : await refreshMissingKmReviewsForAttendance(
         client,
@@ -3909,7 +4040,7 @@ function canonicalLegOverlapEvidence(windowStart, windowEnd, travelLegs = []) {
   };
 }
 
-function checkoutReviewBaselineAmbiguous(attendance, travelLegs = [], overlapEvidence = {}) {
+function checkoutReviewBaselineAmbiguous(attendance, overlapEvidence = {}) {
   if (overlapEvidence.overlaps) return false;
   const storedRouteKm = normalizeNumber(attendance?.total_route_km);
   return Boolean(Number.isFinite(storedRouteKm) && storedRouteKm > 0);
@@ -4147,7 +4278,7 @@ export async function refreshMissingKmReviewsForAttendance(client, attendance, v
       googleKm = null;
     }
     const overlapEvidence = canonicalLegOverlapEvidence(windowStart, windowEnd, travelLegs);
-    overlapEvidence.baselineAmbiguous = checkoutReviewBaselineAmbiguous(attendance, travelLegs, overlapEvidence);
+    overlapEvidence.baselineAmbiguous = checkoutReviewBaselineAmbiguous(attendance, overlapEvidence);
     const payload = missingKmReviewPayloadFromCalculation({
       attendance,
       visit,
@@ -4210,17 +4341,30 @@ export async function syncAttendanceApprovedKmTotals(client, attendanceId) {
   }
   const { data: legs, error: legsError } = await client
     .from('fo_travel_legs')
-    .select('payable_km,payable_amount,fare_amount,status')
+    .select('id,attendance_id,travel_mode,payable_km_allowed,started_at,ended_at,start_lat,start_lng,end_lat,end_lng,calculated_km,payable_km,rate_per_km,payable_amount,fare_amount,status')
     .eq('attendance_id', attendanceId);
   if (legsError) throw legsError;
-  const legKm = Number((legs || []).reduce((sum, leg) => (
+  const canonicalSnapshots = canonicalizePersistedTravelLegSnapshots(legs || []);
+  if (canonicalSnapshots.invalid.length || canonicalSnapshots.overlaps.length) {
+    const error = new Error('Travel-leg boundaries require manual review before attendance totals can be synchronized.');
+    error.statusCode = 409;
+    error.code = 'travel_leg_boundaries_ambiguous';
+    throw error;
+  }
+  if (canonicalSnapshots.active.some((leg) => travelModeAllowsPayableKm(leg).payableKmAllowed)) {
+    const error = new Error('A private-vehicle travel leg is still open.');
+    error.statusCode = 409;
+    error.code = 'travel_leg_closure_pending';
+    throw error;
+  }
+  const legKm = Number(canonicalSnapshots.completed.reduce((sum, leg) => (
     String(leg.status || '').toLowerCase() === 'completed'
       ? sum + Number(leg.payable_km || 0)
       : sum
   ), 0).toFixed(2));
-  const legAmount = Number((legs || []).reduce((sum, leg) => (
+  const legAmount = Number(canonicalSnapshots.completed.reduce((sum, leg) => (
     String(leg.status || '').toLowerCase() === 'completed'
-      ? sum + Number(leg.payable_amount ?? leg.fare_amount ?? 0)
+      ? sum + Number(leg.payable_km || 0) * ratePerKmForTravelMode(leg.travel_mode, leg.rate_per_km)
       : sum
   ), 0).toFixed(2));
   const approvedMissing = await loadApprovedMissingKmSummary(client, attendanceId);

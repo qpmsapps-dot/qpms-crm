@@ -5,6 +5,7 @@ import {
   calculateCanonicalRoutePayableKm,
   calculateFoKmHistoricalImpact,
   calculateTravelLegKm,
+  canonicalizePersistedTravelLegSnapshots,
   classifyPersistedTravelLeg,
   reconcileTravelLegCandidates,
   recalculateFoKm,
@@ -749,6 +750,78 @@ test('recalculation_twice_updates_same_leg_rows_idempotently', async () => {
   assert.equal(travelLegs.length, 1);
   assert.equal(travelLegs[0].payable_km, first.payable_km);
   assert.equal(travelLegs[0].payable_amount, first.payable_amount);
+});
+
+test('mixed-mode reimbursement is calculated per leg and public modes never inherit a private rate', () => {
+  const sequences = [
+    ['bike'], ['car'], ['train'], ['bus'],
+    ['bike', 'train'], ['train', 'bike'], ['car', 'train'], ['train', 'car'],
+    ['bike', 'bus'], ['car', 'bus'], ['bike', 'train', 'bus'], ['car', 'train', 'bus'],
+    ['bike', 'car'], ['car', 'bike'], ['bike', 'train', 'bike', 'bus'],
+  ];
+  for (const modes of sequences) {
+    const result = calculateCanonicalRoutePayableKm({
+      attendance: attendance({
+        travel_mode: modes.at(-1),
+        payable_km_allowed: !['train', 'bus', 'auto', 'other'].includes(modes.at(-1)),
+        rate_per_km: modes.at(-1) === 'car' ? 8 : 4,
+      }),
+      gpsTravelLegs: modes.map((travelMode, index) => gpsLeg(`leg-${index}`, 10, {
+        travel_mode: travelMode,
+        rate_per_km: travelMode === 'car' ? 8 : 4,
+      })),
+    });
+    const expectedAmount = modes.reduce((sum, travelMode) => (
+      sum + (travelMode === 'car' ? 80 : ['bike', 'own_vehicle'].includes(travelMode) ? 40 : 0)
+    ), 0);
+    assert.equal(result.petrolAmount, expectedAmount, modes.join(' -> '));
+    for (const leg of result.auditTravelLegs.filter((item) => ['train', 'bus', 'auto', 'other'].includes(item.travel_mode))) {
+      assert.equal(leg.rate_per_km, 0, `${modes.join(' -> ')} public rate`);
+      assert.equal(leg.payable_km, 0, `${modes.join(' -> ')} public KM`);
+      assert.equal(leg.payable_amount, 0, `${modes.join(' -> ')} public amount`);
+    }
+  }
+});
+
+test('a final public attendance mode does not suppress earlier payable private legs', () => {
+  const result = calculateCanonicalRoutePayableKm({
+    attendance: attendance({ travel_mode: 'train', payable_km_allowed: false, rate_per_km: 4 }),
+    gpsTravelLegs: [
+      gpsLeg('bike-leg', 5.32, { travel_mode: 'bike', payable: true, rate_per_km: 4 }),
+      gpsLeg('train-leg', 200, { travel_mode: 'train', payable: false, rate_per_km: 4 }),
+    ],
+  });
+  assert.equal(result.calculatedPayableKm, 5.32);
+  assert.equal(result.petrolAmount, 21.28);
+});
+
+test('superseded broad parent legs are excluded from a timestamped mixed-mode child chain', () => {
+  const snapshots = [
+    {
+      id: 'parent', travel_mode: 'bike', status: 'completed',
+      started_at: '2026-09-29T00:00:00.000Z', ended_at: '2026-09-29T04:00:00.000Z',
+    },
+    {
+      id: 'bike-child', travel_mode: 'bike', status: 'completed',
+      started_at: '2026-09-29T00:00:00.100Z', ended_at: '2026-09-29T01:00:00.000Z',
+    },
+    {
+      id: 'train-child', travel_mode: 'train', status: 'completed',
+      started_at: '2026-09-29T01:00:00.000Z', ended_at: '2026-09-29T04:00:00.000Z',
+    },
+  ];
+  const canonical = canonicalizePersistedTravelLegSnapshots(snapshots);
+  assert.deepEqual(canonical.ignored_superseded_ids, ['parent']);
+  assert.deepEqual(canonical.completed.map((row) => row.id), ['bike-child', 'train-child']);
+  assert.deepEqual(canonical.overlaps, []);
+});
+
+test('unresolved timestamp overlap is reported instead of double-counted', () => {
+  const canonical = canonicalizePersistedTravelLegSnapshots([
+    { id: 'bike', travel_mode: 'bike', status: 'completed', started_at: '2026-09-29T00:00:00Z', ended_at: '2026-09-29T02:00:00Z' },
+    { id: 'train', travel_mode: 'train', status: 'completed', started_at: '2026-09-29T01:00:00Z', ended_at: '2026-09-29T03:00:00Z' },
+  ]);
+  assert.equal(canonical.overlaps.length, 1);
 });
 
 test('final-leg-only contribution prefers persisted calculated km then metadata', () => {
