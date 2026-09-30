@@ -133,6 +133,7 @@ end;
 $$;
 
 revoke all on function public.refresh_fo_attendance_payable_route_km(uuid) from public;
-grant execute on function public.refresh_fo_attendance_payable_route_km(uuid) to authenticated, service_role;
+revoke all on function public.refresh_fo_attendance_payable_route_km(uuid) from anon, authenticated;
+grant execute on function public.refresh_fo_attendance_payable_route_km(uuid) to service_role;
 
 commit;

@@ -26,6 +26,9 @@ test('site-visit refresh defers to travel legs and preserves legacy single-mode 
   assert.match(migration, /travel_mode, 'bike'\)\) in \('bike', 'own_vehicle', 'car'\)/i);
   assert.match(migration, /travel_mode, ''\)\) = 'car'[\s\S]*route_totals\.total_route_km \* 8/i);
   assert.match(migration, /travel_mode, 'bike'\)\) in \('bike', 'own_vehicle'\)[\s\S]*route_totals\.total_route_km \* 4/i);
+  assert.match(migration, /revoke all on function public\.refresh_fo_attendance_payable_route_km\(uuid\) from anon, authenticated/i);
+  assert.match(migration, /grant execute on function public\.refresh_fo_attendance_payable_route_km\(uuid\) to service_role/i);
+  assert.doesNotMatch(migration, /grant execute[^;]*to authenticated/i);
 });
 
 test('migration 118 does not rewrite operational or expense source data', () => {
