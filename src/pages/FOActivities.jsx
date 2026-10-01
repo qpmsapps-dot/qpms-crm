@@ -85,6 +85,7 @@ import {
   buildReportEvidenceRows,
   reportEvidenceKey,
 } from "../utils/reportEvidence.js";
+import { createLatestRequestCoordinator } from "../utils/latestRequestCoordinator.js";
 
 const SOUTH_INDIA_CENTER = [13.0827, 80.2707];
 const INDIA_TIME_ZONE = "Asia/Kolkata";
@@ -11604,6 +11605,13 @@ export default function FOActivities() {
   const [detailDraftFromDate, setDetailDraftFromDate] = useState(customFromDate);
   const [detailDraftToDate, setDetailDraftToDate] = useState(customToDate);
   const profileRowsRef = useRef([]);
+  const [dashboardRequestCoordinator] = useState(() =>
+    createLatestRequestCoordinator({
+      debug: (details) => {
+        if (import.meta.env.DEV) console.debug('[myQPMS FO polling]', details);
+      },
+    }),
+  );
   const mainRouteFitKeyRef = useRef(null);
   const kmRecalcCooldownRef = useRef(new Map());
   const kmRecalcInFlightRef = useRef(new Set());
@@ -11617,24 +11625,29 @@ export default function FOActivities() {
   const usesScopedBackendOperationsData = true;
 
   useEffect(() => {
-    let cancelled = false;
+    const requestCoordinator = dashboardRequestCoordinator;
     async function loadFoOperations() {
       if (!isSupabaseConfigured || !supabase || !hasActiveSession) {
         return;
       }
       try {
-        const query = operationsSummaryQuery({
-          dateFrom: selectedRange.fromDate,
-          dateTo: selectedRange.toDate,
-          state: stateFilter,
-          business: businessFilter,
-          status: statusFilter,
-        });
-        const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/operations/dashboard?${query}`);
-        const payload = await response.json();
-        if (!response.ok || payload.ok === false) {
-          throw new Error(payload.message || "Operations dashboard failed.");
-        }
+        const requestResult = await requestCoordinator.run(async ({ signal }) => {
+          const query = operationsSummaryQuery({
+            dateFrom: selectedRange.fromDate,
+            dateTo: selectedRange.toDate,
+            state: stateFilter,
+            business: businessFilter,
+            status: statusFilter,
+          });
+          const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/operations/dashboard?${query}`, { signal });
+          const payload = await response.json();
+          if (!response.ok || payload.ok === false) {
+            throw new Error(payload.message || "Operations dashboard failed.");
+          }
+          return payload;
+        }, { replace: true, label: 'operations-dashboard' });
+        if (requestResult.status !== 'applied') return;
+        const payload = requestResult.value;
         const profileRows = payload.profiles || [];
         const officersFromBackend = buildLiveFoData({
           attendance: payload.attendances || [],
@@ -11645,17 +11658,15 @@ export default function FOActivities() {
           statusDate: selectedRange.toDate,
           currentUser: user,
         });
-        if (!cancelled) {
-          profileRowsRef.current = profileRows;
-          setAttendanceKpiRows(payload.attendances || []);
-          setSiteVisitRows(payload.site_visits || []);
-          setLiveOfficers(officersFromBackend);
-          setOperationsAccessScope(payload.access_scope || null);
-        }
+        profileRowsRef.current = profileRows;
+        setAttendanceKpiRows(payload.attendances || []);
+        setSiteVisitRows(payload.site_visits || []);
+        setLiveOfficers(officersFromBackend);
+        setOperationsAccessScope(payload.access_scope || null);
       } catch (error) {
         console.warn("[myQPMS FO] Supabase FO fetch failed.", error);
         const authInvalidated = await invalidateAuthOnUnauthorized(error);
-        if (!cancelled && !authInvalidated) {
+        if (!authInvalidated) {
           setAttendanceKpiRows([]);
           setSiteVisitRows([]);
           setLiveOfficers([]);
@@ -11664,17 +11675,23 @@ export default function FOActivities() {
     }
     loadFoOperations();
     return () => {
-      cancelled = true;
+      requestCoordinator.cancel('operations-dashboard');
     };
-  }, [businessFilter, hasActiveSession, refreshToken, selectedRange.fromDate, selectedRange.toDate, stateFilter, statusFilter, user]);
+  }, [businessFilter, dashboardRequestCoordinator, hasActiveSession, refreshToken, selectedRange.fromDate, selectedRange.toDate, stateFilter, statusFilter, user]);
 
   useEffect(() => {
     if (!hasActiveSession || hasDemoBackendReadSession) return undefined;
     const interval = window.setInterval(() => {
+      if (dashboardRequestCoordinator.isInFlight()) {
+        if (import.meta.env.DEV) {
+          console.debug('[myQPMS FO polling]', { event: 'skipped_in_flight', label: 'operations-dashboard' });
+        }
+        return;
+      }
       setRefreshToken((value) => value + 1);
     }, 12000);
     return () => window.clearInterval(interval);
-  }, [hasActiveSession, hasDemoBackendReadSession]);
+  }, [dashboardRequestCoordinator, hasActiveSession, hasDemoBackendReadSession]);
 
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase || !hasActiveSession || hasDemoBackendReadSession || usesScopedBackendOperationsData) return undefined;

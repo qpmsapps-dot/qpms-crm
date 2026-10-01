@@ -6,6 +6,10 @@ import {
   getHospitalTicketNotifications,
   markHospitalTicketNotificationRead,
 } from '../services/hospitalTicketsApi.js';
+import {
+  createLatestRequestCoordinator,
+  createRequestLoadingOwnership,
+} from '../utils/latestRequestCoordinator.js';
 
 const NOTIFICATION_POLL_MS = 45000;
 
@@ -15,6 +19,14 @@ export default function Navbar({ onMenuClick, theme = 'light', onThemeToggle }) 
   const accountRef = useRef(null);
   const notificationsRef = useRef(null);
   const hospitalNotificationsUnavailableRef = useRef(false);
+  const [notificationRequestCoordinator] = useState(() =>
+    createLatestRequestCoordinator({
+      debug: (details) => {
+        if (import.meta.env.DEV) console.debug('[myQPMS notification polling]', details);
+      },
+    }),
+  );
+  const [notificationLoadingOwnership] = useState(() => createRequestLoadingOwnership());
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [notificationFilter, setNotificationFilter] = useState('all');
@@ -59,13 +71,25 @@ export default function Navbar({ onMenuClick, theme = 'light', onThemeToggle }) 
     if (!userKey || hospitalNotificationsUnavailableRef.current) {
       return;
     }
+    const loadingClaim = notificationLoadingOwnership.begin({
+      visible: !quiet,
+      inherit: quiet,
+    });
     if (!quiet) setNotificationsLoading(true);
+    let shouldFinishLoading = false;
     try {
-      const response = await getHospitalTicketNotifications();
+      const requestResult = await notificationRequestCoordinator.run(
+        ({ signal }) => getHospitalTicketNotifications({ signal }),
+        { replace: !quiet, label: 'hospital-notifications' },
+      );
+      if (requestResult.status !== 'applied') return;
+      shouldFinishLoading = true;
+      const response = requestResult.value;
       setNotifications(normalizeNotifications(response.notifications, userKey));
       setNotificationsError('');
       hospitalNotificationsUnavailableRef.current = false;
     } catch (error) {
+      shouldFinishLoading = true;
       setNotifications((items) => items.filter((item) => item.userKey !== userKey));
       const status = error?.response?.status;
       const code = error?.response?.data?.code;
@@ -76,9 +100,14 @@ export default function Navbar({ onMenuClick, theme = 'light', onThemeToggle }) 
         setNotificationsError('Unable to load notifications.');
       }
     } finally {
-      if (!quiet) setNotificationsLoading(false);
+      if (
+        shouldFinishLoading &&
+        notificationLoadingOwnership.release(loadingClaim.releaseToken)
+      ) {
+        setNotificationsLoading(false);
+      }
     }
-  }, [userKey]);
+  }, [notificationLoadingOwnership, notificationRequestCoordinator, userKey]);
 
   useEffect(() => {
     hospitalNotificationsUnavailableRef.current = false;
@@ -96,10 +125,14 @@ export default function Navbar({ onMenuClick, theme = 'light', onThemeToggle }) 
     return () => {
       window.clearTimeout(initialLoadId);
       window.clearInterval(intervalId);
+      notificationRequestCoordinator.cancel('hospital-notifications');
     };
-  }, [loadNotifications, userKey]);
+  }, [loadNotifications, notificationLoadingOwnership, notificationRequestCoordinator, userKey]);
 
   function handleLogout() {
+    notificationRequestCoordinator.cancel('hospital-notifications');
+    notificationLoadingOwnership.clear();
+    setNotificationsLoading(false);
     logout();
     setIsAccountOpen(false);
     setIsNotificationsOpen(false);

@@ -27,8 +27,8 @@ test('User Management waits for auth and does not turn request failure into zero
 });
 
 test('Operations polling and Realtime are gated by an active session and channels are removed', () => {
-  assert.match(operations, /if \(!hasActiveSession\) return undefined;[\s\S]*?setInterval/);
-  assert.ok((operations.match(/!hasActiveSession\) return undefined/g) || []).length >= 3);
+  assert.match(operations, /if \(!hasActiveSession \|\| hasDemoBackendReadSession\) return undefined;[\s\S]*?setInterval/);
+  assert.ok((operations.match(/!hasActiveSession[^\n]*return undefined/g) || []).length >= 3);
   assert.ok((operations.match(/supabase\.removeChannel\(channel\)/g) || []).length >= 2);
   assert.doesNotMatch(operations, /REALTIME_RECONNECT/);
 });

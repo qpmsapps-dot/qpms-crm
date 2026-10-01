@@ -105,6 +105,7 @@ import {
   normalizeWebRoleKey,
 } from './services/webRoleAccessService.js';
 import { createCorsOptions, resolveAllowedOrigins } from './services/corsPolicyService.js';
+import { createServiceRoleAuthAdminCapabilityValidator } from './services/serviceRoleAuthAdminCapability.js';
 import { startAutomaticBackgroundWorkers } from './services/readOnlyUatMode.js';
 import {
   businessScopeAllows,
@@ -1445,9 +1446,23 @@ async function testServiceRoleAuthAdmin(client = serviceRoleSupabase) {
   }
 }
 
+const serviceRoleAuthAdminCapability = createServiceRoleAuthAdminCapabilityValidator({
+  validate: testServiceRoleAuthAdmin,
+  onValidationAttempt: ({ attempt }) => {
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('[myQPMS Auth] validating service-role Auth Admin capability', { attempt });
+    }
+  },
+});
+
 async function assertServiceRoleAuthAdminAccess(client) {
-  const result = await testServiceRoleAuthAdmin(client);
+  const result = await serviceRoleAuthAdminCapability.ensure(client);
   if (result.success) return;
+  console.warn('[myQPMS Auth] service-role Auth Admin capability validation failed', {
+    reason: result.reason || 'unknown',
+    message: result.error?.message || null,
+    code: result.error?.code || null,
+  });
   const error = new Error(
     result.error?.message || 'Supabase service-role Auth Admin access is unavailable.',
   );

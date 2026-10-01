@@ -52,10 +52,11 @@ export async function notifyHospitalTicketAgain(ticketId, params = {}) {
   }).then(dataOrThrow);
 }
 
-export async function getHospitalTicketNotifications() {
+export async function getHospitalTicketNotifications({ signal } = {}) {
   return authenticatedApiRequest({
     method: 'GET',
     url: '/api/hospital-tickets/notifications',
+    signal,
   }).then(dataOrThrow);
 }
 
