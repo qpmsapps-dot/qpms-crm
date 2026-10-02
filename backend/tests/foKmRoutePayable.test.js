@@ -5,6 +5,7 @@ import {
   calculateCanonicalRoutePayableKm,
   calculateFoKmHistoricalImpact,
   calculateTravelLegKm,
+  buildTransportPolicyEvidenceForCanonicalLeg,
   canonicalizePersistedTravelLegSnapshots,
   classifyPersistedTravelLeg,
   reconcileTravelLegCandidates,
@@ -13,6 +14,7 @@ import {
   reconcileFinalLegOnly,
   previousFinalLegContribution,
   resolveEffectiveAttendanceEnd,
+  ratePerKmForTravelMode,
   syncAttendanceApprovedKmTotals,
 } from '../foKmRecalculationService.js';
 
@@ -705,6 +707,116 @@ test('direct leg persistence is retired in favor of atomic canonical persistence
     (error) => error.code === 'km_v2_canonical_persistence_required',
   );
   assert.equal(travelLegs[0].payable_amount, undefined);
+});
+
+test('runtime transport evidence reaches every rail classification without fabricating unavailable signals', () => {
+  const base = {
+    leg: {
+      type: 'persisted_travel_leg',
+      persistedTravelLegId: 'leg-1',
+      startedAt: '2026-07-16T05:00:00Z',
+      endedAt: '2026-07-16T06:00:00Z',
+      calculatedKm: 30,
+      acceptedGpsKm: 5,
+      reconstructedGapKm: 0,
+      travelMode: 'train',
+      persistedRatePerKm: 7,
+      persistedPayableAmount: 0,
+    },
+  };
+  const explicit = buildTransportPolicyEvidenceForCanonicalLeg(base);
+  assert.equal(explicit.travelLegs[0].mode, 'train');
+  assert.equal(explicit.ratePerKm, 7);
+  assert.equal(explicit.googleTransit, null);
+
+  const corroborated = buildTransportPolicyEvidenceForCanonicalLeg({
+    ...base,
+    options: { railPolicyEvidenceByLeg: { 'leg-1': { localEvidence: {
+      railCompatibleGpsTopology: true,
+      stationOrCorridorEndpoints: true,
+      meaningfulLongDistance: true,
+    } } } },
+  });
+  assert.equal(corroborated.localEvidence.railCompatibleGpsTopology, true);
+
+  const gap = buildTransportPolicyEvidenceForCanonicalLeg({
+    ...base,
+    leg: { ...base.leg, travelMode: 'bike', gpsCoverageClassification: 'MANUAL_REVIEW' },
+    options: { railPolicyEvidenceByLeg: { 'leg-1': { localEvidence: {
+      railCompatibleGpsTopology: true,
+      stationOrCorridorEndpoints: true,
+      meaningfulLongDistance: true,
+    } } } },
+  });
+  assert.equal(gap.localEvidence.centralGpsLoss, true);
+
+  const medium = buildTransportPolicyEvidenceForCanonicalLeg({
+    ...base,
+    leg: { ...base.leg, travelMode: 'bike' },
+    options: { railPolicyEvidenceByLeg: { 'leg-1': { localEvidence: { railCompatibleGpsTopology: true } } } },
+  });
+  assert.equal(medium.localEvidence.railCompatibleGpsTopology, true);
+
+  const privateMode = buildTransportPolicyEvidenceForCanonicalLeg({
+    ...base,
+    leg: { ...base.leg, travelMode: 'bike' },
+  });
+  assert.equal(privateMode.travelLegs[0].mode, 'bike');
+  assert.equal(privateMode.localEvidence.centralGpsLoss, false);
+});
+
+test('historical persisted private rates win while public transport remains financially zero', () => {
+  assert.equal(ratePerKmForTravelMode('bike', 5.5), 5.5);
+  assert.equal(ratePerKmForTravelMode('car', 9), 9);
+  assert.equal(ratePerKmForTravelMode('bike', null), 4);
+  assert.equal(ratePerKmForTravelMode('car', null), 8);
+  assert.equal(ratePerKmForTravelMode('train', 7), 0);
+  const result = calculateCanonicalRoutePayableKm({
+    attendance: attendance(),
+    gpsTravelLegs: [
+      gpsLeg('private-historical', 10, { travel_mode: 'bike', rate_per_km: 5.5 }),
+      gpsLeg('public-historical', 50, { travel_mode: 'train', rate_per_km: 7, payable_km: 0 }),
+    ],
+  });
+  assert.equal(result.auditTravelLegs[0].rate_per_km, 5.5);
+  assert.equal(result.auditTravelLegs[0].payable_amount, 55);
+  assert.equal(result.auditTravelLegs[1].rate_per_km, 0);
+  assert.equal(result.auditTravelLegs[1].payable_amount, 0);
+});
+
+test('runtime evidence matches applied correction legs without attaching attendance totals per leg', () => {
+  const correction = {
+    id: 'correction-1',
+    status: 'applied',
+    before_state: {
+      leg_breakdown: [{
+        id: 'leg-1',
+        mode: 'train',
+        km: 30,
+        rate: 0,
+        amount: 0,
+        started_at: '2026-07-16T05:00:00Z',
+        ended_at: '2026-07-16T06:00:00Z',
+      }],
+    },
+    applied_state: { attendance: { total_approved_km: 20, petrol_amount: 80 } },
+  };
+  const evidence = buildTransportPolicyEvidenceForCanonicalLeg({
+    leg: {
+      persistedTravelLegId: 'leg-1',
+      startedAt: '2026-07-16T05:00:00Z',
+      endedAt: '2026-07-16T06:00:00Z',
+      calculatedKm: 30,
+      travelMode: 'bike',
+    },
+    corrections: [correction],
+  });
+  assert.deepEqual(evidence.travelLegs.map((leg) => leg.mode), ['train']);
+  assert.deepEqual(evidence.appliedCorrectionReference, {
+    id: 'correction-1',
+    reason: 'PRESERVE_APPLIED_CORRECTION',
+  });
+  assert.equal(evidence.correctionLedger, undefined);
 });
 
 function undercoveredGpsRows() {

@@ -5,10 +5,12 @@ import {
   GPS_REJECTION_REASON,
   KM_DECISION,
   KM_ENGINE_VERSION,
+  KM_TRANSPORT_CLASSIFICATION,
   applyWholeLegSanityGate,
   calculateGpsCoverageTrace,
   calculateCanonicalKmV2,
   canonicalKmInputDigest,
+  classifyRailPublicTransportPolicy,
   evaluateLegCoverage,
   finalizeGpsSegments,
   normalizeGpsEvidence,
@@ -294,7 +296,7 @@ test('coverage trace rejects impossible segments and raises the jitter floor for
   assert.ok(normal.distanceKm > contaminated.distanceKm);
 });
 
-test('QPMSAP2315 production-derived leg evidence totals 91.74 without paying route estimates', () => {
+test('QPMSAP2315 30-Sep remains 91.74 km and 366.96 unless genuine new rail evidence applies', () => {
   const first = evaluateLegCoverage({
     acceptedGpsKm: 5.16,
     coverageTraceKm: 42.2369,
@@ -311,15 +313,29 @@ test('QPMSAP2315 production-derived leg evidence totals 91.74 without paying rou
     elapsedSeconds: 8923,
   });
   const legs = [
-    { payableKm: Number(first.selectedKm.toFixed(2)), payableAmount: Number((Number(first.selectedKm.toFixed(2)) * 4).toFixed(2)), acceptedGpsKm: 5.16, reconstructedGapKm: first.reconstructedCoverageKm, decision: first.decision },
-    { payableKm: Number(second.selectedKm.toFixed(2)), payableAmount: Number((Number(second.selectedKm.toFixed(2)) * 4).toFixed(2)), acceptedGpsKm: 26.54, reconstructedGapKm: second.reconstructedCoverageKm, decision: second.decision },
-    { payableKm: 0.05, payableAmount: 0.20, acceptedGpsKm: 0.05, decision: KM_DECISION.ACCEPTED },
-    { payableKm: 0.24, payableAmount: 0.96, acceptedGpsKm: 0.24, decision: KM_DECISION.ACCEPTED_WITH_WARNING, riskFlags: ['SHORT_WINDOW_SPEED_UNCERTAIN'] },
+    { payableKm: Number(first.selectedKm.toFixed(2)), payableAmount: Number((Number(first.selectedKm.toFixed(2)) * 4).toFixed(2)), physicalKm: 42.24, travelMode: 'bike', acceptedGpsKm: 5.16, reconstructedGapKm: first.reconstructedCoverageKm, decision: first.decision },
+    { payableKm: Number(second.selectedKm.toFixed(2)), payableAmount: Number((Number(second.selectedKm.toFixed(2)) * 4).toFixed(2)), physicalKm: 49.21, travelMode: 'bike', acceptedGpsKm: 26.54, reconstructedGapKm: second.reconstructedCoverageKm, decision: second.decision },
+    { payableKm: 0.05, payableAmount: 0.20, physicalKm: 0.05, travelMode: 'bike', acceptedGpsKm: 0.05, decision: KM_DECISION.ACCEPTED },
+    { payableKm: 0.24, payableAmount: 0.96, physicalKm: 0.24, travelMode: 'bike', acceptedGpsKm: 0.24, decision: KM_DECISION.ACCEPTED_WITH_WARNING, riskFlags: ['SHORT_WINDOW_SPEED_UNCERTAIN'] },
   ];
   const result = calculateCanonicalKmV2({ legs });
   assert.deepEqual(legs.map((leg) => leg.payableKm), [42.24, 49.21, 0.05, 0.24]);
   assert.equal(result.payableKm, 91.74);
   assert.equal(result.reimbursement, 366.96);
+
+  const withNewRailEvidence = calculateCanonicalKmV2({
+    legs: legs.map((leg, index) => index === 0 ? {
+      ...leg,
+      transportPolicyEvidence: {
+        travelLegs: [{ mode: 'Train', km: 42.24 }],
+        googleTransit: { status: 'ZERO_RESULTS', routes: [] },
+      },
+    } : leg),
+  });
+  assert.equal(withNewRailEvidence.canonicalLegs[0].transportClassification, 'EXPLICIT_INTERNAL_TRAIN_EVIDENCE');
+  assert.equal(withNewRailEvidence.canonicalLegs[0].originalSelectedMode, 'bike');
+  assert.equal(withNewRailEvidence.payableKm, 49.5);
+  assert.equal(withNewRailEvidence.reimbursement, 198);
 });
 
 test('no movement is accepted at zero while missing checkout requires review', () => {
@@ -357,6 +373,187 @@ test('Google timeout, failure and zero-result evidence cannot become payable rec
     assert.equal(finalized.reconstructedGapKm, 0);
     assert.equal(finalized.segments[0].reason, errorCode);
   }
+});
+
+test('explicit internal Train evidence remains authoritative with an empty Google route', () => {
+  const result = classifyRailPublicTransportPolicy({
+    selectedMode: 'Bike',
+    physicalKm: 30,
+    payableKm: 30,
+    travelLegs: [
+      { mode: 'Bike', km: 10 },
+      { mode: 'Train', km: 20 },
+    ],
+    googleTransit: { status: 'ZERO_RESULTS', routes: [] },
+  });
+  assert.equal(result.classification, KM_TRANSPORT_CLASSIFICATION.EXPLICIT_INTERNAL_TRAIN_EVIDENCE);
+  assert.equal(result.detectedMode, 'TRAIN');
+  assert.equal(result.originalSelectedMode, 'bike');
+  assert.equal(result.googleEvidence, 'EMPTY_ROUTE');
+  assert.equal(result.physicalKm, 30);
+  assert.equal(result.payableKm, 10);
+  assert.equal(result.payableAmount, 40);
+});
+
+test('explicit internal Train evidence remains authoritative with Google BUS-only transit', () => {
+  const result = classifyRailPublicTransportPolicy({
+    selectedMode: 'Bike',
+    physicalKm: 20,
+    payableKm: 20,
+    travelLegs: [{ travel_mode: 'train', calculated_km: 20 }],
+    googleTransit: {
+      routes: [{ legs: [{ steps: [{ transit_details: { line: { vehicle: { type: 'BUS' } } } }] }] }],
+    },
+  });
+  assert.equal(result.classification, KM_TRANSPORT_CLASSIFICATION.EXPLICIT_INTERNAL_TRAIN_EVIDENCE);
+  assert.equal(result.googleEvidence, 'NON_RAIL_TRANSIT');
+  assert.equal(result.payableKm, 0);
+});
+
+test('actual Google rail vehicle plus matching GPS corroborates high-confidence rail', () => {
+  const result = classifyRailPublicTransportPolicy({
+    selectedMode: 'Bike',
+    physicalKm: 45,
+    payableKm: 45,
+    localEvidence: {
+      railCompatibleGpsTopology: true,
+      gpsMatchesRail: true,
+      stationOrCorridorEndpoints: true,
+      meaningfulLongDistance: true,
+    },
+    googleTransit: {
+      routes: [{ legs: [{ steps: [{ transit_details: { line: { vehicle: { type: 'COMMUTER_TRAIN' } } } }] }] }],
+    },
+  });
+  assert.equal(result.classification, KM_TRANSPORT_CLASSIFICATION.HIGH_CONFIDENCE_RAIL_CORROBORATED);
+  assert.equal(result.googleEvidence, 'RAIL_CORROBORATED');
+  assert.equal(result.detectedMode, 'TRAIN');
+  assert.equal(result.payableKm, 0);
+});
+
+test('normal Bike-only travel remains payable at four rupees per km', () => {
+  const result = classifyRailPublicTransportPolicy({ selectedMode: 'Bike', physicalKm: 12.5 });
+  assert.equal(result.classification, KM_TRANSPORT_CLASSIFICATION.PAYABLE_PRIVATE_MODE);
+  assert.equal(result.payableKm, 12.5);
+  assert.equal(result.payableAmount, 50);
+  assert.equal(result.ratePerKm, 4);
+  const car = classifyRailPublicTransportPolicy({ selectedMode: 'Car', physicalKm: 12.5 });
+  assert.equal(car.payableKm, 12.5);
+  assert.equal(car.payableAmount, 100);
+  assert.equal(car.ratePerKm, 8);
+});
+
+test('missing GPS without rail evidence is sent to manual review', () => {
+  const result = classifyRailPublicTransportPolicy({
+    selectedMode: 'Bike',
+    physicalKm: 20,
+    localEvidence: { missingGps: true },
+    googleTransit: { unavailable: true },
+  });
+  assert.equal(result.classification, KM_TRANSPORT_CLASSIFICATION.MEDIUM_MANUAL_REVIEW);
+  assert.equal(result.decision, KM_DECISION.MANUAL_REVIEW);
+  assert.equal(result.googleEvidence, 'UNAVAILABLE');
+  assert.equal(result.payableKm, 0);
+});
+
+test('expected site-visit pause prevents a false rail classification', () => {
+  const result = classifyRailPublicTransportPolicy({
+    selectedMode: 'Bike',
+    physicalKm: 18,
+    localEvidence: {
+      railCompatibleGpsTopology: true,
+      stationOrCorridorEndpoints: true,
+      meaningfulLongDistance: true,
+      expectedSitePause: true,
+    },
+  });
+  assert.equal(result.classification, KM_TRANSPORT_CLASSIFICATION.PAYABLE_PRIVATE_MODE);
+  assert.equal(result.reason, 'EXPECTED_SITE_PAUSE');
+  assert.equal(result.payableKm, 18);
+  assert.equal(result.payableAmount, 72);
+});
+
+test('Bike to Train to Bike pays only the two Bike portions', () => {
+  const result = classifyRailPublicTransportPolicy({
+    selectedMode: 'Bike',
+    physicalKm: 50,
+    travelLegs: [
+      { mode: 'Bike', km: 12 },
+      { mode: 'Train', km: 30 },
+      { mode: 'Bike', km: 8 },
+    ],
+  });
+  assert.equal(result.classification, KM_TRANSPORT_CLASSIFICATION.EXPLICIT_INTERNAL_TRAIN_EVIDENCE);
+  assert.equal(result.physicalKm, 50);
+  assert.equal(result.railPortionKm, 30);
+  assert.equal(result.privatePortionKm, 20);
+  assert.equal(result.payableKm, 20);
+  assert.equal(result.payableAmount, 80);
+  const recalculated = calculateCanonicalKmV2({
+    legs: [{
+      travelMode: 'Bike',
+      physicalKm: 50,
+      payableKm: 20,
+      payableAmount: 80,
+      decision: KM_DECISION.ACCEPTED_WITH_WARNING,
+      transportPolicyEvidence: { correctionLedger: [{
+        id: 'correction-1',
+        correction_key: 'fo-mixed-mode-v1:attendance-1:2026-09-30',
+        correction_reason: 'mixed-mode per-leg reimbursement correction',
+        status: 'applied',
+        before_state: {
+          modes_used: ['bike', 'train'],
+          leg_breakdown: [{ mode: 'Bike', km: 20 }, { mode: 'Train', km: 30 }],
+        },
+        applied_state: { attendance: { total_approved_km: 20, petrol_amount: 80 } },
+      }] },
+    }],
+  });
+  assert.equal(recalculated.payableKm, 20);
+  assert.equal(recalculated.reimbursement, 80);
+  assert.equal(recalculated.canonicalLegs[0].railPolicyIdempotencyAction, 'PRESERVE_APPLIED_CORRECTION');
+});
+
+test('already-applied mixed-mode correction is preserved without a second rail deduction', () => {
+  const result = classifyRailPublicTransportPolicy({
+    selectedMode: 'Bike',
+    physicalKm: 50,
+    payableKm: 20,
+    payableAmount: 80,
+    correctionLedger: [{
+      id: 'correction-1',
+      correction_key: 'fo-mixed-mode-v1:attendance-1:2026-09-30',
+      correction_reason: 'mixed-mode per-leg reimbursement correction',
+      status: 'applied',
+      before_state: {
+        modes_used: ['bike', 'train'],
+        leg_breakdown: [{ mode: 'Bike', km: 20 }, { mode: 'Train', km: 30 }],
+      },
+      applied_state: { attendance: { total_approved_km: 20, petrol_amount: 80 } },
+    }],
+  });
+  assert.equal(result.classification, KM_TRANSPORT_CLASSIFICATION.EXPLICIT_INTERNAL_TRAIN_EVIDENCE);
+  assert.equal(result.idempotencyAction, 'PRESERVE_APPLIED_CORRECTION');
+  assert.equal(result.appliedCorrectionId, 'correction-1');
+  assert.equal(result.payableKm, 20);
+  assert.equal(result.payableAmount, 80);
+});
+
+test('strong local rail evidence across a central GPS gap is non-payable without Google', () => {
+  const result = classifyRailPublicTransportPolicy({
+    selectedMode: 'Bike',
+    physicalKm: 35,
+    localEvidence: {
+      railCompatibleGpsTopology: true,
+      stationOrCorridorEndpoints: true,
+      meaningfulLongDistance: true,
+      centralGpsLoss: true,
+    },
+  });
+  assert.equal(result.classification, KM_TRANSPORT_CLASSIFICATION.RAIL_GAP_POLICY_NON_PAYABLE);
+  assert.equal(result.googleEvidence, 'NO_EVIDENCE');
+  assert.equal(result.googleRequired, false);
+  assert.equal(result.payableKm, 0);
 });
 
 test('normal Bike, Car, mixed and public-mode legs use historical leg rates', () => {

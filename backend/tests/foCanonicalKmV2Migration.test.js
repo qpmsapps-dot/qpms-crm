@@ -53,3 +53,27 @@ test('new writes receive safe nonnegative and time guardrails without validating
   assert.match(sql, /fo_travel_legs_v2_time_check[\s\S]+not valid/);
   assert.match(sql, /fo_attendance_v2_nonnegative_check[\s\S]+not valid/);
 });
+
+test('migration rerun accepts its own disabled GPS trigger only after V2 objects exist', () => {
+  assert.match(sql, /v_v2_already_applied boolean/);
+  assert.match(sql, /t\.tgenabled = 'd'[\s\S]+legacy location audit trigger was disabled before first v2 application/i);
+  assert.match(sql, /fo_km_v2_recovery_snapshot/);
+  assert.match(sql, /on conflict \(snapshot_key\) do nothing/);
+});
+
+test('idempotent replay validates canonical attendance state before returning the old run', () => {
+  const existingRun = sql.indexOf('select * into v_existing');
+  const replayReturn = sql.indexOf("'idempotent_replay', true", existingRun);
+  const stateMismatch = sql.indexOf('km_v2_idempotent_replay_state_mismatch', existingRun);
+  assert.ok(existingRun >= 0 && stateMismatch > existingRun && replayReturn > stateMismatch);
+  assert.match(sql, /metadata ->> 'km_calculation_run_id'/);
+  assert.match(sql, /metadata ->> 'km_input_digest'/);
+  assert.match(sql, /total_approved_km[\s\S]+v_existing\.payable_km/);
+  assert.match(sql, /petrol_amount[\s\S]+v_existing\.reimbursement/);
+});
+
+test('legacy invalid-time travel legs are preserved for manual review', () => {
+  assert.match(sql, /ended_at < started_at/);
+  assert.match(sql, /km_v2_legacy_invalid_leg_time_manual_review/);
+  assert.doesNotMatch(sql, /update\s+public\.fo_travel_legs[\s\S]+set\s+(started_at|ended_at)/i);
+});

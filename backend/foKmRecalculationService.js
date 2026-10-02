@@ -13,6 +13,7 @@ import {
   planGpsSegments,
 } from './services/foCanonicalKmEngineV2.js';
 import { persistCanonicalKmV2 } from './services/foKmV2PersistenceService.js';
+import { assertKmFinancialWritesAvailable } from './services/kmFinancialWriteMaintenanceService.js';
 
 const RATE_PER_KM = 4;
 const CAR_RATE_PER_KM = 8;
@@ -910,7 +911,7 @@ export function calculateCanonicalRoutePayableKm({
   visits = [],
   finalReturnLeg = {},
   gpsTravelLegs = [],
-  ratePerKm = RATE_PER_KM,
+  ratePerKm = null,
   options = {},
 } = {}) {
   const travelPolicy = travelModeAllowsPayableKm(attendance);
@@ -923,7 +924,10 @@ export function calculateCanonicalRoutePayableKm({
       payable_km_allowed: leg?.payable_km_allowed,
       metadata: {},
     });
-    const legRatePerKm = ratePerKmForTravelMode(legMode, ratePerKm);
+    const legRatePerKm = ratePerKmForTravelMode(
+      legMode,
+      leg?.persisted_rate_per_km ?? leg?.rate_per_km ?? leg?.ratePerKm ?? ratePerKm,
+    );
     const payable = leg?.status === 'calculated' && legPolicy.payableKmAllowed && leg?.payable !== false;
     const payableKm = payable && Number.isFinite(Number(leg?.km))
       ? Number(Number(leg.km).toFixed(2))
@@ -1371,8 +1375,11 @@ function isBikeTravelMode(value) {
   return mode === 'bike' || mode === 'own_vehicle';
 }
 
-function ratePerKmForTravelMode(value) {
+export function ratePerKmForTravelMode(value, historicalRate = null) {
   const mode = normalizeTravelMode(value);
+  if (!['bike', 'own_vehicle', 'car'].includes(mode)) return 0;
+  const persistedRate = normalizeNumber(historicalRate);
+  if (Number.isFinite(persistedRate) && persistedRate >= 0) return persistedRate;
   if (mode === 'car') return CAR_RATE_PER_KM;
   if (mode === 'bike' || mode === 'own_vehicle') return RATE_PER_KM;
   return 0;
@@ -1480,6 +1487,30 @@ async function loadPersistedTravelLegSnapshots(client, attendance) {
     throw error;
   }
   return Array.isArray(data) ? data : [];
+}
+
+async function loadAppliedTravelCorrections(client, attendanceId) {
+  try {
+    const { data, error } = await client
+      .from('fo_travel_reimbursement_corrections')
+      .select('id,correction_key,correction_reason,status,before_state,proposed_state,applied_state,applied_at')
+      .eq('attendance_id', attendanceId)
+      .eq('status', 'applied')
+      .order('applied_at', { ascending: false })
+      .limit(100);
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    const message = String(error?.message || '').toLowerCase();
+    if (
+      error?.code === 'PGRST205' ||
+      error?.code === '42P01' ||
+      message.includes('fo_travel_reimbursement_corrections') ||
+      message.includes('schema cache') ||
+      message.includes('unexpected table')
+    ) return [];
+    throw error;
+  }
 }
 
 function travelLegTimestamp(value) {
@@ -1913,6 +1944,107 @@ function travelModeAllowsPayableKm(attendance) {
   return {
     travelMode,
     payableKmAllowed: travelMode === 'bike' || travelMode === 'own_vehicle' || travelMode === 'car',
+  };
+}
+
+function suppliedLegEvidence(source, leg, index) {
+  if (!source) return null;
+  if (typeof source === 'function') return source(leg, index) || null;
+  const keys = [
+    leg.persisted_travel_leg_id,
+    leg.persistedTravelLegId,
+    leg.type,
+    leg.startedAt,
+    leg.from_time,
+    String(index),
+  ].filter(Boolean);
+  if (source instanceof Map) {
+    for (const key of keys) if (source.has(key)) return source.get(key);
+    return null;
+  }
+  for (const key of keys) if (source[key]) return source[key];
+  return null;
+}
+
+function correctionLegForCanonicalLeg(corrections = [], leg = {}) {
+  const legId = leg.persisted_travel_leg_id || leg.persistedTravelLegId || null;
+  const legStart = parseValidDate(leg.startedAt || leg.from_time);
+  const legEnd = parseValidDate(leg.endedAt || leg.to_time);
+  for (const correction of corrections) {
+    const before = correction.before_state || correction.beforeState || {};
+    const breakdown = before.leg_breakdown || before.legBreakdown || [];
+    const match = breakdown.find((candidate) => {
+      if (legId && String(candidate.id || candidate.travel_leg_id || '') === String(legId)) return true;
+      const start = parseValidDate(candidate.started_at || candidate.startedAt);
+      const end = parseValidDate(candidate.ended_at || candidate.endedAt);
+      return legStart && legEnd && start && end &&
+        Math.abs(start - legStart) <= 1000 && Math.abs(end - legEnd) <= 1000;
+    });
+    if (match) return { correction, leg: match };
+  }
+  return null;
+}
+
+function legOverlapsSitePause(leg = {}, visits = []) {
+  const start = parseValidDate(leg.startedAt || leg.from_time);
+  const end = parseValidDate(leg.endedAt || leg.to_time);
+  if (!start || !end) return false;
+  return visits.some((visit) => {
+    const checkIn = visitCheckInTime(visit);
+    const checkOut = visitCheckOutTime(visit);
+    return checkIn && checkOut && checkIn < end && checkOut > start;
+  });
+}
+
+export function buildTransportPolicyEvidenceForCanonicalLeg({
+  leg = {},
+  index = 0,
+  visits = [],
+  corrections = [],
+  options = {},
+} = {}) {
+  const supplied = suppliedLegEvidence(options.railPolicyEvidenceByLeg || options.rail_policy_evidence_by_leg, leg, index) || {};
+  const googleTransit = supplied.googleTransit || supplied.google_transit || suppliedLegEvidence(
+    options.googleTransitEvidenceByLeg || options.google_transit_evidence_by_leg,
+    leg,
+    index,
+  );
+  const correctionMatch = correctionLegForCanonicalLeg(corrections, leg);
+  const persistedRate = normalizeNumber(
+    leg.persisted_rate_per_km ?? leg.persistedRatePerKm ??
+      correctionMatch?.leg?.rate ?? correctionMatch?.leg?.rate_per_km ??
+      leg.ratePerKm ?? leg.rate_per_km,
+  );
+  const persistedAmount = normalizeNumber(
+    leg.persisted_payable_amount ?? leg.persistedPayableAmount ??
+      correctionMatch?.leg?.amount ?? correctionMatch?.leg?.payable_amount ??
+      leg.payableAmount ?? leg.payable_amount,
+  );
+  const local = supplied.localEvidence || supplied.local_evidence || {};
+  return {
+    selectedMode: leg.travelMode || leg.travel_mode || null,
+    ratePerKm: persistedRate,
+    payableAmount: persistedAmount,
+    travelLegs: correctionMatch ? [correctionMatch.leg] : [{
+      id: leg.persisted_travel_leg_id || leg.persistedTravelLegId || null,
+      mode: leg.travelMode || leg.travel_mode || null,
+      km: leg.calculatedKm ?? leg.calculated_km ?? leg.physicalKm ?? leg.physical_km ?? 0,
+    }],
+    localEvidence: {
+      ...local,
+      gpsCoverageClassification: leg.gpsCoverageClassification || leg.gps_coverage_classification || null,
+      acceptedGpsKm: leg.acceptedGpsKm ?? leg.accepted_gps_km ?? 0,
+      reconstructedGapKm: leg.reconstructedGapKm ?? leg.reconstructed_gap_km ?? 0,
+      centralGpsLoss: local.centralGpsLoss === true || local.central_gps_loss === true ||
+        (leg.gpsCoverageClassification || leg.gps_coverage_classification) === 'MANUAL_REVIEW',
+      expectedSitePause: local.expectedSitePause === true || local.expected_site_pause === true ||
+        legOverlapsSitePause(leg, visits),
+    },
+    googleTransit: googleTransit || null,
+    appliedCorrectionReference: correctionMatch ? {
+      id: correctionMatch.correction.id || null,
+      reason: 'PRESERVE_APPLIED_CORRECTION',
+    } : null,
   };
 }
 
@@ -2801,8 +2933,10 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
         attendance.payable_km_allowed,
       metadata: {},
     });
-    const legRatePerKm =
-      ratePerKmForTravelMode(legMode, attendance.rate_per_km);
+    const legRatePerKm = ratePerKmForTravelMode(
+      legMode,
+      persistedLegSnapshot?.rate_per_km ?? leg.rate_per_km ?? attendance.rate_per_km,
+    );
     const legPayable = result.payable === true && legPolicy.payableKmAllowed;
     const legPayableKm = legPayable && Number.isFinite(Number(result.legKm))
       ? Number(Number(result.legKm).toFixed(2))
@@ -2822,6 +2956,8 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       persisted_travel_leg_id: persistedLegSnapshot?.id || null,
       persistence_action: persistenceAction,
       persisted_calculated_km: persistedLegSnapshot?.calculated_km ?? null,
+      persisted_rate_per_km: persistedLegSnapshot?.rate_per_km ?? null,
+      persisted_payable_amount: persistedLegSnapshot?.payable_amount ?? persistedLegSnapshot?.fare_amount ?? null,
       type: leg.type,
       status: result.legSource === 'SKIPPED' ? 'skipped' : 'calculated',
       reason: result.fallbackReason || null,
@@ -3220,6 +3356,8 @@ export async function recalculateFullDayGpsNoSiteVisitKm(serviceRoleClient, payl
 
 export async function recalculateFoKm(serviceRoleClient, payload = {}, options = {}) {
   const client = requireServiceRoleClient(serviceRoleClient);
+  const dryRun = payload.dry_run === true || payload.dryRun === true || options.persist === false;
+  assertKmFinancialWritesAvailable({ dryRun, environment: options.environment || process.env });
   const attendanceId = payload.attendance_id || payload.id || null;
   const foUserId = payload.fo_user_id || null;
   const employeeCode = payload.employee_code || null;
@@ -3242,7 +3380,6 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     employee_code: employeeCode,
     date,
   });
-  const dryRun = payload.dry_run === true || payload.dryRun === true || options.persist === false;
   if (isProtectedSharedTravelNonPayableAttendance(attendance)) {
     log('FO_KM_RECALC_SKIPPED', {
       attendance_id: attendance.id,
@@ -3253,6 +3390,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   }
   const rows = await loadGpsLogs(client, attendance);
   const visits = await loadSiteVisits(client, attendance);
+  const appliedTravelCorrections = await loadAppliedTravelCorrections(client, attendance.id);
   log('FO_KM_GPS_LOGS_LOADED', {
     fo_user_id: attendance.fo_user_id,
     attendance_id: attendance.id,
@@ -3658,34 +3796,51 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   };
   const canonicalLegs = (legRecalculation.travel_legs || [])
     .filter((leg) => leg.status === 'calculated' && leg.from_time && leg.to_time)
-    .map((leg) => ({
-      type: leg.type,
-      startedAt: leg.from_time,
-      endedAt: leg.to_time,
-      startLat: leg.from_lat,
-      startLng: leg.from_lng,
-      endLat: leg.to_lat,
-      endLng: leg.to_lng,
-      calculatedKm: Number(Number(leg.km || 0).toFixed(2)),
-      acceptedGpsKm: Number(Number(leg.accepted_gps_km || 0).toFixed(2)),
-      reconstructedGapKm: Number(Number(leg.reconstructed_gap_km || 0).toFixed(2)),
-      directRouteKm: normalizeNumber(leg.google_direct_route_km),
-      payableKm: Number(Number(leg.payable_km || 0).toFixed(2)),
-      payableAmount: Number(Number(leg.payable_amount || 0).toFixed(2)),
-      ratePerKm: Number(Number(leg.rate_per_km || 0).toFixed(2)),
-      travelMode: leg.travel_mode || travelPolicy.travelMode,
-      payableKmAllowed: leg.payable_km_allowed === true,
-      decision: leg.decision || (leg.payable ? KM_DECISION.ACCEPTED : KM_DECISION.REJECTED),
-      riskFlags: [...new Set(leg.review_flags || [])].sort(),
-      rejectedPointReasons: leg.rejected_point_reasons || {},
-      source: leg.source || null,
-      fromVisitId: leg.from_visit_id || null,
-      toVisitId: leg.to_visit_id || null,
-    }));
+    .map((leg, index) => {
+      const canonicalLeg = {
+        type: leg.type,
+        persistedTravelLegId: leg.persisted_travel_leg_id || null,
+        startedAt: leg.from_time,
+        endedAt: leg.to_time,
+        startLat: leg.from_lat,
+        startLng: leg.from_lng,
+        endLat: leg.to_lat,
+        endLng: leg.to_lng,
+        calculatedKm: Number(Number(leg.km || 0).toFixed(2)),
+        acceptedGpsKm: Number(Number(leg.accepted_gps_km || 0).toFixed(2)),
+        reconstructedGapKm: Number(Number(leg.reconstructed_gap_km || 0).toFixed(2)),
+        directRouteKm: normalizeNumber(leg.google_direct_route_km),
+        payableKm: Number(Number(leg.payable_km || 0).toFixed(2)),
+        payableAmount: Number(Number(leg.payable_amount || 0).toFixed(2)),
+        ratePerKm: Number(Number(leg.rate_per_km || 0).toFixed(2)),
+        persistedRatePerKm: normalizeNumber(leg.persisted_rate_per_km),
+        persistedPayableAmount: normalizeNumber(leg.persisted_payable_amount),
+        travelMode: leg.travel_mode || travelPolicy.travelMode,
+        payableKmAllowed: leg.payable_km_allowed === true,
+        decision: leg.decision || (leg.payable ? KM_DECISION.ACCEPTED : KM_DECISION.REJECTED),
+        riskFlags: [...new Set(leg.review_flags || [])].sort(),
+        rejectedPointReasons: leg.rejected_point_reasons || {},
+        gpsCoverageClassification: leg.gps_coverage_classification || null,
+        source: leg.source || null,
+        fromVisitId: leg.from_visit_id || null,
+        toVisitId: leg.to_visit_id || null,
+      };
+      return {
+        ...canonicalLeg,
+        transportPolicyEvidence: buildTransportPolicyEvidenceForCanonicalLeg({
+          leg: canonicalLeg,
+          index,
+          visits,
+          corrections: appliedTravelCorrections,
+          options,
+        }),
+      };
+    });
   const canonicalCalculation = calculateCanonicalKmV2({
     legs: canonicalLegs,
     approvedMissingKm: approvedMissingKm.approvedKm,
     approvedMissingAmount: approvedMissingKm.approvedAmount,
+    correctionLedger: appliedTravelCorrections,
   });
   canonicalCalculation.inputRowCount = rows.length;
   canonicalCalculation.acceptedPointCount = points.length;
@@ -3730,6 +3885,13 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     canonicalLegs,
     approvedMissingKm: approvedMissingKm.approvedKm,
     approvedMissingAmount: approvedMissingKm.approvedAmount,
+    appliedTravelCorrections: appliedTravelCorrections.map((correction) => ({
+      id: correction.id || null,
+      correctionKey: correction.correction_key || null,
+      status: correction.status || null,
+      appliedAt: correction.applied_at || null,
+      appliedState: correction.applied_state || null,
+    })),
   });
 
   let liveStatusUpdated = false;
@@ -3741,6 +3903,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
       calculation: canonicalCalculation,
       sourceEntryPoint: options.sourceEntryPoint || payload.source_entry_point || 'backend_recalculation',
       actorSource: options.actor?.employee_code || options.actor || null,
+      environment: options.environment || process.env,
     });
     log('FO_KM_ATTENDANCE_UPDATED', { attendance_id: attendance.id, actualTravelKm });
 
@@ -4652,6 +4815,9 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
     error.statusCode = 400;
     throw error;
   }
+  if (normalizedAction === 'approve') {
+    assertKmFinancialWritesAvailable({ dryRun: false });
+  }
   const { data: review, error: reviewError } = await client
     .from('fo_missing_km_reviews')
     .select('*')
@@ -4863,6 +5029,8 @@ async function runWithConcurrency(items, concurrency, worker) {
 
 export async function recalculateFoKmBatch(serviceRoleClient, payload = {}, options = {}) {
   const client = requireServiceRoleClient(serviceRoleClient);
+  const dryRun = payload.dryRun === true || payload.dry_run === true || options.persist === false;
+  assertKmFinancialWritesAvailable({ dryRun, environment: options.environment || process.env });
   const fromDate = normalizeDateInput(payload.fromDate || payload.from_date || payload.date);
   const toDate = normalizeDateInput(payload.toDate || payload.to_date || payload.date || fromDate, fromDate);
   if (fromDate > toDate) {
@@ -4930,7 +5098,7 @@ export async function recalculateFoKmBatch(serviceRoleClient, payload = {}, opti
     try {
       const result = await recalculateFoKm(client, {
         attendance_id: attendance.id,
-        dry_run: payload.dryRun === true || payload.dry_run === true,
+        dry_run: dryRun,
       }, options);
       const finalLeg = result.travel_legs?.find((leg) => leg.type === 'last_checkout_to_end_day') || null;
       return {

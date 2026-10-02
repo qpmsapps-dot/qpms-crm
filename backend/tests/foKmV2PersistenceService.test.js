@@ -75,3 +75,19 @@ test('failed RPC exposes no partial-success result', async () => {
     sourceEntryPoint: 'end_day',
   }), /rollback/);
 });
+
+test('maintenance mode blocks persistence before the transactional RPC is called', async () => {
+  let calls = 0;
+  const client = { rpc: async () => { calls += 1; return { data: {}, error: null }; } };
+  await assert.rejects(
+    persistCanonicalKmV2(client, {
+      attendanceId: 'attendance-1',
+      expectedAttendanceUpdatedAt: '2026-09-30T12:00:00Z',
+      calculation,
+      sourceEntryPoint: 'end_day',
+      environment: { KM_FINANCIAL_WRITES_MAINTENANCE: 'true' },
+    }),
+    (error) => error.code === 'KM_FINANCIAL_WRITES_MAINTENANCE' && error.statusCode === 503,
+  );
+  assert.equal(calls, 0);
+});

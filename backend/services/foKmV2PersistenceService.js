@@ -1,4 +1,5 @@
 import { KM_ENGINE_VERSION } from './foCanonicalKmEngineV2.js';
+import { assertKmFinancialWritesAvailable } from './kmFinancialWriteMaintenanceService.js';
 
 export const KM_V2_PERSISTENCE_RPC = 'rpc_persist_fo_canonical_km_v2';
 
@@ -8,7 +9,9 @@ export async function persistCanonicalKmV2(client, {
   calculation,
   sourceEntryPoint,
   actorSource = null,
+  environment = process.env,
 }) {
+  assertKmFinancialWritesAvailable({ dryRun: false, environment });
   if (!client || typeof client.rpc !== 'function') {
     const error = new Error('A service-role Supabase client with RPC support is required.');
     error.code = 'km_v2_service_role_rpc_required';

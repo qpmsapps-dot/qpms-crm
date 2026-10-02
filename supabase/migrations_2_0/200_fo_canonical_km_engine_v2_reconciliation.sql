@@ -9,6 +9,9 @@ begin;
 do $preflight$
 declare
   v_table text;
+  v_v2_already_applied boolean :=
+    to_regclass('public.fo_km_calculation_runs') is not null
+    and to_regprocedure('public.rpc_persist_fo_canonical_km_v2(uuid,text,timestamp with time zone,jsonb,text,text)') is not null;
 begin
   foreach v_table in array array[
     'fo_attendance',
@@ -34,10 +37,22 @@ begin
     where n.nspname = 'public'
       and c.relname = 'fo_location_logs'
       and t.tgname = 'trg_fo_location_logs_actual_travel_km'
-      and t.tgenabled <> 'D'
       and not t.tgisinternal
   ) then
     raise exception 'KM V2 preflight failed: expected location audit trigger is missing';
+  end if;
+
+  if not v_v2_already_applied and exists (
+    select 1 from pg_trigger t
+    join pg_class c on c.oid = t.tgrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relname = 'fo_location_logs'
+      and t.tgname = 'trg_fo_location_logs_actual_travel_km'
+      and t.tgenabled = 'D'
+      and not t.tgisinternal
+  ) then
+    raise exception 'KM V2 preflight failed: legacy location audit trigger was disabled before first V2 application';
   end if;
 
   if not exists (
@@ -54,6 +69,39 @@ begin
   end if;
 end
 $preflight$;
+
+create table if not exists public.fo_km_v2_recovery_snapshot (
+  snapshot_key text primary key,
+  actual_travel_function_def text not null,
+  payable_route_function_def text not null,
+  location_trigger_enabled "char" not null,
+  captured_at timestamptz not null default now(),
+  constraint fo_km_v2_recovery_snapshot_key_check check (snapshot_key = 'pre_v2')
+);
+
+insert into public.fo_km_v2_recovery_snapshot (
+  snapshot_key,
+  actual_travel_function_def,
+  payable_route_function_def,
+  location_trigger_enabled
+)
+select
+  'pre_v2',
+  pg_get_functiondef(to_regprocedure('public.refresh_fo_attendance_actual_travel_km(uuid)')),
+  pg_get_functiondef(to_regprocedure('public.refresh_fo_attendance_payable_route_km(uuid)')),
+  t.tgenabled
+from pg_trigger t
+join pg_class c on c.oid = t.tgrelid
+join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public'
+  and c.relname = 'fo_location_logs'
+  and t.tgname = 'trg_fo_location_logs_actual_travel_km'
+  and not t.tgisinternal
+on conflict (snapshot_key) do nothing;
+
+alter table public.fo_km_v2_recovery_snapshot enable row level security;
+revoke all on table public.fo_km_v2_recovery_snapshot from public, anon, authenticated;
+grant select on table public.fo_km_v2_recovery_snapshot to service_role;
 
 alter table public.fo_travel_legs
   add column if not exists calculation_version text,
@@ -352,6 +400,8 @@ declare
   v_missing_amount numeric := 0;
   v_total_km numeric := 0;
   v_total_amount numeric := 0;
+  v_authoritative_correction jsonb;
+  v_expected_route_km numeric := 0;
   v_current_started_at timestamptz[] := array[]::timestamptz[];
 begin
   if p_attendance_id is null or p_calculation is null then
@@ -375,12 +425,36 @@ begin
     raise exception using errcode = 'P0002', message = 'km_v2_attendance_not_found';
   end if;
 
+  if exists (
+    select 1 from public.fo_travel_legs
+    where attendance_id = p_attendance_id
+      and lower(coalesce(status, '')) <> 'cancelled'
+      and started_at is not null
+      and ended_at is not null
+      and ended_at < started_at
+  ) then
+    raise exception using errcode = '22023', message = 'km_v2_legacy_invalid_leg_time_manual_review';
+  end if;
+
   select * into v_existing
   from public.fo_km_calculation_runs
   where attendance_id = p_attendance_id
     and calculation_version = 'KM_ENGINE_V2'
     and input_digest = p_input_digest;
   if found then
+    v_expected_route_km := coalesce(
+      (v_existing.result #>> '{authoritativeAppliedCorrection,routeKm}')::numeric,
+      v_existing.payable_km - coalesce((v_existing.result ->> 'approvedMissingKm')::numeric, 0)
+    );
+    if coalesce(v_attendance.metadata ->> 'km_calculation_version', '') <> 'KM_ENGINE_V2'
+       or coalesce(v_attendance.metadata ->> 'km_calculation_run_id', '') <> v_existing.id::text
+       or coalesce(v_attendance.metadata ->> 'km_input_digest', '') <> p_input_digest
+       or coalesce(v_attendance.total_route_km, 0) <> coalesce(v_expected_route_km, 0)
+       or coalesce(v_attendance.total_approved_km, 0) <> v_existing.payable_km
+       or coalesce(v_attendance.eligible_km, 0) <> v_existing.payable_km
+       or coalesce(v_attendance.petrol_amount, 0) <> v_existing.reimbursement then
+      raise exception using errcode = '40001', message = 'km_v2_idempotent_replay_state_mismatch';
+    end if;
     return jsonb_build_object(
       'ok', true, 'idempotent_replay', true, 'calculation_run_id', v_existing.id,
       'payable_km', v_existing.payable_km, 'reimbursement', v_existing.reimbursement
@@ -463,6 +537,18 @@ begin
 
   v_total_km := round(v_payable_leg_km + v_missing_km, 2);
   v_total_amount := round(v_payable_leg_amount + v_missing_amount, 2);
+  v_authoritative_correction := p_calculation -> 'authoritativeAppliedCorrection';
+  if jsonb_typeof(v_authoritative_correction) = 'object'
+     and coalesce(v_authoritative_correction ->> 'reason', '') = 'PRESERVE_APPLIED_CORRECTION' then
+    if coalesce((v_authoritative_correction ->> 'payableKm')::numeric, -1) < 0
+       or coalesce((v_authoritative_correction ->> 'reimbursement')::numeric, -1) < 0
+       or coalesce((v_authoritative_correction ->> 'routeKm')::numeric, -1) < 0 then
+      raise exception using errcode = '22023', message = 'km_v2_invalid_authoritative_correction_state';
+    end if;
+    v_payable_leg_km := round((v_authoritative_correction ->> 'routeKm')::numeric, 2);
+    v_total_km := round((v_authoritative_correction ->> 'payableKm')::numeric, 2);
+    v_total_amount := round((v_authoritative_correction ->> 'reimbursement')::numeric, 2);
+  end if;
 
   insert into public.fo_km_calculation_runs (
     id, attendance_id, calculation_version, input_digest, input_row_count,
@@ -487,6 +573,7 @@ begin
     p_calculation || jsonb_build_object(
       'persistedPayableKm', v_total_km,
       'persistedReimbursement', v_total_amount,
+      'persistedRouteKm', v_payable_leg_km,
       'approvedMissingKm', v_missing_km,
       'approvedMissingAmount', v_missing_amount
     )

@@ -35,6 +35,37 @@ export const KM_COVERAGE_CLASSIFICATION = Object.freeze({
   MANUAL_REVIEW: 'MANUAL_REVIEW',
 });
 
+export const KM_TRANSPORT_CLASSIFICATION = Object.freeze({
+  EXPLICIT_INTERNAL_TRAIN_EVIDENCE: 'EXPLICIT_INTERNAL_TRAIN_EVIDENCE',
+  HIGH_CONFIDENCE_RAIL_CORROBORATED: 'HIGH_CONFIDENCE_RAIL_CORROBORATED',
+  RAIL_GAP_POLICY_NON_PAYABLE: 'RAIL_GAP_POLICY_NON_PAYABLE',
+  MEDIUM_MANUAL_REVIEW: 'MEDIUM_MANUAL_REVIEW',
+  PAYABLE_PRIVATE_MODE: 'PAYABLE_PRIVATE_MODE',
+});
+
+export const GOOGLE_TRANSIT_EVIDENCE = Object.freeze({
+  RAIL_CORROBORATED: 'RAIL_CORROBORATED',
+  NON_RAIL_TRANSIT: 'NON_RAIL_TRANSIT',
+  EMPTY_ROUTE: 'EMPTY_ROUTE',
+  UNAVAILABLE: 'UNAVAILABLE',
+  NO_EVIDENCE: 'NO_EVIDENCE',
+});
+
+const RAIL_MODES = new Set(['train', 'rail', 'public_transport', 'public_transit']);
+const PRIVATE_MODES = new Set(['bike', 'own_vehicle', 'car']);
+const GOOGLE_RAIL_VEHICLE_TYPES = new Set([
+  'RAIL',
+  'METRO_RAIL',
+  'SUBWAY',
+  'TRAM',
+  'MONORAIL',
+  'HEAVY_RAIL',
+  'COMMUTER_TRAIN',
+  'HIGH_SPEED_TRAIN',
+  'LONG_DISTANCE_TRAIN',
+]);
+const GOOGLE_BUS_VEHICLE_TYPES = new Set(['BUS', 'INTERCITY_BUS', 'TROLLEYBUS']);
+
 export const GPS_REJECTION_REASON = Object.freeze({
   INVALID_COORDINATE: 'invalid_coordinate',
   ZERO_COORDINATE: 'zero_coordinate',
@@ -85,6 +116,225 @@ function finiteNumber(value) {
 function validDate(value) {
   const date = value instanceof Date ? value : value ? new Date(value) : null;
   return date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
+function normalizedMode(value) {
+  return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function roundedMoney(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
+function transportRate(mode, fallback = null) {
+  const normalized = normalizedMode(mode);
+  if (RAIL_MODES.has(normalized) || ['auto', 'bus', 'other'].includes(normalized)) return 0;
+  const historicalRate = finiteNumber(fallback);
+  if (historicalRate !== null && historicalRate >= 0) return historicalRate;
+  if (normalized === 'car') return 8;
+  if (['bike', 'own_vehicle'].includes(normalized)) return 4;
+  return 0;
+}
+
+function legMode(leg = {}) {
+  return normalizedMode(leg.mode || leg.travel_mode || leg.travelMode || leg.detected_mode);
+}
+
+function legDistance(leg = {}) {
+  return finiteNumber(
+    leg.km ?? leg.physical_km ?? leg.physicalKm ?? leg.calculated_km ?? leg.calculatedKm ?? leg.distance_km ?? leg.distanceKm,
+  ) ?? 0;
+}
+
+function correctionIsAppliedMixedMode(correction = {}) {
+  const key = String(correction.correction_key || correction.correctionKey || '').toLowerCase();
+  const reason = String(correction.correction_reason || correction.correctionReason || '').toLowerCase();
+  const status = String(correction.status || '').toLowerCase();
+  const before = correction.before_state || correction.beforeState || {};
+  const modes = before.modes_used || before.modesUsed || [];
+  const legs = before.leg_breakdown || before.legBreakdown || [];
+  const hasRail = modes.some((mode) => RAIL_MODES.has(normalizedMode(mode))) || legs.some((leg) => RAIL_MODES.has(legMode(leg)));
+  return status === 'applied' && hasRail && (key.includes('mixed-mode') || reason.includes('mixed-mode') || reason.includes('rail'));
+}
+
+function authoritativeAppliedCorrection(corrections = []) {
+  const correction = corrections.find(correctionIsAppliedMixedMode) || null;
+  if (!correction) return null;
+  const applied = correction.applied_state || correction.appliedState || {};
+  const attendance = applied.attendance || applied.result || {};
+  const payableKm = finiteNumber(attendance.total_approved_km ?? attendance.totalApprovedKm);
+  const reimbursement = finiteNumber(attendance.petrol_amount ?? attendance.petrolAmount);
+  const routeKm = finiteNumber(attendance.total_route_km ?? attendance.totalRouteKm ?? payableKm);
+  if (payableKm === null || reimbursement === null) return null;
+  return {
+    id: correction.id || null,
+    correctionKey: correction.correction_key || correction.correctionKey || null,
+    payableKm: roundedMoney(payableKm),
+    reimbursement: roundedMoney(reimbursement),
+    routeKm: roundedMoney(routeKm),
+    reason: 'PRESERVE_APPLIED_CORRECTION',
+  };
+}
+
+function collectGoogleVehicleTypes(value, result = []) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectGoogleVehicleTypes(item, result);
+    return result;
+  }
+  if (!value || typeof value !== 'object') return result;
+  for (const [key, child] of Object.entries(value)) {
+    const normalizedKey = key.replace(/_/g, '').toLowerCase();
+    if (
+      normalizedKey === 'vehicletype' ||
+      (normalizedKey === 'type' && typeof child === 'string' && (
+        GOOGLE_RAIL_VEHICLE_TYPES.has(child.trim().toUpperCase()) ||
+        GOOGLE_BUS_VEHICLE_TYPES.has(child.trim().toUpperCase())
+      ))
+    ) {
+      result.push(String(child || '').trim().toUpperCase());
+    } else {
+      collectGoogleVehicleTypes(child, result);
+    }
+  }
+  return result;
+}
+
+export function classifyGoogleTransitEvidence(googleTransit = null) {
+  if (!googleTransit) return GOOGLE_TRANSIT_EVIDENCE.NO_EVIDENCE;
+  if (googleTransit.unavailable === true || googleTransit.error || googleTransit.ok === false) {
+    return GOOGLE_TRANSIT_EVIDENCE.UNAVAILABLE;
+  }
+  const vehicleTypes = collectGoogleVehicleTypes(googleTransit);
+  if (vehicleTypes.some((type) => GOOGLE_RAIL_VEHICLE_TYPES.has(type))) {
+    return GOOGLE_TRANSIT_EVIDENCE.RAIL_CORROBORATED;
+  }
+  if (vehicleTypes.some((type) => GOOGLE_BUS_VEHICLE_TYPES.has(type))) {
+    return GOOGLE_TRANSIT_EVIDENCE.NON_RAIL_TRANSIT;
+  }
+  const status = String(googleTransit.status || '').trim().toUpperCase();
+  const routes = googleTransit.routes;
+  if (status === 'ZERO_RESULTS' || (Array.isArray(routes) && routes.length === 0)) {
+    return GOOGLE_TRANSIT_EVIDENCE.EMPTY_ROUTE;
+  }
+  return GOOGLE_TRANSIT_EVIDENCE.NO_EVIDENCE;
+}
+
+/**
+ * Pure policy layer for rail/public-transport reimbursement. Google transit is
+ * corroboration only: authoritative internal legs/corrections always win.
+ * Physical distance and the originally selected private mode are never
+ * rewritten by this function.
+ */
+export function classifyRailPublicTransportPolicy(input = {}) {
+  const selectedMode = normalizedMode(input.selectedMode || input.selected_mode || input.travelMode || input.travel_mode);
+  const physicalKm = finiteNumber(
+    input.physicalKm ?? input.physical_km ?? input.calculatedKm ?? input.calculated_km ?? input.distanceKm ?? input.distance_km,
+  ) ?? Number(input.acceptedGpsKm || input.accepted_gps_km || 0) + Number(input.reconstructedGapKm || input.reconstructed_gap_km || 0);
+  const existingPayableKm = finiteNumber(input.payableKm ?? input.payable_km);
+  const existingPayableAmount = finiteNumber(input.payableAmount ?? input.payable_amount);
+  const internal = input.internalEvidence || input.internal_evidence || {};
+  const local = input.localEvidence || input.local_evidence || {};
+  const corrections = input.correctionLedger || input.correction_ledger || internal.corrections || [];
+  const approved = input.approvedMixedMode || input.approved_mixed_mode || internal.approvedMixedMode || {};
+  const directLegs = input.travelLegs || input.travel_legs || internal.travelLegs || [];
+  const approvedLegs = approved.leg_breakdown || approved.legBreakdown || approved.travel_legs || approved.travelLegs || [];
+  const appliedCorrection = corrections.find(correctionIsAppliedMixedMode) || null;
+  const correctionBefore = appliedCorrection?.before_state || appliedCorrection?.beforeState || {};
+  const correctionLegs = correctionBefore.leg_breakdown || correctionBefore.legBreakdown || [];
+  const evidenceLegs = [...directLegs, ...approvedLegs, ...correctionLegs];
+  const approvedModes = approved.modes_used || approved.modesUsed || correctionBefore.modes_used || correctionBefore.modesUsed || [];
+  const explicitRail = RAIL_MODES.has(selectedMode) ||
+    evidenceLegs.some((leg) => RAIL_MODES.has(legMode(leg))) ||
+    approvedModes.some((mode) => RAIL_MODES.has(normalizedMode(mode))) ||
+    Boolean(appliedCorrection);
+  const googleEvidence = classifyGoogleTransitEvidence(input.googleTransit || input.google_transit || null);
+  const railTopology = local.railCompatibleGpsTopology === true || local.rail_compatible_gps_topology === true || local.gpsMatchesRail === true;
+  const stationEndpoints = local.stationOrCorridorEndpoints === true || local.station_or_corridor_endpoints === true;
+  const meaningfulDistance = local.meaningfulLongDistance === true || local.meaningful_long_distance === true;
+  const centralGpsLoss = local.centralGpsLoss === true || local.central_gps_loss === true || local.missingGps === true || local.missing_gps === true;
+  const expectedSitePause = local.expectedSitePause === true || local.expected_site_pause === true;
+  const strongerPrivateEvidence = local.strongerPrivateModeEvidence === true || local.stronger_private_mode_evidence === true;
+  const strongLocalRail = railTopology && stationEndpoints && meaningfulDistance && !expectedSitePause && !strongerPrivateEvidence;
+
+  let classification;
+  let reason;
+  if (explicitRail) {
+    classification = KM_TRANSPORT_CLASSIFICATION.EXPLICIT_INTERNAL_TRAIN_EVIDENCE;
+    reason = appliedCorrection ? 'APPLIED_INTERNAL_MIXED_MODE_CORRECTION' : 'INTERNAL_TRAIN_OR_PUBLIC_TRANSPORT_EVIDENCE';
+  } else if (expectedSitePause && PRIVATE_MODES.has(selectedMode)) {
+    classification = KM_TRANSPORT_CLASSIFICATION.PAYABLE_PRIVATE_MODE;
+    reason = 'EXPECTED_SITE_PAUSE';
+  } else if (strongLocalRail && !centralGpsLoss) {
+    classification = KM_TRANSPORT_CLASSIFICATION.HIGH_CONFIDENCE_RAIL_CORROBORATED;
+    reason = googleEvidence === GOOGLE_TRANSIT_EVIDENCE.RAIL_CORROBORATED
+      ? 'LOCAL_RAIL_EVIDENCE_WITH_GOOGLE_RAIL_CORROBORATION'
+      : 'MULTIPLE_INDEPENDENT_LOCAL_RAIL_SIGNALS';
+  } else if (strongLocalRail && centralGpsLoss) {
+    classification = KM_TRANSPORT_CLASSIFICATION.RAIL_GAP_POLICY_NON_PAYABLE;
+    reason = 'STRONG_LOCAL_RAIL_EVIDENCE_ACROSS_CENTRAL_GPS_LOSS';
+  } else if (centralGpsLoss || railTopology || stationEndpoints || meaningfulDistance || googleEvidence === GOOGLE_TRANSIT_EVIDENCE.RAIL_CORROBORATED) {
+    classification = KM_TRANSPORT_CLASSIFICATION.MEDIUM_MANUAL_REVIEW;
+    reason = expectedSitePause ? 'EXPECTED_SITE_PAUSE' : 'INSUFFICIENT_INDEPENDENT_RAIL_EVIDENCE';
+  } else {
+    classification = KM_TRANSPORT_CLASSIFICATION.PAYABLE_PRIVATE_MODE;
+    reason = expectedSitePause ? 'EXPECTED_SITE_PAUSE' : 'NORMAL_PRIVATE_MODE_EVIDENCE';
+  }
+
+  const ratePerKm = transportRate(selectedMode, input.ratePerKm ?? input.rate_per_km);
+  const privatePortionKm = evidenceLegs.reduce((sum, leg) => (
+    PRIVATE_MODES.has(legMode(leg)) ? sum + legDistance(leg) : sum
+  ), 0);
+  const railPortionKm = evidenceLegs.reduce((sum, leg) => (
+    RAIL_MODES.has(legMode(leg)) ? sum + legDistance(leg) : sum
+  ), 0);
+  let payableKm = existingPayableKm ?? (PRIVATE_MODES.has(selectedMode) ? physicalKm : 0);
+  let payableAmount = existingPayableAmount ?? payableKm * ratePerKm;
+  let idempotencyAction = 'NOT_APPLICABLE';
+
+  if (appliedCorrection) {
+    const applied = appliedCorrection.applied_state || appliedCorrection.appliedState || {};
+    const appliedAttendance = applied.attendance || applied.result || {};
+    payableKm = finiteNumber(appliedAttendance.total_approved_km ?? appliedAttendance.totalApprovedKm) ?? payableKm;
+    payableAmount = finiteNumber(appliedAttendance.petrol_amount ?? appliedAttendance.petrolAmount) ?? payableAmount;
+    idempotencyAction = 'PRESERVE_APPLIED_CORRECTION';
+  } else if ([
+    KM_TRANSPORT_CLASSIFICATION.EXPLICIT_INTERNAL_TRAIN_EVIDENCE,
+    KM_TRANSPORT_CLASSIFICATION.HIGH_CONFIDENCE_RAIL_CORROBORATED,
+    KM_TRANSPORT_CLASSIFICATION.RAIL_GAP_POLICY_NON_PAYABLE,
+  ].includes(classification)) {
+    payableKm = privatePortionKm > 0
+      ? privatePortionKm
+      : Math.max(0, (existingPayableKm ?? physicalKm) - railPortionKm || 0);
+    if (railPortionKm <= 0 && privatePortionKm <= 0) payableKm = 0;
+    payableAmount = payableKm * ratePerKm;
+    idempotencyAction = 'RAIL_PORTION_EXCLUDED_ONCE';
+  } else if (classification === KM_TRANSPORT_CLASSIFICATION.MEDIUM_MANUAL_REVIEW) {
+    payableKm = 0;
+    payableAmount = 0;
+  }
+
+  return {
+    classification,
+    decision: classification === KM_TRANSPORT_CLASSIFICATION.MEDIUM_MANUAL_REVIEW
+      ? KM_DECISION.MANUAL_REVIEW
+      : classification === KM_TRANSPORT_CLASSIFICATION.PAYABLE_PRIVATE_MODE
+        ? KM_DECISION.ACCEPTED
+        : KM_DECISION.ACCEPTED_WITH_WARNING,
+    reason,
+    detectedMode: classification === KM_TRANSPORT_CLASSIFICATION.PAYABLE_PRIVATE_MODE ? selectedMode.toUpperCase() :
+      classification === KM_TRANSPORT_CLASSIFICATION.MEDIUM_MANUAL_REVIEW ? null : 'TRAIN',
+    originalSelectedMode: selectedMode,
+    physicalKm: roundedMoney(physicalKm),
+    payableKm: roundedMoney(payableKm),
+    payableAmount: roundedMoney(payableAmount),
+    ratePerKm,
+    railPortionKm: roundedMoney(railPortionKm),
+    privatePortionKm: roundedMoney(privatePortionKm),
+    googleEvidence,
+    googleRequired: false,
+    appliedCorrectionId: appliedCorrection?.id || null,
+    idempotencyAction,
+  };
 }
 
 export function haversineDistanceKm(a, b) {
@@ -574,8 +824,39 @@ export function applyWholeLegSanityGate({
   };
 }
 
-export function calculateCanonicalKmV2({ legs = [], approvedMissingKm = 0, approvedMissingAmount = 0 } = {}) {
-  const canonicalLegs = legs.map((leg) => ({ ...leg }));
+function applyTransportPolicyToLeg(leg = {}) {
+  const evidence = leg.transportPolicyEvidence || leg.transport_policy_evidence;
+  const mode = normalizedMode(leg.travelMode || leg.travel_mode);
+  if (!evidence && !RAIL_MODES.has(mode)) return { ...leg };
+  const policy = classifyRailPublicTransportPolicy({
+    ...leg,
+    ...(evidence || {}),
+    selectedMode: evidence?.selectedMode || evidence?.selected_mode || leg.travelMode || leg.travel_mode,
+  });
+  return {
+    ...leg,
+    payableKm: policy.payableKm,
+    payableAmount: policy.payableAmount,
+    decision: policy.decision,
+    transportClassification: policy.classification,
+    detectedMode: policy.detectedMode,
+    originalSelectedMode: policy.originalSelectedMode,
+    physicalKm: policy.physicalKm,
+    railPortionKm: policy.railPortionKm,
+    googleTransitEvidence: policy.googleEvidence,
+    railPolicyReason: policy.reason,
+    railPolicyIdempotencyAction: policy.idempotencyAction,
+    appliedCorrectionId: policy.appliedCorrectionId,
+  };
+}
+
+export function calculateCanonicalKmV2({
+  legs = [],
+  approvedMissingKm = 0,
+  approvedMissingAmount = 0,
+  correctionLedger = [],
+} = {}) {
+  const canonicalLegs = legs.map(applyTransportPolicyToLeg);
   const acceptedGpsKm = canonicalLegs.reduce((sum, leg) => sum + Number(leg.acceptedGpsKm || 0), 0);
   const reconstructedGapKm = canonicalLegs.reduce((sum, leg) => sum + Number(leg.reconstructedGapKm || 0), 0);
   const legPayableKm = canonicalLegs.reduce((sum, leg) => sum + Number(leg.payableKm || 0), 0);
@@ -589,13 +870,14 @@ export function calculateCanonicalKmV2({ legs = [], approvedMissingKm = 0, appro
         ? KM_DECISION.ACCEPTED_WITH_WARNING
         : KM_DECISION.ACCEPTED;
   const riskFlags = [...new Set(canonicalLegs.flatMap((leg) => leg.riskFlags || []))].sort();
+  const appliedCorrection = authoritativeAppliedCorrection(correctionLedger);
   const result = {
     calculationVersion: KM_ENGINE_VERSION,
     canonicalLegs,
     acceptedGpsKm: Number(acceptedGpsKm.toFixed(2)),
     reconstructedGapKm: Number(reconstructedGapKm.toFixed(2)),
-    payableKm: Number((legPayableKm + Number(approvedMissingKm || 0)).toFixed(2)),
-    reimbursement: Number((legAmount + Number(approvedMissingAmount || 0)).toFixed(2)),
+    payableKm: appliedCorrection?.payableKm ?? Number((legPayableKm + Number(approvedMissingKm || 0)).toFixed(2)),
+    reimbursement: appliedCorrection?.reimbursement ?? Number((legAmount + Number(approvedMissingAmount || 0)).toFixed(2)),
     approvedMissingKm: Number(Number(approvedMissingKm || 0).toFixed(2)),
     rejectedPointReasons: canonicalLegs.reduce((counts, leg) => {
       for (const [reason, count] of Object.entries(leg.rejectedPointReasons || {})) counts[reason] = (counts[reason] || 0) + Number(count || 0);
@@ -603,6 +885,20 @@ export function calculateCanonicalKmV2({ legs = [], approvedMissingKm = 0, appro
     }, {}),
     riskFlags,
     decision,
+    authoritativeAppliedCorrection: appliedCorrection,
   };
-  return { ...result, inputDigest: canonicalKmInputDigest({ legs: canonicalLegs, approvedMissingKm, approvedMissingAmount }) };
+  return {
+    ...result,
+    inputDigest: canonicalKmInputDigest({
+      legs: canonicalLegs,
+      approvedMissingKm,
+      approvedMissingAmount,
+      correctionLedger: correctionLedger.map((correction) => ({
+        id: correction.id || null,
+        correctionKey: correction.correction_key || correction.correctionKey || null,
+        status: correction.status || null,
+        appliedState: correction.applied_state || correction.appliedState || null,
+      })),
+    }),
+  };
 }
