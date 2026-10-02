@@ -5,7 +5,7 @@ import '../models/fo_models.dart';
 
 class LocalDbService {
   static const _dbName = 'myqpms_fo_v2.db';
-  static const _dbVersion = 1;
+  static const _dbVersion = 2;
 
   static Database? _database;
 
@@ -17,6 +17,7 @@ class LocalDbService {
       p.join(dbPath, _dbName),
       version: _dbVersion,
       onCreate: _create,
+      onUpgrade: _upgrade,
     );
     _database = db;
     return db;
@@ -37,6 +38,7 @@ class LocalDbService {
         battery_percentage INTEGER,
         logged_at TEXT NOT NULL,
         captured_at TEXT NOT NULL,
+        timestamp_quality TEXT NOT NULL DEFAULT 'legacy_provider_timestamp_unknown',
         source TEXT NOT NULL DEFAULT 'mobile',
         sync_status TEXT NOT NULL DEFAULT 'pending',
         local_synced INTEGER NOT NULL DEFAULT 0,
@@ -76,6 +78,18 @@ class LocalDbService {
     );
   }
 
+  static Future<void> _upgrade(
+    Database db,
+    int oldVersion,
+    int newVersion,
+  ) async {
+    if (oldVersion < 2) {
+      await db.execute(
+        "ALTER TABLE local_gps_logs ADD COLUMN timestamp_quality TEXT NOT NULL DEFAULT 'legacy_provider_timestamp_unknown'",
+      );
+    }
+  }
+
   static Future<void> upsertGpsLog(
     LocationLog log, {
     String eventType = 'gps',
@@ -100,8 +114,9 @@ class LocalDbService {
       'accuracy': log.accuracy,
       'speed': log.speed,
       'battery_percentage': log.battery,
-      'logged_at': log.capturedAt.toUtc().toIso8601String(),
+      'logged_at': log.receivedAt.toUtc().toIso8601String(),
       'captured_at': log.capturedAt.toUtc().toIso8601String(),
+      'timestamp_quality': log.timestampQuality,
       'source': 'mobile',
       'sync_status': syncStatus ?? (synced ? 'synced' : 'pending'),
       'local_synced': synced ? 1 : 0,
@@ -276,7 +291,14 @@ class LocalDbService {
     battery: _int(row['battery_percentage']),
     capturedAt:
         DateTime.tryParse(row['captured_at']?.toString() ?? '')?.toLocal() ??
-        DateTime.now(),
+        DateTime.fromMillisecondsSinceEpoch(0),
+    receivedAt:
+        DateTime.tryParse(row['logged_at']?.toString() ?? '')?.toLocal() ??
+        DateTime.tryParse(row['captured_at']?.toString() ?? '')?.toLocal() ??
+        DateTime.fromMillisecondsSinceEpoch(0),
+    timestampQuality:
+        row['timestamp_quality']?.toString() ??
+        'legacy_provider_timestamp_unknown',
     synced: row['local_synced'] == 1,
   );
 

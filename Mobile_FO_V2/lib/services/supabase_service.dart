@@ -1700,7 +1700,6 @@ class SupabaseService {
     try {
       await _syncAttendanceRouteKmFromVisits(attendance);
       final payableKm = _payableRouteKmForAttendance(attendance);
-      final approvedKm = _approvedKmForAttendance(attendance);
       final ratePerKm = attendance.ratePerKm;
       await client
           .from('fo_attendance')
@@ -1709,11 +1708,9 @@ class SupabaseService {
             'end_latitude': attendance.endLat,
             'end_longitude': attendance.endLng,
             'end_battery_percentage': attendance.batteryEnd,
-            'eligible_km': approvedKm,
-            'total_route_km': payableKm,
-            'total_approved_km': approvedKm,
+            // Mobile values are evidence/provisional display only. Completed
+            // financial totals are replaced atomically by KM_ENGINE_V2.
             'rate_per_km': ratePerKm,
-            'petrol_amount': 0,
             'route_sync_status': 'pending_canonical_end_day_recalculation',
             'status': 'Completed',
             'metadata': {
@@ -1785,7 +1782,6 @@ class SupabaseService {
     final logoutTime = attendance.endTime ?? DateTime.now();
     final existingMetadata = _jsonMap(remoteActive.metadata);
     final payableKm = _payableRouteKmForAttendance(attendance);
-    final approvedKm = _approvedKmForAttendance(attendance);
     final ratePerKm = attendance.ratePerKm;
     final metadata = {
       ...existingMetadata,
@@ -1808,11 +1804,9 @@ class SupabaseService {
           'end_latitude': attendance.endLat,
           'end_longitude': attendance.endLng,
           'end_battery_percentage': attendance.batteryEnd,
-          'eligible_km': approvedKm,
-          'total_route_km': payableKm,
-          'total_approved_km': approvedKm,
+          // Do not finalize completed financial KM from the device. The
+          // authenticated backend recalculation below is the authority.
           'rate_per_km': ratePerKm,
-          'petrol_amount': 0,
           'route_sync_status': 'pending_canonical_end_day_recalculation',
           'status': 'Completed',
           'metadata': metadata,
@@ -2441,11 +2435,15 @@ class SupabaseService {
       'accuracy': log.accuracy,
       'speed': log.speed,
       'battery_percentage': log.battery,
-      'logged_at': log.capturedAt.toUtc().toIso8601String(),
+      'logged_at': log.receivedAt.toUtc().toIso8601String(),
       'captured_at': log.capturedAt.toUtc().toIso8601String(),
       'local_id': log.id,
       'source': 'mobile',
       'sync_status': 'synced',
+      'metadata': {
+        'provider_timestamp_quality': log.timestampQuality,
+        'received_at': log.receivedAt.toUtc().toIso8601String(),
+      },
     };
   }
 
@@ -2573,7 +2571,20 @@ class SupabaseService {
                   row['logged_at']?.toString() ??
                   '',
             )?.toLocal() ??
-            DateTime.now(),
+            DateTime.fromMillisecondsSinceEpoch(0),
+        receivedAt:
+            DateTime.tryParse(
+              row['metadata'] is Map
+                  ? (row['metadata']['received_at']?.toString() ?? '')
+                  : '',
+            )?.toLocal() ??
+            DateTime.tryParse(row['logged_at']?.toString() ?? '')?.toLocal() ??
+            DateTime.tryParse(row['captured_at']?.toString() ?? '')?.toLocal() ??
+            DateTime.fromMillisecondsSinceEpoch(0),
+        timestampQuality: row['metadata'] is Map
+            ? (row['metadata']['provider_timestamp_quality']?.toString() ??
+                'legacy_provider_timestamp_unknown')
+            : 'legacy_provider_timestamp_unknown',
         synced: true,
       );
 

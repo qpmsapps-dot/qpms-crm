@@ -1,3 +1,19 @@
+import {
+  DEFAULT_KM_V2_POLICY,
+  GPS_REJECTION_REASON,
+  KM_DECISION,
+  KM_ENGINE_VERSION,
+  applyWholeLegSanityGate,
+  calculateGpsCoverageTrace,
+  calculateCanonicalKmV2,
+  canonicalKmInputDigest,
+  evaluateLegCoverage,
+  finalizeGpsSegments,
+  normalizeGpsEvidence,
+  planGpsSegments,
+} from './services/foCanonicalKmEngineV2.js';
+import { persistCanonicalKmV2 } from './services/foKmV2PersistenceService.js';
+
 const RATE_PER_KM = 4;
 const CAR_RATE_PER_KM = 8;
 const MAX_ACCURACY_METERS = 50;
@@ -49,6 +65,7 @@ const ATTENDANCE_SELECT_COLUMNS = [
   'payable_km_allowed',
   'route_sync_status',
   'metadata',
+  'updated_at',
 ].join(', ');
 const SITE_VISIT_SELECT_COLUMNS = [
   'id',
@@ -210,48 +227,36 @@ function haversineKm(a, b) {
   return earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 }
 
-function cleanGpsLogs(rows = []) {
-  const sorted = rows
-    .map((row) => {
-      const latitude = normalizeNumber(row.latitude);
-      const longitude = normalizeNumber(row.longitude);
-      const accuracy = normalizeNumber(row.accuracy);
-      const capturedAt = pointTime(row);
-      return {
-        ...row,
-        latitude,
-        longitude,
-        accuracy,
-        capturedAt,
-        highConfidence: accuracy !== null && accuracy <= HIGH_CONFIDENCE_ACCURACY_METERS,
-      };
-    })
-    .filter((point) => {
-      if (!isValidCoordinate(point.latitude, point.longitude)) return false;
-      if (point.accuracy === null || point.accuracy > MAX_ACCURACY_METERS) return false;
-      if (!point.capturedAt) return false;
-      if (point.is_mocked === true || point.metadata?.mock === true) return false;
-      return true;
-    })
-    .sort((a, b) => a.capturedAt - b.capturedAt);
-
-  const cleaned = [];
-  for (const point of sorted) {
-    const previous = cleaned.at(-1);
-    if (previous) {
-      const sameCoordinate =
-        previous.latitude === point.latitude && previous.longitude === point.longitude;
-      const gapSeconds = (point.capturedAt - previous.capturedAt) / 1000;
-      if (sameCoordinate && gapSeconds >= 0 && gapSeconds <= DUPLICATE_WINDOW_SECONDS) {
-        continue;
-      }
-    }
-    cleaned.push(point);
-  }
-  return cleaned;
+function normalizeGpsLogs(rows = [], attendance = {}) {
+  return normalizeGpsEvidence({
+    rows,
+    attendance,
+    policy: {
+      maxAccuracyMeters: MAX_ACCURACY_METERS,
+      duplicateWindowSeconds: DUPLICATE_WINDOW_SECONDS,
+    },
+  });
 }
 
-async function googleDirectionsKm(start, end, options = {}) {
+function cleanGpsLogs(rows = [], attendance = {}) {
+  const normalized = normalizeGpsLogs(rows, attendance);
+  return normalized.points.map((point) => ({
+    ...point,
+    highConfidence:
+      point.accuracy !== null && point.accuracy <= HIGH_CONFIDENCE_ACCURACY_METERS,
+  }));
+}
+
+function mergeReasonCounts(...groups) {
+  return groups.reduce((merged, group) => {
+    for (const [reason, count] of Object.entries(group || {})) {
+      merged[reason] = (merged[reason] || 0) + Number(count || 0);
+    }
+    return merged;
+  }, {});
+}
+
+async function googleDirectionsRoute(start, end, options = {}) {
   const context = googleDirectionsContext(options);
   if (!context.enabled) {
     if (!context.disabledLogged) {
@@ -260,14 +265,14 @@ async function googleDirectionsKm(start, end, options = {}) {
         enable_google_directions: process.env.ENABLE_GOOGLE_DIRECTIONS || 'false',
       });
     }
-    return null;
+    return { ok: false, errorCode: 'google_disabled' };
   }
   if (context.callsAttempted >= context.maxCalls) {
     log('GOOGLE_DIRECTIONS_LIMIT_REACHED', {
       calls_attempted: context.callsAttempted,
       max_calls: context.maxCalls,
     });
-    return null;
+    return { ok: false, errorCode: 'google_call_limit' };
   }
   const keySource = options.googleMapsApiKey
     ? 'options.googleMapsApiKey'
@@ -285,7 +290,7 @@ async function googleDirectionsKm(start, end, options = {}) {
       checked_env: ['GOOGLE_MAPS_API_KEY', 'VITE_GOOGLE_MAPS_API_KEY'],
       has_options_key: Boolean(options.googleMapsApiKey),
     });
-    return null;
+    return { ok: false, errorCode: 'google_key_missing' };
   }
   const url = new URL('https://maps.googleapis.com/maps/api/directions/json');
   url.searchParams.set('origin', `${start.latitude},${start.longitude}`);
@@ -293,19 +298,26 @@ async function googleDirectionsKm(start, end, options = {}) {
   url.searchParams.set('mode', 'driving');
   url.searchParams.set('key', apiKey);
 
-  log('GOOGLE_DIRECTIONS_REQUEST_ATTEMPTED', {
-    endpoint: 'https://maps.googleapis.com/maps/api/directions/json',
-    mode: 'driving',
-    key_source: keySource,
-    calls_attempted: context.callsAttempted + 1,
-    max_calls: context.maxCalls,
-    has_origin: isValidCoordinate(start.latitude, start.longitude),
-    has_destination: isValidCoordinate(end.latitude, end.longitude),
-  });
-  context.callsAttempted += 1;
-
-  try {
-    const response = await fetch(url);
+  const timeoutMs = Math.max(1000, Number(options.googleDirectionsTimeoutMs || 8000));
+  const maxAttempts = Math.min(2, Math.max(1, Number(options.googleDirectionsMaxAttempts || 2)));
+  let lastErrorCode = 'google_unavailable';
+  for (let attempt = 1; attempt <= maxAttempts && context.callsAttempted < context.maxCalls; attempt += 1) {
+    log('GOOGLE_DIRECTIONS_REQUEST_ATTEMPTED', {
+      endpoint: 'https://maps.googleapis.com/maps/api/directions/json',
+      mode: 'driving',
+      key_source: keySource,
+      calls_attempted: context.callsAttempted + 1,
+      max_calls: context.maxCalls,
+      attempt,
+      has_origin: isValidCoordinate(start.latitude, start.longitude),
+      has_destination: isValidCoordinate(end.latitude, end.longitude),
+    });
+    context.callsAttempted += 1;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
     log('GOOGLE_DIRECTIONS_HTTP_STATUS', {
       status: response.status,
       ok: response.ok,
@@ -316,7 +328,8 @@ async function googleDirectionsKm(start, end, options = {}) {
         status: response.status,
         status_text: response.statusText,
       });
-      return null;
+        lastErrorCode = `google_http_${response.status}`;
+        continue;
     }
 
     const payload = await response.json();
@@ -324,91 +337,84 @@ async function googleDirectionsKm(start, end, options = {}) {
       status: payload.status,
       error_message: payload.error_message ? redactForLog(payload.error_message, [apiKey]) : null,
     });
-    if (payload.status !== 'OK') return null;
+      if (payload.status !== 'OK') {
+        lastErrorCode = `google_${String(payload.status || 'unknown').toLowerCase()}`;
+        if (payload.status === 'ZERO_RESULTS') break;
+        continue;
+      }
 
     const meters = payload.routes?.[0]?.legs?.reduce(
       (sum, leg) => sum + Number(leg.distance?.value || 0),
       0,
     );
-    const km = Number.isFinite(meters) && meters > 0 ? meters / 1000 : null;
-    if (km === null) {
+      const seconds = payload.routes?.[0]?.legs?.reduce(
+        (sum, leg) => sum + Number(leg.duration?.value || 0),
+        0,
+      );
+      const km = Number.isFinite(meters) && meters > 0 ? meters / 1000 : null;
+      if (km === null) {
       log('GOOGLE_DIRECTIONS_NO_DISTANCE', {
         status: payload.status,
         route_count: Array.isArray(payload.routes) ? payload.routes.length : 0,
       });
+        lastErrorCode = 'google_no_distance';
+        continue;
+      }
+      return {
+        ok: true,
+        distanceKm: km,
+        durationSeconds: Number.isFinite(seconds) && seconds > 0 ? seconds : null,
+      };
+    } catch (error) {
+      clearTimeout(timeout);
+      lastErrorCode = error?.name === 'AbortError' ? 'google_timeout' : 'google_fetch_error';
+      log('GOOGLE_DIRECTIONS_FETCH_ERROR', {
+        message: redactForLog(error?.message || String(error), [apiKey]),
+        name: error?.name,
+        error_code: lastErrorCode,
+      });
     }
-    return km;
-  } catch (error) {
-    log('GOOGLE_DIRECTIONS_FETCH_ERROR', {
-      message: redactForLog(error?.message || String(error), [apiKey]),
-      name: error?.name,
-    });
-    return null;
   }
+  return { ok: false, errorCode: lastErrorCode };
 }
 
-async function calculateActualTravelKm(points, options = {}) {
-  let acceptedKm = 0;
-  let reconstructedKm = 0;
-  let segmentsAccepted = 0;
-  let segmentsRejected = 0;
-  let segmentsReconstructed = 0;
-  const segmentSummary = [];
+async function googleDirectionsKm(start, end, options = {}) {
+  const route = await googleDirectionsRoute(start, end, options);
+  return route.ok ? route.distanceKm : null;
+}
 
-  for (let index = 1; index < points.length; index += 1) {
-    const previous = points[index - 1];
-    const current = points[index];
-    const secondsGap = (current.capturedAt - previous.capturedAt) / 1000;
-    const distanceKm = haversineKm(previous, current);
-    const distanceMeters = distanceKm * 1000;
-    const speedKmph = secondsGap > 0 ? (distanceKm / (secondsGap / 3600)) : Number.POSITIVE_INFINITY;
-
-    if (
-      distanceMeters >= MIN_SEGMENT_METERS &&
-      secondsGap > 0 &&
-      secondsGap <= MAX_NORMAL_GAP_SECONDS &&
-      speedKmph <= MAX_SPEED_KMPH &&
-      distanceMeters <= MAX_NORMAL_SEGMENT_METERS
-    ) {
-      acceptedKm += distanceKm;
-      segmentsAccepted += 1;
-      log('FO_KM_SEGMENT_ACCEPTED', { index, distanceKm: Number(distanceKm.toFixed(3)), secondsGap, speedKmph: Number(speedKmph.toFixed(1)) });
-      segmentSummary.push({ index, status: 'accepted', distance_km: distanceKm, seconds_gap: secondsGap, speed_kmph: speedKmph });
-      continue;
-    }
-
-    const gapDetected =
-      secondsGap > MAX_NORMAL_GAP_SECONDS || distanceMeters > MAX_NORMAL_SEGMENT_METERS;
-    if (gapDetected) {
-      log('FO_KM_GAP_DETECTED', { index, distanceKm: Number(distanceKm.toFixed(3)), secondsGap, speedKmph: Number(speedKmph.toFixed(1)) });
-      const googleKm = await googleDirectionsKm(previous, current, options);
-      if (googleKm !== null) {
-        reconstructedKm += googleKm;
-        segmentsReconstructed += 1;
-        log('FO_KM_GAP_RECONSTRUCTED_GOOGLE', { index, googleKm: Number(googleKm.toFixed(3)) });
-        segmentSummary.push({ index, status: 'reconstructed_google', distance_km: googleKm, seconds_gap: secondsGap, speed_kmph: speedKmph });
-        continue;
-      }
-      if (secondsGap > 0 && speedKmph <= MAX_SPEED_KMPH) {
-        reconstructedKm += distanceKm;
-        segmentsReconstructed += 1;
-        log('FO_KM_GAP_RECONSTRUCTED_HAVERSINE', {
-          index,
-          distanceKm: Number(distanceKm.toFixed(3)),
-          secondsGap,
-          speedKmph: Number(speedKmph.toFixed(1)),
-          reason: 'google_directions_unavailable',
-        });
-        segmentSummary.push({ index, status: 'reconstructed_haversine', distance_km: distanceKm, seconds_gap: secondsGap, speed_kmph: speedKmph });
-        continue;
-      }
-    }
-
-    segmentsRejected += 1;
-    log('FO_KM_SEGMENT_REJECTED', { index, distanceKm: Number(distanceKm.toFixed(3)), secondsGap, speedKmph: Number(speedKmph.toFixed(1)) });
-    segmentSummary.push({ index, status: 'rejected', distance_km: distanceKm, seconds_gap: secondsGap, speed_kmph: speedKmph });
+export async function calculateActualTravelKm(points, options = {}) {
+  const policy = {
+    ...DEFAULT_KM_V2_POLICY,
+    maxPhysicalSpeedKmph: MAX_SPEED_KMPH,
+    maxNormalGapSeconds: MAX_NORMAL_GAP_SECONDS,
+    maxNormalSegmentMeters: MAX_NORMAL_SEGMENT_METERS,
+    minSegmentMeters: MIN_SEGMENT_METERS,
+    ...(options.kmV2Policy || {}),
+  };
+  const plan = planGpsSegments(points, policy);
+  const routeEvidence = new Map();
+  for (const segment of plan.segments) {
+    // Physics is resolved by planGpsSegments. Impossible transitions are never
+    // eligible for Google, which closes the historical payable-gap defect.
+    if (!segment.googleEligible) continue;
+    routeEvidence.set(segment.index, await googleDirectionsRoute(segment.from, segment.to, options));
   }
-
+  const finalized = finalizeGpsSegments(plan, routeEvidence, policy);
+  const acceptedKm = finalized.acceptedGpsKm;
+  const reconstructedKm = finalized.reconstructedGapKm;
+  const segmentsAccepted = finalized.segments.filter((segment) => segment.status === 'accepted_gps').length;
+  const segmentsReconstructed = finalized.segments.filter((segment) => segment.status === 'reconstructed_google').length;
+  const segmentsRejected = finalized.segments.filter((segment) => ['rejected', 'manual_review'].includes(segment.status)).length;
+  const segmentSummary = finalized.segments.map((segment) => ({
+    index: segment.index,
+    status: segment.status === 'accepted_gps' ? 'accepted' : segment.status,
+    reason: segment.reason || null,
+    distance_km: segment.routeKm ?? segment.straightLineKm,
+    seconds_gap: segment.elapsedSeconds,
+    speed_kmph: segment.impliedSpeedKmph,
+    route_duration_seconds: segment.durationSeconds ?? null,
+  }));
   const actualTravelKm = acceptedKm + reconstructedKm;
   return {
     actualTravelKm,
@@ -418,6 +424,15 @@ async function calculateActualTravelKm(points, options = {}) {
     segmentsRejected,
     segmentsReconstructed,
     segmentSummary,
+    riskFlags: finalized.riskFlags,
+    calculationVersion: KM_ENGINE_VERSION,
+    rejectionReasonCounts: segmentSummary.reduce((counts, segment) => {
+      if (segment.status === 'rejected' || segment.status === 'manual_review') {
+        const reason = segment.reason || GPS_REJECTION_REASON.IMPOSSIBLE_SPEED;
+        counts[reason] = (counts[reason] || 0) + 1;
+      }
+      return counts;
+    }, {}),
   };
 }
 
@@ -643,7 +658,7 @@ async function loadGpsLogsForWindowWithBinding(client, attendance, fromTime, toT
     if (error) throw error;
     attendanceRows = data || [];
   }
-  const attendanceCleaned = cleanGpsLogs(attendanceRows);
+  const attendanceCleaned = cleanGpsLogs(attendanceRows, attendance);
   const attendancePrecheck = attendanceCleaned.length >= 2
     ? await calculateActualTravelKm(attendanceCleaned, { maxGoogleDirectionsCalls: 0 })
     : { actualTravelKm: 0 };
@@ -686,7 +701,7 @@ async function loadGpsLogsForWindowWithBinding(client, attendance, fromTime, toT
     .limit(20000);
   if (employeeError) throw employeeError;
   const fallbackRows = deduplicateGpsRows(employeeRows || []);
-  const fallbackCleaned = cleanGpsLogs(fallbackRows);
+  const fallbackCleaned = cleanGpsLogs(fallbackRows, attendance);
   const fallbackPrecheck = fallbackCleaned.length >= 2
     ? await calculateActualTravelKm(fallbackCleaned, { maxGoogleDirectionsCalls: 0 })
     : { actualTravelKm: 0 };
@@ -720,7 +735,7 @@ export async function resolveEffectiveAttendanceEnd(client, attendance, options 
     return { time: null, coordinate: null, source: 'missing_auto_end_day_boundary', bindingSource: 'none', rows: [] };
   }
   const evidence = await loadGpsLogsForWindowWithBinding(client, attendance, start, dayEnd);
-  const validPoints = cleanGpsLogs(evidence.rows)
+  const validPoints = cleanGpsLogs(evidence.rows, attendance)
     .filter((point) => String(point.source || '').trim().toLowerCase() === 'mobile')
     .filter((point) => point.capturedAt >= start && point.capturedAt < dayEnd)
     .sort((a, b) => a.capturedAt - b.capturedAt);
@@ -805,7 +820,7 @@ export function gpsLegPassesExistingQualityChecks(leg) {
   const km = normalizeNumber(leg?.km);
   return (
     leg?.status === 'calculated' &&
-    ['GPS_BASED', 'PRE_SITE_GPS_SOURCING'].includes(String(leg?.source || '')) &&
+    ['GPS_BASED', 'GPS_ROUTE_SUPPORTED', 'PRE_SITE_GPS_SOURCING'].includes(String(leg?.source || '')) &&
     Number.isFinite(km) &&
     km > 0 &&
     gpsLogCount >= 10 &&
@@ -880,7 +895,7 @@ function collectApprovedAdjustmentAudits(attendance = {}, visits = [], travelLeg
       return {
         ...adjustment,
         included: false,
-        exclusion_reason: matchingLeg.source === 'GPS_BASED' || matchingLeg.source === 'FULL_DAY_GPS_NO_SITE'
+        exclusion_reason: ['GPS_BASED', 'GPS_ROUTE_SUPPORTED', 'FULL_DAY_GPS_NO_SITE'].includes(matchingLeg.source)
           ? 'gps_already_covers_window'
           : 'route_fallback_already_covers_window',
       };
@@ -936,7 +951,7 @@ export function calculateCanonicalRoutePayableKm({
   const finalReturnPayableSource = finalGpsLeg?.payable ? finalGpsLeg.source : 'none';
   const finalReturnFallbackReason = finalGpsLeg?.fallback_reason || finalGpsLeg?.reason || null;
   const finalGpsAuditKm = normalizeNumber(
-    ['GPS_BASED', 'FULL_DAY_GPS_NO_SITE'].includes(finalGpsLeg?.source)
+    ['GPS_BASED', 'GPS_ROUTE_SUPPORTED', 'FULL_DAY_GPS_NO_SITE'].includes(finalGpsLeg?.source)
       ? finalGpsLeg?.km
       : finalGpsLeg?.filtered_gps_km ?? finalGpsLeg?.accepted_gps_km,
   );
@@ -1585,6 +1600,54 @@ const PERSISTED_LEG_BOUNDARY_TOLERANCE_MS = 2 * 60 * 1000;
 function coordinatesMatch(left, right, toleranceMeters = 150) {
   if (!left || !right) return false;
   return haversineKm(left, right) * 1000 <= toleranceMeters;
+}
+
+function trustedSiteRouteEvidenceForLeg(leg, visits = [], attendance = {}) {
+  const legStart = parseValidDate(leg?.fromTime);
+  const legEnd = parseValidDate(leg?.toTime);
+  if (!legStart || !legEnd || !leg?.from || !leg?.to) return null;
+  const visit = visits.find((candidate) => {
+    const checkIn = visitCheckInTime(candidate);
+    return candidate?.attendance_id === attendance?.id &&
+      checkIn && Math.abs(checkIn - legEnd) <= PERSISTED_LEG_BOUNDARY_TOLERANCE_MS &&
+      coordinatesMatch(visitCheckInCoordinate(candidate), leg.to);
+  });
+  if (!visit) return null;
+  const metadata = safeVisitMetadata(visit);
+  const routeKm = normalizeNumber(visit.route_km);
+  const metadataMeters = normalizeNumber(metadata.distance_meters);
+  const metadataKm = Number.isFinite(metadataMeters) ? metadataMeters / 1000 : null;
+  const metadataOrigin = coordinateFrom(metadata, ['origin_lat'], ['origin_lng']);
+  const metadataDestination = coordinateFrom(metadata, ['destination_lat'], ['destination_lng']);
+  const calculatedAt = parseValidDate(metadata.route_calculated_at);
+  const provider = String(metadata.route_provider || metadata.distance_source || '').trim().toLowerCase();
+  const status = String(metadata.route_request_status || '').trim().toUpperCase();
+  const originSource = String(metadata.route_origin_source || '').trim().toLowerCase();
+  const expectedOriginSource = leg.type === 'start_to_first_checkin' ? 'start_day' : 'checkout';
+  const exactWindow =
+    Number.isFinite(routeKm) && routeKm > 0 &&
+    Number.isFinite(metadataKm) && Math.abs(routeKm - metadataKm) <= 0.25 &&
+    coordinatesMatch(metadataOrigin, leg.from) &&
+    coordinatesMatch(metadataDestination, leg.to) &&
+    (!calculatedAt || Math.abs(calculatedAt - legEnd) <= 5 * 60 * 1000) &&
+    originSource === expectedOriginSource;
+  const elapsedSeconds = (legEnd - legStart) / 1000;
+  const physicallyPlausible = elapsedSeconds > 0 &&
+    routeKm / (elapsedSeconds / 3600) <= DEFAULT_KM_V2_POLICY.maxPhysicalSpeedKmph;
+  const providerAccepted = status === 'OK' && (provider.includes('google') || provider.includes('distance_matrix'));
+  return {
+    trusted: exactWindow && physicallyPlausible && providerAccepted,
+    exactWindow,
+    physicallyPlausible,
+    distanceKm: routeKm,
+    durationSeconds: null,
+    source: 'site_visit_exact_window_route',
+    siteVisitId: visit.id || null,
+    provider,
+    reason: exactWindow && physicallyPlausible && providerAccepted
+      ? null
+      : 'site_route_evidence_failed_exact_window_validation',
+  };
 }
 
 function persistedLegMatchesExpected(snapshot, expectedLeg) {
@@ -2306,6 +2369,7 @@ export async function calculateTravelLegKm({
   employeeCode,
   attendanceId,
   legType = null,
+  routeEvidence = null,
   options = {},
 }) {
   const legStart = parseValidDate(fromTime);
@@ -2330,8 +2394,19 @@ export async function calculateTravelLegKm({
 
   const evidence = await loadGpsLogsForWindowWithBinding(client, attendance, legStart, legEnd);
   const gpsRows = evidence.rows;
-  const cleanedPoints = cleanGpsLogs(gpsRows);
+  const normalizedEvidence = normalizeGpsLogs(gpsRows, attendance);
+  fallbackBase.rejectionReasonCounts = normalizedEvidence.rejectionCounts;
+  const cleanedPoints = normalizedEvidence.points.map((point) => ({
+    ...point,
+    highConfidence:
+      point.accuracy !== null && point.accuracy <= HIGH_CONFIDENCE_ACCURACY_METERS,
+  }));
   const rawGpsKm = Number(calculateRawGpsKm(cleanedPoints).toFixed(2));
+  const coverageTrace = calculateGpsCoverageTrace(cleanedPoints, {
+    contaminated: (normalizedEvidence.riskFlags || []).includes('OSCILLATION'),
+    policy: options.kmV2Policy,
+  });
+  const coverageTraceKm = Number(coverageTrace.distanceKm.toFixed(2));
   const preliminaryCalculation = cleanedPoints.length >= 2
     ? await calculateActualTravelKm(cleanedPoints, options)
     : {
@@ -2372,10 +2447,51 @@ export async function calculateTravelLegKm({
     longitude: normalizeNumber(toLng),
   };
   const hasRouteAnchors = isValidCoordinate(from.latitude, from.longitude) && isValidCoordinate(to.latitude, to.longitude);
+  const legElapsedSeconds = (legEnd - legStart) / 1000;
+  const legStraightLineKm = hasRouteAnchors ? haversineKm(from, to) : null;
+  const shortWindowSpeedUncertain = hasRouteAnchors &&
+    legElapsedSeconds > 0 &&
+    legStraightLineKm < (options.kmV2Policy?.speedGateMinimumDistanceKm || DEFAULT_KM_V2_POLICY.speedGateMinimumDistanceKm) &&
+    legStraightLineKm / (legElapsedSeconds / 3600) >
+      (options.kmV2Policy?.maxPhysicalSpeedKmph || DEFAULT_KM_V2_POLICY.maxPhysicalSpeedKmph);
+  if (
+    hasRouteAnchors &&
+    legElapsedSeconds > 0 &&
+    legStraightLineKm >= (options.kmV2Policy?.speedGateMinimumDistanceKm || DEFAULT_KM_V2_POLICY.speedGateMinimumDistanceKm) &&
+    legStraightLineKm / (legElapsedSeconds / 3600) >
+      (options.kmV2Policy?.maxPhysicalSpeedKmph || DEFAULT_KM_V2_POLICY.maxPhysicalSpeedKmph)
+  ) {
+    return {
+      ...fallbackBase,
+      legKm: 0,
+      legSource: 'SKIPPED',
+      payable: false,
+      decision: KM_DECISION.MANUAL_REVIEW,
+      calculationVersion: KM_ENGINE_VERSION,
+      gpsLogCount,
+      validPoints,
+      rejectedPoints,
+      fallbackReason: GPS_REJECTION_REASON.IMPOSSIBLE_SPEED,
+      rawGpsKm,
+      filteredGpsKm: gpsBasedKm,
+      acceptedGpsKm: Number(gpsCalculation.acceptedKm.toFixed(2)),
+      reconstructedGapKm: Number(gpsCalculation.reconstructedKm.toFixed(2)),
+      googleDirectRouteKm: null,
+      gpsLogBindingSource: evidence.bindingSource,
+      reviewFlags: ['IMPOSSIBLE_SPEED'],
+      rejectionReasonCounts: { [GPS_REJECTION_REASON.IMPOSSIBLE_SPEED]: 1 },
+    };
+  }
   let googleDirectKm = null;
+  let googleDirectRoute = null;
   if (hasRouteAnchors) {
-    const directKm = await googleDirectionsKm(from, to, options);
-    googleDirectKm = directKm === null ? null : Number(directKm.toFixed(2));
+    googleDirectRoute = await googleDirectionsRoute(from, to, options);
+    googleDirectKm = googleDirectRoute.ok
+      ? Number(googleDirectRoute.distanceKm.toFixed(2))
+      : null;
+    if (googleDirectKm === null && routeEvidence?.trusted === true) {
+      googleDirectKm = Number(Number(routeEvidence.distanceKm).toFixed(2));
+    }
     if (googleDirectKm === null && gpsUsable && legType === 'last_checkout_to_end_day') {
       const metadata = safeAttendanceMetadata(attendance);
       const storedComparison = normalizeNumber(
@@ -2386,23 +2502,77 @@ export async function calculateTravelLegKm({
   }
 
   if (gpsUsable) {
+    const coverage = evaluateLegCoverage({
+      acceptedGpsKm: gpsCalculation.acceptedKm,
+      reconstructedGapKm: gpsCalculation.reconstructedKm,
+      coverageTraceKm,
+      straightLineKm: legStraightLineKm,
+      routeEvidence: routeEvidence?.trusted === true
+        ? routeEvidence
+        : googleDirectRoute?.ok
+          ? {
+              trusted: true,
+              exactWindow: true,
+              distanceKm: googleDirectRoute.distanceKm,
+              durationSeconds: googleDirectRoute.durationSeconds,
+              source: 'google_direct_exact_window',
+            }
+          : routeEvidence,
+      elapsedSeconds: legElapsedSeconds,
+      existingRiskFlags: [...(normalizedEvidence.riskFlags || []), ...(gpsCalculation.riskFlags || [])],
+      policy: options.kmV2Policy,
+    });
+    const selectedKm = Number(coverage.selectedKm.toFixed(2));
+    const routeSupportedGapKm = Number(coverage.reconstructedCoverageKm.toFixed(2));
+    const wholeLegGate = applyWholeLegSanityGate({
+      acceptedGpsKm: gpsCalculation.acceptedKm,
+      reconstructedGapKm: gpsCalculation.reconstructedKm + routeSupportedGapKm,
+      calculatedKm: selectedKm,
+      straightLineKm: legStraightLineKm,
+      directRouteKm: googleDirectKm,
+      routeDurationSeconds: googleDirectRoute?.durationSeconds ?? null,
+      elapsedSeconds: legElapsedSeconds,
+      startedAt: legStart,
+      endedAt: legEnd,
+      existingRiskFlags: [
+        ...coverage.riskFlags,
+        ...(shortWindowSpeedUncertain ? ['SHORT_WINDOW_SPEED_UNCERTAIN'] : []),
+      ],
+      policy: options.kmV2Policy,
+    });
+    const decision = coverage.decision === KM_DECISION.MANUAL_REVIEW
+      ? KM_DECISION.MANUAL_REVIEW
+      : wholeLegGate.decision;
     return {
       ...fallbackBase,
-      legKm: gpsBasedKm,
-      legSource: 'GPS_BASED',
-      payable: true,
+      legKm: selectedKm,
+      legSource: coverage.classification === 'ROUTE_SUPPORTED' ? 'GPS_ROUTE_SUPPORTED' : 'GPS_BASED',
+      payable: [KM_DECISION.ACCEPTED, KM_DECISION.ACCEPTED_WITH_WARNING].includes(decision),
+      decision,
+      calculationVersion: KM_ENGINE_VERSION,
       gpsLogCount,
       validPoints,
       rejectedPoints,
       fallbackReason: null,
       rawGpsKm,
-      filteredGpsKm: gpsBasedKm,
+      filteredGpsKm: selectedKm,
       acceptedGpsKm: Number(gpsCalculation.acceptedKm.toFixed(2)),
-      reconstructedGapKm: Number(gpsCalculation.reconstructedKm.toFixed(2)),
+      reconstructedGapKm: Number((gpsCalculation.reconstructedKm + routeSupportedGapKm).toFixed(2)),
       googleDirectRouteKm: googleDirectKm,
+      gpsCoverageClassification: coverage.classification,
+      gpsCoverageTraceKm: coverageTraceKm,
+      routeEvidenceSource: routeEvidence?.source || (googleDirectRoute?.ok ? 'google_direct_exact_window' : null),
       gpsLogBindingSource: evidence.bindingSource,
-      payableKmSourceReason: 'gps_cleaned_reconstructed_route_used',
-      reviewFlags: [],
+      payableKmSourceReason: coverage.classification === 'ROUTE_SUPPORTED'
+        ? 'cleaned_gps_trace_recovered_with_exact_window_route_support'
+        : coverage.classification === 'MANUAL_REVIEW'
+          ? 'gps_undercoverage_requires_manual_review'
+          : 'gps_cleaned_reconstructed_route_used',
+      reviewFlags: wholeLegGate.riskFlags,
+      rejectionReasonCounts: mergeReasonCounts(
+        normalizedEvidence.rejectionCounts,
+        gpsCalculation.rejectionReasonCounts,
+      ),
       segmentsAccepted: gpsCalculation.segmentsAccepted,
       segmentsReconstructed: gpsCalculation.segmentsReconstructed,
       segmentsRejected: gpsCalculation.segmentsRejected,
@@ -2425,13 +2595,31 @@ export async function calculateTravelLegKm({
     };
   }
 
-  const googleKm = googleDirectKm !== null ? googleDirectKm : await googleDirectionsKm(from, to, options);
+  const googleRoute = googleDirectRoute?.ok
+    ? googleDirectRoute
+    : routeEvidence?.trusted === true
+      ? { ok: true, distanceKm: routeEvidence.distanceKm, durationSeconds: routeEvidence.durationSeconds ?? null }
+    : await googleDirectionsRoute(from, to, options);
+  const googleKm = googleRoute.ok ? googleRoute.distanceKm : null;
   if (googleKm !== null) {
+    const wholeLegGate = applyWholeLegSanityGate({
+      calculatedKm: googleKm,
+      straightLineKm: legStraightLineKm,
+      directRouteKm: googleKm,
+      routeDurationSeconds: googleRoute.durationSeconds ?? null,
+      elapsedSeconds: legElapsedSeconds,
+      startedAt: legStart,
+      endedAt: legEnd,
+      existingRiskFlags: shortWindowSpeedUncertain ? ['SHORT_WINDOW_SPEED_UNCERTAIN'] : [],
+      policy: options.kmV2Policy,
+    });
     return {
       ...fallbackBase,
       legKm: Number(googleKm.toFixed(2)),
       legSource: 'GOOGLE_ROUTE_FALLBACK',
-      payable: true,
+      payable: [KM_DECISION.ACCEPTED, KM_DECISION.ACCEPTED_WITH_WARNING].includes(wholeLegGate.decision),
+      decision: wholeLegGate.decision,
+      calculationVersion: KM_ENGINE_VERSION,
       gpsLogCount,
       validPoints,
       rejectedPoints,
@@ -2440,7 +2628,7 @@ export async function calculateTravelLegKm({
       googleDirectRouteKm: Number(googleKm.toFixed(2)),
       gpsLogBindingSource: evidence.bindingSource,
       payableKmSourceReason: 'google_route_used_because_gps_proof_did_not_pass_thresholds',
-      reviewFlags: ['INSUFFICIENT_GPS_USED_GOOGLE_FALLBACK'],
+      reviewFlags: [...new Set(['INSUFFICIENT_GPS_USED_GOOGLE_FALLBACK', ...wholeLegGate.riskFlags])],
       fallbackReason: validPoints < 5
         ? 'gps_valid_points_below_threshold'
         : gpsLogCount < 10
@@ -2470,11 +2658,20 @@ export async function calculateTravelLegKm({
       reviewFlags: ['INSUFFICIENT_GPS_NO_MEANINGFUL_ROUTE_FALLBACK'],
     };
   }
+  const wholeLegGate = applyWholeLegSanityGate({
+    calculatedKm: haversineFallbackKm,
+    straightLineKm: haversineFallbackKm,
+    elapsedSeconds: (legEnd - legStart) / 1000,
+    existingRiskFlags: shortWindowSpeedUncertain ? ['SHORT_WINDOW_SPEED_UNCERTAIN'] : [],
+    policy: options.kmV2Policy,
+  });
   return {
     ...fallbackBase,
     legKm: haversineFallbackKm,
     legSource: 'HAVERSINE_ROUTE_FALLBACK',
-    payable: true,
+    payable: [KM_DECISION.ACCEPTED, KM_DECISION.ACCEPTED_WITH_WARNING].includes(wholeLegGate.decision),
+    decision: wholeLegGate.decision,
+    calculationVersion: KM_ENGINE_VERSION,
     gpsLogCount,
     validPoints,
     rejectedPoints,
@@ -2484,7 +2681,7 @@ export async function calculateTravelLegKm({
     gpsLogBindingSource: evidence.bindingSource,
     payableKmSourceReason: 'haversine_used_because_google_route_unavailable',
     fallbackReason: 'google_route_unavailable',
-    reviewFlags: ['GOOGLE_ROUTE_FAILED_USED_HAVERSINE'],
+    reviewFlags: [...new Set(['GOOGLE_ROUTE_FAILED_USED_HAVERSINE', ...wholeLegGate.riskFlags])],
   };
 }
 
@@ -2571,6 +2768,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       legAudit.push(skippedLegAudit(leg, 'missing_leg_coordinates'));
       continue;
     }
+    const routeEvidence = trustedSiteRouteEvidenceForLeg(leg, visits, attendance);
     const result = await calculateTravelLegKm({
       client,
       attendance,
@@ -2583,6 +2781,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       employeeCode: attendance.employee_code || attendance.fo_user_id,
       attendanceId: attendance.id,
       legType: leg.type,
+      routeEvidence,
       options,
     });
     const source = leg.type === 'full_day_no_site' && result.legSource === 'GPS_BASED'
@@ -2641,6 +2840,8 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       km: roundedKm,
       source,
       payable: legPayable,
+      decision: result.decision || (result.payable === true ? KM_DECISION.ACCEPTED : KM_DECISION.REJECTED),
+      calculation_version: result.calculationVersion || KM_ENGINE_VERSION,
       fallback_reason: result.fallbackReason || null,
       gps_log_count: result.gpsLogCount,
       valid_points: result.validPoints,
@@ -2648,6 +2849,9 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       raw_gps_km: result.rawGpsKm ?? null,
       filtered_gps_km: result.filteredGpsKm ?? null,
       google_direct_route_km: result.googleDirectRouteKm ?? null,
+      gps_coverage_classification: result.gpsCoverageClassification || null,
+      gps_coverage_trace_km: result.gpsCoverageTraceKm ?? null,
+      route_evidence_source: result.routeEvidenceSource || null,
       accepted_gps_km: result.acceptedGpsKm ?? null,
       reconstructed_gap_km: result.reconstructedGapKm ?? null,
       gps_log_binding_source: result.gpsLogBindingSource || 'none',
@@ -2659,96 +2863,15 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       payable_amount: roundedPayableAmount,
       fare_amount: roundedPayableAmount,
       review_flags: [...new Set([...(leg.reviewFlags || []), ...(result.reviewFlags || [])])],
+      rejected_point_reasons: result.rejectionReasonCounts || {},
     });
   }
 
   if (options.persistLegResults === true) {
-    for (const leg of legAudit) {
-      if (leg.status !== 'calculated') continue;
-      const values = {
-        attendance_id: attendance.id,
-        employee_code: attendance.employee_code || null,
-        fo_user_id: attendance.fo_user_id || null,
-        travel_mode: leg.travel_mode || travelPolicy.travelMode || null,
-        payable_km_allowed: leg.payable_km_allowed === true,
-        started_at: leg.from_time,
-        ended_at: leg.to_time,
-        start_lat: leg.from_lat,
-        start_lng: leg.from_lng,
-        end_lat: leg.to_lat,
-        end_lng: leg.to_lng,
-        calculated_km: Number(Number(leg.km || 0).toFixed(2)),
-        payable_km: Number(Number(leg.payable_km || 0).toFixed(2)),
-        payable_amount: Number(Number(leg.payable_amount || 0).toFixed(2)),
-        fare_amount: Number(Number(leg.payable_amount || 0).toFixed(2)),
-        status: 'completed',
-        rate_per_km: leg.rate_per_km,
-        updated_at: new Date().toISOString(),
-      };
-      if (leg.persisted_travel_leg_id) {
-        // Existing leg boundaries and mode are historical source evidence. Only
-        // refresh the calculated/payable projection; normalizing a microsecond
-        // boundary to milliseconds can also collide with an older container leg.
-        const derivedValues = {
-          calculated_km: values.calculated_km,
-          payable_km: values.payable_km,
-          payable_amount: values.payable_amount,
-          fare_amount: values.fare_amount,
-          payable_km_allowed: values.payable_km_allowed,
-          rate_per_km: values.rate_per_km,
-          updated_at: values.updated_at,
-        };
-        const { error } = await client
-          .from('fo_travel_legs')
-          .update(derivedValues)
-          .eq('id', leg.persisted_travel_leg_id)
-          .eq('attendance_id', attendance.id);
-        if (error) throw error;
-        continue;
-      }
-      const { data: existing, error: lookupError } = await client
-        .from('fo_travel_legs')
-        .select('id')
-        .eq('attendance_id', attendance.id)
-        .eq('started_at', leg.from_time)
-        .maybeSingle();
-      if (lookupError) throw lookupError;
-      if (existing?.id) {
-        const { error: existingUpdateError } = await client
-          .from('fo_travel_legs')
-          .update(values)
-          .eq('id', existing.id)
-          .eq('attendance_id', attendance.id);
-        if (existingUpdateError) throw existingUpdateError;
-        leg.persisted_travel_leg_id = existing.id;
-        continue;
-      }
-      const { data: inserted, error: insertError } = await client
-        .from('fo_travel_legs')
-        .insert(values)
-        .select('id')
-        .single();
-      if (insertError) {
-        if (insertError.code !== '23505') throw insertError;
-        const { data: raced, error: raceLookupError } = await client
-          .from('fo_travel_legs')
-          .select('id')
-          .eq('attendance_id', attendance.id)
-          .eq('started_at', leg.from_time)
-          .maybeSingle();
-        if (raceLookupError) throw raceLookupError;
-        if (!raced?.id) throw insertError;
-        const { error: raceUpdateError } = await client
-          .from('fo_travel_legs')
-          .update(values)
-          .eq('id', raced.id)
-          .eq('attendance_id', attendance.id);
-        if (raceUpdateError) throw raceUpdateError;
-        leg.persisted_travel_leg_id = raced.id;
-      } else {
-        leg.persisted_travel_leg_id = inserted?.id || null;
-      }
-    }
+    const error = new Error('Direct travel-leg persistence is retired; use recalculateFoKm for atomic KM V2 persistence.');
+    error.code = 'km_v2_canonical_persistence_required';
+    error.statusCode = 409;
+    throw error;
   }
 
   const totalLegKmBeforePolicy = Number(legAudit.reduce((sum, leg) => (
@@ -2768,7 +2891,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
   );
   const selectedKmSource = calculatedSources.size > 1
     ? 'MIXED_LEG_BASED'
-    : calculatedSources.has('GPS_BASED') || calculatedSources.has('FULL_DAY_GPS_NO_SITE')
+    : calculatedSources.has('GPS_BASED') || calculatedSources.has('GPS_ROUTE_SUPPORTED') || calculatedSources.has('FULL_DAY_GPS_NO_SITE')
       ? 'GPS_BASED'
       : calculatedSources.has('GOOGLE_ROUTE_FALLBACK')
         ? 'GOOGLE_ROUTE_FALLBACK'
@@ -2814,7 +2937,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
     leg.source === 'HAVERSINE_ROUTE_FALLBACK' ? sum + Number(leg.km || 0) : sum
   ), 0).toFixed(2));
   const acceptedGpsKm = Number(legAudit.reduce((sum, leg) => (
-    ['GPS_BASED', 'FULL_DAY_GPS_NO_SITE'].includes(leg.source)
+    ['GPS_BASED', 'GPS_ROUTE_SUPPORTED', 'FULL_DAY_GPS_NO_SITE'].includes(leg.source)
       ? sum + Number(leg.accepted_gps_km || 0)
       : sum
   ), 0).toFixed(2));
@@ -2973,7 +3096,7 @@ export async function calculateFullDayGpsNoSiteVisitKm(client, attendance, optio
     attendance.login_time,
     attendance.logout_time,
   );
-  const points = cleanGpsLogs(rows);
+  const points = cleanGpsLogs(rows, attendance);
   const gpsPointsTotal = rows.length;
   const gpsPointsUsed = points.length;
   const gpsPointsRejected = Math.max(0, gpsPointsTotal - gpsPointsUsed);
@@ -3083,53 +3206,16 @@ export async function recalculateFullDayGpsNoSiteVisitKm(serviceRoleClient, payl
     };
   }
 
-  const existingMetadata = safeAttendanceMetadata(attendance);
-  const calculatedAt = new Date().toISOString();
-  const metadata = {
-    ...existingMetadata,
-    km_source: result.source,
-    no_site_visit_km_enabled: true,
-    manual_review_required: false,
-    payable_km_formula: result.payable_km_formula,
-    payable_km_source_detail: result.payable_km_source_detail,
-    gps_points_total: result.gps_points_total,
-    gps_points_used: result.gps_points_used,
-    gps_points_rejected: result.gps_points_rejected,
-    raw_gps_km: result.raw_gps_km,
-    accepted_gps_km: result.accepted_gps_km,
-    reconstructed_gap_km: result.reconstructed_gap_km,
-    google_gap_km: result.google_gap_km,
-    haversine_gap_km: result.haversine_gap_km,
-    filtered_gps_km: result.filtered_gps_km,
-    filtered_gps_km_note:
-      'For this endpoint, filtered_gps_km is the final cleaned/reconstructed GPS route KM used for payable calculation.',
-    whole_route_google_fallback_used: false,
-    whole_route_google_fallback_km: 0,
-    rate_per_km: result.rate_per_km,
-    petrol_amount: result.petrol_amount,
-    audit_note: 'Calculated from Start Day to End Day GPS logs because no site visits were recorded.',
-    calculated_at: calculatedAt,
-    calculated_by: options.actor || null,
-  };
-  const attendanceUpdate = {
-    total_route_km: result.eligible_km,
-    eligible_km: result.eligible_km,
-    total_approved_km: result.eligible_km,
-    petrol_amount: result.petrol_amount,
-    route_sync_status: 'canonical_end_day_recalculation',
-    metadata,
-  };
-  const { error } = await client
-    .from('fo_attendance')
-    .update(attendanceUpdate)
-    .eq('id', attendance.id);
-  if (error) throw error;
-
-  return {
-    ...result,
+  const canonical = await recalculateFoKm(client, {
+    attendance_id: attendance.id,
     dry_run: false,
-    applied: true,
-  };
+    source_entry_point: 'no_site_recalculation',
+  }, {
+    ...options,
+    sourceEntryPoint: 'no_site_recalculation',
+    calculationReason: 'no_site_attendance_canonical_recalculation',
+  });
+  return { ...result, ...canonical, dry_run: false, applied: true };
 }
 
 export async function recalculateFoKm(serviceRoleClient, payload = {}, options = {}) {
@@ -3173,7 +3259,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     count: rows.length,
   });
 
-  const points = cleanGpsLogs(rows);
+  const points = cleanGpsLogs(rows, attendance);
   const calculation = await calculateActualTravelKm(points, options);
   const actualTravelKm = Number(calculation.actualTravelKm.toFixed(2));
   const storedRouteKm = Number(sumStoredRouteKm(visits).toFixed(2));
@@ -3181,7 +3267,8 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   const legRecalculation = await recalculateAttendanceTravelLegs(client, attendance.id, {
     ...options,
     persist: false,
-    persistLegResults: !dryRun,
+    // V2 persists legs and attendance totals together in one database RPC.
+    persistLegResults: false,
     auditDelayedCheckout: false,
   });
   const missingKmReviewResults = dryRun || options.refreshMissingKmReviews === false
@@ -3306,7 +3393,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     (
       leg.source === 'PRE_SITE_GPS_SOURCING' ||
       (
-        leg.source === 'GPS_BASED' &&
+        ['GPS_BASED', 'GPS_ROUTE_SUPPORTED'].includes(leg.source) &&
         (leg.review_flags || []).some((flag) => String(flag).includes('PRE_SITE_SOURCING'))
       )
     )
@@ -3569,13 +3656,92 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     },
     updated_at: new Date().toISOString(),
   };
+  const canonicalLegs = (legRecalculation.travel_legs || [])
+    .filter((leg) => leg.status === 'calculated' && leg.from_time && leg.to_time)
+    .map((leg) => ({
+      type: leg.type,
+      startedAt: leg.from_time,
+      endedAt: leg.to_time,
+      startLat: leg.from_lat,
+      startLng: leg.from_lng,
+      endLat: leg.to_lat,
+      endLng: leg.to_lng,
+      calculatedKm: Number(Number(leg.km || 0).toFixed(2)),
+      acceptedGpsKm: Number(Number(leg.accepted_gps_km || 0).toFixed(2)),
+      reconstructedGapKm: Number(Number(leg.reconstructed_gap_km || 0).toFixed(2)),
+      directRouteKm: normalizeNumber(leg.google_direct_route_km),
+      payableKm: Number(Number(leg.payable_km || 0).toFixed(2)),
+      payableAmount: Number(Number(leg.payable_amount || 0).toFixed(2)),
+      ratePerKm: Number(Number(leg.rate_per_km || 0).toFixed(2)),
+      travelMode: leg.travel_mode || travelPolicy.travelMode,
+      payableKmAllowed: leg.payable_km_allowed === true,
+      decision: leg.decision || (leg.payable ? KM_DECISION.ACCEPTED : KM_DECISION.REJECTED),
+      riskFlags: [...new Set(leg.review_flags || [])].sort(),
+      rejectedPointReasons: leg.rejected_point_reasons || {},
+      source: leg.source || null,
+      fromVisitId: leg.from_visit_id || null,
+      toVisitId: leg.to_visit_id || null,
+    }));
+  const canonicalCalculation = calculateCanonicalKmV2({
+    legs: canonicalLegs,
+    approvedMissingKm: approvedMissingKm.approvedKm,
+    approvedMissingAmount: approvedMissingKm.approvedAmount,
+  });
+  canonicalCalculation.inputRowCount = rows.length;
+  canonicalCalculation.acceptedPointCount = points.length;
+  canonicalCalculation.sourceRowIds = rows.map((row) => row.id).filter(Boolean).sort();
+  canonicalCalculation.directGoogleKm = Number(canonicalLegs.reduce(
+    (sum, leg) => sum + Number(leg.directRouteKm || 0),
+    0,
+  ).toFixed(2));
+  canonicalCalculation.modeRateSnapshot = canonicalLegs.map((leg) => ({
+    startedAt: leg.startedAt,
+    travelMode: leg.travelMode,
+    ratePerKm: leg.ratePerKm,
+    payableKmAllowed: leg.payableKmAllowed,
+  }));
+  canonicalCalculation.calculationReason = options.calculationReason || 'canonical_backend_recalculation';
+  canonicalCalculation.attendanceMetadata = attendanceUpdate.metadata;
+  canonicalCalculation.inputDigest = canonicalKmInputDigest({
+    attendance: {
+      id: attendance.id,
+      startedAt: attendance.login_time || attendance.start_time || null,
+      endedAt: attendance.logout_time || attendance.end_time || null,
+      travelMode: attendance.travel_mode || null,
+      ratePerKm: attendance.rate_per_km ?? null,
+    },
+    gps: rows.map((row) => ({
+      id: row.id || null,
+      latitude: row.latitude,
+      longitude: row.longitude,
+      accuracy: row.accuracy,
+      capturedAt: row.captured_at || null,
+      receivedAt: row.logged_at || row.created_at || null,
+      mocked: row.is_mocked === true,
+    })),
+    visits: visits.map((visit) => ({
+      id: visit.id,
+      checkInAt: visit.check_in_at || null,
+      checkOutAt: visit.check_out_at || null,
+      routeKm: visit.route_km ?? null,
+      travelMode: visit.travel_mode || null,
+      updatedAt: visit.updated_at || null,
+    })),
+    canonicalLegs,
+    approvedMissingKm: approvedMissingKm.approvedKm,
+    approvedMissingAmount: approvedMissingKm.approvedAmount,
+  });
+
   let liveStatusUpdated = false;
+  let persistenceResult = null;
   if (!dryRun) {
-    const { error: attendanceUpdateError } = await client
-      .from('fo_attendance')
-      .update(attendanceUpdate)
-      .eq('id', attendance.id);
-    if (attendanceUpdateError) throw attendanceUpdateError;
+    persistenceResult = await persistCanonicalKmV2(client, {
+      attendanceId: attendance.id,
+      expectedAttendanceUpdatedAt: attendance.updated_at,
+      calculation: canonicalCalculation,
+      sourceEntryPoint: options.sourceEntryPoint || payload.source_entry_point || 'backend_recalculation',
+      actorSource: options.actor?.employee_code || options.actor || null,
+    });
     log('FO_KM_ATTENDANCE_UPDATED', { attendance_id: attendance.id, actualTravelKm });
 
     if (attendance.attendance_date === indiaDateKey() && attendance.fo_user_id) {
@@ -3589,7 +3755,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
         const { error: liveStatusError } = await client
           .from('fo_live_status')
           .update({
-            route_km_today: approvedKm,
+            route_km_today: Number(persistenceResult?.payable_km ?? canonicalCalculation.payableKm),
             travel_mode: travelPolicy.travelMode,
             rate_per_km: ratePerKm,
             last_seen_at: new Date().toISOString(),
@@ -3701,6 +3867,13 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     }),
     accepted_gps_km: Number(calculation.acceptedKm.toFixed(2)),
     reconstructed_gap_km: Number(calculation.reconstructedKm.toFixed(2)),
+    calculation_version: canonicalCalculation.calculationVersion,
+    input_digest: canonicalCalculation.inputDigest,
+    decision: canonicalCalculation.decision,
+    risk_flags: canonicalCalculation.riskFlags,
+    rejected_point_reasons: canonicalCalculation.rejectedPointReasons,
+    calculation_run_id: persistenceResult?.calculation_run_id || null,
+    persistence_idempotent_replay: persistenceResult?.idempotent_replay === true,
     dry_run: dryRun,
     live_status_updated: liveStatusUpdated,
     updated: !dryRun,
@@ -3826,6 +3999,20 @@ export async function reconcileFinalLegOnly(serviceRoleClient, payload = {}, opt
   const dryRun = payload.dry_run !== false && payload.dryRun !== false && options.persist !== true;
   if (isProtectedSharedTravelNonPayableAttendance(attendance)) {
     return protectedSharedTravelResult(attendance, dryRun);
+  }
+  if (!dryRun) {
+    // Final-leg maintenance is no longer an independent financial writer. A
+    // persisted request always runs the complete canonical calculation so the
+    // leg set, attendance totals and run evidence commit atomically.
+    return recalculateFoKm(client, {
+      attendance_id: attendance.id,
+      source_entry_point: 'final_leg_reconciliation',
+    }, {
+      ...options,
+      persist: true,
+      sourceEntryPoint: 'final_leg_reconciliation',
+      calculationReason: 'final_leg_reconciliation_via_canonical_engine',
+    });
   }
   const visits = await loadSiteVisits(client, attendance);
   const effectiveEnd = await resolveEffectiveAttendanceEnd(client, attendance, { includeEvidence: true });
@@ -4084,7 +4271,7 @@ function missingKmReviewPayloadFromCalculation({
   overlapEvidence = {},
   options = {},
 }) {
-  const points = cleanGpsLogs(rows);
+  const points = cleanGpsLogs(rows, attendance);
   const rawGpsKm = Number(calculateRawGpsKm(points).toFixed(2));
   const filteredGpsKm = Number(Number(calculation.actualTravelKm || 0).toFixed(2));
   const acceptedKm = Number(Number(calculation.acceptedKm || 0).toFixed(2));
@@ -4280,7 +4467,7 @@ export async function refreshMissingKmReviewsForAttendance(client, attendance, v
       continue;
     }
     const evidence = await loadGpsLogsForWindowWithBinding(client, attendance, windowStart, windowEnd);
-    const points = cleanGpsLogs(evidence.rows);
+    const points = cleanGpsLogs(evidence.rows, attendance);
     const calculation = points.length >= 2
       ? await calculateActualTravelKm(points, options)
       : { actualTravelKm: 0, acceptedKm: 0, reconstructedKm: 0, segmentSummary: [] };
@@ -4353,66 +4540,23 @@ export async function syncAttendanceApprovedKmTotals(client, attendanceId) {
       skip_reason: 'protected_shared_travel_non_payable_adjustment',
     };
   }
-  const { data: legs, error: legsError } = await client
-    .from('fo_travel_legs')
-    .select('id,attendance_id,travel_mode,payable_km_allowed,started_at,ended_at,start_lat,start_lng,end_lat,end_lng,calculated_km,payable_km,rate_per_km,payable_amount,fare_amount,status')
-    .eq('attendance_id', attendanceId);
-  if (legsError) throw legsError;
-  const canonicalSnapshots = canonicalizePersistedTravelLegSnapshots(legs || []);
-  if (canonicalSnapshots.invalid.length || canonicalSnapshots.overlaps.length) {
-    const error = new Error('Travel-leg boundaries require manual review before attendance totals can be synchronized.');
-    error.statusCode = 409;
-    error.code = 'travel_leg_boundaries_ambiguous';
-    throw error;
-  }
-  if (canonicalSnapshots.active.some((leg) => travelModeAllowsPayableKm(leg).payableKmAllowed)) {
-    const error = new Error('A private-vehicle travel leg is still open.');
-    error.statusCode = 409;
-    error.code = 'travel_leg_closure_pending';
-    throw error;
-  }
-  const legKm = Number(canonicalSnapshots.completed.reduce((sum, leg) => (
-    String(leg.status || '').toLowerCase() === 'completed'
-      ? sum + Number(leg.payable_km || 0)
-      : sum
-  ), 0).toFixed(2));
-  const legAmount = Number(canonicalSnapshots.completed.reduce((sum, leg) => (
-    String(leg.status || '').toLowerCase() === 'completed'
-      ? sum + Number(leg.payable_km || 0) * ratePerKmForTravelMode(leg.travel_mode, leg.rate_per_km)
-      : sum
-  ), 0).toFixed(2));
-  const approvedMissing = await loadApprovedMissingKmSummary(client, attendanceId);
-  const totalApprovedKm = Number((legKm + approvedMissing.approvedKm).toFixed(2));
-  const petrolAmount = Number((legAmount + approvedMissing.approvedAmount).toFixed(2));
-  const metadata = {
-    ...safeAttendanceMetadata(attendance),
-    canonical_travel_leg_payable_km: legKm,
-    approved_missing_km_total: approvedMissing.approvedKm,
-    approved_missing_km_amount_total: approvedMissing.approvedAmount,
-    approved_missing_km_review_count: approvedMissing.count,
-    total_approved_km_formula: 'canonical_travel_leg_payable_km_plus_approved_missing_km',
-    missing_km_totals_synced_at: new Date().toISOString(),
-  };
-  const update = {
-    total_route_km: legKm,
-    eligible_km: totalApprovedKm,
-    total_approved_km: totalApprovedKm,
-    petrol_amount: petrolAmount,
-    route_sync_status: approvedMissing.approvedKm > 0
-      ? 'canonical_with_approved_missing_km'
-      : attendance.route_sync_status || 'canonical_end_day_recalculation',
-    metadata,
-    updated_at: new Date().toISOString(),
-  };
-  const { error } = await client.from('fo_attendance').update(update).eq('id', attendanceId);
-  if (error) throw error;
+  const result = await recalculateFoKm(client, {
+    attendance_id: attendanceId,
+    source_entry_point: 'missing_km_approval',
+  }, {
+    persist: true,
+    refreshMissingKmReviews: false,
+    sourceEntryPoint: 'missing_km_approval',
+    calculationReason: 'approved_missing_km_canonical_aggregation',
+  });
   return {
     attendance_id: attendanceId,
-    canonical_travel_leg_payable_km: legKm,
-    approved_missing_km: approvedMissing.approvedKm,
-    total_approved_km: totalApprovedKm,
-    petrol_amount: petrolAmount,
-    approved_missing_review_count: approvedMissing.count,
+    canonical_travel_leg_payable_km: result.total_route_km,
+    approved_missing_km: result.approved_missing_km,
+    total_approved_km: result.total_approved_km,
+    petrol_amount: result.petrol_amount,
+    approved_missing_review_count: result.missing_km_reviews?.length || 0,
+    calculation_run_id: result.calculation_run_id,
   };
 }
 
@@ -4813,7 +4957,7 @@ export async function recalculateFoKmBatch(serviceRoleClient, payload = {}, opti
         final_leg_valid_points: finalLeg?.valid_points || 0,
         final_leg_review_flags: finalLeg?.review_flags || [],
         counters: {
-          gps_recalculated: result.travel_legs?.some((leg) => ['GPS_BASED', 'FULL_DAY_GPS_NO_SITE'].includes(leg.source)) ? 1 : 0,
+          gps_recalculated: result.travel_legs?.some((leg) => ['GPS_BASED', 'GPS_ROUTE_SUPPORTED', 'FULL_DAY_GPS_NO_SITE'].includes(leg.source)) ? 1 : 0,
           google_fallback_used: Number(result.google_fallback_km || 0) > 0 ? 1 : 0,
           haversine_fallback_used: Number(result.haversine_fallback_km || 0) > 0 ? 1 : 0,
           auto_end_last_gps_used: result.effective_end_source === 'last_mobile_gps_before_auto_end' ? 1 : 0,

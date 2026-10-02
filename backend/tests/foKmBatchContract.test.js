@@ -24,7 +24,7 @@ test('batch applies profile state/business scope and attendance status', async (
   assert.match(batch, /query = query\.ilike\('status', status\)/);
 });
 
-test('main recalculation requests non-persisting leg calculation and owns the attendance write', async () => {
+test('main recalculation keeps leg calculation pure and delegates the only financial write to KM V2 RPC', async () => {
   const source = await readFile(servicePath, 'utf8');
   const main = source.slice(
     source.indexOf('export async function recalculateFoKm('),
@@ -33,7 +33,8 @@ test('main recalculation requests non-persisting leg calculation and owns the at
   assert.match(main, /persist: false/);
   assert.match(main, /auditDelayedCheckout: false/);
   assert.match(main, /eligibility_status: reviewFlags\.length \? \[\.\.\.new Set\(reviewFlags\)\]\.join\(','\) : 'Approved'/);
-  assert.equal((main.match(/\.from\('fo_attendance'\)\s*\.update\(/g) || []).length, 1);
+  assert.match(main, /persistCanonicalKmV2\(client/);
+  assert.equal((main.match(/\.from\('fo_attendance'\)\s*\.update\(/g) || []).length, 0);
 });
 
 test('historical recalculation cannot update current live status', async () => {

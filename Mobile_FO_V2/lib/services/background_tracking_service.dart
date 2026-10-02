@@ -10,6 +10,7 @@ import 'package:geolocator/geolocator.dart';
 import '../models/fo_models.dart';
 import '../tracking/route_km_calculator.dart';
 import '../tracking/phase1_tracking_policy.dart';
+import '../tracking/provider_timestamp_policy.dart';
 import '../tracking/tracking_flags.dart';
 import '../tracking/tracking_health_metrics.dart';
 import '../utils/date_utils.dart';
@@ -752,6 +753,19 @@ void _onStart(ServiceInstance service) async {
         battery = null;
       }
 
+      final timestampDecision = ProviderTimestampPolicy.classify(
+        providerTimestamp: position.timestamp,
+        receivedAt: DateTime.now(),
+      );
+      if (!timestampDecision.accepted) {
+        await _checkpoint(
+          employeeCode: user.employeeCode,
+          action: 'BACKGROUND_LOCATION_TIMESTAMP_REJECTED',
+          detail: 'quality=${timestampDecision.quality}',
+        );
+        return;
+      }
+
       final log = LocationLog(
         id: newLocalId('gps'),
         employeeCode: user.employeeCode,
@@ -761,7 +775,9 @@ void _onStart(ServiceInstance service) async {
         accuracy: position.accuracy,
         speed: max(0, position.speed),
         battery: battery,
-        capturedAt: DateTime.now(),
+        capturedAt: timestampDecision.capturedAt,
+        receivedAt: timestampDecision.receivedAt,
+        timestampQuality: timestampDecision.quality,
       );
 
       List<LocationLog> existingLogs;

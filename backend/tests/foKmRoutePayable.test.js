@@ -665,7 +665,7 @@ test('travel-leg recalculation preserves persisted bike and car leg snapshots', 
   );
 });
 
-test('canonical_recalculation_persists_leg_payable_amount', async () => {
+test('direct leg persistence is retired in favor of atomic canonical persistence', async () => {
   const rows = gpsRows();
   const row = attendance({
     travel_mode: 'car',
@@ -695,25 +695,102 @@ test('canonical_recalculation_persists_leg_payable_amount', async () => {
   }];
   const client = clientWith(rows, { attendanceRow: row, travelLegs });
 
-  const result = await recalculateAttendanceTravelLegs(client, row.id, {
-    persist: false,
-    persistLegResults: true,
-    auditDelayedCheckout: false,
-    maxGoogleDirectionsCalls: 0,
-  });
-
-  assert.equal(travelLegs[0].travel_mode, 'car');
-  assert.equal(travelLegs[0].started_at, originalStartedAt);
-  assert.equal(travelLegs[0].ended_at, originalEndedAt);
-  assert.equal(travelLegs[0].rate_per_km, 8);
-  assert.equal(travelLegs[0].payable_amount, result.travel_legs[0].payable_amount);
-  assert.equal(
-    travelLegs[0].payable_amount,
-    Number((travelLegs[0].payable_km * 8).toFixed(2)),
+  await assert.rejects(
+    recalculateAttendanceTravelLegs(client, row.id, {
+      persist: false,
+      persistLegResults: true,
+      auditDelayedCheckout: false,
+      maxGoogleDirectionsCalls: 0,
+    }),
+    (error) => error.code === 'km_v2_canonical_persistence_required',
   );
+  assert.equal(travelLegs[0].payable_amount, undefined);
 });
 
-test('recalculation_twice_updates_same_leg_rows_idempotently', async () => {
+function undercoveredGpsRows() {
+  const rows = [];
+  const start = new Date('2026-07-16T04:31:00.000Z').getTime();
+  for (let index = 0; index < 11; index += 1) {
+    rows.push({
+      id: `partial-${index}`,
+      attendance_id: 'attendance-1',
+      fo_user_id: 'profile-1',
+      latitude: 13 + index * 0.0045,
+      longitude: 80,
+      accuracy: 8,
+      is_mocked: false,
+      source: 'mobile',
+      captured_at: new Date(start + index * 60_000).toISOString(),
+      metadata: {},
+    });
+  }
+  rows.push({
+    ...rows.at(-1),
+    id: 'partial-end',
+    latitude: 13.38,
+    captured_at: '2026-07-16T06:00:00.000Z',
+  });
+  return rows;
+}
+
+test('partial GPS is recovered only when exact-window route evidence is trusted', async () => {
+  const rows = undercoveredGpsRows();
+  const row = attendance({
+    login_time: '2026-07-16T04:30:00.000Z',
+    logout_time: '2026-07-16T06:00:00.000Z',
+    start_latitude: 13,
+    start_longitude: 80,
+    end_latitude: 13.38,
+    end_longitude: 80,
+  });
+  const result = await calculateTravelLegKm({
+    client: clientWith(rows, { attendanceRow: row }),
+    attendance: row,
+    fromTime: row.login_time,
+    toTime: row.logout_time,
+    fromLat: row.start_latitude,
+    fromLng: row.start_longitude,
+    toLat: row.end_latitude,
+    toLng: row.end_longitude,
+    routeEvidence: { trusted: true, exactWindow: true, distanceKm: 59, source: 'site_visit_exact_window_route' },
+    options: { maxGoogleDirectionsCalls: 0 },
+  });
+  assert.equal(result.legSource, 'GPS_ROUTE_SUPPORTED');
+  assert.equal(result.decision, 'ACCEPTED_WITH_WARNING');
+  assert.ok(result.legKm > result.acceptedGpsKm);
+  assert.ok(result.reviewFlags.includes('GPS_UNDERCOVERED'));
+  assert.ok(result.reviewFlags.includes('ROUTE_SUPPORTED'));
+  assert.equal(result.routeEvidenceSource, 'site_visit_exact_window_route');
+});
+
+test('partial GPS with mismatched site-route evidence cannot become payable', async () => {
+  const rows = undercoveredGpsRows();
+  const row = attendance({
+    login_time: '2026-07-16T04:30:00.000Z',
+    logout_time: '2026-07-16T06:00:00.000Z',
+    start_latitude: 13,
+    start_longitude: 80,
+    end_latitude: 13.38,
+    end_longitude: 80,
+  });
+  const result = await calculateTravelLegKm({
+    client: clientWith(rows, { attendanceRow: row }),
+    attendance: row,
+    fromTime: row.login_time,
+    toTime: row.logout_time,
+    fromLat: row.start_latitude,
+    fromLng: row.start_longitude,
+    toLat: row.end_latitude,
+    toLng: row.end_longitude,
+    routeEvidence: { trusted: false, exactWindow: false, distanceKm: 59, source: 'site_visit_exact_window_route' },
+    options: { maxGoogleDirectionsCalls: 0 },
+  });
+  assert.equal(result.decision, 'MANUAL_REVIEW');
+  assert.equal(result.payable, false);
+  assert.equal(result.gpsCoverageClassification, 'MANUAL_REVIEW');
+});
+
+test('repeated direct leg persistence remains blocked without mutating rows', async () => {
   const rows = gpsRows();
   const row = attendance({
     travel_mode: 'car',
@@ -747,13 +824,15 @@ test('recalculation_twice_updates_same_leg_rows_idempotently', async () => {
     maxGoogleDirectionsCalls: 0,
   };
 
-  await recalculateAttendanceTravelLegs(client, row.id, options);
-  const first = { ...travelLegs[0] };
-  await recalculateAttendanceTravelLegs(client, row.id, options);
+  const first = structuredClone(travelLegs);
+  await assert.rejects(recalculateAttendanceTravelLegs(client, row.id, options), {
+    code: 'km_v2_canonical_persistence_required',
+  });
+  await assert.rejects(recalculateAttendanceTravelLegs(client, row.id, options), {
+    code: 'km_v2_canonical_persistence_required',
+  });
 
-  assert.equal(travelLegs.length, 1);
-  assert.equal(travelLegs[0].payable_km, first.payable_km);
-  assert.equal(travelLegs[0].payable_amount, first.payable_amount);
+  assert.deepEqual(travelLegs, first);
 });
 
 test('mixed-mode reimbursement is calculated per leg and public modes never inherit a private rate', () => {

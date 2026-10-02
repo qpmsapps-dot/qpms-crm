@@ -15,6 +15,7 @@ import '../utils/date_utils.dart';
 import '../utils/local_id.dart';
 import 'route_km_calculator.dart';
 import 'phase1_tracking_policy.dart';
+import 'provider_timestamp_policy.dart';
 import 'tracking_flags.dart';
 import 'tracking_health_metrics.dart';
 
@@ -661,6 +662,19 @@ class TrackingService {
           timeLimit: Duration(seconds: 15),
         ),
       );
+      final timestampDecision = ProviderTimestampPolicy.classify(
+        providerTimestamp: position.timestamp,
+        receivedAt: DateTime.now(),
+      );
+      if (!timestampDecision.accepted) {
+        await CrashLogService.record(
+          employeeCode: user.employeeCode,
+          screen: 'tracking',
+          action: 'FOREGROUND_LOCATION_TIMESTAMP_REJECTED',
+          error: 'quality=${timestampDecision.quality}',
+        );
+        return;
+      }
       int? battery;
       try {
         battery = await Battery().batteryLevel;
@@ -676,7 +690,9 @@ class TrackingService {
         accuracy: position.accuracy,
         speed: max(0, position.speed),
         battery: battery,
-        capturedAt: DateTime.now(),
+        capturedAt: timestampDecision.capturedAt,
+        receivedAt: timestampDecision.receivedAt,
+        timestampQuality: timestampDecision.quality,
       );
       try {
         await LocalStore.addLocationLog(log, eventType: 'tracking');

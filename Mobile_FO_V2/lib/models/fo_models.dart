@@ -400,12 +400,14 @@ class LocationLog {
     required this.latitude,
     required this.longitude,
     required this.capturedAt,
+    DateTime? receivedAt,
+    this.timestampQuality = 'provider_timestamp',
     this.remoteId,
     this.accuracy,
     this.speed,
     this.battery,
     this.synced = false,
-  });
+  }) : receivedAt = receivedAt ?? capturedAt;
 
   final String id;
   String? remoteId;
@@ -417,6 +419,8 @@ class LocationLog {
   final double? speed;
   final int? battery;
   final DateTime capturedAt;
+  final DateTime receivedAt;
+  final String timestampQuality;
   bool synced;
 
   Map<String, dynamic> toJson() => {
@@ -432,6 +436,8 @@ class LocationLog {
     'speed': speed,
     'battery': battery,
     'captured_at': capturedAt.toIso8601String(),
+    'received_at': receivedAt.toIso8601String(),
+    'timestamp_quality': timestampQuality,
     'synced': synced,
   };
 
@@ -445,7 +451,19 @@ class LocationLog {
     accuracy: _double(json['accuracy']),
     speed: _double(json['speed']),
     battery: _int(json['battery']),
-    capturedAt: _date(json['captured_at']) ?? DateTime.now(),
+    capturedAt:
+        _date(json['captured_at']) ??
+        _date(json['received_at'] ?? json['logged_at']) ??
+        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+    receivedAt:
+        _date(json['received_at'] ?? json['logged_at']) ??
+        _date(json['captured_at']) ??
+        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+    timestampQuality: _text(json['timestamp_quality']).isNotEmpty
+        ? _text(json['timestamp_quality'])
+        : json['captured_at'] == null
+            ? 'missing_provider_timestamp_compat'
+            : 'legacy_provider_timestamp_unknown',
     synced: json['synced'] == true,
   );
 }
