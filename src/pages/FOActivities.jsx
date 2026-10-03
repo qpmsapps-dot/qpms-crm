@@ -3492,7 +3492,10 @@ function exportOfficerMatchesFilters(officer, filters = {}) {
     !filters.business ||
     filters.business === "All Business" ||
     officer.business === filters.business;
-  return stateMatches && businessMatches && officerSearchMatches(officer, filters.search || "");
+  const roles = Array.isArray(filters.roles) ? filters.roles : [];
+  const roleMatches =
+    roles.length === 0 || roles.includes(String(officer?.profile?.role || officer.role || "").trim());
+  return stateMatches && businessMatches && roleMatches && officerSearchMatches(officer, filters.search || "");
 }
 
 function visitsForEmployeeDate(siteVisitRows = [], employeeKey, dateInput) {
@@ -3787,6 +3790,7 @@ async function exportHistoricalOperationsDashboardExcel({
   const state = filters?.state || "All States";
   const business = filters?.business || "All Business";
   const status = filters?.status || "All Status";
+  const roles = Array.isArray(filters?.roles) ? filters.roles : [];
   const searchText = filters?.search || "";
 
   if (import.meta.env.DEV) {
@@ -3795,6 +3799,7 @@ async function exportHistoricalOperationsDashboardExcel({
       toDate,
       state,
       business,
+      roles,
       status,
       searchText,
     });
@@ -3826,7 +3831,7 @@ async function exportHistoricalOperationsDashboardExcel({
         !isHiddenEmployeeRecord(profile),
     )
     .map(profileToExportOfficer)
-    .filter((officer) => exportOfficerMatchesFilters(officer, { state, business, search: searchText }));
+    .filter((officer) => exportOfficerMatchesFilters(officer, { state, business, roles, search: searchText }));
   const officerKeys = new Set(
     exportOfficers
       .flatMap((officer) => [
@@ -5532,6 +5537,63 @@ function missingCheckoutKmLabel(visit) {
   }
   if (evidence.hasDetectedKm) return `${evidence.detectedKm.toFixed(2)} km detected — Requires Review`;
   return "--";
+}
+
+function officerRoleValue(officer = {}) {
+  return String(officer?.profile?.role || officer.role || "").trim();
+}
+
+function RoleMultiSelect({ options, value, onChange }) {
+  const selected = new Set(value);
+  const label = value.length === 0
+    ? "All Roles"
+    : value.length === 1
+      ? value[0]
+      : `${value.length} Roles`;
+  const toggle = (role) => {
+    const next = new Set(value);
+    if (next.has(role)) next.delete(role);
+    else next.add(role);
+    onChange(options.filter((option) => next.has(option)));
+  };
+
+  return (
+    <div className="relative">
+      <span className="text-[11px] font-bold uppercase text-slate-500">Role</span>
+      <details className="group relative mt-1">
+        <summary className="focus-ring flex h-10 cursor-pointer list-none items-center justify-between rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition hover:border-qpms-300 [&::-webkit-details-marker]:hidden">
+          <span className="truncate">{label}</span>
+          <span className="ml-2 text-[10px] text-slate-400 group-open:rotate-180">▼</span>
+        </summary>
+        <div className="absolute left-0 z-[1200] mt-1 w-64 rounded-xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+          <div className="mb-2 flex items-center justify-between border-b border-slate-100 pb-2 dark:border-slate-800">
+            <button type="button" onClick={() => onChange([])} className="text-xs font-bold text-slate-500 hover:text-slate-800">
+              Clear
+            </button>
+            <button type="button" onClick={() => onChange([...options])} className="text-xs font-bold text-qpms-700 hover:text-qpms-900">
+              Select All
+            </button>
+          </div>
+          <div className="max-h-56 space-y-1 overflow-y-auto">
+            {options.map((role) => (
+              <label key={role} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800">
+                <input
+                  type="checkbox"
+                  checked={selected.has(role)}
+                  onChange={() => toggle(role)}
+                  className="h-4 w-4 accent-qpms-600"
+                />
+                <span className="truncate">{role}</span>
+              </label>
+            ))}
+            {options.length === 0 ? (
+              <p className="px-2 py-1.5 text-xs text-slate-500">No roles available</p>
+            ) : null}
+          </div>
+        </div>
+      </details>
+    </div>
+  );
 }
 
 function missingCheckoutEvidenceLabel(visit) {
@@ -11542,9 +11604,11 @@ export default function FOActivities() {
   const [stateFilter, setStateFilter] = useState("All States");
   const [statusFilter, setStatusFilter] = useState("All Status");
   const [businessFilter, setBusinessFilter] = useState("All Business");
+  const [roleFilter, setRoleFilter] = useState([]);
   const [draftStateFilter, setDraftStateFilter] = useState("All States");
   const [draftStatusFilter, setDraftStatusFilter] = useState("All Status");
   const [draftBusinessFilter, setDraftBusinessFilter] = useState("All Business");
+  const [draftRoleFilter, setDraftRoleFilter] = useState([]);
   const [search, setSearch] = useState("");
   const [expandedMap, setExpandedMap] = useState(false);
   const [selectedOfficerId, setSelectedOfficerId] = useState(null);
@@ -11638,6 +11702,7 @@ export default function FOActivities() {
             state: stateFilter,
             business: businessFilter,
             status: statusFilter,
+            roles: roleFilter,
           });
           const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/operations/dashboard?${query}`, { signal });
           const payload = await response.json();
@@ -11677,7 +11742,7 @@ export default function FOActivities() {
     return () => {
       requestCoordinator.cancel('operations-dashboard');
     };
-  }, [businessFilter, dashboardRequestCoordinator, hasActiveSession, refreshToken, selectedRange.fromDate, selectedRange.toDate, stateFilter, statusFilter, user]);
+  }, [businessFilter, dashboardRequestCoordinator, hasActiveSession, refreshToken, roleFilter, selectedRange.fromDate, selectedRange.toDate, stateFilter, statusFilter, user]);
 
   useEffect(() => {
     if (!hasActiveSession || hasDemoBackendReadSession) return undefined;
@@ -11803,6 +11868,7 @@ export default function FOActivities() {
           state: stateFilter,
           business: businessFilter,
           status: statusFilter,
+          roles: roleFilter,
         });
         const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/operations/summary?${query}`, {
           signal: controller.signal,
@@ -11833,7 +11899,7 @@ export default function FOActivities() {
 
     if (isSupabaseConfigured && supabase) loadFilteredSummary();
     return () => controller.abort();
-  }, [authError, businessFilter, hasActiveSession, selectedRange.fromDate, selectedRange.toDate, stateFilter, statusFilter, summaryRefreshToken]);
+  }, [authError, businessFilter, hasActiveSession, roleFilter, selectedRange.fromDate, selectedRange.toDate, stateFilter, statusFilter, summaryRefreshToken]);
   const operationalOfficerKeys = useMemo(() => {
     const keys = new Set();
     officers.forEach((officer) => {
@@ -11878,6 +11944,8 @@ export default function FOActivities() {
         const businessMatches =
           businessFilter === "All Business" ||
           businessLabel === businessFilter;
+        const roleMatches =
+          roleFilter.length === 0 || roleFilter.includes(officerRoleValue(officer));
         const searchText = search.trim().toLowerCase();
         const searchableFields = [
           officer.name,
@@ -11904,9 +11972,9 @@ export default function FOActivities() {
             .join(" ")
             .toLowerCase()
             .includes(searchText);
-        return stateMatches && businessMatches && searchMatches;
+        return stateMatches && businessMatches && roleMatches && searchMatches;
       }),
-    [businessFilter, officers, search, stateFilter],
+    [businessFilter, officers, roleFilter, search, stateFilter],
   );
 
   const businessOptions = useMemo(
@@ -11918,6 +11986,12 @@ export default function FOActivities() {
             .filter(Boolean),
         ),
       ).sort((a, b) => a.localeCompare(b)),
+    [officers],
+  );
+
+  const roleOptions = useMemo(
+    () => Array.from(new Set(officers.map(officerRoleValue).filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b)),
     [officers],
   );
 
@@ -11944,6 +12018,7 @@ export default function FOActivities() {
     setCustomToDate(draftToDate);
     setStateFilter(draftStateFilter);
     setBusinessFilter(draftBusinessFilter);
+    setRoleFilter([...draftRoleFilter]);
     setStatusFilter(draftStatusFilter);
     setSummaryRefreshToken((value) => value + 1);
   }
@@ -11954,11 +12029,13 @@ export default function FOActivities() {
     setDraftToDate(today);
     setDraftStateFilter("All States");
     setDraftBusinessFilter("All Business");
+    setDraftRoleFilter([]);
     setDraftStatusFilter("All Status");
     setCustomFromDate(today);
     setCustomToDate(today);
     setStateFilter("All States");
     setBusinessFilter("All Business");
+    setRoleFilter([]);
     setStatusFilter("All Status");
     setSummaryRefreshToken((value) => value + 1);
   }
@@ -11975,6 +12052,7 @@ export default function FOActivities() {
           state: stateFilter,
           business: businessFilter,
           status: statusFilter,
+          roles: roleFilter,
           search,
         },
       });
@@ -12031,6 +12109,7 @@ export default function FOActivities() {
         state: stateFilter,
         business: businessFilter,
         status: statusFilter,
+        roles: roleFilter,
       });
       const response = await authenticatedFetch(
         `${API_BASE_URL}/api/fo/reports/consolidated-travel-claims/pdf?${query}`,
@@ -13386,7 +13465,7 @@ export default function FOActivities() {
       ) : null}
 
       <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-[0_10px_28px_rgba(15,23,42,0.05)] dark:border-slate-800 dark:bg-slate-900">
-        <div className="grid items-end gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto_auto_auto]">
+        <div className="grid items-end gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[repeat(6,minmax(0,1fr))_auto_auto_auto_auto]">
           <label>
             <span className="text-[11px] font-bold uppercase text-slate-500">
               From Date
@@ -13443,6 +13522,11 @@ export default function FOActivities() {
               ))}
             </select>
           </label>
+          <RoleMultiSelect
+            options={roleOptions}
+            value={draftRoleFilter}
+            onChange={setDraftRoleFilter}
+          />
           <label>
             <span className="text-[11px] font-bold uppercase text-slate-500">
               Status

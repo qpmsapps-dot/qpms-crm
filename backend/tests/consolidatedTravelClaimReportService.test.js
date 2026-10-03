@@ -277,9 +277,14 @@ test('state business and status filters are applied', () => {
 });
 
 test('state and business restrictions are enforced by actor scope', () => {
+  const scopedProfiles = profiles.map((profile) =>
+    profile.state === 'KL' && profile.business === 'HDFC'
+      ? { ...profile, business: 'Standalone' }
+      : profile);
   const report = dataset({
-    actor: branchHead,
-    filters: { date_from: '2026-08-01', date_to: '2026-08-31', state: null, business: null, status: null },
+    actor: { ...branchHead, business: 'Standalone' },
+    profiles: scopedProfiles,
+    filters: { date_from: '2026-08-01', date_to: '2026-08-31', state: null, business: null, status: null, roles: ['FO'] },
   });
   assert.equal(report.rows.some((row) => row.employee_code === 'TN1'), false);
   assert.equal(report.rows.some((row) => row.employee_code === 'JIO1'), false);
@@ -658,6 +663,36 @@ test('empty PDF endpoint result rejects with structured no-data error', async ()
   );
 });
 
+test('PDF export filters by profile role column and ignores designation', async () => {
+  const roleProfiles = [
+    { id: 'p-role-fo', employee_code: 'ROLE-FO', full_name: 'Actual FO', role: 'FO', designation: 'Operations Manager', state: 'KL', business: 'HDFC', status: 'active', is_active: true },
+    { id: 'p-role-ops', employee_code: 'ROLE-OPS', full_name: 'Actual Operations Manager', role: 'Operations Manager', designation: 'Field Officer', state: 'KL', business: 'HDFC', status: 'active', is_active: true },
+  ];
+  const client = mockClient({
+    profiles: roleProfiles,
+    employee_hierarchy: [],
+    fo_live_status: [],
+    fo_attendance: [
+      attendance('a-role-fo', 'ROLE-FO', '2026-08-01', 10, 40),
+      attendance('a-role-ops', 'ROLE-OPS', '2026-08-01', 20, 80),
+    ],
+    fo_travel_expense_claims: [],
+    fo_monthly_travel_settlements: [],
+  });
+  const result = await buildConsolidatedTravelClaimPdf(client, admin, {
+    date_from: '2026-08-01',
+    date_to: '2026-08-31',
+    roles: ['FO'],
+  }, '2026-08-31');
+  const { pages } = await extractPdfPages(result.buffer);
+  const text = pages.join('\n');
+
+  assert.deepEqual(result.dataset.rows.map((row) => row.employee_code), ['ROLE-FO']);
+  assert.match(text, /ROLE-FO/);
+  assert.doesNotMatch(text, /ROLE-OPS/);
+  assert.match(text, /Roles: FO/);
+});
+
 test('unauthorized actor is rejected', async () => {
   await assert.rejects(
     buildConsolidatedTravelClaimReport(mockClient({}), { role: 'Finance', is_active: true }, {
@@ -676,6 +711,9 @@ test('PDF route requires Supabase authentication and Excel export remains in the
   assert.match(serverSource, /app\.get\('\/api\/fo\/reports\/consolidated-travel-claims\/pdf', requireSupabaseJwt, requireFoOperationsCommandCenter,/);
   assert.match(pageSource, /Export Excel/);
   assert.match(pageSource, /Export Travel Claim PDF/);
+  assert.match(pageSource, /roles: roleFilter/);
+  assert.match(pageSource, /officer\?\.profile\?\.role \|\| officer\.role/);
+  assert.doesNotMatch(pageSource, /officerRoleValue[\s\S]{0,200}designation/);
 });
 
 test('attendance query uses only real fo_attendance columns', async () => {

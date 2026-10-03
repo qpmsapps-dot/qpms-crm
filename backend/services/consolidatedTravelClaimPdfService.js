@@ -219,12 +219,13 @@ function drawReportHeader(doc, dataset, fontName, y = doc.page.margins.top) {
   const headerLines = [
     `Report Period: ${dateLabel(filters.date_from)} to ${dateLabel(filters.date_to)}`,
     `State: ${filters.state || 'All States'}    Business: ${filters.business || 'All Business'}    Status: ${filters.status || 'All Status'}`,
+    `Roles: ${Array.isArray(filters.roles) && filters.roles.length ? filters.roles.join(', ') : 'All Roles'}`,
   ];
   doc.text(headerLines.join('\n'), x, y + 42, {
     width: doc.page.width - doc.page.margins.left - doc.page.margins.right,
     lineGap: 1,
   });
-  return y + 72;
+  return y + 82;
 }
 
 function drawStateTitle(doc, section, fontName, y, continued = false) {

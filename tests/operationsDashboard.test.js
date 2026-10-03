@@ -11,11 +11,19 @@ import {
 
 test('filtered summary query carries every applied filter without UTC conversion', () => {
   const query = operationsSummaryQuery({
-    dateFrom: '2026-07-01', dateTo: '2026-07-14', state: 'KL', business: 'HDFC', status: 'Active',
+    dateFrom: '2026-07-01', dateTo: '2026-07-14', state: 'KL', business: 'HDFC', status: 'Active', roles: ['FO', 'Operations Manager'],
   });
   assert.match(query, /date_from=2026-07-01/);
   assert.match(query, /date_to=2026-07-14/);
   assert.match(query, /state=KL/);
+  assert.deepEqual(new URLSearchParams(query).getAll('roles'), ['FO', 'Operations Manager']);
+});
+
+test('All Roles omits role parameters and preserves the existing request contract', () => {
+  const query = operationsSummaryQuery({
+    dateFrom: '2026-07-01', dateTo: '2026-07-14', state: 'All States', business: 'All Business', status: 'All Status', roles: [],
+  });
+  assert.deepEqual(new URLSearchParams(query).getAll('roles'), []);
 });
 
 test('rapid filter responses accept only the latest request', () => {

@@ -14,6 +14,10 @@ export function operationsSummaryQuery(filters) {
     business: filters.business,
     status: filters.status,
   });
+  for (const role of filters.roles || []) {
+    const value = String(role || '').trim();
+    if (value) params.append('roles', value);
+  }
   return params.toString();
 }
 

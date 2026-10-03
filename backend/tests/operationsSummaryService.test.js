@@ -107,6 +107,36 @@ test('state and business filters combine', () => {
   assert.equal(summary({ state: 'KL', business: 'HDFC' }).payable_km, 30);
 });
 
+test('All Roles preserves existing totals', () => {
+  assert.deepEqual(summary({ roles: [] }), summary());
+});
+
+test('single and multiple role filters use role column OR semantics', () => {
+  assert.equal(summary({ roles: ['FO'] }).payable_km, 130);
+  assert.equal(summary({ roles: ['KAM'] }).payable_km, 5);
+  assert.equal(summary({ roles: ['FO', 'KAM'] }).payable_km, 135);
+});
+
+test('role filter never uses designation and unknown roles return no rows', () => {
+  const result = summarizeOperationsRows({
+    actor,
+    profiles: [
+      { employee_code: 'ROLE1', role: 'Operations Manager', designation: 'Field Officer', status: 'active', is_active: true },
+      { employee_code: 'ROLE2', role: 'FO', designation: 'Operations Manager', status: 'active', is_active: true },
+    ],
+    hierarchyRows: [],
+    liveRows: [],
+    attendances: [
+      { employee_code: 'ROLE1', attendance_date: '2026-07-10', total_approved_km: 10, petrol_amount: 40 },
+      { employee_code: 'ROLE2', attendance_date: '2026-07-10', total_approved_km: 20, petrol_amount: 80 },
+    ],
+    filters: { date_from: '2026-07-01', date_to: '2026-07-14', state: null, business: null, status: null, roles: ['FO'] },
+  });
+  assert.equal(result.payable_km, 20);
+  assert.equal(result.matching_employee_count, 1);
+  assert.equal(summary({ roles: ['Not A Real Role'] }).matching_employee_count, 0);
+});
+
 test('status filters matching attendance rows', () => {
   assert.equal(summary({ state: 'KL', status: 'Active' }).payable_km, 20);
 });

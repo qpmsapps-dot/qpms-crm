@@ -232,6 +232,21 @@ function allValue(value) {
   return !normalized || normalized.startsWith('all ') || normalized === 'all';
 }
 
+function selectedRoles(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return [...new Set(values
+    .flatMap((item) => String(item || '').split(','))
+    .map(text)
+    .filter((item) => item && !allValue(item))
+    .slice(0, 50))];
+}
+
+function roleMatchesFilter(profile = {}, roles = []) {
+  if (!roles.length) return true;
+  const role = comparable(profile.role);
+  return role ? roles.some((selectedRole) => comparable(selectedRole) === role) : false;
+}
+
 export function normalizeOperationsSummaryFilters(query = {}, today) {
   const dateFrom = validDateInput(query.date_from || query.from_date, today);
   const dateTo = validDateInput(query.date_to || query.to_date, today);
@@ -251,6 +266,7 @@ export function normalizeOperationsSummaryFilters(query = {}, today) {
     state: allValue(query.state) ? null : text(query.state),
     business: allValue(query.business) ? null : text(query.business),
     status: allValue(query.status) ? null : text(query.status),
+    roles: selectedRoles(query.roles ?? query.role),
   };
 }
 
@@ -341,6 +357,7 @@ export function summarizeOperationsRows({
     const profile = profilesByCode.get(code) || {};
     if (filters.state && comparable(profileValue(profile, 'state')) !== comparable(filters.state)) continue;
     if (filters.business && businessGroup(profileValue(profile, 'business')) !== businessGroup(filters.business)) continue;
+    if (!roleMatchesFilter(profile, filters.roles)) continue;
     if (!statusMatches(attendance, filters.status, liveByEmployee)) continue;
     const rowPayableKm = storedAttendancePayableKm(attendance);
     payableKm += rowPayableKm;
@@ -359,6 +376,7 @@ export function summarizeOperationsRows({
       state: filters.state || 'All States',
       business: filters.business || 'All Business',
       status: filters.status || 'All Status',
+      roles: filters.roles || [],
       timezone: 'Asia/Kolkata',
     },
   };
@@ -450,6 +468,7 @@ export function buildConsolidatedTravelClaimReportDataset({
     const profile = profilesByCode.get(code) || {};
     if (filters.state && !stateMatchesFilter(profile, filters.state)) continue;
     if (filters.business && businessGroup(profileValue(profile, 'business')) !== businessGroup(filters.business)) continue;
+    if (!roleMatchesFilter(profile, filters.roles)) continue;
     if (!statusMatches(attendance, filters.status, liveByEmployee)) continue;
 
     const payableKm = storedAttendancePayableKm(attendance);
@@ -576,6 +595,7 @@ export function buildConsolidatedTravelClaimReportDataset({
       state: filters.state || 'All States',
       business: filters.business || 'All Business',
       status: filters.status || 'All Status',
+      roles: filters.roles || [],
       timezone: 'Asia/Kolkata',
     },
     claim_statuses_included: TRAVEL_CLAIM_REPORT_INCLUDED_STATUSES,
