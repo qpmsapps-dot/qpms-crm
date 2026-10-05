@@ -10,6 +10,7 @@ import {
 } from './routes/hospitalFeedbackQrRoutes.js';
 import { createClientDeepCleaningRouter } from './routes/clientDeepCleaningRoutes.js';
 import { createTrainingRouter } from './routes/trainingRoutes.js';
+import { createMomRouter } from './routes/momRoutes.js';
 import { createHospitalTicketRouter } from './routes/hospitalTicketRoutes.js';
 import { registerPreSalesRoutes } from './routes/preSalesRoutes.js';
 import { registerTenderRoutes } from './routes/tenderRoutes.js';
@@ -440,6 +441,14 @@ app.use(
 app.use(
   '/api/training',
   createTrainingRouter({
+    requireAuth: requireSupabaseJwt,
+    getClient: requireServiceRoleSupabase,
+  }),
+);
+
+app.use(
+  '/api/mom',
+  createMomRouter({
     requireAuth: requireSupabaseJwt,
     getClient: requireServiceRoleSupabase,
   }),
