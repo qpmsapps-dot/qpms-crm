@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import { canAccessRoute, normalizeCanonicalRole } from '../src/utils/authRoles.js';
 import { filterHospitalClientContacts } from '../src/utils/hospitalClientContacts.js';
+import { ticketAcceptancePresentation, ticketEscalationLabel } from '../src/utils/hospitalTicketDashboardPresentation.js';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 const [routes, sidebar, page, api, guard, accessHook, dashboard] = await Promise.all([
@@ -106,6 +107,28 @@ test('QPMS and Client dashboards use live grouped statuses and real drilldowns',
   assert.match(page, /escalated_hospital_dean/);
   assert.match(page, /setTimeout\(\(\) => setDebouncedSearch[\s\S]*350/);
   assert.doesNotMatch(page, /include_images/);
+});
+
+test('QPMS ticket table separates canonical acceptance and escalation from status', () => {
+  const ticketTableStart = page.indexOf('function TicketTable');
+  const ticketTableEnd = page.indexOf('function DashboardView', ticketTableStart);
+  const ticketTable = page.slice(ticketTableStart, ticketTableEnd);
+  assert.match(ticketTable, /'Status'.*'Acceptance', 'Escalation', 'Assignee'.*'Age', 'Updated', 'Action'/s);
+  assert.doesNotMatch(ticketTable, /\['SLA'\]|ticket\.sla|ticket\.overdue/);
+
+  const scenarios = [
+    [{ status_code: 'accepted', acceptance_status: 'accepted', current_escalation_level: 'supervisor', current_escalation_level_no: 1 }, 'Accepted', '—'],
+    [{ status_code: 'escalated_project_head', accepted_by: { id: 'supervisor-1' }, current_escalation_level: 'project_head' }, 'Accepted', 'Project Head'],
+    [{ status_code: 'escalated_project_head', acceptance_status: 'timed_out', current_escalation_level: 'project_head' }, 'Timed Out', 'Project Head'],
+    [{ status_code: 'closed', acceptance_status: 'accepted', current_escalation_level: 'supervisor' }, 'Accepted', '—'],
+    [{ status_code: 'resolved_awaiting_confirmation', acceptance_status: 'accepted', current_escalation_level_no: 4 }, 'Accepted', 'Project Head'],
+  ];
+  for (const [ticket, acceptance, escalation] of scenarios) {
+    assert.equal(ticketAcceptancePresentation(ticket).label, acceptance);
+    assert.equal(ticketEscalationLabel(ticket), escalation);
+  }
+  assert.deepEqual(ticketAcceptancePresentation({ acceptance_status: null }), { label: 'Not Accepted', tone: 'not_accepted' });
+  assert.equal(ticketEscalationLabel({ current_escalation_level_no: 5 }), 'Dean');
 });
 
 test('Client View omits internal panels while QPMS View renders them', () => {

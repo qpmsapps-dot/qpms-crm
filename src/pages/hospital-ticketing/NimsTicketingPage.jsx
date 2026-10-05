@@ -19,6 +19,7 @@ import {
   notifyHospitalTicketAgain,
 } from '../../services/hospitalTicketsApi.js';
 import { filterHospitalClientContacts } from '../../utils/hospitalClientContacts.js';
+import { ticketAcceptancePresentation, ticketEscalationLabel } from '../../utils/hospitalTicketDashboardPresentation.js';
 
 const STATUS_OPTIONS = [
   ['open', 'Open'],
@@ -90,6 +91,22 @@ function StatusPill({ status, clientView = false }) {
       {statusLabel(status, clientView)}
     </span>
   );
+}
+
+function AcceptanceBadge({ ticket }) {
+  const acceptance = ticketAcceptancePresentation(ticket);
+  const tones = {
+    accepted: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+    timed_out: 'bg-amber-50 text-amber-700 ring-amber-200',
+    not_accepted: 'bg-rose-50 text-rose-700 ring-rose-200',
+  };
+  const acceptedBy = ticket.accepted_by?.display_name;
+  return <span className={`inline-flex whitespace-nowrap rounded-full px-2 py-1 text-[11px] font-bold ring-1 ring-inset ${tones[acceptance.tone]}`} title={acceptedBy ? `Accepted by ${acceptedBy}` : undefined}>{acceptance.label}</span>;
+}
+
+function EscalationBadge({ ticket }) {
+  const label = ticketEscalationLabel(ticket);
+  return <span className={`inline-flex whitespace-nowrap rounded-full px-2 py-1 text-[11px] font-bold ring-1 ring-inset ${label === '—' ? 'bg-slate-50 text-slate-500 ring-slate-200' : 'bg-violet-50 text-violet-700 ring-violet-200'}`}>{label}</span>;
 }
 
 function Panel({ title, action, children, className = '' }) {
@@ -285,10 +302,10 @@ function TicketTable({ tickets, view, expanded, onToggle, notifyState = {}, onNo
     <Panel title={clientView ? 'Recent Tickets' : 'Recent / Active Tickets'} action={<button className="inline-flex items-center gap-1 text-xs font-bold text-blue-600" onClick={onToggle}>{expanded ? 'Show recent' : 'View all tickets'}<ExternalLink className="h-3.5 w-3.5" /></button>}>
       {!tickets.length ? <EmptyState text="No NIMS tickets match these filters." /> : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px] text-left text-xs">
+          <table className={`w-full text-left text-xs ${clientView ? 'min-w-[980px]' : 'min-w-[1080px]'}`}>
             <thead>
               <tr className="border-b border-slate-200 text-[10px] uppercase text-slate-400">
-                {['Ticket No', 'Block / Location', 'Category / Issue', ...(clientView ? ['Raised By'] : []), 'Status', ...(clientView ? [] : ['Assignee']), 'Age', ...(clientView ? [] : ['SLA']), 'Updated', 'Action'].map((heading) => <th className="px-2 py-2" key={heading}>{heading}</th>)}
+                {['Ticket No', 'Block / Location', 'Category / Issue', ...(clientView ? ['Raised By'] : []), 'Status', ...(clientView ? [] : ['Acceptance', 'Escalation', 'Assignee']), 'Age', 'Updated', 'Action'].map((heading) => <th className="px-2 py-2" key={heading}>{heading}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -299,9 +316,10 @@ function TicketTable({ tickets, view, expanded, onToggle, notifyState = {}, onNo
                   <td className="max-w-48 px-2 py-3 text-slate-700">{ticket.category?.name || ticket.title || '-'}</td>
                   {clientView ? <td className="max-w-40 truncate px-2 py-3 font-semibold text-slate-600" title={ticket.raised_by?.name || undefined}>{ticket.raised_by?.name || '-'}</td> : null}
                   <td className="px-2 py-3"><StatusPill status={ticket.status_code} clientView={clientView} /></td>
+                  {!clientView ? <td className="px-2 py-3"><AcceptanceBadge ticket={ticket} /></td> : null}
+                  {!clientView ? <td className="px-2 py-3"><EscalationBadge ticket={ticket} /></td> : null}
                   {!clientView ? <td className="px-2 py-3 text-slate-600">{ticket.current_assignee?.display_name || 'Unassigned'}</td> : null}
                   <td className="px-2 py-3 text-slate-600">{ageLabel(ticket.raised_at)}</td>
-                  {!clientView ? <td className="px-2 py-3 font-semibold text-slate-600">{ticket.overdue ? 'Breached' : titleCase(ticket.sla?.state || 'Not applicable')}</td> : null}
                   <td className="px-2 py-3 text-slate-500">{formatDate(ticket.updated_at)}</td>
                   <td className="px-2 py-3">
                     {clientView ? <ExternalLink className="h-4 w-4 text-blue-600" /> : (
