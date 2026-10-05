@@ -123,6 +123,7 @@ import {
   normalizeBusinessDevelopmentCapability,
 } from './shared/businessDevelopmentRoles.js';
 import { isPlatformAdmin } from './shared/platformAdmin.js';
+import { validateFoCheckInLocation } from './services/foCheckInLocationPolicyService.js';
 import {
   canAccessLeadModule,
   canAssignLead,
@@ -9854,6 +9855,27 @@ app.get('/api/workflows/:siteVisitId/status', requireApiAuth, async (request, re
 });
 
 app.post(
+  '/api/fo/site-visits/validate-checkin-location',
+  requireSupabaseJwt,
+  async (request, response) => {
+    try {
+      const client = requireServiceRoleSupabase();
+      const evidence = await validateFoCheckInLocation(client, request.body || {});
+      response.json({ ok: true, evidence });
+    } catch (error) {
+      const status = Number(error?.statusCode || 500);
+      response.status(status).json({
+        ok: false,
+        code: error?.code || 'checkin_location_validation_failed',
+        message: status >= 500
+          ? 'Secure Check-In location validation failed. Please retry.'
+          : error.message,
+      });
+    }
+  },
+);
+
+app.post(
   '/api/fo/site-visits/:visitId/force-checkout',
   requireApiAuth,
   requireRoles(['Admin', 'MD', 'COO', 'GM / Top Management', 'Finance GM', 'CFO', 'Existing Business Operations Team']),
@@ -11220,6 +11242,14 @@ async function runEndDayKmAutoRecalc(reason = 'interval') {
     });
   }
 }
+
+app.use('/api/fo/site-visits', (request, response) => {
+  response.status(404).json({
+    ok: false,
+    code: 'fo_site_visits_route_not_found',
+    message: `FO Site Visits API route not found: ${request.method} ${request.path}`,
+  });
+});
 
 function startEndDayKmAutoRecalcScheduler() {
   const enabled = endDayKmAutoRecalcEnabled();
