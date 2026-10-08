@@ -11,7 +11,7 @@ void main() {
     () {
       final source = supabaseSource.readAsStringSync();
       final guardIndex = source.indexOf(
-        'static Future<void> requireAuthenticatedSession',
+        'static Future<Session> requireAuthenticatedSession',
       );
       final checkoutIndex = source.indexOf(
         'static Future<void> updateVisitCheckout',
@@ -21,9 +21,9 @@ void main() {
 
       final guard = source.substring(guardIndex, checkoutIndex);
       expect(guard, contains('client.auth.refreshSession()'));
-      expect(guard, contains(r'${action}_REFRESH_STARTED'));
-      expect(guard, contains(r'${action}_REFRESH_FAILED'));
-      expect(guard, contains('finalSessionExpired'));
+      expect(guard, contains(r'${action}_RECOVERY_STARTED'));
+      expect(guard, contains(r'${action}_RECOVERY_SUCCEEDED'));
+      expect(guard, contains('result.isAuthenticated'));
     },
   );
 
@@ -32,12 +32,13 @@ void main() {
     () {
       final source = supabaseSource.readAsStringSync();
       final guardIndex = source.indexOf(
-        'static Future<void> requireAuthenticatedSession',
+        'static Future<Session> requireAuthenticatedSession',
       );
-      final checkoutIndex = source.indexOf(
-        'static Future<void> updateVisitCheckout',
+      final guardEnd = source.indexOf(
+        'static String writeDiagnostic',
+        guardIndex,
       );
-      final guard = source.substring(guardIndex, checkoutIndex);
+      final guard = source.substring(guardIndex, guardEnd);
 
       expect(guard, contains('AuthSessionExpiredException'));
       expect(guard, isNot(contains('GRANT UPDATE')));
