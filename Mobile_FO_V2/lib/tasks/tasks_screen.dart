@@ -10,6 +10,7 @@ import '../models/fo_models.dart';
 import '../services/app_state_sync_service.dart';
 import '../services/checkin_store_matcher.dart';
 import '../services/crash_log_service.dart';
+import '../services/fo_checkin_validation_service.dart';
 import '../services/local_db_service.dart';
 import '../services/local_store.dart';
 import '../services/performance_log_service.dart';
@@ -50,12 +51,14 @@ class TasksScreen extends StatefulWidget {
   const TasksScreen({
     required this.user,
     required this.onLogout,
+    required this.onAuthRequired,
     this.isSelected = true,
     super.key,
   });
 
   final FoUser user;
   final Future<void> Function() onLogout;
+  final Future<void> Function() onAuthRequired;
   final bool isSelected;
 
   @override
@@ -547,6 +550,14 @@ class _TasksScreenState extends State<TasksScreen>
         );
       }
 
+      await FoCheckInValidationService.validate(
+        user: widget.user,
+        storeId: store.id,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracy: position.accuracy,
+        gpsTimestamp: position.timestamp,
+      );
       final visit = await _createVisit(store, position, activeAttendance);
       await _closeTravelLegForCheckedInVisit(
         attendance: activeAttendance,
@@ -584,8 +595,8 @@ class _TasksScreenState extends State<TasksScreen>
         stackTrace: stackTrace,
       );
       if (_isSessionExpiredError(error)) {
-        _toast('Session expired. Please login again.');
-        await widget.onLogout();
+        _toast(AuthSessionExpiredException.message);
+        await widget.onAuthRequired();
         return;
       }
       await _showErrorDialog('Check In failed', error);
@@ -659,6 +670,7 @@ class _TasksScreenState extends State<TasksScreen>
         builder: (_) => _AddStoreDialog(
           user: widget.user,
           attendance: activeAttendance,
+          onAuthRequired: widget.onAuthRequired,
           latitude: position.latitude,
           longitude: position.longitude,
           accuracy: position.accuracy,
@@ -672,6 +684,14 @@ class _TasksScreenState extends State<TasksScreen>
         error: 'store_id=${store.id} store=${store.storeName}',
       );
       await _recordRepeatSiteAllowedIfNeeded(store, activeAttendance);
+      await FoCheckInValidationService.validate(
+        user: widget.user,
+        storeId: store.id,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracy: position.accuracy,
+        gpsTimestamp: position.timestamp,
+      );
       final visit = await _createVisit(store, position, activeAttendance);
       await _closeTravelLegForCheckedInVisit(
         attendance: activeAttendance,
@@ -696,8 +716,8 @@ class _TasksScreenState extends State<TasksScreen>
         stackTrace: stackTrace,
       );
       if (_isSessionExpiredError(error)) {
-        _toast('Session expired. Please login again.');
-        await widget.onLogout();
+        _toast(AuthSessionExpiredException.message);
+        await widget.onAuthRequired();
         return;
       }
       await _showErrorDialog('Add Site failed', error);
@@ -4866,6 +4886,7 @@ class _AddStoreDialog extends StatefulWidget {
   const _AddStoreDialog({
     required this.user,
     required this.attendance,
+    this.onAuthRequired,
     this.latitude,
     this.longitude,
     this.accuracy,
@@ -4873,6 +4894,7 @@ class _AddStoreDialog extends StatefulWidget {
 
   final FoUser user;
   final Attendance attendance;
+  final Future<void> Function()? onAuthRequired;
   final double? latitude;
   final double? longitude;
   final double? accuracy;
@@ -4979,6 +5001,11 @@ class _AddStoreDialogState extends State<_AddStoreDialog> {
       if (_business == null || _business!.trim().isEmpty) {
         throw StateError('Business is required.');
       }
+      await SupabaseService.requireAuthenticatedSession(
+        widget.user,
+        screen: 'tasks',
+        action: 'ADD_SITE_AUTH_SESSION_INVALID',
+      );
       final profile = SupabaseService.isReady
           ? await SupabaseService.fetchCurrentProfile()
           : widget.user;
@@ -5052,6 +5079,22 @@ class _AddStoreDialogState extends State<_AddStoreDialog> {
           gpsAccuracy: accuracy,
         ),
       );
+    } on AuthSessionExpiredException catch (error, stackTrace) {
+      await CrashLogService.record(
+        employeeCode: widget.user.employeeCode,
+        screen: 'tasks',
+        action: 'FO_ADD_SITE_AUTH_REQUIRED',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      final onAuthRequired = widget.onAuthRequired;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text(AuthSessionExpiredException.message)),
+        );
+        Navigator.of(context).pop();
+      }
+      await onAuthRequired?.call();
     } on StoreCreateException catch (error) {
       await CrashLogService.record(
         employeeCode: widget.user.employeeCode,

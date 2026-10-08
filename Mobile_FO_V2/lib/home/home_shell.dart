@@ -90,10 +90,16 @@ Future<void> showHospitalAccessRequiredSheet(BuildContext context) {
 }
 
 class HomeShell extends StatefulWidget {
-  const HomeShell({required this.user, required this.onLogout, super.key});
+  const HomeShell({
+    required this.user,
+    required this.onLogout,
+    required this.onAuthRequired,
+    super.key,
+  });
 
   final FoUser user;
   final Future<void> Function() onLogout;
+  final Future<void> Function() onAuthRequired;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -316,6 +322,7 @@ class _HomeShellState extends State<HomeShell> {
       TasksScreen(
         user: widget.user,
         onLogout: widget.onLogout,
+        onAuthRequired: widget.onAuthRequired,
         isSelected: _index == 1,
         key: const PageStorageKey('tasks'),
       ),

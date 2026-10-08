@@ -13,11 +13,13 @@ class LoginScreen extends StatefulWidget {
   const LoginScreen({
     required this.onAuthenticated,
     this.onHospitalDemoAuthenticated,
+    this.initialMessage,
     super.key,
   });
 
   final ValueChanged<FoUser> onAuthenticated;
   final ValueChanged<HospitalDemoSession>? onHospitalDemoAuthenticated;
+  final String? initialMessage;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -29,6 +31,12 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _busy = false;
   bool _showPassword = false;
   String? _message;
+
+  @override
+  void initState() {
+    super.initState();
+    _message = widget.initialMessage;
+  }
 
   @override
   void dispose() {

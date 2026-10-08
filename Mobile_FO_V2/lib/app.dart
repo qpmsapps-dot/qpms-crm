@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'auth/login_screen.dart';
 import 'hospital_housekeeping/hospital_models.dart';
@@ -29,7 +30,11 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
   bool _resolvingPrimaryHospitalAccess = false;
   String? _primaryHospitalAccessError;
   FoUser? _user;
+  String? _loginMessage;
   HospitalDemoSession? _hospitalDemoSession;
+  StreamSubscription<AuthState>? _authStateSubscription;
+  bool _authEventReconciliationRunning = false;
+  bool _resumeAuthCheckRunning = false;
 
   @override
   void initState() {
@@ -41,6 +46,7 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _authStateSubscription?.cancel();
     super.dispose();
   }
 
@@ -52,13 +58,27 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
   }
 
   Future<void> _handleResume() async {
-    if (_hospitalDemoSession != null) return;
+    if (_hospitalDemoSession != null || _resumeAuthCheckRunning) return;
+    _resumeAuthCheckRunning = true;
     try {
       await CrashLogService.record(
         employeeCode: _user?.employeeCode,
         screen: 'app',
         action: 'APP_RESUME_SYNC_START',
       );
+      final cachedUser = _user;
+      if (cachedUser != null) {
+        try {
+          await SupabaseService.requireAuthenticatedSession(
+            cachedUser,
+            screen: 'app',
+            action: 'APP_RESUME_AUTH_SESSION_INVALID',
+          );
+        } on AuthSessionExpiredException {
+          await _requireReauthentication(cachedUser, source: 'app_resume');
+          return;
+        }
+      }
       if (SupabaseService.isReady) {
         await TrackingService.syncQueuedLogs();
         await CrashLogService.sync();
@@ -97,6 +117,8 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
         error: error,
         stackTrace: stackTrace,
       );
+    } finally {
+      _resumeAuthCheckRunning = false;
     }
   }
 
@@ -106,9 +128,13 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
         _error = AppConfig.configError;
       } else {
         await SupabaseService.initialize();
-        await CrashLogService.sync();
-        _user = await LocalStore.getUser();
-        _user = await _refreshCachedProfile(_user, source: 'app_startup');
+        final cachedUser = await LocalStore.getUser();
+        _user = await _restoreAuthenticatedUser(
+          cachedUser,
+          source: 'app_startup',
+        );
+        _startAuthStateListener();
+        if (_user != null) await CrashLogService.sync();
         if (_user != null && _isDedicatedHospitalEmployee(_user!)) {
           await _resolvePrimaryHospitalAccess(_user!, source: 'app_startup');
         }
@@ -126,13 +152,133 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
     }
   }
 
+  Future<FoUser?> _restoreAuthenticatedUser(
+    FoUser? cachedUser, {
+    required String source,
+  }) async {
+    if (!SupabaseService.isReady) return null;
+    if (cachedUser == null) {
+      if (SupabaseService.client.auth.currentSession == null ||
+          SupabaseService.client.auth.currentUser == null) {
+        return null;
+      }
+      try {
+        await SupabaseService.requireAuthenticatedSession(
+          null,
+          screen: 'app',
+          action: 'BOOTSTRAP_RESTORED_AUTH_SESSION_INVALID',
+        );
+      } on AuthSessionExpiredException {
+        _loginMessage = AuthSessionExpiredException.message;
+        return null;
+      }
+      return _refreshCachedProfile(null, source: source);
+    }
+    try {
+      await SupabaseService.requireAuthenticatedSession(
+        cachedUser,
+        screen: 'app',
+        action: 'BOOTSTRAP_AUTH_SESSION_INVALID',
+      );
+      return _refreshCachedProfile(cachedUser, source: source);
+    } on AuthSessionExpiredException {
+      await CrashLogService.record(
+        employeeCode: cachedUser.employeeCode,
+        screen: 'app',
+        action: 'BOOTSTRAP_REAUTHENTICATION_REQUIRED',
+        error:
+            'source=$source cached_user_present=true session_present=${SupabaseService.client.auth.currentSession != null} current_user_present=${SupabaseService.client.auth.currentUser != null}',
+      );
+      return null;
+    }
+  }
+
+  void _startAuthStateListener() {
+    if (_authStateSubscription != null || !SupabaseService.isReady) return;
+    _authStateSubscription = SupabaseService.client.auth.onAuthStateChange
+        .listen(
+          (state) => unawaited(_handleAuthStateChange(state)),
+          onError: (Object error, StackTrace stackTrace) {
+            unawaited(
+              CrashLogService.record(
+                employeeCode: _user?.employeeCode,
+                screen: 'app',
+                action: 'AUTH_STATE_LISTENER_ERROR',
+                error: error,
+                stackTrace: stackTrace,
+              ),
+            );
+          },
+        );
+  }
+
+  Future<void> _handleAuthStateChange(AuthState state) async {
+    final event = state.event;
+    await CrashLogService.record(
+      employeeCode: _user?.employeeCode,
+      screen: 'app',
+      action: 'AUTH_STATE_CHANGED',
+      error:
+          'event=${event.name} cached_user_present=${_user != null} session_present=${state.session != null} current_user_present=${SupabaseService.client.auth.currentUser != null}',
+    );
+    if (event == AuthChangeEvent.signedOut) {
+      final cachedUser = _user ?? await LocalStore.getUser();
+      await _requireReauthentication(cachedUser, source: 'auth_signed_out');
+      return;
+    }
+    final authenticatedEvent =
+        event == AuthChangeEvent.signedIn ||
+        event == AuthChangeEvent.initialSession ||
+        event == AuthChangeEvent.tokenRefreshed ||
+        event == AuthChangeEvent.userUpdated ||
+        event == AuthChangeEvent.passwordRecovery;
+    if (!authenticatedEvent ||
+        state.session == null ||
+        SupabaseService.client.auth.currentUser == null ||
+        _authEventReconciliationRunning) {
+      return;
+    }
+    if (event == AuthChangeEvent.tokenRefreshed && _user != null) return;
+    _authEventReconciliationRunning = true;
+    try {
+      final refreshed = await _refreshCachedProfile(
+        _user ?? await LocalStore.getUser(),
+        source: 'auth_${event.name}',
+      );
+      if (refreshed != null && mounted) setState(() => _user = refreshed);
+    } finally {
+      _authEventReconciliationRunning = false;
+    }
+  }
+
+  Future<void> _requireReauthentication(
+    FoUser? cachedUser, {
+    required String source,
+  }) async {
+    await CrashLogService.record(
+      employeeCode: cachedUser?.employeeCode,
+      screen: 'app',
+      action: 'REAUTHENTICATION_REQUIRED',
+      error:
+          'source=$source cached_user_present=${cachedUser != null} session_present=${SupabaseService.isReady && SupabaseService.client.auth.currentSession != null} current_user_present=${SupabaseService.isReady && SupabaseService.client.auth.currentUser != null} operational_data_preserved=true',
+    );
+    if (!mounted) return;
+    setState(() {
+      _user = null;
+      _loginMessage = AuthSessionExpiredException.message;
+      _hospitalDemoSession = null;
+      _primaryHospitalAccessError = null;
+      _resolvingPrimaryHospitalAccess = false;
+    });
+  }
+
   Future<FoUser?> _refreshCachedProfile(
     FoUser? cachedUser, {
     required String source,
   }) async {
     if (!SupabaseService.isReady ||
         SupabaseService.client.auth.currentUser == null) {
-      return cachedUser;
+      return null;
     }
     try {
       final serverUser = await SupabaseService.fetchCurrentProfile();
@@ -196,6 +342,7 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
       setState(() {
         _hospitalDemoSession = null;
         _primaryHospitalAccessError = null;
+        _loginMessage = null;
         _user = user;
       });
     }
@@ -228,6 +375,7 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
         _hospitalDemoSession = null;
         _primaryHospitalAccessError = null;
         _resolvingPrimaryHospitalAccess = false;
+        _loginMessage = null;
         _user = null;
       });
     }
@@ -371,6 +519,7 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
       return LoginScreen(
         onAuthenticated: _setUser,
         onHospitalDemoAuthenticated: _setHospitalDemoSession,
+        initialMessage: _loginMessage,
       );
     }
     if (_isDedicatedHospitalEmployee(_user!)) {
@@ -384,7 +533,12 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
         onLogout: _logout,
       );
     }
-    return HomeShell(user: _user!, onLogout: _logout);
+    return HomeShell(
+      user: _user!,
+      onLogout: _logout,
+      onAuthRequired: () =>
+          _requireReauthentication(_user, source: 'authenticated_write'),
+    );
   }
 }
 

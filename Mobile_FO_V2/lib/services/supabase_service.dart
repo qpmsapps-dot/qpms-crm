@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/fo_models.dart';
 import '../utils/date_utils.dart';
 import '../utils/mobile_roles.dart';
+import 'auth_session_recovery.dart';
 import 'config_service.dart';
 import 'crash_log_service.dart';
 import 'local_store.dart';
@@ -58,8 +59,7 @@ class StoreCreateException implements Exception {
 class AuthSessionExpiredException implements Exception {
   const AuthSessionExpiredException();
 
-  static const message =
-      'Your login session expired. Please login again and retry checkout.';
+  static const message = 'Your session has expired. Please sign in again.';
 
   @override
   String toString() => message;
@@ -141,6 +141,10 @@ class SupabaseService {
   ];
   static bool _initialized = false;
   static bool _runtimeConfigured = false;
+  static final AuthSessionRecoveryCoordinator _sessionRecovery =
+      AuthSessionRecoveryCoordinator();
+  static const Duration _sessionRecoveryTimeout = Duration(seconds: 15);
+  static const Duration _sessionExpirySkew = Duration(seconds: 60);
 
   static bool get isReady =>
       _initialized && (AppConfig.hasSupabase || _runtimeConfigured);
@@ -154,10 +158,11 @@ class SupabaseService {
     final session = isReady ? client.auth.currentSession : null;
     final authUser = isReady ? client.auth.currentUser : null;
     final accessTokenExists = session?.accessToken.trim().isNotEmpty == true;
-    final expiresAt = session?.expiresAt;
-    final sessionExpired =
-        expiresAt != null &&
-        DateTime.now().millisecondsSinceEpoch >= expiresAt * 1000;
+    final expiresAt =
+        session?.expiresAt ??
+        accessTokenExpiryEpochSeconds(session?.accessToken);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final sessionExpired = expiresAt != null && now >= expiresAt * 1000;
     final sessionExists = session != null;
     final supabaseAuthUserId = authUser?.id.trim() ?? '';
     final sessionUserMatchesProfile =
@@ -210,72 +215,91 @@ class SupabaseService {
     return result(isValid: true, message: null, action: 'START_DAY_AUTH_VALID');
   }
 
-  static Future<void> requireAuthenticatedSession(
-    FoUser user, {
+  static AuthSessionSnapshot _authSessionSnapshot(FoUser? user) {
+    final session = isReady ? client.auth.currentSession : null;
+    final authUser = isReady ? client.auth.currentUser : null;
+    final accessTokenPresent = session?.accessToken.trim().isNotEmpty == true;
+    final expiresAt =
+        session?.expiresAt ??
+        accessTokenExpiryEpochSeconds(session?.accessToken);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final sessionExpired = expiresAt != null && now >= expiresAt * 1000;
+    final sessionExpiringSoon =
+        expiresAt != null &&
+        now + _sessionExpirySkew.inMilliseconds >= expiresAt * 1000;
+    final profileAuthUserId = user?.authUserId.trim() ?? '';
+    final currentAuthUserId = authUser?.id.trim() ?? '';
+    return AuthSessionSnapshot(
+      supabaseReady: isReady,
+      sessionPresent: session != null,
+      currentUserPresent: authUser != null,
+      accessTokenPresent: accessTokenPresent,
+      sessionExpired: sessionExpired,
+      sessionExpiringSoon: sessionExpiringSoon,
+      identityMatches:
+          profileAuthUserId.isEmpty ||
+          (currentAuthUserId.isNotEmpty &&
+              profileAuthUserId == currentAuthUserId),
+    );
+  }
+
+  static Future<Session> requireAuthenticatedSession(
+    FoUser? user, {
     required String screen,
     required String action,
+    bool forceRefresh = false,
   }) async {
-    var session = isReady ? client.auth.currentSession : null;
-    var authUser = isReady ? client.auth.currentUser : null;
-    final accessTokenExists = session?.accessToken.trim().isNotEmpty == true;
-    final expiresAt = session?.expiresAt;
-    final sessionExpired =
-        expiresAt != null &&
-        DateTime.now().millisecondsSinceEpoch >= expiresAt * 1000;
-    final profileAuthUserId = user.authUserId.trim();
-    final supabaseAuthUserId = authUser?.id.trim() ?? '';
-
-    if (session != null &&
-        authUser != null &&
-        (!accessTokenExists || sessionExpired)) {
-      try {
+    final initial = _authSessionSnapshot(user);
+    final result = await _sessionRecovery.validate(
+      readSnapshot: () => _authSessionSnapshot(user),
+      refresh: () async {
         await CrashLogService.record(
-          employeeCode: user.employeeCode,
+          employeeCode: user?.employeeCode,
           screen: screen,
-          action: '${action}_REFRESH_STARTED',
+          action: '${action}_RECOVERY_STARTED',
           error:
-              'access_token_exists=$accessTokenExists session_expired=$sessionExpired profile_auth_user_id=${profileAuthUserId.isEmpty ? '--' : profileAuthUserId} supabase_auth_user_id=${supabaseAuthUserId.isEmpty ? '--' : supabaseAuthUserId}',
+              'cached_user_present=true session_present=${initial.sessionPresent} current_user_present=${initial.currentUserPresent} attempted_recovery=true',
         );
-        final refreshed = await client.auth.refreshSession();
-        session = refreshed.session ?? client.auth.currentSession;
-        authUser = refreshed.user ?? client.auth.currentUser;
-      } catch (error, stackTrace) {
-        await CrashLogService.record(
-          employeeCode: user.employeeCode,
-          screen: screen,
-          action: '${action}_REFRESH_FAILED',
-          error: error,
-          stackTrace: stackTrace,
-        );
-      }
-    }
-
-    final finalAccessTokenExists =
-        session?.accessToken.trim().isNotEmpty == true;
-    final finalExpiresAt = session?.expiresAt;
-    final finalSessionExpired =
-        finalExpiresAt != null &&
-        DateTime.now().millisecondsSinceEpoch >= finalExpiresAt * 1000;
-    final finalSupabaseAuthUserId = authUser?.id.trim() ?? '';
-    final finalSessionUserMatchesProfile =
-        profileAuthUserId.isEmpty ||
-        (finalSupabaseAuthUserId.isNotEmpty &&
-            profileAuthUserId == finalSupabaseAuthUserId);
-
-    if (session == null ||
-        authUser == null ||
-        !finalAccessTokenExists ||
-        finalSessionExpired ||
-        !finalSessionUserMatchesProfile) {
+        await client.auth.refreshSession().timeout(_sessionRecoveryTimeout);
+      },
+      forceRefresh: forceRefresh,
+    );
+    final snapshot = result.snapshot;
+    if (!result.isAuthenticated) {
       await CrashLogService.record(
-        employeeCode: user.employeeCode,
+        employeeCode: user?.employeeCode,
         screen: screen,
         action: action,
         error:
-            'session_exists=${session != null} access_token_exists=$finalAccessTokenExists session_expired=$finalSessionExpired profile_auth_user_id=${profileAuthUserId.isEmpty ? '--' : profileAuthUserId} supabase_auth_user_id=${finalSupabaseAuthUserId.isEmpty ? '--' : finalSupabaseAuthUserId} session_user_matches_profile=$finalSessionUserMatchesProfile',
+            'cached_user_present=true session_present=${snapshot.sessionPresent} current_user_present=${snapshot.currentUserPresent} access_token_present=${snapshot.accessTokenPresent} session_expired=${snapshot.sessionExpired} session_expiring_soon=${snapshot.sessionExpiringSoon} identity_matches=${snapshot.identityMatches} attempted_recovery=${result.recoveryAttempted} recovery_succeeded=false',
       );
+      if (isReady) {
+        try {
+          await client.auth
+              .signOut(scope: SignOutScope.local)
+              .timeout(_sessionRecoveryTimeout);
+        } catch (error, stackTrace) {
+          await CrashLogService.record(
+            employeeCode: user?.employeeCode,
+            screen: screen,
+            action: '${action}_LOCAL_AUTH_CLEAR_FAILED',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
+      }
       throw const AuthSessionExpiredException();
     }
+    if (result.recoveryAttempted) {
+      await CrashLogService.record(
+        employeeCode: user?.employeeCode,
+        screen: screen,
+        action: '${action}_RECOVERY_SUCCEEDED',
+        error:
+            'cached_user_present=true session_present=true current_user_present=true attempted_recovery=true recovery_succeeded=true',
+      );
+    }
+    return client.auth.currentSession!;
   }
 
   static String writeDiagnostic({
@@ -495,7 +519,7 @@ class SupabaseService {
 
   static Future<FoUser> fetchCurrentProfile() async {
     final authUser = client.auth.currentUser;
-    if (authUser == null) throw StateError('No active Supabase session.');
+    if (authUser == null) throw const AuthSessionExpiredException();
     final row = await client
         .from('profiles')
         .select(
@@ -546,6 +570,11 @@ class SupabaseService {
     Attendance attendance,
     FoUser user,
   ) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'home',
+      action: 'START_DAY_AUTH_SESSION_INVALID',
+    );
     final authValidation = validateStartDayAuth(user);
     if (!authValidation.isValid) {
       await CrashLogService.record(
@@ -640,6 +669,11 @@ class SupabaseService {
     String? travelModeNote,
     Map<String, dynamic> metadata = const {},
   }) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'home',
+      action: 'TRAVEL_MODE_AUTH_SESSION_INVALID',
+    );
     final id = attendance.remoteId?.trim();
     if (!isValidUuid(id)) {
       throw StateError(
@@ -695,6 +729,11 @@ class SupabaseService {
     required String contentType,
     required String extension,
   }) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'home',
+      action: 'TRAVEL_CLAIM_UPLOAD_AUTH_SESSION_INVALID',
+    );
     final attendanceId = attendance.remoteId?.trim();
     if (!isValidUuid(attendanceId)) {
       throw StateError(
@@ -743,6 +782,11 @@ class SupabaseService {
     String? storageBucket,
     String? siteVisitId,
   }) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'home',
+      action: 'TRAVEL_CLAIM_SUBMIT_AUTH_SESSION_INVALID',
+    );
     final attendanceId = attendance.remoteId?.trim();
     if (!isValidUuid(attendanceId)) {
       throw StateError(
@@ -990,6 +1034,11 @@ class SupabaseService {
     required String contentType,
     required String extension,
   }) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'tasks',
+      action: 'ACTIVITY_FILE_UPLOAD_AUTH_SESSION_INVALID',
+    );
     final attendanceDate = attendance.attendanceDate?.trim().isNotEmpty == true
         ? attendance.attendanceDate!.trim()
         : indiaDateKey(attendance.startTime);
@@ -1050,6 +1099,11 @@ class SupabaseService {
     String? localId,
     Map<String, dynamic> metadata = const {},
   }) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'tasks',
+      action: 'ACTIVITY_UPLOAD_ROW_AUTH_SESSION_INVALID',
+    );
     final attendanceId = attendance.remoteId?.trim();
     final siteVisitId = visit.remoteId?.trim();
     if (!isValidUuid(submissionId)) {
@@ -1095,6 +1149,11 @@ class SupabaseService {
     required FoUser user,
     required TravelLeg travelLeg,
   }) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'tracking',
+      action: 'TRAVEL_LEG_CREATE_AUTH_SESSION_INVALID',
+    );
     final attendanceId = travelLeg.attendanceId.trim();
     if (!isValidUuid(attendanceId)) {
       throw StateError('Travel leg requires a synced attendance_id.');
@@ -1146,6 +1205,11 @@ class SupabaseService {
     String? remarks,
     String status = 'completed',
   }) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'tracking',
+      action: 'TRAVEL_LEG_CLOSE_AUTH_SESSION_INVALID',
+    );
     final id = travelLegId.trim();
     if (!isValidUuid(id)) return null;
     final payload = <String, dynamic>{
@@ -1592,6 +1656,11 @@ class SupabaseService {
     bool? payableKmAllowed,
     String? travelModeNote,
   }) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'home',
+      action: 'RESTART_DAY_AUTH_SESSION_INVALID',
+    );
     final id = attendance.remoteId?.trim();
     if (!isValidUuid(id)) {
       throw StateError(
@@ -1767,6 +1836,11 @@ class SupabaseService {
     String? autoClosedSiteVisitId,
     Map<String, dynamic> endLocationMetadata = const {},
   }) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'home',
+      action: 'END_DAY_AUTH_SESSION_INVALID',
+    );
     final resolution = await resolveEndDayAttendance(
       user: user,
       attendance: attendance,
@@ -2888,6 +2962,11 @@ class SupabaseService {
     double? longitude,
     double? accuracy,
   }) async {
+    await requireAuthenticatedSession(
+      user,
+      screen: 'tasks',
+      action: 'ADD_SITE_AUTH_SESSION_INVALID',
+    );
     final employeeCode = user.employeeCode.trim();
     final fullName = user.fullName.trim();
     if (employeeCode.isEmpty) {
