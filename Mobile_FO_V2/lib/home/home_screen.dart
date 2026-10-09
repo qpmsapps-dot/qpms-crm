@@ -1869,9 +1869,14 @@ class _HomeScreenState extends State<HomeScreen>
     String attendanceId,
   ) {
     final resultAttendanceId = result['attendance_id']?.toString().trim();
-    return resultAttendanceId == null ||
-        resultAttendanceId.isEmpty ||
-        resultAttendanceId == attendanceId.trim();
+    final runId = result['calculation_run_id']?.toString().trim() ?? '';
+    final digest = result['input_digest']?.toString().trim() ?? '';
+    return resultAttendanceId == attendanceId.trim() &&
+        result['updated'] == true &&
+        result['dry_run'] == false &&
+        result['route_sync_status'] == 'canonical_v2_persisted' &&
+        SupabaseService.isValidUuid(runId) &&
+        RegExp(r'^[0-9a-f]{64}$').hasMatch(digest);
   }
 
   void _applyBackendAttendance({

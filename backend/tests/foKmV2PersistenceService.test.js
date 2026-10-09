@@ -4,6 +4,7 @@ import test from 'node:test';
 import { KM_ENGINE_VERSION } from '../services/foCanonicalKmEngineV2.js';
 import {
   KM_V2_PERSISTENCE_RPC,
+  getKmV2FinancialWriteState,
   persistCanonicalKmV2,
 } from '../services/foKmV2PersistenceService.js';
 
@@ -90,4 +91,23 @@ test('maintenance mode blocks persistence before the transactional RPC is called
     (error) => error.code === 'KM_FINANCIAL_WRITES_MAINTENANCE' && error.statusCode === 503,
   );
   assert.equal(calls, 0);
+});
+
+test('database financial state lookup fails closed when the guard RPC is unavailable', async () => {
+  const state = await getKmV2FinancialWriteState({
+    rpc: async () => ({ data: null, error: { code: 'PGRST202' } }),
+  });
+  assert.equal(state.financial_writes_enabled, false);
+  assert.equal(state.reason, 'database_financial_gate_unavailable');
+  assert.equal(state.error_code, 'PGRST202');
+});
+
+test('database financial state lookup fails closed on an invalid response', async () => {
+  const state = await getKmV2FinancialWriteState({
+    rpc: async () => ({ data: null, error: null }),
+  });
+  assert.deepEqual(state, {
+    financial_writes_enabled: false,
+    reason: 'database_financial_gate_invalid_response',
+  });
 });

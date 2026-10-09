@@ -41,6 +41,12 @@ import {
   recalculateSwitchModeKmTemporary,
 } from './foKmRecalculationService.js';
 import { authorizeFoKmRecalculation } from './services/foKmRecalculationAuthorizationService.js';
+import { getKmV2FinancialWriteState } from './services/foKmV2PersistenceService.js';
+import {
+  canonicalEndDayCompletionMatches,
+  historicalIndiaDateStart,
+  runBoundedEndDayRecoveryAttempt,
+} from './services/foEndDayKmRecoveryService.js';
 import {
   cleanupStaleFoSessions,
   cleanupStaleLiveStatusReferences,
@@ -223,6 +229,8 @@ const foKmRecalculateAllLockStartedAt = new Map();
 const FO_STALE_CLEANUP_INTERVAL_MS = Number(process.env.FO_STALE_CLEANUP_INTERVAL_MS || 30 * 60 * 1000);
 const END_DAY_KM_AUTO_RECALC_INTERVAL_MS = 5 * 60 * 1000;
 const END_DAY_KM_AUTO_RECALC_LIMIT = 50;
+const END_DAY_KM_AUTO_RECALC_LOOKBACK_DAYS = 7;
+const END_DAY_KM_AUTO_RECALC_MAX_ATTEMPTS = 2;
 const FO_DRILLDOWN_PAGE_SIZE = 1000;
 const FO_DRILLDOWN_MAX_SITE_VISIT_IDS = 100;
 
@@ -10719,6 +10727,8 @@ app.post('/api/fo/km/recalculate', requireSupabaseJwt, async (request, response)
     response.status(safeError.statusCode).json({
       ok: false,
       message: safeError.message,
+      code: error.code || safeError.code || null,
+      retryable: error.retryable === true,
       ...(safeError.diagnosticReason
         ? { diagnosticReason: safeError.diagnosticReason }
         : {}),
@@ -11160,13 +11170,23 @@ function attendanceNeedsEndDayKmAutoRecalc(row, now = new Date()) {
 }
 
 async function loadEndDayKmAutoRecalcCandidates(client, date) {
+  const lookbackDays = integerEnv(
+    'END_DAY_KM_AUTO_RECALC_LOOKBACK_DAYS',
+    END_DAY_KM_AUTO_RECALC_LOOKBACK_DAYS,
+    1,
+    31,
+  );
+  const fromDate = historicalIndiaDateStart(date, lookbackDays);
   const { data, error } = await client
     .from('fo_attendance')
-    .select('id, fo_user_id, employee_code, attendance_date, logout_time, status, metadata')
-    .eq('attendance_date', date)
+    .select('id, fo_user_id, employee_code, attendance_date, logout_time, status, route_sync_status, metadata')
+    .gte('attendance_date', fromDate)
+    .lte('attendance_date', date)
     .not('logout_time', 'is', null)
     .in('status', ['Completed', 'Ended', 'Ended Day', 'Closed', 'Auto Ended', 'Stale Auto Ended'])
-    .order('logout_time', { ascending: false })
+    .eq('route_sync_status', 'pending_canonical_end_day_recalculation')
+    .order('attendance_date', { ascending: true })
+    .order('logout_time', { ascending: true })
     .limit(END_DAY_KM_AUTO_RECALC_LIMIT);
   if (error) throw error;
   const now = new Date();
@@ -11193,6 +11213,13 @@ async function runEndDayKmAutoRecalc(reason = 'interval') {
   });
   try {
     const client = requireServiceRoleSupabase();
+    const databaseGate = await getKmV2FinancialWriteState(client);
+    if (databaseGate.financial_writes_enabled !== true) {
+      console.warn('END_DAY_KM_AUTO_RECALC_GATE_CLOSED', {
+        reason: databaseGate.reason || databaseGate.change_reason || 'database_financial_gate_closed',
+      });
+      return;
+    }
     const candidates = await loadEndDayKmAutoRecalcCandidates(client, date);
     summary.scanned = candidates.length;
     for (const attendance of candidates) {
@@ -11211,9 +11238,26 @@ async function runEndDayKmAutoRecalc(reason = 'interval') {
       }
       addFoKmRecalculationLock(lockKey);
       try {
-        const result = await recalculateFoKm(client, payload, {
-          maxGoogleDirectionsCalls: Number(process.env.END_DAY_KM_AUTO_RECALC_MAX_GOOGLE_DIRECTIONS_CALLS || process.env.MAX_GOOGLE_DIRECTIONS_CALLS),
+        const recovery = await runBoundedEndDayRecoveryAttempt(async () => {
+          const result = await recalculateFoKm(client, payload, {
+            maxGoogleDirectionsCalls: Number(process.env.END_DAY_KM_AUTO_RECALC_MAX_GOOGLE_DIRECTIONS_CALLS || process.env.MAX_GOOGLE_DIRECTIONS_CALLS),
+          });
+          if (!canonicalEndDayCompletionMatches(result, attendance.id)) {
+            const error = new Error('Canonical End Day recalculation did not return matching persisted run evidence.');
+            error.code = 'end_day_canonical_completion_unverified';
+            error.retryable = true;
+            throw error;
+          }
+          return result;
+        }, {
+          maxAttempts: integerEnv(
+            'END_DAY_KM_AUTO_RECALC_MAX_ATTEMPTS',
+            END_DAY_KM_AUTO_RECALC_MAX_ATTEMPTS,
+            1,
+            3,
+          ),
         });
+        const result = recovery.result;
         summary.updated += 1;
         console.log('END_DAY_KM_AUTO_RECALC_ATTENDANCE_UPDATED', {
           attendance_id: attendance.id,
@@ -11222,6 +11266,8 @@ async function runEndDayKmAutoRecalc(reason = 'interval') {
           total_route_km: result.total_route_km ?? result.new_total_route_km ?? null,
           petrol_amount: result.petrol_amount ?? result.new_petrol_amount ?? null,
           route_sync_status: result.route_sync_status || null,
+          calculation_run_id: result.calculation_run_id || null,
+          attempts: recovery.attempts,
         });
       } catch (error) {
         summary.failed += 1;

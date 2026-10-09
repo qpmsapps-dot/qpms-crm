@@ -4274,6 +4274,29 @@ export async function reconcileFinalLegOnly(serviceRoleClient, payload = {}, opt
   const now = new Date().toISOString();
   const finalLegValues = {
     attendance_id: attendance.id,
+    financial_change_detected: [
+      [normalizeNumber(attendance.total_route_km) || 0, calculatedPayableKm],
+      [normalizeNumber(attendance.eligible_km) || 0, approvedKm],
+      [normalizeNumber(attendance.total_approved_km) || 0, approvedKm],
+      [normalizeNumber(attendance.petrol_amount) || 0, petrolAmount],
+    ].some(([before, after]) => Number(before.toFixed(2)) !== Number(after.toFixed(2))),
+    financial_approval_preview: {
+      attendance_id: attendance.id,
+      input_digest: canonicalCalculation.inputDigest,
+      expected_attendance_updated_at: attendance.updated_at,
+      before: {
+        total_route_km: Number((normalizeNumber(attendance.total_route_km) || 0).toFixed(2)),
+        eligible_km: Number((normalizeNumber(attendance.eligible_km) || 0).toFixed(2)),
+        total_approved_km: Number((normalizeNumber(attendance.total_approved_km) || 0).toFixed(2)),
+        petrol_amount: Number((normalizeNumber(attendance.petrol_amount) || 0).toFixed(2)),
+      },
+      after: {
+        total_route_km: Number(calculatedPayableKm.toFixed(2)),
+        eligible_km: Number(approvedKm.toFixed(2)),
+        total_approved_km: Number(approvedKm.toFixed(2)),
+        petrol_amount: Number(petrolAmount.toFixed(2)),
+      },
+    },
     employee_code: attendance.employee_code || null,
     fo_user_id: attendance.fo_user_id || null,
     travel_mode: travelMode || null,

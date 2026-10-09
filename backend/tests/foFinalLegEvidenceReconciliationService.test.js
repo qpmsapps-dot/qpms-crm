@@ -1,0 +1,165 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  buildFinalLegEvidencePlan,
+  persistFinalLegEvidenceReconciliation,
+} from '../services/foFinalLegEvidenceReconciliationService.js';
+
+const attendance = (overrides = {}) => ({
+  id: 'a8d170e6-cbb4-4788-928d-6eb9999d51e2',
+  employee_code: 'QPMSTNC17015',
+  attendance_date: '2026-10-07',
+  logout_time: '2026-10-07T14:14:49.941909Z',
+  end_latitude: 12.8926102,
+  end_longitude: 80.0828082,
+  total_route_km: 76.45,
+  eligible_km: 76.45,
+  total_approved_km: 76.45,
+  petrol_amount: 0,
+  updated_at: '2026-10-07T14:14:50.366503Z',
+  ...overrides,
+});
+
+const finalLeg = (overrides = {}) => ({
+  id: '48991354-ca06-4856-9931-8f95e6bb932e',
+  attendance_id: 'a8d170e6-cbb4-4788-928d-6eb9999d51e2',
+  status: 'completed',
+  started_at: '2026-10-07T13:14:51.302142Z',
+  ended_at: '2026-10-07T14:14:49.941909Z',
+  start_lat: 12.8017917,
+  start_lng: 80.1993063,
+  end_lat: 12.8926102,
+  end_lng: 80.0828082,
+  calculated_km: 0,
+  payable_km: 0,
+  payable_amount: 0,
+  fare_amount: 0,
+  updated_at: '2026-10-07T14:14:50.565107Z',
+  ...overrides,
+});
+
+const routeValues = [10.24, 1.49, 6.99, 19.10, 16.60, 5.29, 16.74];
+const visits = routeValues.map((route_km, index) => ({
+  id: `visit-${index + 1}`,
+  attendance_id: attendance().id,
+  check_in_time: `2026-10-07T0${index + 5}:00:00Z`,
+  check_out_time: index === 6 ? '2026-10-07T13:14:51.302142Z' : `2026-10-07T0${index + 5}:30:00Z`,
+  check_out_latitude: index === 6 ? 12.8017917 : 12.7 + index / 100,
+  check_out_longitude: index === 6 ? 80.1993063 : 80.1 + index / 100,
+  route_km,
+}));
+
+const gpsCalculation = (overrides = {}) => ({
+  legKm: 19.401,
+  legSource: 'GPS_BASED',
+  gpsLogCount: 177,
+  validPoints: 131,
+  rejectedPoints: 46,
+  acceptedGpsKm: 19.401,
+  reviewFlags: [],
+  ...overrides,
+});
+
+function plan(overrides = {}) {
+  return buildFinalLegEvidencePlan({
+    attendance: attendance(overrides.attendance),
+    finalLeg: finalLeg(overrides.finalLeg),
+    visits: overrides.visits || visits,
+    gpsRows: Array.from({ length: 177 }, (_, index) => ({ id: `gps-${index + 1}` })),
+    calculation: gpsCalculation(overrides.calculation),
+    expectedEmployeeCode: 'QPMSTNC17015',
+    expectedAttendanceDate: '2026-10-07',
+    expectedBaseKm: 76.45,
+    expectedSiteVisitCount: 7,
+    expectedSiteVisitRouteKm: 76.45,
+    expectedPetrolAmount: 0,
+  });
+}
+
+test('input digest is stable across unrelated row timestamp changes', () => {
+  const before = plan();
+  const replay = plan({
+    attendance: { updated_at: '2026-10-08T00:00:00Z' },
+    finalLeg: { updated_at: '2026-10-08T00:00:00Z' },
+  });
+  assert.equal(replay.inputDigest, before.inputDigest);
+});
+
+test('GPS evidence plan preserves all existing payable and reimbursement values', () => {
+  const result = plan();
+  assert.equal(result.persistable, true);
+  assert.equal(result.candidateCalculatedKm, 19.4);
+  assert.equal(result.decision, 'MANUAL_REVIEW');
+  assert.equal(result.proposedPayableKm, 0);
+  assert.equal(result.proposedReimbursementChange, 0);
+  assert.equal(result.expectedTotalRouteKm, 76.45);
+  assert.equal(result.expectedEligibleKm, 76.45);
+  assert.equal(result.expectedTotalApprovedKm, 76.45);
+  assert.equal(result.expectedSiteVisitCount, 7);
+  assert.equal(result.expectedSiteVisitRouteKm, 76.45);
+  assert.equal(result.canonicalRecalculationComplete, false);
+  assert.equal(result.referenceOnly, false);
+});
+
+test('stale or changed existing totals fail closed before persistence', () => {
+  assert.throws(
+    () => plan({ attendance: { total_route_km: 76.46 } }),
+    (error) => error.code === 'final_leg_existing_totals_mismatch' && error.statusCode === 409,
+  );
+});
+
+test('zero candidate is non-persistable manual review evidence', () => {
+  const result = plan({ calculation: { legKm: 0, legSource: 'SKIPPED', fallbackReason: 'no_valid_gps' } });
+  assert.equal(result.persistable, false);
+  assert.equal(result.proposedPayableKm, 0);
+  assert.equal(result.decision, 'MANUAL_REVIEW');
+});
+
+test('Haversine-only distance is persistable only as reference evidence and remains nonpayable', async () => {
+  const result = plan({ calculation: { legKm: 16.16, legSource: 'HAVERSINE_ROUTE_FALLBACK' } });
+  assert.equal(result.persistable, true);
+  assert.equal(result.source, 'HAVERSINE_REFERENCE');
+  assert.equal(result.referenceOnly, true);
+  assert.equal(result.proposedPayableKm, 0);
+  assert.ok(result.riskFlags.includes('HAVERSINE_ONLY_NOT_PAYABLE'));
+  const persisted = await persistFinalLegEvidenceReconciliation({
+    rpc: async () => ({ data: { ok: true, reference_only: true }, error: null }),
+  }, result);
+  assert.equal(persisted.reference_only, true);
+});
+
+test('a different attendance, employee, date or final leg is rejected locally', () => {
+  assert.throws(
+    () => plan({ attendance: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } }),
+    (error) => error.code === 'final_leg_attendance_mismatch' || error.code === 'final_leg_target_not_authorized',
+  );
+  assert.throws(
+    () => plan({ attendance: { employee_code: 'QPMSTNC17016' } }),
+    (error) => error.code === 'final_leg_target_not_authorized' && error.statusCode === 403,
+  );
+});
+
+test('missing companion schema is reported distinctly', async () => {
+  const client = { rpc: async () => ({ data: null, error: { code: 'PGRST202', message: 'schema cache miss' } }) };
+  await assert.rejects(
+    persistFinalLegEvidenceReconciliation(client, plan()),
+    (error) => error.code === 'final_leg_evidence_schema_missing' && error.statusCode === 503,
+  );
+});
+
+test('duplicate apply delegates idempotency to one guarded RPC call', async () => {
+  let calls = 0;
+  const client = {
+    rpc: async () => {
+      calls += 1;
+      return { data: { ok: true, idempotent_replay: calls > 1 }, error: null };
+    },
+  };
+  const evidencePlan = plan();
+  const first = await persistFinalLegEvidenceReconciliation(client, evidencePlan);
+  const second = await persistFinalLegEvidenceReconciliation(client, evidencePlan);
+  assert.equal(first.idempotent_replay, false);
+  assert.equal(second.idempotent_replay, true);
+  assert.equal(calls, 2);
+});

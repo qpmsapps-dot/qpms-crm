@@ -108,6 +108,10 @@ void main() {
       expect(refresh, contains('_recalculationResultBelongsToAttendance'));
       expect(refresh, contains('_applyBackendAttendance'));
       expect(refresh, contains('await LocalStore.saveAttendance'));
+      expect(homeSource, contains("result['route_sync_status'] == 'canonical_v2_persisted'"));
+      expect(homeSource, contains("result['calculation_run_id']"));
+      expect(homeSource, contains("result['input_digest']"));
+      expect(homeSource, contains('resultAttendanceId == attendanceId.trim()'));
     });
 
     test('Today KM updates only from refreshed backend attendance', () {
