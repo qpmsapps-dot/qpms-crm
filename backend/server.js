@@ -125,6 +125,8 @@ import {
   loadAuthorizedEmployeeRange,
   recalculateEmployeeRange,
 } from './services/employeeRangeReportService.js';
+import { kmFinancialWritesMaintenanceEnabled } from './services/kmFinancialWriteMaintenanceService.js';
+import { createEmployeeRangeRecalculationRegistry } from './services/foEmployeeRangeRecalculationLockService.js';
 import {
   BUSINESS_DEVELOPMENT_CAPABILITIES,
   normalizeBusinessDevelopmentCapability,
@@ -217,8 +219,10 @@ const apiDemoUsers = [
 const apiSessions = new Map();
 const foKmRecalculationLocks = new Set();
 const foKmRecalculateAllLocks = new Set();
-const foEmployeeRangeRecalculationLocks = new Set();
+const foEmployeeRangeRecalculationOperations = createEmployeeRangeRecalculationRegistry();
 const FO_KM_RECALCULATION_RUNNING_MESSAGE = 'Recalculation already running. Please wait.';
+const FO_KM_RECALCULATION_MAINTENANCE_MESSAGE =
+  'KM recalculation is temporarily unavailable during maintenance. Existing KM and reimbursement values have not changed.';
 const configuredFoKmRecalculationLockTtlMs = Number(process.env.FO_KM_RECALCULATION_LOCK_TTL_MS);
 const FO_KM_RECALCULATION_LOCK_TTL_MS =
   Number.isFinite(configuredFoKmRecalculationLockTtlMs) && configuredFoKmRecalculationLockTtlMs > 0
@@ -10773,20 +10777,22 @@ app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRec
 
 app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
   const payload = request.body || {};
+  if (kmFinancialWritesMaintenanceEnabled(process.env)) {
+    response.status(503).json({
+      ok: false,
+      outcome: 'maintenance_blocked',
+      code: 'KM_FINANCIAL_WRITES_MAINTENANCE',
+      retryable: true,
+      message: FO_KM_RECALCULATION_MAINTENANCE_MESSAGE,
+    });
+    return;
+  }
   const lockKey = [
     String(payload.employee || payload.employee_code || payload.fo_user_id || '').trim().toUpperCase(),
     String(payload.date_from || payload.from_date || '').slice(0, 10),
     String(payload.date_to || payload.to_date || '').slice(0, 10),
   ].join('|');
-  if (foEmployeeRangeRecalculationLocks.has(lockKey)) {
-    response.status(409).json({
-      ok: false,
-      message: FO_KM_RECALCULATION_RUNNING_MESSAGE,
-    });
-    return;
-  }
-  foEmployeeRangeRecalculationLocks.add(lockKey);
-  try {
+  const operation = foEmployeeRangeRecalculationOperations.start(lockKey, async () => {
     const client = requireServiceRoleSupabase();
     await assertServiceRoleAuthAdminAccess(client);
     const dataset = await loadAuthorizedEmployeeRange(
@@ -10794,7 +10800,7 @@ app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, requireFoK
       request.profile,
       payload,
     );
-    const result = await recalculateEmployeeRange({
+    return recalculateEmployeeRange({
       attendances: dataset.attendance_days,
       recalculate: (attendance) =>
         recalculateFoKm(client, {
@@ -10804,7 +10810,26 @@ app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, requireFoK
           date: attendance.attendance_date,
         }),
     });
-    response.json({ ok: true, ...result });
+  });
+  if (!operation.acquired) {
+    response.status(409).json({
+      ok: false,
+      outcome: 'already_running',
+      code: 'KM_RECALCULATION_ALREADY_RUNNING',
+      retryable: true,
+      message: FO_KM_RECALCULATION_RUNNING_MESSAGE,
+    });
+    return;
+  }
+  try {
+    const result = await operation.promise;
+    const hasServerFailure = result.results?.some((row) => Number(row.error_status || 0) >= 500);
+    const status = result.outcome === 'partial_success'
+      ? 207
+      : result.outcome === 'complete_failure'
+        ? hasServerFailure ? 503 : 422
+        : 200;
+    response.status(status).json(result);
   } catch (error) {
     const status = Number(error?.statusCode || 500);
     const safeError =
@@ -10813,10 +10838,11 @@ app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, requireFoK
         : { statusCode: status, message: error.message };
     response.status(safeError.statusCode).json({
       ok: false,
+      outcome: 'request_failed',
+      code: error?.code || safeError.code || 'EMPLOYEE_RANGE_RECALCULATION_FAILED',
+      retryable: error?.retryable === true,
       message: safeError.message,
     });
-  } finally {
-    foEmployeeRangeRecalculationLocks.delete(lockKey);
   }
 });
 

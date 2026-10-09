@@ -1114,16 +1114,24 @@ export async function recalculateEmployeeRange({ attendances = [], recalculate }
       await recalculate(attendance);
       updated += 1;
       results.push({ ...baseResult, outcome: 'updated', reason: null });
-    } catch {
+    } catch (error) {
       failed += 1;
       results.push({
         ...baseResult,
         outcome: 'failed',
         reason: 'KM recalculation failed for this attendance.',
+        error_code: error?.code || null,
+        error_status: Number(error?.statusCode || 0) || null,
+        retryable: error?.retryable === true,
       });
     }
   }
+  const outcome = failed === 0
+    ? eligible === 0 ? 'no_eligible_records' : 'complete_success'
+    : updated > 0 ? 'partial_success' : 'complete_failure';
   return {
+    ok: failed === 0,
+    outcome,
     found: attendances.length,
     eligible,
     updated,

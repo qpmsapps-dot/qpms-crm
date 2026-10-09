@@ -635,6 +635,8 @@ test('selected_period_recalculation_processes_all_completed_attendances', async 
   assert.equal(result.eligible, 2);
   assert.equal(result.updated, 2);
   assert.equal(result.skipped, 1);
+  assert.equal(result.ok, true);
+  assert.equal(result.outcome, 'complete_success');
   assert.deepEqual(called, rows.slice(0, 2).map((row) => row.id));
 });
 
@@ -649,8 +651,31 @@ test('selected_period_recalculation_returns_partial_failures_by_day', async () =
   });
   assert.equal(result.updated, 1);
   assert.equal(result.failed, 1);
+  assert.equal(result.ok, false);
+  assert.equal(result.outcome, 'partial_success');
   assert.deepEqual(result.results.map((row) => row.outcome), ['updated', 'failed']);
   assert.equal(result.results[1].reason, 'KM recalculation failed for this attendance.');
+});
+
+test('selected_period_recalculation_reports_complete_failure_when_every_eligible_day_fails', async () => {
+  const rows = [attendance('2026-07-01', 10), attendance('2026-07-02', 5)];
+  const result = await recalculateEmployeeRange({
+    attendances: rows,
+    recalculate: async () => {
+      const error = new Error('maintenance');
+      error.code = 'KM_FINANCIAL_WRITES_MAINTENANCE';
+      error.statusCode = 503;
+      error.retryable = true;
+      throw error;
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.outcome, 'complete_failure');
+  assert.equal(result.updated, 0);
+  assert.equal(result.failed, 2);
+  assert.equal(result.results[0].error_code, 'KM_FINANCIAL_WRITES_MAINTENANCE');
+  assert.equal(result.results[0].error_status, 503);
+  assert.equal(result.results[0].retryable, true);
 });
 
 test('travel claim proof path accepts only a path in the private proof bucket', () => {

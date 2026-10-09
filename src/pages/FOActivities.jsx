@@ -62,6 +62,12 @@ import { authenticatedApiRequest, authenticatedFetch } from "../services/api.js"
 import { authSessionManager, invalidateAuthOnUnauthorized, isAuthSessionError, SESSION_EXPIRED_MESSAGE } from "../services/authSession.js";
 import { assertDemoWriteAllowed, isDemoUser, isReadOnlyUser } from "../utils/demoAccess.js";
 import {
+  employeeRangeRecalculationPresentation,
+  KM_RECALCULATION_REFRESH_TIMEOUT_MS,
+  KM_RECALCULATION_REQUEST_TIMEOUT_MS,
+  runWithAbortTimeout,
+} from "../utils/foKmRecalculationUi.js";
+import {
   EMPTY_OPERATIONS_SUMMARY,
   activityPreviewFileKind,
   nextPreviewIndex,
@@ -12349,7 +12355,8 @@ export default function FOActivities() {
   const selectedEmployeeIdentifier =
     selectedOfficerBase?.employeeCode || selectedOfficerBase?.foId || null;
 
-  const loadSelectedEmployeeRange = useCallback(async () => {
+  const loadSelectedEmployeeRange = useCallback(async (options = {}) => {
+    const { signal, throwOnError = false } = options;
     const requestSequence = employeeRangeRequestSequenceRef.current + 1;
     employeeRangeRequestSequenceRef.current = requestSequence;
 
@@ -12381,6 +12388,7 @@ export default function FOActivities() {
           `${API_BASE_URL}/api/fo/operations/employee-missing-km-reviews/refresh`,
           {
             method: "POST",
+            signal,
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               employee: selectedEmployeeIdentifier,
@@ -12401,6 +12409,7 @@ export default function FOActivities() {
       }
       const response = await authenticatedFetch(
         `${API_BASE_URL}/api/fo/operations/employee-range?${query}`,
+        { signal },
       );
       const payload = await response.json();
       if (!response.ok || payload.ok === false) {
@@ -12417,6 +12426,7 @@ export default function FOActivities() {
           error?.message || "Employee period report could not be loaded.",
         );
       }
+      if (throwOnError) throw error;
       return null;
     } finally {
       if (requestSequence === employeeRangeRequestSequenceRef.current) {
@@ -12989,40 +12999,77 @@ export default function FOActivities() {
     setKmRecalcBusy(true);
     setKmRecalcResult(null);
     try {
-      const response = await authenticatedFetch(
-        `${API_BASE_URL}/api/fo/km/recalculate-employee-range`,
+      const { response, payload } = await runWithAbortTimeout(
+        async (signal) => {
+          const requestResponse = await authenticatedFetch(
+            `${API_BASE_URL}/api/fo/km/recalculate-employee-range`,
+            {
+              method: "POST",
+              signal,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                employee:
+                  selectedOfficer.employeeCode ||
+                  selectedOfficer.foId ||
+                  selectedOfficer.attendance?.employee_code,
+                date_from: selectedRange.fromDate,
+                date_to: selectedRange.toDate,
+              }),
+            },
+          );
+          return { response: requestResponse, payload: await requestResponse.json() };
+        },
         {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            employee:
-              selectedOfficer.employeeCode ||
-              selectedOfficer.foId ||
-              selectedOfficer.attendance?.employee_code,
-            date_from: selectedRange.fromDate,
-            date_to: selectedRange.toDate,
-          }),
+          timeoutMs: KM_RECALCULATION_REQUEST_TIMEOUT_MS,
+          timeoutCode: "KM_RECALCULATION_REQUEST_TIMEOUT",
+          timeoutMessage: "KM recalculation request timed out.",
         },
       );
-      const payload = await response.json();
-      if (!response.ok || payload.ok === false) {
+      const presentation = employeeRangeRecalculationPresentation(payload);
+      const structuredOutcome = Boolean(payload.outcome || payload.code);
+      if (!response.ok && !structuredOutcome) {
         throw new Error(payload.message || "KM recalculation failed.");
       }
-      const refreshedDataset = await loadSelectedEmployeeRange();
-      if (refreshedDataset) {
-        setEmployeeRangeDataset({
-          ...refreshedDataset,
-          recalculation_results: payload.results || [],
-        });
+      if (presentation.shouldRefresh) {
+        const refreshedDataset = await runWithAbortTimeout(
+          (signal) => loadSelectedEmployeeRange({ signal, throwOnError: true }),
+          {
+            timeoutMs: KM_RECALCULATION_REFRESH_TIMEOUT_MS,
+            timeoutCode: "KM_RECALCULATION_REFRESH_TIMEOUT",
+            timeoutMessage: "Employee period refresh timed out.",
+          },
+        );
+        if (refreshedDataset) {
+          setEmployeeRangeDataset({
+            ...refreshedDataset,
+            recalculation_results: payload.results || [],
+          });
+        }
       }
       setKmRecalcResult({
         ...payload,
-        message: `${payload.updated || 0} of ${payload.eligible || 0} eligible attendance records recalculated. ${payload.failed || 0} failed.`,
+        ...presentation,
       });
-      setRefreshToken((value) => value + 1);
-      setSummaryRefreshToken((value) => value + 1);
+      if (presentation.shouldRefresh) {
+        setRefreshToken((value) => value + 1);
+        setSummaryRefreshToken((value) => value + 1);
+      }
     } catch (error) {
-      setKmRecalcResult({ ok: false, message: error.message, confidence: "ERROR" });
+      const timeoutMessage = error?.code === "KM_RECALCULATION_REQUEST_TIMEOUT"
+        ? "KM recalculation request timed out. It may still be running; wait and refresh before retrying."
+        : error?.code === "KM_RECALCULATION_REFRESH_TIMEOUT"
+          ? "KM recalculation finished, but refreshing the employee report timed out. Reload the report before retrying."
+          : error.message;
+      setKmRecalcResult({
+        ok: false,
+        outcome: error?.code === "KM_RECALCULATION_REQUEST_TIMEOUT"
+          ? "request_timeout"
+          : error?.code === "KM_RECALCULATION_REFRESH_TIMEOUT"
+            ? "refresh_timeout"
+            : "request_failed",
+        message: timeoutMessage,
+        confidence: "ERROR",
+      });
       console.warn("[myQPMS FO] KM recalculation failed.", error);
     } finally {
       if (recalcKey) {
