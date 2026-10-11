@@ -7,6 +7,7 @@ import {
   calculateGpsCoverageTrace,
   calculateCanonicalKmV2,
   canonicalKmInputDigest,
+  evaluateGpsCompleteness,
   evaluateLegCoverage,
   finalizeGpsSegments,
   normalizeGpsEvidence,
@@ -451,20 +452,16 @@ function calculateRawGpsKm(points = []) {
   return rawKm;
 }
 
-function gpsWindowQuality(rows = [], cleanedPoints = [], calculatedKm = 0) {
-  const rawCount = rows.length;
-  const validCount = cleanedPoints.length;
-  const validRatio = rawCount > 0 ? validCount / rawCount : 0;
-  return {
-    rawCount,
-    validCount,
-    validRatio,
-    usable:
-      rawCount >= MIN_WINDOW_RAW_GPS_ROWS &&
-      validCount >= MIN_WINDOW_VALID_GPS_POINTS &&
-      validRatio >= MIN_WINDOW_VALID_GPS_RATIO &&
-      Number(calculatedKm) > 0,
-  };
+function gpsWindowQuality(rows = [], cleanedPoints = [], calculatedKm = 0, rejectionCounts = {}) {
+  return evaluateGpsCompleteness({
+    rawSampleCount: rows.length,
+    validSampleCount: cleanedPoints.length,
+    rejectionCounts,
+    minimumEffectiveSamples: MIN_WINDOW_RAW_GPS_ROWS,
+    minimumValidSamples: MIN_WINDOW_VALID_GPS_POINTS,
+    minimumValidRatio: MIN_WINDOW_VALID_GPS_RATIO,
+    calculatedKm,
+  });
 }
 
 function deduplicateGpsRows(rows = []) {
@@ -659,7 +656,12 @@ async function loadGpsLogsForWindowWithBinding(client, attendance, fromTime, toT
     if (error) throw error;
     attendanceRows = data || [];
   }
-  const attendanceCleaned = cleanGpsLogs(attendanceRows, attendance);
+  const attendanceNormalized = normalizeGpsLogs(attendanceRows, attendance);
+  const attendanceCleaned = attendanceNormalized.points.map((point) => ({
+    ...point,
+    highConfidence:
+      point.accuracy !== null && point.accuracy <= HIGH_CONFIDENCE_ACCURACY_METERS,
+  }));
   const attendancePrecheck = attendanceCleaned.length >= 2
     ? await calculateActualTravelKm(attendanceCleaned, { maxGoogleDirectionsCalls: 0 })
     : { actualTravelKm: 0 };
@@ -667,6 +669,7 @@ async function loadGpsLogsForWindowWithBinding(client, attendance, fromTime, toT
     attendanceRows,
     attendanceCleaned,
     attendancePrecheck.actualTravelKm,
+    attendanceNormalized.rejectionCounts,
   );
   if (attendanceQuality.usable || !attendance?.fo_user_id) {
     return {
@@ -702,11 +705,21 @@ async function loadGpsLogsForWindowWithBinding(client, attendance, fromTime, toT
     .limit(20000);
   if (employeeError) throw employeeError;
   const fallbackRows = deduplicateGpsRows(employeeRows || []);
-  const fallbackCleaned = cleanGpsLogs(fallbackRows, attendance);
+  const fallbackNormalized = normalizeGpsLogs(fallbackRows, attendance);
+  const fallbackCleaned = fallbackNormalized.points.map((point) => ({
+    ...point,
+    highConfidence:
+      point.accuracy !== null && point.accuracy <= HIGH_CONFIDENCE_ACCURACY_METERS,
+  }));
   const fallbackPrecheck = fallbackCleaned.length >= 2
     ? await calculateActualTravelKm(fallbackCleaned, { maxGoogleDirectionsCalls: 0 })
     : { actualTravelKm: 0 };
-  const fallbackQuality = gpsWindowQuality(fallbackRows, fallbackCleaned, fallbackPrecheck.actualTravelKm);
+  const fallbackQuality = gpsWindowQuality(
+    fallbackRows,
+    fallbackCleaned,
+    fallbackPrecheck.actualTravelKm,
+    fallbackNormalized.rejectionCounts,
+  );
   if (
     fallbackQuality.usable ||
     fallbackQuality.validCount > attendanceQuality.validCount ||
@@ -817,16 +830,22 @@ function finalReturnMismatchConfig(options = {}) {
 export function gpsLegPassesExistingQualityChecks(leg) {
   const gpsLogCount = Number(leg?.gps_log_count || 0);
   const validPoints = Number(leg?.valid_points || 0);
-  const validRatio = gpsLogCount > 0 ? validPoints / gpsLogCount : 0;
   const km = normalizeNumber(leg?.km);
+  const quality = evaluateGpsCompleteness({
+    rawSampleCount: gpsLogCount,
+    validSampleCount: validPoints,
+    rejectionCounts: leg?.rejected_point_reasons || {},
+    minimumEffectiveSamples: MIN_WINDOW_RAW_GPS_ROWS,
+    minimumValidSamples: MIN_WINDOW_VALID_GPS_POINTS,
+    minimumValidRatio: MIN_WINDOW_VALID_GPS_RATIO,
+    calculatedKm: km,
+  });
   return (
     leg?.status === 'calculated' &&
     ['GPS_BASED', 'GPS_ROUTE_SUPPORTED', 'PRE_SITE_GPS_SOURCING'].includes(String(leg?.source || '')) &&
     Number.isFinite(km) &&
     km > 0 &&
-    gpsLogCount >= 10 &&
-    validPoints >= 5 &&
-    validRatio >= 0.6
+    quality.usable
   );
 }
 
@@ -2551,7 +2570,12 @@ export async function calculateTravelLegKm({
         segmentSummary: [],
       };
   const preliminaryKm = Number(preliminaryCalculation.actualTravelKm.toFixed(2));
-  const quality = gpsWindowQuality(gpsRows, cleanedPoints, preliminaryKm);
+  const quality = gpsWindowQuality(
+    gpsRows,
+    cleanedPoints,
+    preliminaryKm,
+    normalizedEvidence.rejectionCounts,
+  );
   const connectedPoints = quality.usable
     ? connectWindowAnchors(cleanedPoints, {
         latitude: normalizeNumber(fromLat),
@@ -2569,6 +2593,14 @@ export async function calculateTravelLegKm({
   const validPoints = cleanedPoints.length;
   const rejectedPoints = Math.max(0, gpsLogCount - validPoints);
   const gpsUsable = quality.usable && gpsBasedKm > 0;
+  const qualityDiagnostics = {
+    gpsRawSampleCount: quality.rawCount,
+    gpsDuplicateSampleCount: quality.duplicateCount,
+    gpsEffectiveSampleCount: quality.effectiveCount,
+    gpsValidSampleCount: quality.validCount,
+    gpsRejectedUniqueSampleCount: quality.rejectedUniqueCount,
+    gpsValidRatio: quality.validRatio,
+  };
 
   const from = {
     latitude: normalizeNumber(fromLat),
@@ -2603,6 +2635,7 @@ export async function calculateTravelLegKm({
       gpsLogCount,
       validPoints,
       rejectedPoints,
+      ...qualityDiagnostics,
       fallbackReason: GPS_REJECTION_REASON.IMPOSSIBLE_SPEED,
       rawGpsKm,
       filteredGpsKm: gpsBasedKm,
@@ -2685,6 +2718,7 @@ export async function calculateTravelLegKm({
       gpsLogCount,
       validPoints,
       rejectedPoints,
+      ...qualityDiagnostics,
       fallbackReason: null,
       rawGpsKm,
       filteredGpsKm: selectedKm,
@@ -2720,6 +2754,7 @@ export async function calculateTravelLegKm({
       gpsLogCount,
       validPoints,
       rejectedPoints,
+      ...qualityDiagnostics,
       fallbackReason: 'gps_unusable_and_missing_route_anchors',
       rawGpsKm,
       filteredGpsKm: gpsBasedKm,
@@ -2755,6 +2790,7 @@ export async function calculateTravelLegKm({
       gpsLogCount,
       validPoints,
       rejectedPoints,
+      ...qualityDiagnostics,
       rawGpsKm,
       filteredGpsKm: gpsBasedKm,
       googleDirectRouteKm: Number(googleKm.toFixed(2)),
@@ -2763,8 +2799,8 @@ export async function calculateTravelLegKm({
       reviewFlags: [...new Set(['INSUFFICIENT_GPS_USED_GOOGLE_FALLBACK', ...wholeLegGate.riskFlags])],
       fallbackReason: validPoints < 5
         ? 'gps_valid_points_below_threshold'
-        : gpsLogCount < 10
-          ? 'gps_log_count_below_threshold'
+        : quality.effectiveCount < MIN_WINDOW_RAW_GPS_ROWS
+          ? 'gps_effective_sample_count_below_threshold'
           : gpsBasedKm <= 0
             ? 'gps_based_km_zero'
             : 'gps_valid_ratio_below_threshold',
@@ -2781,6 +2817,7 @@ export async function calculateTravelLegKm({
       gpsLogCount,
       validPoints,
       rejectedPoints,
+      ...qualityDiagnostics,
       rawGpsKm,
       filteredGpsKm: gpsBasedKm,
       googleDirectRouteKm: googleDirectKm,
@@ -2807,6 +2844,7 @@ export async function calculateTravelLegKm({
     gpsLogCount,
     validPoints,
     rejectedPoints,
+    ...qualityDiagnostics,
     rawGpsKm,
     filteredGpsKm: gpsBasedKm,
     googleDirectRouteKm: googleDirectKm,
@@ -2980,7 +3018,15 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       calculation_version: result.calculationVersion || KM_ENGINE_VERSION,
       fallback_reason: result.fallbackReason || null,
       gps_log_count: result.gpsLogCount,
+      gps_raw_sample_count: result.gpsRawSampleCount ?? result.gpsLogCount,
+      gps_duplicate_sample_count: result.gpsDuplicateSampleCount ?? 0,
+      gps_effective_sample_count: result.gpsEffectiveSampleCount ?? result.gpsLogCount,
       valid_points: result.validPoints,
+      gps_valid_sample_count: result.gpsValidSampleCount ?? result.validPoints,
+      gps_rejected_unique_sample_count: result.gpsRejectedUniqueSampleCount ?? result.rejectedPoints,
+      gps_valid_ratio: Number.isFinite(Number(result.gpsValidRatio))
+        ? Number(Number(result.gpsValidRatio).toFixed(6))
+        : 0,
       rejected_points: result.rejectedPoints,
       raw_gps_km: result.rawGpsKm ?? null,
       filtered_gps_km: result.filteredGpsKm ?? null,
@@ -3232,11 +3278,15 @@ export async function calculateFullDayGpsNoSiteVisitKm(client, attendance, optio
     attendance.login_time,
     attendance.logout_time,
   );
-  const points = cleanGpsLogs(rows, attendance);
+  const normalizedEvidence = normalizeGpsLogs(rows, attendance);
+  const points = normalizedEvidence.points.map((point) => ({
+    ...point,
+    highConfidence:
+      point.accuracy !== null && point.accuracy <= HIGH_CONFIDENCE_ACCURACY_METERS,
+  }));
   const gpsPointsTotal = rows.length;
   const gpsPointsUsed = points.length;
   const gpsPointsRejected = Math.max(0, gpsPointsTotal - gpsPointsUsed);
-  const validRatio = gpsPointsTotal > 0 ? gpsPointsUsed / gpsPointsTotal : 0;
   const calculation = gpsPointsUsed >= 2
     ? await calculateActualTravelKm(points, options)
     : {
@@ -3264,15 +3314,17 @@ export async function calculateFullDayGpsNoSiteVisitKm(client, attendance, optio
       .toFixed(2),
   );
   const reconstructedGapKm = Number(calculation.reconstructedKm.toFixed(2));
-  const proofValid =
-    gpsPointsTotal >= 10 &&
-    gpsPointsUsed >= 5 &&
-    validRatio >= 0.6 &&
-    filteredGpsKm > 0;
+  const quality = gpsWindowQuality(
+    rows,
+    points,
+    filteredGpsKm,
+    normalizedEvidence.rejectionCounts,
+  );
+  const proofValid = quality.usable;
   const manualReviewRequired = !proofValid;
-  if (gpsPointsTotal < 10) warnings.push('GPS_LOG_COUNT_BELOW_THRESHOLD');
+  if (quality.effectiveCount < MIN_WINDOW_RAW_GPS_ROWS) warnings.push('GPS_EFFECTIVE_SAMPLE_COUNT_BELOW_THRESHOLD');
   if (gpsPointsUsed < 5) warnings.push('VALID_GPS_POINTS_BELOW_THRESHOLD');
-  if (gpsPointsTotal > 0 && validRatio < 0.6) warnings.push('GPS_VALID_RATIO_BELOW_THRESHOLD');
+  if (quality.effectiveCount > 0 && quality.validRatio < MIN_WINDOW_VALID_GPS_RATIO) warnings.push('GPS_VALID_RATIO_BELOW_THRESHOLD');
   if (filteredGpsKm <= 0) warnings.push('FILTERED_GPS_KM_ZERO');
 
   const ratePerKm = ratePerKmForTravelMode(attendance.travel_mode, attendance.rate_per_km);
@@ -3288,8 +3340,12 @@ export async function calculateFullDayGpsNoSiteVisitKm(client, attendance, optio
     eligible_km: eligibleKm,
     petrol_amount: petrolAmount,
     gps_points_total: gpsPointsTotal,
+    gps_duplicate_sample_count: quality.duplicateCount,
+    gps_effective_sample_count: quality.effectiveCount,
     gps_points_used: gpsPointsUsed,
     gps_points_rejected: gpsPointsRejected,
+    gps_rejected_unique_sample_count: quality.rejectedUniqueCount,
+    rejected_point_reasons: normalizedEvidence.rejectionCounts,
     raw_gps_km: rawGpsKm,
     filtered_gps_km: filteredGpsKm,
     accepted_gps_km: acceptedGpsKm,
@@ -3305,7 +3361,7 @@ export async function calculateFullDayGpsNoSiteVisitKm(client, attendance, optio
     rate_per_km: ratePerKm,
     travel_mode: travelPolicy.travelMode,
     payable_km_allowed: travelPolicy.payableKmAllowed,
-    valid_ratio: Number(validRatio.toFixed(3)),
+    valid_ratio: Number(quality.validRatio.toFixed(3)),
     segments_accepted: calculation.segmentsAccepted,
     segments_reconstructed: calculation.segmentsReconstructed,
     segments_rejected: calculation.segmentsRejected,
@@ -3397,7 +3453,12 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     count: rows.length,
   });
 
-  const points = cleanGpsLogs(rows, attendance);
+  const normalizedEvidence = normalizeGpsLogs(rows, attendance);
+  const points = normalizedEvidence.points.map((point) => ({
+    ...point,
+    highConfidence:
+      point.accuracy !== null && point.accuracy <= HIGH_CONFIDENCE_ACCURACY_METERS,
+  }));
   const calculation = await calculateActualTravelKm(points, options);
   const actualTravelKm = Number(calculation.actualTravelKm.toFixed(2));
   const storedRouteKm = Number(sumStoredRouteKm(visits).toFixed(2));
@@ -4457,17 +4518,23 @@ function missingKmReviewPayloadFromCalculation({
   overlapEvidence = {},
   options = {},
 }) {
-  const points = cleanGpsLogs(rows, attendance);
+  const normalizedEvidence = normalizeGpsLogs(rows, attendance);
+  const points = normalizedEvidence.points.map((point) => ({
+    ...point,
+    highConfidence:
+      point.accuracy !== null && point.accuracy <= HIGH_CONFIDENCE_ACCURACY_METERS,
+  }));
   const rawGpsKm = Number(calculateRawGpsKm(points).toFixed(2));
   const filteredGpsKm = Number(Number(calculation.actualTravelKm || 0).toFixed(2));
   const acceptedKm = Number(Number(calculation.acceptedKm || 0).toFixed(2));
   const reconstructedKm = Number(Number(calculation.reconstructedKm || 0).toFixed(2));
-  const validRatio = rows.length > 0 ? points.length / rows.length : 0;
-  const gpsUsable =
-    rows.length >= MIN_WINDOW_RAW_GPS_ROWS &&
-    points.length >= MIN_WINDOW_VALID_GPS_POINTS &&
-    validRatio >= MIN_WINDOW_VALID_GPS_RATIO &&
-    filteredGpsKm > 0;
+  const quality = gpsWindowQuality(
+    rows,
+    points,
+    filteredGpsKm,
+    normalizedEvidence.rejectionCounts,
+  );
+  const gpsUsable = quality.usable;
   let detectedMissingKm = 0;
   let calculationSource = 'no_reliable_route_evidence';
   let evidenceQuality = 'manual_review_required';
@@ -4475,7 +4542,7 @@ function missingKmReviewPayloadFromCalculation({
 
   if (overlapEvidence.overlaps) reasonCodes.push('CHECKOUT_WINDOW_OVERLAPS_CANONICAL_TRAVEL_LEG');
   if (checkoutExceptionRequiresReview(visit)) reasonCodes.push('CHECKOUT_AWAY_FROM_SITE');
-  if (rows.length < MIN_WINDOW_RAW_GPS_ROWS) reasonCodes.push('CHECKOUT_GPS_INCOMPLETE');
+  if (quality.effectiveCount < MIN_WINDOW_RAW_GPS_ROWS) reasonCodes.push('CHECKOUT_GPS_INCOMPLETE');
 
   if (gpsUsable) {
     detectedMissingKm = filteredGpsKm;
@@ -4534,8 +4601,12 @@ function missingKmReviewPayloadFromCalculation({
       origin_source: origin?.source || null,
       destination_source: destination?.source || null,
       gps_log_count: rows.length,
+      gps_duplicate_sample_count: quality.duplicateCount,
+      gps_effective_sample_count: quality.effectiveCount,
       valid_gps_count: points.length,
-      valid_gps_ratio: Number(validRatio.toFixed(4)),
+      valid_gps_ratio: Number(quality.validRatio.toFixed(4)),
+      rejected_unique_gps_count: quality.rejectedUniqueCount,
+      rejected_point_reasons: normalizedEvidence.rejectionCounts,
       accepted_gps_km: acceptedKm,
       reconstructed_gap_km: reconstructedKm,
       overlap_with_canonical_travel_leg: Boolean(overlapEvidence.overlaps),

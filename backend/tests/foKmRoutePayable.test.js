@@ -69,6 +69,51 @@ function gpsRows({ count = 12, start = '2026-07-16T12:41:20.000Z', accuracy = 10
   }));
 }
 
+function oct8FinalLegRows() {
+  const startMs = new Date('2026-10-08T12:37:43.000Z').getTime();
+  const durationMs = 3_639_000;
+  const latitude = 12.85;
+  const startLongitude = 80.20;
+  const endLongitude = 80.11075;
+  const validRows = Array.from({ length: 79 }, (_, index) => {
+    const fraction = index / 78;
+    return {
+      id: `oct8-valid-${index}`,
+      attendance_id: 'd299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91',
+      fo_user_id: 'profile-balaji',
+      employee_code: 'QPMSTNC17015',
+      latitude,
+      longitude: startLongitude + (endLongitude - startLongitude) * fraction,
+      accuracy: 20,
+      is_mocked: false,
+      captured_at: new Date(startMs + durationMs * fraction).toISOString(),
+      metadata: {},
+    };
+  });
+  const duplicates = validRows.slice(0, 44).map((row, index) => ({
+    ...row,
+    id: `oct8-duplicate-${index}`,
+    captured_at: new Date(new Date(row.captured_at).getTime() + 5_000).toISOString(),
+  }));
+  const poorAccuracy = Array.from({ length: 32 }, (_, index) => {
+    const fraction = (index + 0.5) / 32;
+    return {
+      id: `oct8-poor-${index}`,
+      attendance_id: 'd299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91',
+      fo_user_id: 'profile-balaji',
+      employee_code: 'QPMSTNC17015',
+      latitude,
+      longitude: startLongitude + (endLongitude - startLongitude) * fraction,
+      accuracy: 75,
+      is_mocked: false,
+      captured_at: new Date(startMs + durationMs * fraction).toISOString(),
+      metadata: {},
+    };
+  });
+  return [...validRows, ...duplicates, ...poorAccuracy]
+    .sort((left, right) => left.captured_at.localeCompare(right.captured_at));
+}
+
 class Query {
   constructor(rows) {
     this.rows = [...rows];
@@ -283,6 +328,58 @@ test('GPS leg calculation uses cleaned chronological points and anchors', async 
   assert.ok(result.legKm > 0);
 });
 
+test('8 October final leg excludes benign duplicates from completeness without Google fallback', async (t) => {
+  const previousEnabled = process.env.ENABLE_GOOGLE_DIRECTIONS;
+  const previousFetch = global.fetch;
+  let fetchCalls = 0;
+  process.env.ENABLE_GOOGLE_DIRECTIONS = 'true';
+  global.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error('Google must not be called for complete GPS evidence');
+  };
+  t.after(() => {
+    if (previousEnabled === undefined) delete process.env.ENABLE_GOOGLE_DIRECTIONS;
+    else process.env.ENABLE_GOOGLE_DIRECTIONS = previousEnabled;
+    global.fetch = previousFetch;
+  });
+
+  const rows = oct8FinalLegRows();
+  const targetAttendance = attendance({
+    id: 'd299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91',
+    fo_user_id: 'profile-balaji',
+    employee_code: 'QPMSTNC17015',
+    attendance_date: '2026-10-08',
+    login_time: '2026-10-08T03:00:00.000Z',
+    logout_time: '2026-10-08T13:38:51.889Z',
+  });
+  const result = await calculateTravelLegKm({
+    client: clientWith(rows, { attendanceRow: targetAttendance }),
+    attendance: targetAttendance,
+    fromTime: '2026-10-08T12:37:42.000Z',
+    toTime: '2026-10-08T13:38:51.889Z',
+    fromLat: rows.find((row) => row.id === 'oct8-valid-0').latitude,
+    fromLng: rows.find((row) => row.id === 'oct8-valid-0').longitude,
+    toLat: rows.find((row) => row.id === 'oct8-valid-78').latitude,
+    toLng: rows.find((row) => row.id === 'oct8-valid-78').longitude,
+    legType: 'last_checkout_to_end_day',
+    options: { maxGoogleDirectionsCalls: 0 },
+  });
+
+  assert.equal(rows.length, 155);
+  assert.equal(result.gpsRawSampleCount, 155);
+  assert.equal(result.gpsDuplicateSampleCount, 44);
+  assert.equal(result.gpsEffectiveSampleCount, 111);
+  assert.equal(result.gpsValidSampleCount, 79);
+  assert.equal(result.gpsRejectedUniqueSampleCount, 32);
+  assert.equal(Number((result.gpsValidRatio * 100).toFixed(2)), 71.17);
+  assert.equal(result.rejectionReasonCounts.duplicate, 44);
+  assert.equal(result.rejectionReasonCounts.poor_accuracy, 32);
+  assert.equal(result.legSource, 'GPS_BASED');
+  assert.equal(result.gpsCoverageClassification, 'GPS_COMPLETE');
+  assert.equal(result.filteredGpsKm, 9.68);
+  assert.equal(fetchCalls, 0);
+});
+
 test('poor accuracy and mock logs fail GPS quality', async () => {
   for (const rows of [gpsRows({ accuracy: 75 }), gpsRows({ mocked: true })]) {
     const result = await calculateTravelLegKm({
@@ -299,6 +396,24 @@ test('poor accuracy and mock logs fail GPS quality', async () => {
     assert.equal(result.legSource, 'HAVERSINE_ROUTE_FALLBACK');
     assert.ok(result.reviewFlags.includes('GOOGLE_ROUTE_FAILED_USED_HAVERSINE'));
   }
+});
+
+test('dedup-aware completeness does not bypass missing endpoint coverage', async () => {
+  const rows = gpsRows();
+  const result = await calculateTravelLegKm({
+    client: clientWith(rows),
+    attendance: attendance(),
+    fromTime: rows[0].captured_at,
+    toTime: new Date(new Date(rows.at(-1).captured_at).getTime() + 600_000).toISOString(),
+    fromLat: rows[0].latitude,
+    fromLng: rows[0].longitude,
+    toLat: rows.at(-1).latitude + 0.05,
+    toLng: rows.at(-1).longitude + 0.05,
+    options: { maxGoogleDirectionsCalls: 0 },
+  });
+  assert.equal(result.gpsCoverageClassification, 'MANUAL_REVIEW');
+  assert.equal(result.payable, false);
+  assert.ok(result.reviewFlags.includes('GPS_UNDERCOVERED'));
 });
 
 test('insufficient GPS uses exact-window Google fallback', async (t) => {

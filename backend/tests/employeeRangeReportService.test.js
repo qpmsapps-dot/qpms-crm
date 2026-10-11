@@ -750,4 +750,52 @@ test('site_visit_summary exposes the resolved final leg on End Day', () => {
   const endDay = dataset.site_visit_summary.find((item) => item.row_type === 'end_day');
   assert.equal(endDay.travel_from_previous, 'Synthetic Last Site');
   assert.equal(endDay.route_km, 4.25);
+  assert.equal(endDay.gps_calculated_km, 4.25);
+  assert.equal(endDay.payable_km, 4.25);
+});
+
+test('final-leg evidence is displayed separately from zero payable KM', () => {
+  const row = attendance('2026-10-08', 80.62, {
+    id: 'd299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91',
+    login_time: '2026-10-08T03:00:00.000Z',
+    logout_time: '2026-10-08T13:38:51.889Z',
+  });
+  const leg = travelLeg(row.id, 'bike', 0, 4, {
+    id: '850bc41b-e492-4661-9f5e-05aaafb19d0c',
+    started_at: '2026-10-08T12:37:42.970Z',
+    ended_at: '2026-10-08T13:38:51.889Z',
+    calculated_km: 0,
+    payable_km: 0,
+  });
+  const dataset = buildEmployeeRangeDataset({
+    employee: { employee_code: 'QPMSTNC17015' },
+    period: kolkataPeriodBounds('2026-10-08', '2026-10-08'),
+    attendances: [row],
+    visits: [{
+      id: 'visit-oct8-final',
+      attendance_id: row.id,
+      site_name: 'Last Site',
+      check_in_time: '2026-10-08T11:00:00.000Z',
+      check_out_time: '2026-10-08T12:37:42.970Z',
+      route_km: 8,
+      status: 'Completed',
+    }],
+    travelLegs: [leg],
+    finalLegEvidence: [{
+      id: 'evidence-oct8',
+      attendance_id: row.id,
+      travel_leg_id: leg.id,
+      candidate_calculated_km: 9.68,
+      source: 'GPS_BASED',
+      decision: 'MANUAL_REVIEW',
+      reference_only: false,
+      created_at: '2026-10-09T00:00:00.000Z',
+    }],
+  });
+  const endDay = dataset.site_visit_summary.find((item) => item.row_type === 'end_day');
+  assert.equal(endDay.route_km, 9.68);
+  assert.equal(endDay.gps_calculated_km, 9.68);
+  assert.equal(endDay.payable_km, 0);
+  assert.equal(endDay.evidence_decision, 'MANUAL_REVIEW');
+  assert.match(endDay.remarks, /evidence only/i);
 });

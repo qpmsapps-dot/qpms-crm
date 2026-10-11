@@ -53,9 +53,16 @@ const visits = routeValues.map((route_km, index) => ({
 const gpsCalculation = (overrides = {}) => ({
   legKm: 19.401,
   legSource: 'GPS_BASED',
+  gpsCoverageClassification: 'GPS_COMPLETE',
   gpsLogCount: 177,
+  gpsRawSampleCount: 177,
+  gpsDuplicateSampleCount: 0,
+  gpsEffectiveSampleCount: 177,
   validPoints: 131,
+  gpsValidRatio: 131 / 177,
   rejectedPoints: 46,
+  gpsRejectedUniqueSampleCount: 46,
+  rejectionReasonCounts: { poor_accuracy: 46 },
   acceptedGpsKm: 19.401,
   reviewFlags: [],
   ...overrides,
@@ -90,6 +97,12 @@ test('GPS evidence plan preserves all existing payable and reimbursement values'
   const result = plan();
   assert.equal(result.persistable, true);
   assert.equal(result.candidateCalculatedKm, 19.4);
+  assert.equal(result.gpsCoverageClassification, 'GPS_COMPLETE');
+  assert.equal(result.rawSampleCount, 177);
+  assert.equal(result.effectiveSampleCount, 177);
+  assert.equal(result.validPointCount, 131);
+  assert.equal(Number(result.validSampleRatio.toFixed(4)), 0.7401);
+  assert.deepEqual(result.rejectedPointReasons, { poor_accuracy: 46 });
   assert.equal(result.decision, 'MANUAL_REVIEW');
   assert.equal(result.proposedPayableKm, 0);
   assert.equal(result.proposedReimbursementChange, 0);

@@ -107,6 +107,53 @@ export const DEFAULT_KM_V2_POLICY = Object.freeze({
   speedGateMinimumDistanceKm: 0.5,
 });
 
+function nonNegativeCount(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
+
+/**
+ * Measures usable GPS coverage without treating benign, adjacent duplicate
+ * fixes as failed coverage. Duplicates remain auditable and never contribute
+ * distance. Every other rejected unique sample remains in the denominator.
+ */
+export function evaluateGpsCompleteness({
+  rawSampleCount = 0,
+  validSampleCount = 0,
+  rejectionCounts = {},
+  minimumEffectiveSamples = 10,
+  minimumValidSamples = 5,
+  minimumValidRatio = 0.6,
+  calculatedKm = 0,
+} = {}) {
+  const rawCount = nonNegativeCount(rawSampleCount);
+  const duplicateCount = Math.min(
+    rawCount,
+    nonNegativeCount(rejectionCounts?.[GPS_REJECTION_REASON.DUPLICATE]),
+  );
+  const effectiveCount = Math.max(0, rawCount - duplicateCount);
+  const reportedValidCount = nonNegativeCount(validSampleCount);
+  const validCount = Math.min(reportedValidCount, effectiveCount);
+  const validRatio = effectiveCount > 0 ? validCount / effectiveCount : 0;
+  const movementKm = Number(calculatedKm);
+  const usable =
+    effectiveCount >= nonNegativeCount(minimumEffectiveSamples) &&
+    validCount >= nonNegativeCount(minimumValidSamples) &&
+    validRatio >= Number(minimumValidRatio) &&
+    Number.isFinite(movementKm) &&
+    movementKm > 0;
+
+  return {
+    rawCount,
+    duplicateCount,
+    effectiveCount,
+    validCount,
+    rejectedUniqueCount: Math.max(0, effectiveCount - validCount),
+    validRatio,
+    usable,
+  };
+}
+
 function finiteNumber(value) {
   if (value === null || value === undefined || value === '') return null;
   const number = Number(value);

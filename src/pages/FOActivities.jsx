@@ -10831,7 +10831,7 @@ function FieldOfficerDetailsView({
               <table className="mt-2 w-full border-collapse text-left text-xs">
                 <thead>
                   <tr className="bg-slate-100">
-                    {["Date", "Site / Client", "Check-in", "Check-out", "Duration", "Travel from Previous", "Route KM"].map((heading) => (
+                    {["Date", "Site / Client", "Check-in", "Check-out", "Duration", "Travel from Previous", "Route KM", "GPS Calculated", "Payable KM"].map((heading) => (
                       <th key={heading} className="border border-slate-200 px-2 py-2">
                         {heading}
                       </th>
@@ -10847,7 +10847,7 @@ function FieldOfficerDetailsView({
                         {visitDate !== previousVisitDate ? (
                           <tr>
                             <td
-                              colSpan={7}
+                              colSpan={9}
                               className="border border-slate-200 bg-slate-50 px-2 py-1.5 font-black text-slate-700"
                             >
                               Attendance date: {visitDate}
@@ -10876,13 +10876,23 @@ function FieldOfficerDetailsView({
                               ? `${Number(row.route_km).toFixed(2)} km`
                               : "--"}
                           </td>
+                          <td className="border border-slate-200 px-2 py-2 text-blue-700">
+                            {Number.isFinite(Number(row.gps_calculated_km)) && Number(row.gps_calculated_km) > 0
+                              ? `${Number(row.gps_calculated_km).toFixed(2)} km`
+                              : "--"}
+                          </td>
+                          <td className="border border-slate-200 px-2 py-2 font-bold text-emerald-700">
+                            {Number.isFinite(Number(row.payable_km))
+                              ? `${Number(row.payable_km).toFixed(2)} km`
+                              : "--"}
+                          </td>
                         </tr>
                       </Fragment>
                     );
                   })}
                   {!rangeDataset?.site_visit_summary?.length ? (
                     <tr>
-                      <td colSpan={7} className="border border-slate-200 px-2 py-5 text-center">
+                      <td colSpan={9} className="border border-slate-200 px-2 py-5 text-center">
                         No attendance sequence available.
                       </td>
                     </tr>

@@ -11,6 +11,7 @@ import {
   calculateCanonicalKmV2,
   canonicalKmInputDigest,
   classifyRailPublicTransportPolicy,
+  evaluateGpsCompleteness,
   evaluateLegCoverage,
   finalizeGpsSegments,
   normalizeGpsEvidence,
@@ -56,6 +57,68 @@ test('normalizes GPS evidence with explicit rejection reasons', () => {
   assert.equal(result.rejectionCounts[GPS_REJECTION_REASON.MOCKED], 1);
   assert.equal(result.rejectionCounts[GPS_REJECTION_REASON.DUPLICATE], 1);
   assert.equal(result.rejectionCounts[GPS_REJECTION_REASON.IDENTITY_MISMATCH], 1);
+});
+
+test('GPS completeness excludes only benign duplicates from the denominator', () => {
+  const result = evaluateGpsCompleteness({
+    rawSampleCount: 155,
+    validSampleCount: 79,
+    rejectionCounts: {
+      [GPS_REJECTION_REASON.DUPLICATE]: 44,
+      [GPS_REJECTION_REASON.POOR_ACCURACY]: 32,
+    },
+    calculatedKm: 9.68,
+  });
+
+  assert.equal(result.rawCount, 155);
+  assert.equal(result.duplicateCount, 44);
+  assert.equal(result.effectiveCount, 111);
+  assert.equal(result.validCount, 79);
+  assert.equal(result.rejectedUniqueCount, 32);
+  assert.equal(Number(result.validRatio.toFixed(4)), 0.7117);
+  assert.equal(result.usable, true);
+});
+
+test('poor accuracy remains in completeness while duplicate-only and stationary traces fail closed', () => {
+  const poorAccuracy = evaluateGpsCompleteness({
+    rawSampleCount: 20,
+    validSampleCount: 5,
+    rejectionCounts: {
+      [GPS_REJECTION_REASON.DUPLICATE]: 2,
+      [GPS_REJECTION_REASON.POOR_ACCURACY]: 13,
+    },
+    calculatedKm: 2,
+  });
+  assert.equal(poorAccuracy.effectiveCount, 18);
+  assert.equal(Number(poorAccuracy.validRatio.toFixed(4)), 0.2778);
+  assert.equal(poorAccuracy.usable, false);
+
+  const duplicateOnly = evaluateGpsCompleteness({
+    rawSampleCount: 100,
+    validSampleCount: 1,
+    rejectionCounts: { [GPS_REJECTION_REASON.DUPLICATE]: 99 },
+    calculatedKm: 2,
+  });
+  assert.equal(duplicateOnly.effectiveCount, 1);
+  assert.equal(duplicateOnly.usable, false);
+
+  const zeroDenominator = evaluateGpsCompleteness({
+    rawSampleCount: 44,
+    validSampleCount: 0,
+    rejectionCounts: { [GPS_REJECTION_REASON.DUPLICATE]: 44 },
+    calculatedKm: 2,
+  });
+  assert.equal(zeroDenominator.effectiveCount, 0);
+  assert.equal(zeroDenominator.validRatio, 0);
+  assert.equal(zeroDenominator.usable, false);
+
+  const stationary = evaluateGpsCompleteness({
+    rawSampleCount: 155,
+    validSampleCount: 79,
+    rejectionCounts: { [GPS_REJECTION_REASON.DUPLICATE]: 44 },
+    calculatedKm: 0,
+  });
+  assert.equal(stationary.usable, false);
 });
 
 test('stale and future provider timestamps are rejected', () => {

@@ -412,6 +412,35 @@ function safeTravelLeg(row = {}, attendanceDateById = new Map()) {
   };
 }
 
+export async function loadOptionalFinalLegEvidence(client, attendanceIds = []) {
+  if (!attendanceIds.length) return [];
+  try {
+    return await fetchByAttendanceIds(
+      client,
+      'fo_final_leg_reconciliation_runs',
+      attendanceIds,
+      'created_at',
+    );
+  } catch (error) {
+    if (!['42501', '42P01', 'PGRST205'].includes(error?.code)) throw error;
+    return [];
+  }
+}
+
+function safeFinalLegEvidence(row = {}, attendanceDateById = new Map()) {
+  return {
+    id: row.id || null,
+    attendance_id: row.attendance_id || null,
+    attendance_date: attendanceDateById.get(text(row.attendance_id)) || null,
+    travel_leg_id: row.travel_leg_id || null,
+    candidate_calculated_km: row.candidate_calculated_km ?? null,
+    source: row.source || null,
+    decision: row.decision || null,
+    reference_only: row.reference_only === true,
+    created_at: row.created_at || null,
+  };
+}
+
 function isParkingClaim(row = {}) {
   return normalizedMode(row.claim_type) === 'parking' ||
     (
@@ -631,7 +660,12 @@ function reportFinalLegForAttendance(attendance, visits = [], legs = []) {
   }) || null;
 }
 
-function buildSiteVisitSummary(attendances, visitsByAttendance, legsByAttendance = new Map()) {
+function buildSiteVisitSummary(
+  attendances,
+  visitsByAttendance,
+  legsByAttendance = new Map(),
+  evidenceByAttendance = new Map(),
+) {
   return attendances.flatMap((attendance) => {
     const visits = [...(visitsByAttendance.get(attendance.id) || [])]
       .sort((left, right) =>
@@ -648,6 +682,8 @@ function buildSiteVisitSummary(attendances, visitsByAttendance, legsByAttendance
       visit_duration_minutes: null,
       travel_from_previous: null,
       route_km: 0,
+      gps_calculated_km: null,
+      payable_km: 0,
       missing_km: 0,
       approved_km: 0,
       review_status: null,
@@ -666,6 +702,8 @@ function buildSiteVisitSummary(attendances, visitsByAttendance, legsByAttendance
         visit_duration_minutes: visit.visit_duration_minutes,
         travel_from_previous: null,
         route_km: rounded(visit.route_km),
+        gps_calculated_km: null,
+        payable_km: rounded(visit.route_km),
         missing_km: 0,
         approved_km: adjustment?.approved_km || 0,
         review_status: visit.metadata?.checkout_review_status || visit.status || null,
@@ -676,6 +714,16 @@ function buildSiteVisitSummary(attendances, visitsByAttendance, legsByAttendance
       });
     }
     const ended = Boolean(attendance.logout_time);
+    const finalLeg = reportFinalLegForAttendance(
+      attendance,
+      visits,
+      legsByAttendance.get(attendance.id) || [],
+    );
+    const finalLegEvidence = [...(evidenceByAttendance.get(attendance.id) || [])]
+      .filter((evidence) => !finalLeg?.id || evidence.travel_leg_id === finalLeg.id)
+      .sort((left, right) => text(right.created_at).localeCompare(text(left.created_at)))
+      .at(0) || null;
+    const gpsCalculatedKm = finalLegEvidence?.candidate_calculated_km ?? finalLeg?.calculated_km ?? null;
     rows.push({
       attendance_id: attendance.id,
       attendance_date: attendance.attendance_date,
@@ -690,23 +738,18 @@ function buildSiteVisitSummary(attendances, visitsByAttendance, legsByAttendance
       travel_from_previous: visits.at(-1)
         ? [visits.at(-1).store_name || visits.at(-1).site_name, visits.at(-1).client_name].filter(Boolean).join(' / ')
         : null,
-      route_km: rounded(reportFinalLegForAttendance(
-        attendance,
-        visits,
-        legsByAttendance.get(attendance.id) || [],
-      )?.calculated_km),
+      route_km: rounded(gpsCalculatedKm),
+      gps_calculated_km: gpsCalculatedKm === null ? null : rounded(gpsCalculatedKm),
+      payable_km: rounded(finalLeg?.payable_km),
+      evidence_decision: finalLegEvidence?.decision || null,
+      evidence_source: finalLegEvidence?.source || finalLeg?.calculation_source || null,
+      evidence_reference_only: finalLegEvidence?.reference_only === true,
       missing_km: 0,
       approved_km: 0,
-      review_status: reportFinalLegForAttendance(
-        attendance,
-        visits,
-        legsByAttendance.get(attendance.id) || [],
-      )?.status || null,
-      remarks: reportFinalLegForAttendance(
-        attendance,
-        visits,
-        legsByAttendance.get(attendance.id) || [],
-      )?.remarks || (ended ? 'End of day' : 'Attendance is still active'),
+      review_status: finalLegEvidence?.decision || finalLeg?.status || null,
+      remarks: finalLegEvidence
+        ? 'GPS evidence only; payable KM requires separate financial approval.'
+        : finalLeg?.remarks || (ended ? 'End of day' : 'Attendance is still active'),
     });
     return rows;
   });
@@ -718,6 +761,7 @@ export function buildEmployeeRangeDataset({
   attendances = [],
   visits = [],
   travelLegs = [],
+  finalLegEvidence = [],
   expenseClaims = [],
 }) {
   const sortedAttendances = attendances
@@ -735,6 +779,9 @@ export function buildEmployeeRangeDataset({
   const safeTravelLegs = travelLegs
     .map((row) => safeTravelLeg(row, attendanceDateById))
     .sort((left, right) => text(left.started_at).localeCompare(text(right.started_at)));
+  const safeFinalLegEvidenceRows = finalLegEvidence
+    .map((row) => safeFinalLegEvidence(row, attendanceDateById))
+    .sort((left, right) => text(left.created_at).localeCompare(text(right.created_at)));
   const uniqueExpenseClaims = new Map();
   for (const claim of expenseClaims) {
     const claimKey = text(claim.id) ||
@@ -754,6 +801,7 @@ export function buildEmployeeRangeDataset({
   const adjustments = safeVisits.map(adjustmentFromVisit).filter(Boolean);
   const visitsByAttendance = new Map();
   const legsByAttendance = new Map();
+  const evidenceByAttendance = new Map();
   const claimsByAttendance = new Map();
   for (const visit of safeVisits) {
     const list = visitsByAttendance.get(visit.attendance_id) || [];
@@ -764,6 +812,11 @@ export function buildEmployeeRangeDataset({
     const list = legsByAttendance.get(leg.attendance_id) || [];
     list.push(leg);
     legsByAttendance.set(leg.attendance_id, list);
+  }
+  for (const evidence of safeFinalLegEvidenceRows) {
+    const list = evidenceByAttendance.get(evidence.attendance_id) || [];
+    list.push(evidence);
+    evidenceByAttendance.set(evidence.attendance_id, list);
   }
   for (const claim of safeExpenseClaims) {
     const list = claimsByAttendance.get(claim.attendance_id) || [];
@@ -910,8 +963,14 @@ export function buildEmployeeRangeDataset({
     period,
     attendance_days: sortedAttendances,
     site_visits: safeVisits,
-    site_visit_summary: buildSiteVisitSummary(sortedAttendances, visitsByAttendance, legsByAttendance),
+    site_visit_summary: buildSiteVisitSummary(
+      sortedAttendances,
+      visitsByAttendance,
+      legsByAttendance,
+      evidenceByAttendance,
+    ),
     travel_legs: safeTravelLegs,
+    final_leg_evidence: safeFinalLegEvidenceRows,
     expense_claims: safeExpenseClaims,
     missing_checkout_adjustments: adjustments,
     period_summary: periodSummary,
@@ -973,12 +1032,14 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
     attendances,
     employee.employee_code,
   );
+  const finalLegEvidence = await loadOptionalFinalLegEvidence(client, attendanceIds);
   const dataset = buildEmployeeRangeDataset({
     employee,
     period,
     attendances,
     visits,
     travelLegs,
+    finalLegEvidence,
     expenseClaims: linkedExpenseClaims,
   });
   dataset.travel_claim_proofs = await attachAuthorizedTravelClaimProofs(

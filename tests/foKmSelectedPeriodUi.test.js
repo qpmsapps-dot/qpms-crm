@@ -76,3 +76,11 @@ test('button path keeps authentication and always clears UI in-flight/loading st
   assert.match(server, /outcome:\s*'maintenance_blocked'/);
   assert.match(server, /outcome:\s*'already_running'/);
 });
+
+test('range report labels GPS evidence separately from payable KM', async () => {
+  const frontend = await readFile(new URL('../src/pages/FOActivities.jsx', import.meta.url), 'utf8');
+  assert.match(frontend, /"GPS Calculated"/);
+  assert.match(frontend, /"Payable KM"/);
+  assert.match(frontend, /row\.gps_calculated_km/);
+  assert.match(frontend, /row\.payable_km/);
+});
