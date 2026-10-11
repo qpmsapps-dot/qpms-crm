@@ -4,14 +4,27 @@ import { calculateTravelLegKm } from '../foKmRecalculationService.js';
 
 export const FINAL_LEG_EVIDENCE_VERSION = 'KM_ENGINE_V2_FINAL_LEG_EVIDENCE_V1';
 export const FINAL_LEG_EVIDENCE_RPC = 'rpc_record_fo_final_leg_evidence_v1';
-export const FINAL_LEG_EVIDENCE_TARGET = Object.freeze({
-  attendanceId: 'a8d170e6-cbb4-4788-928d-6eb9999d51e2',
-  finalLegId: '48991354-ca06-4856-9931-8f95e6bb932e',
-  employeeCode: 'QPMSTNC17015',
-  attendanceDate: '2026-10-07',
-  protectedBaseKm: 76.45,
-  siteVisitCount: 7,
-});
+export const FINAL_LEG_EVIDENCE_TARGETS = Object.freeze([
+  Object.freeze({
+    attendanceId: 'a8d170e6-cbb4-4788-928d-6eb9999d51e2',
+    finalLegId: '48991354-ca06-4856-9931-8f95e6bb932e',
+    employeeCode: 'QPMSTNC17015',
+    attendanceDate: '2026-10-07',
+    protectedBaseKm: 76.45,
+    siteVisitCount: 7,
+    financialApplyAuthorized: true,
+  }),
+  Object.freeze({
+    attendanceId: 'd299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91',
+    finalLegId: '850bc41b-e492-4661-9f5e-05aaafb19d0c',
+    employeeCode: 'QPMSTNC17015',
+    attendanceDate: '2026-10-08',
+    financialApplyAuthorized: false,
+  }),
+]);
+
+// Backward-compatible export for the separately guarded 7 October financial apply.
+export const FINAL_LEG_EVIDENCE_TARGET = FINAL_LEG_EVIDENCE_TARGETS[0];
 
 const GPS_PAYABLE_EVIDENCE_SOURCES = new Set(['GPS_BASED', 'GPS_ROUTE_SUPPORTED']);
 const VERIFIED_ROUTE_SOURCE = 'VERIFIED_ROAD_ROUTE';
@@ -176,12 +189,13 @@ export function buildFinalLegEvidencePlan({
     });
   }
   const employeeCode = String(attendance.employee_code || attendance.fo_user_id || '').trim();
-  if (
-    attendance.id !== FINAL_LEG_EVIDENCE_TARGET.attendanceId ||
-    finalLeg.id !== FINAL_LEG_EVIDENCE_TARGET.finalLegId ||
-    employeeCode !== FINAL_LEG_EVIDENCE_TARGET.employeeCode ||
-    attendance.attendance_date !== FINAL_LEG_EVIDENCE_TARGET.attendanceDate
-  ) {
+  const authorizedTarget = FINAL_LEG_EVIDENCE_TARGETS.find((target) => (
+    attendance.id === target.attendanceId &&
+    finalLeg.id === target.finalLegId &&
+    employeeCode === target.employeeCode &&
+    attendance.attendance_date === target.attendanceDate
+  ));
+  if (!authorizedTarget) {
     throw Object.assign(new Error('Final-leg evidence persistence is not authorized for this target.'), {
       code: 'final_leg_target_not_authorized', statusCode: 403,
     });

@@ -1,6 +1,7 @@
 -- 205: Isolated final Check-Out -> End Day evidence, review and guarded apply.
 -- Depends on guarded Migration 200. Evidence operations are nonfinancial. The
--- single-target financial RPC requires both evidence and financial approval.
+-- 7/8 October evidence operations are nonfinancial. The 7 October-only
+-- financial RPC requires both evidence and financial approval.
 
 begin;
 
@@ -211,10 +212,6 @@ security definer
 set search_path = public, pg_temp
 as $function$
 declare
-  v_allowed_attendance_id constant uuid := 'a8d170e6-cbb4-4788-928d-6eb9999d51e2';
-  v_allowed_leg_id constant uuid := '48991354-ca06-4856-9931-8f95e6bb932e';
-  v_allowed_employee_code constant text := 'QPMSTNC17015';
-  v_allowed_date constant date := date '2026-10-07';
   v_attendance public.fo_attendance%rowtype;
   v_leg public.fo_travel_legs%rowtype;
   v_existing public.fo_final_leg_reconciliation_runs%rowtype;
@@ -242,10 +239,20 @@ begin
      or coalesce(p_plan ->> 'inputDigest', '') !~ '^[0-9a-f]{64}$' then
     raise exception using errcode = '22023', message = 'final_leg_evidence_invalid_version_or_digest';
   end if;
-  if (p_plan ->> 'attendanceId')::uuid <> v_allowed_attendance_id
-     or (p_plan ->> 'finalLegId')::uuid <> v_allowed_leg_id
-     or coalesce(p_plan ->> 'employeeCode', '') <> v_allowed_employee_code
-     or (p_plan ->> 'attendanceDate')::date <> v_allowed_date then
+  if not (
+    (
+      (p_plan ->> 'attendanceId')::uuid = 'a8d170e6-cbb4-4788-928d-6eb9999d51e2'::uuid
+      and (p_plan ->> 'finalLegId')::uuid = '48991354-ca06-4856-9931-8f95e6bb932e'::uuid
+      and coalesce(p_plan ->> 'employeeCode', '') = 'QPMSTNC17015'
+      and (p_plan ->> 'attendanceDate')::date = date '2026-10-07'
+    )
+    or (
+      (p_plan ->> 'attendanceId')::uuid = 'd299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91'::uuid
+      and (p_plan ->> 'finalLegId')::uuid = '850bc41b-e492-4661-9f5e-05aaafb19d0c'::uuid
+      and coalesce(p_plan ->> 'employeeCode', '') = 'QPMSTNC17015'
+      and (p_plan ->> 'attendanceDate')::date = date '2026-10-08'
+    )
+  ) then
     raise exception using errcode = '42501', message = 'final_leg_evidence_target_not_authorized';
   end if;
   if coalesce((p_plan ->> 'persistable')::boolean, false) is not true
@@ -281,9 +288,9 @@ begin
   if not found then
     raise exception using errcode = 'P0002', message = 'final_leg_evidence_attendance_not_found';
   end if;
-  if v_attendance.id <> v_allowed_attendance_id
-     or coalesce(v_attendance.employee_code, v_attendance.fo_user_id, '') <> v_allowed_employee_code
-     or v_attendance.attendance_date <> v_allowed_date then
+  if v_attendance.id <> v_attendance_id
+     or coalesce(v_attendance.employee_code, v_attendance.fo_user_id, '') <> coalesce(p_plan ->> 'employeeCode', '')
+     or v_attendance.attendance_date <> (p_plan ->> 'attendanceDate')::date then
     raise exception using errcode = '42501', message = 'final_leg_evidence_database_target_mismatch';
   end if;
 
@@ -292,7 +299,7 @@ begin
   if not found then
     raise exception using errcode = 'P0002', message = 'final_leg_evidence_leg_not_found';
   end if;
-  if v_leg.id <> v_allowed_leg_id then
+  if v_leg.id <> v_leg_id then
     raise exception using errcode = '42501', message = 'final_leg_evidence_database_leg_mismatch';
   end if;
 
@@ -362,17 +369,12 @@ begin
   into v_site_visit_count, v_site_visit_route_km
   from public.fo_site_visits where attendance_id = v_attendance_id;
   if v_site_visit_count <> (p_plan ->> 'expectedSiteVisitCount')::integer
-     or v_site_visit_route_km <> round((p_plan ->> 'expectedSiteVisitRouteKm')::numeric, 2)
-     or v_site_visit_count <> 7
-     or v_site_visit_route_km <> 76.45 then
+     or v_site_visit_route_km <> round((p_plan ->> 'expectedSiteVisitRouteKm')::numeric, 2) then
     raise exception using errcode = '40001', message = 'final_leg_evidence_site_visit_state_mismatch';
   end if;
   if round(coalesce(v_attendance.total_route_km, 0), 2) <> v_expected_total_route_km
      or round(coalesce(v_attendance.eligible_km, 0), 2) <> v_expected_eligible_km
      or round(coalesce(v_attendance.total_approved_km, 0), 2) <> v_expected_total_approved_km
-     or round(coalesce(v_attendance.total_route_km, 0), 2) <> 76.45
-     or round(coalesce(v_attendance.eligible_km, 0), 2) <> 76.45
-     or round(coalesce(v_attendance.total_approved_km, 0), 2) <> 76.45
      or round(coalesce(v_attendance.petrol_amount, 0), 2) <> v_expected_petrol_amount then
     raise exception using errcode = '40001', message = 'final_leg_evidence_attendance_financial_state_mismatch';
   end if;
@@ -451,9 +453,13 @@ begin
 
   select * into v_run from public.fo_final_leg_reconciliation_runs
   where id = p_reconciliation_run_id for update;
-  if not found
-     or v_run.attendance_id <> 'a8d170e6-cbb4-4788-928d-6eb9999d51e2'::uuid
-     or v_run.travel_leg_id <> '48991354-ca06-4856-9931-8f95e6bb932e'::uuid then
+  if not found or not (
+    (v_run.attendance_id = 'a8d170e6-cbb4-4788-928d-6eb9999d51e2'::uuid
+      and v_run.travel_leg_id = '48991354-ca06-4856-9931-8f95e6bb932e'::uuid)
+    or
+    (v_run.attendance_id = 'd299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91'::uuid
+      and v_run.travel_leg_id = '850bc41b-e492-4661-9f5e-05aaafb19d0c'::uuid)
+  ) then
     raise exception using errcode = '42501', message = 'final_leg_evidence_resolution_target_not_authorized';
   end if;
   if v_decision = 'APPROVED_EVIDENCE' and (

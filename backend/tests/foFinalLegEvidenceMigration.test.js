@@ -25,8 +25,8 @@ test('RPC locks exact rows and guards stale state and existing totals', () => {
   assert.match(sql, /final_leg_evidence_not_pending_or_already_canonical/);
   assert.match(sql, /final_leg_evidence_site_visit_state_mismatch/);
   assert.match(sql, /final_leg_evidence_attendance_financial_state_mismatch/);
-  assert.match(sql, /v_site_visit_count <> 7/);
-  assert.match(sql, /v_site_visit_route_km <> 76\.45/);
+  assert.match(evidenceRpc, /v_site_visit_count <> \(p_plan ->> 'expectedSiteVisitCount'\)::integer/);
+  assert.match(evidenceRpc, /v_site_visit_route_km <> round\(\(p_plan ->> 'expectedSiteVisitRouteKm'\)::numeric, 2\)/);
   assert.match(sql, /v_last_visit\.check_out_latitude/);
   assert.match(sql, /v_attendance\.end_latitude/);
 });
@@ -59,12 +59,27 @@ test('Haversine is reference-only, cannot be evidence-approved and canonical com
   assert.match(sql, /'canonical_recalculation_complete', false/);
 });
 
-test('database authorization is bound to the exact Balaji attendance and leg', () => {
+test('database evidence authorization is bound to the exact 7/8 October Balaji attendance and legs', () => {
   assert.match(sql, /a8d170e6-cbb4-4788-928d-6eb9999d51e2/);
   assert.match(sql, /48991354-ca06-4856-9931-8f95e6bb932e/);
+  assert.match(evidenceRpc, /d299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91/);
+  assert.match(evidenceRpc, /850bc41b-e492-4661-9f5e-05aaafb19d0c/);
   assert.match(sql, /QPMSTNC17015/);
   assert.match(sql, /date '2026-10-07'/);
+  assert.match(evidenceRpc, /date '2026-10-08'/);
   assert.match(sql, /final_leg_evidence_target_not_authorized/);
+});
+
+test('8 October extension remains evidence-only while 7 October financial apply stays exact', () => {
+  const financialRpc = sql
+    .split('create or replace function public.rpc_apply_fo_final_leg_financial_v1')[1]
+    .split('alter function public.rpc_record_fo_final_leg_evidence_v1')[0];
+  assert.doesNotMatch(financialRpc, /d299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91/);
+  assert.doesNotMatch(financialRpc, /850bc41b-e492-4661-9f5e-05aaafb19d0c/);
+  assert.match(financialRpc, /a8d170e6-cbb4-4788-928d-6eb9999d51e2/);
+  assert.match(financialRpc, /48991354-ca06-4856-9931-8f95e6bb932e/);
+  assert.match(financialRpc, /v_before_route <> 76\.45/);
+  assert.match(financialRpc, /v_site_visit_count <> 7 or v_site_visit_route_km <> 76\.45/);
 });
 
 test('evidence and resolution rows are immutable and evidence approval is not financial approval', () => {

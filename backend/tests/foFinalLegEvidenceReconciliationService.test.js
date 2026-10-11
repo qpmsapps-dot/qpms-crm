@@ -84,6 +84,78 @@ function plan(overrides = {}) {
   });
 }
 
+function planForOctober8(overrides = {}) {
+  const attendance8 = {
+    id: 'd299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91',
+    employee_code: 'QPMSTNC17015',
+    attendance_date: '2026-10-08',
+    logout_time: '2026-10-08T13:38:51Z',
+    end_latitude: 12.91,
+    end_longitude: 80.12,
+    total_route_km: 80.62,
+    eligible_km: 80.62,
+    total_approved_km: 80.62,
+    petrol_amount: 322.48,
+    updated_at: '2026-10-08T13:39:00Z',
+    ...overrides.attendance,
+  };
+  const finalLeg8 = {
+    id: '850bc41b-e492-4661-9f5e-05aaafb19d0c',
+    attendance_id: attendance8.id,
+    status: 'completed',
+    started_at: '2026-10-08T12:37:42Z',
+    ended_at: '2026-10-08T13:38:51Z',
+    start_lat: 12.84,
+    start_lng: 80.18,
+    end_lat: 12.91,
+    end_lng: 80.12,
+    calculated_km: 0,
+    payable_km: 0,
+    payable_amount: 0,
+    fare_amount: 0,
+    updated_at: '2026-10-08T13:39:00Z',
+    ...overrides.finalLeg,
+  };
+  const visits8 = [
+    {
+      id: 'visit-8-1', attendance_id: attendance8.id,
+      check_in_time: '2026-10-08T07:00:00Z', check_out_time: '2026-10-08T08:00:00Z',
+      check_out_latitude: 12.8, check_out_longitude: 80.1, route_km: 30,
+    },
+    {
+      id: 'visit-8-2', attendance_id: attendance8.id,
+      check_in_time: '2026-10-08T11:00:00Z', check_out_time: '2026-10-08T12:37:42Z',
+      check_out_latitude: 12.84, check_out_longitude: 80.18, route_km: 50.62,
+    },
+  ];
+  return buildFinalLegEvidencePlan({
+    attendance: attendance8,
+    finalLeg: finalLeg8,
+    visits: overrides.visits || visits8,
+    gpsRows: Array.from({ length: 155 }, (_, index) => ({ id: `gps-8-${index + 1}` })),
+    calculation: gpsCalculation({
+      legKm: 9.68,
+      gpsLogCount: 155,
+      gpsRawSampleCount: 155,
+      gpsDuplicateSampleCount: 44,
+      gpsEffectiveSampleCount: 111,
+      validPoints: 79,
+      gpsValidRatio: 79 / 111,
+      rejectedPoints: 76,
+      gpsRejectedUniqueSampleCount: 32,
+      rejectionReasonCounts: { duplicate: 44, poor_accuracy: 32 },
+      acceptedGpsKm: 9.68,
+      ...overrides.calculation,
+    }),
+    expectedEmployeeCode: 'QPMSTNC17015',
+    expectedAttendanceDate: '2026-10-08',
+    expectedBaseKm: 80.62,
+    expectedSiteVisitCount: 2,
+    expectedSiteVisitRouteKm: 80.62,
+    expectedPetrolAmount: 322.48,
+  });
+}
+
 test('input digest is stable across unrelated row timestamp changes', () => {
   const before = plan();
   const replay = plan({
@@ -113,6 +185,27 @@ test('GPS evidence plan preserves all existing payable and reimbursement values'
   assert.equal(result.expectedSiteVisitRouteKm, 76.45);
   assert.equal(result.canonicalRecalculationComplete, false);
   assert.equal(result.referenceOnly, false);
+});
+
+test('8 October duplicate-aware GPS evidence is independently recordable and nonpayable', () => {
+  const result = planForOctober8();
+  assert.equal(result.attendanceId, 'd299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91');
+  assert.equal(result.finalLegId, '850bc41b-e492-4661-9f5e-05aaafb19d0c');
+  assert.equal(result.candidateCalculatedKm, 9.68);
+  assert.equal(result.gpsCoverageClassification, 'GPS_COMPLETE');
+  assert.equal(result.rawSampleCount, 155);
+  assert.equal(result.duplicateSampleCount, 44);
+  assert.equal(result.effectiveSampleCount, 111);
+  assert.equal(result.validPointCount, 79);
+  assert.equal(Number((result.validSampleRatio * 100).toFixed(2)), 71.17);
+  assert.equal(result.rejectedUniqueSampleCount, 32);
+  assert.deepEqual(result.rejectedPointReasons, { duplicate: 44, poor_accuracy: 32 });
+  assert.equal(result.decision, 'MANUAL_REVIEW');
+  assert.equal(result.proposedPayableKm, 0);
+  assert.equal(result.proposedReimbursementChange, 0);
+  assert.equal(result.expectedTotalRouteKm, 80.62);
+  assert.equal(result.expectedSiteVisitRouteKm, 80.62);
+  assert.equal(result.canonicalRecalculationComplete, false);
 });
 
 test('stale or changed existing totals fail closed before persistence', () => {
@@ -149,6 +242,10 @@ test('a different attendance, employee, date or final leg is rejected locally', 
   );
   assert.throws(
     () => plan({ attendance: { employee_code: 'QPMSTNC17016' } }),
+    (error) => error.code === 'final_leg_target_not_authorized' && error.statusCode === 403,
+  );
+  assert.throws(
+    () => planForOctober8({ finalLeg: { id: '850bc41b-e492-4661-9f5e-05aaafb19d0d' } }),
     (error) => error.code === 'final_leg_target_not_authorized' && error.statusCode === 403,
   );
 });
