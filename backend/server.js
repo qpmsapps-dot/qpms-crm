@@ -1701,7 +1701,6 @@ async function requireSupabaseJwt(request, response, next) {
 
     request.authUser = authData.user;
     request.profile = profile;
-    request.userScopedSupabase = userScopedSupabase;
     request.employeeCode = String(profile.employee_code || '').trim() || null;
     request.userRole = String(profile.role || '').trim();
     if (blockDemoReadOnlyMutation(request, response, profile, authData.user)) return;
@@ -1712,12 +1711,14 @@ async function requireSupabaseJwt(request, response, next) {
       message: safeError.message,
       code: safeError.code,
     });
-    response.status(error.statusCode || 401).json({
+    const status = error.statusCode === 503 ? 503 : 500;
+    response.status(status).json({
       ok: false,
-      message: error.statusCode === 503
+      code: error.code || 'supabase_jwt_verification_failed',
+      message: status === 503
         ? error.message
-        : 'Unable to verify Supabase access token.',
-      ...(error.statusCode === 503 && error.diagnosticReason
+        : 'Supabase access token verification failed internally. Please retry.',
+      ...(status === 503 && error.diagnosticReason
         ? { diagnosticReason: error.diagnosticReason }
         : {}),
     });
@@ -1784,12 +1785,14 @@ async function requireSupabaseJwtAllowMissingProfile(request, response, next) {
       message: safeError.message,
       code: safeError.code,
     });
-    response.status(error.statusCode || 401).json({
+    const status = error.statusCode === 503 ? 503 : 500;
+    response.status(status).json({
       ok: false,
-      message: error.statusCode === 503
+      code: error.code || 'supabase_jwt_verification_failed',
+      message: status === 503
         ? error.message
-        : 'Unable to verify Supabase access token.',
-      ...(error.statusCode === 503 && error.diagnosticReason
+        : 'Supabase access token verification failed internally. Please retry.',
+      ...(status === 503 && error.diagnosticReason
         ? { diagnosticReason: error.diagnosticReason }
         : {}),
     });
