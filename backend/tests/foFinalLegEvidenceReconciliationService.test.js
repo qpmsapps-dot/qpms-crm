@@ -273,3 +273,114 @@ test('duplicate apply delegates idempotency to one guarded RPC call', async () =
   assert.equal(second.idempotent_replay, true);
   assert.equal(calls, 2);
 });
+
+test('concurrent duplicate evidence requests are rejected before a second RPC call', async () => {
+  let release;
+  let calls = 0;
+  const client = {
+    rpc: () => {
+      calls += 1;
+      return new Promise((resolve) => { release = resolve; });
+    },
+  };
+  const evidencePlan = plan();
+  const first = persistFinalLegEvidenceReconciliation(client, evidencePlan, { timeoutMs: 5_000 });
+  await assert.rejects(
+    persistFinalLegEvidenceReconciliation(client, evidencePlan, { timeoutMs: 5_000 }),
+    (error) => error.code === 'final_leg_evidence_already_running' && error.statusCode === 409,
+  );
+  assert.equal(calls, 1);
+  release({ data: { ok: true, idempotent_replay: false }, error: null });
+  await first;
+});
+
+test('caller cancellation does not release ownership while an uncooperative RPC is active', async () => {
+  let release;
+  let calls = 0;
+  const client = {
+    rpc: () => {
+      calls += 1;
+      return new Promise((resolve) => { release = resolve; });
+    },
+  };
+  const controller = new AbortController();
+  const evidencePlan = plan();
+  const first = persistFinalLegEvidenceReconciliation(client, evidencePlan, {
+    signal: controller.signal,
+    timeoutMs: 5_000,
+  });
+  controller.abort();
+  await assert.rejects(first, (error) => error.code === 'final_leg_evidence_cancelled');
+  await assert.rejects(
+    persistFinalLegEvidenceReconciliation(client, evidencePlan),
+    (error) => error.code === 'final_leg_evidence_already_running',
+  );
+  assert.equal(calls, 1);
+  release({ data: { ok: true }, error: null });
+  await new Promise((resolve) => setImmediate(resolve));
+  const replay = await persistFinalLegEvidenceReconciliation({
+    rpc: async () => ({ data: { ok: true, idempotent_replay: true }, error: null }),
+  }, evidencePlan);
+  assert.equal(replay.idempotent_replay, true);
+});
+
+test('bounded timeout aborts the RPC, disables HTTP retry and permits retry only after cleanup', async () => {
+  let retrySetting = null;
+  let receivedSignal = null;
+  const client = {
+    rpc: () => {
+      const response = new Promise((resolve, reject) => {
+        queueMicrotask(() => {
+          receivedSignal?.addEventListener('abort', () => {
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          }, { once: true });
+        });
+      });
+      return {
+        retry(value) { retrySetting = value; return this; },
+        abortSignal(signal) { receivedSignal = signal; return this; },
+        then(resolve, reject) { return response.then(resolve, reject); },
+      };
+    },
+  };
+  await assert.rejects(
+    persistFinalLegEvidenceReconciliation(client, plan(), { timeoutMs: 1_000 }),
+    (error) => error.code === 'final_leg_evidence_timeout' && error.statusCode === 504,
+  );
+  assert.equal(retrySetting, false);
+  assert.equal(receivedSignal.aborted, true);
+});
+
+test('database fail-fast contention is returned as an explicit retryable outcome', async () => {
+  const client = {
+    rpc: async () => ({
+      data: null,
+      error: { code: '55P03', message: 'final_leg_evidence_already_running' },
+    }),
+  };
+  await assert.rejects(
+    persistFinalLegEvidenceReconciliation(client, plan()),
+    (error) => error.code === 'final_leg_evidence_already_running'
+      && error.statusCode === 409
+      && error.retryable === true,
+  );
+});
+
+test('database row-lock and statement timeouts remain distinct retryable outcomes', async () => {
+  await assert.rejects(
+    persistFinalLegEvidenceReconciliation({
+      rpc: async () => ({ data: null, error: { code: '55P03', message: 'canceling statement due to lock timeout' } }),
+    }, plan()),
+    (error) => error.code === 'final_leg_evidence_lock_timeout'
+      && error.statusCode === 409
+      && error.retryable === true,
+  );
+  await assert.rejects(
+    persistFinalLegEvidenceReconciliation({
+      rpc: async () => ({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }),
+    }, plan()),
+    (error) => error.code === 'final_leg_evidence_statement_timeout'
+      && error.statusCode === 504
+      && error.retryable === true,
+  );
+});

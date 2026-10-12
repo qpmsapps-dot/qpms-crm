@@ -30,6 +30,23 @@ const GPS_PAYABLE_EVIDENCE_SOURCES = new Set(['GPS_BASED', 'GPS_ROUTE_SUPPORTED'
 const VERIFIED_ROUTE_SOURCE = 'VERIFIED_ROAD_ROUTE';
 const BOUNDARY_TOLERANCE_MS = 1_000;
 const COORDINATE_TOLERANCE_METERS = 25;
+const DEFAULT_EVIDENCE_RPC_TIMEOUT_MS = 15_000;
+const MAX_EVIDENCE_RPC_TIMEOUT_MS = 30_000;
+const evidenceOperations = new Map();
+
+function evidenceOperationError(code, message, statusCode, retryable = false) {
+  return Object.assign(new Error(message), { code, statusCode, retryable });
+}
+
+function evidenceOperationKey(plan) {
+  return `${plan.attendanceId}|${plan.finalLegId}`;
+}
+
+function boundedEvidenceTimeout(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_EVIDENCE_RPC_TIMEOUT_MS;
+  return Math.min(MAX_EVIDENCE_RPC_TIMEOUT_MS, Math.max(1_000, Math.trunc(parsed)));
+}
 
 function number(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -422,7 +439,11 @@ export async function prepareFinalLegEvidenceReconciliation(client, payload = {}
   });
 }
 
-export async function persistFinalLegEvidenceReconciliation(client, plan, { actorSource = null } = {}) {
+export async function persistFinalLegEvidenceReconciliation(
+  client,
+  plan,
+  { actorSource = null, timeoutMs = DEFAULT_EVIDENCE_RPC_TIMEOUT_MS, signal = null } = {},
+) {
   if (!plan?.persistable) {
     const error = new Error(plan?.reason || 'Final-leg evidence is not eligible for persistence.');
     error.code = 'final_leg_evidence_not_persistable';
@@ -434,21 +455,117 @@ export async function persistFinalLegEvidenceReconciliation(client, plan, { acto
       code: 'final_leg_service_role_rpc_required', statusCode: 503,
     });
   }
-  const { data, error } = await client.rpc(FINAL_LEG_EVIDENCE_RPC, {
-    p_plan: plan,
-    p_actor_source: actorSource,
-  });
-  if (error) {
-    const message = String(error.message || 'Final-leg evidence persistence failed.');
-    const schemaMissing = ['PGRST202', '42883', '42P01', '42703'].includes(error.code) ||
-      /schema cache|does not exist|could not find the function/i.test(message);
-    const wrapped = new Error(schemaMissing
-      ? 'Final-leg evidence schema is not deployed. Apply canonical V2 prerequisites before retrying.'
-      : message);
-    wrapped.code = schemaMissing ? 'final_leg_evidence_schema_missing' : (error.code || 'final_leg_evidence_persistence_failed');
-    wrapped.statusCode = schemaMissing ? 503 : (error.code === '40001' ? 409 : 500);
-    wrapped.details = error.details || null;
-    throw wrapped;
+
+  const operationKey = evidenceOperationKey(plan);
+  if (evidenceOperations.has(operationKey)) {
+    throw evidenceOperationError(
+      'final_leg_evidence_already_running',
+      'Final-leg evidence recording is already running for this attendance and leg.',
+      409,
+      true,
+    );
   }
-  return data;
+
+  const controller = new AbortController();
+  const operationToken = {};
+  const effectiveTimeoutMs = boundedEvidenceTimeout(timeoutMs);
+  let timedOut = false;
+  let externalAbortHandler = null;
+  evidenceOperations.set(operationKey, operationToken);
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, effectiveTimeoutMs);
+
+  if (signal) {
+    externalAbortHandler = () => controller.abort(signal.reason);
+    if (signal.aborted) externalAbortHandler();
+    else signal.addEventListener('abort', externalAbortHandler, { once: true });
+  }
+
+  const cleanup = () => {
+    clearTimeout(timer);
+    if (signal && externalAbortHandler) signal.removeEventListener('abort', externalAbortHandler);
+    if (evidenceOperations.get(operationKey) === operationToken) evidenceOperations.delete(operationKey);
+  };
+
+  let request;
+  try {
+    request = client.rpc(FINAL_LEG_EVIDENCE_RPC, {
+      p_plan: plan,
+      p_actor_source: actorSource,
+    });
+    if (request && typeof request.retry === 'function') request = request.retry(false);
+    if (request && typeof request.abortSignal === 'function') request = request.abortSignal(controller.signal);
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+
+  const operation = Promise.resolve(request).then(({ data, error }) => {
+    if (error) {
+      const message = String(error.message || 'Final-leg evidence persistence failed.');
+      const schemaMissing = ['PGRST202', '42883', '42P01', '42703'].includes(error.code) ||
+        /schema cache|does not exist|could not find the function/i.test(message);
+      const contention = /final_leg_evidence_already_running/i.test(message);
+      const lockTimeout = error.code === '55P03' && !contention;
+      const statementTimeout = error.code === '57014';
+      const wrapped = new Error(schemaMissing
+        ? 'Final-leg evidence schema is not deployed. Apply canonical V2 prerequisites before retrying.'
+        : contention
+          ? 'Final-leg evidence recording is already running for this attendance and leg.'
+          : lockTimeout
+            ? 'Final-leg evidence recording could not acquire a required database row lock in time.'
+            : statementTimeout
+              ? 'Final-leg evidence recording exceeded its bounded database statement timeout.'
+          : message);
+      wrapped.code = schemaMissing
+        ? 'final_leg_evidence_schema_missing'
+        : contention
+          ? 'final_leg_evidence_already_running'
+          : lockTimeout
+            ? 'final_leg_evidence_lock_timeout'
+            : statementTimeout
+              ? 'final_leg_evidence_statement_timeout'
+          : (error.code || 'final_leg_evidence_persistence_failed');
+      wrapped.statusCode = schemaMissing
+        ? 503
+        : (contention || lockTimeout || error.code === '40001' ? 409 : (statementTimeout ? 504 : 500));
+      wrapped.retryable = contention || lockTimeout || statementTimeout;
+      wrapped.details = error.details || null;
+      throw wrapped;
+    }
+    return data;
+  }).catch((error) => {
+    if (controller.signal.aborted && (error?.name === 'AbortError' || error?.code === 'ABORT_ERR')) {
+      throw evidenceOperationError(
+        timedOut ? 'final_leg_evidence_timeout' : 'final_leg_evidence_cancelled',
+        timedOut
+          ? 'Final-leg evidence recording timed out without confirming a database result.'
+          : 'Final-leg evidence recording was cancelled without confirming a database result.',
+        timedOut ? 504 : 499,
+        timedOut,
+      );
+    }
+    throw error;
+  });
+
+  const ownedOperation = operation.finally(cleanup);
+  operationToken.promise = ownedOperation;
+
+  const cancellation = new Promise((resolve, reject) => {
+    const rejectForAbort = () => reject(evidenceOperationError(
+      timedOut ? 'final_leg_evidence_timeout' : 'final_leg_evidence_cancelled',
+      timedOut
+        ? 'Final-leg evidence recording timed out without confirming a database result.'
+        : 'Final-leg evidence recording was cancelled without confirming a database result.',
+      timedOut ? 504 : 499,
+      timedOut,
+    ));
+    if (controller.signal.aborted) rejectForAbort();
+    else controller.signal.addEventListener('abort', rejectForAbort, { once: true });
+  });
+
+  return Promise.race([ownedOperation, cancellation]);
 }

@@ -110,6 +110,8 @@ returns jsonb language sql stable as $$
   end
 $$;
 
+create extension if not exists dblink;
+
 set session authorization service_role;
 select set_config('request.jwt.claim.role', 'service_role', false);
 
@@ -120,6 +122,52 @@ begin
   end if;
 end
 $$;
+
+reset session authorization;
+select dblink_connect('evidence_lock_holder', 'dbname=' || current_database());
+select dblink_send_query(
+  'evidence_lock_holder',
+  'select 1 from (select pg_advisory_lock(8278566192434363561::bigint)) locked, lateral (select pg_sleep(3)) waiting'
+);
+
+do $$
+declare
+  v_started timestamptz;
+  v_lock_seen boolean := false;
+begin
+  for v_attempt in 1..20 loop
+    select exists (
+      select 1 from pg_locks
+      where locktype = 'advisory'
+        and classid = 1927503895::oid
+        and objid = 496745641::oid
+        and granted
+    ) into v_lock_seen;
+    exit when v_lock_seen;
+    perform pg_sleep(0.05);
+  end loop;
+  if not v_lock_seen then raise exception 'test_failed_advisory_holder_not_ready'; end if;
+
+  perform set_config('request.jwt.claim.role', 'service_role', true);
+  v_started := clock_timestamp();
+  begin
+    perform public.rpc_record_fo_final_leg_evidence_v1(
+      pg_temp.final_leg_plan(date '2026-10-07'), 'contention_test'
+    );
+    raise exception 'test_failed_contending_request_accepted';
+  exception when lock_not_available then
+    if sqlerrm <> 'final_leg_evidence_already_running' then raise; end if;
+  end;
+  if clock_timestamp() - v_started > interval '1 second' then
+    raise exception 'test_failed_contention_did_not_fail_fast';
+  end if;
+end
+$$;
+
+select * from dblink_get_result('evidence_lock_holder') as t(result integer);
+select dblink_disconnect('evidence_lock_holder');
+set session authorization service_role;
+select set_config('request.jwt.claim.role', 'service_role', false);
 
 select public.rpc_record_fo_final_leg_evidence_v1(pg_temp.final_leg_plan(date '2026-10-07'), 'two_target_test');
 select public.rpc_record_fo_final_leg_evidence_v1(pg_temp.final_leg_plan(date '2026-10-08'), 'two_target_test');
