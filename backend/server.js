@@ -43,6 +43,10 @@ import {
 import { authorizeFoKmRecalculation } from './services/foKmRecalculationAuthorizationService.js';
 import { getKmV2FinancialWriteState } from './services/foKmV2PersistenceService.js';
 import {
+  loadAutomaticRecoveryAuthorization,
+  runAutomaticMissingKmRecoveryRange,
+} from './services/foAutomaticMissingKmRecoveryService.js';
+import {
   canonicalEndDayCompletionMatches,
   historicalIndiaDateStart,
   runBoundedEndDayRecoveryAttempt,
@@ -10857,6 +10861,82 @@ app.post('/api/fo/km/final-leg-recovery/preview-range', requireSupabaseJwt, requ
       ok: false,
       outcome: 'preview_failed',
       code: error?.code || 'FINAL_LEG_RECOVERY_PREVIEW_FAILED',
+      message: safeError.message,
+    });
+  }
+});
+
+app.post('/api/fo/km/automatic-missing-km/recalculate-range', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
+  try {
+    const fromDateText = String(request.body?.date_from || '').slice(0, 10);
+    const toDateText = String(request.body?.date_to || '').slice(0, 10);
+    const fromDate = new Date(`${fromDateText}T00:00:00Z`);
+    const toDate = new Date(`${toDateText}T00:00:00Z`);
+    const rangeDays = Math.floor((toDate - fromDate) / 86_400_000) + 1;
+    if (!Number.isFinite(rangeDays) || rangeDays < 1 || rangeDays > 31) {
+      response.status(400).json({
+        ok: false,
+        outcome: 'recalculation_failed',
+        code: 'AUTOMATIC_MISSING_KM_RANGE_INVALID',
+        message: 'Select an inclusive employee date range of 1 to 31 days.',
+      });
+      return;
+    }
+    const client = requireServiceRoleSupabase();
+    await assertServiceRoleAuthAdminAccess(client);
+    const dataset = await loadAuthorizedEmployeeRange(client, request.profile, request.body || {});
+    const attendances = dataset.attendance_days || [];
+    if (attendances.length > 31) {
+      response.status(422).json({
+        ok: false,
+        outcome: 'recalculation_failed',
+        code: 'AUTOMATIC_MISSING_KM_ATTENDANCE_LIMIT',
+        message: 'The selected period exceeds the 31-attendance safety limit.',
+      });
+      return;
+    }
+    const employeeCode = String(
+      dataset.employee?.employee_code || dataset.employee?.fo_user_id || request.body?.employee || '',
+    ).trim().toUpperCase();
+    const authorization = await loadAutomaticRecoveryAuthorization(
+      client, employeeCode, fromDateText, toDateText,
+    );
+    const result = await runAutomaticMissingKmRecoveryRange(client, attendances, {
+      authorization,
+      actor: {
+        userId: request.authUser?.id,
+        identity: request.profile?.email || request.authUser?.email ||
+          request.profile?.employee_code || request.authUser?.id,
+      },
+    });
+    response.json({
+      ...result,
+      employee: dataset.employee,
+      date_from: fromDateText,
+      date_to: toDateText,
+      authorization: authorization ? {
+        id: authorization.id,
+        expires_at: authorization.expires_at,
+        scope: `${authorization.employee_code}:${authorization.date_from}:${authorization.date_to}`,
+      } : null,
+      google_routes_calls: 0,
+      message: result.outcome === 'authorization_required'
+        ? 'Preview completed. Automatic financial application is blocked until this exact employee/date batch is separately authorized.'
+        : result.outcome === 'partial_success'
+          ? 'Eligible GPS_COMPLETE legs were applied where safe; one or more legs remain blocked for review.'
+          : result.outcome === 'applied'
+            ? 'Eligible GPS_COMPLETE missing travel KM was applied additively and exactly once.'
+            : 'Preview completed with no automatically eligible missing travel KM.',
+    });
+  } catch (error) {
+    const status = Number(error?.statusCode || 500);
+    const safeError = status >= 500
+      ? safeServiceRoleError(error, 'automatic_missing_km_recalculation_failed')
+      : { statusCode: status, message: error.message };
+    response.status(safeError.statusCode).json({
+      ok: false,
+      outcome: 'recalculation_failed',
+      code: error?.code || 'AUTOMATIC_MISSING_KM_RECALCULATION_FAILED',
       message: safeError.message,
     });
   }

@@ -117,16 +117,15 @@ test('recovery revokes execution without deleting immutable audit evidence', () 
   assert.doesNotMatch(recovery, /delete from|truncate|drop table/i);
 });
 
-test('button uses preview workflow and never calls old replacement endpoint', () => {
-  assert.match(ui, /\/api\/fo\/km\/final-leg-recovery\/preview-range/);
-  assert.match(ui, /GPS Calculated/);
-  assert.match(ui, /Payable KM/);
-  assert.match(ui, /Apply Approved Delta/);
+test('button uses bounded automatic missing-KM workflow and never calls old replacement endpoint', () => {
+  assert.match(ui, /\/api\/fo\/km\/automatic-missing-km\/recalculate-range/);
+  assert.match(ui, /Missing KM/);
+  assert.match(ui, /Auto Eligible/);
+  assert.match(ui, /Applied KM/);
+  assert.doesNotMatch(ui, /Apply Approved Delta/);
   const handler = ui.slice(ui.indexOf('async function recalculateSelectedOfficerKm'), ui.indexOf('async function recalculateTemporarySwitchKmForOfficer'));
   assert.doesNotMatch(handler, /recalculate-employee-range/);
-  assert.match(server, /KM_FINANCIAL_WRITES_MAINTENANCE/);
-  assert.match(server, /KM_V2_DATABASE_FINANCIAL_WRITES_CLOSED/);
-  assert.match(server, /final-leg-recovery\/preview-range', requireSupabaseJwt, requireFoKmBatchRecalculationPermission/);
-  assert.match(server, /final-leg-recovery\/action', requireSupabaseJwtWithUserScopedProfile, requireFoKmBatchRecalculationPermission/);
+  assert.match(server, /automatic-missing-km\/recalculate-range', requireSupabaseJwt, requireFoKmBatchRecalculationPermission/);
+  assert.match(server, /loadAutomaticRecoveryAuthorization/);
   assert.match(server, /rangeDays > 31/);
 });
