@@ -56,6 +56,28 @@ create table public.fo_site_visits (
   route_km numeric(10,2) not null default 0
 );
 
+create table public.fo_travel_reimbursement_corrections (
+  id uuid primary key default gen_random_uuid(),
+  attendance_id uuid not null references public.fo_attendance(id),
+  status text not null,
+  correction_key text,
+  correction_reason text,
+  applied_state jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table public.fo_monthly_travel_settlements (
+  id uuid primary key default gen_random_uuid(),
+  employee_code text not null,
+  period_start date not null,
+  period_end date not null,
+  approved_payable_amount numeric,
+  source_reference text
+);
+
+grant select, insert, delete on public.fo_travel_reimbursement_corrections to service_role;
+grant select, insert, delete on public.fo_monthly_travel_settlements to service_role;
+
 create table public.fo_location_logs (
   id uuid primary key default gen_random_uuid(),
   attendance_id uuid references public.fo_attendance(id) on delete cascade,

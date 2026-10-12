@@ -32,7 +32,7 @@ insert into public.fo_attendance (
     'd299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91', 'QPMSTNC17015', 'QPMSTNC17015',
     date '2026-10-08', timestamptz '2026-10-08 09:00:00+05:30',
     timestamptz '2026-10-08 19:08:51+05:30', 'Completed',
-    12.9100000, 80.1200000, 80.62, 80.62, 80.62, 4.00, 322.48,
+    12.9100000, 80.1200000, 57.54, 57.54, 57.54, 4.00, 230.16,
     'bike', 'pending_canonical_end_day_recalculation',
     '{"canonical_recalculation_pending":true}', timestamptz '2026-10-08 19:09:00+05:30'
   );
@@ -51,7 +51,7 @@ insert into public.fo_site_visits (
     '10000000-0000-4000-8000-000000000008',
     'd299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91',
     timestamptz '2026-10-08 09:00:00+05:30', timestamptz '2026-10-08 18:07:42+05:30',
-    12.8400000, 80.1800000, 80.62
+    12.8400000, 80.1800000, 57.54
   );
 
 insert into public.fo_travel_legs (
@@ -99,8 +99,8 @@ returns jsonb language sql stable as $$
       'startedAt','2026-10-08T12:37:42Z','endedAt','2026-10-08T13:38:51Z',
       'startLat',12.8400000,'startLng',80.1800000,'endLat',12.9100000,'endLng',80.1200000,
       'existingCalculatedKm',0,'existingPayableKm',0,'existingPayableAmount',0,'existingFareAmount',0,
-      'expectedTotalRouteKm',80.62,'expectedEligibleKm',80.62,'expectedTotalApprovedKm',80.62,
-      'expectedPetrolAmount',322.48,'expectedSiteVisitCount',1,'expectedSiteVisitRouteKm',80.62,
+      'expectedTotalRouteKm',57.54,'expectedEligibleKm',57.54,'expectedTotalApprovedKm',57.54,
+      'expectedPetrolAmount',230.16,'expectedSiteVisitCount',1,'expectedSiteVisitRouteKm',57.54,
       'candidateCalculatedKm',9.68,'acceptedGpsKm',9.68,'source','GPS_BASED','referenceOnly',false,
       'decision','MANUAL_REVIEW','persistable',true,'proposedPayableKm',0,'proposedReimbursementChange',0,
       'rawSampleCount',155,'duplicateSampleCount',44,'effectiveSampleCount',111,
@@ -185,7 +185,7 @@ begin
     );
     raise exception 'test_failed_unauthorized_target_accepted';
   exception when insufficient_privilege then
-    if sqlerrm <> 'final_leg_evidence_target_not_authorized' then raise; end if;
+    if sqlerrm <> 'final_leg_evidence_database_target_mismatch' then raise; end if;
   end;
 
   begin
@@ -199,16 +199,6 @@ begin
     if sqlerrm <> 'final_leg_evidence_stale_input' then raise; end if;
   end;
 
-  begin
-    perform public.rpc_apply_fo_final_leg_financial_v1(
-      'd299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91', '850bc41b-e492-4661-9f5e-05aaafb19d0c',
-      null, repeat('a',64), repeat('8',64), null, null,
-      80.62,80.62,80.62,322.48,0,0,0,0,9.68,4,38.72,'test', 'two_target_test'
-    );
-    raise exception 'test_failed_8_october_financial_apply_authorized';
-  exception when insufficient_privilege then
-    if sqlerrm <> 'final_leg_financial_target_not_authorized' then raise; end if;
-  end;
 end
 $$;
 
@@ -238,7 +228,7 @@ begin
                (76.45::numeric,76.45::numeric,76.45::numeric,305.80::numeric))
        or (id='d299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91'
            and (total_route_km,eligible_km,total_approved_km,petrol_amount) is distinct from
-               (80.62::numeric,80.62::numeric,80.62::numeric,322.48::numeric))
+               (57.54::numeric,57.54::numeric,57.54::numeric,230.16::numeric))
   ) then raise exception 'test_failed_attendance_financials_changed'; end if;
   if exists (
     select 1 from public.fo_travel_legs
@@ -250,7 +240,7 @@ begin
     raise exception 'test_failed_financial_audit_write';
   end if;
   if (select round(sum(route_km),2) from public.fo_site_visits where attendance_id='a8d170e6-cbb4-4788-928d-6eb9999d51e2') <> 76.45
-     or (select round(sum(route_km),2) from public.fo_site_visits where attendance_id='d299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91') <> 80.62 then
+     or (select round(sum(route_km),2) from public.fo_site_visits where attendance_id='d299f0c4-9af7-4f0c-b8cc-86e5b7fb1f91') <> 57.54 then
     raise exception 'test_failed_site_visit_values_changed';
   end if;
   raise notice 'TWO_TARGET_EVIDENCE_INTEGRATION_OK';

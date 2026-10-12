@@ -62,7 +62,6 @@ import { authenticatedApiRequest, authenticatedFetch } from "../services/api.js"
 import { authSessionManager, invalidateAuthOnUnauthorized, isAuthSessionError, SESSION_EXPIRED_MESSAGE } from "../services/authSession.js";
 import { assertDemoWriteAllowed, isDemoUser, isReadOnlyUser } from "../utils/demoAccess.js";
 import {
-  employeeRangeRecalculationPresentation,
   KM_RECALCULATION_REFRESH_TIMEOUT_MS,
   KM_RECALCULATION_REQUEST_TIMEOUT_MS,
   runWithAbortTimeout,
@@ -7375,6 +7374,7 @@ function FieldOfficerDetailsView({
   onBack,
   onExport,
   onRecalculateKm,
+  onFinalLegRecoveryAction,
   onTemporarySwitchKm,
   onCheckoutReviewAction,
   checkoutReviewBusyVisitId = null,
@@ -10614,6 +10614,59 @@ function FieldOfficerDetailsView({
               </div>
             </div>
             {recalculationResult?.message ? <p className={`mt-3 rounded-lg p-3 text-xs font-semibold ${recalculationResult.ok ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{recalculationResult.message}</p> : null}
+            {Array.isArray(recalculationResult?.rows) && recalculationResult.rows.length ? (
+              <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+                <table className="min-w-full divide-y divide-slate-200 text-xs">
+                  <thead className="bg-slate-50 text-left font-black text-slate-600">
+                    <tr>
+                      <th className="px-3 py-2">Date</th>
+                      <th className="px-3 py-2">Existing KM</th>
+                      <th className="px-3 py-2">GPS Calculated</th>
+                      <th className="px-3 py-2">Payable KM</th>
+                      <th className="px-3 py-2">Additive Preview</th>
+                      <th className="px-3 py-2">Status / Review</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {recalculationResult.rows.map((row) => (
+                      <tr key={row.attendanceId || row.attendanceDate}>
+                        <td className="px-3 py-3 font-bold text-slate-800">{row.attendanceDate || "--"}</td>
+                        <td className="px-3 py-3">{Number(row.expectedTotalApprovedKm || 0).toFixed(2)} km</td>
+                        <td className="px-3 py-3 font-black text-blue-700">
+                          {row.candidateCalculatedKm == null ? "--" : `${Number(row.candidateCalculatedKm).toFixed(2)} km`}
+                        </td>
+                        <td className="px-3 py-3 font-black text-emerald-700">{Number(row.existingPayableKm || 0).toFixed(2)} km</td>
+                        <td className="px-3 py-3">{Number(row.proposedAdditiveTotalKm || row.expectedTotalApprovedKm || 0).toFixed(2)} km</td>
+                        <td className="px-3 py-3">
+                          <p className="font-bold text-slate-700">{row.status || "MANUAL_REVIEW"}</p>
+                          {row.warning ? <p className="mt-1 text-amber-700">{row.warning}</p> : null}
+                          {row.status === "ELIGIBLE_FOR_EVIDENCE_REVIEW" ? (
+                            <button type="button" onClick={() => onFinalLegRecoveryAction?.("RECORD_EVIDENCE", row)} className="mt-2 rounded-md border border-blue-200 px-2 py-1 font-black text-blue-700">
+                              Record GPS Evidence
+                            </button>
+                          ) : null}
+                          {row.status === "EVIDENCE_RECORDED_REVIEW_REQUIRED" ? (
+                            <div className="mt-2 flex gap-2">
+                              <button type="button" onClick={() => onFinalLegRecoveryAction?.("APPROVE_EVIDENCE", row)} className="rounded-md border border-emerald-200 px-2 py-1 font-black text-emerald-700">Approve Evidence</button>
+                              <button type="button" onClick={() => onFinalLegRecoveryAction?.("REJECT_EVIDENCE", row)} className="rounded-md border border-rose-200 px-2 py-1 font-black text-rose-700">Reject</button>
+                            </div>
+                          ) : null}
+                          {row.status === "EVIDENCE_APPROVED_FINANCIAL_APPROVAL_REQUIRED" ? (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button type="button" onClick={() => onFinalLegRecoveryAction?.("CREATE_FINANCIAL_APPROVAL", row)} className="rounded-md border border-violet-200 px-2 py-1 font-black text-violet-700">Approve Financial Change</button>
+                              <button type="button" onClick={() => onFinalLegRecoveryAction?.("APPLY_APPROVED_DELTA", row)} className="rounded-md border border-amber-200 px-2 py-1 font-black text-amber-700">Apply Approved Delta</button>
+                            </div>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="border-t border-slate-200 bg-slate-50 px-3 py-2 font-semibold text-slate-600">
+                  Preview is non-mutating. GPS evidence, evidence review, financial approval and additive apply are separate audited actions.
+                </p>
+              </div>
+            ) : null}
             <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {[
                 ["GPS Log Count", gpsMetrics.gpsLogsCount],
@@ -13012,7 +13065,7 @@ export default function FOActivities() {
       const { response, payload } = await runWithAbortTimeout(
         async (signal) => {
           const requestResponse = await authenticatedFetch(
-            `${API_BASE_URL}/api/fo/km/recalculate-employee-range`,
+            `${API_BASE_URL}/api/fo/km/final-leg-recovery/preview-range`,
             {
               method: "POST",
               signal,
@@ -13035,35 +13088,19 @@ export default function FOActivities() {
           timeoutMessage: "KM recalculation request timed out.",
         },
       );
-      const presentation = employeeRangeRecalculationPresentation(payload);
-      const structuredOutcome = Boolean(payload.outcome || payload.code);
-      if (!response.ok && !structuredOutcome) {
-        throw new Error(payload.message || "KM recalculation failed.");
-      }
-      if (presentation.shouldRefresh) {
-        const refreshedDataset = await runWithAbortTimeout(
-          (signal) => loadSelectedEmployeeRange({ signal, throwOnError: true }),
-          {
-            timeoutMs: KM_RECALCULATION_REFRESH_TIMEOUT_MS,
-            timeoutCode: "KM_RECALCULATION_REFRESH_TIMEOUT",
-            timeoutMessage: "Employee period refresh timed out.",
-          },
-        );
-        if (refreshedDataset) {
-          setEmployeeRangeDataset({
-            ...refreshedDataset,
-            recalculation_results: payload.results || [],
-          });
-        }
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.message || "Final-leg recovery preview failed.");
       }
       setKmRecalcResult({
         ...payload,
-        ...presentation,
+        ok: true,
+        confidence: payload.summary?.eligible ? "REVIEW_REQUIRED" : "NO_CHANGE",
+        message: payload.summary?.eligible
+          ? `${payload.summary.eligible} eligible, ${payload.summary.manualReview || 0} manual-review and ${payload.summary.alreadyHandled || 0} already handled final-leg record(s). No payable KM was changed.`
+          : payload.summary?.manualReview
+            ? `${payload.summary.manualReview} record(s) require manual review; ${payload.summary.alreadyHandled || 0} were already handled. No payable KM was changed.`
+            : "Preview completed. All selected final-leg records are already handled or no eligible correction was found.",
       });
-      if (presentation.shouldRefresh) {
-        setRefreshToken((value) => value + 1);
-        setSummaryRefreshToken((value) => value + 1);
-      }
     } catch (error) {
       const timeoutMessage = error?.code === "KM_RECALCULATION_REQUEST_TIMEOUT"
         ? "KM recalculation request timed out. It may still be running; wait and refresh before retrying."
@@ -13085,6 +13122,87 @@ export default function FOActivities() {
       if (recalcKey) {
         kmRecalcInFlightRef.current.delete(recalcKey);
       }
+      setKmRecalcBusy(false);
+    }
+  }
+
+  async function submitFinalLegRecoveryAction(action, row) {
+    if (!selectedOfficer || !row?.attendanceId || !row?.finalLegId || kmRecalcBusy) return;
+    let reviewReason = "";
+    let approvedRatePerKm = null;
+    let approvedPayableAmount = null;
+    let ratePolicy = "";
+    let approvalReason = "";
+    if (["APPROVE_EVIDENCE", "REJECT_EVIDENCE"].includes(action)) {
+      reviewReason = window.prompt("Enter the evidence review reason:", "Canonical GPS V2 final-leg review") || "";
+      if (!reviewReason.trim()) return;
+    }
+    if (["CREATE_FINANCIAL_APPROVAL", "APPLY_APPROVED_DELTA"].includes(action)) {
+      approvedRatePerKm = Number(window.prompt("Enter the separately approved rate per KM:", ""));
+      ratePolicy = window.prompt("Enter the approved rate policy/reference:", "") || "";
+      approvedPayableAmount = Number((Number(row.evidenceResolution?.approved_evidence_km || row.candidateCalculatedKm || 0) * approvedRatePerKm).toFixed(2));
+      if (!(approvedRatePerKm > 0) || !ratePolicy.trim()) return;
+      if (action === "CREATE_FINANCIAL_APPROVAL") {
+        approvalReason = window.prompt("Enter the financial approval reason:", "Approved additive missing final-leg recovery") || "";
+        if (!approvalReason.trim()) return;
+      } else if (!window.confirm(`Apply the separately approved additive delta of ${Number(row.evidenceResolution?.approved_evidence_km || row.candidateCalculatedKm || 0).toFixed(2)} km? Existing KM will not be replaced.`)) {
+        return;
+      }
+    }
+    setKmRecalcBusy(true);
+    try {
+      const { response, payload } = await runWithAbortTimeout(async (signal) => {
+        const requestResponse = await authenticatedFetch(`${API_BASE_URL}/api/fo/km/final-leg-recovery/action`, {
+          method: "POST",
+          signal,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action,
+            employee: selectedOfficer.employeeCode || selectedOfficer.foId || selectedOfficer.attendance?.employee_code,
+            attendance_id: row.attendanceId,
+            attendance_date: row.attendanceDate,
+            review_reason: reviewReason,
+            approved_rate_per_km: approvedRatePerKm,
+            approved_payable_amount: approvedPayableAmount,
+            rate_policy: ratePolicy,
+            approval_reason: approvalReason,
+          }),
+        });
+        return { response: requestResponse, payload: await requestResponse.json() };
+      }, {
+        timeoutMs: KM_RECALCULATION_REQUEST_TIMEOUT_MS,
+        timeoutCode: "FINAL_LEG_RECOVERY_ACTION_TIMEOUT",
+        timeoutMessage: "Final-leg recovery action timed out without a confirmed result.",
+      });
+      if (!response.ok || payload.ok === false) throw new Error(payload.message || "Final-leg recovery action failed.");
+      let refreshWarning = "";
+      try {
+        const refreshedDataset = await runWithAbortTimeout(
+          (signal) => loadSelectedEmployeeRange({ signal, throwOnError: true }),
+          {
+            timeoutMs: KM_RECALCULATION_REFRESH_TIMEOUT_MS,
+            timeoutCode: "FINAL_LEG_RECOVERY_REFRESH_TIMEOUT",
+            timeoutMessage: "Final-leg recovery completed, but the employee report refresh timed out.",
+          },
+        );
+        if (refreshedDataset) setEmployeeRangeDataset(refreshedDataset);
+      } catch (refreshError) {
+        refreshWarning = ` ${refreshError.message} Reload the report before taking another action.`;
+      }
+      setKmRecalcBusy(false);
+      const recalcKey = selectedOfficerKmRecalcKey();
+      if (recalcKey) kmRecalcCooldownRef.current.delete(recalcKey);
+      await recalculateSelectedOfficerKm();
+      setKmRecalcResult((current) => ({
+        ...(current || {}),
+        ok: true,
+        message: action === "APPLY_APPROVED_DELTA"
+          ? `The approved additive final-leg delta was applied exactly once.${refreshWarning}`
+          : `The audited workflow step was recorded. Payable KM remains unchanged unless a separately approved apply completed.${refreshWarning}`,
+      }));
+    } catch (error) {
+      setKmRecalcResult({ ok: false, outcome: "action_failed", message: error.message, confidence: "ERROR" });
+    } finally {
       setKmRecalcBusy(false);
     }
   }
@@ -13463,6 +13581,7 @@ export default function FOActivities() {
             onProgress,
           })}
         onRecalculateKm={fullTechnicalAccess ? recalculateSelectedOfficerKm : null}
+        onFinalLegRecoveryAction={fullTechnicalAccess ? submitFinalLegRecoveryAction : null}
         onTemporarySwitchKm={
           canRunTemporarySwitchKm
             ? () => recalculateTemporarySwitchKmForOfficer(selectedOfficer)

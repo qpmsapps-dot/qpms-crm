@@ -128,6 +128,14 @@ import {
 import { kmFinancialWritesMaintenanceEnabled } from './services/kmFinancialWriteMaintenanceService.js';
 import { createEmployeeRangeRecalculationRegistry } from './services/foEmployeeRangeRecalculationLockService.js';
 import {
+  applyApprovedFinalLeg,
+  approveFinalLegFinancialChange,
+  previewFinalLegRecoveryAttendance,
+  previewFinalLegRecoveryRange,
+  recordFinalLegEvidence,
+  resolveFinalLegEvidence,
+} from './services/foFinalLegRecoveryWorkflowService.js';
+import {
   BUSINESS_DEVELOPMENT_CAPABILITIES,
   normalizeBusinessDevelopmentCapability,
 } from './shared/businessDevelopmentRoles.js';
@@ -1693,6 +1701,7 @@ async function requireSupabaseJwt(request, response, next) {
 
     request.authUser = authData.user;
     request.profile = profile;
+    request.userScopedSupabase = userScopedSupabase;
     request.employeeCode = String(profile.employee_code || '').trim() || null;
     request.userRole = String(profile.role || '').trim();
     if (blockDemoReadOnlyMutation(request, response, profile, authData.user)) return;
@@ -1832,6 +1841,7 @@ async function requireSupabaseJwtWithUserScopedProfile(request, response, next) 
 
     request.authUser = authData.user;
     request.profile = profile;
+    request.userScopedSupabase = userScopedSupabase;
     request.employeeCode = String(profile.employee_code || '').trim() || null;
     request.userRole = String(profile.role || '').trim();
     if (blockDemoReadOnlyMutation(request, response, profile, authData.user)) return;
@@ -10772,6 +10782,163 @@ app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRec
     });
   } finally {
     releaseFoKmRecalculateAllLock(lockDate);
+  }
+});
+
+async function loadAuthorizedFinalLegPreview(client, request, payload = {}) {
+  const attendanceId = String(payload.attendance_id || '').trim();
+  const employee = String(payload.employee || payload.employee_code || '').trim();
+  const date = String(payload.attendance_date || payload.date || '').slice(0, 10);
+  if (!attendanceId || !employee || !date) {
+    throw Object.assign(new Error('employee, attendance_date and attendance_id are required.'), {
+      code: 'FINAL_LEG_RECOVERY_TARGET_REQUIRED', statusCode: 400,
+    });
+  }
+  const dataset = await loadAuthorizedEmployeeRange(client, request.profile, {
+    employee,
+    date_from: date,
+    date_to: date,
+  });
+  const attendance = (dataset.attendance_days || []).find((row) => row.id === attendanceId);
+  if (!attendance) {
+    throw Object.assign(new Error('The target attendance is outside the authorized employee/date scope.'), {
+      code: 'FINAL_LEG_RECOVERY_TARGET_NOT_AUTHORIZED', statusCode: 403,
+    });
+  }
+  return previewFinalLegRecoveryAttendance(client, attendance, { maxGoogleDirectionsCalls: 0 });
+}
+
+app.post('/api/fo/km/final-leg-recovery/preview-range', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
+  try {
+    const fromDate = new Date(`${String(request.body?.date_from || '').slice(0, 10)}T00:00:00Z`);
+    const toDate = new Date(`${String(request.body?.date_to || '').slice(0, 10)}T00:00:00Z`);
+    const rangeDays = Math.floor((toDate - fromDate) / 86_400_000) + 1;
+    if (!Number.isFinite(rangeDays) || rangeDays < 1 || rangeDays > 31) {
+      response.status(400).json({
+        ok: false,
+        outcome: 'preview_failed',
+        code: 'FINAL_LEG_RECOVERY_RANGE_INVALID',
+        message: 'Select an inclusive employee date range of 1 to 31 days.',
+      });
+      return;
+    }
+    const client = requireServiceRoleSupabase();
+    await assertServiceRoleAuthAdminAccess(client);
+    const dataset = await loadAuthorizedEmployeeRange(client, request.profile, request.body || {});
+    const attendances = dataset.attendance_days || [];
+    if (attendances.length > 100) {
+      response.status(422).json({
+        ok: false,
+        outcome: 'preview_failed',
+        code: 'FINAL_LEG_RECOVERY_RESULT_LIMIT',
+        message: 'The selected range exceeds the 100-attendance preview limit.',
+      });
+      return;
+    }
+    const result = await previewFinalLegRecoveryRange(client, attendances, {
+      maxGoogleDirectionsCalls: 0,
+    });
+    response.json({
+      ...result,
+      employee: dataset.employee,
+      date_from: request.body?.date_from || null,
+      date_to: request.body?.date_to || null,
+      google_routes_calls: 0,
+    });
+  } catch (error) {
+    const status = Number(error?.statusCode || 500);
+    const safeError = status >= 500
+      ? safeServiceRoleError(error, 'final_leg_recovery_preview_failed')
+      : { statusCode: status, message: error.message };
+    response.status(safeError.statusCode).json({
+      ok: false,
+      outcome: 'preview_failed',
+      code: error?.code || 'FINAL_LEG_RECOVERY_PREVIEW_FAILED',
+      message: safeError.message,
+    });
+  }
+});
+
+app.post('/api/fo/km/final-leg-recovery/action', requireSupabaseJwtWithUserScopedProfile, requireFoKmBatchRecalculationPermission, async (request, response) => {
+  const payload = request.body || {};
+  const action = String(payload.action || '').trim().toUpperCase();
+  try {
+    const client = requireServiceRoleSupabase();
+    await assertServiceRoleAuthAdminAccess(client);
+    const preview = await loadAuthorizedFinalLegPreview(client, request, payload);
+    const actorSource = request.profile?.email || request.authUser?.email ||
+      request.profile?.employee_code || request.authUser?.id || null;
+    if (action === 'RECORD_EVIDENCE') {
+      const result = await recordFinalLegEvidence(
+        client, preview.attendanceId, preview.finalLegId, actorSource,
+        { signal: request.signal },
+      );
+      response.json({ ok: true, outcome: 'evidence_recorded', result });
+      return;
+    }
+    if (action === 'APPROVE_EVIDENCE' || action === 'REJECT_EVIDENCE') {
+      if (!preview.existingEvidence?.id) {
+        throw Object.assign(new Error('Immutable evidence must be recorded before review.'), {
+          code: 'FINAL_LEG_EVIDENCE_REQUIRED', statusCode: 409,
+        });
+      }
+      const result = await resolveFinalLegEvidence(request.userScopedSupabase, {
+        reconciliation_run_id: preview.existingEvidence.id,
+        decision: action === 'APPROVE_EVIDENCE' ? 'APPROVED_EVIDENCE' : 'REJECTED',
+        approved_evidence_km: preview.existingEvidence.candidate_calculated_km,
+        review_reason: payload.review_reason,
+      });
+      response.json({ ok: true, outcome: 'evidence_reviewed', result });
+      return;
+    }
+    if (action === 'CREATE_FINANCIAL_APPROVAL') {
+      const result = await approveFinalLegFinancialChange(request.userScopedSupabase, preview, payload);
+      response.json({ ok: true, outcome: 'financial_approval_recorded', result });
+      return;
+    }
+    if (action === 'APPLY_APPROVED_DELTA') {
+      if (kmFinancialWritesMaintenanceEnabled(process.env)) {
+        response.status(503).json({
+          ok: false,
+          outcome: 'maintenance_blocked',
+          code: 'KM_FINANCIAL_WRITES_MAINTENANCE',
+          retryable: true,
+          message: FO_KM_RECALCULATION_MAINTENANCE_MESSAGE,
+        });
+        return;
+      }
+      const databaseGate = await getKmV2FinancialWriteState(client);
+      if (databaseGate?.financial_writes_enabled !== true) {
+        response.status(503).json({
+          ok: false,
+          outcome: 'financial_gate_closed',
+          code: 'KM_V2_DATABASE_FINANCIAL_WRITES_CLOSED',
+          retryable: true,
+          message: 'Approved final-leg recovery is blocked because the database financial gate is closed.',
+        });
+        return;
+      }
+      const result = await applyApprovedFinalLeg(client, preview, { ...payload, actor_source: actorSource });
+      response.json({ ok: true, outcome: 'approved_delta_applied', result });
+      return;
+    }
+    response.status(400).json({
+      ok: false,
+      outcome: 'invalid_action',
+      code: 'FINAL_LEG_RECOVERY_ACTION_INVALID',
+      message: 'A supported explicit final-leg recovery action is required.',
+    });
+  } catch (error) {
+    const status = Number(error?.statusCode || 500);
+    const safeError = status >= 500
+      ? safeServiceRoleError(error, 'final_leg_recovery_action_failed')
+      : { statusCode: status, message: error.message };
+    response.status(safeError.statusCode).json({
+      ok: false,
+      outcome: 'action_failed',
+      code: error?.code || 'FINAL_LEG_RECOVERY_ACTION_FAILED',
+      message: safeError.message,
+    });
   }
 });
 

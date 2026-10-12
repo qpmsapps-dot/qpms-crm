@@ -4,6 +4,9 @@ import { calculateTravelLegKm } from '../foKmRecalculationService.js';
 
 export const FINAL_LEG_EVIDENCE_VERSION = 'KM_ENGINE_V2_FINAL_LEG_EVIDENCE_V1';
 export const FINAL_LEG_EVIDENCE_RPC = 'rpc_record_fo_final_leg_evidence_v1';
+// Legacy target constants remain exported for the two already-verified recovery
+// cases. Eligibility is now established from locked database rows, exact final
+// leg anchors and stale-state checks rather than this historical allow-list.
 export const FINAL_LEG_EVIDENCE_TARGETS = Object.freeze([
   Object.freeze({
     attendanceId: 'a8d170e6-cbb4-4788-928d-6eb9999d51e2',
@@ -206,15 +209,9 @@ export function buildFinalLegEvidencePlan({
     });
   }
   const employeeCode = String(attendance.employee_code || attendance.fo_user_id || '').trim();
-  const authorizedTarget = FINAL_LEG_EVIDENCE_TARGETS.find((target) => (
-    attendance.id === target.attendanceId &&
-    finalLeg.id === target.finalLegId &&
-    employeeCode === target.employeeCode &&
-    attendance.attendance_date === target.attendanceDate
-  ));
-  if (!authorizedTarget) {
-    throw Object.assign(new Error('Final-leg evidence persistence is not authorized for this target.'), {
-      code: 'final_leg_target_not_authorized', statusCode: 403,
+  if (!employeeCode || !attendance.attendance_date || !attendance.logout_time) {
+    throw Object.assign(new Error('Completed attendance identity and End Day time are required.'), {
+      code: 'final_leg_attendance_identity_incomplete', statusCode: 409,
     });
   }
   if (expectedEmployeeCode && employeeCode !== String(expectedEmployeeCode).trim()) {

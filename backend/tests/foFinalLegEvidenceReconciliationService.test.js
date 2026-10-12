@@ -92,9 +92,9 @@ function planForOctober8(overrides = {}) {
     logout_time: '2026-10-08T13:38:51Z',
     end_latitude: 12.91,
     end_longitude: 80.12,
-    total_route_km: 80.62,
-    eligible_km: 80.62,
-    total_approved_km: 80.62,
+    total_route_km: 57.54,
+    eligible_km: 57.54,
+    total_approved_km: 57.54,
     petrol_amount: 322.48,
     updated_at: '2026-10-08T13:39:00Z',
     ...overrides.attendance,
@@ -125,7 +125,7 @@ function planForOctober8(overrides = {}) {
     {
       id: 'visit-8-2', attendance_id: attendance8.id,
       check_in_time: '2026-10-08T11:00:00Z', check_out_time: '2026-10-08T12:37:42Z',
-      check_out_latitude: 12.84, check_out_longitude: 80.18, route_km: 50.62,
+      check_out_latitude: 12.84, check_out_longitude: 80.18, route_km: 27.54,
     },
   ];
   return buildFinalLegEvidencePlan({
@@ -149,9 +149,9 @@ function planForOctober8(overrides = {}) {
     }),
     expectedEmployeeCode: 'QPMSTNC17015',
     expectedAttendanceDate: '2026-10-08',
-    expectedBaseKm: 80.62,
+    expectedBaseKm: 57.54,
     expectedSiteVisitCount: 2,
-    expectedSiteVisitRouteKm: 80.62,
+    expectedSiteVisitRouteKm: 57.54,
     expectedPetrolAmount: 322.48,
   });
 }
@@ -203,8 +203,9 @@ test('8 October duplicate-aware GPS evidence is independently recordable and non
   assert.equal(result.decision, 'MANUAL_REVIEW');
   assert.equal(result.proposedPayableKm, 0);
   assert.equal(result.proposedReimbursementChange, 0);
-  assert.equal(result.expectedTotalRouteKm, 80.62);
-  assert.equal(result.expectedSiteVisitRouteKm, 80.62);
+  assert.equal(result.expectedTotalRouteKm, 57.54);
+  assert.equal(result.expectedSiteVisitRouteKm, 57.54);
+  assert.equal(Number((result.expectedTotalApprovedKm + result.candidateCalculatedKm).toFixed(2)), 67.22);
   assert.equal(result.canonicalRecalculationComplete, false);
 });
 
@@ -235,18 +236,23 @@ test('Haversine-only distance is persistable only as reference evidence and rema
   assert.equal(persisted.reference_only, true);
 });
 
-test('a different attendance, employee, date or final leg is rejected locally', () => {
+test('generalized eligibility accepts database-matching targets and rejects identity mismatches', () => {
+  const generalized = plan({
+    attendance: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+    finalLeg: { attendance_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+  });
+  assert.equal(generalized.persistable, true);
   assert.throws(
     () => plan({ attendance: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } }),
-    (error) => error.code === 'final_leg_attendance_mismatch' || error.code === 'final_leg_target_not_authorized',
+    (error) => error.code === 'final_leg_attendance_mismatch',
   );
   assert.throws(
     () => plan({ attendance: { employee_code: 'QPMSTNC17016' } }),
-    (error) => error.code === 'final_leg_target_not_authorized' && error.statusCode === 403,
+    (error) => error.code === 'final_leg_employee_mismatch' && error.statusCode === 409,
   );
   assert.throws(
-    () => planForOctober8({ finalLeg: { id: '850bc41b-e492-4661-9f5e-05aaafb19d0d' } }),
-    (error) => error.code === 'final_leg_target_not_authorized' && error.statusCode === 403,
+    () => planForOctober8({ finalLeg: { attendance_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } }),
+    (error) => error.code === 'final_leg_attendance_mismatch',
   );
 });
 
