@@ -5,6 +5,7 @@ import {
   storedAttendancePayableKm,
   storedAttendancePetrolAmount,
 } from './operationsSummaryService.js';
+import { attachHistoricalFinalLegRecoveries } from './historicalFinalLegRecoveryReportingService.js';
 
 const PAGE_SIZE = 1000;
 const ATTENDANCE_ID_CHUNK_SIZE = 100;
@@ -1085,7 +1086,7 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
       message: 'Travel-leg records are temporarily unavailable.',
     });
   }
-  return dataset;
+  return attachHistoricalFinalLegRecoveries(client, dataset);
 }
 
 export async function recalculateEmployeeRange({ attendances = [], recalculate }) {
