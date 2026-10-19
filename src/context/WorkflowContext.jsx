@@ -25,6 +25,7 @@ import {
   updateLeadRemote,
   uploadSiteImageRemote,
 } from '../services/workflowRepository.js';
+import { shouldLoadLeadManagementData } from '../utils/siteSurveyAssignmentActions.js';
 import { useAuth } from './auth-context.js';
 import { WorkflowContext } from './workflow-context.js';
 
@@ -358,7 +359,10 @@ export function WorkflowProvider({ children }) {
     workflowRequestIdRef.current = requestId;
     setBackendStatus('connecting');
     setWorkflowError('');
-    return fetchWorkflowData({ requestKey })
+    return fetchWorkflowData({
+      requestKey,
+      includeLeads: shouldLoadLeadManagementData(user),
+    })
       .then((data) => {
         if (requestId !== workflowRequestIdRef.current) return;
         setLeads(data.leads.map(normalizeLead));

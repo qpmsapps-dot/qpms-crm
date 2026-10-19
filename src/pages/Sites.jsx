@@ -34,6 +34,7 @@ import { useWorkflow } from '../context/workflow-context.js';
 import { canViewBdTeam, isAdmin, isApprovalReviewer, isCommercialTeam, isCoordinator, isFinanceTeam, isHrReviewer, isOperationsTeam } from '../data/mockUsers.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { isReadOnlyUser } from '../utils/demoAccess.js';
+import { canOpenAssignedSiteSurveyForUser } from '../utils/siteSurveyAssignmentActions.js';
 import { sendProposalEmail, sendSiteVisitMomEmail } from '../services/mailService.js';
 import { logAssessmentAuditRemote } from '../services/workflowRepository.js';
 import { calculateManpowerCost } from '../services/costingEngine.js';
@@ -834,6 +835,9 @@ export default function Sites() {
   usePageTitle('Site Visit & Estimation');
 
   const visibleSiteVisits = useMemo(() => {
+    if (['Operations Manager', 'KAM'].includes(user?.role)) {
+      return siteVisits.filter((visit) => canOpenAssignedSiteSurveyForUser(visit, user));
+    }
     if (canViewBdTeam(user) || isApprovalReviewer(user)) return siteVisits;
     return siteVisits.filter((visit) => visit.assigned_bd_email === user?.email || visit.created_by_user_id === user?.id);
   }, [siteVisits, user]);

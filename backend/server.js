@@ -9020,7 +9020,9 @@ function requireSiteVisitWorkflowEnabled(request, response, next) {
 
 async function listSiteVisitWorkflow(request, response) {
   try {
-    const result = await loadSiteVisitWorkflowData(siteVisitWorkflowClient(request));
+    const result = await loadSiteVisitWorkflowData(siteVisitWorkflowClient(request), {
+      actor: request.profile,
+    });
     response.json({ ok: true, ...result });
   } catch (error) {
     console.error('[myQPMS Site Visit] workflow load failed', {

@@ -282,6 +282,12 @@ export function dbSiteVisitToApp(row) {
     executive: row.assigned_bd_executive,
     assigned_bd_executive: row.assigned_bd_executive,
     assigned_bd_email: row.assigned_bd_email,
+    assignedProfileId: row.assigned_profile_id || '',
+    assignedOperationsManagerProfileId: row.assigned_operations_manager_profile_id || '',
+    acceptanceStatus: row.acceptance_status || '',
+    assignmentVersion: row.assignment_version ?? null,
+    acceptedByProfileId: row.accepted_by_profile_id || '',
+    acceptedAt: row.accepted_at || null,
     created_by_user_id: lead.created_by_user_id,
     created_by_name: lead.created_by_name || row.assigned_bd_executive,
     location: lead.site_location || row.site_name,
@@ -403,10 +409,13 @@ function dbSiteMomToApp(row) {
 const workflowFetchesByIdentity = new Map();
 
 async function fetchWorkflowDataOnce() {
+  const { includeLeads = true } = arguments[0] || {};
   assertConfigured();
-  console.info('[myQPMS Lead Management] Fetching authorized leads through backend');
+  if (includeLeads) {
+    console.info('[myQPMS Lead Management] Fetching authorized leads through backend');
+  }
 
-  const leadApiResponse = await getLeadManagementLeads();
+  const leadApiResponse = includeLeads ? await getLeadManagementLeads() : { leads: [] };
   const leadsResponse = {
     data: (leadApiResponse.leads || []).map((lead) => ({
       ...lead,
@@ -523,12 +532,12 @@ async function fetchWorkflowDataOnce() {
   };
 }
 
-export function fetchWorkflowData({ requestKey = 'authenticated-user' } = {}) {
-  const key = String(requestKey || 'authenticated-user');
+export function fetchWorkflowData({ requestKey = 'authenticated-user', includeLeads = true } = {}) {
+  const key = `${String(requestKey || 'authenticated-user')}:${includeLeads ? 'with-leads' : 'site-visits-only'}`;
   const existing = workflowFetchesByIdentity.get(key);
   if (existing) return existing;
 
-  const request = fetchWorkflowDataOnce().finally(() => {
+  const request = fetchWorkflowDataOnce({ includeLeads }).finally(() => {
     if (workflowFetchesByIdentity.get(key) === request) {
       workflowFetchesByIdentity.delete(key);
     }
