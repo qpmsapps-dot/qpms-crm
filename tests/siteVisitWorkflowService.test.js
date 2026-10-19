@@ -1,10 +1,44 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  canOpenAssignedSiteSurvey,
   createSiteVisitUserClient,
   executeSiteVisitWorkflowOperation,
   loadSiteVisitWorkflowData,
 } from '../backend/services/siteVisitWorkflowService.js';
+
+const acceptedAssignment = {
+  id: 'visit-accepted',
+  assigned_operations_manager_profile_id: 'om-1',
+  accepted_by_profile_id: 'om-1',
+  acceptance_status: 'accepted',
+  assignment_version: 2,
+};
+
+test('accepted current Operations Manager can open the assigned Site Survey', () => {
+  assert.equal(canOpenAssignedSiteSurvey(acceptedAssignment, {
+    id: 'om-1',
+    role: 'Operations Manager',
+  }), true);
+});
+
+test('unaccepted assignment is not available to the assigned Operations Manager', () => {
+  assert.equal(canOpenAssignedSiteSurvey({
+    ...acceptedAssignment,
+    acceptance_status: 'pending_acceptance',
+    accepted_by_profile_id: null,
+  }, {
+    id: 'om-1',
+    role: 'Operations Manager',
+  }), false);
+});
+
+test('accepted assignment is not available to an unauthorized Operations Manager', () => {
+  assert.equal(canOpenAssignedSiteSurvey(acceptedAssignment, {
+    id: 'om-2',
+    role: 'Operations Manager',
+  }), false);
+});
 
 test('backend user-scoped client forwards the caller JWT without service-role impersonation', () => {
   let received;
@@ -97,6 +131,32 @@ test('workflow loader returns a complete assessment with current sections in one
     result.siteVisits[0].site_assessments[0].assessment_sections[0].section_data.paymentTerms,
     '30 days',
   );
+});
+
+test('workflow loader returns only accepted assignments owned by the current Operations Manager', async () => {
+  const rowsByTable = {
+    site_visits: [
+      acceptedAssignment,
+      { ...acceptedAssignment, id: 'visit-pending', acceptance_status: 'pending_acceptance' },
+      { ...acceptedAssignment, id: 'visit-other', assigned_operations_manager_profile_id: 'om-2' },
+    ],
+    site_assessments: [{ id: 'assessment-1', site_visit_id: 'visit-accepted' }],
+    assessment_sections: [],
+    site_mom: [],
+    approval_requests: [],
+    workflow_events: [],
+    workflow_instances: [],
+    proposals: [],
+  };
+  const result = await loadSiteVisitWorkflowData({
+    from(table) {
+      return queryResult(rowsByTable[table] || []);
+    },
+  }, {
+    actor: { id: 'om-1', role: 'Operations Manager' },
+  });
+  assert.deepEqual(result.siteVisits.map((visit) => visit.id), ['visit-accepted']);
+  assert.equal(result.siteVisits[0].site_assessments[0].id, 'assessment-1');
 });
 
 test('workflow load fails clearly instead of returning false empty data on schema errors', async () => {

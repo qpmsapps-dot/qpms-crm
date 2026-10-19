@@ -46,11 +46,34 @@ function groupBy(rows, key) {
   }, {});
 }
 
-export async function loadSiteVisitWorkflowData(client) {
-  const visits = throwIfError(
+function assignmentRoleKey(value) {
+  return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+export function canOpenAssignedSiteSurvey(visit = {}, actor = {}) {
+  const role = assignmentRoleKey(actor.role);
+  if (!['OPERATIONSMANAGER', 'KAM'].includes(role)) return true;
+
+  const profileId = String(actor.id || actor.profileId || '').trim();
+  const assignedProfileId = String(visit.assigned_operations_manager_profile_id || '').trim();
+  const acceptedByProfileId = String(visit.accepted_by_profile_id || '').trim();
+  const assignmentVersion = Number(visit.assignment_version);
+  return Boolean(profileId)
+    && assignedProfileId === profileId
+    && acceptedByProfileId === profileId
+    && String(visit.acceptance_status || '').trim().toLowerCase() === 'accepted'
+    && Number.isSafeInteger(assignmentVersion)
+    && assignmentVersion > 0;
+}
+
+export async function loadSiteVisitWorkflowData(client, { actor = null } = {}) {
+  const visibleVisits = throwIfError(
     await client.from('site_visits').select('*').order('created_at', { ascending: false }),
     'Site Visit load',
   ) || [];
+  const visits = actor
+    ? visibleVisits.filter((visit) => canOpenAssignedSiteSurvey(visit, actor))
+    : visibleVisits;
   const visitIds = visits.map((visit) => visit.id);
   if (!visitIds.length) return { siteVisits: [] };
 
