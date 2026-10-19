@@ -1,4 +1,4 @@
-import { authenticatedApiRequest } from './api.js';
+﻿import { authenticatedApiRequest } from './api.js';
 
 async function request(config) {
   try {
@@ -51,4 +51,7 @@ export const recordProposalOutcome = (proposalId, payload, idempotencyKey) => re
 export const getBranchHeadSiteSurveys = () => request({ method: 'GET', url: '/api/pre-sales/site-surveys' });
 export const getAssignedOperationsSiteSurveys = () => request({ method: 'GET', url: '/api/pre-sales/site-surveys/assigned' });
 export const getBranchOperationsManagers = (siteVisitId) => request({ method: 'GET', url: `/api/pre-sales/site-surveys/${encodeURIComponent(siteVisitId)}/operations-managers` });
-export const assignSiteSurveyOperationsManager = (siteVisitId, operationsManagerProfileId) => request({ method: 'POST', url: `/api/pre-sales/site-surveys/${encodeURIComponent(siteVisitId)}/assign-operations-manager`, data: { operations_manager_profile_id: operationsManagerProfileId } });
+export const assignSiteSurveyOperationsManager = (siteVisitId, payload) => request({ method: 'POST', url: `/api/pre-sales/site-surveys/${encodeURIComponent(siteVisitId)}/assign-operations-manager`, data: payload });
+
+export const acceptSiteSurveyAssignment = (siteVisitId, assignmentVersion) => request({ method: 'POST', url: `/api/pre-sales/site-surveys/${encodeURIComponent(siteVisitId)}/accept`, data: { assignment_version: assignmentVersion } });
+export const declineSiteSurveyAssignment = (siteVisitId, assignmentVersion, reason) => request({ method: 'POST', url: `/api/pre-sales/site-surveys/${encodeURIComponent(siteVisitId)}/unable-to-attend`, data: { assignment_version: assignmentVersion, reason } });
