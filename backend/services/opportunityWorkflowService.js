@@ -37,6 +37,13 @@ function rpcError(error) {
     operations_manager_not_direct_report: [403, 'operations_manager_not_direct_report', 'Select an Operations Manager who reports directly to you.'],
     operations_manager_outside_branch_hierarchy: [403, 'operations_manager_outside_branch_hierarchy', 'Select an Operations Manager in your reporting hierarchy.'],
     operations_manager_already_assigned: [409, 'operations_manager_already_assigned', 'An Operations Manager is already assigned.'],
+    operations_manager_not_authorized: [403, 'operations_manager_not_authorized', 'An active Operations Manager profile is required.'],
+    site_survey_not_assigned_to_operations_manager: [403, 'site_survey_not_assigned_to_operations_manager', 'This Site Survey is assigned to another Operations Manager.'],
+    site_survey_assignment_version_conflict: [409, 'site_survey_assignment_version_conflict', 'This Site Survey assignment changed. Refresh and try again.'],
+    site_survey_not_pending_acceptance: [409, 'site_survey_not_pending_acceptance', 'This Site Survey is no longer pending acceptance.'],
+    site_survey_reassignment_required: [409, 'site_survey_reassignment_required', 'Use the audited reassignment action for an assigned Site Survey.'],
+    site_survey_reassignment_reason_required: [400, 'site_survey_reassignment_reason_required', 'Enter a reason for reassignment.'],
+    unable_to_attend_reason_required: [400, 'unable_to_attend_reason_required', 'Enter a reason why you are unable to attend.'],
     proposal_not_owned_by_actor: [403, 'proposal_not_owned_by_actor', 'This opportunity is assigned to another BD user.'],
     proposal_requires_completed_mom: [409, 'proposal_requires_completed_mom', 'Complete the BD meeting and MOM before preparing a proposal.'],
     opportunity_not_returned_to_bd: [409, 'opportunity_not_returned_to_bd', 'The assessment workflow has not returned this opportunity to BD.'],
@@ -277,7 +284,7 @@ export async function submitBdMeetingMom(client, actor, meetingId, payload = {})
 export async function listBranchHeadSurveyRequests(client, actor) {
   requireRole(actor, ['Branch Head'], 'branch_survey_denied', 'Branch Head access is required.');
   let query = client.from('site_visits')
-    .select('id,lead_id,client_name,site_name,site_location,owner_state,scheduled_visit_date,status,current_stage,pending_with,source_lead_mom_id,branch_head_profile_id,assigned_operations_manager_profile_id,routing_status,created_at,updated_at')
+    .select('id,lead_id,client_name,site_name,site_location,owner_state,scheduled_visit_date,status,current_stage,pending_with,source_lead_mom_id,branch_head_profile_id,assigned_operations_manager_profile_id,assigned_by_profile_id,assigned_at,routing_status,acceptance_status,assignment_version,accepted_by_profile_id,accepted_at,unable_to_attend_by_profile_id,unable_to_attend_reason,unable_to_attend_at,created_at,updated_at')
     .order('created_at', { ascending: false });
   if (!isPlatformAdmin(actor)) query = query.eq('branch_head_profile_id', actor.profileId);
   const result = await query;
@@ -288,7 +295,7 @@ export async function listBranchHeadSurveyRequests(client, actor) {
 export async function listOperationsManagerSurveyTasks(client, actor) {
   requireRole(actor, ['Operations Manager'], 'operations_survey_denied', 'Operations Manager access is required.');
   let query = client.from('site_visits')
-    .select('id,lead_id,client_name,site_name,site_location,owner_state,scheduled_visit_date,status,current_stage,pending_with,source_lead_mom_id,branch_head_profile_id,assigned_operations_manager_profile_id,routing_status,created_at,updated_at')
+    .select('id,lead_id,client_name,site_name,site_location,owner_state,scheduled_visit_date,status,current_stage,pending_with,source_lead_mom_id,branch_head_profile_id,assigned_operations_manager_profile_id,assigned_by_profile_id,assigned_at,routing_status,acceptance_status,assignment_version,accepted_by_profile_id,accepted_at,unable_to_attend_by_profile_id,unable_to_attend_reason,unable_to_attend_at,created_at,updated_at')
     .order('created_at', { ascending: false });
   if (!isPlatformAdmin(actor)) query = query.eq('assigned_operations_manager_profile_id', actor.profileId);
   const result = await query;
@@ -427,15 +434,62 @@ export async function listBranchOperationsManagers(client, actor, siteVisitId) {
     }));
 }
 
-export async function assignSurveyOperationsManager(client, actor, siteVisitId, operationsManagerProfileId) {
+function assignmentVersion(value) {
+  if (value === null || value === undefined || value === '') {
+    throw httpError(400, 'site_survey_assignment_version_required', 'Refresh the Site Survey and try again.');
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw httpError(400, 'site_survey_assignment_version_required', 'Refresh the Site Survey and try again.');
+  }
+  return parsed;
+}
+
+export async function assignSurveyOperationsManager(client, actor, siteVisitId, payload = {}) {
   requireRole(actor, ['Branch Head'], 'branch_survey_denied', 'Branch Head access is required.');
-  const managerId = text(operationsManagerProfileId);
+  const managerId = text(payload.operations_manager_profile_id);
   if (!managerId) throw httpError(400, 'operations_manager_required', 'Select an Operations Manager.');
   try {
-    const result = await client.rpc('rpc_assign_site_survey_operations_manager', {
+    const result = await client.rpc('rpc_assign_site_survey_operations_manager_v2', {
       p_site_visit_id: siteVisitId,
       p_branch_head_profile_id: actor.profileId,
       p_operations_manager_profile_id: managerId,
+      p_expected_assignment_version: assignmentVersion(payload.assignment_version),
+      p_reassignment: payload.reassignment === true,
+      p_reassignment_reason: text(payload.reassignment_reason) || null,
+    });
+    if (result.error) throw rpcError(result.error);
+    return result.data;
+  } catch (error) {
+    throw rpcError(error);
+  }
+}
+
+export async function acceptSiteSurveyAssignment(client, actor, siteVisitId, payload = {}) {
+  requireRole(actor, ['Operations Manager'], 'operations_survey_denied', 'Operations Manager access is required.');
+  try {
+    const result = await client.rpc('rpc_accept_site_survey_assignment', {
+      p_site_visit_id: siteVisitId,
+      p_operations_manager_profile_id: actor.profileId,
+      p_expected_assignment_version: assignmentVersion(payload.assignment_version),
+    });
+    if (result.error) throw rpcError(result.error);
+    return result.data;
+  } catch (error) {
+    throw rpcError(error);
+  }
+}
+
+export async function declineSiteSurveyAssignment(client, actor, siteVisitId, payload = {}) {
+  requireRole(actor, ['Operations Manager'], 'operations_survey_denied', 'Operations Manager access is required.');
+  const reason = text(payload.reason);
+  if (!reason) throw httpError(400, 'unable_to_attend_reason_required', 'Enter a reason why you are unable to attend.');
+  try {
+    const result = await client.rpc('rpc_decline_site_survey_assignment', {
+      p_site_visit_id: siteVisitId,
+      p_operations_manager_profile_id: actor.profileId,
+      p_expected_assignment_version: assignmentVersion(payload.assignment_version),
+      p_reason: reason,
     });
     if (result.error) throw rpcError(result.error);
     return result.data;
