@@ -22,7 +22,9 @@ import { getOpportunityProgress } from '../services/preSalesOpportunityProgressS
 import { createRequireWritablePreSalesEnvironment } from '../services/readOnlyUatMode.js';
 import { isActiveLeadProfile, leadActor, normalizeLeadRole } from '../services/leadManagementService.js';
 import {
+  acceptSiteSurveyAssignment,
   assignSurveyOperationsManager,
+  declineSiteSurveyAssignment,
   listBdOpportunityWork,
   listBranchHeadSurveyRequests,
   listBranchOperationsManagers,
@@ -144,5 +146,7 @@ export function registerPreSalesRoutes({
   app.get('/api/pre-sales/site-surveys', ...workflowGuards, handler(getClient, async (client, actor) => ({ items: await listBranchHeadSurveyRequests(client, actor) })));
   app.get('/api/pre-sales/site-surveys/assigned', ...workflowGuards, handler(getClient, async (client, actor) => ({ items: await listOperationsManagerSurveyTasks(client, actor) })));
   app.get('/api/pre-sales/site-surveys/:siteVisitId/operations-managers', ...workflowGuards, handler(getClient, async (client, actor, request) => ({ items: await listBranchOperationsManagers(client, actor, request.params.siteVisitId) })));
-  app.post('/api/pre-sales/site-surveys/:siteVisitId/assign-operations-manager', ...workflowMutationGuards, handler(getClient, async (client, actor, request) => ({ result: await assignSurveyOperationsManager(client, actor, request.params.siteVisitId, request.body?.operations_manager_profile_id) })));
+  app.post('/api/pre-sales/site-surveys/:siteVisitId/assign-operations-manager', ...workflowMutationGuards, handler(getClient, async (client, actor, request) => ({ result: await assignSurveyOperationsManager(client, actor, request.params.siteVisitId, request.body) })));
+  app.post('/api/pre-sales/site-surveys/:siteVisitId/accept', ...workflowMutationGuards, handler(getClient, async (client, actor, request) => ({ result: await acceptSiteSurveyAssignment(client, actor, request.params.siteVisitId, request.body) })));
+  app.post('/api/pre-sales/site-surveys/:siteVisitId/unable-to-attend', ...workflowMutationGuards, handler(getClient, async (client, actor, request) => ({ result: await declineSiteSurveyAssignment(client, actor, request.params.siteVisitId, request.body) })));
 }

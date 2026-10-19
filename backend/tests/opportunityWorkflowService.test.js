@@ -225,7 +225,10 @@ test('OM assignment maps precise database eligibility failures', async () => {
     await assert.rejects(
       assignSurveyOperationsManager(client, {
         role: 'Branch Head', profileId: 'branch-1', employeeCode: 'BH-1',
-      }, 'visit-1', 'om-1'),
+      }, 'visit-1', {
+        operations_manager_profile_id: 'om-1',
+        assignment_version: 0,
+      }),
       (error) => error.code === expectedCode,
     );
   }

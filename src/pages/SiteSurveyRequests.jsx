@@ -17,6 +17,7 @@ import {
 import { isPlatformAdmin, normalizeCanonicalRole } from '../utils/authRoles.js';
 import { formatDateTime } from '../utils/preSalesFormat.js';
 import { normalizeGoogleMapsLink } from '../utils/googleMapsLink.js';
+import { getSiteSurveyAssignmentActions } from '../utils/siteSurveyAssignmentActions.js';
 
 function formatDate(value) {
   if (!value) return 'Not recorded';
@@ -108,44 +109,47 @@ export default function SiteSurveyRequests() {
         <EmptyState title="No Site Survey requests are assigned to you." />
       ) : (
         <section className="space-y-3">
-          {state.items.map((item) => (
-            <article key={item.id} className="enterprise-card flex flex-col justify-between gap-4 p-5 lg:flex-row lg:items-center">
-              <div>
-                <p className="text-lg font-bold text-slate-950">{item.client_name || item.site_name || 'Site Survey'}</p>
-                <p className="mt-1 text-sm text-slate-500">{item.site_address || 'Location not recorded'}</p>
-                <dl className="mt-3 grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
-                  <div><dt className="font-semibold text-slate-500">Lead Reference</dt><dd>{item.lead_reference || item.lead_id}</dd></div>
-                  <div><dt className="font-semibold text-slate-500">MoM Reference</dt><dd>{item.source_lead_mom_id || 'Not recorded'}</dd></div>
-                  <div><dt className="font-semibold text-slate-500">Lead State</dt><dd>{item.lead_state || 'Not recorded'}</dd></div>
-                  <div><dt className="font-semibold text-slate-500">Preferred Survey Date</dt><dd>{formatDate(item.preferred_survey_date)}</dd></div>
-                  <div><dt className="font-semibold text-slate-500">Assigned BD</dt><dd>{item.assigned_bd_name || 'Not recorded'}</dd></div>
-                  <div><dt className="font-semibold text-slate-500">Originating Pre-Sales</dt><dd>{item.originating_pre_sales_name || 'Not recorded'}</dd></div>
-                  {!isBranchHead ? <div><dt className="font-semibold text-slate-500">Assigned Branch Head</dt><dd>{item.assigned_branch_head_name || 'Not recorded'}</dd></div> : null}
-                  {isBranchHead ? <div><dt className="font-semibold text-slate-500">Operations Manager / KAM</dt><dd>{item.assigned_operations_manager_name || 'Not assigned'}</dd></div> : null}
-                </dl>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {normalizeGoogleMapsLink(item.site_location_link) ? <a href={normalizeGoogleMapsLink(item.site_location_link)} target="_blank" rel="noreferrer" className="rounded-lg border border-blue-200 px-3 py-1.5 text-sm font-bold text-blue-700">Open Site Location</a> : null}
-                  {normalizeGoogleMapsLink(item.office_location_link) ? <a href={normalizeGoogleMapsLink(item.office_location_link)} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700">Open Office Location</a> : null}
+          {state.items.map((item) => {
+            const actions = getSiteSurveyAssignmentActions(item, { canAssignOperationsManager });
+            return (
+              <article key={item.id} className="enterprise-card flex flex-col justify-between gap-4 p-5 lg:flex-row lg:items-center">
+                <div>
+                  <p className="text-lg font-bold text-slate-950">{item.client_name || item.site_name || 'Site Survey'}</p>
+                  <p className="mt-1 text-sm text-slate-500">{item.site_address || 'Location not recorded'}</p>
+                  <dl className="mt-3 grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
+                    <div><dt className="font-semibold text-slate-500">Lead Reference</dt><dd>{item.lead_reference || item.lead_id}</dd></div>
+                    <div><dt className="font-semibold text-slate-500">MoM Reference</dt><dd>{item.source_lead_mom_id || 'Not recorded'}</dd></div>
+                    <div><dt className="font-semibold text-slate-500">Lead State</dt><dd>{item.lead_state || 'Not recorded'}</dd></div>
+                    <div><dt className="font-semibold text-slate-500">Preferred Survey Date</dt><dd>{formatDate(item.preferred_survey_date)}</dd></div>
+                    <div><dt className="font-semibold text-slate-500">Assigned BD</dt><dd>{item.assigned_bd_name || 'Not recorded'}</dd></div>
+                    <div><dt className="font-semibold text-slate-500">Originating Pre-Sales</dt><dd>{item.originating_pre_sales_name || 'Not recorded'}</dd></div>
+                    {!isBranchHead ? <div><dt className="font-semibold text-slate-500">Assigned Branch Head</dt><dd>{item.assigned_branch_head_name || 'Not recorded'}</dd></div> : null}
+                    {isBranchHead ? <div><dt className="font-semibold text-slate-500">Operations Manager / KAM</dt><dd>{item.assigned_operations_manager_name || 'Not assigned'}</dd></div> : null}
+                  </dl>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {normalizeGoogleMapsLink(item.site_location_link) ? <a href={normalizeGoogleMapsLink(item.site_location_link)} target="_blank" rel="noreferrer" className="rounded-lg border border-blue-200 px-3 py-1.5 text-sm font-bold text-blue-700">Open Site Location</a> : null}
+                    {normalizeGoogleMapsLink(item.office_location_link) ? <a href={normalizeGoogleMapsLink(item.office_location_link)} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700">Open Office Location</a> : null}
+                  </div>
+                  <SiteSurveyTat item={item}/>
+                  {item.mom ? <div className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-700"><p className="font-bold text-slate-900">{item.mom.subject || 'BD Meeting MOM'}</p><p className="mt-1">{item.mom.requirement_discussed || item.mom.scope_summary || 'Requirement summary not recorded.'}</p>{item.mom.survey_notes ? <p className="mt-1 text-slate-500">Survey notes: {item.mom.survey_notes}</p> : null}</div> : null}
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-600">
+                    <span className="rounded-full bg-slate-100 px-3 py-1">{item.status}</span>
+                    <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">{item.pending_with}</span>
+                    <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-800">{item.acceptance_status?.replaceAll('_', ' ') || 'unassigned'}</span>
+                    <span className="rounded-full bg-slate-100 px-3 py-1">Updated {formatDateTime(item.updated_at)}</span>
+                  </div>
                 </div>
-                <SiteSurveyTat item={item}/>
-                {item.mom ? <div className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-700"><p className="font-bold text-slate-900">{item.mom.subject || 'BD Meeting MOM'}</p><p className="mt-1">{item.mom.requirement_discussed || item.mom.scope_summary || 'Requirement summary not recorded.'}</p>{item.mom.survey_notes ? <p className="mt-1 text-slate-500">Survey notes: {item.mom.survey_notes}</p> : null}</div> : null}
-                <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-600">
-                  <span className="rounded-full bg-slate-100 px-3 py-1">{item.status}</span>
-                  <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">{item.pending_with}</span>
-                  <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-800">{item.acceptance_status?.replaceAll('_', ' ') || 'unassigned'}</span>
-                  <span className="rounded-full bg-slate-100 px-3 py-1">Updated {formatDateTime(item.updated_at)}</span>
+                <div className="flex flex-col gap-2">
+                  {canAssignOperationsManager ? <button type="button" onClick={() => openAssignment(item)} className="rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white">{item.assigned_operations_manager_profile_id ? 'Reassign Operations Manager / KAM' : 'Assign Operations Manager / KAM'}</button> : null}
+                  {actions.showAccept ? <>
+                    <button type="button" disabled={taskAction.loading} onClick={() => void performTaskAction(item, 'accept')} className="rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">Accept Assignment</button>
+                    <button type="button" onClick={() => setTaskAction({ siteVisitId: item.id, type: 'unable', reason: '', loading: false, error: '' })} className="rounded-xl border border-rose-200 px-4 py-2.5 text-sm font-bold text-rose-700">Unable to Attend</button>
+                  </> : null}
+                  {actions.showOpenSiteSurvey ? <Link to={`/site-visit/${encodeURIComponent(item.id)}`} className="rounded-xl bg-blue-700 px-4 py-2.5 text-center text-sm font-bold text-white">Open Site Survey</Link> : null}
                 </div>
-              </div>
-              <div className="flex flex-col gap-2">
-                {canAssignOperationsManager ? <button type="button" onClick={() => openAssignment(item)} className="rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white">{item.assigned_operations_manager_profile_id ? 'Reassign Operations Manager / KAM' : 'Assign Operations Manager / KAM'}</button> : null}
-                {!canAssignOperationsManager && item.acceptance_status === 'pending_acceptance' ? <>
-                  <button type="button" disabled={taskAction.loading} onClick={() => void performTaskAction(item, 'accept')} className="rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">Accept Assignment</button>
-                  <button type="button" onClick={() => setTaskAction({ siteVisitId: item.id, type: 'unable', reason: '', loading: false, error: '' })} className="rounded-xl border border-rose-200 px-4 py-2.5 text-sm font-bold text-rose-700">Unable to Attend</button>
-                </> : null}
-                {item.acceptance_status === 'accepted' ? <Link to={`/site-visit/${encodeURIComponent(item.id)}`} className="rounded-xl bg-blue-700 px-4 py-2.5 text-center text-sm font-bold text-white">Open Site Visit</Link> : null}
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </section>
       )}
       {assignment.siteVisitId ? (
