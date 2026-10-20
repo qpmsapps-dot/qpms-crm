@@ -130,11 +130,21 @@ export async function createTrainingEvidenceUploadUrl(client, profile, sessionId
   };
   const { error: insertError } = await client.from('training_evidence').insert(pending);
   if (insertError) throw translateTrainingDatabaseError(insertError);
-  return {
-    evidence_id: evidenceId, storage_path: storagePath,
-    signed_upload_url: `/api/training/sessions/${sessionId}/evidence/${evidenceId}/content`,
-    token: null, expires_at: null,
-  };
+  try {
+    const { data, error } = await client.storage.from(TRAINING_EVIDENCE_BUCKET)
+      .createSignedUploadUrl(storagePath, { upsert: false });
+    if (error) throw error;
+    return {
+      evidence_id: evidenceId,
+      storage_path: storagePath,
+      signed_upload_url: data?.signedUrl || data?.signedURL || null,
+      token: data?.token || null,
+      expires_at: new Date(Date.now() + (2 * 60 * 60 * 1000)).toISOString(),
+    };
+  } catch (error) {
+    await client.from('training_evidence').delete().eq('id', evidenceId).eq('training_session_id', sessionId);
+    throw error;
+  }
 }
 
 export async function completeTrainingEvidence(client, profile, sessionId, input = {}) {
@@ -208,19 +218,4 @@ export async function verifyTrainingEvidenceObjects(client, profile, sessionId) 
     await storageObject(client, row);
   }
   return true;
-}
-
-// The upload authorization is checked when bytes arrive, not just when an intent is issued.
-export async function uploadTrainingEvidenceContent(client, profile, sessionId, evidenceId, bytes, contentType) {
-  await loadAuthorizedTrainingSession(client, profile, sessionId, { editable: true });
-  const row = await evidenceRow(client, sessionId, evidenceId);
-  assertServerPath(row);
-  if (!Buffer.isBuffer(bytes) || bytes.length !== Number(row.file_size) || contentType?.split(';')[0] !== row.mime_type) {
-    throw trainingError(400, 'upload_intent_mismatch', 'Evidence bytes do not match the upload intent.');
-  }
-  const { error } = await client.storage.from(row.storage_bucket).upload(row.storage_path, bytes, { contentType: row.mime_type, upsert: false });
-  if (error) throw error;
-  try { await loadAuthorizedTrainingSession(client, profile, sessionId, { editable: true }); }
-  catch (error) { await client.storage.from(row.storage_bucket).remove([row.storage_path]); throw error; }
-  return { id: evidenceId };
 }

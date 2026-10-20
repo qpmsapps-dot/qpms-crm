@@ -3,7 +3,7 @@ import { foOperationalAllowedEmployeeCodes } from './foOperationalAccessService.
 
 export const RELIANCE_TRAINING_CLIENT_ID = '369d2d5f-396f-49f9-a47d-bfbc8f7cb922';
 export const RELIANCE_TRAINING_CLIENT_CODE = 'reliance_retail';
-export const TRAINING_CREATE_ROLES = new Set(['FO']);
+export const TRAINING_CREATE_ROLES = new Set(['FO', 'OPERATIONSMANAGER', 'ADMIN']);
 
 export class TrainingError extends Error {
   constructor(statusCode, code, message) {
@@ -51,7 +51,7 @@ export function assertTrainingActor(profile, { mutation = false } = {}) {
   if (mutation && !TRAINING_CREATE_ROLES.has(canonicalRole)) {
     throw trainingError(403, 'forbidden_role', 'This role cannot change structured Training.');
   }
-  if (mutation && !isRelianceRetailValue(profile.business)) {
+  if (mutation && canonicalRole !== 'ADMIN' && !isRelianceRetailValue(profile.business)) {
     throw trainingError(403, 'forbidden_business', 'Reliance Retail authorization is required.');
   }
   if (!profile.id || !trainingEmployeeCode(profile)) {
@@ -69,10 +69,6 @@ export function translateTrainingDatabaseError(error) {
   const message = dbErrorMessage(error);
   const code = cleanTrainingText(error?.code);
   const known = {
-    training_attendance_not_active: [409, 'attendance_not_active', 'Start Day and an active Check-In are required.'],
-    training_site_visit_not_active: [409, 'site_visit_not_active', 'This visit has ended. Training is read-only.'],
-    training_visit_not_active: [409, 'site_visit_not_active', 'This visit has ended. Training is read-only.'],
-    training_store_scope_forbidden: [403, 'store_scope_forbidden', 'Select an active Training store in your authorized state and zone.'],
     training_session_not_found: [404, 'session_not_found', 'Training session was not found.'],
     training_attendance_not_found: [404, 'attendance_not_found', 'Attendance was not found.'],
     training_site_visit_not_found: [404, 'site_visit_not_found', 'Site visit was not found.'],
@@ -173,10 +169,22 @@ export async function loadTrainingCreateContext(client, profile, input = {}) {
   if (!employeeMatches(profile, visit)) {
     throw trainingError(403, 'site_visit_forbidden', 'Site visit is outside your authorized scope.');
   }
-  if (!visit.check_in_time || visit.check_out_time || visit.checkout_time) {
+  if (visit.check_out_time || visit.checkout_time) {
     throw trainingError(409, 'site_visit_not_active', 'A current checked-in site visit is required.');
   }
-  return { attendance, visit };
+  if (!visit.store_id) throw trainingError(400, 'site_visit_store_missing', 'Site visit has no verified store.');
+  const store = await one(
+    client.from('store_master').select('*').eq('id', visit.store_id),
+    'store_not_found',
+    'Store was not found.',
+  );
+  if (!isRelianceRetailStore(store)) {
+    throw trainingError(403, 'non_reliance_store', 'Structured Training is available only for Reliance Retail sites.');
+  }
+  if (!stateMatches(profile, store.state)) {
+    throw trainingError(403, 'cross_state_forbidden', 'Cross-state Training creation is not allowed.');
+  }
+  return { attendance, visit, store };
 }
 
 async function loadScopeRows(client) {
@@ -218,9 +226,6 @@ export async function loadAuthorizedTrainingSession(client, profile, sessionId, 
   if (editable) {
     if (session.status !== 'draft') throw trainingError(409, 'session_immutable', 'Submitted or cancelled Training sessions cannot be changed.');
     if (creator !== self) throw trainingError(403, 'not_session_creator', 'Only the session creator may change this draft.');
-    await loadTrainingCreateContext(client, profile, {
-      attendance_id: session.attendance_id, site_visit_id: session.site_visit_id,
-    });
   } else if (creator !== self) {
     const scope = await resolveTrainingReadScope(client, profile);
     if (!scope.employeeCodes.has(creator)) {
@@ -231,14 +236,10 @@ export async function loadAuthorizedTrainingSession(client, profile, sessionId, 
     throw trainingError(403, 'cross_state_forbidden', 'Training session is outside your state scope.');
   }
   const store = await one(
-    client.from(session.retail_store_id ? 'reliance_retail_store_master' : 'store_master')
-      .select('*')
-      .eq('id', session.retail_store_id || session.store_id),
+    client.from('store_master').select('*').eq('id', session.store_id),
     'store_not_found',
     'Training store was not found.',
   );
-  if (!session.retail_store_id && !isRelianceRetailStore(store)) {
-    throw trainingError(403, 'non_reliance_store', 'Training store is not Reliance Retail.');
-  }
+  if (!isRelianceRetailStore(store)) throw trainingError(403, 'non_reliance_store', 'Training store is not Reliance Retail.');
   return { session, envelope, store };
 }
