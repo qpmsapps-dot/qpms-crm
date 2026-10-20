@@ -305,7 +305,7 @@ class AboutScreen extends StatelessWidget {
                   ),
                   SizedBox(height: 10),
                   Text(
-                    'A clean mobile experience for raising and tracking hospital housekeeping complaints.',
+                    'A clean mobile experience for raising and tracking hospital tickets.',
                     style: TextStyle(fontWeight: FontWeight.w700, height: 1.4),
                   ),
                   SizedBox(height: 12),

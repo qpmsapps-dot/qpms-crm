@@ -6,7 +6,6 @@ import 'package:provider/provider.dart';
 import '../../app/routes.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/widgets/app_card.dart';
-import '../../core/widgets/chips.dart';
 import '../../core/widgets/client_bottom_nav.dart';
 import '../../core/widgets/client_ui.dart';
 import '../../models/ticket.dart';
@@ -71,9 +70,8 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen>
       return _TicketLookupState(
         loading: controller.error == null,
         message: controller.error ?? 'Unable to load this ticket.',
-        onRetry: () => context.read<TicketController>().resolveTicket(
-          widget.ticketNumber,
-        ),
+        onRetry: () =>
+            context.read<TicketController>().resolveTicket(widget.ticketNumber),
       );
     }
     final canConfirm = ticket.status == TicketStatus.awaitingConfirmation;
@@ -122,8 +120,9 @@ class _TicketDetailsScreenState extends State<TicketDetailsScreen>
       ),
       body: SafeArea(
         child: RefreshIndicator(
-          onRefresh: () =>
-              context.read<TicketController>().resolveTicket(widget.ticketNumber),
+          onRefresh: () => context.read<TicketController>().resolveTicket(
+            widget.ticketNumber,
+          ),
           child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(16, 6, 16, 18),
@@ -387,8 +386,8 @@ class _QpmsWordmark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-    width: 132,
-    height: 38,
+    width: 164,
+    height: 46,
     child: Image.asset(
       'assets/Images/qpms_logo.png',
       fit: BoxFit.contain,
@@ -437,7 +436,8 @@ class _StatusHeroCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final success = ticket.status == TicketStatus.awaitingConfirmation ||
+    final success =
+        ticket.status == TicketStatus.awaitingConfirmation ||
         ticket.status == TicketStatus.closed;
     final statusColor = success ? AppColors.green : AppColors.royalBlue;
     return Container(
@@ -620,7 +620,8 @@ class _ServiceProgressCard extends StatelessWidget {
                   child: _TimelineStage(
                     label: _labels[index],
                     timestamp: _stageTimestamp(ticket, index),
-                    complete: index < active || ticket.status == TicketStatus.closed,
+                    complete:
+                        index < active || ticket.status == TicketStatus.closed,
                     active: index == active,
                   ),
                 ),
@@ -759,7 +760,10 @@ class _IssueDetailsCard extends StatelessWidget {
           const SizedBox(height: 14),
           LayoutBuilder(
             builder: (context, constraints) {
-              final photoWidth = (constraints.maxWidth * 0.38).clamp(118.0, 150.0);
+              final photoWidth = (constraints.maxWidth * 0.38).clamp(
+                118.0,
+                150.0,
+              );
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1408,22 +1412,22 @@ String _clientStatusLabel(TicketStatus status) => switch (status) {
   TicketStatus.accepted || TicketStatus.inProgress => 'Work In Progress',
   TicketStatus.escalatedOperations ||
   TicketStatus.escalatedFacilityManager ||
-  TicketStatus.reopened =>
-    'Ticket Under Process',
+  TicketStatus.escalatedProjectHead ||
+  TicketStatus.reopened => 'Ticket Under Process',
   TicketStatus.awaitingConfirmation => 'Work Completed',
   TicketStatus.closed => 'Ticket Closed',
   TicketStatus.cancelled => 'Ticket Cancelled',
 };
 
 String _statusHeroMessage(TicketStatus status) => switch (status) {
-  TicketStatus.open =>
-    'Your housekeeping ticket has been received by QPMS.',
+  TicketStatus.open => 'Your housekeeping ticket has been received by QPMS.',
   TicketStatus.assigned =>
     'A QPMS team member has been assigned to your ticket.',
   TicketStatus.accepted || TicketStatus.inProgress =>
     'The QPMS team is currently attending this ticket.',
   TicketStatus.escalatedOperations ||
   TicketStatus.escalatedFacilityManager ||
+  TicketStatus.escalatedProjectHead ||
   TicketStatus.reopened =>
     'QPMS is coordinating the appropriate team for your ticket.',
   TicketStatus.awaitingConfirmation =>
@@ -1441,12 +1445,14 @@ String _whatNextMessage(TicketStatus status) => switch (status) {
     'The QPMS team is currently attending the issue. You will be notified when the work is completed.',
   TicketStatus.escalatedOperations ||
   TicketStatus.escalatedFacilityManager ||
+  TicketStatus.escalatedProjectHead ||
   TicketStatus.reopened =>
     'QPMS is coordinating the housekeeping team. You will receive an update when work begins.',
   TicketStatus.awaitingConfirmation =>
     'The work has been completed. Please review the completion evidence and confirm the service.',
   TicketStatus.closed => 'This ticket has been completed and closed.',
-  TicketStatus.cancelled => 'No further action is required for this cancelled ticket.',
+  TicketStatus.cancelled =>
+    'No further action is required for this cancelled ticket.',
 };
 
 String _teamUpdateFallback(TicketStatus status) => switch (status) {
@@ -1456,8 +1462,8 @@ String _teamUpdateFallback(TicketStatus status) => switch (status) {
     "Your ticket is currently being attended. We'll keep you updated.",
   TicketStatus.escalatedOperations ||
   TicketStatus.escalatedFacilityManager ||
-  TicketStatus.reopened =>
-    'Your ticket is under QPMS team review.',
+  TicketStatus.escalatedProjectHead ||
+  TicketStatus.reopened => 'Your ticket is under QPMS team review.',
   TicketStatus.awaitingConfirmation =>
     'The work has been completed and is ready for your confirmation.',
   TicketStatus.closed => 'This ticket has been closed after confirmation.',
@@ -1471,8 +1477,8 @@ int _stageIndex(TicketStatus status) => switch (status) {
   TicketStatus.inProgress ||
   TicketStatus.escalatedOperations ||
   TicketStatus.escalatedFacilityManager ||
-  TicketStatus.reopened =>
-    2,
+  TicketStatus.escalatedProjectHead ||
+  TicketStatus.reopened => 2,
   TicketStatus.awaitingConfirmation => 3,
   TicketStatus.closed => 4,
   TicketStatus.cancelled => 0,
@@ -1486,7 +1492,9 @@ String? _stageTimestamp(Ticket ticket, int index) {
     return _compactDateTime(ticket.resolvedAt!);
   }
   if (index == 4 && ticket.status == TicketStatus.closed) {
-    return ticket.resolvedAt == null ? null : _compactDateTime(ticket.resolvedAt!);
+    return ticket.resolvedAt == null
+        ? null
+        : _compactDateTime(ticket.resolvedAt!);
   }
   final needle = switch (index) {
     1 => 'assign',
@@ -1582,7 +1590,9 @@ class _CurrentTicketStatusCard extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.paleBlue,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.royalBlue.withValues(alpha: 0.1)),
+            border: Border.all(
+              color: AppColors.royalBlue.withValues(alpha: 0.1),
+            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1605,7 +1615,8 @@ class _CurrentTicketStatusCard extends StatelessWidget {
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              if (_latestClientSafeUpdate(ticket.updates) case final update?) ...[
+              if (_latestClientSafeUpdate(ticket.updates)
+                  case final update?) ...[
                 const SizedBox(height: 8),
                 Text(
                   'Updated: ${_compactTime(update.dateTime)}',

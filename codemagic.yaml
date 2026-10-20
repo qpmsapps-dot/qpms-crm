@@ -1,0 +1,33 @@
+workflows:
+  client-ticketing-ios-simulator:
+    name: Client Ticketing iOS simulator
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      flutter: 3.44.1
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Get Flutter packages
+        script: |
+          cd Client_Ticketing_App
+          flutter pub get
+      - name: Verify native iOS configuration
+        script: |
+          cd Client_Ticketing_App
+          flutter test test/ios_platform_configuration_test.dart
+      - name: Build unsigned iOS simulator app
+        script: |
+          cd Client_Ticketing_App
+          flutter build ios --simulator --debug
+      - name: Analyze Client Ticketing
+        script: |
+          cd Client_Ticketing_App
+          flutter analyze --no-fatal-infos
+      - name: Test Client Ticketing
+        script: |
+          cd Client_Ticketing_App
+          flutter test test/ios_platform_configuration_test.dart test/client_ticket_deep_link_test.dart test/controller_test.dart test/nims_contact_flow_test.dart test/phase1_uat_readiness_test.dart test/my_tickets_screen_test.dart
+    artifacts:
+      - Client_Ticketing_App/build/ios/iphonesimulator/*.app
+      - /tmp/xcodebuild_logs/*.log

@@ -12,10 +12,10 @@ ThemeData buildQpmsTheme() {
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
-    scaffoldBackgroundColor: const Color(0xFFF5FAFF),
+    scaffoldBackgroundColor: AppColors.screenBg,
     fontFamily: 'Roboto',
     appBarTheme: const AppBarTheme(
-      backgroundColor: Color(0xFFF5FAFF),
+      backgroundColor: AppColors.screenBg,
       foregroundColor: AppColors.deepBlue,
       elevation: 0,
       centerTitle: true,
@@ -28,14 +28,14 @@ ThemeData buildQpmsTheme() {
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: Colors.white,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
         borderSide: const BorderSide(color: AppColors.line),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
         borderSide: const BorderSide(color: AppColors.royalBlue, width: 1.5),
       ),
     ),
@@ -44,8 +44,11 @@ ThemeData buildQpmsTheme() {
         backgroundColor: AppColors.royalBlue,
         foregroundColor: Colors.white,
         minimumSize: const Size.fromHeight(52),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        textStyle: const TextStyle(fontWeight: FontWeight.w800),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        textStyle: const TextStyle(
+          fontWeight: FontWeight.w900,
+          letterSpacing: 0.2,
+        ),
       ),
     ),
     floatingActionButtonTheme: const FloatingActionButtonThemeData(

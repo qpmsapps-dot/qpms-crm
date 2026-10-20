@@ -7,6 +7,7 @@ enum TicketStatus {
   inProgress,
   escalatedOperations,
   escalatedFacilityManager,
+  escalatedProjectHead,
   awaitingConfirmation,
   reopened,
   closed,
@@ -246,6 +247,7 @@ String statusLabel(TicketStatus status) => switch (status) {
   TicketStatus.inProgress => 'Work In Progress',
   TicketStatus.escalatedOperations => 'Ticket Under Process',
   TicketStatus.escalatedFacilityManager => 'Ticket Under Process',
+  TicketStatus.escalatedProjectHead => 'Ticket Under Process',
   TicketStatus.awaitingConfirmation => 'Work Completed',
   TicketStatus.reopened => 'Ticket Under Process',
   TicketStatus.closed => 'Closed',
@@ -257,6 +259,7 @@ String shortStatusLabel(TicketStatus status) => switch (status) {
   TicketStatus.assigned => 'Assigned',
   TicketStatus.escalatedOperations ||
   TicketStatus.escalatedFacilityManager ||
+  TicketStatus.escalatedProjectHead ||
   TicketStatus.reopened => 'Under Process',
   TicketStatus.awaitingConfirmation => 'Work Completed',
   _ => statusLabel(status),
@@ -289,6 +292,7 @@ bool ticketMatchesFilter(Ticket ticket, TicketListFilter filter) {
           ticket.status == TicketStatus.inProgress ||
           ticket.status == TicketStatus.escalatedOperations ||
           ticket.status == TicketStatus.escalatedFacilityManager ||
+          ticket.status == TicketStatus.escalatedProjectHead ||
           ticket.status == TicketStatus.reopened,
     TicketListFilter.awaitingConfirmation =>
       ticket.status == TicketStatus.awaitingConfirmation,
@@ -305,6 +309,9 @@ TicketStatus _statusFromCode(String value) => switch (value) {
   'in_progress' => TicketStatus.inProgress,
   'escalated_operations_executive' => TicketStatus.escalatedOperations,
   'escalated_facility_manager' => TicketStatus.escalatedFacilityManager,
+  'escalated_project_head' => TicketStatus.escalatedProjectHead,
+  'work_completed' ||
+  'awaiting_confirmation' => TicketStatus.awaitingConfirmation,
   'resolved_awaiting_confirmation' => TicketStatus.awaitingConfirmation,
   'reopened' => TicketStatus.reopened,
   'closed' => TicketStatus.closed,

@@ -18,6 +18,22 @@ class HospitalApiException implements Exception {
 class HospitalTicketApi {
   static String? contactSessionToken;
 
+  @visibleForTesting
+  static Future<Map<String, dynamic>> Function(
+    String method,
+    String path,
+    String token,
+  )?
+  requestOverrideForTesting;
+
+  @visibleForTesting
+  static Future<Map<String, dynamic>> Function(
+    String method,
+    String path,
+    Map<String, dynamic>? body,
+  )?
+  publicRequestOverrideForTesting;
+
   static Future<Map<String, dynamic>> identifyRegisteredMobile(
     String mobile,
   ) async {
@@ -169,6 +185,9 @@ class HospitalTicketApi {
       );
     }
     final effectivePath = _contactPath(path);
+    if (requestOverrideForTesting != null) {
+      return requestOverrideForTesting!(method, effectivePath, token);
+    }
     final base = ClientAppConfig.effectiveBackendApiUrl.replaceAll(
       RegExp(r'/+$'),
       '',
@@ -180,10 +199,7 @@ class HospitalTicketApi {
       ..connectionTimeout = const Duration(seconds: 15);
     try {
       final request = await client.openUrl(method, uri);
-      request.headers.set(
-        HttpHeaders.authorizationHeader,
-        'Bearer $token',
-      );
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
       headers?.forEach(request.headers.set);
       if (body != null) request.write(jsonEncode(body));
@@ -250,6 +266,9 @@ class HospitalTicketApi {
     Map<String, dynamic>? body,
     Map<String, String>? query,
   }) async {
+    if (publicRequestOverrideForTesting != null) {
+      return publicRequestOverrideForTesting!(method, path, body);
+    }
     final base = ClientAppConfig.effectiveBackendApiUrl.replaceAll(
       RegExp(r'/+$'),
       '',

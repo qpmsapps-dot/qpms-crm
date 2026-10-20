@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 class ClientAppConfig {
   static const supabaseUrl = String.fromEnvironment('SUPABASE_URL');
   static const supabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
@@ -7,8 +9,14 @@ class ClientAppConfig {
     defaultValue: false,
   );
 
-  static bool get isConfigured =>
-      supabaseUrl.isNotEmpty &&
-      supabaseAnonKey.isNotEmpty &&
-      backendApiUrl.isNotEmpty;
+  @visibleForTesting
+  static String? backendApiUrlOverride;
+
+  static String get effectiveBackendApiUrl =>
+      backendApiUrlOverride ?? backendApiUrl;
+
+  static bool get hasSupabaseConfig =>
+      supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty;
+
+  static bool get isConfigured => effectiveBackendApiUrl.isNotEmpty;
 }

@@ -8,7 +8,7 @@ String friendlyErrorMessage(Object? error, {required String fallback}) {
       return 'Your session has expired. Please sign in again.';
     }
     if (code.contains('timeout') || message.contains('timed out')) {
-      return 'The request took too long. Please try again.';
+      return 'The ticket request took too long. Please try again.';
     }
     if (code.contains('network') ||
         message.contains('socket') ||
@@ -17,7 +17,7 @@ String friendlyErrorMessage(Object? error, {required String fallback}) {
     }
     if (message.contains('already submitted') ||
         message.contains('idempotent')) {
-      return 'This complaint was already submitted.';
+      return 'This ticket was already submitted.';
     }
     if (message.contains('location') ||
         message.contains('block') ||
@@ -31,7 +31,7 @@ String friendlyErrorMessage(Object? error, {required String fallback}) {
     return fallback;
   }
   final text = '$error'.toLowerCase();
-  if (text.contains('timeout')) return 'The request took too long. Please try again.';
+  if (text.contains('timeout')) return 'The ticket request took too long. Please try again.';
   if (text.contains('socket') || text.contains('network')) {
     return 'No internet connection. Please check your network and try again.';
   }

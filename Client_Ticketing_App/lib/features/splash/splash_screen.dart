@@ -103,7 +103,7 @@ class _SplashScreenState extends State<SplashScreen>
               child: Padding(
                 padding: EdgeInsets.only(bottom: 18),
                 child: Text(
-                  'Client Ticketing App v1.0.0',
+                  'QPMS Client Ticketing',
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w700,

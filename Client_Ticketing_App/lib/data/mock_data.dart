@@ -149,6 +149,7 @@ List<Ticket> initialTickets() {
   final now = DateTime.now();
   return [
     Ticket(
+      id: 'demo-ticket-0005',
       number: 'QPMS-HK-2026-0005',
       block: 'Block A',
       floor: '3rd Floor',
@@ -165,8 +166,8 @@ List<Ticket> initialTickets() {
       complaintPhotoAssets: const [AppAssets.washroom],
       updates: [
         TicketUpdate(
-          title: 'Complaint raised',
-          body: 'Housekeeping complaint logged.',
+          title: 'Ticket raised',
+          body: 'Housekeeping ticket logged.',
           dateTime: now.subtract(const Duration(minutes: 48)),
         ),
         TicketUpdate(
@@ -183,6 +184,7 @@ List<Ticket> initialTickets() {
       ],
     ),
     Ticket(
+      id: 'demo-ticket-0004',
       number: 'QPMS-HK-2026-0004',
       block: 'Block B',
       floor: 'Ground Floor',
@@ -199,13 +201,13 @@ List<Ticket> initialTickets() {
       complaintPhotoAssets: const [AppAssets.consumables],
       updates: [
         TicketUpdate(
-          title: 'Complaint raised',
-          body: 'Complaint logged from OPD.',
+          title: 'Ticket raised',
+          body: 'Ticket logged from OPD.',
           dateTime: now.subtract(const Duration(hours: 2, minutes: 12)),
         ),
         TicketUpdate(
           title: 'Assigned to Housekeeping Supervisor',
-          body: 'Meena R. acknowledged the complaint.',
+          body: 'Meena R. acknowledged the ticket.',
           dateTime: now.subtract(const Duration(hours: 2, minutes: 10)),
         ),
         TicketUpdate(
@@ -216,6 +218,7 @@ List<Ticket> initialTickets() {
       ],
     ),
     Ticket(
+      id: 'demo-ticket-0003',
       number: 'QPMS-HK-2026-0003',
       block: 'Main Building',
       floor: '2nd Floor',
@@ -228,15 +231,15 @@ List<Ticket> initialTickets() {
       status: TicketStatus.awaitingConfirmation,
       assignedPerson: 'Rajesh K.',
       assignedRole: 'Housekeeping Supervisor',
-      slaLabel: 'Resolved • Waiting for your confirmation',
+      slaLabel: 'Work completed • Waiting for your confirmation',
       complaintPhotoAssets: const [AppAssets.washroom],
       completionPhotoAssets: const [AppAssets.washroom],
       resolutionNotes:
           'Washroom deep-cleaned, floor dried and consumables replenished.',
       updates: [
         TicketUpdate(
-          title: 'Complaint raised',
-          body: 'Cleaning complaint logged.',
+          title: 'Ticket raised',
+          body: 'Cleaning ticket logged.',
           dateTime: now.subtract(const Duration(hours: 4, minutes: 20)),
         ),
         TicketUpdate(
@@ -250,13 +253,14 @@ List<Ticket> initialTickets() {
           dateTime: now.subtract(const Duration(hours: 4)),
         ),
         TicketUpdate(
-          title: 'Resolved – Awaiting Confirmation',
+          title: 'Work Completed',
           body: 'Please verify the completed work.',
           dateTime: now.subtract(const Duration(minutes: 35)),
         ),
       ],
     ),
     Ticket(
+      id: 'demo-ticket-0002',
       number: 'QPMS-HK-2026-0002',
       block: 'Block A',
       floor: '1st Floor',
@@ -279,12 +283,12 @@ List<Ticket> initialTickets() {
       isSatisfied: true,
       updates: [
         TicketUpdate(
-          title: 'Complaint raised',
-          body: 'Safety cleaning request logged.',
+          title: 'Ticket raised',
+          body: 'Safety cleaning ticket logged.',
           dateTime: now.subtract(const Duration(days: 1, hours: 2)),
         ),
         TicketUpdate(
-          title: 'Resolved – Awaiting Confirmation',
+          title: 'Work Completed',
           body: 'Area cleaned and made safe.',
           dateTime: now.subtract(
             const Duration(days: 1, hours: 1, minutes: 38),
@@ -300,6 +304,7 @@ List<Ticket> initialTickets() {
       ],
     ),
     Ticket(
+      id: 'demo-ticket-0001',
       number: 'QPMS-HK-2026-0001',
       block: 'Block C',
       floor: '4th Floor',
@@ -321,8 +326,8 @@ List<Ticket> initialTickets() {
       isSatisfied: true,
       updates: [
         TicketUpdate(
-          title: 'Complaint raised',
-          body: 'Consumables request logged.',
+          title: 'Ticket raised',
+          body: 'Consumables ticket logged.',
           dateTime: now.subtract(const Duration(days: 2, hours: 1)),
         ),
         TicketUpdate(
@@ -346,8 +351,8 @@ List<NotificationItem> initialNotifications() => [
   ),
   NotificationItem(
     id: 'n2',
-    title: 'Complaint escalated',
-    body: 'QPMS-HK-2026-0005 is now assigned to the Operations Executive.',
+    title: 'Ticket update',
+    body: 'QPMS-HK-2026-0005 moved to the next QPMS support level.',
     time: '26 min ago',
     iconKey: 'alert',
     ticketNumber: 'QPMS-HK-2026-0005',

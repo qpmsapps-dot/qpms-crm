@@ -14,8 +14,9 @@ class StatusChip extends StatelessWidget {
       TicketStatus.assigned => AppColors.purple,
       TicketStatus.accepted => AppColors.orange,
       TicketStatus.inProgress => AppColors.orange,
-      TicketStatus.escalatedOperations => AppColors.orange,
-      TicketStatus.escalatedFacilityManager => AppColors.red,
+      TicketStatus.escalatedOperations => AppColors.royalBlue,
+      TicketStatus.escalatedFacilityManager => AppColors.purple,
+      TicketStatus.escalatedProjectHead => AppColors.purple,
       TicketStatus.awaitingConfirmation => AppColors.green,
       TicketStatus.reopened => AppColors.red,
       TicketStatus.closed => AppColors.green,
@@ -59,7 +60,7 @@ class _LabelChip extends StatelessWidget {
         style: TextStyle(
           color: color,
           fontWeight: FontWeight.w800,
-          fontSize: 11,
+          fontSize: 10.5,
         ),
       ),
     );

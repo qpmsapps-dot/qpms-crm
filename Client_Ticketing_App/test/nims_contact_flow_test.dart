@@ -1,7 +1,7 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:client_ticketing_app/features/auth/login_screen.dart';
+import 'package:client_ticketing_app/features/dashboard/dashboard_screen.dart';
 import 'package:client_ticketing_app/models/ticket.dart';
 import 'package:client_ticketing_app/services/app_config.dart';
 import 'package:client_ticketing_app/services/hospital_ticket_api.dart';
@@ -20,23 +20,35 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     ClientAppConfig.backendApiUrlOverride = 'http://127.0.0.1:1';
     HospitalTicketApi.contactSessionToken = null;
+    HospitalTicketApi.requestOverrideForTesting = null;
+    HospitalTicketApi.publicRequestOverrideForTesting = null;
+    AuthController.registerPushDeviceForTesting = null;
+    AuthController.unregisterPushDeviceForTesting = null;
   });
 
   tearDown(() {
     ClientAppConfig.backendApiUrlOverride = null;
     HospitalTicketApi.contactSessionToken = null;
+    HospitalTicketApi.requestOverrideForTesting = null;
+    HospitalTicketApi.publicRequestOverrideForTesting = null;
+    AuthController.registerPushDeviceForTesting = null;
+    AuthController.unregisterPushDeviceForTesting = null;
   });
 
   testWidgets('login screen uses mobile-only registered contact copy', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(1200, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     final prefs = await SharedPreferences.getInstance();
+    final auth = AuthController(preferences: prefs, demoMode: false);
+    await auth.load();
     await tester.pumpWidget(
       MultiProvider(
         providers: [
-          ChangeNotifierProvider(
-            create: (_) => AuthController(preferences: prefs, demoMode: false),
-          ),
+          ChangeNotifierProvider<AuthController>.value(value: auth),
           ChangeNotifierProvider(
             create: (_) => TicketController(demoMode: false),
           ),
@@ -56,7 +68,7 @@ void main() {
     );
     expect(find.text('Mobile Number'), findsOneWidget);
     expect(
-      find.text('Enter the mobile number registered with NIMS services.'),
+      find.text('Enter your registered hospital contact mobile number.'),
       findsOneWidget,
     );
     expect(find.text('Continue with Registered Mobile Number'), findsOneWidget);
@@ -66,34 +78,23 @@ void main() {
   });
 
   test('registered contact lookup waits for explicit confirmation', () async {
-    final server = await _contactServer((request) async {
-      expect(request.uri.path, '/api/hospital-client/identify');
-      final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;
-      expect(body['mobile'], '9876543210');
-      request.response
-        ..headers.contentType = ContentType.json
-        ..write(
-          jsonEncode({
-            'ok': true,
-            'token': 'contact-token',
-            'contact': {
-              'id': 'contact-id',
-              'full_name': 'TEST PERSON NAME',
-              'mobile': '9876543210',
-              'designation': 'Dean',
-              'department': 'Administration',
-            },
-            'client': {
-              'id': 'client-id',
-              'name': 'NIMS Hyderabad',
-              'code': 'NIMS',
-            },
-          }),
-        );
-      await request.response.close();
-    });
-    addTearDown(() => server.close(force: true));
-    ClientAppConfig.backendApiUrlOverride = 'http://127.0.0.1:${server.port}';
+    HospitalTicketApi
+        .publicRequestOverrideForTesting = (method, path, body) async {
+      expect(path, '/api/hospital-client/identify');
+      expect(body?['mobile'], '9876543210');
+      return {
+        'ok': true,
+        'token': 'contact-token',
+        'contact': {
+          'id': 'contact-id',
+          'full_name': 'TEST PERSON NAME',
+          'mobile': '9876543210',
+          'designation': 'Dean',
+          'department': 'Administration',
+        },
+        'client': {'id': 'client-id', 'name': 'NIMS Hyderabad', 'code': 'NIMS'},
+      };
+    };
 
     final prefs = await SharedPreferences.getInstance();
     final auth = AuthController(preferences: prefs, demoMode: false);
@@ -112,29 +113,57 @@ void main() {
     expect(prefs.getString('qpms_contact_token'), 'contact-token');
   });
 
-  test('unknown registered mobile shows NIMS administrator message', () async {
-    final server = await _contactServer((request) async {
-      request.response
-        ..statusCode = 403
-        ..headers.contentType = ContentType.json
-        ..write(
-          jsonEncode({
-            'ok': false,
-            'code': 'mobile_not_registered',
-            'message':
-                'This mobile number is not registered for NIMS Client Ticketing.',
-          }),
+  test(
+    'contact login registers push token and logout unregisters device',
+    () async {
+      var registerCount = 0;
+      var unregisterCount = 0;
+      AuthController.registerPushDeviceForTesting = () async {
+        expect(HospitalTicketApi.contactSessionToken, 'contact-token');
+        registerCount += 1;
+      };
+      AuthController.unregisterPushDeviceForTesting = () async {
+        expect(HospitalTicketApi.contactSessionToken, 'contact-token');
+        unregisterCount += 1;
+      };
+
+      final prefs = await SharedPreferences.getInstance();
+      final auth = AuthController(preferences: prefs, demoMode: false);
+      auth.setPendingRegisteredContactForTesting(
+        token: 'contact-token',
+        profile: const {
+          'id': 'contact-id',
+          'client_id': 'client-id',
+          'full_name': 'TEST PERSON NAME',
+          'mobile': '9876543210',
+          'profile_type': 'client_contact',
+          'role_code': 'client_contact',
+          'is_active': true,
+        },
+      );
+
+      await auth.confirmRegisteredContact();
+      expect(registerCount, 1);
+
+      await auth.logout();
+      expect(unregisterCount, 1);
+      expect(HospitalTicketApi.contactSessionToken, isNull);
+    },
+  );
+
+  test('unknown registered mobile shows neutral support message', () async {
+    HospitalTicketApi.publicRequestOverrideForTesting = (_, _, _) async =>
+        throw const HospitalApiException(
+          'This mobile number is not registered for Hospital Client Ticketing.',
+          code: 'mobile_not_registered',
+          statusCode: 403,
         );
-      await request.response.close();
-    });
-    addTearDown(() => server.close(force: true));
-    ClientAppConfig.backendApiUrlOverride = 'http://127.0.0.1:${server.port}';
 
     final prefs = await SharedPreferences.getInstance();
     final auth = AuthController(preferences: prefs, demoMode: false);
 
     expect(await auth.lookupRegisteredMobile('9999999999'), isFalse);
-    expect(auth.errorMessage, contains('NIMS/QPMS administrator'));
+    expect(auth.errorMessage, contains('Hospital Client Ticketing'));
     expect(auth.isAuthenticated, isFalse);
   });
 
@@ -219,53 +248,59 @@ void main() {
     expect(feedback, contains('Add feedback (optional)'));
   });
 
-  test('Housekeeping and Security categories resolve from production names', () {
-    final categories = [
-      {'id': 'hk', 'category_name': 'Housekeeping', 'is_active': true},
-      {'id': 'sec', 'category_name': 'Security', 'is_active': true},
-    ];
-    final controller = TicketController(demoMode: false)
-      ..replaceMastersForTesting(
-        blocks: const [
-          {'id': 'block', 'block_name': 'NIMS Block', 'is_active': true},
-        ],
-        floors: const [
-          {
-            'id': 'floor',
-            'block_id': 'block',
-            'floor_name': 'Ground Floor',
-            'is_active': true,
-          },
-        ],
-        locations: const [
-          {
-            'id': 'loc',
-            'block_id': 'block',
-            'floor_id': 'floor',
-            'location_name': 'Reception',
-            'is_active': true,
-          },
-        ],
-        categories: categories,
-      );
+  test(
+    'Housekeeping and Security categories resolve from production names',
+    () {
+      final categories = [
+        {'id': 'hk', 'category_name': 'Housekeeping', 'is_active': true},
+        {'id': 'sec', 'category_name': 'Security', 'is_active': true},
+      ];
+      final controller = TicketController(demoMode: false)
+        ..replaceMastersForTesting(
+          blocks: const [
+            {'id': 'block', 'block_name': 'NIMS Block', 'is_active': true},
+          ],
+          floors: const [
+            {
+              'id': 'floor',
+              'block_id': 'block',
+              'floor_name': 'Ground Floor',
+              'is_active': true,
+            },
+          ],
+          locations: const [
+            {
+              'id': 'loc',
+              'block_id': 'block',
+              'floor_id': 'floor',
+              'location_name': 'Reception',
+              'is_active': true,
+            },
+          ],
+          categories: categories,
+        );
 
-    for (final category in ['Housekeeping', 'Security']) {
-      final payload = controller.createPayloadForTesting(
-        ComplaintDraft(
-            category: category,
-            priority: TicketPriority.medium,
-            description: '$category issue',
-          )
-          ..blockId = 'block'
-          ..block = 'NIMS Block'
-          ..floorId = 'floor'
-          ..floor = 'Ground Floor'
-          ..locationId = 'loc'
-          ..location = 'Reception',
-      );
-      expect(payload['category_id'], category == 'Housekeeping' ? 'hk' : 'sec');
-    }
-  });
+      for (final category in ['Housekeeping', 'Security']) {
+        final payload = controller.createPayloadForTesting(
+          ComplaintDraft(
+              category: category,
+              priority: TicketPriority.medium,
+              description: '$category issue',
+            )
+            ..blockId = 'block'
+            ..block = 'NIMS Block'
+            ..floorId = 'floor'
+            ..floor = 'Ground Floor'
+            ..locationId = 'loc'
+            ..location = 'Reception',
+        );
+        expect(
+          payload['category_id'],
+          category == 'Housekeeping' ? 'hk' : 'sec',
+        );
+      }
+    },
+  );
 
   test('logout clears contact token and cached contact session', () async {
     final prefs = await SharedPreferences.getInstance();
@@ -281,12 +316,196 @@ void main() {
     expect(prefs.getString('qpms_contact_name'), isNull);
     expect(auth.isAuthenticated, isFalse);
   });
-}
 
-Future<HttpServer> _contactServer(
-  Future<void> Function(HttpRequest request) handler,
-) async {
-  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-  server.listen(handler);
-  return server;
+  test(
+    'NIMS to logout to Osmania clears client state and uses new configuration',
+    () async {
+      final prefs = await SharedPreferences.getInstance();
+      final tickets = TicketController(demoMode: false);
+      final notifications = NotificationController(
+        preferences: prefs,
+        demoMode: false,
+      );
+      final auth = AuthController(
+        preferences: prefs,
+        demoMode: false,
+        onSessionCleared: () {
+          tickets.clearSessionState();
+          notifications.clearSessionState();
+        },
+      );
+      AuthController.registerPushDeviceForTesting = () async {};
+      AuthController.unregisterPushDeviceForTesting = () async {};
+      auth.setPendingRegisteredContactForTesting(
+        token: 'nims-token',
+        profile: const {
+          'client_id': 'nims',
+          'client_name': 'NIMS Hyderabad',
+          'client_short_name': 'NIMS',
+          'profile_type': 'client_contact',
+          'role_code': 'client_contact',
+          'is_active': true,
+        },
+      );
+      await auth.confirmRegisteredContact();
+      tickets.replaceMastersForTesting(
+        blocks: const [
+          {'id': 'nims-block', 'block_name': 'NIMS Block', 'is_active': true},
+        ],
+        locations: const [],
+      );
+      notifications.addTicketRaisedNotification('NIMS-1');
+      expect(tickets.blocks, isNotEmpty);
+      expect(notifications.items, isNotEmpty);
+      await auth.logout();
+      expect(auth.profile, isNull);
+      expect(tickets.blocks, isEmpty);
+      expect(notifications.items, isEmpty);
+      auth.setPendingRegisteredContactForTesting(
+        token: 'osmania-token',
+        profile: const {
+          'client_id': 'osmania',
+          'client_name': 'Osmania General Hospital',
+          'client_short_name': 'Osmania',
+          'client_configuration_version': 'v2',
+          'profile_type': 'client_contact',
+          'role_code': 'client_contact',
+          'is_active': true,
+        },
+      );
+      await auth.confirmRegisteredContact();
+      expect(auth.profile?['client_name'], 'Osmania General Hospital');
+      expect(HospitalTicketApi.contactSessionToken, 'osmania-token');
+      expect(tickets.blocks, isEmpty);
+    },
+  );
+
+  test('authenticated profile refresh replaces backend branding', () async {
+    HospitalTicketApi.contactSessionToken = 'nims-token';
+    HospitalTicketApi.requestOverrideForTesting = (method, path, token) async {
+      expect(path, '/api/hospital-client/me');
+      expect(token, 'nims-token');
+      return {
+        'ok': true,
+        'user': {
+          'id': 'contact',
+          'client_id': 'nims',
+          'profile_type': 'client_contact',
+          'role_code': 'client_contact',
+          'is_active': true,
+        },
+        'client': {
+          'id': 'nims',
+          'name': 'NIMS Hyderabad',
+          'code': 'NIMS',
+          'short_name': 'NIMS',
+          'logo_url': 'https://assets.example/nims-v2.png',
+          'banner_url': null,
+          'configuration_version': 'v2',
+        },
+      };
+    };
+    final auth = AuthController(demoMode: false);
+    await auth.loadProfile();
+    expect(
+      auth.profile?['client_logo_url'],
+      'https://assets.example/nims-v2.png',
+    );
+    expect(auth.profile?['client_configuration_version'], 'v2');
+  });
+
+  test(
+    'authenticated hierarchy uses active contact token and backend hospital records',
+    () async {
+      HospitalTicketApi.requestOverrideForTesting =
+          (method, path, token) async {
+            expect(token, 'osmania-token');
+            if (path == '/api/hospital-client/hierarchy') {
+              return {
+                'ok': true,
+                'hierarchy': {
+                  'blocks': [
+                    {
+                      'id': 'osmania-block',
+                      'client_id': 'osmania',
+                      'block_name': 'Osmania Block',
+                      'is_active': true,
+                    },
+                  ],
+                  'floors': [],
+                  'departments': [],
+                  'locations': [],
+                },
+              };
+            }
+            if (path == '/api/hospital-client/categories') {
+              return {
+                'ok': true,
+                'categories': [
+                  {
+                    'id': 'security',
+                    'category_name': 'Security',
+                    'is_active': true,
+                  },
+                ],
+              };
+            }
+            fail('Unexpected master route $path');
+          };
+      HospitalTicketApi.contactSessionToken = 'osmania-token';
+      final tickets = TicketController(demoMode: false);
+      await tickets.loadCompleteHierarchy();
+      expect(tickets.hospitalBlocks.single.name, 'Osmania Block');
+      expect(tickets.categories.single['category_name'], 'Security');
+    },
+  );
+
+  testWidgets(
+    'dashboard branding follows configured hospital including a future client',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final prefs = await SharedPreferences.getInstance();
+      AuthController.registerPushDeviceForTesting = () async {};
+      final auth = AuthController(preferences: prefs, demoMode: false);
+      auth.setPendingRegisteredContactForTesting(
+        token: 'future-token',
+        profile: const {
+          'client_id': 'future',
+          'client_name': 'Future Hospital',
+          'client_short_name': 'Future',
+          'client_configuration_version': 'v3',
+          'profile_type': 'client_contact',
+          'role_code': 'client_contact',
+          'is_active': true,
+        },
+      );
+      await auth.confirmRegisteredContact();
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider<AuthController>.value(value: auth),
+            ChangeNotifierProvider(
+              create: (_) => TicketController(demoMode: false),
+            ),
+            ChangeNotifierProvider(
+              create: (_) =>
+                  NotificationController(preferences: prefs, demoMode: false),
+            ),
+          ],
+          child: const MaterialApp(
+            home: MediaQuery(
+              data: MediaQueryData(textScaler: TextScaler.linear(0.8)),
+              child: DashboardScreen(),
+            ),
+          ),
+        ),
+      );
+      expect(find.text('Future Hospital'), findsOneWidget);
+      expect(find.text('Future'), findsWidgets);
+      expect(find.text('NIMS'), findsNothing);
+    },
+  );
 }

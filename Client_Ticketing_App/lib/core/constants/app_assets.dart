@@ -16,6 +16,6 @@ class AppAssets {
   static const clientHomeFacility =
       'assets/Images/client/client_home_facility.jpg';
   static const nimsHospitalHome =
-      'assets/Images/client/home/nims_hospital_home.png';
-  static const nimsLogo = 'assets/Images/client/home/nims_logo.png';
+      'assets/ui_refs/home/nims_hospital.png';
+  static const nimsLogo = 'assets/ui_refs/home/nims_logo.png';
 }

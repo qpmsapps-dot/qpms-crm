@@ -11,10 +11,10 @@ import '../services/hospital_ticket_api.dart';
 class ComplaintDraft {
   ComplaintDraft({
     this.site = 'Client Site',
-    this.block = 'Block A',
-    this.floor = 'Ground Floor',
+    this.block = '',
+    this.floor = '',
     this.department = '',
-    this.location = 'OPD Waiting Area',
+    this.location = '',
     this.exactLandmark = '',
     this.category = '',
     this.priority = TicketPriority.medium,
@@ -71,6 +71,7 @@ class TicketController extends ChangeNotifier {
   List<Map<String, dynamic>> _locations = [];
   List<Map<String, dynamic>> _categories = [];
   int _hierarchyRequestVersion = 0;
+  int _sessionVersion = 0;
 
   late List<Ticket> _tickets;
   int _nextTicketSequence = 6;
@@ -83,6 +84,23 @@ class TicketController extends ChangeNotifier {
   List<Map<String, dynamic>> get departments => List.unmodifiable(_departments);
   List<Map<String, dynamic>> get locations => List.unmodifiable(_locations);
   List<Map<String, dynamic>> get categories => List.unmodifiable(_categories);
+
+  void clearSessionState() {
+    _sessionVersion++;
+    if (demoMode) {
+      resetMockData();
+      return;
+    }
+    _tickets = [];
+    _blocks = [];
+    _floors = [];
+    _departments = [];
+    _locations = [];
+    _categories = [];
+    _error = null;
+    _hierarchyRequestVersion++;
+    notifyListeners();
+  }
 
   List<HospitalBlock> get hospitalBlocks =>
       _blocks.map(HospitalBlock.fromJson).where(_isSelectable).toList();
@@ -112,7 +130,7 @@ class TicketController extends ChangeNotifier {
 
   @visibleForTesting
   void replaceTicketsForTesting(List<Ticket> tickets) {
-    _tickets = List<Ticket>.from(tickets);
+    _tickets = _dedupeTickets(tickets);
   }
 
   List<String> floorsForBlock(String blockName) {
@@ -250,47 +268,41 @@ class TicketController extends ChangeNotifier {
 
   List<Ticket> filterTickets(TicketListFilter filter, {String query = ''}) {
     final needle = query.trim().toLowerCase();
-    return _tickets.where((ticket) {
-      final searchable =
-          '${ticket.number} ${ticket.fullLocation} ${ticket.category} ${ticket.description}'
-              .toLowerCase();
-      return ticketMatchesFilter(ticket, filter) &&
-          (needle.isEmpty || searchable.contains(needle));
-    }).toList();
+    return _dedupeTickets(
+      _tickets.where((ticket) {
+        final searchable =
+            '${ticket.number} ${ticket.fullLocation} ${ticket.category} ${ticket.description}'
+                .toLowerCase();
+        return ticketMatchesFilter(ticket, filter) &&
+            (needle.isEmpty || searchable.contains(needle));
+      }),
+    );
   }
 
   bool isDraftValid(ComplaintDraft draft) {
-    final hasMappedLocation =
-        draft.departmentId.trim().isNotEmpty ||
-        draft.department.trim().isNotEmpty ||
-        draft.locationId.trim().isNotEmpty ||
-        draft.location.trim().isNotEmpty;
-    final hasManualLocation = draft.exactLandmark.trim().length >= 3;
+    if (demoMode) {
+      return draft.block.trim().isNotEmpty &&
+          draft.floor.trim().isNotEmpty &&
+          (draft.location.trim().isNotEmpty ||
+              draft.department.trim().isNotEmpty) &&
+          draft.category.trim().isNotEmpty &&
+          draft.description.trim().isNotEmpty;
+    }
     final basic =
-        draft.block.trim().isNotEmpty &&
-        (hasMappedLocation || hasManualLocation) &&
+        draft.blockId.trim().isNotEmpty &&
+        draft.floorId.trim().isNotEmpty &&
+        draft.locationId.trim().isNotEmpty &&
         draft.category.trim().isNotEmpty &&
         draft.description.trim().isNotEmpty;
-    if (!basic || demoMode || _locations.isEmpty) {
+    if (!basic || _locations.isEmpty) {
       return basic;
     }
-    if (draft.locationId.trim().isNotEmpty) {
-      return hospitalLocations.any(
-        (row) =>
-            row.id == draft.locationId &&
-            (draft.blockId.isEmpty || row.blockId == draft.blockId),
-      );
-    }
-    if (draft.location.trim().isEmpty) return basic;
-    return _locations.any((row) {
-      final sameBlock = draft.blockId.isNotEmpty
-          ? row['block_id'] == draft.blockId
-          : row['block_name'] == draft.block || row['block'] == draft.block;
-      final sameLocation = row['location_name'] == draft.location;
-      final sameFloor =
-          draft.floor.trim().isEmpty || row['floor_name'] == draft.floor;
-      return sameBlock && sameLocation && sameFloor;
-    });
+    return hospitalLocations.any(
+      (row) =>
+          row.id == draft.locationId &&
+          row.blockId == draft.blockId &&
+          row.floorId == draft.floorId,
+    );
   }
 
   @visibleForTesting
@@ -299,6 +311,7 @@ class TicketController extends ChangeNotifier {
 
   Future<void> load() async {
     if (demoMode) return;
+    final version = _sessionVersion;
     _loading = true;
     _error = null;
     notifyListeners();
@@ -309,6 +322,7 @@ class TicketController extends ChangeNotifier {
         HospitalTicketApi.request('GET', '/api/hospital-tickets/locations'),
         HospitalTicketApi.request('GET', '/api/hospital-tickets/categories'),
       ]);
+      if (version != _sessionVersion) return;
       _tickets = _ticketRows(responses[0]['tickets']);
       _blocks = _mapRows(responses[1]['blocks']);
       _locations = _mapRows(responses[2]['locations']);
@@ -337,13 +351,17 @@ class TicketController extends ChangeNotifier {
           )
           .toList();
     } catch (error) {
-      _error = friendlyErrorMessage(
-        error,
-        fallback: 'Unable to load tickets. Please try again.',
-      );
+      if (version == _sessionVersion) {
+        _error = friendlyErrorMessage(
+          error,
+          fallback: 'Unable to load tickets. Please try again.',
+        );
+      }
     } finally {
-      _loading = false;
-      notifyListeners();
+      if (version == _sessionVersion) {
+        _loading = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -353,6 +371,11 @@ class TicketController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    _blocks = [];
+    _floors = [];
+    _departments = [];
+    _locations = [];
+    notifyListeners();
     _blocks = (await HospitalTicketApi.loadBlocks())
         .map(
           (row) => {
@@ -384,6 +407,91 @@ class TicketController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> loadCompleteHierarchy() async {
+    final version = ++_hierarchyRequestVersion;
+    if (demoMode) {
+      _blocks = List<Map<String, dynamic>>.from(demoBlockRows);
+      _floors = List<Map<String, dynamic>>.from(demoFloorRows);
+      _departments = List<Map<String, dynamic>>.from(demoDepartmentRows);
+      _locations = List<Map<String, dynamic>>.from(demoLocationRows);
+      _categories = housekeepingCategories
+          .map((name) => {'id': name, 'category_name': name, 'is_active': true})
+          .toList();
+      notifyListeners();
+      return;
+    }
+    final responses = await Future.wait([
+      HospitalTicketApi.loadCompleteHierarchy(),
+      HospitalTicketApi.request('GET', '/api/hospital-tickets/categories'),
+    ]);
+    final hierarchy = responses[0] as Map<String, List<Object>>;
+    final categoryResponse = responses[1];
+    if (version != _hierarchyRequestVersion) return;
+    _blocks = (hierarchy['blocks'] ?? const <Object>[])
+        .whereType<HospitalBlock>()
+        .map(
+          (row) => {
+            'id': row.id,
+            'client_id': row.clientId,
+            'block_code': row.code,
+            'block_name': row.name,
+            'verification_status': row.verificationStatus,
+            'is_active': row.isActive,
+          },
+        )
+        .toList();
+    _floors = (hierarchy['floors'] ?? const <Object>[])
+        .whereType<HospitalFloor>()
+        .map(
+          (row) => {
+            'id': row.id,
+            'block_id': row.blockId,
+            'floor_name': row.name,
+            'verification_status': row.verificationStatus,
+            'is_active': row.isActive,
+          },
+        )
+        .toList();
+    _departments = (hierarchy['departments'] ?? const <Object>[])
+        .whereType<HospitalDepartment>()
+        .map(
+          (row) => {
+            'id': row.id,
+            'block_id': row.blockId,
+            'floor_id': row.floorId,
+            'department_name': row.name,
+            'department_type': row.departmentType,
+            'verification_status': row.verificationStatus,
+            'is_active': row.isActive,
+          },
+        )
+        .toList();
+    _locations = (hierarchy['locations'] ?? const <Object>[])
+        .whereType<HospitalLocation>()
+        .map(
+          (row) => {
+            'id': row.id,
+            'client_id': row.clientId,
+            'block_id': row.blockId,
+            'floor_id': row.floorId,
+            'department_id': row.departmentId,
+            'location_code': row.code,
+            'floor_name': row.floorName,
+            'department_name': row.departmentName,
+            'location_name': row.name,
+            'room_number': row.roomNumber,
+            'area_name': row.areaName,
+            'ward_name': row.wardName,
+            'location_type': row.locationType,
+            'verification_status': row.verificationStatus,
+            'is_active': row.isActive,
+          },
+        )
+        .toList();
+    _categories = _mapRows(categoryResponse['categories']);
+    notifyListeners();
+  }
+
   Future<void> loadFloorsForBlock(String blockId) async {
     final version = ++_hierarchyRequestVersion;
     if (demoMode) {
@@ -395,6 +503,10 @@ class TicketController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    _floors = [];
+    _departments = [];
+    _locations = [];
+    notifyListeners();
     final rows = await HospitalTicketApi.loadFloors(blockId);
     if (version != _hierarchyRequestVersion) return;
     _floors = rows
@@ -432,6 +544,9 @@ class TicketController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    _departments = [];
+    _locations = [];
+    notifyListeners();
     final rows = await HospitalTicketApi.loadDepartments(
       blockId,
       floorId: floorId.isEmpty ? null : floorId,
@@ -472,6 +587,8 @@ class TicketController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    _locations = [];
+    notifyListeners();
     final rows = await HospitalTicketApi.loadHierarchyLocations(
       blockId,
       floorId: floorId.isEmpty ? null : floorId,
@@ -504,6 +621,7 @@ class TicketController extends ChangeNotifier {
 
   Future<void> loadDetail(String ticketNumber) async {
     if (demoMode) return;
+    final version = _sessionVersion;
     try {
       final response = await HospitalTicketApi.request(
         'GET',
@@ -531,6 +649,7 @@ class TicketController extends ChangeNotifier {
         complaintPhotoAssets: complaintPhotos,
         completionPhotoAssets: completionPhotos,
       );
+      if (version != _sessionVersion) return;
       final index = _tickets.indexWhere((row) => row.number == ticket.number);
       if (index >= 0) {
         _tickets[index] = ticket;
@@ -539,6 +658,7 @@ class TicketController extends ChangeNotifier {
       }
       notifyListeners();
     } catch (error) {
+      if (version != _sessionVersion) return;
       _error = friendlyErrorMessage(
         error,
         fallback: 'Unable to load ticket details.',
@@ -632,17 +752,25 @@ class TicketController extends ChangeNotifier {
       throw const HospitalApiException('Select a valid hospital block.');
     }
     final block = matchingBlocks.single;
+    final matchingFloors = _floors.where((row) {
+      final id = '${row['id'] ?? ''}';
+      return id == draft.floorId && row['block_id'] == block['id'];
+    }).toList();
+    if (matchingFloors.length != 1) {
+      throw const HospitalApiException('Select a valid hospital floor.');
+    }
     Map<String, dynamic>? location;
-    if (draft.locationId.trim().isNotEmpty ||
-        draft.location.trim().isNotEmpty) {
-      final blockLocations = _locations
-          .where((row) => row['block_id'] == block['id'])
+    if (draft.locationId.trim().isNotEmpty) {
+      final floorLocations = _locations
+          .where(
+            (row) =>
+                row['block_id'] == block['id'] &&
+                row['floor_id'] == draft.floorId,
+          )
           .toList();
-      final matchingLocations = blockLocations.where((row) {
+      final matchingLocations = floorLocations.where((row) {
         final id = '${row['id'] ?? ''}';
-        return id == draft.locationId ||
-            (row['location_name'] == draft.location &&
-                (draft.floor.isEmpty || row['floor_name'] == draft.floor));
+        return id == draft.locationId;
       }).toList();
       if (matchingLocations.length != 1) {
         throw const HospitalApiException(
@@ -650,10 +778,8 @@ class TicketController extends ChangeNotifier {
         );
       }
       location = matchingLocations.single;
-    } else if (draft.exactLandmark.trim().isEmpty) {
-      throw const HospitalApiException(
-        'Select a room/area or provide an exact location landmark.',
-      );
+    } else {
+      throw const HospitalApiException('Select a valid area or ward.');
     }
     final matchingCategories = _categories
         .where((row) => row['category_name'] == draft.category)
@@ -666,7 +792,7 @@ class TicketController extends ChangeNotifier {
       'block_id': block['id'],
       'floor_id': draft.floorId.isEmpty ? null : draft.floorId,
       'department_id': draft.departmentId.isEmpty ? null : draft.departmentId,
-      'location_id': location == null ? null : location['id'],
+      'location_id': location['id'],
       'exact_landmark': draft.exactLandmark.trim(),
       'category_id': category['id'],
       'priority': draft.priority.name,
@@ -812,7 +938,23 @@ class TicketController extends ChangeNotifier {
       : [];
 
   static List<Ticket> _ticketRows(dynamic value) =>
-      _mapRows(value).map(Ticket.fromApi).toList();
+      _dedupeTickets(_mapRows(value).map(Ticket.fromApi));
+
+  static List<Ticket> _dedupeTickets(Iterable<Ticket> tickets) {
+    final byKey = <String, Ticket>{};
+    var anonymousIndex = 0;
+    for (final ticket in tickets) {
+      final id = ticket.id.trim();
+      final number = ticket.number.trim();
+      final key = id.isNotEmpty
+          ? 'id:$id'
+          : number.isNotEmpty
+          ? 'number:$number'
+          : 'row:${anonymousIndex++}';
+      byKey.putIfAbsent(key, () => ticket);
+    }
+    return byKey.values.toList();
+  }
 
   static List<TicketUpdate> _timeline(dynamic value) => _mapRows(value)
       .map(
@@ -836,6 +978,7 @@ class TicketController extends ChangeNotifier {
     TicketStatus.inProgress ||
     TicketStatus.escalatedOperations ||
     TicketStatus.escalatedFacilityManager ||
+    TicketStatus.escalatedProjectHead ||
     TicketStatus.reopened => true,
     TicketStatus.awaitingConfirmation ||
     TicketStatus.closed ||

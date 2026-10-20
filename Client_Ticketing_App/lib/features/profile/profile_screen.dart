@@ -7,6 +7,7 @@ import '../../core/widgets/app_card.dart';
 import '../../core/widgets/client_bottom_nav.dart';
 import '../../core/widgets/logo_mark.dart';
 import '../../state/auth_controller.dart';
+import '../../state/ticket_controller.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -36,23 +37,39 @@ class ProfileScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Profile')),
-      bottomNavigationBar: const ClientBottomNav(currentRoute: AppRoutes.profile),
+      bottomNavigationBar: const ClientBottomNav(
+        currentRoute: AppRoutes.profile,
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
           children: [
-            AppCard(
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [AppColors.deepBlue, AppColors.royalBlue],
+                ),
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.royalBlue.withValues(alpha: 0.2),
+                    blurRadius: 24,
+                    offset: const Offset(0, 12),
+                  ),
+                ],
+              ),
               child: Row(
                 children: [
                   CircleAvatar(
-                    radius: 32,
-                    backgroundColor: AppColors.paleBlue,
+                    radius: 34,
+                    backgroundColor: Colors.white,
                     child: Text(
                       _initials(name),
                       style: const TextStyle(
                         color: AppColors.royalBlue,
                         fontWeight: FontWeight.w900,
-                        fontSize: 20,
+                        fontSize: 21,
                       ),
                     ),
                   ),
@@ -66,7 +83,7 @@ class ProfileScreen extends StatelessWidget {
                           style: const TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.w900,
-                            color: AppColors.deepBlue,
+                            color: Colors.white,
                           ),
                         ),
                         const SizedBox(height: 4),
@@ -74,7 +91,7 @@ class ProfileScreen extends StatelessWidget {
                           role,
                           style: const TextStyle(
                             fontWeight: FontWeight.w800,
-                            color: AppColors.muted,
+                            color: Color(0xFFDDEBFF),
                           ),
                         ),
                         const SizedBox(height: 4),
@@ -83,7 +100,29 @@ class ProfileScreen extends StatelessWidget {
                           style: const TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
-                            color: AppColors.muted,
+                            color: Color(0xFFDDEBFF),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.24),
+                            ),
+                          ),
+                          child: const Text(
+                            'Client Account',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                            ),
                           ),
                         ),
                       ],
@@ -106,9 +145,9 @@ class ProfileScreen extends StatelessWidget {
                   ),
                   const Divider(height: 1),
                   const _ProfileTile(
-                    icon: Icons.lock_reset_rounded,
-                    label: 'Change Password',
-                    value: 'Contact your administrator or QPMS support.',
+                    icon: Icons.phone_android_rounded,
+                    label: 'Registered Mobile Access',
+                    value: 'Use logout to continue with another registered number.',
                   ),
                   const Divider(height: 1),
                   const _ProfileTile(
@@ -136,7 +175,7 @@ class ProfileScreen extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Client Ticketing App',
+                          'QPMS Client Ticketing',
                           style: TextStyle(
                             fontWeight: FontWeight.w900,
                             color: AppColors.deepBlue,
@@ -195,6 +234,7 @@ class ProfileScreen extends StatelessWidget {
       ),
     );
     if (ok != true || !context.mounted) return;
+    context.read<TicketController>().clearSessionState();
     await context.read<AuthController>().logout();
     if (!context.mounted) return;
     Navigator.pushNamedAndRemoveUntil(context, AppRoutes.login, (_) => false);

@@ -11,6 +11,10 @@ class QpmsDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final profile = context.watch<AuthController>().profile;
+    final hospitalName =
+        '${profile?['client_short_name'] ?? profile?['client_name'] ?? 'Hospital'}'
+            .trim();
     return Drawer(
       backgroundColor: Colors.white,
       child: SafeArea(
@@ -53,13 +57,13 @@ class QpmsDrawer extends StatelessWidget {
             _item(
               context,
               Icons.add_circle_rounded,
-              'Raise Complaint',
+              'Raise Ticket',
               AppRoutes.raiseTicket,
             ),
             _item(
               context,
               Icons.confirmation_number_rounded,
-              'NIMS Tickets',
+              '$hospitalName Tickets',
               AppRoutes.tickets,
             ),
             _item(

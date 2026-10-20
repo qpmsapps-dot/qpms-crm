@@ -36,10 +36,11 @@ class ClientPushMessage {
 class ClientPushService {
   static const appScope = 'qpms_client';
   static const _deviceKey = 'hospital_push_device_id_qpms_client';
+  static const _androidNotificationIcon = 'ic_notification';
   static const _channel = AndroidNotificationChannel(
     'hospital_tickets',
     'Hospital ticket alerts',
-    description: 'High-priority hospital ticket alerts',
+    description: 'Critical-priority hospital ticket alerts',
     importance: Importance.high,
     playSound: true,
     enableVibration: true,
@@ -63,6 +64,8 @@ class ClientPushService {
     _pendingMessages.clear();
     return messages;
   }
+
+  static void clearPendingMessages() => _pendingMessages.clear();
 
   static Future<void> ensureFirebaseReady() async {
     if (_firebaseReady) return;
@@ -104,6 +107,12 @@ class ClientPushService {
       badge: true,
       sound: true,
     );
+    if (Platform.isIOS && await _waitForApnsToken(messaging) == null) {
+      debugPrint(
+        'QPMS client push registration skipped: APNs token unavailable.',
+      );
+      return;
+    }
     final token = await messaging.getToken();
     if (token == null || token.isEmpty) return;
     await _registerToken(
@@ -114,6 +123,15 @@ class ClientPushService {
     _tokenRefreshSubscription = messaging.onTokenRefresh.listen((freshToken) {
       unawaited(_registerToken(freshToken, 'granted'));
     });
+  }
+
+  static Future<String?> _waitForApnsToken(FirebaseMessaging messaging) async {
+    for (var attempt = 0; attempt < 20; attempt++) {
+      final token = await messaging.getAPNSToken();
+      if (token != null && token.isNotEmpty) return token;
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return null;
   }
 
   static Future<void> unregisterAuthenticatedDevice() async {
@@ -166,32 +184,38 @@ class ClientPushService {
 
   static Future<void> _configureLocalNotifications() async {
     if (_localNotificationsReady) return;
-    await _localNotifications.initialize(
-      settings: const InitializationSettings(
-        android: AndroidInitializationSettings('ic_launcher'),
-        iOS: DarwinInitializationSettings(
-          requestAlertPermission: false,
-          requestBadgePermission: false,
-          requestSoundPermission: false,
+    try {
+      await _localNotifications.initialize(
+        settings: const InitializationSettings(
+          android: AndroidInitializationSettings(_androidNotificationIcon),
+          iOS: DarwinInitializationSettings(
+            requestAlertPermission: false,
+            requestBadgePermission: false,
+            requestSoundPermission: false,
+          ),
         ),
-      ),
-      onDidReceiveNotificationResponse: (response) {
-        final push = _fromPayload(response.payload);
-        if (push != null) _emit(push);
-      },
-    );
-    await _localNotifications
-        .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin
-        >()
-        ?.createNotificationChannel(_channel);
-    await FirebaseMessaging.instance
-        .setForegroundNotificationPresentationOptions(
-          alert: true,
-          badge: true,
-          sound: true,
-        );
-    _localNotificationsReady = true;
+        onDidReceiveNotificationResponse: (response) {
+          final push = _fromPayload(response.payload);
+          if (push != null) _emit(push);
+        },
+      );
+      await _localNotifications
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.createNotificationChannel(_channel);
+      await FirebaseMessaging.instance
+          .setForegroundNotificationPresentationOptions(
+            alert: true,
+            badge: true,
+            sound: true,
+          );
+      _localNotificationsReady = true;
+    } catch (error, stackTrace) {
+      _localNotificationsReady = false;
+      debugPrint('QPMS client local notification setup failed: $error');
+      debugPrint('$stackTrace');
+    }
   }
 
   static Future<void> _showForegroundNotification(

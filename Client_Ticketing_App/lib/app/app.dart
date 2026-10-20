@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../features/auth/login_screen.dart';
 import '../features/dashboard/dashboard_screen.dart';
+import '../features/deep_links/hospital_ticket_deep_link_screen.dart';
 import '../features/locations/locations_screen.dart';
 import '../features/notifications/notifications_screen.dart';
 import '../features/profile/profile_screen.dart';
@@ -14,10 +15,12 @@ import '../features/splash/splash_screen.dart';
 import '../features/tickets/my_tickets_screen.dart';
 import '../features/tickets/ticket_details_screen.dart';
 import '../features/tickets/feedback_screen.dart';
+import '../models/ticket.dart';
 import '../state/auth_controller.dart';
 import '../state/notification_controller.dart';
 import '../state/ticket_controller.dart';
 import '../services/client_push_service.dart';
+import 'client_ticket_deep_link.dart';
 import 'routes.dart';
 import 'theme.dart';
 
@@ -55,16 +58,26 @@ class _QpmsClientTicketingAppState extends State<QpmsClientTicketingApp> {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => AuthController()..load()),
         ChangeNotifierProvider(create: (_) => TicketController()),
         ChangeNotifierProvider(create: (_) => NotificationController()),
+        ChangeNotifierProvider(
+          create: (context) => AuthController(
+            onSessionCleared: () {
+              context.read<TicketController>().clearSessionState();
+              context.read<NotificationController>().clearSessionState();
+              ClientPushService.clearPendingMessages();
+            },
+          )..load(),
+        ),
       ],
       child: MaterialApp(
         navigatorKey: _navigatorKey,
         title: 'QPMS Client Ticketing',
         debugShowCheckedModeBanner: false,
         theme: buildQpmsTheme(),
-        initialRoute: AppRoutes.splash,
+        initialRoute: ClientTicketDeepLink.initialRouteName(
+          WidgetsBinding.instance.platformDispatcher.defaultRouteName,
+        ),
         routes: {
           AppRoutes.splash: (_) => const SplashScreen(),
           AppRoutes.login: (_) => const LoginScreen(),
@@ -97,6 +110,13 @@ class _QpmsClientTicketingAppState extends State<QpmsClientTicketingApp> {
                   FeedbackScreen(ticketNumber: settings.arguments as String),
             );
           }
+          final deepLink = ClientTicketDeepLink.parse(settings.name);
+          if (deepLink != null) {
+            return MaterialPageRoute(
+              builder: (_) =>
+                  HospitalTicketDeepLinkScreen(destination: deepLink),
+            );
+          }
           return null;
         },
       ),
@@ -106,14 +126,16 @@ class _QpmsClientTicketingAppState extends State<QpmsClientTicketingApp> {
   void _handlePush(ClientPushMessage message) {
     final context = _navigatorKey.currentContext;
     if (context == null) return;
+    if (!context.read<AuthController>().isAuthenticated) return;
     final ticketNumber = message.ticketNumber.isNotEmpty
         ? message.ticketNumber
         : message.ticketId;
     if (ticketNumber.isEmpty) return;
-    unawaited(context.read<TicketController>().loadDetail(ticketNumber));
+    final tickets = context.read<TicketController>();
+    unawaited(tickets.resolveTicket(ticketNumber));
     unawaited(context.read<NotificationController>().load());
     if (message.openImmediately) {
-      _openPushTicket(message, ticketNumber);
+      unawaited(_openPushTicket(message, ticketNumber));
       return;
     }
     ScaffoldMessenger.of(context).showSnackBar(
@@ -125,18 +147,29 @@ class _QpmsClientTicketingAppState extends State<QpmsClientTicketingApp> {
         ),
         action: SnackBarAction(
           label: 'Open',
-          onPressed: () => _openPushTicket(message, ticketNumber),
+          onPressed: () => unawaited(_openPushTicket(message, ticketNumber)),
         ),
       ),
     );
   }
 
-  void _openPushTicket(ClientPushMessage message, String ticketNumber) {
+  Future<void> _openPushTicket(
+    ClientPushMessage message,
+    String ticketNumber,
+  ) async {
+    final context = _navigatorKey.currentContext;
+    Ticket? resolved;
+    if (context != null) {
+      resolved = await context.read<TicketController>().resolveTicket(
+        ticketNumber,
+      );
+    }
+    final routeIdentifier = resolved?.number ?? ticketNumber;
     _navigatorKey.currentState?.pushNamed(
       message.targetScreen == 'ticket_feedback'
           ? AppRoutes.feedback
           : AppRoutes.ticketDetails,
-      arguments: ticketNumber,
+      arguments: routeIdentifier,
     );
   }
 }

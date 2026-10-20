@@ -26,6 +26,15 @@ class NotificationController extends ChangeNotifier {
   int get unreadCount => _items.where((item) => !item.isRead).length;
   bool get isLoading => _loading;
   String? get errorMessage => _errorMessage;
+  int _sessionVersion = 0;
+
+  void clearSessionState() {
+    _sessionVersion++;
+    _items = [];
+    _loading = false;
+    _errorMessage = null;
+    notifyListeners();
+  }
 
   void addTicketRaisedNotification(String ticketNumber) {
     _items.insert(
@@ -95,6 +104,7 @@ class NotificationController extends ChangeNotifier {
 
   Future<void> load() async {
     if (demoMode) return;
+    final version = _sessionVersion;
     _loading = true;
     _errorMessage = null;
     notifyListeners();
@@ -103,6 +113,7 @@ class NotificationController extends ChangeNotifier {
         'GET',
         '/api/hospital-tickets/notifications',
       );
+      if (version != _sessionVersion) return;
       final rows = response['notifications'] is List
           ? response['notifications'] as List
           : const [];
@@ -131,10 +142,14 @@ class NotificationController extends ChangeNotifier {
         );
       }).toList();
     } catch (_) {
-      _errorMessage = "Couldn't refresh notifications.";
+      if (version == _sessionVersion) {
+        _errorMessage = "Couldn't refresh notifications.";
+      }
     } finally {
-      _loading = false;
-      notifyListeners();
+      if (version == _sessionVersion) {
+        _loading = false;
+        notifyListeners();
+      }
     }
   }
 }

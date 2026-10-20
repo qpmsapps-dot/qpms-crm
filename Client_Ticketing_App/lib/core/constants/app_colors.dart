@@ -4,6 +4,11 @@ class AppColors {
   static const royalBlue = Color(0xFF0B5CFF);
   static const deepBlue = Color(0xFF062A8F);
   static const paleBlue = Color(0xFFEAF4FF);
+  static const screenBg = Color(0xFFF4F8FC);
+  static const softSurface = Color(0xFFF8FBFF);
+  static const amberSoft = Color(0xFFFFF7ED);
+  static const greenSoft = Color(0xFFECFDF3);
+  static const redSoft = Color(0xFFFEF2F2);
   static const green = Color(0xFF16A34A);
   static const orange = Color(0xFFF97316);
   static const purple = Color(0xFF7C3AED);

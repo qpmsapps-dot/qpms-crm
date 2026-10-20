@@ -13,22 +13,23 @@ void main() {
     expect(manifest, contains('android.permission.CAMERA'));
   });
 
-  test('only active client hospital roles are accepted', () {
+  test('only active registered contact identity is accepted', () {
     expect(
       AuthController.isAllowedClientProfile({
-        'profile_type': 'client',
-        'role_code': 'doctor',
+        'profile_type': 'client_contact',
+        'role_code': 'client_contact',
+        'client_id': 'fixture-hospital',
         'is_active': true,
       }),
       isTrue,
     );
     expect(
       AuthController.isAllowedClientProfile({
-        'profile_type': 'client',
-        'role_code': 'hospital_management',
+        'profile_type': 'client_contact',
+        'role_code': 'client_contact',
         'is_active': true,
       }),
-      isTrue,
+      isFalse,
     );
     expect(
       AuthController.isAllowedClientProfile({
@@ -42,7 +43,7 @@ void main() {
       AuthController.isAllowedClientProfile({
         'profile_type': 'client',
         'role_code': 'doctor',
-        'is_active': false,
+        'is_active': true,
       }),
       isFalse,
     );
@@ -103,10 +104,7 @@ void main() {
     ).readAsStringSync();
     expect(detail, contains('WidgetsBindingObserver'));
     expect(detail, contains('_pollTimer?.cancel()'));
-    expect(
-      dashboard,
-      contains('Future.wait([tickets.load(), notifications.load()])'),
-    );
+    expect(dashboard, contains('context.read<AuthController>().loadProfile()'));
   });
 
   test('startup routing waits for the single auth bootstrap future', () {
@@ -116,7 +114,7 @@ void main() {
     final auth = File('lib/state/auth_controller.dart').readAsStringSync();
     expect(splash, contains('await auth.load()'));
     expect(auth, contains('_bootstrapFuture ??= _bootstrap()'));
-    expect(auth, contains('auth.onAuthStateChange.listen'));
-    expect(auth, contains('_authSubscription?.cancel()'));
+    expect(auth, contains('_contactTokenKey'));
+    expect(auth, isNot(contains('auth.onAuthStateChange.listen')));
   });
 }

@@ -149,13 +149,11 @@ class HospitalLocation {
   final bool isActive;
 
   String get displayName {
-    final parts = [
-      wardName,
-      roomNumber,
-      areaName,
-      name,
-    ].where((value) => value.trim().isNotEmpty).toSet().toList();
-    return parts.isEmpty ? name : parts.join(' / ');
+    for (final value in [wardName, areaName, departmentName, name]) {
+      final label = value.trim();
+      if (label.isNotEmpty) return label;
+    }
+    return '';
   }
 
   factory HospitalLocation.fromJson(Map<String, dynamic> row) =>

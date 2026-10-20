@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
@@ -20,7 +21,7 @@ class RaiseTicketScreen extends StatefulWidget {
   State<RaiseTicketScreen> createState() => _RaiseTicketScreenState();
 }
 
-enum _ComplaintStep { locationPriority, issueDetails, evidenceReview }
+enum _ComplaintStep { locationPriority, evidenceReview }
 
 class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
   final _description = TextEditingController();
@@ -30,18 +31,15 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
   final _draft = ComplaintDraft();
 
   int _step = 0;
-  String _serviceCategory = 'Housekeeping';
+  final String _serviceCategory = 'Housekeeping';
   bool _submitting = false;
-  bool _loadingBlocks = false;
-  bool _loadingFloors = false;
-  bool _loadingDepartments = false;
-  bool _loadingLocations = false;
+  bool _loadingHierarchy = false;
   String? _hierarchyError;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadBlocks());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadHierarchy());
   }
 
   @override
@@ -63,13 +61,6 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
       'hospital_client_name',
       'site_name',
     ], fallback: 'Client Site');
-    final categories = controller.categories.isEmpty && controller.demoMode
-        ? housekeepingCategories
-        : controller.categories
-              .map((row) => '${row['category_name'] ?? ''}'.trim())
-              .where((value) => value.isNotEmpty)
-              .toList();
-
     return PopScope(
       canPop: !_hasDraftData(),
       onPopInvokedWithResult: (didPop, _) async {
@@ -79,7 +70,7 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
         }
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFFF8FBFF),
+        backgroundColor: const Color(0xFFF6F8FC),
         body: Stack(
           children: [
             SafeArea(
@@ -87,7 +78,7 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
                 children: [
                   const _RaiseTicketHeader(),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(22, 16, 22, 12),
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
                     child: _StepProgress(
                       step: stepIndex,
                       totalSteps: steps.length,
@@ -95,7 +86,7 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
                   ),
                   if (_hierarchyError != null)
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(22, 0, 22, 12),
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
                       child: _InlineMessage(
                         message: friendlyErrorMessage(
                           _hierarchyError,
@@ -103,7 +94,7 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
                               'Unable to load locations. Tap Retry to try again.',
                         ),
                         onRetry: _draft.blockId.isEmpty
-                            ? _loadBlocks
+                            ? _loadHierarchy
                             : () => _selectBlock(_draft.blockId),
                       ),
                     ),
@@ -111,11 +102,11 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
                     child: ListView(
                       keyboardDismissBehavior:
                           ScrollViewKeyboardDismissBehavior.onDrag,
-                      padding: const EdgeInsets.fromLTRB(22, 0, 22, 22),
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 112),
                       children: [
                         _IntroCard(step: currentStep),
-                        const SizedBox(height: 18),
-                        _buildStep(controller, categories, currentStep),
+                        const SizedBox(height: 14),
+                        _buildStep(controller, currentStep),
                       ],
                     ),
                   ),
@@ -137,11 +128,7 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
     );
   }
 
-  Widget _buildStep(
-    TicketController controller,
-    List<String> categories,
-    _ComplaintStep step,
-  ) {
+  Widget _buildStep(TicketController controller, _ComplaintStep step) {
     return switch (step) {
       _ComplaintStep.locationPriority => _LocationPriorityStep(
         draft: _draft,
@@ -149,16 +136,11 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
           for (final block in controller.hospitalBlocks)
             _PickerOption(block.id, block.name),
         ],
-        floors: [
-          for (final floor in controller.hospitalFloors)
-            _PickerOption(floor.id, floor.name),
-          if (_hasUnconfirmedDepartments(controller))
-            const _PickerOption('', 'Floor not confirmed / Not specified'),
-        ],
+        floors: _floorOptions(controller),
         areas: _areaOptions(controller),
-        loadingBlocks: _loadingBlocks,
-        loadingFloors: _loadingFloors,
-        loadingAreas: _loadingDepartments || _loadingLocations,
+        loadingBlocks: _loadingHierarchy,
+        loadingFloors: _loadingHierarchy,
+        loadingAreas: _loadingHierarchy,
         landmarkController: _landmark,
         submitting: _submitting,
         onBlockChanged: _selectBlock,
@@ -171,27 +153,34 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
           _draft.exactLandmark = value.trim();
         }),
       ),
-      _ComplaintStep.issueDetails => _IssueDetailsStep(
-        selectedService: _serviceCategory,
-        descriptionController: _description,
-        submitting: _submitting,
-        onServiceChanged: (service) => setState(() {
-          _serviceCategory = service;
-          _draft.category = _categoryValueForService(categories, service) ?? '';
-        }),
-        onDescriptionChanged: (_) => setState(() {}),
-      ),
       _ComplaintStep.evidenceReview => _EvidenceReviewStep(
         summary: controller.buildLocationSummary(_draft),
         draft: _draft,
         serviceCategory: _serviceCategory,
-        description: _description.text.trim(),
+        descriptionController: _description,
         photos: _photos,
         submitting: _submitting,
+        onDescriptionChanged: (_) => setState(() {}),
         onAddPhoto: _choosePhoto,
         onRemovePhoto: (photo) => setState(() => _photos.remove(photo)),
       ),
     };
+  }
+
+  List<String> _categoryNames(TicketController controller) {
+    return controller.categories.isEmpty && controller.demoMode
+        ? housekeepingCategories
+        : controller.categories
+              .map((row) => '${row['category_name'] ?? ''}'.trim())
+              .where((value) => value.isNotEmpty)
+              .toList();
+  }
+
+  List<_PickerOption> _floorOptions(TicketController controller) {
+    final floors = controller.hospitalFloors
+        .where((floor) => floor.blockId == _draft.blockId)
+        .toList();
+    return [for (final floor in floors) _PickerOption(floor.id, floor.name)];
   }
 
   List<_PickerOption> _areaOptions(TicketController controller) {
@@ -204,15 +193,9 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
       blockId: _draft.blockId,
       floorId: _draft.floorId,
     );
-    final departments = controller.departmentsFor(
-      blockId: _draft.blockId,
-      floorId: _draft.floorId,
-    );
     final options = <_PickerOption>[
       for (final location in [...locations, ...directLocations])
         _PickerOption('loc:${location.id}', location.displayName),
-      for (final department in departments)
-        _PickerOption('dept:${department.id}', department.name),
     ];
     final seen = <String>{};
     return options.where((row) => seen.add(row.label.toLowerCase())).toList();
@@ -246,17 +229,11 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
     return switch (step) {
       _ComplaintStep.locationPriority =>
         _draft.blockId.isNotEmpty &&
-            (_draft.locationId.isNotEmpty ||
-                _draft.departmentId.isNotEmpty ||
-                _hasMeaningfulLocationText(_landmark.text)),
-      _ComplaintStep.issueDetails =>
-        _serviceCategory.trim().isNotEmpty &&
-            _description.text.trim().isNotEmpty,
-      _ComplaintStep.evidenceReview => true,
+            _draft.floorId.isNotEmpty &&
+            _draft.locationId.isNotEmpty,
+      _ComplaintStep.evidenceReview => _description.text.trim().isNotEmpty,
     };
   }
-
-  bool _hasMeaningfulLocationText(String value) => value.trim().length >= 3;
 
   Future<void> _nextOrSubmit(List<_ComplaintStep> steps, int stepIndex) async {
     if (stepIndex < steps.length - 1) {
@@ -266,25 +243,56 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
     await _submit();
   }
 
-  Future<void> _loadBlocks() async {
+  Future<void> _loadHierarchy() async {
     setState(() {
-      _loadingBlocks = true;
+      _loadingHierarchy = true;
       _hierarchyError = null;
     });
     try {
       final controller = context.read<TicketController>();
-      await controller.loadBlocks();
+      await controller.loadCompleteHierarchy();
+      if (!mounted) return;
+      if (kDebugMode) {
+        final profile = context.read<AuthController>().profile;
+        debugPrint(
+          '[RaiseTicketHierarchy] demoMode=${controller.demoMode} '
+          'client_id=${profile?['client_id'] ?? ''} '
+          'user_id=${profile?['id'] ?? ''} '
+          'blocks=${controller.hospitalBlocks.map((row) => row.name).join(', ')} '
+          'selected_before=${_draft.blockId}/${_draft.block}',
+        );
+      }
+      if (_draft.blockId.isNotEmpty &&
+          !controller.hospitalBlocks.any((row) => row.id == _draft.blockId)) {
+        setState(() {
+          _draft
+            ..blockId = ''
+            ..block = ''
+            ..floorId = ''
+            ..floor = ''
+            ..departmentId = ''
+            ..department = ''
+            ..locationId = ''
+            ..location = '';
+        });
+      }
       if (controller.categories.isEmpty) {
         await controller.loadCategories();
       }
+      _draft.category =
+          _categoryValueForService(
+            _categoryNames(controller),
+            'Housekeeping',
+          ) ??
+          '';
     } catch (error) {
       if (mounted) setState(() => _hierarchyError = error.toString());
     } finally {
-      if (mounted) setState(() => _loadingBlocks = false);
+      if (mounted) setState(() => _loadingHierarchy = false);
     }
   }
 
-  Future<void> _selectBlock(String blockId) async {
+  void _selectBlock(String blockId) {
     final controller = context.read<TicketController>();
     final block = controller.hospitalBlocks.firstWhere(
       (row) => row.id == blockId,
@@ -300,37 +308,11 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
         ..department = ''
         ..locationId = ''
         ..location = '';
-      _loadingFloors = true;
-      _loadingDepartments = true;
       _hierarchyError = null;
     });
-    try {
-      await controller.loadFloorsForBlock(blockId);
-      await controller.loadDepartmentsForBlock(blockId);
-      final hasFloors = controller.hospitalFloors.any(
-        (row) => row.blockId == blockId,
-      );
-      final hasDepartments = controller.hospitalDepartments.any(
-        (row) => row.blockId == blockId,
-      );
-      if (!hasFloors && !hasDepartments) {
-        if (mounted) setState(() => _loadingLocations = true);
-        await controller.loadLocationsForSelection(blockId);
-      }
-    } catch (error) {
-      if (mounted) setState(() => _hierarchyError = error.toString());
-    } finally {
-      if (mounted) {
-        setState(() {
-          _loadingFloors = false;
-          _loadingDepartments = false;
-          _loadingLocations = false;
-        });
-      }
-    }
   }
 
-  Future<void> _selectFloor(String floorId) async {
+  void _selectFloor(String floorId) {
     final floor = context.read<TicketController>().hospitalFloors.firstWhere(
       (row) => row.id == floorId,
       orElse: () =>
@@ -339,46 +321,15 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
     setState(() {
       _draft
         ..floorId = floorId
-        ..floor = floorId.isEmpty ? 'Floor not confirmed' : floor.name
+        ..floor = floor.name
         ..departmentId = ''
         ..department = ''
         ..locationId = ''
         ..location = '';
     });
-    final controller = context.read<TicketController>();
-    setState(() {
-      _loadingDepartments = true;
-      _loadingLocations = false;
-      _hierarchyError = null;
-    });
-    try {
-      await controller.loadDepartmentsForBlock(
-        _draft.blockId,
-        floorId: floorId,
-      );
-      final hasDepartments = controller
-          .departmentsFor(blockId: _draft.blockId, floorId: floorId)
-          .isNotEmpty;
-      if (!hasDepartments) {
-        if (mounted) setState(() => _loadingLocations = true);
-        await controller.loadLocationsForSelection(
-          _draft.blockId,
-          floorId: floorId,
-        );
-      }
-    } catch (error) {
-      if (mounted) setState(() => _hierarchyError = error.toString());
-    } finally {
-      if (mounted) {
-        setState(() {
-          _loadingDepartments = false;
-          _loadingLocations = false;
-        });
-      }
-    }
   }
 
-  Future<void> _selectDepartment(String departmentId) async {
+  void _selectDepartment(String departmentId) {
     final controller = context.read<TicketController>();
     final department = controller.hospitalDepartments.firstWhere(
       (row) => row.id == departmentId,
@@ -394,25 +345,8 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
         ..department = department.name
         ..locationId = ''
         ..location = '';
-      if (department.floorId.isEmpty) {
-        _draft
-          ..floorId = ''
-          ..floor = 'Floor not confirmed';
-      }
-      _loadingLocations = true;
       _hierarchyError = null;
     });
-    try {
-      await controller.loadLocationsForSelection(
-        _draft.blockId,
-        floorId: department.floorId,
-        departmentId: departmentId,
-      );
-    } catch (error) {
-      if (mounted) setState(() => _hierarchyError = error.toString());
-    } finally {
-      if (mounted) setState(() => _loadingLocations = false);
-    }
   }
 
   void _selectLocation(String locationId) {
@@ -434,14 +368,9 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
     });
   }
 
-  bool _hasUnconfirmedDepartments(TicketController controller) => controller
-      .hospitalDepartments
-      .any((row) => row.blockId == _draft.blockId && row.floorId.isEmpty);
-
   List<_ComplaintStep> _stepsFor(TicketController controller) {
     return const [
       _ComplaintStep.locationPriority,
-      _ComplaintStep.issueDetails,
       _ComplaintStep.evidenceReview,
     ];
   }
@@ -487,20 +416,12 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
     final landmarkText = _landmark.text.trim();
     _draft
       ..description = _description.text.trim()
-      ..exactLandmark = landmarkText.isNotEmpty || _draft.locationId.isNotEmpty
-          ? landmarkText
-          : _draft.department
+      ..exactLandmark = landmarkText
       ..photoPaths = _photos.map((photo) => photo.path).toList();
     if (_draft.category.trim().isEmpty) {
       final controller = context.read<TicketController>();
-      final categories = controller.categories.isEmpty && controller.demoMode
-          ? housekeepingCategories
-          : controller.categories
-                .map((row) => '${row['category_name'] ?? ''}'.trim())
-                .where((value) => value.isNotEmpty)
-                .toList();
       final mappedCategory = _categoryValueForService(
-        categories,
+        _categoryNames(controller),
         _serviceCategory,
       );
       if (mappedCategory == null) {
@@ -508,9 +429,7 @@ class _RaiseTicketScreenState extends State<RaiseTicketScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              _serviceCategory == 'Security'
-                  ? 'Security service is not currently configured. Please contact QPMS support.'
-                  : 'This service is not currently configured. Please contact QPMS support.',
+              'Housekeeping service is not currently configured. Please contact QPMS support.',
             ),
           ),
         );
@@ -611,12 +530,12 @@ class _StepProgress extends StatelessWidget {
           ),
         ],
       ),
-      const SizedBox(height: 14),
+      const SizedBox(height: 10),
       ClipRRect(
         borderRadius: BorderRadius.circular(999),
         child: LinearProgressIndicator(
           value: (step + 1) / totalSteps,
-          minHeight: 7,
+          minHeight: 5,
           backgroundColor: AppColors.line,
           color: AppColors.royalBlue,
         ),
@@ -635,38 +554,35 @@ class _IntroCard extends StatelessWidget {
     final data = switch (step) {
       _ComplaintStep.locationPriority => (
         Icons.location_on_rounded,
-        'Tell us where and how urgent',
-        'This step helps us identify the exact location and priority of the issue.',
-      ),
-      _ComplaintStep.issueDetails => (
-        Icons.assignment_rounded,
-        'Tell us more about the issue',
-        'Provide a clear description so we can understand and resolve it faster.',
+        'Choose the location and priority of the issue.',
+        'Accurate details help us resolve it faster.',
       ),
       _ComplaintStep.evidenceReview => (
-        Icons.photo_library_rounded,
-        'Add supporting photos',
-        'Images help our team understand the issue better and resolve it faster.',
+        Icons.info_outline_rounded,
+        'Add details, photos and review before submitting.',
+        '',
       ),
     };
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 20),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FBFF),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFA7C7FF)),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.royalBlue.withValues(alpha: 0.06),
-            blurRadius: 24,
-            offset: const Offset(0, 12),
-          ),
-        ],
+        color: AppColors.paleBlue.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.royalBlue.withValues(alpha: 0.12)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _SoftIllustration(icon: data.$1, size: 104),
-          const SizedBox(width: 20),
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(13),
+            ),
+            child: Icon(data.$1, color: AppColors.royalBlue, size: 22),
+          ),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -680,16 +596,18 @@ class _IntroCard extends StatelessWidget {
                     height: 1.25,
                   ),
                 ),
-                const SizedBox(height: 10),
-                Text(
-                  data.$3,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    height: 1.45,
-                    color: AppColors.muted,
-                    fontWeight: FontWeight.w600,
+                if (data.$3.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    data.$3,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      height: 1.35,
+                      color: AppColors.muted,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ),
@@ -704,7 +622,7 @@ class _RaiseTicketHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(22, 18, 22, 8),
+    padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
     child: Row(
       children: [
         _HeaderButton(
@@ -716,9 +634,9 @@ class _RaiseTicketHeader extends StatelessWidget {
             'Raise Ticket',
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 28,
+              fontSize: 20,
               fontWeight: FontWeight.w900,
-              color: AppColors.deepBlue,
+              color: AppColors.ink,
             ),
           ),
         ),
@@ -739,51 +657,21 @@ class _HeaderButton extends StatelessWidget {
     onTap: onTap,
     borderRadius: BorderRadius.circular(16),
     child: Container(
-      width: 48,
-      height: 48,
+      width: 42,
+      height: 42,
       decoration: BoxDecoration(
-        color: const Color(0xFFF1F6FF),
-        borderRadius: BorderRadius.circular(16),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.line),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0F172A).withValues(alpha: 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
+          ),
+        ],
       ),
-      child: Icon(icon, color: AppColors.deepBlue, size: 26),
-    ),
-  );
-}
-
-class _SoftIllustration extends StatelessWidget {
-  const _SoftIllustration({required this.icon, this.size = 92});
-
-  final IconData icon;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    width: size,
-    height: size,
-    child: Stack(
-      alignment: Alignment.center,
-      children: [
-        Container(
-          width: size * 0.74,
-          height: size * 0.74,
-          decoration: BoxDecoration(
-            color: AppColors.paleBlue,
-            borderRadius: BorderRadius.circular(20),
-          ),
-        ),
-        Positioned(
-          bottom: 13,
-          child: Container(
-            width: size * 0.86,
-            height: 4,
-            decoration: BoxDecoration(
-              color: AppColors.royalBlue.withValues(alpha: 0.22),
-              borderRadius: BorderRadius.circular(99),
-            ),
-          ),
-        ),
-        Icon(icon, color: AppColors.royalBlue, size: size * 0.48),
-      ],
+      child: Icon(icon, color: AppColors.deepBlue, size: 22),
     ),
   );
 }
@@ -837,6 +725,7 @@ class _LocationPriorityStep extends StatelessWidget {
       children: [
         _SearchSelectField(
           label: 'Block',
+          placeholder: 'Select a block',
           icon: Icons.apartment_rounded,
           value: draft.blockId,
           loading: loadingBlocks,
@@ -848,19 +737,21 @@ class _LocationPriorityStep extends StatelessWidget {
         const SizedBox(height: 18),
         _SearchSelectField(
           label: 'Floor',
+          placeholder: 'Select a floor',
           icon: Icons.stairs_rounded,
           value: draft.floorId,
           loading: loadingFloors,
           enabled: draft.blockId.isNotEmpty,
           disabledText: 'Select a block first',
           loadingText: 'Loading floors...',
-          emptyText: 'No confirmed floors are available for this block.',
+          emptyText: 'Floor mapping is not available for this block.',
           options: floors,
           onChanged: onFloorChanged,
         ),
         const SizedBox(height: 18),
         _SearchSelectField(
           label: 'Area / Ward',
+          placeholder: 'Select an area or ward',
           icon: Icons.bed_rounded,
           value: _areaValue,
           loading: loadingAreas,
@@ -869,32 +760,24 @@ class _LocationPriorityStep extends StatelessWidget {
               ? 'Select a block first'
               : 'Select a floor first',
           loadingText: 'Loading areas...',
-          emptyText: 'No mapped area is available. Add a landmark below.',
+          emptyText: 'No areas or wards are mapped to this floor.',
           options: areas,
           onChanged: onAreaChanged,
         ),
-        const SizedBox(height: 20),
-        const Text(
-          'If area is not listed, enter exact landmark / location',
-          style: TextStyle(
-            fontSize: 13.5,
-            fontWeight: FontWeight.w900,
-            color: AppColors.deepBlue,
-          ),
-        ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 16),
         TextFormField(
           controller: landmarkController,
           maxLength: 180,
           enabled: !submitting,
           decoration: const InputDecoration(
+            labelText: 'Exact landmark / location (optional)',
             hintText: 'e.g., Near Lift No. 2, Opposite Nursing Station',
             prefixIcon: Icon(Icons.place_outlined),
             counterText: '',
           ),
           onChanged: onLandmarkChanged,
         ),
-        const Divider(height: 34),
+        const SizedBox(height: 22),
         const Text(
           'Priority',
           style: TextStyle(
@@ -913,69 +796,50 @@ class _LocationPriorityStep extends StatelessWidget {
           value: draft.priority,
           onChanged: submitting ? null : onPriorityChanged,
         ),
+        const SizedBox(height: 18),
+        const _InfoNotice(
+          icon: Icons.lightbulb_outline_rounded,
+          title: 'Tip',
+          text: 'Choosing the right priority helps our team respond faster.',
+        ),
       ],
     ),
   );
 }
 
-class _IssueDetailsStep extends StatelessWidget {
-  const _IssueDetailsStep({
-    required this.selectedService,
+class _EvidenceReviewStep extends StatelessWidget {
+  const _EvidenceReviewStep({
+    required this.summary,
+    required this.draft,
+    required this.serviceCategory,
     required this.descriptionController,
+    required this.photos,
     required this.submitting,
-    required this.onServiceChanged,
     required this.onDescriptionChanged,
+    required this.onAddPhoto,
+    required this.onRemovePhoto,
   });
 
-  final String selectedService;
+  final String summary;
+  final ComplaintDraft draft;
+  final String serviceCategory;
   final TextEditingController descriptionController;
+  final List<XFile> photos;
   final bool submitting;
-  final ValueChanged<String> onServiceChanged;
   final ValueChanged<String> onDescriptionChanged;
+  final VoidCallback onAddPhoto;
+  final ValueChanged<XFile> onRemovePhoto;
 
   @override
   Widget build(BuildContext context) => _ReferenceCard(
     icon: Icons.article_rounded,
     title: 'Issue Details',
+    subtitle: 'Tell us what needs attention',
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Service Category',
-          style: TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w900,
-            color: AppColors.deepBlue,
-          ),
-        ),
-        const SizedBox(height: 6),
-        const Text(
-          'Select the category that best matches your issue',
-          style: TextStyle(color: AppColors.muted, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 18),
-        Row(
-          children: [
-            Expanded(
-              child: _ServiceTile(
-                label: 'Housekeeping',
-                icon: Icons.cleaning_services_rounded,
-                selected: selectedService == 'Housekeeping',
-                onTap: () => onServiceChanged('Housekeeping'),
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: _ServiceTile(
-                label: 'Security',
-                icon: Icons.security_rounded,
-                selected: selectedService == 'Security',
-                onTap: () => onServiceChanged('Security'),
-              ),
-            ),
-          ],
-        ),
-        const Divider(height: 38),
+        _SelectedCategoryNotice(category: serviceCategory),
+        const SizedBox(height: 20),
         const Text(
           'Describe the issue',
           style: TextStyle(
@@ -992,8 +856,8 @@ class _IssueDetailsStep extends StatelessWidget {
         const SizedBox(height: 14),
         TextFormField(
           controller: descriptionController,
-          minLines: 7,
-          maxLines: 9,
+          minLines: 5,
+          maxLines: 7,
           maxLength: 1000,
           enabled: !submitting,
           decoration: const InputDecoration(
@@ -1002,40 +866,46 @@ class _IssueDetailsStep extends StatelessWidget {
           ),
           onChanged: onDescriptionChanged,
         ),
-      ],
-    ),
-  );
-}
-
-class _EvidenceReviewStep extends StatelessWidget {
-  const _EvidenceReviewStep({
-    required this.summary,
-    required this.draft,
-    required this.serviceCategory,
-    required this.description,
-    required this.photos,
-    required this.submitting,
-    required this.onAddPhoto,
-    required this.onRemovePhoto,
-  });
-
-  final String summary;
-  final ComplaintDraft draft;
-  final String serviceCategory;
-  final String description;
-  final List<XFile> photos;
-  final bool submitting;
-  final VoidCallback onAddPhoto;
-  final ValueChanged<XFile> onRemovePhoto;
-
-  @override
-  Widget build(BuildContext context) => _ReferenceCard(
-    icon: Icons.camera_alt_rounded,
-    title: 'Add Evidence',
-    subtitle: 'Upload clear photos related to the issue',
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
+        const _SectionDivider(),
+        const _FormSectionHeader(
+          icon: Icons.photo_camera_rounded,
+          title: 'Photos',
+          subtitle: 'Add clear photos related to the issue',
+        ),
+        const SizedBox(height: 14),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              if (photos.length < 5 && !submitting)
+                Padding(
+                  padding: EdgeInsets.only(right: photos.isEmpty ? 0 : 12),
+                  child: _AddPhotoButton(onTap: onAddPhoto),
+                ),
+              for (var index = 0; index < photos.length; index++) ...[
+                _PhotoThumb(
+                  photo: photos[index],
+                  onRemove: submitting
+                      ? () {}
+                      : () => onRemovePhoto(photos[index]),
+                ),
+                if (index != photos.length - 1) const SizedBox(width: 12),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        const _InfoNotice(
+          text:
+              'You can add up to 5 photos. Make sure images are clear and well-lit.',
+        ),
+        const _SectionDivider(),
+        const _FormSectionHeader(
+          icon: Icons.fact_check_rounded,
+          title: 'Review Summary',
+          subtitle: 'Review the details before submitting',
+        ),
+        const SizedBox(height: 14),
         _TicketSummaryStrip(
           block: draft.block,
           floor: draft.floor,
@@ -1051,28 +921,9 @@ class _EvidenceReviewStep extends StatelessWidget {
           priority: priorityLabel(draft.priority),
           category: serviceCategory,
         ),
-        const SizedBox(height: 24),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            for (final photo in photos)
-              _PhotoThumb(
-                photo: photo,
-                onRemove: submitting ? () {} : () => onRemovePhoto(photo),
-              ),
-            if (photos.length < 5 && !submitting)
-              _AddPhotoButton(onTap: onAddPhoto),
-          ],
-        ),
-        const SizedBox(height: 18),
-        _InfoNotice(
-          text:
-              'You can add up to 5 photos. Make sure images are clear and well-lit.',
-        ),
-        const SizedBox(height: 18),
-        _ReviewRow('Location', summary),
-        if (draft.floor.isNotEmpty) _ReviewRow('Floor', draft.floor),
+        const SizedBox(height: 12),
+        _ReviewRow('Block', draft.block),
+        _ReviewRow('Floor', draft.floor),
         if (draft.location.isNotEmpty || draft.department.isNotEmpty)
           _ReviewRow(
             'Area / Ward',
@@ -1080,7 +931,9 @@ class _EvidenceReviewStep extends StatelessWidget {
           ),
         if (draft.exactLandmark.isNotEmpty)
           _ReviewRow('Exact Location', draft.exactLandmark),
-        _ReviewRow('Issue Details', description),
+        _ReviewRow('Priority', priorityLabel(draft.priority)),
+        _ReviewRow('Category', serviceCategory),
+        _ReviewRow('Issue Description', descriptionController.text.trim()),
       ],
     ),
   );
@@ -1101,16 +954,16 @@ class _ReferenceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(20),
+    padding: const EdgeInsets.all(18),
     decoration: BoxDecoration(
       color: Colors.white,
-      borderRadius: BorderRadius.circular(22),
+      borderRadius: BorderRadius.circular(18),
       border: Border.all(color: AppColors.line),
       boxShadow: [
         BoxShadow(
-          color: Colors.black.withValues(alpha: 0.06),
-          blurRadius: 24,
-          offset: const Offset(0, 12),
+          color: const Color(0xFF0F172A).withValues(alpha: 0.055),
+          blurRadius: 18,
+          offset: const Offset(0, 8),
         ),
       ],
     ),
@@ -1120,15 +973,15 @@ class _ReferenceCard extends StatelessWidget {
         Row(
           children: [
             Container(
-              width: 56,
-              height: 56,
+              width: 42,
+              height: 42,
               decoration: BoxDecoration(
                 color: AppColors.paleBlue,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(13),
               ),
-              child: Icon(icon, color: AppColors.royalBlue, size: 30),
+              child: Icon(icon, color: AppColors.royalBlue, size: 22),
             ),
-            const SizedBox(width: 16),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1147,7 +1000,8 @@ class _ReferenceCard extends StatelessWidget {
                       subtitle!,
                       style: const TextStyle(
                         color: AppColors.muted,
-                        fontWeight: FontWeight.w600,
+                        height: 1.3,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                   ],
@@ -1156,8 +1010,127 @@ class _ReferenceCard extends StatelessWidget {
             ),
           ],
         ),
-        const Divider(height: 30),
+        const SizedBox(height: 18),
         child,
+      ],
+    ),
+  );
+}
+
+class _FormSectionHeader extends StatelessWidget {
+  const _FormSectionHeader({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(
+          color: AppColors.paleBlue,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Icon(icon, color: AppColors.royalBlue, size: 20),
+      ),
+      const SizedBox(width: 11),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                color: AppColors.deepBlue,
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              subtitle,
+              style: const TextStyle(
+                color: AppColors.muted,
+                height: 1.3,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ],
+  );
+}
+
+class _SectionDivider extends StatelessWidget {
+  const _SectionDivider();
+
+  @override
+  Widget build(BuildContext context) => const Padding(
+    padding: EdgeInsets.symmetric(vertical: 22),
+    child: Divider(height: 1, color: AppColors.line),
+  );
+}
+
+class _SelectedCategoryNotice extends StatelessWidget {
+  const _SelectedCategoryNotice({required this.category});
+
+  final String category;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: AppColors.paleBlue,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: AppColors.line),
+    ),
+    child: Row(
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(11),
+          ),
+          child: const Icon(
+            Icons.cleaning_services_rounded,
+            color: AppColors.royalBlue,
+            size: 20,
+          ),
+        ),
+        const SizedBox(width: 12),
+        const Expanded(
+          child: Text(
+            'Category',
+            style: TextStyle(
+              color: AppColors.muted,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        Flexible(
+          child: Text(
+            category,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.right,
+            style: const TextStyle(
+              color: AppColors.deepBlue,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ),
       ],
     ),
   );
@@ -1176,32 +1149,19 @@ class _PrioritySelector extends StatelessWidget {
       TicketPriority.medium,
       TicketPriority.high,
     ];
-    return Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: AppColors.line),
-        borderRadius: BorderRadius.circular(18),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Row(
-        children: [
-          for (var index = 0; index < items.length; index++) ...[
-            Expanded(
-              child: _PriorityOption(
-                priority: items[index],
-                selected: value == items[index],
-                onTap: onChanged == null
-                    ? null
-                    : () => onChanged!(items[index]),
-              ),
+    return Row(
+      children: [
+        for (var index = 0; index < items.length; index++) ...[
+          Expanded(
+            child: _PriorityOption(
+              priority: items[index],
+              selected: value == items[index],
+              onTap: onChanged == null ? null : () => onChanged!(items[index]),
             ),
-            if (index < items.length - 1)
-              const SizedBox(
-                height: 56,
-                child: VerticalDivider(width: 1, color: AppColors.line),
-              ),
-          ],
+          ),
+          if (index < items.length - 1) const SizedBox(width: 8),
         ],
-      ),
+      ],
     );
   }
 }
@@ -1228,17 +1188,21 @@ class _PriorityOption extends StatelessWidget {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        height: 64,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
+        height: 54,
+        padding: const EdgeInsets.symmetric(horizontal: 6),
         decoration: BoxDecoration(
           color: selected ? color.withValues(alpha: 0.08) : Colors.white,
-          border: selected ? Border.all(color: color, width: 1.5) : null,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: selected ? color : AppColors.line,
+            width: selected ? 1.4 : 1,
+          ),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(_priorityIcon(priority), color: color, size: 22),
-            const SizedBox(width: 8),
+            Icon(_priorityIcon(priority), color: color, size: 18),
+            const SizedBox(width: 5),
             Flexible(
               child: Text(
                 priorityLabel(priority),
@@ -1255,69 +1219,6 @@ class _PriorityOption extends StatelessWidget {
       ),
     );
   }
-}
-
-class _ServiceTile extends StatelessWidget {
-  const _ServiceTile({
-    required this.label,
-    required this.icon,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final IconData icon;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    borderRadius: BorderRadius.circular(18),
-    child: AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
-      height: 136,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: selected ? AppColors.paleBlue : Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: selected ? AppColors.royalBlue : AppColors.line,
-          width: selected ? 1.5 : 1,
-        ),
-      ),
-      child: Stack(
-        children: [
-          Align(
-            alignment: Alignment.topLeft,
-            child: Icon(
-              icon,
-              size: 42,
-              color: selected ? AppColors.royalBlue : AppColors.muted,
-            ),
-          ),
-          Align(
-            alignment: Alignment.topRight,
-            child: Icon(
-              selected ? Icons.check_circle_rounded : Icons.circle_outlined,
-              color: selected ? AppColors.royalBlue : AppColors.muted,
-            ),
-          ),
-          Align(
-            alignment: Alignment.bottomLeft,
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w900,
-                color: selected ? AppColors.royalBlue : AppColors.ink,
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
 }
 
 class _TicketSummaryStrip extends StatelessWidget {
@@ -1347,41 +1248,51 @@ class _TicketSummaryStrip extends StatelessWidget {
     ),
     child: Column(
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: _SummaryMini(
-                icon: Icons.apartment_rounded,
-                value: block,
-                label: 'Block',
-              ),
-            ),
-            if (floor.isNotEmpty)
-              Expanded(
-                child: _SummaryMini(
-                  icon: Icons.stairs_rounded,
-                  value: floor,
-                  label: 'Floor',
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final itemWidth = (constraints.maxWidth - 10) / 2;
+            return Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                SizedBox(
+                  width: itemWidth,
+                  child: _SummaryMini(
+                    icon: Icons.apartment_rounded,
+                    value: block,
+                    label: 'Block',
+                  ),
                 ),
-              ),
-            Expanded(
-              child: _SummaryMini(
-                icon: Icons.warning_rounded,
-                value: priority,
-                label: 'Priority',
-                color: priority == 'Critical'
-                    ? AppColors.red
-                    : AppColors.royalBlue,
-              ),
-            ),
-            Expanded(
-              child: _SummaryMini(
-                icon: Icons.cleaning_services_rounded,
-                value: category,
-                label: 'Category',
-              ),
-            ),
-          ],
+                SizedBox(
+                  width: itemWidth,
+                  child: _SummaryMini(
+                    icon: Icons.stairs_rounded,
+                    value: floor,
+                    label: 'Floor',
+                  ),
+                ),
+                SizedBox(
+                  width: itemWidth,
+                  child: _SummaryMini(
+                    icon: Icons.warning_rounded,
+                    value: priority,
+                    label: 'Priority',
+                    color: priority == 'Critical'
+                        ? AppColors.red
+                        : AppColors.royalBlue,
+                  ),
+                ),
+                SizedBox(
+                  width: itemWidth,
+                  child: _SummaryMini(
+                    icon: Icons.cleaning_services_rounded,
+                    value: category,
+                    label: 'Category',
+                  ),
+                ),
+              ],
+            );
+          },
         ),
         if (location.trim().isNotEmpty) ...[
           const SizedBox(height: 14),
@@ -1450,63 +1361,105 @@ class _SummaryMini extends StatelessWidget {
   final Color color;
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Icon(icon, color: color, size: 24),
-      const SizedBox(height: 6),
-      Text(
-        value.isEmpty ? '-' : value,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        textAlign: TextAlign.center,
-        style: const TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w900,
-          color: AppColors.ink,
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(10),
+    decoration: BoxDecoration(
+      color: const Color(0xFFF8FAFC),
+      borderRadius: BorderRadius.circular(13),
+      border: Border.all(color: AppColors.line),
+    ),
+    child: Row(
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.muted,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                value.isEmpty ? '-' : value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.ink,
+                ),
+              ),
+            ],
+          ),
         ),
-      ),
-      const SizedBox(height: 2),
-      Text(
-        label,
-        style: const TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          color: AppColors.muted,
-        ),
-      ),
-    ],
+      ],
+    ),
   );
 }
 
 class _InfoNotice extends StatelessWidget {
-  const _InfoNotice({required this.text});
+  const _InfoNotice({
+    required this.text,
+    this.icon = Icons.info_outline_rounded,
+    this.title,
+  });
 
   final String text;
+  final IconData icon;
+  final String? title;
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(14),
+    padding: const EdgeInsets.all(12),
     decoration: BoxDecoration(
-      color: AppColors.paleBlue,
+      color: AppColors.paleBlue.withValues(alpha: 0.65),
       borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: AppColors.royalBlue.withValues(alpha: 0.1)),
     ),
     child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const CircleAvatar(
-          radius: 15,
-          backgroundColor: AppColors.royalBlue,
-          child: Icon(Icons.info_rounded, color: Colors.white, size: 18),
+        Container(
+          width: 28,
+          height: 28,
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, color: AppColors.royalBlue, size: 17),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: 10),
         Expanded(
-          child: Text(
-            text,
-            style: const TextStyle(
-              color: AppColors.muted,
-              height: 1.35,
-              fontWeight: FontWeight.w700,
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (title != null) ...[
+                Text(
+                  title!,
+                  style: const TextStyle(
+                    color: AppColors.deepBlue,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 2),
+              ],
+              Text(
+                text,
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  height: 1.35,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -1573,7 +1526,7 @@ class _WizardActions extends StatelessWidget {
   Widget build(BuildContext context) => SafeArea(
     top: false,
     child: Container(
-      padding: const EdgeInsets.fromLTRB(22, 14, 22, 16),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
       decoration: BoxDecoration(
         color: Colors.white,
         border: const Border(top: BorderSide(color: AppColors.line)),
@@ -1591,22 +1544,24 @@ class _WizardActions extends StatelessWidget {
             child: OutlinedButton(
               onPressed: canGoBack ? onBack : null,
               style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(58),
+                foregroundColor: AppColors.royalBlue,
+                side: const BorderSide(color: AppColors.royalBlue),
+                minimumSize: const Size.fromHeight(54),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(15),
                 ),
               ),
               child: const Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(Icons.arrow_back_rounded),
-                  SizedBox(width: 12),
+                  SizedBox(width: 8),
                   Text('Back'),
                 ],
               ),
             ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 12),
           Expanded(
             flex: 2,
             child: ElevatedButton.icon(
@@ -1632,13 +1587,15 @@ class _WizardActions extends StatelessWidget {
                     : 'Next',
               ),
               style: ElevatedButton.styleFrom(
-                minimumSize: const Size.fromHeight(58),
+                minimumSize: const Size.fromHeight(54),
                 backgroundColor: AppColors.royalBlue,
+                disabledBackgroundColor: const Color(0xFFCBD5E1),
+                disabledForegroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(15),
                 ),
                 textStyle: const TextStyle(
-                  fontSize: 18,
+                  fontSize: 16,
                   fontWeight: FontWeight.w900,
                 ),
               ),
@@ -1659,6 +1616,7 @@ class _PickerOption {
 class _SearchSelectField extends StatelessWidget {
   const _SearchSelectField({
     required this.label,
+    required this.placeholder,
     required this.value,
     required this.options,
     required this.icon,
@@ -1671,6 +1629,7 @@ class _SearchSelectField extends StatelessWidget {
   });
 
   final String label;
+  final String placeholder;
   final String value;
   final List<_PickerOption> options;
   final IconData icon;
@@ -1695,11 +1654,52 @@ class _SearchSelectField extends StatelessWidget {
     return DropdownButtonFormField<String>(
       initialValue: selectedValue,
       isExpanded: true,
-      icon: const Icon(Icons.keyboard_arrow_down_rounded),
+      icon: const Icon(
+        Icons.keyboard_arrow_down_rounded,
+        color: AppColors.muted,
+      ),
       decoration: InputDecoration(
         labelText: label,
-        prefixIcon: Icon(icon),
+        hintText: placeholder,
+        prefixIcon: Icon(
+          icon,
+          color: enabled ? AppColors.royalBlue : AppColors.muted,
+        ),
         helperText: helperText,
+        filled: true,
+        fillColor: enabled ? Colors.white : const Color(0xFFF8FAFC),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 16,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppColors.line),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppColors.line),
+        ),
+        disabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppColors.line),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppColors.royalBlue, width: 1.4),
+        ),
+        labelStyle: const TextStyle(
+          color: AppColors.deepBlue,
+          fontWeight: FontWeight.w800,
+        ),
+        hintStyle: const TextStyle(
+          color: AppColors.muted,
+          fontWeight: FontWeight.w700,
+        ),
+        helperStyle: const TextStyle(
+          color: AppColors.muted,
+          fontWeight: FontWeight.w600,
+        ),
       ),
       items: [
         for (final option in options)
@@ -1840,39 +1840,29 @@ class _AddPhotoButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => InkWell(
     onTap: onTap,
-    borderRadius: BorderRadius.circular(18),
+    borderRadius: BorderRadius.circular(16),
     child: Container(
-      width: 118,
-      height: 158,
+      width: 92,
+      height: 92,
       decoration: BoxDecoration(
         border: Border.all(
           color: AppColors.royalBlue.withValues(alpha: 0.45),
           style: BorderStyle.solid,
         ),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         color: Colors.white,
       ),
       child: const Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.add_a_photo_rounded, color: AppColors.royalBlue, size: 34),
-          SizedBox(height: 10),
+          Icon(Icons.add_a_photo_rounded, color: AppColors.royalBlue, size: 26),
+          SizedBox(height: 7),
           Text(
             'Add Photo',
             style: TextStyle(
-              fontSize: 14,
+              fontSize: 12,
               fontWeight: FontWeight.w900,
               color: AppColors.royalBlue,
-            ),
-          ),
-          SizedBox(height: 6),
-          Text(
-            'JPG, PNG up to 10MB',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              color: AppColors.muted,
             ),
           ),
         ],
@@ -1894,12 +1884,12 @@ class _PhotoThumb extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         child: Image.file(
           File(photo.path),
-          width: 118,
-          height: 158,
+          width: 92,
+          height: 92,
           fit: BoxFit.cover,
           errorBuilder: (_, _, _) => Container(
-            width: 118,
-            height: 158,
+            width: 92,
+            height: 92,
             color: AppColors.paleBlue,
             child: const Icon(Icons.broken_image_outlined),
           ),
@@ -1913,7 +1903,7 @@ class _PhotoThumb extends StatelessWidget {
           icon: const Icon(Icons.close, size: 14),
           style: IconButton.styleFrom(
             backgroundColor: AppColors.red,
-            minimumSize: const Size(26, 26),
+            minimumSize: const Size(24, 24),
             padding: EdgeInsets.zero,
           ),
         ),

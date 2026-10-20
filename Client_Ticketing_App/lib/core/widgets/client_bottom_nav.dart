@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/routes.dart';
-import '../constants/app_colors.dart';
 import '../../state/notification_controller.dart';
+import '../constants/app_colors.dart';
 
 class ClientBottomNav extends StatelessWidget {
   const ClientBottomNav({required this.currentRoute, super.key});
@@ -13,88 +13,182 @@ class ClientBottomNav extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final unreadCount = context.watch<NotificationController>().unreadCount;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: const Border(top: BorderSide(color: AppColors.line)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 20,
-            offset: const Offset(0, -8),
-          ),
-        ],
-      ),
-      child: NavigationBar(
-        selectedIndex: _indexFor(currentRoute),
-        height: 72,
-        elevation: 0,
-        backgroundColor: Colors.white,
-        indicatorColor: AppColors.paleBlue,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        destinations: [
-          const NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home_rounded),
-            label: 'Home',
-          ),
-          const NavigationDestination(
-            icon: Icon(Icons.confirmation_number_outlined),
-            selectedIcon: Icon(Icons.confirmation_number_rounded),
-            label: 'Tickets',
-          ),
-          const NavigationDestination(
-            icon: Icon(Icons.add_circle_outline_rounded, size: 30),
-            selectedIcon: Icon(Icons.add_circle_rounded, size: 32),
-            label: '',
-          ),
-          NavigationDestination(
-            icon: _NotificationNavIcon(
-              icon: Icons.notifications_none_rounded,
-              unreadCount: unreadCount,
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: SizedBox(
+          height: 68,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(26),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF0F172A).withValues(alpha: 0.12),
+                  blurRadius: 24,
+                  offset: const Offset(0, 12),
+                ),
+              ],
             ),
-            selectedIcon: _NotificationNavIcon(
-              icon: Icons.notifications_rounded,
-              unreadCount: unreadCount,
+            child: Row(
+              children: [
+                _NavItem(
+                  label: 'Home',
+                  icon: Icons.home_outlined,
+                  selectedIcon: Icons.home_rounded,
+                  selected: currentRoute == AppRoutes.dashboard,
+                  onTap: () => _go(context, AppRoutes.dashboard),
+                ),
+                _NavItem(
+                  label: 'Tickets',
+                  icon: Icons.confirmation_number_outlined,
+                  selectedIcon: Icons.confirmation_number_rounded,
+                  selected: currentRoute == AppRoutes.tickets,
+                  onTap: () => _go(context, AppRoutes.tickets),
+                ),
+                Expanded(
+                  child: Center(
+                    child: _CreateTicketButton(
+                      onTap: () =>
+                          Navigator.pushNamed(context, AppRoutes.raiseTicket),
+                    ),
+                  ),
+                ),
+                _NavItem(
+                  label: 'Notifications',
+                  icon: Icons.notifications_none_rounded,
+                  selectedIcon: Icons.notifications_rounded,
+                  selected: currentRoute == AppRoutes.notifications,
+                  unreadCount: unreadCount,
+                  onTap: () => _go(context, AppRoutes.notifications),
+                ),
+                _NavItem(
+                  label: 'Profile',
+                  icon: Icons.person_outline_rounded,
+                  selectedIcon: Icons.person_rounded,
+                  selected: currentRoute == AppRoutes.profile,
+                  onTap: () => _go(context, AppRoutes.profile),
+                ),
+              ],
             ),
-            label: 'Notifications',
           ),
-          const NavigationDestination(
-            icon: Icon(Icons.person_outline_rounded),
-            selectedIcon: Icon(Icons.person_rounded),
-            label: 'Profile',
-          ),
-        ],
-        onDestinationSelected: (index) {
-          if (index == 2) {
-            Navigator.pushNamed(context, AppRoutes.raiseTicket);
-            return;
-          }
-          final route = switch (index) {
-            0 => AppRoutes.dashboard,
-            1 => AppRoutes.tickets,
-            3 => AppRoutes.notifications,
-            _ => AppRoutes.profile,
-          };
-          if (route == currentRoute) return;
-          Navigator.pushNamedAndRemoveUntil(context, route, (_) => false);
-        },
+        ),
       ),
     );
   }
 
-  int _indexFor(String route) => switch (route) {
-    AppRoutes.tickets => 1,
-    AppRoutes.notifications => 3,
-    AppRoutes.profile => 4,
-    _ => 0,
-  };
+  void _go(BuildContext context, String route) {
+    if (route == currentRoute) return;
+    Navigator.pushNamedAndRemoveUntil(context, route, (_) => false);
+  }
+}
+
+class _NavItem extends StatelessWidget {
+  const _NavItem({
+    required this.label,
+    required this.icon,
+    required this.selectedIcon,
+    required this.selected,
+    required this.onTap,
+    this.unreadCount = 0,
+  });
+
+  final String label;
+  final IconData icon;
+  final IconData selectedIcon;
+  final bool selected;
+  final VoidCallback onTap;
+  final int unreadCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? AppColors.royalBlue : AppColors.muted;
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 3),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _NotificationNavIcon(
+                icon: selected ? selectedIcon : icon,
+                color: color,
+                unreadCount: unreadCount,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 10.5,
+                  fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 3),
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                width: selected ? 18 : 0,
+                height: 3,
+                decoration: BoxDecoration(
+                  color: AppColors.royalBlue,
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CreateTicketButton extends StatelessWidget {
+  const _CreateTicketButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+    borderRadius: BorderRadius.circular(999),
+    onTap: onTap,
+    child: Container(
+      width: 52,
+      height: 52,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: const LinearGradient(
+          colors: [AppColors.deepBlue, AppColors.royalBlue],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.royalBlue.withValues(alpha: 0.28),
+            blurRadius: 18,
+            offset: const Offset(0, 9),
+          ),
+        ],
+      ),
+      child: const Icon(Icons.add_rounded, color: Colors.white, size: 32),
+    ),
+  );
 }
 
 class _NotificationNavIcon extends StatelessWidget {
-  const _NotificationNavIcon({required this.icon, required this.unreadCount});
+  const _NotificationNavIcon({
+    required this.icon,
+    required this.color,
+    required this.unreadCount,
+  });
 
   final IconData icon;
+  final Color color;
   final int unreadCount;
 
   @override
@@ -103,10 +197,10 @@ class _NotificationNavIcon extends StatelessWidget {
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        Icon(icon),
+        Icon(icon, color: color, size: 24),
         if (unreadCount > 0)
           Positioned(
-            right: -8,
+            right: -9,
             top: -7,
             child: Container(
               constraints: const BoxConstraints(minWidth: 17, minHeight: 17),
