@@ -30,3 +30,70 @@ workflows:
     artifacts:
       - Client_Ticketing_App/build/ios/iphonesimulator/*.app
       - /tmp/xcodebuild_logs/*.log
+
+  client-ticketing-ios-device-unsigned:
+    name: Client Ticketing iOS device unsigned IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+    environment:
+      flutter: 3.44.1
+      xcode: latest
+    scripts:
+      - name: Get Flutter packages
+        script: |
+          cd Client_Ticketing_App
+          flutter pub get
+      - name: Verify device build configuration
+        script: |
+          set -eu
+          cd Client_Ticketing_App
+          : "${BACKEND_API_URL:?Set BACKEND_API_URL in Codemagic environment variables}"
+          : "${SUPABASE_URL:?Set SUPABASE_URL in Codemagic environment variables}"
+          : "${SUPABASE_ANON_KEY:?Set SUPABASE_ANON_KEY in Codemagic environment variables}"
+          test "${BACKEND_API_URL%/}" = 'https://myqpms-crm-back-end-production.up.railway.app'
+          test "${SUPABASE_URL%/}" = 'https://ubawkjdbtickdlrgkulz.supabase.co'
+          test "${HOSPITAL_DEMO_MODE:-false}" = false
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          url = os.environ['BACKEND_API_URL'].rstrip('/') + '/health'
+          with urllib.request.urlopen(url, timeout=15) as response:
+              health = json.load(response)
+          if health.get('ok') is not True or health.get('service') != 'qpms-mail-api':
+              raise SystemExit('The configured backend did not return the expected health response.')
+          print('Approved HTTPS backend health check passed.')
+          PY
+          flutter test test/ios_platform_configuration_test.dart
+      - name: Analyze Client Ticketing
+        script: |
+          cd Client_Ticketing_App
+          flutter analyze --no-fatal-infos lib test
+      - name: Test Client Ticketing
+        script: |
+          cd Client_Ticketing_App
+          flutter test test/ios_platform_configuration_test.dart test/client_ticket_deep_link_test.dart test/controller_test.dart test/nims_contact_flow_test.dart test/phase1_uat_readiness_test.dart test/my_tickets_screen_test.dart
+      - name: Build unsigned iOS device app
+        script: |
+          set -eu
+          cd Client_Ticketing_App
+          flutter build ios --release --no-codesign \
+            --dart-define="BACKEND_API_URL=${BACKEND_API_URL%/}" \
+            --dart-define="SUPABASE_URL=${SUPABASE_URL%/}" \
+            --dart-define="SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY" \
+            --dart-define=HOSPITAL_DEMO_MODE=false
+      - name: Package unsigned device IPA
+        script: |
+          set -eu
+          cd Client_Ticketing_App
+          test -d build/ios/iphoneos/Runner.app
+          mkdir -p build/ios/ipa/Payload
+          ditto build/ios/iphoneos/Runner.app build/ios/ipa/Payload/Runner.app
+          cd build/ios/ipa
+          ditto -c -k --keepParent Payload client-ticketing-unsigned.ipa
+          unzip -t client-ticketing-unsigned.ipa > /dev/null
+          unzip -Z1 client-ticketing-unsigned.ipa | grep -Fxq 'Payload/Runner.app/Info.plist'
+    artifacts:
+      - Client_Ticketing_App/build/ios/ipa/client-ticketing-unsigned.ipa
+      - /tmp/xcodebuild_logs/*.log
