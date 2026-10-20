@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { normalizedStateKey, stateScopeQueryValues } from './workMappingScope.js';
 
 export const CLIENT_DEEP_CLEANING_BUCKET = 'client-deep-cleaning-uploads';
 export const CLIENT_DEEP_CLEANING_BUSINESS = 'Reliance Retail';
@@ -45,6 +46,20 @@ function normalizeKey(value) {
   return text(value).toUpperCase().replace(/[^A-Z0-9]+/g, '');
 }
 
+function retailStateKey(value) {
+  const key = normalizedStateKey(value);
+  if (['PUDUCHERRY', 'PONDICHERRY'].includes(key)) return 'PY';
+  if (['AP', 'AP1', 'AP2', 'ANDHRAPRADESH'].includes(key)) return 'AP';
+  return key;
+}
+
+function retailStateQueryValues(value) {
+  const key = retailStateKey(value);
+  if (key === 'PY') return ['PY', 'Puducherry', 'Pondicherry'];
+  if (key === 'AP') return ['AP', 'AP-1', 'AP-2', 'Andhra Pradesh', 'Andhra Pradesh - 1', 'Andhra Pradesh - 2'];
+  return stateScopeQueryValues(value);
+}
+
 function canonicalRole(value) {
   const key = normalizeKey(value);
   if (key === 'FO' || key === 'FIELDOFFICER') return 'FO';
@@ -64,6 +79,9 @@ export function isRelianceRetailStore(row) {
 export function assertRelianceRetailFo(profile) {
   if (!profile) {
     throw clientDeepCleaningError(401, 'unauthenticated', 'Authentication is required.');
+  }
+  if (profile.is_active === false || normalizeKey(profile.status) === 'INACTIVE') {
+    throw clientDeepCleaningError(403, 'inactive_profile', 'An active employee profile is required.');
   }
   if (canonicalRole(profile.role) !== 'FO') {
     throw clientDeepCleaningError(403, 'forbidden_role', 'Only FO users can use this Deep Cleaning workflow.');
@@ -149,25 +167,56 @@ function validateDraftPayload(payload = {}, { requireStore = false } = {}) {
   };
 }
 
-export async function loadRelianceRetailStore(client, storeCode) {
+function storeWithinZoneState(store, zones, profile) {
+  const zone = zones.find((item) => item.id === store?.zone_id);
+  const state = retailStateKey(profile?.state);
+  return Boolean(zone && state && retailStateKey(zone.state) === state
+    && retailStateKey(store.state) === state);
+}
+
+async function loadAuthorizedRetailZones(client, profile) {
+  const state = retailStateKey(profile?.state);
+  if (!state || state === 'ALL' || state === 'ALLSTATES') return [];
+  const { data: assignments, error: assignmentError } = await client
+    .from('reliance_retail_zone_fo_assignments')
+    .select('zone_id')
+    .eq('fo_profile_id', profile.id)
+    .eq('status', 'Active')
+    .is('effective_to', null)
+    .lte('effective_from', new Date().toISOString());
+  if (assignmentError) throw assignmentError;
+  const zoneIds = [...new Set((assignments || []).map((row) => row.zone_id).filter(Boolean))];
+  if (!zoneIds.length) return [];
+  const { data: zones, error: zoneError } = await client
+    .from('reliance_retail_zones')
+    .select('id,zone_code,zone_name,state,status')
+    .in('id', zoneIds)
+    .eq('status', 'Active');
+  if (zoneError) throw zoneError;
+  return (zones || []).filter((zone) => retailStateKey(zone.state) === state);
+}
+
+export async function loadRelianceRetailStore(client, profile, storeCode) {
+  assertRelianceRetailFo(profile);
   const code = nullableText(storeCode);
   if (!code) {
     throw clientDeepCleaningError(400, 'store_code_required', 'Store code is required.');
   }
+  const zones = await loadAuthorizedRetailZones(client, profile);
+  if (!zones.length) throw clientDeepCleaningError(403, 'no_zone_assigned', 'No Zone assigned. Contact your administrator.');
   const { data, error } = await client
-    .from('store_master')
-    .select('id,store_code,store_name,client_name,state,business,metadata,status')
-    .ilike('store_code', code)
+    .from('reliance_retail_store_master')
+    .select(storeSelect())
+    .in('zone_id', zones.map((zone) => zone.id))
+    .eq('store_code', code)
     .limit(1)
     .maybeSingle();
   if (error) throw error;
-  if (!data || !/^active$/i.test(text(data.status || 'Active'))) {
+  if (!data || data.status !== 'Active' || !storeWithinZoneState(data, zones, profile)) {
     throw clientDeepCleaningError(400, 'invalid_store', 'Store was not found or is inactive.');
   }
-  if (!isRelianceRetailStore(data)) {
-    throw clientDeepCleaningError(400, 'non_reliance_store', 'Store is not a Reliance Retail store.');
-  }
-  return data;
+  const zone = zones.find((item) => item.id === data.zone_id);
+  return { ...data, zone_code: zone.zone_code, zone_name: zone.zone_name };
 }
 
 function storeSnapshot(store) {
@@ -175,18 +224,19 @@ function storeSnapshot(store) {
     ? store.metadata
     : {};
   return {
-    store_id: store?.id || null,
+    store_id: null,
+    retail_store_id: store?.id || null,
     store_code: text(store?.store_code),
     store_name: nullableText(store?.store_name),
-    client_name: nullableText(store?.client_name),
+    client_name: CLIENT_DEEP_CLEANING_BUSINESS,
     state: nullableText(store?.state),
-    city: nullableText(metadata.city || metadata.location || metadata.store_city),
-    store_format: nullableText(metadata.store_format || metadata.format),
+    city: nullableText(store?.city || metadata.city || metadata.location || metadata.store_city),
+    store_format: nullableText(store?.store_format || metadata.store_format || metadata.format),
   };
 }
 
 function submissionSelect() {
-  return 'id,business,store_id,store_code,store_name,client_name,state,city,store_format,deep_cleaning_date,performed_by_type,vendor_name,submitted_by_user_id,submitted_by_employee_code,remarks,status,submitted_at,metadata,created_at,updated_at';
+  return 'id,business,store_id,retail_store_id,store_code,store_name,client_name,state,city,store_format,deep_cleaning_date,performed_by_type,vendor_name,submitted_by_user_id,submitted_by_employee_code,remarks,status,submitted_at,metadata,created_at,updated_at';
 }
 
 function uploadSelect() {
@@ -194,13 +244,13 @@ function uploadSelect() {
 }
 
 function storeSelect() {
-  return 'id,store_code,store_name,client_name,state,business,metadata,status';
+  return 'id,store_code,store_name,state,city,store_format,metadata,status,zone_id';
 }
 
 function serializeRelianceRetailStore(store) {
   const snapshot = storeSnapshot(store);
   return {
-    id: snapshot.store_id,
+    id: snapshot.retail_store_id,
     store_code: snapshot.store_code,
     store_name: snapshot.store_name,
     client_name: snapshot.client_name,
@@ -208,6 +258,9 @@ function serializeRelianceRetailStore(store) {
     business: CLIENT_DEEP_CLEANING_BUSINESS,
     city: snapshot.city,
     store_format: snapshot.store_format,
+    zone_id: store.zone_id,
+    zone_code: store.zone_code,
+    zone_name: store.zone_name,
   };
 }
 
@@ -217,16 +270,23 @@ function safeSearchTerm(value) {
 
 export async function searchRelianceRetailStores(client, profile, filters = {}) {
   assertRelianceRetailFo(profile);
+  const zones = await loadAuthorizedRetailZones(client, profile);
   const limit = Math.max(1, Math.min(Number(filters.limit || 20), 50));
   const page = Math.max(1, Number(filters.page || 1));
   const from = (page - 1) * limit;
   const to = from + limit - 1;
   const q = safeSearchTerm(filters.q);
+  const requestedZone = nullableText(filters.zone_id);
+  if (requestedZone && !zones.some((zone) => zone.id === requestedZone)) {
+    throw clientDeepCleaningError(403, 'unauthorized_zone', 'The selected Zone is not assigned to this account.');
+  }
+  if (!zones.length) return { rows: [], zones: [], pagination: { page, limit, total: 0 } };
   let query = client
-    .from('store_master')
+    .from('reliance_retail_store_master')
     .select(storeSelect(), { count: 'exact' })
+    .in('zone_id', requestedZone ? [requestedZone] : zones.map((zone) => zone.id))
+    .in('state', retailStateQueryValues(profile.state))
     .eq('status', 'Active')
-    .or('business.ilike.%Reliance%,client_name.ilike.%Reliance%')
     .order('store_code', { ascending: true })
     .range(from, to);
   if (q) {
@@ -235,15 +295,18 @@ export async function searchRelianceRetailStores(client, profile, filters = {}) 
   const { data, error, count } = await query;
   if (error) throw error;
   const rows = (data || [])
-    .filter(isRelianceRetailStore)
-    .map(serializeRelianceRetailStore);
-  return { rows, pagination: { page, limit, total: count || rows.length } };
+    .filter((store) => storeWithinZoneState(store, zones, profile))
+    .map((store) => {
+      const zone = zones.find((item) => item.id === store.zone_id);
+      return serializeRelianceRetailStore({ ...store, zone_code: zone.zone_code, zone_name: zone.zone_name });
+    });
+  return { rows, zones, pagination: { page, limit, total: count ?? rows.length } };
 }
 
 export async function createClientDeepCleaningSubmission(client, profile, payload = {}) {
   const actor = assertRelianceRetailFo(profile);
   const draft = validateDraftPayload(payload, { requireStore: true });
-  const store = await loadRelianceRetailStore(client, draft.storeCode);
+  const store = await loadRelianceRetailStore(client, profile, draft.storeCode);
   const { data, error } = await client
     .from('client_deep_cleaning_submissions')
     .insert({
@@ -318,7 +381,7 @@ export async function updateClientDeepCleaningDraft(client, profile, submissionI
   const update = {};
   if (Object.prototype.hasOwnProperty.call(payload, 'store_code')) {
     if (!patch.storeCode) throw clientDeepCleaningError(400, 'store_code_required', 'Store code is required.');
-    const store = await loadRelianceRetailStore(client, patch.storeCode);
+    const store = await loadRelianceRetailStore(client, profile, patch.storeCode);
     Object.assign(update, storeSnapshot(store));
   }
   if (Object.prototype.hasOwnProperty.call(payload, 'deep_cleaning_date')) update.deep_cleaning_date = patch.deepCleaningDate;
@@ -580,6 +643,10 @@ export async function submitClientDeepCleaningSubmission(client, profile, submis
   if (submission.status === 'submitted') return submission;
   if (!DRAFT_STATUSES.has(submission.status)) {
     throw clientDeepCleaningError(409, 'invalid_status', 'Deep Cleaning submission cannot be submitted from its current status.');
+  }
+  const authorizedStore = await loadRelianceRetailStore(client, profile, submission.store_code);
+  if (authorizedStore.id !== submission.retail_store_id) {
+    throw clientDeepCleaningError(403, 'store_authorization_changed', 'The selected store is no longer authorized for this account.');
   }
   if (!submission.deep_cleaning_date) {
     throw clientDeepCleaningError(400, 'deep_cleaning_date_required', 'Deep Cleaning date is required before submit.');
