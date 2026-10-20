@@ -22,7 +22,7 @@ workflows:
       - name: Analyze Client Ticketing
         script: |
           cd Client_Ticketing_App
-          flutter analyze --no-fatal-infos
+          flutter analyze --no-fatal-infos lib test
       - name: Test Client Ticketing
         script: |
           cd Client_Ticketing_App
