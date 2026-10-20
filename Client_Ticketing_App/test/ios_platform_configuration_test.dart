@@ -11,6 +11,9 @@ void main() {
     final entitlements = File(
       'ios/Runner/Runner.entitlements',
     ).readAsStringSync();
+    final scheme = File(
+      'ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme',
+    ).readAsStringSync();
 
     expect(plist, contains('<string>QPMS Client Ticketing</string>'));
     expect(plist, contains('<key>NSCameraUsageDescription</key>'));
@@ -18,7 +21,9 @@ void main() {
     expect(plist, contains('<string>qpms</string>'));
     expect(plist, contains('<string>remote-notification</string>'));
     expect(project, contains('IPHONEOS_DEPLOYMENT_TARGET = 15.0;'));
-    expect(File('ios/Podfile').readAsStringSync(), contains("platform :ios, '15.0'"));
+    expect(File('ios/Podfile').existsSync(), isFalse);
+    expect(project, contains('FlutterGeneratedPluginSwiftPackage'));
+    expect(scheme, contains('Run Prepare Flutter Framework Script'));
     expect(
       project,
       contains('PRODUCT_BUNDLE_IDENTIFIER = com.qpms.clientticketing;'),
@@ -33,6 +38,7 @@ void main() {
 
     expect(workflow, contains('client-ticketing-ios-simulator:'));
     expect(workflow, contains('flutter build ios --simulator --debug'));
+    expect(workflow, isNot(contains('cocoapods:')));
     expect(workflow, isNot(contains('flutter build apk')));
     expect(workflow, isNot(contains('flutter build ipa')));
     expect(workflow, isNot(contains('publishing:')));

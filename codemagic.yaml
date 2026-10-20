@@ -6,7 +6,6 @@ workflows:
     environment:
       flutter: 3.44.1
       xcode: latest
-      cocoapods: default
     scripts:
       - name: Get Flutter packages
         script: |
