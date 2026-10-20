@@ -46,6 +46,12 @@ export function createTrainingRouter({
     topics: await service.listTrainingTopics(client, request.profile, request.query || {}),
   })));
 
+  router.get('/zones', route('list_zones', async (request, client) => ({ zones: await service.listTrainingZones(client, request.profile) })));
+  router.get('/stores', route('search_stores', async (request, client) => service.searchTrainingRetailStores(client, request.profile, request.query || {})));
+  router.put('/sessions/:id/evidence/:evidenceId/content', express.raw({ type: ['image/jpeg', 'image/png', 'application/pdf'], limit: '5mb' }), route('evidence_content', async (request, client) => ({
+    evidence: await evidenceService.uploadTrainingEvidenceContent(client, request.profile, request.params.id, request.params.evidenceId, request.body, request.get('content-type')),
+  })));
+
   router.get('/site-staff', route('site_staff', async (request, client) => ({
     staff: await service.searchTrainingSiteStaff(client, request.profile, request.query || {}),
   })));
