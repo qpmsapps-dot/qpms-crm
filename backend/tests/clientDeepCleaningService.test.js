@@ -13,6 +13,7 @@ import {
   createClientDeepCleaningUploadViewUrl,
   deleteClientDeepCleaningUpload,
   listClientDeepCleaningSubmissions,
+  loadRelianceRetailStore,
   loadOwnedSubmission,
   searchRelianceRetailStores,
   submitClientDeepCleaningSubmission,
@@ -26,6 +27,7 @@ const FO_PROFILE = {
   employee_code: 'RRFO001',
   role: 'FO',
   business: 'Reliance Retail',
+  state: 'TG',
 };
 
 const OTHER_FO_PROFILE = {
@@ -34,6 +36,7 @@ const OTHER_FO_PROFILE = {
   employee_code: 'RRFO002',
   role: 'FO',
   business: 'Reliance',
+  state: 'TN',
 };
 
 const NON_RELIANCE_PROFILE = {
@@ -46,6 +49,9 @@ const NON_RELIANCE_PROFILE = {
 
 const TABLES = [
   'store_master',
+  'reliance_retail_store_master',
+  'reliance_retail_zones',
+  'reliance_retail_zone_fo_assignments',
   'client_deep_cleaning_submissions',
   'client_deep_cleaning_uploads',
   'fo_activity_submissions',
@@ -65,6 +71,7 @@ function matchesFilter(row, filter) {
   }
   if (filter.type === 'gte') return String(actual ?? '') >= String(filter.value ?? '');
   if (filter.type === 'lte') return String(actual ?? '') <= String(filter.value ?? '');
+  if (filter.type === 'is') return actual === filter.value || (actual == null && filter.value == null);
   if (filter.type === 'in') return filter.values.includes(actual);
   if (filter.type === 'or') return filter.conditions.some((condition) => matchesFilter(row, condition));
   return true;
@@ -125,6 +132,11 @@ class Query {
 
   lte(column, value) {
     this.filters.push({ type: 'lte', column, value });
+    return this;
+  }
+
+  is(column, value) {
+    this.filters.push({ type: 'is', column, value });
     return this;
   }
 
@@ -276,6 +288,18 @@ class FakeSupabase {
 
 function client() {
   return new FakeSupabase({
+    reliance_retail_zones: [
+      { id: 'zone-tg', zone_code: 'ZONE-TG', zone_name: 'Telangana', state: 'TG', status: 'Active' },
+      { id: 'zone-tn', zone_code: 'ZONE-TN', zone_name: 'Tamil Nadu', state: 'TN', status: 'Active' },
+    ],
+    reliance_retail_zone_fo_assignments: [
+      { zone_id: 'zone-tg', fo_profile_id: FO_PROFILE.id, status: 'Active', effective_from: '2026-01-01T00:00:00Z', effective_to: null },
+      { zone_id: 'zone-tn', fo_profile_id: OTHER_FO_PROFILE.id, status: 'Active', effective_from: '2026-01-01T00:00:00Z', effective_to: null },
+    ],
+    reliance_retail_store_master: [
+      { id: 'store-rr-1', store_code: 'RR001', store_name: 'Reliance Smart Hyderabad', state: 'TG', status: 'Active', zone_id: 'zone-tg', city: 'Hyderabad', store_format: 'Smart' },
+      { id: 'store-rr-2', store_code: 'TH72', store_name: 'Reliance Fresh Chennai', state: 'TN', status: 'Active', zone_id: 'zone-tn', city: 'Chennai', store_format: 'Fresh' },
+    ],
     store_master: [
       {
         id: 'store-rr-1',
@@ -373,7 +397,8 @@ test('Reliance Retail FO can create draft and forged trusted fields are ignored'
   assert.equal(row.submitted_by_employee_code, FO_PROFILE.employee_code);
   assert.equal(row.performed_by_type, 'vendor');
   assert.equal(row.status, 'draft');
-  assert.equal(row.store_id, 'store-rr-1');
+  assert.equal(row.store_id, null);
+  assert.equal(row.retail_store_id, 'store-rr-1');
   assert.equal(row.store_format, 'Smart');
   assert.equal(row.attendance_id, undefined);
   assert.equal(row.site_visit_id, undefined);
@@ -407,7 +432,7 @@ test('Non-Reliance FO receives 403 and unauthenticated route receives 401', asyn
   }
 });
 
-test('Invalid or non-Reliance store is rejected and Reliance alias stores save canonical business', async () => {
+test('Unlisted store is rejected and Retail store saves canonical business', async () => {
   const db = client();
   await assert.rejects(
     () => createClientDeepCleaningSubmission(db, FO_PROFILE, { store_code: 'MISSING001' }),
@@ -415,17 +440,18 @@ test('Invalid or non-Reliance store is rejected and Reliance alias stores save c
   );
   await assert.rejects(
     () => createClientDeepCleaningSubmission(db, FO_PROFILE, { store_code: 'ST001' }),
-    /Store is not a Reliance Retail store/,
+    /not found or is inactive/,
   );
   const row = await createClientDeepCleaningSubmission(db, FO_PROFILE, { store_code: 'RR001' });
   assert.equal(row.business, 'Reliance Retail');
 });
 
-test('Reliance store search is authorised and returns only Reliance-compatible stores', async () => {
+test('Reliance store search is authorised and zone scoped', async () => {
   const db = client();
   const retail = await searchRelianceRetailStores(db, FO_PROFILE, { limit: 10 });
-  assert.equal(retail.rows.length, 2);
-  assert.deepEqual(retail.rows.map((row) => row.business), ['Reliance Retail', 'Reliance Retail']);
+  assert.equal(retail.rows.length, 1);
+  assert.deepEqual(retail.rows.map((row) => row.business), ['Reliance Retail']);
+  assert.deepEqual(retail.zones.map((zone) => zone.id), ['zone-tg']);
   assert.ok(retail.rows.every((row) => row.store_code !== 'ST001' && row.store_code !== 'TH72-OTHER'));
 
   const alias = await searchRelianceRetailStores(db, OTHER_FO_PROFILE, { q: 'TH72', page: 1, limit: 1 });
@@ -442,6 +468,103 @@ test('Reliance store search is authorised and returns only Reliance-compatible s
     () => searchRelianceRetailStores(db, { ...FO_PROFILE, role: 'KAM' }, {}),
     /Only FO users/,
   );
+});
+
+test('Dharani Zone 1 contract returns 32 eligible stores across 20-row pages', async () => {
+  const db = client();
+  const dharani = { ...FO_PROFILE, id: 'dharani-profile', employee_code: 'QPMSTN10465', state: 'TN' };
+  db.tables.reliance_retail_zones.push({ id: 'zone-1', zone_code: 'ZONE-1', zone_name: 'Zone 1', state: 'TN', status: 'Active' });
+  db.tables.reliance_retail_zone_fo_assignments.push({
+    zone_id: 'zone-1', fo_profile_id: dharani.id, status: 'Active',
+    effective_from: '2026-10-14T03:40:25Z', effective_to: null,
+  });
+  for (let index = 1; index <= 32; index += 1) {
+    db.tables.reliance_retail_store_master.push({
+      id: `zone-1-store-${index}`, store_code: `Z1-${String(index).padStart(2, '0')}`,
+      store_name: `Zone 1 Store ${index}`, state: 'TN', status: 'Active', zone_id: 'zone-1',
+    });
+  }
+  db.tables.reliance_retail_store_master.push(
+    { id: 'inactive', store_code: 'INACTIVE', store_name: 'Inactive', state: 'TN', status: 'Inactive', zone_id: 'zone-1' },
+    { id: 'wrong-state', store_code: 'WRONGSTATE', store_name: 'Wrong State', state: 'PY', status: 'Active', zone_id: 'zone-1' },
+  );
+  const first = await searchRelianceRetailStores(db, dharani);
+  const second = await searchRelianceRetailStores(db, dharani, { page: 2 });
+  assert.deepEqual(first.zones.map((zone) => zone.zone_code), ['ZONE-1']);
+  assert.equal(first.pagination.limit, 20);
+  assert.equal(first.pagination.total, 32);
+  assert.equal(first.rows.length, 20);
+  assert.equal(second.rows.length, 12);
+  assert.equal(second.pagination.total, 32);
+  assert.equal(new Set([...first.rows, ...second.rows].map((row) => row.id)).size, 32);
+  assert.ok([...first.rows, ...second.rows].every((row) => row.zone_id === 'zone-1' && row.state === 'TN'));
+  const searched = await searchRelianceRetailStores(db, dharani, { q: 'Z1-32', zone_id: 'zone-1' });
+  assert.deepEqual(searched.rows.map((row) => row.store_code), ['Z1-32']);
+  assert.equal(searched.pagination.total, 1);
+});
+
+test('No assignment and inactive or out-of-state zones return empty zones and stores', async () => {
+  const db = client();
+  const missing = await searchRelianceRetailStores(db, { ...FO_PROFILE, id: 'unassigned' });
+  assert.deepEqual(missing.zones, []);
+  assert.deepEqual(missing.rows, []);
+  assert.equal(missing.pagination.total, 0);
+
+  db.tables.reliance_retail_zones.find((zone) => zone.id === 'zone-tg').status = 'Inactive';
+  const inactive = await searchRelianceRetailStores(db, FO_PROFILE);
+  assert.deepEqual(inactive.zones, []);
+  db.tables.reliance_retail_zones.find((zone) => zone.id === 'zone-tg').status = 'Active';
+  db.tables.reliance_retail_zones.find((zone) => zone.id === 'zone-tg').state = 'TN';
+  const wrongState = await searchRelianceRetailStores(db, FO_PROFILE);
+  assert.deepEqual(wrongState.zones, []);
+});
+
+test('Assigned zone with no active stores remains visible with an empty result', async () => {
+  const db = client();
+  db.tables.reliance_retail_store_master.find((store) => store.store_code === 'RR001').status = 'Inactive';
+  const result = await searchRelianceRetailStores(db, FO_PROFILE);
+  assert.deepEqual(result.zones.map((zone) => zone.id), ['zone-tg']);
+  assert.deepEqual(result.rows, []);
+  assert.equal(result.pagination.total, 0);
+});
+
+test('Future and ended assignments cannot authorize a zone or store', async () => {
+  const db = client();
+  const assignment = db.tables.reliance_retail_zone_fo_assignments.find((row) => row.fo_profile_id === FO_PROFILE.id);
+  assignment.effective_from = '2099-01-01T00:00:00Z';
+  assert.deepEqual((await searchRelianceRetailStores(db, FO_PROFILE)).zones, []);
+  assignment.effective_from = '2026-01-01T00:00:00Z';
+  assignment.effective_to = '2026-10-01T00:00:00Z';
+  assert.deepEqual((await searchRelianceRetailStores(db, FO_PROFILE)).zones, []);
+  await assert.rejects(() => loadRelianceRetailStore(db, FO_PROFILE, 'RR001'), (error) => error.code === 'no_zone_assigned');
+});
+
+test('Unauthorized zone and store requests are rejected without widening access', async () => {
+  const db = client();
+  await assert.rejects(
+    () => searchRelianceRetailStores(db, FO_PROFILE, { zone_id: 'zone-tn' }),
+    (error) => error.code === 'unauthorized_zone',
+  );
+  await assert.rejects(
+    () => createClientDeepCleaningSubmission(db, FO_PROFILE, { store_code: 'TH72' }),
+    (error) => error.code === 'invalid_store',
+  );
+  await assert.rejects(
+    () => searchRelianceRetailStores(db, { ...FO_PROFILE, is_active: false }),
+    (error) => error.code === 'inactive_profile',
+  );
+});
+
+test('Draft submission fails closed when its zone assignment ends', async () => {
+  const db = client();
+  const draft = await createReadySubmission(db);
+  const assignment = db.tables.reliance_retail_zone_fo_assignments.find((row) => row.fo_profile_id === FO_PROFILE.id);
+  assignment.effective_to = '2026-10-01T00:00:00Z';
+  await assert.rejects(
+    () => submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id),
+    (error) => error.code === 'no_zone_assigned',
+  );
+  assert.equal(db.tables.client_deep_cleaning_submissions.find((row) => row.id === draft.id).status, 'uploading');
 });
 
 test('Deep Cleaning store route enforces auth profile and paginated response shape', async () => {
@@ -461,15 +584,16 @@ test('Deep Cleaning store route enforces auth profile and paginated response sha
   await new Promise((resolve) => server.listen(0, resolve));
   try {
     const { port } = server.address();
-    const allowed = await fetch(`http://127.0.0.1:${port}/api/client-deep-cleaning/stores?q=TH72&page=1&limit=1`, {
+    const allowed = await fetch(`http://127.0.0.1:${port}/api/client-deep-cleaning/stores?q=RR001&page=1&limit=1`, {
       headers: { authorization: 'Bearer retail' },
     });
     assert.equal(allowed.status, 200);
     const body = await allowed.json();
     assert.equal(body.ok, true);
     assert.equal(body.rows.length, 1);
-    assert.equal(body.rows[0].store_code, 'TH72');
+    assert.equal(body.rows[0].store_code, 'RR001');
     assert.equal(body.rows[0].business, 'Reliance Retail');
+    assert.deepEqual(body.zones.map((zone) => zone.id), ['zone-tg']);
     assert.equal(body.pagination.limit, 1);
 
     const denied = await fetch(`http://127.0.0.1:${port}/api/client-deep-cleaning/stores`, {
@@ -484,7 +608,7 @@ test('Deep Cleaning store route enforces auth profile and paginated response sha
 test('FO can list and read own submissions but not another FO record', async () => {
   const db = client();
   const own = await createClientDeepCleaningSubmission(db, FO_PROFILE, { store_code: 'RR001' });
-  const other = await createClientDeepCleaningSubmission(db, OTHER_FO_PROFILE, { store_code: 'RR001' });
+  const other = await createClientDeepCleaningSubmission(db, OTHER_FO_PROFILE, { store_code: 'TH72' });
   const list = await listClientDeepCleaningSubmissions(db, FO_PROFILE, {});
   assert.deepEqual(list.rows.map((row) => row.id), [own.id]);
   assert.equal((await loadOwnedSubmission(db, FO_PROFILE, own.id)).id, own.id);
@@ -494,10 +618,20 @@ test('FO can list and read own submissions but not another FO record', async () 
 test('FO cannot modify another FO draft, draft can be edited, and submitted record is locked', async () => {
   const db = client();
   const own = await createReadySubmission(db);
-  const other = await createClientDeepCleaningSubmission(db, OTHER_FO_PROFILE, { store_code: 'RR001' });
+  const legacy = db.tables.client_deep_cleaning_submissions.find((row) => row.id === own.id);
+  legacy.store_id = 'legacy-store';
+  legacy.retail_store_id = null;
+  legacy.store_code = 'LEGACY';
+  const other = await createClientDeepCleaningSubmission(db, OTHER_FO_PROFILE, { store_code: 'TH72' });
   await assert.rejects(() => updateClientDeepCleaningDraft(db, FO_PROFILE, other.id, { remarks: 'Nope' }), /not found/);
+  assert.equal((await loadOwnedSubmission(db, FO_PROFILE, own.id)).store_code, 'LEGACY');
   const edited = await updateClientDeepCleaningDraft(db, FO_PROFILE, own.id, { remarks: 'Updated', vendor_name: 'Vendor Two' });
   assert.equal(edited.remarks, 'Updated');
+  await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, own.id), (error) => error.code === 'invalid_store');
+  assert.equal(legacy.status, 'uploading');
+  const reassigned = await updateClientDeepCleaningDraft(db, FO_PROFILE, own.id, { store_code: 'RR001' });
+  assert.equal(reassigned.store_id, null);
+  assert.equal(reassigned.retail_store_id, 'store-rr-1');
   const submitted = await submitClientDeepCleaningSubmission(db, FO_PROFILE, own.id);
   assert.equal(submitted.status, 'submitted');
   await assert.rejects(() => updateClientDeepCleaningDraft(db, FO_PROFILE, own.id, { remarks: 'After submit' }), /cannot be edited/);
