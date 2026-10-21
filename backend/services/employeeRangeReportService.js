@@ -1111,19 +1111,53 @@ export async function recalculateEmployeeRange({ attendances = [], recalculate }
     }
     eligible += 1;
     try {
-      await recalculate(attendance);
+      const recalculation = await recalculate(attendance);
+      if (recalculation?.ok === false) {
+        const error = new Error('KM recalculation failed for this attendance.');
+        error.code = recalculation.code || 'KM_RECALCULATION_FAILED';
+        error.statusCode = Number(recalculation.statusCode || 500);
+        error.retryable = recalculation.retryable === true;
+        throw error;
+      }
+      if (recalculation?.skipped === true || recalculation?.updated === false) {
+        skipped += 1;
+        results.push({
+          ...baseResult,
+          outcome: 'skipped',
+          reason: recalculation?.skip_reason || recalculation?.reason || 'KM recalculation remains pending.',
+          route_sync_status: recalculation?.route_sync_status || null,
+          retryable: recalculation?.status === 'pending' || recalculation?.status === 'pending_review',
+        });
+        continue;
+      }
       updated += 1;
-      results.push({ ...baseResult, outcome: 'updated', reason: null });
-    } catch {
+      results.push({
+        ...baseResult,
+        outcome: 'updated',
+        reason: null,
+        route_sync_status: recalculation?.route_sync_status || null,
+        final_return_leg_km: recalculation?.final_return_leg_km ?? null,
+        total_route_km: recalculation?.total_route_km ?? recalculation?.new_total_route_km ?? null,
+        calculation_run_id: recalculation?.calculation_run_id || null,
+      });
+    } catch (error) {
       failed += 1;
       results.push({
         ...baseResult,
         outcome: 'failed',
         reason: 'KM recalculation failed for this attendance.',
+        error_code: error?.code || null,
+        error_status: Number(error?.statusCode || 0) || null,
+        retryable: error?.retryable === true,
       });
     }
   }
+  const outcome = failed === 0
+    ? updated === 0 ? 'no_eligible_records' : 'complete_success'
+    : updated > 0 ? 'partial_success' : 'complete_failure';
   return {
+    ok: failed === 0,
+    outcome,
     found: attendances.length,
     eligible,
     updated,

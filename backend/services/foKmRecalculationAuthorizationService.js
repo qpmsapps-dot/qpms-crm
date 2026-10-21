@@ -109,3 +109,15 @@ export const foKmRecalculationAuthorization = {
   canRecalculateOtherFoAttendance,
   ownsAttendance,
 };
+
+// Only authenticated request context supplies identity. A reason explicitly opts
+// into an Admin financial correction rather than the forward final-leg action.
+export function adminKmApprovalAuthorization(profile, authUser, reason) {
+  const approvalReason = String(reason || '').trim();
+  if (!approvalReason) return null;
+  if (!activeProfile(profile) || profile.web_access_enabled === false ||
+      !['ADMIN', 'QPMSADMIN'].includes(normalized(profile.role)) || !authUser?.id) {
+    throw authorizationError(403, 'An authenticated Admin is required for financial KM corrections.');
+  }
+  return { userId: authUser.id, reason: approvalReason };
+}
