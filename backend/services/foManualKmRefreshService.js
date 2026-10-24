@@ -120,7 +120,8 @@ export function createManualKmRefreshService({ calculate = recalculateFoKm, calc
       });
       // Distance evidence cannot override checkout eligibility. Missing evidence
       // requires review too; these previews must never receive an apply token.
-      const checkoutEligible = diagnostic.final_leg_evidence?.checkout_eligibility?.petrol_eligible_after_checkout === true;
+      const checkoutEligible = diagnostic.final_leg_evidence?.checkout_eligibility?.petrol_eligible_after_checkout === true &&
+        diagnostic.final_leg_evidence?.requires_endpoint_review !== true;
       if (preview && checkoutEligible && attendance.updated_at !== preview.updatedAt) {
         // A successful save itself makes attendance financially protected.
         // Only the locked database guard may replay this exact Admin/digest's
@@ -138,14 +139,18 @@ export function createManualKmRefreshService({ calculate = recalculateFoKm, calc
             before, after: { ...before },
             message: protectedRecord
               ? 'Distance preview only. Saved financial values are unchanged. Payable adjustments require the separate authorized correction workflow; checkout eligibility must be reviewed independently.'
-              : 'Distance preview only. Checkout petrol eligibility is false or unverified. Review original checkout evidence through the authorized correction workflow; Refresh KM cannot override this restriction.',
+              : diagnostic.final_leg_evidence?.requires_endpoint_review === true
+                ? 'Recovered GPS endpoints are calculation evidence only. Saved financial values are unchanged; endpoint review is required before any correction.'
+                : 'Distance preview only. Checkout petrol eligibility is false or unverified. Review original checkout evidence through the authorized correction workflow; Refresh KM cannot override this restriction.',
             final_leg: { ...diagnostic.final_leg_evidence,
               km: diagnostic.skipped ? null : diagnostic.final_return_leg_km,
               source: diagnostic.source || diagnostic.provider || null,
               status: diagnostic.final_leg_status || 'unavailable',
               reason: diagnostic.skip_reason || diagnostic.reason || null,
               review_flags: diagnostic.review_flags || [],
-              included_in_financial_totals: false },
+              classification: diagnostic.final_leg_classification || (diagnostic.skipped ? 'insufficient_evidence' : 'review_required'),
+              included_in_financial_totals: Number(diagnostic.previous_payable_km) > 0 &&
+                Number(attendance.total_approved_km) >= Number(diagnostic.previous_payable_km) ? true : null },
           };
         }
         fail(409, protectedRecord ? 'KM_FINANCIAL_STATE_PROTECTED' : 'KM_CHECKOUT_ELIGIBILITY_REVIEW_REQUIRED',

@@ -203,3 +203,17 @@ test('real canonical engine preview includes final leg and apply compares the sa
     assert.equal((await invoke({ ...payload, dry_run: false, attendance_id: f.attendance.id, preview_token: preview.preview_token })).updated, true);
   } finally { globalThis.fetch = oldFetch; }
 });
+
+test('recovered endpoints cannot issue financial apply tokens even with eligible checkout', async () => {
+ const f=fixture();let fullCalculations=0;
+ const service=createManualKmRefreshService({calculateFinalLeg:async()=>({final_return_leg_km:3,source:'GPS_BASED',final_leg_evidence:{requires_endpoint_review:true,checkout_eligibility:{petrol_eligible_after_checkout:true}}}),calculate:async()=>{fullCalculations++;return f.prepared;}});
+ const result=await service({client:f.client,payload:f.payload,profile:admin,authUser:{id:admin.auth_user_id},environment});
+ assert.equal(result.read_only,true);assert.equal(result.financial_eligible,false);assert.equal(result.preview_token,undefined);assert.equal(fullCalculations,0);assert.equal(f.calls.length,0);assert.deepEqual(result.before,result.after);
+});
+
+test('protected existing final leg reports included payable evidence without adding distance',async()=>{
+ const f=fixture();f.attendance.total_approved_km=71.25;f.attendance.total_route_km=71.25;f.attendance.petrol_amount=285;
+ const service=createManualKmRefreshService({calculateFinalLeg:async()=>({previous_payable_km:27.97,final_return_leg_km:27.97,final_leg_classification:'already_included',final_leg_evidence:{checkout_eligibility:{petrol_eligible_after_checkout:true}}}),calculate:async()=>{throw Error('Protected record must not prepare financial change');}});
+ const result=await service({client:f.client,payload:f.payload,profile:admin,authUser:{id:admin.auth_user_id},environment});
+ assert.equal(result.final_leg.included_in_financial_totals,true);assert.equal(result.final_leg.classification,'already_included');assert.deepEqual(result.before,result.after);assert.equal(f.calls.length,0);
+});

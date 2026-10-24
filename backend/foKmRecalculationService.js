@@ -12,6 +12,7 @@ import {
   normalizeGpsEvidence,
   planGpsSegments,
 } from './services/foCanonicalKmEngineV2.js';
+import { resolveFinalLegEndpoint } from './services/foFinalLegEndpointService.js';
 import { persistCanonicalKmV2 } from './services/foKmV2PersistenceService.js';
 import { persistForwardFinalLeg } from './services/foForwardFinalLegPersistenceService.js';
 import { assertKmFinancialWritesAvailable } from './services/kmFinancialWriteMaintenanceService.js';
@@ -2396,6 +2397,23 @@ async function finalLegOriginComparison(visits, leg, selectedKm, options) {
   };
 }
 
+async function recoverFinalLegEndpoints(client, attendance, visits, effectiveEnd) {
+  if (!attendance.logout_time) return effectiveEnd;
+  const last = [...visits].filter(visitCheckInTime).sort((a,b) => visitCheckInTime(a)-visitCheckInTime(b)).at(-1);
+  const checkout = last && visitCheckOutTime(last);
+  if (!checkout || !effectiveEnd.time) return effectiveEnd;
+  const recordedFrom = coordinateFrom(last, ['check_out_latitude'], ['check_out_longitude']);
+  if (recordedFrom && effectiveEnd.coordinate) return effectiveEnd;
+  // Use the existing binding and quality filters; failed retrieval propagates.
+  const evidence = await loadGpsLogsForWindowWithBinding(client, attendance,
+    new Date(checkout.getTime()-120001), new Date(effectiveEnd.time.getTime()+120000));
+  const points = cleanGpsLogs(evidence.rows, attendance);
+  const from = resolveFinalLegEndpoint(recordedFrom, checkout, points, 'recorded_checkout');
+  const to = resolveFinalLegEndpoint(effectiveEnd.coordinate, effectiveEnd.time, points, effectiveEnd.source);
+  return { ...effectiveEnd, coordinate: to.coordinate, source: to.source,
+    finalCheckout: from, endpointEvidence: { from, to }, recoveredFinalEndpoints: from.recovered || to.recovered };
+}
+
 function buildCompletedTravelLegs(attendance, visits = [], effectiveEnd = {}) {
   const legs = [];
   const orderedVisits = [...visits]
@@ -2491,9 +2509,10 @@ function buildCompletedTravelLegs(attendance, visits = [], effectiveEnd = {}) {
     type: 'last_checkout_to_end_day',
     fromTime: visitCheckOutTime(lastVisit),
     toTime: endTime,
-    from: visitCheckOutCoordinate(lastVisit),
+    from: effectiveEnd.finalCheckout?.coordinate || coordinateFrom(lastVisit, ['check_out_latitude'], ['check_out_longitude']),
     to: endCoordinate,
-    fromSource: 'last_site_checkout',
+    endpointEvidence: effectiveEnd.endpointEvidence || null,
+    fromSource: effectiveEnd.finalCheckout?.source || 'last_site_checkout',
     toSource: effectiveEnd.source || 'attendance_end',
     fromVisitId: lastVisit.id || null,
     fromSiteName: lastVisit.store_name || lastVisit.site_name || lastVisit.client_name || null,
@@ -2513,7 +2532,9 @@ function skippedLegAudit(leg, reason) {
     to_source: leg.toSource || null,
     from_visit_id: leg.fromVisitId || null,
     to_visit_id: leg.toVisitId || null,
-    km: 0,
+    km: leg.type === 'last_checkout_to_end_day' && reason === 'missing_leg_coordinates' ? null : 0,
+    evidence_classification: 'insufficient_evidence',
+    endpoint_evidence: leg.endpointEvidence || null,
     source: 'SKIPPED',
     payable: false,
     fallback_reason: reason,
@@ -2865,9 +2886,10 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
   const attendance = await findAttendance(client, { attendance_id: attendanceId });
   const visits = await loadSiteVisits(client, attendance);
   const travelPolicy = travelModeAllowsPayableKm(attendance);
-  const effectiveEnd = options.evidenceOnly === true && !attendance.logout_time
+  let effectiveEnd = options.evidenceOnly === true && !attendance.logout_time
     ? { time: null, coordinate: null, source: 'active_attendance_closed_windows_only', bindingSource: 'none', rows: [] }
     : await resolveEffectiveAttendanceEnd(client, attendance, { includeEvidence: true });
+  if (options.evidenceOnly === true) effectiveEnd = await recoverFinalLegEndpoints(client, attendance, visits, effectiveEnd);
   const persistedLegSnapshots = await loadPersistedTravelLegSnapshots(client, attendance);
   const canonicalSnapshots = canonicalizePersistedTravelLegSnapshots(persistedLegSnapshots);
   const activePrivateLegs = canonicalSnapshots.active.filter((snapshot) => (
@@ -3016,6 +3038,8 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
     legAudit.push({
       persisted_travel_leg_id: persistedLegSnapshot?.id || null,
       persistence_action: persistenceAction,
+      endpoint_evidence: leg.endpointEvidence || null,
+      evidence_classification: result.legSource === 'SKIPPED' ? 'insufficient_evidence' : persistedLegSnapshot && Number(persistedLegSnapshot.calculated_km) > 0 ? 'already_included' : !legPayable ? 'review_required' : 'calculated',
       persisted_calculated_km: persistedLegSnapshot?.calculated_km ?? null,
       persisted_rate_per_km: persistedLegSnapshot?.rate_per_km ?? null,
       persisted_payable_amount: persistedLegSnapshot?.payable_amount ?? persistedLegSnapshot?.fare_amount ?? null,
@@ -4270,7 +4294,8 @@ export async function reconcileFinalLegOnly(serviceRoleClient, payload = {}, opt
     };
   }
   const visits = await loadSiteVisits(client, attendance);
-  const effectiveEnd = await resolveEffectiveAttendanceEnd(client, attendance, { includeEvidence: true });
+  let effectiveEnd = await resolveEffectiveAttendanceEnd(client, attendance, { includeEvidence: true });
+  if (dryRun) effectiveEnd = await recoverFinalLegEndpoints(client, attendance, visits, effectiveEnd);
   const snapshots = await loadPersistedTravelLegSnapshots(client, attendance);
   const expectedFinal = buildCompletedTravelLegs(attendance, visits, effectiveEnd)
     .find((leg) => leg.type === 'last_checkout_to_end_day');
@@ -4306,7 +4331,9 @@ export async function reconcileFinalLegOnly(serviceRoleClient, payload = {}, opt
       old_total_route_km: roundMoney(oldTotal),
       new_total_route_km: roundMoney(oldTotal),
       final_leg_action: 'skipped',
-      final_leg_status: 'skipped',
+      final_leg_status: 'insufficient_evidence',
+      final_leg_classification: 'insufficient_evidence',
+      endpoint_evidence: effectiveEnd.endpointEvidence || null,
       final_leg_id: matching[0]?.id || null,
     };
   }
@@ -4523,8 +4550,11 @@ export async function reconcileFinalLegOnly(serviceRoleClient, payload = {}, opt
     new_total_route_km: attendanceUpdate.total_route_km,
     final_leg_id: finalLegId,
     final_leg_action: action,
+    final_leg_classification: previousCalculatedKm > 0 ? 'already_included' : calculation.payable === true ? 'calculated' : 'review_required',
     final_leg_status: payableKm > 0 ? 'calculated' : 'review_required',
     final_leg_evidence: { from: expectedFinal.from, to: expectedFinal.to,
+      endpoint_evidence: expectedFinal.endpointEvidence || null,
+      requires_endpoint_review: effectiveEnd.recoveredFinalEndpoints === true,
       origin_comparison: dryRun && options.includeOriginComparison === true
         ? await finalLegOriginComparison(visits, expectedFinal, calculatedKm, options) : null,
       checkout_eligibility: finalLegCheckoutEligibility(visits, expectedFinal),

@@ -1111,3 +1111,29 @@ test('a GPS row on a shared travel-window boundary is counted only once', async 
   assert.equal(second.gpsLogCount, 10);
   assert.equal(first.gpsLogCount + second.gpsLogCount, rows.length);
 });
+
+test('missing final checkout never substitutes site check-in coordinates', async () => {
+ const row=attendance({end_latitude:13.096,end_longitude:80.290});
+ const visits=[{id:'last',attendance_id:row.id,check_in_time:'2026-07-16T12:00:00.000Z',check_out_time:'2026-07-16T12:41:20.000Z',check_in_latitude:13.08,check_in_longitude:80.27}];
+ const result=await reconcileFinalLegOnly(clientWith([], {attendanceRow:row,visits}),{attendance_id:row.id,dry_run:true},{maxGoogleDirectionsCalls:0});
+ assert.equal(result.final_leg_classification,'insufficient_evidence');assert.equal(result.new_total_route_km,result.old_total_route_km);
+});
+
+test('completed final endpoint recovers filtered GPS without mutating attendance or visits', async () => {
+ const rows=gpsRows(); const last=rows.at(-1);
+ const row=attendance({logout_time:last.captured_at,end_latitude:null,end_longitude:null});
+ const visits=[{id:'last',attendance_id:row.id,check_in_time:'2026-07-16T12:00:00.000Z',check_out_time:rows[0].captured_at,check_out_latitude:rows[0].latitude,check_out_longitude:rows[0].longitude,petrol_eligible_after_checkout:true}];
+ const before=JSON.stringify({row,visits});
+ const result=await reconcileFinalLegOnly(clientWith(rows,{attendanceRow:row,visits}),{attendance_id:row.id,dry_run:true},{maxGoogleDirectionsCalls:0});
+ assert.equal(result.final_leg_evidence.endpoint_evidence.to.recovered,true);
+ assert.equal(result.final_leg_evidence.requires_endpoint_review,true);
+ assert.equal(JSON.stringify({row,visits}),before);
+});
+
+test('GPS retrieval failure propagates rather than becoming zero final-leg evidence', async () => {
+ const row=attendance({end_latitude:null,end_longitude:null});
+ const visits=[{id:'last',attendance_id:row.id,check_in_time:'2026-07-16T12:00:00.000Z',check_out_time:'2026-07-16T12:41:20.000Z',check_out_latitude:13.08,check_out_longitude:80.27}];
+ const client=clientWith([],{attendanceRow:row,visits});const original=client.from;
+ client.from=table=>{if(table==='fo_location_logs')throw Error('GPS retrieval timed out');return original(table);};
+ await assert.rejects(reconcileFinalLegOnly(client,{attendance_id:row.id,dry_run:true}),/GPS retrieval timed out/);
+});
