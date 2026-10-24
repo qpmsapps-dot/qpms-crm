@@ -1,4 +1,6 @@
 import ManualKmRefreshDialog from '../components/ManualKmRefreshDialog.jsx';
+import TravelEvidenceDialog from '../components/TravelEvidenceDialog.jsx';
+import { evidenceDates, gpsEvidenceDisplay } from '../utils/travelEvidenceRecalculation.js';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Battery,
@@ -7358,6 +7360,7 @@ function FieldOfficerDetailsView({
   rangeDatasetError = "",
   generatedByUser,
   routeLogs,
+  routeLogsState,
   activitySubmissions = [],
   activityUploads = [],
   fromDate,
@@ -10609,16 +10612,17 @@ function FieldOfficerDetailsView({
               </div>
             </div>
             {recalculationResult?.message ? <p className={`mt-3 rounded-lg p-3 text-xs font-semibold ${recalculationResult.ok ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{recalculationResult.message}</p> : null}
+            {routeLogsState?.status === 'failed' ? <p role="alert" className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">GPS retrieval failed: {routeLogsState.error}. This does not mean zero GPS logs. Stored period GPS Audit KM is shown independently.</p> : null}
             <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {[
-                ["GPS Log Count", gpsMetrics.gpsLogsCount],
-                ["Raw GPS KM", `${Number(gpsMetrics.rawGpsKm || 0).toFixed(1)} km`],
-                ["Filtered GPS KM", `${Number(gpsMetrics.filteredGpsKm || 0).toFixed(1)} km`],
+                ["GPS Log Count", gpsEvidenceDisplay(routeLogsState?.status, gpsMetrics.gpsLogsCount)],
+                ["Raw GPS KM", gpsEvidenceDisplay(routeLogsState?.status, `${Number(gpsMetrics.rawGpsKm || 0).toFixed(1)} km`)],
+                ["Filtered GPS KM", gpsEvidenceDisplay(routeLogsState?.status, `${Number(gpsMetrics.filteredGpsKm || 0).toFixed(1)} km`)],
                 ["GPS Audit KM", `${Number(gpsAuditKm || 0).toFixed(1)} km`],
-                ["Valid Points", gpsMetrics.validPointsCount],
-                ["Rejected Points", gpsMetrics.rejectedPointsCount],
-                ["Max GPS Gap", formatDurationSeconds(gpsMetrics.maxGapSeconds)],
-                ["Confidence", gpsMetrics.kmConfidence || "Needs Review"],
+                ["Valid Points", gpsEvidenceDisplay(routeLogsState?.status, gpsMetrics.validPointsCount)],
+                ["Rejected Points", gpsEvidenceDisplay(routeLogsState?.status, gpsMetrics.rejectedPointsCount)],
+                ["Max GPS Gap", gpsEvidenceDisplay(routeLogsState?.status, formatDurationSeconds(gpsMetrics.maxGapSeconds))],
+                ["Confidence", gpsEvidenceDisplay(routeLogsState?.status, gpsMetrics.kmConfidence || "Needs Review")],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-xl bg-slate-50 p-4">
                   <p className="text-[11px] font-bold uppercase text-slate-400">{label}</p>
@@ -11632,6 +11636,7 @@ export default function FOActivities() {
   const [attendanceKpiRows, setAttendanceKpiRows] = useState([]);
   const [siteVisitRows, setSiteVisitRows] = useState([]);
   const [selectedRouteLogs, setSelectedRouteLogs] = useState([]);
+  const [selectedRouteLogsState, setSelectedRouteLogsState] = useState({ status: 'idle', error: '' });
   const [selectedRouteEvidenceOfficerId, setSelectedRouteEvidenceOfficerId] = useState(null);
   const [mainMapRouteLines, setMainMapRouteLines] = useState([]);
   const [mainMapRouteMessage, setMainMapRouteMessage] = useState(null);
@@ -11645,7 +11650,8 @@ export default function FOActivities() {
   const [mapCommand, setMapCommand] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [manualKmEmployee, setManualKmEmployee] = useState(null);
-  const kmRecalcBusy = manualKmEmployee !== null;
+  const [travelEvidenceSelection, setTravelEvidenceSelection] = useState(null);
+  const kmRecalcBusy = manualKmEmployee !== null || travelEvidenceSelection !== null;
   const [kmRecalcResult, setKmRecalcResult] = useState(null);
   const [switchKmRecalcBusy, setSwitchKmRecalcBusy] = useState(false);
   const [batchKmRecalcBusy, setBatchKmRecalcBusy] = useState(false);
@@ -12376,29 +12382,6 @@ export default function FOActivities() {
         fromDate: selectedRange.fromDate,
         toDate: selectedRange.toDate,
       });
-      if (canApproveCheckoutMissingKmReviews) {
-        const refreshResponse = await authenticatedFetch(
-          `${API_BASE_URL}/api/fo/operations/employee-missing-km-reviews/refresh`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              employee: selectedEmployeeIdentifier,
-              date_from: selectedRange.fromDate,
-              date_to: selectedRange.toDate,
-            }),
-          },
-        );
-        if (refreshResponse.ok) {
-          const refreshPayload = await refreshResponse.json();
-          if (refreshPayload?.dataset) {
-            if (requestSequence === employeeRangeRequestSequenceRef.current) {
-              setEmployeeRangeDataset(refreshPayload.dataset);
-            }
-            return refreshPayload.dataset;
-          }
-        }
-      }
       const response = await authenticatedFetch(
         `${API_BASE_URL}/api/fo/operations/employee-range?${query}`,
       );
@@ -12426,7 +12409,6 @@ export default function FOActivities() {
   }, [
     hasActiveSession,
     hasDemoBackendReadSession,
-    canApproveCheckoutMissingKmReviews,
     selectedEmployeeIdentifier,
     selectedRange.fromDate,
     selectedRange.toDate,
@@ -12527,8 +12509,10 @@ export default function FOActivities() {
     async function loadSelectedRouteLogs() {
       if (hasDemoBackendReadSession || !shouldLoadRouteLogs || !routeOfficer || !isSupabaseConfigured || !supabase) {
         setSelectedRouteLogs([]);
+        setSelectedRouteLogsState({ status: 'idle', error: '' });
         return;
       }
+      setSelectedRouteLogsState({ status: 'loading', error: '' });
       const operationalFoId = operationalFoIdForOfficer(routeOfficer);
       const attendanceId =
         selectedRange.fromDate === selectedRange.toDate
@@ -12557,10 +12541,12 @@ export default function FOActivities() {
           (a, b) => routePointTime(a) - routePointTime(b),
         );
         setSelectedRouteLogs(selectedLogs);
+        setSelectedRouteLogsState({ status: 'loaded', error: '' });
       } catch (error) {
         if (!cancelled) {
           console.warn("[myQPMS FO] Selected FO route logs fetch failed.", error);
           setSelectedRouteLogs([]);
+          setSelectedRouteLogsState({ status: 'failed', error: error.message || 'Please retry this employee/date range.' });
         }
         return;
       }
@@ -12946,15 +12932,21 @@ export default function FOActivities() {
   function recalculateSelectedOfficerKm() {
     try {
       assertDemoWriteAllowed(user);
-      if (!['admin', 'qpmsadmin'].includes(currentRole)) throw new Error('An authenticated Admin is required to approve Refresh KM.');
+      if (!['admin', 'qpmsadmin'].includes(currentRole)) throw new Error('An authenticated Admin is required to recalculate travel evidence.');
       const officer = selectedOfficer || supportOfficer || routeOfficer;
       const employee = officer?.employeeCode || officer?.attendance?.employee_code;
-      if (!employee) throw new Error('Select an employee before Refresh KM.');
-      setManualKmEmployee(employee);
+      if (!employee) throw new Error('Select an employee before recalculation.');
+      evidenceDates(selectedRange.fromDate, selectedRange.toDate);
+      setTravelEvidenceSelection({ employee, from: selectedRange.fromDate, to: selectedRange.toDate });
     } catch (error) { setKmRecalcResult({ ok: false, message: error.message, confidence: 'BLOCKED' }); }
   }
 
-  const manualKmDialog = manualKmEmployee ? <ManualKmRefreshDialog
+  const manualKmDialog = <>
+    {travelEvidenceSelection ? <TravelEvidenceDialog selection={travelEvidenceSelection}
+      endpoint={`${API_BASE_URL}/api/fo/km/travel-evidence`}
+      onClose={() => setTravelEvidenceSelection(null)}
+      onFinancialReview={() => { setManualKmEmployee(travelEvidenceSelection.employee); setTravelEvidenceSelection(null); }} /> : null}
+    {manualKmEmployee ? <ManualKmRefreshDialog
     employee={manualKmEmployee}
     endpoint={`${API_BASE_URL}/api/fo/km/recalculate`}
     onClose={() => setManualKmEmployee(null)}
@@ -12967,7 +12959,7 @@ export default function FOActivities() {
       const refreshed = await loadSelectedEmployeeRange();
       if (refreshed) setEmployeeRangeDataset(refreshed);
     }}
-  /> : null;
+  /> : null}</>;
 
   async function recalculateTemporarySwitchKmForOfficer(officer = selectedOfficer) {
     if (!officer || !canRunTemporarySwitchKm) return;
@@ -13326,6 +13318,7 @@ export default function FOActivities() {
         rangeDatasetError={employeeRangeError}
         generatedByUser={user}
         routeLogs={selectedRouteLogs}
+        routeLogsState={selectedRouteLogsState}
         activitySubmissions={selectedActivitySubmissions}
         activityUploads={selectedActivityUploads}
         fromDate={selectedRange.from}

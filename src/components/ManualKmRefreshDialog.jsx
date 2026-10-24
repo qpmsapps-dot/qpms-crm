@@ -98,7 +98,7 @@ export default function ManualKmRefreshDialog({ employee, endpoint, rangeEndpoin
     <dialog ref={dialog} aria-labelledby="manual-km-title"
       onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}
       className={`fixed inset-0 m-auto max-h-[90vh] ${rangeMode ? 'w-[min(64rem,95vw)]' : 'w-[min(36rem,95vw)]'} overflow-auto rounded-xl border border-slate-300 bg-white p-6 text-slate-900 shadow-xl backdrop:bg-black/50`}>
-      <h2 id="manual-km-title" className="text-lg font-bold">Review Refresh KM</h2>
+      <h2 id="manual-km-title" className="text-lg font-bold">Review Refresh KM — financial correction</h2>
       <p className="my-2 text-sm">Approved, settled and manually adjusted records are protected. Each completed attendance is reviewed and saved independently.</p>
       <label className="my-3 block">Employee<input aria-label="Employee" readOnly value={employee} className="mt-1 block w-full rounded border p-2" /></label>
       <label className="my-3 flex gap-2"><input type="checkbox" aria-label="Recalculate date range" checked={rangeMode} disabled={busy || Boolean(receipt)}

@@ -2854,6 +2854,8 @@ export async function calculateTravelLegKm({
 }
 
 export async function recalculateAttendanceTravelLegs(serviceRoleClient, attendanceId, options = {}) {
+  // Evidence mode never finalizes open travel or invokes review/persistence writes.
+  if (options.evidenceOnly === true) options = { ...options, persist: false, persistLegResults: false, auditDelayedCheckout: false };
   const client = requireServiceRoleClient(serviceRoleClient);
   if (!attendanceId) {
     const error = new Error('attendanceId is required for travel-leg recalculation.');
@@ -2863,13 +2865,15 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
   const attendance = await findAttendance(client, { attendance_id: attendanceId });
   const visits = await loadSiteVisits(client, attendance);
   const travelPolicy = travelModeAllowsPayableKm(attendance);
-  const effectiveEnd = await resolveEffectiveAttendanceEnd(client, attendance, { includeEvidence: true });
+  const effectiveEnd = options.evidenceOnly === true && !attendance.logout_time
+    ? { time: null, coordinate: null, source: 'active_attendance_closed_windows_only', bindingSource: 'none', rows: [] }
+    : await resolveEffectiveAttendanceEnd(client, attendance, { includeEvidence: true });
   const persistedLegSnapshots = await loadPersistedTravelLegSnapshots(client, attendance);
   const canonicalSnapshots = canonicalizePersistedTravelLegSnapshots(persistedLegSnapshots);
   const activePrivateLegs = canonicalSnapshots.active.filter((snapshot) => (
     travelModeAllowsPayableKm(snapshot).payableKmAllowed
   ));
-  if (activePrivateLegs.length) {
+  if (activePrivateLegs.length && options.evidenceOnly !== true) {
     const error = new Error(
       'A private-vehicle travel leg is still open. Close it before KM recalculation.',
     );
@@ -2891,9 +2895,20 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
   }
   const expectedLegs = buildCompletedTravelLegs(attendance, visits, effectiveEnd);
   const persistedCandidateLegs = completedPersistedTravelLegs(canonicalSnapshots.completed, expectedLegs);
-  const candidateLegs = persistedCandidateLegs.length > 0
+  let candidateLegs = persistedCandidateLegs.length > 0
     ? persistedCandidateLegs
     : buildCompletedTravelLegs(attendance, visits, effectiveEnd);
+  if (options.evidenceOnly === true) {
+    // Retain authoritative mode-split boundaries. Add only wholly missing
+    // windows, rather than counting an expected parent over its persisted children.
+    for (const expected of expectedLegs) {
+      if (!expected.fromTime || !expected.toTime || expected.toTime <= expected.fromTime) continue;
+      if (!candidateLegs.some(leg => leg.fromTime < expected.toTime && expected.fromTime < leg.toTime)) candidateLegs.push(expected);
+    }
+    candidateLegs = candidateLegs.filter(leg => leg.fromTime && leg.toTime && leg.toTime > leg.fromTime &&
+      (attendance.logout_time || leg.type !== 'last_checkout_to_end_day'));
+    candidateLegs.sort((a, b) => a.fromTime - b.fromTime);
+  }
   const legAudit = [];
   const delayedCheckoutAudits = [];
 
@@ -2924,6 +2939,12 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
   }
 
   for (const leg of candidateLegs) {
+    if (options.deadlineAt && Date.now() >= options.deadlineAt) {
+      const error = new Error('Travel evidence calculation exceeded its time budget. Retry this date.');
+      error.statusCode = 504;
+      error.code = 'KM_EVIDENCE_TIMEOUT';
+      throw error;
+    }
     if (leg.forcedSkipReason) {
       legAudit.push(skippedLegAudit(leg, leg.forcedSkipReason));
       continue;
@@ -2973,7 +2994,11 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       legMode,
       persistedLegSnapshot?.rate_per_km ?? leg.rate_per_km ?? attendance.rate_per_km,
     );
-    const legPayable = result.payable === true && legPolicy.payableKmAllowed;
+    const expectedWindow = options.evidenceOnly === true ? expectedLegs.find(expected =>
+      expected.fromTime && expected.toTime && expected.fromTime <= leg.fromTime && expected.toTime >= leg.toTime) : null;
+    const originVisit = expectedWindow?.fromVisitId ? visits.find(visit => visit.id === expectedWindow.fromVisitId) : null;
+    const checkoutReview = options.evidenceOnly === true && originVisit && originVisit.petrol_eligible_after_checkout !== true;
+    const legPayable = result.payable === true && legPolicy.payableKmAllowed && !checkoutReview;
     const legPayableKm = legPayable && Number.isFinite(Number(result.legKm))
       ? Number(Number(result.legKm).toFixed(2))
       : 0;
@@ -3034,7 +3059,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       payable_km: roundedPayableKm,
       payable_amount: roundedPayableAmount,
       fare_amount: roundedPayableAmount,
-      review_flags: [...new Set([...(leg.reviewFlags || []), ...(result.reviewFlags || [])])],
+      review_flags: [...new Set([...(leg.reviewFlags || []), ...(result.reviewFlags || []), ...(checkoutReview ? ['CHECKOUT_ELIGIBILITY_REVIEW_REQUIRED'] : [])])],
       rejected_point_reasons: result.rejectionReasonCounts || {},
     });
   }
