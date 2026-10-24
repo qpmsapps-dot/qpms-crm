@@ -261,6 +261,12 @@ function mergeReasonCounts(...groups) {
   }, {});
 }
 
+export async function estimateOctoberRecoveryRoute(start, end, options = {}) {
+  // Callers supply only server-selected, quality-filtered GPS endpoints.
+  if (![start, end].every(p => p && Number.isFinite(p.latitude) && Number.isFinite(p.longitude) && Math.abs(p.latitude) <= 90 && Math.abs(p.longitude) <= 180 && (p.latitude !== 0 || p.longitude !== 0))) return null;
+  return googleDirectionsRoute(start, end, { ...options, maxGoogleDirectionsCalls: 1 });
+}
+
 async function googleDirectionsRoute(start, end, options = {}) {
   const context = googleDirectionsContext(options);
   if (!context.enabled) {

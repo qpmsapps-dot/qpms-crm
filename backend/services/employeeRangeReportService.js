@@ -1,3 +1,4 @@
+import { loadApprovedOctoberRecoveries, attachRangeRecovery } from './foOctoberRecoveryReportingService.js';
 import {
   canAccessOperationsSummary,
   operationsSummaryAllowedEmployeeCodes,
@@ -1085,7 +1086,7 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
       message: 'Travel-leg records are temporarily unavailable.',
     });
   }
-  return dataset;
+  return attachRangeRecovery(dataset, await loadApprovedOctoberRecoveries(client, [employee.employee_code], period.from_date, period.to_date));
 }
 
 export async function recalculateEmployeeRange({ attendances = [], recalculate }) {

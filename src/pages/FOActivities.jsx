@@ -1,3 +1,5 @@
+import { octoberRecoveryExportRows } from '../utils/octoberRecoveryExport.js';
+import OctoberKmRecoveryDialog from '../components/OctoberKmRecoveryDialog.jsx';
 import ManualKmRefreshDialog from '../components/ManualKmRefreshDialog.jsx';
 import TravelEvidenceDialog from '../components/TravelEvidenceDialog.jsx';
 import { evidenceDates, gpsEvidenceDisplay } from '../utils/travelEvidenceRecalculation.js';
@@ -4716,6 +4718,8 @@ async function exportEmployeeRangeExcelWithOptions({
   if (options.attendanceKm !== false) {
     appendExcelJsSheet(workbook, "Daily Attendance", rows.dailyAttendance);
     appendExcelJsSheet(workbook, "Travel Claims", rows.travelClaims);
+    const recoveries = octoberRecoveryExportRows(dataset);
+    if (recoveries.length) appendExcelJsSheet(workbook, "October KM Recovery", recoveries);
   }
   if (options.siteVisits !== false) {
     appendExcelJsSheet(workbook, "Site Visits", rows.siteVisits);
@@ -11651,6 +11655,7 @@ export default function FOActivities() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [manualKmEmployee, setManualKmEmployee] = useState(null);
   const [travelEvidenceSelection, setTravelEvidenceSelection] = useState(null);
+  const [octoberRecoveryEmployee, setOctoberRecoveryEmployee] = useState(null);
   const kmRecalcBusy = manualKmEmployee !== null || travelEvidenceSelection !== null;
   const [kmRecalcResult, setKmRecalcResult] = useState(null);
   const [switchKmRecalcBusy, setSwitchKmRecalcBusy] = useState(false);
@@ -12942,6 +12947,10 @@ export default function FOActivities() {
   }
 
   const manualKmDialog = <>
+    {!readOnlyDemo && ['admin', 'qpmsadmin'].includes(currentRole) && selectedOfficer?.employeeCode ? <button type="button" className="fixed bottom-5 right-5 z-30 rounded-lg border border-qpms-300 bg-white px-4 py-3 font-bold text-qpms-800 shadow-lg" onClick={() => setOctoberRecoveryEmployee(selectedOfficer.employeeCode)}>October KM Recovery</button> : null}
+    {octoberRecoveryEmployee ? <OctoberKmRecoveryDialog employee={octoberRecoveryEmployee}
+      endpoint={API_BASE_URL + '/api/fo/km/october-recovery'} onClose={() => setOctoberRecoveryEmployee(null)}
+      onApproved={() => { setRefreshToken(value => value + 1); setSummaryRefreshToken(value => value + 1); loadSelectedEmployeeRange().then(result => { if (result) setEmployeeRangeDataset(result); }); }} /> : null}
     {travelEvidenceSelection ? <TravelEvidenceDialog selection={travelEvidenceSelection}
       endpoint={`${API_BASE_URL}/api/fo/km/travel-evidence`}
       onClose={() => setTravelEvidenceSelection(null)}

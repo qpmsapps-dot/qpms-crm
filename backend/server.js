@@ -1,6 +1,7 @@
 import { createRelianceRetailManagementRouter } from './routes/relianceRetailManagementRoutes.js';
 import cors from 'cors';
 import { createTravelEvidenceRouter } from './routes/foTravelEvidenceRoutes.js';
+import { createOctoberRecoveryRouter } from './routes/foOctoberRecoveryRoutes.js';
 import { createManualKmRefreshService, assertManualKmRangeAllowed, assertKmBulkAvailable } from './services/foManualKmRefreshService.js';
 const manualKmRefresh = createManualKmRefreshService();
 import { createManualKmRangeRefreshService } from './services/foManualKmRangeRefreshService.js';
@@ -10685,6 +10686,7 @@ app.get('/api/deep-cleaning/records', requireSupabaseJwtOrDemoApiRead, async (re
 });
 
 app.use('/api/fo/km', createTravelEvidenceRouter({ requireAuth: requireSupabaseJwt, getClient: requireServiceRoleSupabase }));
+app.use('/api/fo/km', createOctoberRecoveryRouter({ requireAuth: requireSupabaseJwt, getClient: requireServiceRoleSupabase }));
 
 app.post('/api/fo/km/manual-range', requireSupabaseJwt, async (request, response) => {
   try {

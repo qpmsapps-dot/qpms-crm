@@ -1,3 +1,4 @@
+import { loadApprovedOctoberRecoveries, overlayRecoveryRows } from './foOctoberRecoveryReportingService.js';
 import {
   canAccessOperationsCommandCenter,
   operationsCommandCenterAllowedEmployeeCodes,
@@ -279,6 +280,7 @@ export function operationsSummaryAllowedEmployeeCodes(actor, profiles = [], hier
 }
 
 export function storedAttendancePayableKm(row = {}) {
+  if (Number(row.recovery_approved_km) > 0) return rounded(storedAttendancePayableKm({ ...row, recovery_approved_km: 0 }) + Number(row.recovery_approved_km));
   if (row.payable_km_allowed === false || String(row.payable_km_allowed).toLowerCase() === 'false') {
     return 0;
   }
@@ -291,6 +293,7 @@ export function storedAttendancePayableKm(row = {}) {
 }
 
 export function storedAttendancePetrolAmount(row = {}, payableKm = storedAttendancePayableKm(row)) {
+  if (Number(row.recovery_additional_amount) > 0) return rounded(storedAttendancePetrolAmount({ ...row, recovery_additional_amount: 0, recovery_approved_km: 0 }, payableKm - Number(row.recovery_approved_km || 0)) + Number(row.recovery_additional_amount));
   if (row.payable_km_allowed === false || String(row.payable_km_allowed).toLowerCase() === 'false') {
     return 0;
   }
@@ -362,7 +365,7 @@ export function summarizeOperationsRows({
     const rowPayableKm = storedAttendancePayableKm(attendance);
     payableKm += rowPayableKm;
     petrolAmount += storedAttendancePetrolAmount(attendance, rowPayableKm);
-    matchingAttendanceCount += 1;
+    if (!attendance.recovery_only) matchingAttendanceCount += 1;
     matchingEmployeeCodes.add(code);
   }
 
@@ -487,11 +490,17 @@ export function buildConsolidatedTravelClaimReportDataset({
       parking_amount: 0,
       total_claim: 0,
       attendance_count: 0,
+      recovery_additional_km: 0,
+      recovery_additional_amount: 0,
+      recovery_records: [],
     };
     if (!row.employee_name) row.employee_name = displayNameForEmployee(attendance, profile);
     row.total_km_travelled += payableKm;
     row.distance_reimbursement += distanceReimbursement;
-    row.attendance_count += 1;
+    row.recovery_additional_km += Number(attendance.recovery_approved_km || 0);
+    row.recovery_additional_amount += Number(attendance.recovery_additional_amount || 0);
+    row.recovery_records.push(...(attendance.recovery_records || []));
+    if (!attendance.recovery_only) row.attendance_count += 1;
     rowsByEmployee.set(code, row);
     if (attendance.id) attendanceIdToEmployeeCode.set(text(attendance.id), code);
   }
@@ -538,6 +547,12 @@ export function buildConsolidatedTravelClaimReportDataset({
       const finalPayable = settlementMatches && Number.isFinite(approvedPayable)
         ? rounded(Math.max(0, approvedPayable))
         : calculatedClaim;
+      const supplementUnsettledKnown = !settlementMatches || row.recovery_records.every(recovery => {
+        const prior = recovery.before_state?.settlements?.find(item => text(item.id) === text(settlement.id));
+        return prior && prior.updated_at && settlement.updated_at &&
+          new Date(prior.updated_at).getTime() === new Date(settlement.updated_at).getTime() &&
+          Number(prior.approved_payable_amount) === approvedPayable;
+      });
       return {
         ...row,
         employee_name: row.employee_name || row.employee_code,
@@ -551,6 +566,12 @@ export function buildConsolidatedTravelClaimReportDataset({
         final_payable: finalPayable,
         finance_settlement_id: settlementMatches ? text(settlement.id) || null : null,
         finance_settlement_source: settlementMatches ? text(settlement.source_reference) || null : null,
+        recovery_settlement_review_required: Boolean(settlementMatches && row.recovery_additional_amount > 0),
+        existing_payable_km: rounded(row.total_km_travelled - row.recovery_additional_km),
+        approved_additional_km: rounded(row.recovery_additional_km),
+        final_payable_km: rounded(row.total_km_travelled),
+        settled_amount: settlementMatches && Number.isFinite(approvedPayable) ? approvedPayable : null,
+        unsettled_approved_supplement: supplementUnsettledKnown ? rounded(row.recovery_additional_amount) : null,
       };
     })
     .sort((left, right) =>
@@ -624,7 +645,7 @@ async function fetchClaimsForAttendanceIds(client, attendanceIds) {
 async function fetchMonthlyTravelSettlements(client, filters) {
   return fetchPaged(() => client
     .from('fo_monthly_travel_settlements')
-    .select('id,profile_id,employee_code,state,period_start,period_end,calculated_claim_amount,finance_reviewed_amount,approved_payable_amount,adjustment_amount,adjustment_type,adjustment_reason,remarks,source_reference,approved_by,approved_at')
+    .select('id,profile_id,employee_code,state,period_start,period_end,calculated_claim_amount,finance_reviewed_amount,approved_payable_amount,adjustment_amount,adjustment_type,adjustment_reason,remarks,source_reference,approved_by,approved_at,updated_at')
     .eq('period_start', filters.date_from)
     .eq('period_end', filters.date_to)
     .order('employee_code', { ascending: true }));
@@ -637,7 +658,7 @@ export async function buildConsolidatedTravelClaimReport(client, actor, query, t
     throw error;
   }
   const filters = normalizeOperationsSummaryFilters(query, today);
-  const [profiles, hierarchyRows, attendances, settlements] = await Promise.all([
+  const [profiles, hierarchyRows, rawAttendances, settlements] = await Promise.all([
     fetchPaged(() => client.from('profiles').select('*').eq('is_active', true)),
     fetchPaged(() => client.from('employee_hierarchy').select('*').eq('is_active', true)),
     fetchPaged(() => client
@@ -650,6 +671,7 @@ export async function buildConsolidatedTravelClaimReport(client, actor, query, t
     fetchMonthlyTravelSettlements(client, filters),
   ]);
   const allowedCodes = operationsSummaryAllowedEmployeeCodes(actor, profiles, hierarchyRows);
+  const attendances = overlayRecoveryRows(rawAttendances, await loadApprovedOctoberRecoveries(client, [...allowedCodes], filters.date_from, filters.date_to));
   const authorizedLiveIdentifiers = profiles.flatMap((profile) => {
     const code = employeeKey(profile);
     if (!code || !allowedCodes.has(code)) return [];
@@ -695,7 +717,7 @@ export async function buildOperationsSummary(client, actor, query, today) {
     throw error;
   }
   const filters = normalizeOperationsSummaryFilters(query, today);
-  const [profiles, hierarchyRows, attendances] = await Promise.all([
+  const [profiles, hierarchyRows, rawAttendances] = await Promise.all([
     fetchPaged(() => client.from('profiles').select('*').eq('is_active', true)),
     fetchPaged(() => client.from('employee_hierarchy').select('*').eq('is_active', true)),
     fetchPaged(() => client
@@ -707,6 +729,7 @@ export async function buildOperationsSummary(client, actor, query, today) {
       .order('id', { ascending: true })),
   ]);
   const allowedCodes = operationsSummaryAllowedEmployeeCodes(actor, profiles, hierarchyRows);
+  const attendances = overlayRecoveryRows(rawAttendances, await loadApprovedOctoberRecoveries(client, [...allowedCodes], filters.date_from, filters.date_to));
   const authorizedLiveIdentifiers = profiles.flatMap((profile) => {
     const code = employeeKey(profile);
     if (!code || !allowedCodes.has(code)) return [];
