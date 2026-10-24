@@ -1,4 +1,9 @@
+import { createRelianceRetailManagementRouter } from './routes/relianceRetailManagementRoutes.js';
 import cors from 'cors';
+import { createManualKmRefreshService, assertManualKmRangeAllowed, assertKmBulkAvailable } from './services/foManualKmRefreshService.js';
+const manualKmRefresh = createManualKmRefreshService();
+import { createManualKmRangeRefreshService } from './services/foManualKmRangeRefreshService.js';
+const manualKmRangeRefresh = createManualKmRangeRefreshService();
 import { createHmac, randomUUID } from 'node:crypto';
 import dotenv from 'dotenv';
 import express from 'express';
@@ -38,9 +43,14 @@ import {
   recalculateFoKm,
   recalculateFoKmBatch,
   recalculateFoKmForToday,
+  reconcileFinalLegOnly,
   recalculateSwitchModeKmTemporary,
 } from './foKmRecalculationService.js';
-import { authorizeFoKmRecalculation } from './services/foKmRecalculationAuthorizationService.js';
+import { authorizeFoKmRecalculation, adminKmApprovalAuthorization } from './services/foKmRecalculationAuthorizationService.js';
+import { startFoGpsEvidenceSummaryWorker } from './services/foGpsEvidenceSummaryService.js';
+import { kmFinancialWritesMaintenanceEnabled } from './services/kmFinancialWriteMaintenanceService.js';
+import { createEmployeeRangeRecalculationRegistry } from './services/foEmployeeRangeRecalculationLockService.js';
+import { canonicalEndDayCompletionMatches, historicalIndiaDateStart, runBoundedEndDayRecoveryAttempt } from './services/foEndDayKmRecoveryService.js';
 import {
   cleanupStaleFoSessions,
   cleanupStaleLiveStatusReferences,
@@ -211,7 +221,9 @@ const apiDemoUsers = [
 const apiSessions = new Map();
 const foKmRecalculationLocks = new Set();
 const foKmRecalculateAllLocks = new Set();
-const foEmployeeRangeRecalculationLocks = new Set();
+const foEmployeeRangeRecalculationOperations = createEmployeeRangeRecalculationRegistry();
+const FO_KM_RECALCULATION_MAINTENANCE_MESSAGE =
+  'KM recalculation is temporarily unavailable during maintenance. Existing KM and reimbursement values have not changed.';
 const FO_KM_RECALCULATION_RUNNING_MESSAGE = 'Recalculation already running. Please wait.';
 const configuredFoKmRecalculationLockTtlMs = Number(process.env.FO_KM_RECALCULATION_LOCK_TTL_MS);
 const FO_KM_RECALCULATION_LOCK_TTL_MS =
@@ -223,6 +235,10 @@ const foKmRecalculateAllLockStartedAt = new Map();
 const FO_STALE_CLEANUP_INTERVAL_MS = Number(process.env.FO_STALE_CLEANUP_INTERVAL_MS || 30 * 60 * 1000);
 const END_DAY_KM_AUTO_RECALC_INTERVAL_MS = 5 * 60 * 1000;
 const END_DAY_KM_AUTO_RECALC_LIMIT = 50;
+const END_DAY_KM_AUTO_RECALC_LOOKBACK_DAYS = 31;
+const END_DAY_KM_AUTO_RECALC_MAX_ATTEMPTS = 2;
+const END_DAY_KM_AUTO_RECALC_EFFECTIVE_FROM = '2026-10-16';
+const END_DAY_KM_AUTO_RECALC_GRACE_MINUTES = 5;
 const FO_DRILLDOWN_PAGE_SIZE = 1000;
 const FO_DRILLDOWN_MAX_SITE_VISIT_IDS = 100;
 
@@ -437,6 +453,8 @@ app.use(
     getClient: requireServiceRoleSupabase,
   }),
 );
+
+app.use('/api/reliance-retail', createRelianceRetailManagementRouter({ requireAuth: requireSupabaseJwt, getClient: requireServiceRoleSupabase }));
 
 app.use(
   '/api/training',
@@ -4146,47 +4164,17 @@ function inviteMetadataForResult(invite = {}, timestamp = new Date().toISOString
   };
 }
 
-function validateTemporaryPassword(value) {
-  const password = String(value || '');
-  if (!password) return '';
-  if (password.length < 10) {
-    throw userManagementHttpError(400, 'Temporary password must be at least 10 characters.');
+function assertInvitationOnlyPayload(body = {}) {
+  if (['password', 'temporary_password', 'temporaryPassword', 'new_password'].some(
+    (key) => Object.prototype.hasOwnProperty.call(body, key),
+  )) {
+    throw userManagementHttpError(400, 'Admins cannot set user passwords. Use Invite User so the user can create their own password.');
   }
-  if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
-    throw userManagementHttpError(400, 'Temporary password must include at least one letter and one number.');
-  }
-  return password;
 }
 
-async function createInvitedAuthUser(client, { email, authMetadata, temporaryPassword = '' }) {
-  const password = validateTemporaryPassword(temporaryPassword);
-  if (password) {
-    const { data, error } = await client.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: authMetadata,
-    });
-    if (!error && data?.user) {
-      return {
-        user: data.user,
-        invite: {
-          method: 'admin_temporary_password',
-          email_sent: false,
-          setup_link: null,
-          message: 'Auth account created with the admin-entered temporary password. The user can sign in immediately.',
-          warning: null,
-        },
-        usedTemporaryPassword: true,
-      };
-    }
-    throw userManagementHttpError(
-      503,
-      'Supabase Auth user could not be created with a temporary password. Verify Auth Admin configuration and retry.',
-      { auth_error: safeAuthError(error) },
-    );
-  }
-
+async function createInvitedAuthUser(client, options) {
+  assertInvitationOnlyPayload(options);
+  const { email, authMetadata } = options;
   const redirectTo = passwordSetupRedirectUrl();
   const inviteResult = {
     method: 'supabase_invite',
@@ -5051,10 +5039,16 @@ const FAULT_TRACKER_READ_ALL_ROLE_KEYS = new Set([
 
 const FAULT_TRACKER_STATE_RESTRICTED_ROLE_KEYS = new Set(['PROJECTCOORDINATOR', 'MIS']);
 
+function isRetailTechnicalMis(profile) {
+  const retailBusiness = ['RELIANCE', 'RELIANCERETAIL'].includes(faultTrackerKey(profile?.business));
+  const responsibility = [profile?.role, profile?.designation, profile?.department].map(faultTrackerKey);
+  return retailBusiness && responsibility.some((value) => ['TECHNICALMIS', 'TECHMIS'].includes(value));
+}
+
 function faultTrackerCanAccess(profile) {
   if (isDemoUser(profile)) return true;
   const roleKey = faultTrackerRoleKey(profile);
-  return FAULT_TRACKER_READ_ALL_ROLE_KEYS.has(roleKey) || FAULT_TRACKER_STATE_RESTRICTED_ROLE_KEYS.has(roleKey);
+  return isRetailTechnicalMis(profile) || FAULT_TRACKER_READ_ALL_ROLE_KEYS.has(roleKey) || FAULT_TRACKER_STATE_RESTRICTED_ROLE_KEYS.has(roleKey);
 }
 
 function faultTrackerCanManage(profile) {
@@ -5064,7 +5058,7 @@ function faultTrackerCanManage(profile) {
 
 function faultTrackerCanReadAll(profile) {
   if (isDemoUser(profile)) return true;
-  return FAULT_TRACKER_READ_ALL_ROLE_KEYS.has(faultTrackerRoleKey(profile));
+  return isRetailTechnicalMis(profile) || FAULT_TRACKER_READ_ALL_ROLE_KEYS.has(faultTrackerRoleKey(profile));
 }
 
 function faultTrackerStateCode(value) {
@@ -5317,6 +5311,16 @@ app.get('/api/fault-tracker/tickets', requireSupabaseJwtOrDemoApiRead, requireFa
       }
     }
 
+    let retailStoreCodes = null;
+    const retailOnly = isRetailTechnicalMis(request.profile) || faultTrackerKey(request.query.business) === 'RELIANCERETAIL';
+    if (retailOnly) {
+      const { data: retailStores, error: retailStoreError } = await client
+        .from('reliance_retail_store_master')
+        .select('store_code')
+        .limit(500);
+      if (retailStoreError) throw retailStoreError;
+      retailStoreCodes = (retailStores || []).map((row) => row.store_code).filter(Boolean);
+    }
     const buildTicketQuery = () => {
       let query = client
         .from('fault_tracker_tickets')
@@ -5324,6 +5328,7 @@ app.get('/api/fault-tracker/tickets', requireSupabaseJwtOrDemoApiRead, requireFa
         .eq('import_batch_id', importBatchId)
         .eq('is_active', true)
         .order('created_at_source', { ascending: false, nullsFirst: false });
+      if (retailStoreCodes) query = retailStoreCodes.length ? query.in('store_code', retailStoreCodes) : query.eq('store_code', '__NO_RETAIL_STORE__');
 
       if (roleCanReadAll) {
         const state = faultTrackerStateCode(request.query.state);
@@ -5356,7 +5361,7 @@ app.get('/api/fault-tracker/tickets', requireSupabaseJwtOrDemoApiRead, requireFa
 
     const tickets = [];
     const pageSize = 1000;
-    for (let from = 0; from < 50000; from += pageSize) {
+    for (let from = 0; from < (retailOnly ? 5000 : 50000); from += pageSize) {
       const to = from + pageSize - 1;
       const { data: pageTickets, error: ticketsError } = await buildTicketQuery().range(from, to);
       if (ticketsError) {
@@ -7154,12 +7159,7 @@ app.post(
       const employeeCode = normalizeEmployeeCode(body.employee_code);
       const fullName = textOrNull(body.full_name);
       const email = normalizeEmail(body.email);
-      if (textOrNull(body.password)) {
-        throw userManagementHttpError(
-          400,
-          'Use temporary_password for controlled User Management UAT password creation.',
-        );
-      }
+      assertInvitationOnlyPayload(body);
       if (!employeeCode) throw userManagementHttpError(400, 'employee_code is required.');
       if (!fullName) throw userManagementHttpError(400, 'full_name is required.');
       if (!email) {
@@ -7282,7 +7282,6 @@ app.post(
       const { user: invitedAuthUser, invite: inviteResult, usedTemporaryPassword } = await createInvitedAuthUser(client, {
         email,
         authMetadata,
-        temporaryPassword: textOrNull(body.temporary_password),
       });
       createdAuthUser = invitedAuthUser;
       createBody = {
@@ -7506,6 +7505,7 @@ app.post(
   requireUserManagementPermission,
   async (request, response) => {
     try {
+      assertInvitationOnlyPayload(request.body || {});
       const client = requireServiceRoleSupabase();
       await assertUserManagementFoundation(client);
       const employeeCode = normalizeEmployeeCode(request.params.employeeCode);
@@ -7548,7 +7548,6 @@ app.post(
       };
       const { user: authUser, invite } = await createInvitedAuthUser(client, {
         email,
-        password: null,
         authMetadata: profileMetadataForAuth(nextProfileForAuth),
       });
 
@@ -10186,6 +10185,7 @@ app.post(
           manual_override: request.body?.manual_override === true,
         },
         {
+          auth_user_id: request.authUser?.id || null,
           email: request.profile?.email || request.authUser?.email || null,
           employee_code: request.profile?.employee_code || request.employeeCode || null,
           full_name: request.profile?.full_name || request.profile?.name || null,
@@ -10683,9 +10683,34 @@ app.get('/api/deep-cleaning/records', requireSupabaseJwtOrDemoApiRead, async (re
   }
 });
 
+app.post('/api/fo/km/manual-range', requireSupabaseJwt, async (request, response) => {
+  try {
+    const result = await manualKmRangeRefresh({ client: requireServiceRoleSupabase(), payload: request.body || {},
+      profile: request.profile, authUser: request.authUser });
+    response.status(result.outcome === 'success' ? 200 : 207).json(result);
+  } catch (error) {
+    response.status(error.statusCode || 503).json({ ok: false, code: error.code || 'KM_MANUAL_RANGE_FAILED',
+      message: error.statusCode ? error.message : 'The reviewed range could not be processed.' });
+  }
+});
+
 app.post('/api/fo/km/recalculate', requireSupabaseJwt, async (request, response) => {
   let payload = request.body || {};
   const client = requireServiceRoleSupabase();
+  if (payload.manual_refresh === true) {
+    try {
+      response.json(await manualKmRefresh({ client, payload, profile: request.profile, authUser: request.authUser }));
+    } catch (error) {
+      response.status(error.statusCode || 503).json({ ok: false,
+        code: error.code || 'KM_MANUAL_REFRESH_FAILED', retryable: error.retryable === true,
+        message: error.statusCode ? error.message : 'Manual KM recalculation is temporarily unavailable.' });
+    }
+    return;
+  }
+  if (kmFinancialWritesMaintenanceEnabled(process.env) && payload.dry_run !== true && payload.dryRun !== true) {
+    response.status(423).json({ ok: false, code: 'KM_MANUAL_PREVIEW_REQUIRED', message: 'Use the Admin preview and approval workflow during maintenance.' });
+    return;
+  }
   try {
     const authorization = await authorizeFoKmRecalculation({
       client,
@@ -10714,6 +10739,7 @@ app.post('/api/fo/km/recalculate', requireSupabaseJwt, async (request, response)
     await assertServiceRoleAuthAdminAccess(client);
     const result = await recalculateFoKm(client, payload, {
       maxGoogleDirectionsCalls: payload.max_google_directions_calls,
+      adminAuthorization: adminKmApprovalAuthorization(request.profile, request.authUser, payload.approval_reason),
     });
     response.json({ ok: true, ...result });
   } catch (error) {
@@ -10732,6 +10758,9 @@ app.post('/api/fo/km/recalculate', requireSupabaseJwt, async (request, response)
 
 app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
   const payload = request.body || {};
+  try { assertKmBulkAvailable(process.env); } catch (error) {
+    response.status(error.statusCode).json({ ok: false, code: error.code, message: error.message }); return;
+  }
   const fromDate = normalizeFoKmRecalculationDate(payload.fromDate || payload.date);
   const toDate = normalizeFoKmRecalculationDate(payload.toDate || payload.date || fromDate);
   const lockDate = `${fromDate}_${toDate}`;
@@ -10765,20 +10794,34 @@ app.post('/api/fo/km/recalculate-batch', requireSupabaseJwt, requireFoKmBatchRec
 
 app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
   const payload = request.body || {};
+  try { assertManualKmRangeAllowed(payload, process.env); } catch (error) {
+    response.status(error.statusCode).json({ ok: false, code: error.code, message: error.message }); return;
+  }
+  let adminAuthorization;
+  try {
+    adminAuthorization = adminKmApprovalAuthorization(request.profile, request.authUser, payload.approval_reason);
+  } catch (error) {
+    response.status(error.statusCode || 403).json({ ok: false, message: error.message });
+    return;
+  }
+  const financialMaintenance = kmFinancialWritesMaintenanceEnabled(process.env);
+  const requestedToDate = String(payload.date_to || payload.to_date || payload.date_from || payload.from_date || '').slice(0, 10);
+  if (!adminAuthorization && financialMaintenance && requestedToDate && requestedToDate < endDayKmAutoRecalcEffectiveFrom()) {
+    response.status(503).json({
+      ok: false,
+      outcome: 'maintenance_blocked',
+      code: 'KM_FINANCIAL_WRITES_MAINTENANCE',
+      retryable: true,
+      message: FO_KM_RECALCULATION_MAINTENANCE_MESSAGE,
+    });
+    return;
+  }
   const lockKey = [
     String(payload.employee || payload.employee_code || payload.fo_user_id || '').trim().toUpperCase(),
     String(payload.date_from || payload.from_date || '').slice(0, 10),
     String(payload.date_to || payload.to_date || '').slice(0, 10),
   ].join('|');
-  if (foEmployeeRangeRecalculationLocks.has(lockKey)) {
-    response.status(409).json({
-      ok: false,
-      message: FO_KM_RECALCULATION_RUNNING_MESSAGE,
-    });
-    return;
-  }
-  foEmployeeRangeRecalculationLocks.add(lockKey);
-  try {
+  const operation = foEmployeeRangeRecalculationOperations.start(lockKey, async () => {
     const client = requireServiceRoleSupabase();
     await assertServiceRoleAuthAdminAccess(client);
     const dataset = await loadAuthorizedEmployeeRange(
@@ -10786,17 +10829,66 @@ app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, requireFoK
       request.profile,
       payload,
     );
-    const result = await recalculateEmployeeRange({
+    return recalculateEmployeeRange({
       attendances: dataset.attendance_days,
-      recalculate: (attendance) =>
-        recalculateFoKm(client, {
+      recalculate: (attendance) => {
+        const attendanceDate = String(attendance.attendance_date || '').slice(0, 10);
+        if (adminAuthorization) {
+          return recalculateFoKm(client, { attendance_id: attendance.id }, {
+            adminAuthorization, refreshMissingKmReviews: false, sourceEntryPoint: 'admin_correction',
+          });
+        }
+        if (attendanceDate >= endDayKmAutoRecalcEffectiveFrom()) {
+          return reconcileFinalLegOnly(client, {
           attendance_id: attendance.id,
           employee_code:
             attendance.employee_code || dataset.employee.employee_code,
           date: attendance.attendance_date,
-        }),
+            source_entry_point: 'web_refresh_km',
+          }, {
+            persist: true,
+            sourceEntryPoint: 'web_refresh_km',
+            enforceEndDayGpsSyncGrace: true,
+            forwardFinalLegEffectiveFrom: endDayKmAutoRecalcEffectiveFrom(),
+            endDayGpsSyncGraceMinutes: endDayKmAutoRecalcGraceMinutes(),
+          });
+        }
+        if (financialMaintenance) {
+          return {
+            ok: true,
+            skipped: true,
+            updated: false,
+            status: 'protected_historical',
+            skip_reason: 'Historical KM remains protected during financial maintenance.',
+          };
+        }
+        return recalculateFoKm(client, {
+          attendance_id: attendance.id,
+          employee_code: attendance.employee_code || dataset.employee.employee_code,
+          date: attendance.attendance_date,
+        });
+      },
     });
-    response.json({ ok: true, ...result });
+  });
+  if (!operation.acquired) {
+    response.status(409).json({
+      ok: false,
+      outcome: 'already_running',
+      code: 'KM_RECALCULATION_ALREADY_RUNNING',
+      retryable: true,
+      message: FO_KM_RECALCULATION_RUNNING_MESSAGE,
+    });
+    return;
+  }
+  try {
+    const result = await operation.promise;
+    const hasServerFailure = result.results?.some((row) => Number(row.error_status || 0) >= 500);
+    const status = result.outcome === 'partial_success'
+      ? 207
+      : result.outcome === 'complete_failure'
+        ? hasServerFailure ? 503 : 422
+        : 200;
+    response.status(status).json(result);
   } catch (error) {
     const status = Number(error?.statusCode || 500);
     const safeError =
@@ -10805,10 +10897,11 @@ app.post('/api/fo/km/recalculate-employee-range', requireSupabaseJwt, requireFoK
         : { statusCode: status, message: error.message };
     response.status(safeError.statusCode).json({
       ok: false,
+      outcome: 'request_failed',
+      code: error?.code || safeError.code || 'EMPLOYEE_RANGE_RECALCULATION_FAILED',
+      retryable: error?.retryable === true,
       message: safeError.message,
     });
-  } finally {
-    foEmployeeRangeRecalculationLocks.delete(lockKey);
   }
 });
 
@@ -10882,6 +10975,9 @@ app.post('/api/fo/km/recalculate-full-day-gps', requireSupabaseJwt, requireFullD
 
 app.post('/api/fo/km/recalculate-all', requireSupabaseJwt, requireFoKmBatchRecalculationPermission, async (request, response) => {
   const payload = request.body || {};
+  try { assertKmBulkAvailable(process.env); } catch (error) {
+    response.status(error.statusCode).json({ ok: false, code: error.code, message: error.message }); return;
+  }
   const date = payload.date || payload.fromDate || currentIndiaDateInput();
   const lockDate = normalizeFoKmRecalculationDate(date);
   pruneStaleFoKmRecalculationLocks();
@@ -11133,6 +11229,24 @@ function endDayKmAutoRecalcEnabled() {
   return String(process.env.END_DAY_KM_AUTO_RECALC_ENABLED || 'false').trim().toLowerCase() === 'true';
 }
 
+function endDayKmAutoRecalcEffectiveFrom() {
+  const configured = String(
+    process.env.END_DAY_KM_AUTO_RECALC_EFFECTIVE_FROM || END_DAY_KM_AUTO_RECALC_EFFECTIVE_FROM,
+  ).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(configured)
+    ? configured
+    : END_DAY_KM_AUTO_RECALC_EFFECTIVE_FROM;
+}
+
+function endDayKmAutoRecalcGraceMinutes() {
+  return integerEnv(
+    'END_DAY_KM_AUTO_RECALC_GRACE_MINUTES',
+    END_DAY_KM_AUTO_RECALC_GRACE_MINUTES,
+    1,
+    60,
+  );
+}
+
 function endDayKmAutoRecalcCooldownMs() {
   const minutes = integerEnv('END_DAY_KM_AUTO_RECALC_COOLDOWN_MINUTES', 10, 1, 1440);
   return minutes * 60 * 1000;
@@ -11162,13 +11276,27 @@ function attendanceNeedsEndDayKmAutoRecalc(row, now = new Date()) {
 }
 
 async function loadEndDayKmAutoRecalcCandidates(client, date) {
+  const lookbackDays = integerEnv(
+    'END_DAY_KM_AUTO_RECALC_LOOKBACK_DAYS',
+    END_DAY_KM_AUTO_RECALC_LOOKBACK_DAYS,
+    1,
+    31,
+  );
+  const fromDate = historicalIndiaDateStart(date, lookbackDays);
+  const effectiveFrom = endDayKmAutoRecalcEffectiveFrom();
+  const boundedFromDate = fromDate < effectiveFrom ? effectiveFrom : fromDate;
+  const graceCutoff = new Date(Date.now() - endDayKmAutoRecalcGraceMinutes() * 60 * 1000).toISOString();
   const { data, error } = await client
     .from('fo_attendance')
-    .select('id, fo_user_id, employee_code, attendance_date, logout_time, status, metadata')
-    .eq('attendance_date', date)
+    .select('id, fo_user_id, employee_code, attendance_date, logout_time, status, route_sync_status, metadata')
+    .gte('attendance_date', boundedFromDate)
+    .lte('attendance_date', date)
     .not('logout_time', 'is', null)
+    .lte('logout_time', graceCutoff)
     .in('status', ['Completed', 'Ended', 'Ended Day', 'Closed', 'Auto Ended', 'Stale Auto Ended'])
-    .order('logout_time', { ascending: false })
+    .eq('route_sync_status', 'pending_canonical_end_day_recalculation')
+    .order('attendance_date', { ascending: true })
+    .order('logout_time', { ascending: true })
     .limit(END_DAY_KM_AUTO_RECALC_LIMIT);
   if (error) throw error;
   const now = new Date();
@@ -11192,6 +11320,8 @@ async function runEndDayKmAutoRecalc(reason = 'interval') {
     date,
     limit: END_DAY_KM_AUTO_RECALC_LIMIT,
     cooldownMinutes: endDayKmAutoRecalcCooldownMs() / 60000,
+    graceMinutes: endDayKmAutoRecalcGraceMinutes(),
+    effectiveFrom: endDayKmAutoRecalcEffectiveFrom(),
   });
   try {
     const client = requireServiceRoleSupabase();
@@ -11213,9 +11343,31 @@ async function runEndDayKmAutoRecalc(reason = 'interval') {
       }
       addFoKmRecalculationLock(lockKey);
       try {
-        const result = await recalculateFoKm(client, payload, {
-          maxGoogleDirectionsCalls: Number(process.env.END_DAY_KM_AUTO_RECALC_MAX_GOOGLE_DIRECTIONS_CALLS || process.env.MAX_GOOGLE_DIRECTIONS_CALLS),
+        const recovery = await runBoundedEndDayRecoveryAttempt(async () => {
+          const result = await reconcileFinalLegOnly(client, payload, {
+            persist: true,
+            sourceEntryPoint: 'end_day_auto_recalculation',
+            enforceEndDayGpsSyncGrace: true,
+            forwardFinalLegEffectiveFrom: endDayKmAutoRecalcEffectiveFrom(),
+            endDayGpsSyncGraceMinutes: endDayKmAutoRecalcGraceMinutes(),
+            maxGoogleDirectionsCalls: Number(process.env.END_DAY_KM_AUTO_RECALC_MAX_GOOGLE_DIRECTIONS_CALLS || process.env.MAX_GOOGLE_DIRECTIONS_CALLS),
+          });
+          if (!canonicalEndDayCompletionMatches(result, attendance.id)) {
+            const error = new Error('Canonical End Day recalculation did not return matching persisted run evidence.');
+            error.code = 'end_day_canonical_completion_unverified';
+            error.retryable = true;
+            throw error;
+          }
+          return result;
+        }, {
+          maxAttempts: integerEnv(
+            'END_DAY_KM_AUTO_RECALC_MAX_ATTEMPTS',
+            END_DAY_KM_AUTO_RECALC_MAX_ATTEMPTS,
+            1,
+            3,
+          ),
         });
+        const result = recovery.result;
         summary.updated += 1;
         console.log('END_DAY_KM_AUTO_RECALC_ATTENDANCE_UPDATED', {
           attendance_id: attendance.id,
@@ -11224,6 +11376,8 @@ async function runEndDayKmAutoRecalc(reason = 'interval') {
           total_route_km: result.total_route_km ?? result.new_total_route_km ?? null,
           petrol_amount: result.petrol_amount ?? result.new_petrol_amount ?? null,
           route_sync_status: result.route_sync_status || null,
+          calculation_run_id: result.calculation_run_id || null,
+          attempts: recovery.attempts,
         });
       } catch (error) {
         summary.failed += 1;
@@ -11269,6 +11423,8 @@ function startEndDayKmAutoRecalcScheduler() {
     intervalMs: END_DAY_KM_AUTO_RECALC_INTERVAL_MS,
     timezone: 'Asia/Kolkata',
     cooldownMinutes: endDayKmAutoRecalcCooldownMs() / 60000,
+    graceMinutes: endDayKmAutoRecalcGraceMinutes(),
+    effectiveFrom: endDayKmAutoRecalcEffectiveFrom(),
     limit: END_DAY_KM_AUTO_RECALC_LIMIT,
   });
   if (!enabled) return;
@@ -11305,7 +11461,10 @@ app.listen(port, () => {
       hospital_ticket_sla_scheduler: () => startHospitalSlaScheduler(serviceRoleSupabase, process.env),
       smtp_transport_verification: verifyMailTransporter,
       daily_operations_report_scheduler: startDailyOperationsReportScheduler,
-      end_day_km_auto_recalculation: startEndDayKmAutoRecalcScheduler,
+      end_day_km_auto_recalculation: () => {
+        startEndDayKmAutoRecalcScheduler();
+        startFoGpsEvidenceSummaryWorker(serviceRoleSupabase, process.env);
+      },
       fo_stale_session_cleanup: startFoStaleSessionCleanupScheduler,
     },
   });

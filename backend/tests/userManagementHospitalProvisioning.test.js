@@ -29,16 +29,16 @@ test('backend validates Hospital scope ownership and handles duplicate access cl
   assert.match(server, /Profile identity already exists/);
 });
 
-test('temporary password path uses secure Supabase Admin createUser without auditing plaintext', () => {
-  assert.match(server, /validateTemporaryPassword/);
-  assert.match(server, /client\.auth\.admin\.createUser\(\{/);
-  assert.match(server, /email_confirm: true/);
-  assert.match(server, /temporaryPassword: textOrNull\(body\.temporary_password\)/);
-  assert.match(server, /usedTemporaryPassword/);
-  assert.match(server, /requires_password_change: usedTemporaryPassword/);
+test('provisioning requires an invitation and never creates confirmed password accounts', () => {
+  assert.match(server, /assertInvitationOnlyPayload\(body\)/);
+  assert.match(server, /assertInvitationOnlyPayload\(request\.body \|\| \{\}\)/);
+  assert.doesNotMatch(server, /client\.auth\.admin\.createUser\(/);
+  assert.doesNotMatch(server, /email_confirm:\s*true/);
   const helperStart = server.indexOf('async function createInvitedAuthUser');
   const helperEnd = server.indexOf('async function markProfileAuthSyncFailure', helperStart);
   const helperBody = server.slice(helperStart, helperEnd);
+  assert.match(helperBody, /assertInvitationOnlyPayload\(options\)/);
+  assert.match(helperBody, /client\.auth\.admin\.inviteUserByEmail\(/);
   assert.doesNotMatch(helperBody, /metadata:.*temporary_password/i);
   assert.doesNotMatch(helperBody, /console\.(log|info|warn|error)\([^)]*password/i);
 });
@@ -65,7 +65,8 @@ test('Invite User UI keeps QPMS base role separate from Hospital role', () => {
   assert.match(drawer, /hospital_role_code/);
   assert.match(drawer, /Hospital Supervisor/);
   assert.match(drawer, /Scope: NIMS client-wide/);
-  assert.match(drawer, /Temporary Password/);
+  assert.match(drawer, /Password Setup Invite/);
+  assert.doesNotMatch(drawer, /Temporary Password|temporary_password/);
   assert.doesNotMatch(drawer, /Client User Code/);
 });
 

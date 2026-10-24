@@ -1,5 +1,6 @@
 import {
   RELIANCE_TRAINING_CLIENT_ID,
+  RELIANCE_TRAINING_CLIENT_CODE,
   assertTrainingActor,
   cleanTrainingText,
   loadAuthorizedTrainingSession,
@@ -11,6 +12,8 @@ import {
   translateTrainingDatabaseError,
 } from './trainingAccessService.js';
 import { isRelianceRetailStore, isRelianceRetailValue } from './clientDeepCleaningService.js';
+import { applyRetailTrainingStoreScope, narrowRetailTrainingScope, retailTrainingEnvelopeIds } from './retailTrainingReadScopeService.js';
+import { normalizedStateKey } from './workMappingScope.js';
 
 function nullableText(value) {
   const valueText = cleanTrainingText(value);
@@ -145,14 +148,16 @@ export async function listTrainingSessions(client, profile, input = {}) {
   const scope = await resolveTrainingReadScope(client, profile);
   const mine = ['1', 'true', 'yes'].includes(cleanTrainingText(input.mine).toLowerCase());
   const actorCode = trainingEmployeeCode(profile);
-  const codes = mine ? [actorCode] : [...scope.employeeCodes];
+  const codes = mine ? (scope.retailScope ? [] : [actorCode]) : [...scope.employeeCodes];
   if (!codes.length) return [];
   let envelopeQuery = client.from('fo_activity_submissions')
     .select('id,employee_code,fo_user_id,created_at')
     .eq('activity_type', 'training')
     .in('employee_code', codes).order('created_at', { ascending: false });
   if (input.site_visit_id) envelopeQuery = envelopeQuery.eq('site_visit_id', cleanTrainingText(input.site_visit_id));
-  const envelopes = await rows(envelopeQuery.limit(2000));
+  const envelopes = scope.retailScope
+    ? (await retailTrainingEnvelopeIds(client, codes)).map(id => ({ id }))
+    : await rows(envelopeQuery.limit(2000));
   const envelopeById = new Map(envelopes.map((row) => [row.id, row]));
   if (!envelopeById.size) return [];
   let query = client.from('training_sessions').select('*')
@@ -160,13 +165,21 @@ export async function listTrainingSessions(client, profile, input = {}) {
     .in('id', [...envelopeById.keys()])
     .order('created_at', { ascending: false })
     .limit(Math.min(200, Math.max(1, Number.parseInt(input.limit, 10) || 100)));
+  let hkScope = scope.retailScope;
+  if (hkScope && input.store_id) {
+    const legacy = hkScope.legacyStores.find(s => s.id === cleanTrainingText(input.store_id));
+    hkScope = narrowRetailTrainingScope(hkScope, hkScope.stores.filter(s => s.id === cleanTrainingText(input.store_id) || (legacy && s.store_code === legacy.store_code && normalizedStateKey(s.state) === normalizedStateKey(legacy.state))).map(s => s.id));
+    if (!hkScope.retailStoreIds.length) return [];
+  }
   if (input.status) query = query.eq('status', cleanTrainingText(input.status).toLowerCase());
   if (input.date_from) query = query.gte('training_date', validDate(input.date_from, 'date_from'));
   if (input.date_to) query = query.lte('training_date', validDate(input.date_to, 'date_to'));
   if (input.category_id) query = query.eq('category_id', cleanTrainingText(input.category_id));
-  if (input.store_id) query = query.or(
+  if (input.store_id && !hkScope) query = query.or(
     `store_id.eq.${cleanTrainingText(input.store_id)},retail_store_id.eq.${cleanTrainingText(input.store_id)}`,
   );
+  if (hkScope) query = applyRetailTrainingStoreScope(query, hkScope).eq('access_client_code', RELIANCE_TRAINING_CLIENT_CODE);
+  if (hkScope && input.site_visit_id) query = query.eq('site_visit_id', cleanTrainingText(input.site_visit_id));
   const sessions = await rows(query);
   if (!sessions.length) return [];
   const ids = sessions.map((row) => row.id);

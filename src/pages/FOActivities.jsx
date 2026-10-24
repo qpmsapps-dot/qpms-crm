@@ -1,3 +1,4 @@
+import ManualKmRefreshDialog from '../components/ManualKmRefreshDialog.jsx';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Battery,
@@ -11643,7 +11644,8 @@ export default function FOActivities() {
   const [mapControlsCollapsed, setMapControlsCollapsed] = useState(false);
   const [mapCommand, setMapCommand] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
-  const [kmRecalcBusy, setKmRecalcBusy] = useState(false);
+  const [manualKmEmployee, setManualKmEmployee] = useState(null);
+  const kmRecalcBusy = manualKmEmployee !== null;
   const [kmRecalcResult, setKmRecalcResult] = useState(null);
   const [switchKmRecalcBusy, setSwitchKmRecalcBusy] = useState(false);
   const [batchKmRecalcBusy, setBatchKmRecalcBusy] = useState(false);
@@ -11677,8 +11679,6 @@ export default function FOActivities() {
     }),
   );
   const mainRouteFitKeyRef = useRef(null);
-  const kmRecalcCooldownRef = useRef(new Map());
-  const kmRecalcInFlightRef = useRef(new Set());
   const summaryRequestSequenceRef = useRef(0);
   const employeeRangeRequestSequenceRef = useRef(0);
 
@@ -12943,94 +12943,31 @@ export default function FOActivities() {
     setCustomToDate(detailDraftToDate);
   }
 
-  function selectedOfficerKmRecalcKey() {
-    if (!selectedOfficer) return null;
-    const foId = normalizeFoKey(
-      selectedOfficer.foId ||
-        selectedOfficer.employeeCode ||
-        selectedOfficer.attendance?.fo_user_id ||
-        selectedOfficer.attendance?.employee_code ||
-        selectedOfficer.id,
-    );
-    return foId
-      ? `${foId}|${selectedRange.fromDate}|${selectedRange.toDate}`
-      : null;
-  }
-
-  async function recalculateSelectedOfficerKm() {
-    if (!selectedOfficer) return;
+  function recalculateSelectedOfficerKm() {
     try {
       assertDemoWriteAllowed(user);
-    } catch (error) {
-      setKmRecalcResult({ ok: false, message: error.message, confidence: "BLOCKED" });
-      return;
-    }
-    const recalcKey = selectedOfficerKmRecalcKey();
-    const now = Date.now();
-    const lastStartedAt = recalcKey ? kmRecalcCooldownRef.current.get(recalcKey) : null;
-    if (
-      kmRecalcBusy ||
-      (recalcKey && kmRecalcInFlightRef.current.has(recalcKey)) ||
-      (lastStartedAt && now - lastStartedAt < KM_RECALC_COOLDOWN_MS)
-    ) {
-      setKmRecalcResult({
-        ok: false,
-        message: KM_RECALC_RUNNING_MESSAGE,
-        confidence: "BLOCKED",
-      });
-      return;
-    }
-
-    if (recalcKey) {
-      kmRecalcInFlightRef.current.add(recalcKey);
-      kmRecalcCooldownRef.current.set(recalcKey, now);
-    }
-
-    setKmRecalcBusy(true);
-    setKmRecalcResult(null);
-    try {
-      const response = await authenticatedFetch(
-        `${API_BASE_URL}/api/fo/km/recalculate-employee-range`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            employee:
-              selectedOfficer.employeeCode ||
-              selectedOfficer.foId ||
-              selectedOfficer.attendance?.employee_code,
-            date_from: selectedRange.fromDate,
-            date_to: selectedRange.toDate,
-          }),
-        },
-      );
-      const payload = await response.json();
-      if (!response.ok || payload.ok === false) {
-        throw new Error(payload.message || "KM recalculation failed.");
-      }
-      const refreshedDataset = await loadSelectedEmployeeRange();
-      if (refreshedDataset) {
-        setEmployeeRangeDataset({
-          ...refreshedDataset,
-          recalculation_results: payload.results || [],
-        });
-      }
-      setKmRecalcResult({
-        ...payload,
-        message: `${payload.updated || 0} of ${payload.eligible || 0} eligible attendance records recalculated. ${payload.failed || 0} failed.`,
-      });
-      setRefreshToken((value) => value + 1);
-      setSummaryRefreshToken((value) => value + 1);
-    } catch (error) {
-      setKmRecalcResult({ ok: false, message: error.message, confidence: "ERROR" });
-      console.warn("[myQPMS FO] KM recalculation failed.", error);
-    } finally {
-      if (recalcKey) {
-        kmRecalcInFlightRef.current.delete(recalcKey);
-      }
-      setKmRecalcBusy(false);
-    }
+      if (!['admin', 'qpmsadmin'].includes(currentRole)) throw new Error('An authenticated Admin is required to approve Refresh KM.');
+      const officer = selectedOfficer || supportOfficer || routeOfficer;
+      const employee = officer?.employeeCode || officer?.attendance?.employee_code;
+      if (!employee) throw new Error('Select an employee before Refresh KM.');
+      setManualKmEmployee(employee);
+    } catch (error) { setKmRecalcResult({ ok: false, message: error.message, confidence: 'BLOCKED' }); }
   }
+
+  const manualKmDialog = manualKmEmployee ? <ManualKmRefreshDialog
+    employee={manualKmEmployee}
+    endpoint={`${API_BASE_URL}/api/fo/km/recalculate`}
+    onClose={() => setManualKmEmployee(null)}
+    onCommitted={async (result) => {
+      setKmRecalcResult({ ...result, message: result.mode === 'range'
+        ? `${result.summary.applied} of ${result.summary.total_days} selected dates saved. Review per-date results.`
+        : 'Selected attendance KM recalculated and saved.' });
+      setRefreshToken(value => value + 1);
+      setSummaryRefreshToken(value => value + 1);
+      const refreshed = await loadSelectedEmployeeRange();
+      if (refreshed) setEmployeeRangeDataset(refreshed);
+    }}
+  /> : null;
 
   async function recalculateTemporarySwitchKmForOfficer(officer = selectedOfficer) {
     if (!officer || !canRunTemporarySwitchKm) return;
@@ -13379,6 +13316,8 @@ export default function FOActivities() {
 
   if (selectedOfficer) {
     return (
+      <>
+      {manualKmDialog}
       <FieldOfficerDetailsView
         key={selectedOfficer.id}
         officer={selectedOfficer}
@@ -13405,7 +13344,7 @@ export default function FOActivities() {
             options,
             onProgress,
           })}
-        onRecalculateKm={fullTechnicalAccess ? recalculateSelectedOfficerKm : null}
+        onRecalculateKm={!readOnlyDemo && ['admin', 'qpmsadmin'].includes(currentRole) ? recalculateSelectedOfficerKm : null}
         onTemporarySwitchKm={
           canRunTemporarySwitchKm
             ? () => recalculateTemporarySwitchKmForOfficer(selectedOfficer)
@@ -13424,11 +13363,13 @@ export default function FOActivities() {
         }
         onRouteGpsEvidenceActive={setSelectedRouteEvidenceOfficerId}
       />
+      </>
     );
   }
 
   return (
     <div className="space-y-3">
+      {manualKmDialog}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-xl font-black tracking-normal text-slate-950 dark:text-white sm:text-2xl">
           Operations Command Center
@@ -13986,7 +13927,7 @@ export default function FOActivities() {
                   setMapRouteOfficerId(null);
                   closeSupportActions();
                 }}
-                onRecalculateKm={recalculateSelectedOfficerKm}
+                onRecalculateKm={!readOnlyDemo && ['admin', 'qpmsadmin'].includes(currentRole) ? recalculateSelectedOfficerKm : null}
                 onTemporarySwitchKm={
                   canRunTemporarySwitchKm
                     ? () => recalculateTemporarySwitchKmForOfficer(supportOfficer || routeOfficer)

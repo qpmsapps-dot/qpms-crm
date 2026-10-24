@@ -33,14 +33,14 @@ test('Invite User drawer uses live foundation to resolve NIMS client options', (
   assert.doesNotMatch(drawer, /Reliance Retail Block A|Block A/);
 });
 
-test('Invite User payload keeps unified assignment separate from optional temporary password', () => {
+test('Invite User payload preserves unified assignment without accepting passwords', () => {
   assert.match(drawer, /access_assignment/);
   assert.match(drawer, /business_vertical_id: values\.access_business_vertical_id/);
   assert.match(drawer, /module_id: values\.access_module_id/);
   assert.match(drawer, /role_id: values\.access_role_id/);
   assert.match(drawer, /scope_type: values\.access_scope_type/);
-  assert.match(drawer, /Temporary Password/);
-  assert.match(drawer, /payload\.temporary_password = values\.temporary_password/);
+  assert.match(drawer, /Password Setup Invite/);
+  assert.doesNotMatch(drawer, /Temporary Password|temporary_password/);
 });
 
 test('backend creates unified assignment, scope and audit through admin invite route', () => {

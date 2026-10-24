@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Image,
   Images,
+  FileText,
   Loader2,
   MapPin,
   RefreshCw,
@@ -86,7 +87,7 @@ function deepCleaningStage(upload = {}) {
   ).toLowerCase();
   if (stage.includes('before') || role.includes('before')) return 'before';
   if (stage.includes('after') || role.includes('after')) return 'after';
-  if (role.includes('document') || role.includes('pdf')) return 'document';
+  if (role.includes('document') || role.includes('checklist') || role.includes('pdf')) return 'document';
   return 'other';
 }
 
@@ -106,6 +107,7 @@ function uploadPath(upload = {}) {
 }
 
 async function signedUploadUrl(upload) {
+  if (upload?.signed_url) return upload.signed_url;
   if (!upload?.file_url) return '';
   if (/^https?:\/\//i.test(upload.file_url)) return upload.file_url;
   if (!supabase?.storage) return '';
@@ -138,7 +140,7 @@ function mergeDeepCleaningRecords({ submissions, uploads, stores, profiles, visi
   const submissionsById = new Map(submissions.map((submission) => [text(submission.id), submission]));
   const records = new Map();
 
-  uploads.filter(isImageUpload).forEach((upload, index) => {
+  uploads.filter((upload) => isImageUpload(upload) || deepCleaningStage(upload) === 'document').forEach((upload, index) => {
     const submission = upload.submission_id ? submissionsById.get(text(upload.submission_id)) : null;
     const metadata = objectMetadata(upload);
     const submissionMetadata = objectMetadata(submission);
@@ -272,6 +274,35 @@ function ImageStrip({ label, uploads, signedUrls, onPreview }) {
   );
 }
 
+function DocumentList({ uploads, signedUrls }) {
+  if (!uploads.length) return null;
+  return (
+    <div className="md:col-span-2">
+      <p className="text-xs font-black text-slate-900">Supporting Documents ({uploads.length})</p>
+      <div className="mt-2 space-y-2">
+        {uploads.map((upload, index) => {
+          const key = text(upload.id || upload.file_url || index);
+          const url = signedUrls[key] || '';
+          return (
+            <a
+              key={key}
+              href={url || undefined}
+              target="_blank"
+              rel="noreferrer"
+              aria-disabled={!url}
+              className={`flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold ${url ? 'text-qpms-700 hover:bg-qpms-50' : 'pointer-events-none text-slate-400'}`}
+            >
+              <FileText className="h-5 w-5 shrink-0" />
+              <span className="truncate">{upload.displayName}</span>
+              <span className="ml-auto text-xs">{url ? 'View' : 'Unavailable'}</span>
+            </a>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Lightbox({ file, url, onClose, onPrevious, onNext, hasMultiple }) {
   if (!file) return null;
   return (
@@ -308,7 +339,7 @@ function Lightbox({ file, url, onClose, onPrevious, onNext, hasMultiple }) {
   );
 }
 
-export default function DeepCleaning() {
+export default function DeepCleaning({ initialBusiness = 'All', lockBusiness = false }) {
   usePageTitle('Deep Cleaning');
   const { user } = useAuth();
   const useDemoBackendRead = isDemoUser(user);
@@ -319,7 +350,7 @@ export default function DeepCleaning() {
   const [signedUrls, setSignedUrls] = useState({});
   const [previewUpload, setPreviewUpload] = useState(null);
   const [filters, setFilters] = useState({
-    business: 'All',
+    business: initialBusiness,
     state: 'All',
     city: 'All',
     status: 'All',
@@ -338,10 +369,10 @@ export default function DeepCleaning() {
     setLoading(true);
     setError('');
     try {
-      if (useDemoBackendRead) {
+      if (useDemoBackendRead || lockBusiness) {
         const response = await authenticatedApiRequest({
           method: 'GET',
-          url: '/api/deep-cleaning/records',
+          url: lockBusiness ? '/api/reliance-retail/deep-cleaning/records' : '/api/deep-cleaning/records',
         });
         setRecords(mergeDeepCleaningRecords({
           submissions: response.data?.submissions || [],
@@ -400,7 +431,7 @@ export default function DeepCleaning() {
     } finally {
       setLoading(false);
     }
-  }, [useDemoBackendRead]);
+  }, [lockBusiness, useDemoBackendRead]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -479,7 +510,9 @@ export default function DeepCleaning() {
   }, [records]);
 
   const previewFiles = previewUpload
-    ? filteredRecords.find((record) => record.uploads.some((upload) => upload === previewUpload))?.uploads || [previewUpload]
+    ? filteredRecords
+        .find((record) => record.uploads.some((upload) => upload === previewUpload))
+        ?.uploads.filter(isImageUpload) || [previewUpload]
     : [];
   const previewIndex = previewFiles.indexOf(previewUpload);
   const previewKey = text(previewUpload?.id || previewUpload?.file_url);
@@ -522,7 +555,7 @@ export default function DeepCleaning() {
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="grid gap-3 lg:grid-cols-7">
           <FilterField label="Business">
-            <select value={filters.business} onChange={(event) => setFilter('business', event.target.value)} className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400">
+            <select disabled={lockBusiness} value={filters.business} onChange={(event) => setFilter('business', event.target.value)} className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400 disabled:bg-slate-100">
               <option value="All">Reliance Retail + IFMS</option>
               {TARGET_BUSINESSES.map((business) => <option key={business}>{business}</option>)}
             </select>
@@ -601,7 +634,7 @@ export default function DeepCleaning() {
                     ['State / City', [record.state, record.city].filter(Boolean).join(' / ') || '--'],
                     ['Assigned Person', record.person || '--'],
                     ['Remarks', record.remarks || '--'],
-                    ['Images', `${record.uploads.length} total`],
+                    ['Evidence', `${record.uploads.length} total`],
                   ].map(([label, value]) => (
                     <div key={label}>
                       <p className="font-black uppercase tracking-wide text-slate-400">{label}</p>
@@ -613,6 +646,7 @@ export default function DeepCleaning() {
                   <ImageStrip label="Before Images" uploads={record.before} signedUrls={signedUrls} onPreview={setPreviewUpload} />
                   <ImageStrip label="After Images" uploads={record.after} signedUrls={signedUrls} onPreview={setPreviewUpload} />
                   {record.other.length ? <ImageStrip label="Other Images" uploads={record.other} signedUrls={signedUrls} onPreview={setPreviewUpload} /> : null}
+                  <DocumentList uploads={record.documents} signedUrls={signedUrls} />
                 </div>
               </article>
             ))}

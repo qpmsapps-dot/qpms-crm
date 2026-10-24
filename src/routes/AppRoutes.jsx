@@ -27,6 +27,13 @@ import Settings from '../pages/Settings.jsx';
 import StoreMaster from '../pages/StoreMaster.jsx';
 import HospitalTicketRouteGuard from '../components/hospital-ticketing/HospitalTicketRouteGuard.jsx';
 import NimsTicketingPage, { LegacyHospitalTicketsRedirect } from '../pages/hospital-ticketing/NimsTicketingPage.jsx';
+import RetailDashboard from '../pages/reliance-retail/RetailDashboard.jsx';
+import RetailStoreMaster from '../pages/reliance-retail/RetailStoreMaster.jsx';
+import RetailComingSoon from '../pages/reliance-retail/RetailComingSoon.jsx';
+import RetailScopedDeepCleaning from '../pages/reliance-retail/RetailScopedDeepCleaning.jsx';
+import RetailScopedFaultTracker from '../pages/reliance-retail/RetailScopedFaultTracker.jsx';
+import RetailTraining from '../pages/reliance-retail/RetailTraining.jsx';
+import RetailAttendance from '../pages/reliance-retail/RetailAttendance.jsx';
 import FaultTracker from '../pages/FaultTracker.jsx';
 import DeepCleaning from '../pages/DeepCleaning.jsx';
 import UserManagement from '../pages/settings/UserManagement.jsx';
@@ -113,6 +120,17 @@ const productionRoutes = [
           { path: 'tickets/:ticketId', element: <HospitalTicketRouteGuard><LegacyHospitalTicketsRedirect /></HospitalTicketRouteGuard> },
           { path: 'fault-tracker', element: <FaultTracker /> },
           { path: 'deep-cleaning', element: <DeepCleaning /> },
+          { path: 'reliance-retail', element: <RetailDashboard /> },
+          { path: 'reliance-retail/store-master', element: <RetailStoreMaster /> },
+          { path: 'reliance-retail/deep-cleaning', element: <RetailScopedDeepCleaning /> },
+          { path: 'reliance-retail/fault-tracker', element: <RetailScopedFaultTracker /> },
+          { path: 'reliance-retail/training', element: <RetailTraining /> },
+          { path: 'reliance-retail/attendance', element: <RetailAttendance /> },
+          { path: 'reliance-retail/m-here-attendance', element: <Navigate to="/reliance-retail/attendance" replace /> },
+          { path: 'reliance-retail/oos', element: <RetailComingSoon title="OOS Tracker" /> },
+          { path: 'reliance-retail/cmpm', element: <RetailComingSoon title="CMPM" /> },
+          { path: 'reliance-retail/thermography', element: <RetailComingSoon title="Thermography" /> },
+          { path: 'reliance-retail/manpower', element: <RetailComingSoon title="Manpower Vacancy" /> },
           { path: 'assets', element: <AssetCenterPage /> },
           { path: 'tasks', element: <Tasks /> },
           {

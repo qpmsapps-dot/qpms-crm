@@ -2,6 +2,7 @@ import express from 'express';
 import * as defaultTrainingService from '../services/trainingService.js';
 import * as defaultEvidenceService from '../services/trainingEvidenceService.js';
 import { safeTrainingError } from '../services/trainingAccessService.js';
+import { isRetailHkTrainingReader } from '../services/retailTrainingReadScopeService.js';
 
 function trainingLog(request, operation, result, sessionId = null) {
   console.info('[Training]', {
@@ -22,6 +23,13 @@ export function createTrainingRouter({
   if (typeof getClient !== 'function') throw new Error('createTrainingRouter requires getClient.');
   const router = express.Router();
   router.use(requireAuth);
+  router.use((request, response, next) => {
+    if (isRetailHkTrainingReader(request.profile) && (!['GET', 'HEAD'].includes(request.method)
+        || !/^\/sessions(?:\/[^/]+(?:\/evidence\/[^/]+\/view-url)?)?\/?$/.test(request.path))) {
+      return response.status(403).json({ ok: false, code: 'training_read_only', message: 'HK MIS Training access is read-only.' });
+    }
+    return next();
+  });
 
   const route = (operation, handler, { status = 200 } = {}) => async (request, response) => {
     try {

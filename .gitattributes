@@ -1,0 +1,11 @@
+backend/foKmRecalculationService.js text eol=lf
+backend/services/foManualKmRefreshService.js text eol=lf
+backend/services/foManualKmRangeRefreshService.js text eol=lf
+src/components/ManualKmRefreshDialog.jsx text eol=lf
+supabase/migrations_2_0/237_fo_manual_checkout_transaction_guard.sql text eol=lf
+backend/server.js text eol=lf
+src/components/user-management/UserFormDrawer.jsx text eol=lf
+backend/tests/invitationOnlyProvisioning.test.js text eol=lf
+backend/tests/userManagementHospitalProvisioning.test.js text eol=lf
+backend/tests/unifiedAccessUserManagementPhase3.test.js text eol=lf
+backend/tests/trainingReleaseCompatibility.test.js text eol=lf

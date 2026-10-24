@@ -14,6 +14,7 @@ const mobileSource = fs.readFileSync(
   'utf8',
 );
 const webSource = fs.readFileSync(path.join(root, 'src/pages/FOActivities.jsx'), 'utf8');
+const manualDialogSource = fs.readFileSync(path.join(root, 'src/components/ManualKmRefreshDialog.jsx'), 'utf8');
 
 function fakeClient(attendance) {
   const state = { filters: {} };
@@ -149,6 +150,8 @@ test('mobile and web callers send the current Supabase JWT', () => {
   );
   assert.match(
     webSource,
-    /authenticatedFetch\([\s\S]{0,120}`\$\{API_BASE_URL\}\/api\/fo\/km\/recalculate-employee-range`/,
+    /endpoint=\{`\$\{API_BASE_URL\}\/api\/fo\/km\/recalculate`\}/,
   );
+  assert.match(manualDialogSource, /request = authenticatedFetch/);
+  assert.match(manualDialogSource, /await request\(rangeMode \? rangeEndpoint : endpoint/);
 });

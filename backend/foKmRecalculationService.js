@@ -13,6 +13,7 @@ import {
   planGpsSegments,
 } from './services/foCanonicalKmEngineV2.js';
 import { persistCanonicalKmV2 } from './services/foKmV2PersistenceService.js';
+import { persistForwardFinalLeg } from './services/foForwardFinalLegPersistenceService.js';
 import { assertKmFinancialWritesAvailable } from './services/kmFinancialWriteMaintenanceService.js';
 
 const RATE_PER_KM = 4;
@@ -85,6 +86,8 @@ const SITE_VISIT_SELECT_COLUMNS = [
   'check_out_latitude',
   'check_out_longitude',
   'checkout_distance_meters',
+  'petrol_eligible_after_checkout',
+  'updated_at',
   'checkout_location_status',
   'checkout_note',
   'origin_lat',
@@ -2361,6 +2364,38 @@ function confirmedOpenSiteDeparture(validPoints = [], visit, effectiveEndTime) {
   return null;
 }
 
+function finalLegCheckoutEligibility(visits, leg) {
+  const visit = visits.find(row => row.id === leg.fromVisitId);
+  return { visit_id: visit?.id || null,
+    snapshot: visit ? { visit_id: visit.id, attendance_id: visit.attendance_id,
+      check_in_time: visit.check_in_time, check_out_time: visit.check_out_time || visit.checkout_time,
+      latitude: visit.check_out_latitude, longitude: visit.check_out_longitude,
+      updated_at: visit.updated_at, location_status: visit.checkout_location_status ?? null,
+      distance_meters: visit.checkout_distance_meters ?? null,
+      petrol_eligible_after_checkout: visit.petrol_eligible_after_checkout ?? null } : null,
+    petrol_eligible_after_checkout: visit?.petrol_eligible_after_checkout ?? null,
+    location_status: visit?.checkout_location_status || null,
+    distance_meters: visit?.checkout_distance_meters ?? null };
+}
+
+async function finalLegOriginComparison(visits, leg, selectedKm, options) {
+  const visit = visits.find(row => row.id === leg.fromVisitId);
+  const site = visit ? visitCheckInCoordinate(visit) : null;
+  const offsetKm = site ? haversineKm(site, leg.from) : null;
+  // 100 m is a display threshold only; it never changes calculation policy.
+  const route = site && offsetKm >= 0.1 ? await googleDirectionsRoute(site, leg.to, options) : null;
+  return {
+    selected_origin: leg.fromSource, recorded_checkout_km: selectedKm,
+    policy_reason: 'Existing policy uses recorded checkout coordinates and time, with accepted GPS first and Google Directions driving fallback. Site/check-in routing is comparison only.',
+    site_origin: site, origin_offset_meters: offsetKm == null ? null : Math.round(offsetKm * 1000),
+    materially_different_origins: offsetKm != null && offsetKm >= 0.1,
+    site_origin_km: route?.ok ? route.distanceKm : null,
+    site_origin_source: route?.ok ? 'GOOGLE_DIRECTIONS_DRIVING' : null,
+    site_origin_status: route?.ok ? 'available' : route?.errorCode || (site ? 'same_origin' : 'missing_site_coordinates'),
+    comparison_only: true,
+  };
+}
+
 function buildCompletedTravelLegs(attendance, visits = [], effectiveEnd = {}) {
   const legs = [];
   const orderedVisits = [...visits]
@@ -2526,6 +2561,7 @@ export async function calculateTravelLegKm({
 
   const evidence = await loadGpsLogsForWindowWithBinding(client, attendance, legStart, legEnd);
   const gpsRows = evidence.rows;
+  fallbackBase.sourceRowIds = gpsRows.map((row) => row.id).filter(Boolean).sort();
   const normalizedEvidence = normalizeGpsLogs(gpsRows, attendance);
   fallbackBase.rejectionReasonCounts = normalizedEvidence.rejectionCounts;
   const cleanedPoints = normalizedEvidence.points.map((point) => ({
@@ -3356,8 +3392,9 @@ export async function recalculateFullDayGpsNoSiteVisitKm(serviceRoleClient, payl
 
 export async function recalculateFoKm(serviceRoleClient, payload = {}, options = {}) {
   const client = requireServiceRoleClient(serviceRoleClient);
-  const dryRun = payload.dry_run === true || payload.dryRun === true || options.persist === false;
-  assertKmFinancialWritesAvailable({ dryRun, environment: options.environment || process.env });
+  const dryRun = payload.dry_run === true || payload.dryRun === true || options.persist === false || options.prepareOnly === true;
+  assertKmFinancialWritesAvailable({ dryRun, environment: options.environment || process.env,
+    authorizedAdminAction: Boolean(options.adminAuthorization?.userId) });
   const attendanceId = payload.attendance_id || payload.id || null;
   const foUserId = payload.fo_user_id || null;
   const employeeCode = payload.employee_code || null;
@@ -3409,7 +3446,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     persistLegResults: false,
     auditDelayedCheckout: false,
   });
-  const missingKmReviewResults = dryRun || options.refreshMissingKmReviews === false
+  const missingKmReviewResults = dryRun || options.adminAuthorization || options.refreshMissingKmReviews === false
     ? []
     : await refreshMissingKmReviewsForAttendance(
         client,
@@ -3474,7 +3511,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
   const calculatedPayableKm = canonicalRouteCalculation.routeBasedSelected
     ? canonicalRouteCalculation.calculatedPayableKm
     : Number((legRecalculation.total_route_km || 0).toFixed(2));
-  const approvedMissingKm = await loadApprovedMissingKmSummary(client, attendance.id);
+  const approvedMissingKm = await loadApprovedMissingKmSummary(client, attendance.id, options.missingKmReviewDecision);
   let approvedKm = calculatedPayableKm;
   if (
     switchFallback?.overridePayableKm &&
@@ -3892,6 +3929,12 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
       appliedAt: correction.applied_at || null,
       appliedState: correction.applied_state || null,
     })),
+    ...(options.missingKmReviewDecision ? { missingKmReviewDecision: {
+      reviewId: options.missingKmReviewDecision.reviewId,
+      expectedUpdatedAt: options.missingKmReviewDecision.expectedUpdatedAt,
+      approvedKm: options.missingKmReviewDecision.update.approved_missing_km,
+      approvedAmount: options.missingKmReviewDecision.update.approved_amount,
+    } } : {}),
   });
 
   let liveStatusUpdated = false;
@@ -3904,6 +3947,7 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
       sourceEntryPoint: options.sourceEntryPoint || payload.source_entry_point || 'backend_recalculation',
       actorSource: options.actor?.employee_code || options.actor || null,
       environment: options.environment || process.env,
+      adminAuthorization: options.adminAuthorization || null,
     });
     log('FO_KM_ATTENDANCE_UPDATED', { attendance_id: attendance.id, actualTravelKm });
 
@@ -3940,6 +3984,10 @@ export async function recalculateFoKm(serviceRoleClient, payload = {}, options =
     fo_user_id: attendance.fo_user_id,
     employee_code: attendance.employee_code,
     attendance_id: attendance.id,
+    ...(options.prepareOnly === true ? {
+      canonical_calculation: canonicalCalculation,
+      expected_attendance_updated_at: attendance.updated_at,
+    } : {}),
     old_total_route_km: normalizeNumber(attendance.total_route_km),
     old_petrol_amount: normalizeNumber(attendance.petrol_amount),
     actual_travel_km: actualTravelKm,
@@ -4163,19 +4211,38 @@ export async function reconcileFinalLegOnly(serviceRoleClient, payload = {}, opt
   if (isProtectedSharedTravelNonPayableAttendance(attendance)) {
     return protectedSharedTravelResult(attendance, dryRun);
   }
-  if (!dryRun) {
-    // Final-leg maintenance is no longer an independent financial writer. A
-    // persisted request always runs the complete canonical calculation so the
-    // leg set, attendance totals and run evidence commit atomically.
-    return recalculateFoKm(client, {
+  const effectiveFrom = String(
+    options.forwardFinalLegEffectiveFrom || process.env.END_DAY_KM_AUTO_RECALC_EFFECTIVE_FROM || '2026-10-16',
+  ).slice(0, 10);
+  if (!dryRun && String(attendance.attendance_date || '').slice(0, 10) < effectiveFrom) {
+    return {
+      ok: true,
+      skipped: true,
+      skip_reason: 'FORWARD_FINAL_LEG_BEFORE_EFFECTIVE_DATE',
+      status: 'protected_historical',
       attendance_id: attendance.id,
-      source_entry_point: 'final_leg_reconciliation',
-    }, {
-      ...options,
-      persist: true,
-      sourceEntryPoint: 'final_leg_reconciliation',
-      calculationReason: 'final_leg_reconciliation_via_canonical_engine',
-    });
+      employee_code: attendance.employee_code,
+      dry_run: dryRun,
+      updated: false,
+    };
+  }
+  const graceMinutes = Math.max(1, Math.min(60, Number(
+    options.endDayGpsSyncGraceMinutes || process.env.END_DAY_KM_AUTO_RECALC_GRACE_MINUTES || 5,
+  ) || 5));
+  const logoutTime = parseValidDate(attendance.logout_time);
+  if (!dryRun && options.enforceEndDayGpsSyncGrace !== false && logoutTime &&
+      Date.now() - logoutTime.getTime() < graceMinutes * 60 * 1000) {
+    return {
+      ok: true,
+      skipped: true,
+      skip_reason: 'END_DAY_GPS_SYNC_GRACE_PENDING',
+      status: 'pending',
+      attendance_id: attendance.id,
+      employee_code: attendance.employee_code,
+      retry_after_seconds: Math.ceil((graceMinutes * 60 * 1000 - (Date.now() - logoutTime.getTime())) / 1000),
+      dry_run: false,
+      updated: false,
+    };
   }
   const visits = await loadSiteVisits(client, attendance);
   const effectiveEnd = await resolveEffectiveAttendanceEnd(client, attendance, { includeEvidence: true });
@@ -4321,9 +4388,105 @@ export async function reconcileFinalLegOnly(serviceRoleClient, payload = {}, opt
   const action = persisted ? 'update' : 'insert';
   let finalLegId = persisted?.id || null;
   if (!dryRun) {
-    finalLegId = await persistFinalLegOnly(client, attendance, expectedFinal, persisted, finalLegValues);
-    const { error } = await client.from('fo_attendance').update(attendanceUpdate).eq('id', attendance.id);
-    if (error) throw error;
+    if (
+      !['GPS_BASED', 'GPS_ROUTE_SUPPORTED', 'GOOGLE_ROUTE_FALLBACK'].includes(calculation.legSource) ||
+      ![KM_DECISION.ACCEPTED, KM_DECISION.ACCEPTED_WITH_WARNING].includes(calculation.decision)
+    ) {
+      return {
+        ok: true,
+        skipped: true,
+        skip_reason: 'FORWARD_FINAL_LEG_RELIABLE_EVIDENCE_PENDING',
+        status: 'pending_review',
+        attendance_id: attendance.id,
+        employee_code: attendance.employee_code,
+        final_leg_id: finalLegId,
+        final_return_leg_km: calculatedKm,
+        source: calculation.legSource,
+        review_flags: reviewFlags,
+        dry_run: false,
+        updated: false,
+      };
+    }
+    const finalLeg = {
+      type: 'last_checkout_to_end_day',
+      startedAt: expectedFinal.fromTime.toISOString(),
+      endedAt: expectedFinal.toTime.toISOString(),
+      startLat: expectedFinal.from.latitude,
+      startLng: expectedFinal.from.longitude,
+      endLat: expectedFinal.to.latitude,
+      endLng: expectedFinal.to.longitude,
+      calculatedKm,
+      payableKm,
+      ratePerKm: rate,
+      payableAmount,
+      travelMode,
+      source: calculation.legSource,
+      decision: calculation.decision || (calculation.payable === true
+        ? KM_DECISION.ACCEPTED
+        : KM_DECISION.ACCEPTED_WITH_WARNING),
+    };
+    const forwardCalculation = {
+      calculationVersion: KM_ENGINE_VERSION,
+      inputRowCount: calculation.gpsLogCount || 0,
+      acceptedPointCount: calculation.validPoints || 0,
+      rejectedPointReasons: calculation.rejectionReasonCounts || {},
+      acceptedGpsKm: Number(Number(calculation.acceptedGpsKm || 0).toFixed(2)),
+      reconstructedGapKm: Number(Number(calculation.reconstructedGapKm || 0).toFixed(2)),
+      directGoogleKm: normalizeNumber(calculation.googleDirectRouteKm),
+      riskFlags: reviewFlags,
+      decision: finalLeg.decision,
+      sourceRowIds: calculation.sourceRowIds || [],
+      finalLeg,
+      before: {
+        totalRouteKm: roundMoney(attendance.total_route_km),
+        eligibleKm: roundMoney(attendance.eligible_km),
+        totalApprovedKm: roundMoney(attendance.total_approved_km),
+        petrolAmount: roundMoney(attendance.petrol_amount),
+      },
+    };
+    forwardCalculation.inputDigest = canonicalKmInputDigest(forwardCalculation);
+    const sourceEntryPoint = options.sourceEntryPoint || payload.source_entry_point || 'forward_final_leg_retry';
+    const persistence = await persistForwardFinalLeg(client, {
+      attendanceId: attendance.id,
+      expectedAttendanceUpdatedAt: attendance.updated_at,
+      calculation: forwardCalculation,
+      sourceEntryPoint,
+      actorSource: options.actor?.employee_code || options.actor || null,
+    });
+    finalLegId = persistence?.final_leg_id || finalLegId;
+    return {
+      ok: true,
+      skipped: false,
+      status: 'updated',
+      attendance_id: attendance.id,
+      employee_code: attendance.employee_code,
+      old_total_route_km: roundMoney(persistence?.old_total_route_km ?? oldTotal),
+      new_total_route_km: roundMoney(persistence?.total_route_km),
+      total_route_km: roundMoney(persistence?.total_route_km),
+      total_approved_km: roundMoney(persistence?.total_approved_km ?? persistence?.payable_km),
+      petrol_amount: roundMoney(persistence?.reimbursement),
+      final_leg_id: finalLegId,
+      final_leg_action: persistence?.idempotent_replay === true ? 'idempotent_replay' : action,
+      final_leg_status: 'calculated',
+      previous_final_leg_km: previousCalculatedKm,
+      final_return_leg_km: calculatedKm,
+      final_leg_delta_km: calculatedDelta,
+      previous_payable_km: previousPayableKm,
+      proposed_payable_km: payableKm,
+      proposed_payable_amount: payableAmount,
+      source: calculation.legSource,
+      provider: calculation.legSource,
+      reason: calculation.fallbackReason || null,
+      review_flags: reviewFlags,
+      final_leg_gps_log_count: calculation.gpsLogCount || 0,
+      final_leg_valid_points: calculation.validPoints || 0,
+      route_sync_status: persistence?.route_sync_status || 'canonical_v2_persisted',
+      calculation_run_id: persistence?.calculation_run_id || null,
+      input_digest: forwardCalculation.inputDigest,
+      persistence_idempotent_replay: persistence?.idempotent_replay === true,
+      dry_run: false,
+      updated: true,
+    };
   }
   return {
     ok: true,
@@ -4336,6 +4499,14 @@ export async function reconcileFinalLegOnly(serviceRoleClient, payload = {}, opt
     final_leg_id: finalLegId,
     final_leg_action: action,
     final_leg_status: payableKm > 0 ? 'calculated' : 'review_required',
+    final_leg_evidence: { from: expectedFinal.from, to: expectedFinal.to,
+      origin_comparison: dryRun && options.includeOriginComparison === true
+        ? await finalLegOriginComparison(visits, expectedFinal, calculatedKm, options) : null,
+      checkout_eligibility: finalLegCheckoutEligibility(visits, expectedFinal),
+      from_time: expectedFinal.fromTime.toISOString(), to_time: expectedFinal.toTime.toISOString(),
+      gps_log_count: calculation.gpsLogCount, valid_points: calculation.validPoints,
+      rejected_point_reasons: calculation.rejectionReasonCounts || {},
+      filtered_gps_km: calculation.filteredGpsKm, decision: calculation.decision },
     previous_final_leg_km: previousCalculatedKm,
     final_return_leg_km: calculatedKm,
     final_leg_delta_km: calculatedDelta,
@@ -4670,15 +4841,17 @@ export async function refreshMissingKmReviewsForAttendance(client, attendance, v
   return results;
 }
 
-export async function loadApprovedMissingKmSummary(client, attendanceId) {
+export async function loadApprovedMissingKmSummary(client, attendanceId, reviewDecision = null) {
   try {
     const { data, error } = await client
       .from('fo_missing_km_reviews')
-      .select('approved_missing_km, approved_amount, status')
+      .select('id, approved_missing_km, approved_amount, status')
       .eq('attendance_id', attendanceId)
       .eq('status', 'approved');
     if (error) throw error;
-    return (data || []).reduce((summary, row) => ({
+    const approvedRows = (data || []).filter((row) => !reviewDecision || row.id !== reviewDecision.reviewId);
+    if (reviewDecision?.update?.status === 'approved') approvedRows.push(reviewDecision.update);
+    return approvedRows.reduce((summary, row) => ({
       approvedKm: Number((summary.approvedKm + Number(row.approved_missing_km || 0)).toFixed(2)),
       approvedAmount: Number((summary.approvedAmount + Number(row.approved_amount || 0)).toFixed(2)),
       count: summary.count + 1,
@@ -4816,7 +4989,7 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
     throw error;
   }
   if (normalizedAction === 'approve') {
-    assertKmFinancialWritesAvailable({ dryRun: false });
+    assertKmFinancialWritesAvailable({ dryRun: false, authorizedAdminAction: true });
   }
   const { data: review, error: reviewError } = await client
     .from('fo_missing_km_reviews')
@@ -4841,8 +5014,7 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
         error.statusCode = 409;
         throw error;
       }
-      const totals = await syncAttendanceApprovedKmTotals(client, review.attendance_id);
-      return { review, totals, no_change: true };
+      // Same-value retries use the transactional RPC's persisted receipt below.
     }
     if (review.metadata?.incremental_determination === 'requires_review' && !manualOverride) {
       const error = new Error('Incremental Missing KM is not defensible yet. Request clarification before approval.');
@@ -4907,10 +5079,53 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
       review_action: normalizedAction,
       reviewed_by_role: actor.role || null,
       manual_override: manualOverride,
+      elevated_override: payload.elevated_override === true,
       approval_source: manualOverride ? 'MANUAL_REVIEW' : 'CALCULATED_REVIEW',
       ...(manualOverride ? { manual_approval_upper_bound_km: missingKmManualApprovalUpperBound(review) } : {}),
     },
   };
+  if (normalizedAction === 'approve') {
+    if (!actor.auth_user_id || !['ADMIN', 'QPMSADMIN'].includes(manualApprovalRoleKey(actor.role))) {
+      const error = new Error('Authenticated Admin identity is required for financial approval.');
+      error.statusCode = 403;
+      throw error;
+    }
+    const reviewDecision = {
+      reviewId: review.id, expectedUpdatedAt: review.updated_at,
+      expectedStatus: review.status, update,
+    };
+    const receiptDigest = review.metadata?.atomic_approval_input_digest;
+    const retry = review.status === 'approved' && receiptDigest;
+    const preview = retry ? null : await recalculateFoKm(client, {
+      attendance_id: review.attendance_id, dry_run: true,
+    }, {
+      prepareOnly: true, refreshMissingKmReviews: false,
+      missingKmReviewDecision: reviewDecision, maxGoogleDirectionsCalls: 0,
+    });
+    const persistence = await persistCanonicalKmV2(client, {
+      attendanceId: review.attendance_id,
+      expectedAttendanceUpdatedAt: preview?.expected_attendance_updated_at || review.updated_at,
+      calculation: preview?.canonical_calculation || { calculationVersion: KM_ENGINE_VERSION, inputDigest: receiptDigest },
+      sourceEntryPoint: 'missing_km_approval', actorSource: actor.employee_code,
+      adminAuthorization: { userId: actor.auth_user_id, reason: remarks || 'Approve evidenced Missing KM review' },
+      reviewDecision,
+    });
+    return {
+      review: persistence.review,
+      totals: { attendance_id: review.attendance_id,
+        total_approved_km: persistence.payable_km, petrol_amount: persistence.reimbursement,
+        canonical_travel_leg_payable_km: persistence.total_route_km,
+        approved_missing_km: persistence.approved_missing_km,
+        approved_missing_review_count: persistence.approved_missing_review_count,
+        calculation_run_id: persistence.calculation_run_id },
+      no_change: review.status === 'approved' || persistence.idempotent_replay === true,
+    };
+  }
+  if (review.status === 'approved') {
+    const error = new Error('An approved Missing KM decision requires a separate financial correction.');
+    error.statusCode = 409;
+    throw error;
+  }
   const { data: updated, error: updateError } = await client
     .from('fo_missing_km_reviews')
     .update(update)

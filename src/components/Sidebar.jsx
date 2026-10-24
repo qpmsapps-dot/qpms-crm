@@ -11,6 +11,7 @@ import {
   Sparkles,
   Store,
   TicketCheck,
+  Users,
   Wrench,
   Workflow,
 } from 'lucide-react';
@@ -32,6 +33,7 @@ import {
   normalizeAppRole,
   normalizeCanonicalRole,
   usesOperationsSidebar,
+  retailWebAccess,
 } from '../utils/authRoles.js';
 import { isDemoUser } from '../utils/demoAccess.js';
 import { useHospitalTicketAccess } from '../hooks/useHospitalTicketAccess.js';
@@ -53,6 +55,22 @@ const hospitalTicketingNavGroup = {
 const preSalesNavItem = { label: 'Pre-Sales', to: '/pre-sales', icon: Workflow, matchPrefix: true };
 const businessDevelopmentNavItem = { label: 'Business Development', to: '/business-development', icon: Workflow, matchPrefix: true };
 const tenderNavItem = { label: 'Tender', to: '/tender', icon: FileText, matchPrefix: true };
+
+const relianceRetailNavGroup = {
+  title: 'Reliance Retail',
+  items: [
+    { label: 'Dashboard', to: '/reliance-retail', icon: Home },
+    { label: 'Attendance', to: '/reliance-retail/attendance', icon: ClipboardCheck },
+    { label: 'Deep Cleaning', to: '/reliance-retail/deep-cleaning', icon: Sparkles },
+    { label: 'Technical Training', to: '/reliance-retail/training', icon: ListChecks },
+    { label: 'Fault Tracker', to: '/reliance-retail/fault-tracker', icon: ClipboardList },
+    { label: 'OOS Tracker', to: '/reliance-retail/oos', icon: ClipboardList },
+    { label: 'CMPM', to: '/reliance-retail/cmpm', icon: Wrench },
+    { label: 'Thermography', to: '/reliance-retail/thermography', icon: BarChart3 },
+    { label: 'Manpower Vacancy', to: '/reliance-retail/manpower', icon: Users },
+    { label: 'Reliance Retail Store Master', to: '/reliance-retail/store-master', icon: Store },
+  ],
+};
 
 function insertHospitalTicketingGroup(groups) {
   const demoReviewsIndex = groups.findIndex((group) => group.title === 'Demo Reviews');
@@ -286,9 +304,10 @@ export default function Sidebar({ isOpen, onClose }) {
   const hasStaticHospitalTicketingAccess = isPlatformAdmin(user)
     && canAccessNavRoute(user, '/hospital-ticketing/nims/qpms');
   const canShowHospitalTicketing = hospitalAccess.allowed || hasStaticHospitalTicketingAccess;
-  const authorizedNavGroups = canShowHospitalTicketing
+  const roleNavGroups = canShowHospitalTicketing
     ? insertHospitalTicketingGroup(baseNavGroups)
     : baseNavGroups;
+  const authorizedNavGroups = isDemoUser(user) ? roleNavGroups : [...roleNavGroups, ...(retailWebAccess(user).dashboard ? [relianceRetailNavGroup] : [])];
   const canSeeFaultTracker = canAccessNavRoute(user, '/fault-tracker');
   const navGroups = canSeeFaultTracker && !authorizedNavGroups.some((group) => group.items.some((item) => item.to === '/fault-tracker'))
     ? [

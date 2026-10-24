@@ -1380,7 +1380,7 @@ function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, ca
   );
 }
 
-export default function FaultTracker() {
+export default function FaultTracker({ retailScope = false }) {
   usePageTitle('Fault Tracker');
   const { user } = useAuth();
   const [tickets, setTickets] = useState([]);
@@ -1399,7 +1399,7 @@ export default function FaultTracker() {
   const userId = user?.id || '';
   const demoReadOnly = isReadOnlyUser(user);
   const canSwitchView = isAdminDeveloperUser(user);
-  const canImport = isAdminDeveloperUser(user);
+  const canImport = !retailScope && isAdminDeveloperUser(user);
   const isStateRestricted = isCoordinatorMisUser(user) && !canSwitchView;
   const mappedUserState = useMemo(() => groupedStateFromUser(user), [user]);
   const viewMode = canSwitchView ? (manualViewMode || defaultFaultTrackerView(user)) : defaultFaultTrackerView(user);
@@ -1442,6 +1442,7 @@ export default function FaultTracker() {
         url: '/api/fault-tracker/tickets',
         params: {
           latest: true,
+          ...(retailScope ? { business: 'Reliance Retail' } : {}),
           ...params,
         },
       });
@@ -1456,7 +1457,7 @@ export default function FaultTracker() {
     } finally {
       setIsFaultTrackerLoading(false);
     }
-  }, []);
+  }, [retailScope]);
 
   useEffect(() => {
     if (!userId) return undefined;

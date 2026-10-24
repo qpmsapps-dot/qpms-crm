@@ -26,7 +26,7 @@ export const roleGroups = {
   DemoViewer: ['DEMO_VIEWER'],
 };
 
-export const protectedNavRoutes = ['/dashboard', '/crm', '/pre-sales', '/business-development', '/tender', '/site-survey-requests', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/hospital-ticketing', '/fault-tracker', '/deep-cleaning', '/assets', '/reports', '/employees', '/store-master', '/settings', '/hospital-feedback', '/operations/hospital-feedback'];
+export const protectedNavRoutes = ['/dashboard', '/reliance-retail', '/crm', '/pre-sales', '/business-development', '/tender', '/site-survey-requests', '/sites', '/site-visit', '/site-monitoring', '/proposals', '/approvals', '/tasks', '/existing-business', '/fo-activities', '/tickets', '/hospital-ticketing', '/fault-tracker', '/deep-cleaning', '/assets', '/reports', '/employees', '/store-master', '/settings', '/hospital-feedback', '/operations/hospital-feedback'];
 
 function normalizedRoleKey(role = '') {
   return String(role || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
@@ -265,9 +265,31 @@ export function canManageHospitalFeedbackQr(user) {
   );
 }
 
+export function retailWebAccess(user) {
+  if (!user) return { dashboard: false };
+  if (isPlatformAdmin(user)) return { dashboard: true, hk: true, technical: true, kam: true };
+  const business = normalizeRawRole(user.business);
+  const keys = [user.rawRole, user.role, user.designation, user.department].map(normalizeRawRole);
+  const retail = ['RELIANCE', 'RELIANCERETAIL'].includes(business);
+  return {
+    dashboard: retail && keys.some((key) => ['HKMIS', 'HOUSEKEEPINGMIS', 'TECHNICALMIS', 'TECHMIS', 'KAM'].includes(key)),
+    hk: retail && keys.some((key) => ['HKMIS', 'HOUSEKEEPINGMIS'].includes(key)),
+    technical: retail && keys.some((key) => ['TECHNICALMIS', 'TECHMIS'].includes(key)),
+    kam: retail && keys.includes('KAM'),
+  };
+}
+
 export function canAccessRoute(user, pathname) {
   if (!user) return false;
   if (isPlatformAdmin(user)) return true;
+  if (pathname.startsWith('/reliance-retail')) {
+    const access = retailWebAccess(user);
+    if (pathname.startsWith('/reliance-retail/store-master') || pathname.startsWith('/reliance-retail/deep-cleaning') || pathname.startsWith('/reliance-retail/training') || pathname.startsWith('/reliance-retail/manpower')) return Boolean(access.hk);
+    if (pathname.startsWith('/reliance-retail/fault-tracker') || pathname.startsWith('/reliance-retail/oos')) return Boolean(access.technical);
+    if (pathname.startsWith('/reliance-retail/cmpm') || pathname.startsWith('/reliance-retail/thermography')) return Boolean(access.kam);
+    return Boolean(access.dashboard);
+  }
+
   if (normalizeAppRole(user?.rawRole || user?.role) === 'PreSales') {
     return pathname.startsWith('/dashboard') || pathname.startsWith('/pre-sales');
   }

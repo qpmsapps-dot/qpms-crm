@@ -37,7 +37,6 @@ const emptyForm = {
   client_id: '',
   hospital_access_enabled: false,
   hospital_role_code: 'housekeeping_supervisor',
-  temporary_password: '',
 };
 
 const roleOptions = [
@@ -786,9 +785,6 @@ export default function UserFormDrawer({
       payload.role = values.user_type === 'client'
         ? (selectedAccessRole?.code === 'hospital_management' ? 'Hospital Management' : selectedAccessRole?.name || values.role)
         : values.role;
-      if (values.temporary_password.trim()) {
-        payload.temporary_password = values.temporary_password;
-      }
       if (values.hospital_access_enabled && values.client_id) {
         payload.client_id = values.client_id;
         payload.access_client_id = values.client_id;
@@ -1157,18 +1153,8 @@ export default function UserFormDrawer({
             <section className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
               <h3 className="text-sm font-bold text-slate-950">Password Setup Invite</h3>
               <p className="mt-1 text-xs font-semibold leading-5 text-slate-600">
-                Leave temporary password blank for the normal invite email. Enter it only for controlled same-day UAT accounts.
+                An invitation email lets the user securely set their own password.
               </p>
-              <div className="mt-3 max-w-sm">
-                <TextField
-                  name="temporary_password"
-                  label="Temporary Password"
-                  type="password"
-                  value={values.temporary_password}
-                  error={errors.temporary_password}
-                  onChange={update}
-                />
-              </div>
             </section>
           ) : null}
 
