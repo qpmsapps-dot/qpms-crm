@@ -15,12 +15,15 @@ export async function persistCanonicalKmV2(client, {
 }) {
   if (calculation?.incrementalRecovery === true) {
     const scoped = scopedAuthorizationReference != null;
+    const policy = !scoped && environment.KM_CANONICAL_POLICY_ENABLED === 'true';
     if (scoped && (sourceEntryPoint !== 'admin_recalculation' || !adminAuthorization?.userId || actorSource || !/^[A-Z0-9_-]{8,100}$/.test(scopedAuthorizationReference))) throw Object.assign(new Error('Scoped KM authorization requires a trusted Admin action.'),{code:'KM_SCOPE_ADMIN_REQUIRED',statusCode:403});
     // No exemption for automatic credits. Scoped requests must use the database
     // scope validator, which independently checks the actor, plan and expiry.
-    assertKmFinancialWritesAvailable({dryRun:false,environment,authorizedAdminAction:false,scopedAdminAction:scoped});
+    // Policy mode reaches only the DB policy validator. It shares the explicit
+    // emergency-stop requirement with scoped acceptance, never a general RPC.
+    assertKmFinancialWritesAvailable({dryRun:false,environment,authorizedAdminAction:false,scopedAdminAction:scoped || policy});
     if(environment.KM_SHARED_RECONCILIATION_ENABLED!=='true'||environment.KM_INCREMENTAL_REPORTING_ENABLED!=='true')throw Object.assign(new Error('Shared reconciliation/reporting is inactive.'),{code:'KM_SHARED_RECONCILIATION_INACTIVE',retryable:true});
-    const {data,error}=await client.rpc(scoped ? 'rpc_reconcile_fo_scoped_km_v1' : 'rpc_reconcile_fo_incremental_km_v1',{
+    const {data,error}=await client.rpc(scoped ? 'rpc_reconcile_fo_scoped_km_v1' : policy ? 'rpc_reconcile_fo_policy_km_v1' : 'rpc_reconcile_fo_incremental_km_v1',{
       ...(scoped ? {p_reference:scopedAuthorizationReference} : {p_trigger:sourceEntryPoint,p_lease:actorSource||null}),
       p_attendance_id:attendanceId,p_calculation:calculation,
       p_admin:adminAuthorization?.userId||null,

@@ -58,9 +58,12 @@ export function buildIncrementalKmPlan(evidence, calculation, existingCredits = 
   }
   const additionalKm = round(legs.reduce((s, l) => s + l.new_eligible_km, 0));
   const additionalAmount = round(legs.reduce((s, l) => s + l.new_eligible_km * Number(l.rate_per_km || 0), 0));
+  const settledSupplements = existingCredits.filter(c => !c.applied_to_attendance).reduce((s,c) => s + Number(c.added_km),0);
+  const recoverySupplements = recoveries.reduce((s,r) => s + Number(r.approved_additional_km || 0),0);
+  const existingPayableKm = Number.isFinite(base) ? round(base + settledSupplements + recoverySupplements) : null;
   return { calculationVersion: 'KM_ENGINE_V2', incrementalRecovery: true, legs,
-    existingPayableKm: attendance.total_approved_km, additionalKm, additionalAmount,
-    finalPayableKm: Number.isFinite(base) ? round(base + additionalKm) : null,
+    existingPayableKm, additionalKm, additionalAmount,
+    finalPayableKm: existingPayableKm == null ? null : round(existingPayableKm + additionalKm),
     effectiveEnd: calculation.effective_end_evidence, baselineKnown,
     unresolved: legs.filter(l => !['supported'].includes(l.evidence_status)),
     sourceRowIds: evidence.originalRows.map(r => r.id).sort() };
