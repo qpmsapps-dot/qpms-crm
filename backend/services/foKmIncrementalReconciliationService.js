@@ -61,14 +61,19 @@ export function buildIncrementalKmPlan(evidence, calculation, existingCredits = 
 export function sharedKmReconciliationEnabled(environment = process.env) {
   return environment.KM_SHARED_RECONCILIATION_ENABLED === 'true' && environment.KM_INCREMENTAL_REPORTING_ENABLED === 'true';
 }
+export function sharedKmPreviewEnabled(environment = process.env) {
+  return sharedKmReconciliationEnabled(environment) || environment.KM_SHARED_RECONCILIATION_PREVIEW_ENABLED === 'true';
+}
 export function kmReconciliationDependencyError(error) {
   if (!['PGRST202','PGRST205','42P01','42883'].includes(error?.code)) return error;
   return Object.assign(kmError('KM_SHARED_SCHEMA_UNAVAILABLE', 'Shared KM reconciliation database functions are unavailable; no financial posting was confirmed.', 503), {retryable:true});
 }
 export async function reconcileSupportedKm(client, payload, options = {}) {
   const environment = options.environment || process.env;
-  // Inactive means no evidence, ledger, RPC or queue access, including previews.
-  if (!sharedKmReconciliationEnabled(environment)) return {attendance_id:payload.attendance_id, status:'deferred', code:'KM_SHARED_RECONCILIATION_INACTIVE', financial_posted:false, updated:false, retryable:true};
+  // A separately enabled Admin preview may read evidence while posting stays off.
+  // This never enables workers or changes the financial persistence guard.
+  const adminPreview = options.persist === false && (options.trigger || 'admin_recalculation') === 'admin_recalculation' && sharedKmPreviewEnabled(environment);
+  if (!sharedKmReconciliationEnabled(environment) && !adminPreview) return {attendance_id:payload.attendance_id, status:'deferred', code:'KM_SHARED_RECONCILIATION_INACTIVE', financial_posted:false, updated:false, retryable:true};
   if ((options.trigger || 'admin_recalculation') === 'admin_recalculation' && !options.adminAuthorization?.userId) throw kmError('KM_ADMIN_REQUIRED','An authenticated Admin is required.',403);
   const evidence = options.evidence || await loadKmEvidence(client, payload.attendance_id);
   const { data: state, error } = await client.rpc('rpc_fo_km_reconciliation_state_v1', { p_attendance_id: evidence.attendance.id });
@@ -82,7 +87,7 @@ export async function reconcileSupportedKm(client, payload, options = {}) {
   plan.inputDigest = createHash('sha256').update(JSON.stringify({ attendance: evidence.attendance.id, legs: plan.legs, snapshot: state.digest, sources: plan.sourceRowIds })).digest('hex');
   const response = { attendance_id: evidence.attendance.id, date: evidence.attendance.attendance_date, ...plan, updated: false, financial_posted: false };
   if (!evidence.attendance.logout_time) return { ...response, status: 'active_closed_windows_only', additionalKm: 0, message: 'Closed travel evidence calculated; active attendance payable unchanged.' };
-  if (options.persist === false) return { ...response, status: 'calculated_not_posted' };
+  if (options.persist === false) return { ...response, authorization_calculation: plan, status: 'calculated_not_posted', message: 'Evidence calculated only. No KM or petrol credit was posted.' };
   if (!plan.additionalKm) return { ...response, status: plan.unresolved.length ? 'partial_unresolved' : 'unchanged', message: 'Recalculation completed — no additional supported KM found. Existing payable unchanged.' };
   if(options.deadlineAt && Date.now()>=options.deadlineAt)return {...response,status:'deferred',code:'KM_EVIDENCE_TIMEOUT',retryable:true,message:'Calculation exceeded its bounded window; no financial posting was attempted.'};
   if (environment.KM_SHARED_RECONCILIATION_ENABLED !== 'true' || environment.KM_INCREMENTAL_REPORTING_ENABLED !== 'true') return { ...response, status: 'deferred', code: 'KM_SHARED_RECONCILIATION_INACTIVE', retryable: true };
@@ -91,6 +96,7 @@ export async function reconcileSupportedKm(client, payload, options = {}) {
       attendanceId: evidence.attendance.id, expectedAttendanceUpdatedAt: evidence.attendance.updated_at,
       calculation: plan, sourceEntryPoint: options.trigger || 'admin_recalculation', environment,
       adminAuthorization: options.adminAuthorization, actorSource: options.actorSource,
+      scopedAuthorizationReference: options.scopedAuthorizationReference,
     });
     if (!posted?.receipt_id) throw kmError('km_posting_unverified', 'Persistence returned no atomic receipt.');
     return { ...response, ...posted, status: 'posted', financial_posted: true, updated: true };

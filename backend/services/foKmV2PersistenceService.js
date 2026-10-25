@@ -11,14 +11,19 @@ export async function persistCanonicalKmV2(client, {
   environment = process.env,
   adminAuthorization = null,
   reviewDecision = null,
+  scopedAuthorizationReference = null,
 }) {
   if (calculation?.incrementalRecovery === true) {
-    // No Admin maintenance exemption and no P1 exception for automatic credits.
-    assertKmFinancialWritesAvailable({dryRun:false,environment,authorizedAdminAction:false});
+    const scoped = scopedAuthorizationReference != null;
+    if (scoped && (sourceEntryPoint !== 'admin_recalculation' || !adminAuthorization?.userId || actorSource || !/^[A-Z0-9_-]{8,100}$/.test(scopedAuthorizationReference))) throw Object.assign(new Error('Scoped KM authorization requires a trusted Admin action.'),{code:'KM_SCOPE_ADMIN_REQUIRED',statusCode:403});
+    // No exemption for automatic credits. Scoped requests must use the database
+    // scope validator, which independently checks the actor, plan and expiry.
+    assertKmFinancialWritesAvailable({dryRun:false,environment,authorizedAdminAction:false,scopedAdminAction:scoped});
     if(environment.KM_SHARED_RECONCILIATION_ENABLED!=='true'||environment.KM_INCREMENTAL_REPORTING_ENABLED!=='true')throw Object.assign(new Error('Shared reconciliation/reporting is inactive.'),{code:'KM_SHARED_RECONCILIATION_INACTIVE',retryable:true});
-    const {data,error}=await client.rpc('rpc_reconcile_fo_incremental_km_v1',{
-      p_attendance_id:attendanceId,p_calculation:calculation,p_trigger:sourceEntryPoint,
-      p_admin:adminAuthorization?.userId||null,p_lease:actorSource||null,
+    const {data,error}=await client.rpc(scoped ? 'rpc_reconcile_fo_scoped_km_v1' : 'rpc_reconcile_fo_incremental_km_v1',{
+      ...(scoped ? {p_reference:scopedAuthorizationReference} : {p_trigger:sourceEntryPoint,p_lease:actorSource||null}),
+      p_attendance_id:attendanceId,p_calculation:calculation,
+      p_admin:adminAuthorization?.userId||null,
     });
     if(error)throw Object.assign(new Error(error.message),{code:error.code,retryable:['40001','40P01','55P03','55000'].includes(error.code)});
     return data;

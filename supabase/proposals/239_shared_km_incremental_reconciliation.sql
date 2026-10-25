@@ -86,7 +86,7 @@ begin
 end $$;
 
 create function public.rpc_reconcile_fo_incremental_km_v1(p_attendance_id uuid,p_calculation jsonb,p_trigger text,p_admin uuid,p_lease uuid) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
-declare a public.fo_attendance%rowtype; actor public.profiles%rowtype; leg jsonb; original_km numeric; original_amount numeric; saved public.fo_travel_legs%rowtype; recorded_mode text; recorded_allowed boolean; included numeric; previous numeric; supplemental numeric; delta numeric; total_km numeric:=0;total_amount numeric:=0;rate numeric; credit_id uuid; receipt uuid; canonical boolean;known numeric;
+declare a public.fo_attendance%rowtype; actor public.profiles%rowtype; leg jsonb; original_km numeric; original_amount numeric; saved public.fo_travel_legs%rowtype; recorded_mode text; recorded_allowed boolean; included numeric; previous numeric; supplemental numeric; delta numeric; total_km numeric:=0;total_amount numeric:=0;rate numeric; credit_id uuid; receipt uuid; canonical boolean;known numeric; previous_financial_write_context text;
 begin
  if coalesce(auth.role(),'')<>'service_role' then raise exception 'km_service_required' using errcode='42501';end if;
  -- This contract NEVER uses the P1 emergency exception. Ordinary global financial
@@ -148,9 +148,20 @@ begin
  end loop;
  if receipt is null then raise exception 'km_no_supported_increment' using errcode='22023';end if;
  if canonical then
+   -- All role/lease, global-gate, snapshot and evidence checks above must pass.
+   -- This existing V2 marker is private to the guarded UPDATE, not an RPC input
+   -- or a session-wide permission. Restore the caller context on every exit.
+   previous_financial_write_context:=pg_catalog.current_setting('app.km_v2_authorized_financial_write',true);
+   begin
+   perform pg_catalog.set_config('app.km_v2_authorized_financial_write','true',true);
    update public.fo_attendance set total_approved_km=total_approved_km+total_km,eligible_km=eligible_km+total_km,
    total_route_km=total_route_km+total_km,petrol_amount=petrol_amount+total_amount,
    route_sync_status='canonical_v2_incremental_persisted',metadata=coalesce(metadata,'{}')||jsonb_build_object('effective_end_evidence',p_calculation->'effectiveEnd','shared_km_last_receipt',receipt,'km_recalculation_status',case when jsonb_array_length(coalesce(p_calculation->'unresolved','[]'))>0 then 'partial' else 'complete' end,'shared_km_final_leg',(select value from jsonb_array_elements(p_calculation->'legs') where value->>'type'='last_checkout_to_end_day' limit 1)),updated_at=now() where id=a.id;
+   perform pg_catalog.set_config('app.km_v2_authorized_financial_write',coalesce(previous_financial_write_context,''),true);
+   exception when others then
+     perform pg_catalog.set_config('app.km_v2_authorized_financial_write',coalesce(previous_financial_write_context,''),true);
+     raise;
+   end;
  end if;
  return jsonb_build_object('receipt_id',receipt,'additionalKm',total_km,'additionalAmount',total_amount,
  'finalPayableKm',original_km+total_km,'applied_to_attendance',canonical,'settled_values_unchanged',true);
