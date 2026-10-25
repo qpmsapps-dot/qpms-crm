@@ -4,13 +4,24 @@ import { octoberRecoveryClaimRows } from './foOctoberRecoveryClaimRows.js';
 // Read activation is independent of write activation. Missing/unreadable ledger
 // is an error once enabled, never silently interpreted as no approved credits.
 export async function loadApprovedOctoberRecoveries(client, codes, from, to, environment = process.env) {
-  if (environment.KM_OCTOBER_RECOVERY_REPORTING_ENABLED !== 'true' || to < '2026-10-01' || from > '2026-10-31') return [];
+  const octoberEnabled=environment.KM_OCTOBER_RECOVERY_REPORTING_ENABLED==='true' && to>='2026-10-01' && from<='2026-10-31';
+  const sharedEnabled=environment.KM_INCREMENTAL_REPORTING_ENABLED==='true';
+  if(!octoberEnabled&&!sharedEnabled)return [];
   const all = [], unique = [...new Set(codes.map(c => String(c).toUpperCase()).filter(Boolean))];
-  for (let i = 0; i < unique.length; i += 100) all.push(...await recoveryPages(() => client.from('fo_october_km_recoveries').select('*').in('employee_code', unique.slice(i, i + 100)).eq('status', 'approved').gte('attendance_date', from).lte('attendance_date', to).order('id')));
+  for (let i = 0; i < unique.length; i += 100) if(octoberEnabled)all.push(...await recoveryPages(() => client.from('fo_october_km_recoveries').select('*').in('employee_code', unique.slice(i, i + 100)).eq('status', 'approved').gte('attendance_date', from).lte('attendance_date', to).order('id')));
+  if(sharedEnabled)for(let i=0;i<unique.length;i+=100){
+    const credits=await recoveryPages(()=>client.from('fo_km_incremental_credits').select('*').in('employee_code',unique.slice(i,i+100)).gte('attendance_date',from).lte('attendance_date',to).order('id'));
+    all.push(...credits.map(c=>({id:c.id,employee_code:c.employee_code,attendance_date:c.attendance_date,applied_to_attendance:c.applied_to_attendance,status:'approved',
+      approved_additional_km:c.added_km,additional_amount:c.amount,travel_rate:c.rate,travel_mode:c.evidence.travel_mode,
+      original_payable_km:c.evidence.original_payable_km,resulting_payable_km:c.evidence.resulting_payable_km,
+      original_claim_amount:c.evidence.original_claim_amount,resulting_claim_amount:c.evidence.resulting_claim_amount,
+      before_state:c.evidence.before_state,approved_by:c.actor||c.trigger_source,approved_at:c.created_at,created_at:c.created_at,
+      recovery_reason:'Evidence-supported KM reconciliation',journey_start:c.started_at,journey_end:c.ended_at})));
+  }
   return all;
 }
 export function recoveryTotals(rows = []) {
-  const unique = [...new Map(rows.filter(r => r.status === 'approved' && r.id).map(r => [r.id, r])).values()];
+  const unique = [...new Map(rows.filter(r => r.status === 'approved' && r.id && !r.applied_to_attendance).map(r => [r.id, r])).values()];
   return { recovered_km: roundKm(unique.reduce((n, r) => n + Number(r.approved_additional_km), 0)), additional_amount: roundKm(unique.reduce((n, r) => n + Number(r.additional_amount), 0)), records: unique };
 }
 export function overlayRecoveryRows(attendances, recoveries) {

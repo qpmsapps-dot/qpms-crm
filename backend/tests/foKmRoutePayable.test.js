@@ -296,8 +296,10 @@ test('poor accuracy and mock logs fail GPS quality', async () => {
       toLng: rows.at(-1).longitude,
       options: { maxGoogleDirectionsCalls: 0 },
     });
-    assert.equal(result.legSource, 'HAVERSINE_ROUTE_FALLBACK');
-    assert.ok(result.reviewFlags.includes('GOOGLE_ROUTE_FAILED_USED_HAVERSINE'));
+    assert.equal(result.legSource, 'UNRESOLVED');
+    assert.equal(result.legKm, null);
+    assert.equal(result.payable, false);
+    assert.ok(result.reviewFlags.includes('ROAD_DISTANCE_UNRESOLVED'));
   }
 });
 
@@ -423,7 +425,7 @@ test('mixed bike and car legs keep their own rates and amounts', () => {
   );
 });
 
-test('null and unknown travel modes retain the legacy bike fallback', () => {
+test('null and unknown travel modes never become payable bike travel', () => {
   const nullMode = calculateCanonicalRoutePayableKm({
     attendance: attendance({ travel_mode: null, payable_km_allowed: null, rate_per_km: null }),
     gpsTravelLegs: [gpsLeg('start_to_first_checkin', 10)],
@@ -433,10 +435,10 @@ test('null and unknown travel modes retain the legacy bike fallback', () => {
     gpsTravelLegs: [gpsLeg('start_to_first_checkin', 10)],
   });
 
-  assert.equal(nullMode.calculatedPayableKm, 10);
-  assert.equal(nullMode.petrolAmount, 40);
-  assert.equal(unknownMode.calculatedPayableKm, 10);
-  assert.equal(unknownMode.petrolAmount, 40);
+  assert.equal(nullMode.calculatedPayableKm, 0);
+  assert.equal(nullMode.petrolAmount, 0);
+  assert.equal(unknownMode.calculatedPayableKm, 0);
+  assert.equal(unknownMode.petrolAmount, 0);
 });
 
 test('no-site full-day GPS leg is a payable canonical window', () => {
@@ -503,7 +505,8 @@ test('auto-ended open visit without confirmed departure produces a zero reviewed
 });
 
 test('auto-ended open visit counts only after two-point confirmed departure', async () => {
-  const rows = gpsRows().map((row, index) => ({
+  // Enough post-departure proof to pass V2 quality; no payable Haversine fallback.
+  const rows = gpsRows({ count: 24 }).map((row, index) => ({
     ...row,
     latitude: index < 2 ? 13.028 : 13.03 + index * 0.0002,
     longitude: index < 2 ? 80.248 : 80.25 + index * 0.0002,

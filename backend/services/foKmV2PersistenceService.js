@@ -12,6 +12,17 @@ export async function persistCanonicalKmV2(client, {
   adminAuthorization = null,
   reviewDecision = null,
 }) {
+  if (calculation?.incrementalRecovery === true) {
+    // No Admin maintenance exemption and no P1 exception for automatic credits.
+    assertKmFinancialWritesAvailable({dryRun:false,environment,authorizedAdminAction:false});
+    if(environment.KM_SHARED_RECONCILIATION_ENABLED!=='true'||environment.KM_INCREMENTAL_REPORTING_ENABLED!=='true')throw Object.assign(new Error('Shared reconciliation/reporting is inactive.'),{code:'KM_SHARED_RECONCILIATION_INACTIVE',retryable:true});
+    const {data,error}=await client.rpc('rpc_reconcile_fo_incremental_km_v1',{
+      p_attendance_id:attendanceId,p_calculation:calculation,p_trigger:sourceEntryPoint,
+      p_admin:adminAuthorization?.userId||null,p_lease:actorSource||null,
+    });
+    if(error)throw Object.assign(new Error(error.message),{code:error.code,retryable:['40001','40P01','55P03','55000'].includes(error.code)});
+    return data;
+  }
   // This selects a service-only RPC which independently validates the Admin.
   // It does not grant permission to the ordinary canonical persistence RPC.
   assertKmFinancialWritesAvailable({ dryRun: false, environment, authorizedAdminAction: Boolean(adminAuthorization?.userId) });

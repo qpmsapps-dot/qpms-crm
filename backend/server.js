@@ -1,3 +1,5 @@
+import { createKmReconciliationRouter } from './routes/foKmReconciliationRoutes.js';
+import { processKmReconciliationJobs } from './services/foKmReconciliationWorker.js';
 import { createRelianceRetailManagementRouter } from './routes/relianceRetailManagementRoutes.js';
 import cors from 'cors';
 import { createTravelEvidenceRouter } from './routes/foTravelEvidenceRoutes.js';
@@ -10686,6 +10688,7 @@ app.get('/api/deep-cleaning/records', requireSupabaseJwtOrDemoApiRead, async (re
 });
 
 app.use('/api/fo/km', createTravelEvidenceRouter({ requireAuth: requireSupabaseJwt, getClient: requireServiceRoleSupabase }));
+app.use('/api/fo/km', createKmReconciliationRouter({requireAuth:requireSupabaseJwt,getClient:requireServiceRoleSupabase}));
 app.use('/api/fo/km', createOctoberRecoveryRouter({ requireAuth: requireSupabaseJwt, getClient: requireServiceRoleSupabase }));
 
 app.post('/api/fo/km/manual-range', requireSupabaseJwt, async (request, response) => {
@@ -11309,108 +11312,9 @@ async function loadEndDayKmAutoRecalcCandidates(client, date) {
 }
 
 async function runEndDayKmAutoRecalc(reason = 'interval') {
-  if (!endDayKmAutoRecalcEnabled()) return;
-  const date = currentIndiaDateInput();
-  const startedAt = Date.now();
-  const summary = {
-    reason,
-    date,
-    scanned: 0,
-    updated: 0,
-    skippedLocked: 0,
-    failed: 0,
-  };
-  console.log('END_DAY_KM_AUTO_RECALC_STARTED', {
-    reason,
-    date,
-    limit: END_DAY_KM_AUTO_RECALC_LIMIT,
-    cooldownMinutes: endDayKmAutoRecalcCooldownMs() / 60000,
-    graceMinutes: endDayKmAutoRecalcGraceMinutes(),
-    effectiveFrom: endDayKmAutoRecalcEffectiveFrom(),
-  });
-  try {
-    const client = requireServiceRoleSupabase();
-    const candidates = await loadEndDayKmAutoRecalcCandidates(client, date);
-    summary.scanned = candidates.length;
-    for (const attendance of candidates) {
-      const payload = {
-        attendance_id: attendance.id,
-        fo_user_id: attendance.fo_user_id || attendance.employee_code,
-        employee_code: attendance.employee_code,
-        date: attendance.attendance_date || date,
-      };
-      const lockKey = foKmRecalculationLockKey(payload);
-      const lockDate = normalizeFoKmRecalculationDate(payload.date);
-      pruneStaleFoKmRecalculationLocks();
-      if (foKmRecalculateAllLocks.has(lockDate) || foKmRecalculationLocks.has(lockKey)) {
-        summary.skippedLocked += 1;
-        continue;
-      }
-      addFoKmRecalculationLock(lockKey);
-      try {
-        const recovery = await runBoundedEndDayRecoveryAttempt(async () => {
-          const result = await reconcileFinalLegOnly(client, payload, {
-            persist: true,
-            sourceEntryPoint: 'end_day_auto_recalculation',
-            enforceEndDayGpsSyncGrace: true,
-            forwardFinalLegEffectiveFrom: endDayKmAutoRecalcEffectiveFrom(),
-            endDayGpsSyncGraceMinutes: endDayKmAutoRecalcGraceMinutes(),
-            maxGoogleDirectionsCalls: Number(process.env.END_DAY_KM_AUTO_RECALC_MAX_GOOGLE_DIRECTIONS_CALLS || process.env.MAX_GOOGLE_DIRECTIONS_CALLS),
-          });
-          if (!canonicalEndDayCompletionMatches(result, attendance.id)) {
-            const error = new Error('Canonical End Day recalculation did not return matching persisted run evidence.');
-            error.code = 'end_day_canonical_completion_unverified';
-            error.retryable = true;
-            throw error;
-          }
-          return result;
-        }, {
-          maxAttempts: integerEnv(
-            'END_DAY_KM_AUTO_RECALC_MAX_ATTEMPTS',
-            END_DAY_KM_AUTO_RECALC_MAX_ATTEMPTS,
-            1,
-            3,
-          ),
-        });
-        const result = recovery.result;
-        summary.updated += 1;
-        console.log('END_DAY_KM_AUTO_RECALC_ATTENDANCE_UPDATED', {
-          attendance_id: attendance.id,
-          fo_user_id: attendance.fo_user_id || null,
-          employee_code: attendance.employee_code || null,
-          total_route_km: result.total_route_km ?? result.new_total_route_km ?? null,
-          petrol_amount: result.petrol_amount ?? result.new_petrol_amount ?? null,
-          route_sync_status: result.route_sync_status || null,
-          calculation_run_id: result.calculation_run_id || null,
-          attempts: recovery.attempts,
-        });
-      } catch (error) {
-        summary.failed += 1;
-        console.error('END_DAY_KM_AUTO_RECALC_FAILED', {
-          attendance_id: attendance.id,
-          fo_user_id: attendance.fo_user_id || null,
-          employee_code: attendance.employee_code || null,
-          message: error.message,
-          code: error.code || null,
-        });
-      } finally {
-        releaseFoKmRecalculationLock(lockKey);
-      }
-    }
-  } catch (error) {
-    summary.failed += 1;
-    console.error('END_DAY_KM_AUTO_RECALC_FAILED', {
-      reason,
-      date,
-      message: error.message,
-      code: error.code || null,
-    });
-  } finally {
-    console.log('END_DAY_KM_AUTO_RECALC_COMPLETED', {
-      ...summary,
-      durationMs: Date.now() - startedAt,
-    });
-  }
+  if(!endDayKmAutoRecalcEnabled() || process.env.KM_SHARED_RECONCILIATION_ENABLED!=='true')return;
+  try { return await processKmReconciliationJobs(requireServiceRoleSupabase(),{environment:process.env,limit:END_DAY_KM_AUTO_RECALC_LIMIT}); }
+  catch(error){ console.error('END_DAY_KM_RECONCILIATION_DEFERRED',{reason,code:error.code||'KM_FAILED'}); }
 }
 
 app.use('/api/fo/site-visits', (request, response) => {

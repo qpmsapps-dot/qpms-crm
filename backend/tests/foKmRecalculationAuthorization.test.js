@@ -150,7 +150,7 @@ test('mobile and web callers send the current Supabase JWT', () => {
   );
   assert.match(
     webSource,
-    /endpoint=\{`\$\{API_BASE_URL\}\/api\/fo\/km\/recalculate`\}/,
+    /runSupportedKmPeriod\([\s\S]*\/api\/fo\/km\/reconcile-supported[\s\S]*request:authenticatedFetch/,
   );
   assert.match(manualDialogSource, /request = authenticatedFetch/);
   assert.match(manualDialogSource, /await request\(rangeMode \? rangeEndpoint : endpoint/);

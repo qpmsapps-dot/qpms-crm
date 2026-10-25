@@ -1,3 +1,4 @@
+import { attachEffectiveEndEvidence } from './foKmReportEvidenceService.js';
 import { loadApprovedOctoberRecoveries, attachRangeRecovery } from './foOctoberRecoveryReportingService.js';
 import {
   canAccessOperationsSummary,
@@ -244,6 +245,8 @@ function safeEmployee(profile = {}) {
 }
 
 const SAFE_ATTENDANCE_METADATA_KEYS = [
+  'effective_end_evidence',
+  'shared_km_final_leg',
   'approved_adjustment_included_in_payable',
   'approved_adjustment_km',
   'final_return_leg_km',
@@ -681,6 +684,7 @@ function buildSiteVisitSummary(attendances, visitsByAttendance, legsByAttendance
       attendance_id: attendance.id,
       attendance_date: attendance.attendance_date,
       row_type: ended ? 'end_day' : 'end_day_pending',
+      effective_end_evidence:attendance.metadata?.effective_end_evidence||null,
       site_name: ended
         ? isStaleAttendance(attendance) ? 'Auto Ended' : 'End Day'
         : 'End Day Pending',
@@ -950,6 +954,7 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
       .order('attendance_date', { ascending: true })
       .order('login_time', { ascending: true })
       .order('id', { ascending: true }));
+  await attachEffectiveEndEvidence(client,attendances);
   const attendanceIds = attendances.map((row) => row.id).filter(Boolean);
   const visits = attendanceIds.length
     ? await fetchByAttendanceIds(client, 'fo_site_visits', attendanceIds, 'check_in_time')

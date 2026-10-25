@@ -12,6 +12,7 @@ import {
   normalizeGpsEvidence,
   planGpsSegments,
 } from './services/foCanonicalKmEngineV2.js';
+import { trustworthyFixes, detectSiteDeparture } from './services/foKmEvidenceService.js';
 import { resolveFinalLegEndpoint } from './services/foFinalLegEndpointService.js';
 import { persistCanonicalKmV2 } from './services/foKmV2PersistenceService.js';
 import { persistForwardFinalLeg } from './services/foForwardFinalLegPersistenceService.js';
@@ -324,11 +325,12 @@ async function googleDirectionsRoute(start, end, options = {}) {
       has_destination: isValidCoordinate(end.latitude, end.longitude),
     });
     context.callsAttempted += 1;
+    const remaining=options.deadlineAt?options.deadlineAt-Date.now():timeoutMs;
+    if(remaining<=0)return {ok:false,errorCode:'google_deadline_exceeded'};
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs,remaining));
     try {
       const response = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeout);
     log('GOOGLE_DIRECTIONS_HTTP_STATUS', {
       status: response.status,
       ok: response.ok,
@@ -384,7 +386,7 @@ async function googleDirectionsRoute(start, end, options = {}) {
         name: error?.name,
         error_code: lastErrorCode,
       });
-    }
+    } finally { clearTimeout(timeout); }
   }
   return { ok: false, errorCode: lastErrorCode };
 }
@@ -731,6 +733,10 @@ export async function resolveEffectiveAttendanceEnd(client, attendance, options 
   const manualEndTime = parseValidDate(attendance?.logout_time);
   const manualEndCoordinate = attendanceEndCoordinate(attendance);
   if (!isStaleAutoEndedAttendance(attendance)) {
+    if (!manualEndCoordinate && manualEndTime && options.evidenceRows) {
+      const last = trustworthyFixes(options.evidenceRows, attendance).filter(p => p.capturedAt <= manualEndTime && manualEndTime - p.capturedAt <= 120000).at(-1);
+      if (last) return { time:last.capturedAt,coordinate:{latitude:last.latitude,longitude:last.longitude},source:'verified_mobile_near_manual_end',bindingSource:'verified_attendance_evidence',rows:options.evidenceRows,administrativeEndAt:attendance.logout_time,ageMinutes:(manualEndTime-last.capturedAt)/60000,evidenceStatus:'observed' };
+    }
     return {
       time: manualEndTime,
       coordinate: manualEndCoordinate,
@@ -745,8 +751,8 @@ export async function resolveEffectiveAttendanceEnd(client, attendance, options 
   if (!start || !dayEnd || dayEnd <= start) {
     return { time: null, coordinate: null, source: 'missing_auto_end_day_boundary', bindingSource: 'none', rows: [] };
   }
-  const evidence = await loadGpsLogsForWindowWithBinding(client, attendance, start, dayEnd);
-  const validPoints = cleanGpsLogs(evidence.rows, attendance)
+  const evidence = options.evidenceRows ? {rows: options.evidenceRows, bindingSource:'verified_attendance_evidence'} : await loadGpsLogsForWindowWithBinding(client, attendance, start, dayEnd);
+  const validPoints = trustworthyFixes(evidence.rows, attendance)
     .filter((point) => String(point.source || '').trim().toLowerCase() === 'mobile')
     .filter((point) => point.capturedAt >= start && point.capturedAt < dayEnd)
     .sort((a, b) => a.capturedAt - b.capturedAt);
@@ -758,6 +764,9 @@ export async function resolveEffectiveAttendanceEnd(client, attendance, options 
     bindingSource: evidence.bindingSource,
     rows: evidence.rows,
     validPoints,
+    administrativeEndAt:attendance.logout_time,
+    ageMinutes:last && manualEndTime?Math.max(0,(manualEndTime-last.capturedAt)/60000):null,
+    evidenceStatus:!last?'insufficient_evidence':manualEndTime-last.capturedAt>600000?'stale_last_observed_fix':'observed',
     ...(options.includeEvidence ? { evidenceRows: evidence.rows } : {}),
   };
 }
@@ -1377,7 +1386,7 @@ function normalizeTravelMode(value) {
     .replace(/[\s-]+/g, '_');
   return ['bike', 'own_vehicle', 'car', 'auto', 'bus', 'train', 'other'].includes(normalized)
     ? normalized
-    : 'bike';
+    : 'unknown';
 }
 
 function isBikeTravelMode(value) {
@@ -2214,32 +2223,10 @@ export async function calculateFinalReturnLegKm(attendance, visits = [], options
     };
   }
 
-  const fallbackKm = Number(straightLineKm.toFixed(2));
-  const reason = process.env.ENABLE_GOOGLE_DIRECTIONS === 'true'
-    ? 'google_failed_used_haversine'
-    : process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY
-      ? 'google_disabled_used_haversine'
-      : 'google_missing_key_used_haversine';
-  log('FINAL_RETURN_LEG_HAVERSINE_FALLBACK', {
-    attendance_id: attendance.id,
-    site_visit_id: completedVisit.id,
-    route_km: fallbackKm,
-    reason,
-    straight_line_km: Number(straightLineKm.toFixed(3)),
-  });
-  return {
-    km: fallbackKm,
-    calculated: true,
-    reason,
-    status: 'calculated',
-    includedInPayable: true,
-    site_visit_id: completedVisit.id,
-    site_name: lastSiteName,
-    origin,
-    destination,
-    provider: 'haversine_fallback',
-    origin_source: origin.source,
-  };
+  return {km:null,straightLineSupportingKm:Number(straightLineKm.toFixed(2)),calculated:false,includedInPayable:false,
+    reason:'road_route_unavailable',status:'insufficient_evidence',site_visit_id:completedVisit.id,site_name:lastSiteName,
+    origin,destination,provider:'haversine_supporting_evidence_only',origin_source:origin.source};
+
 }
 
 export async function calculateRouteKmFromVisitAnchors(client, attendance, visits = [], options = {}) {
@@ -2420,7 +2407,7 @@ async function recoverFinalLegEndpoints(client, attendance, visits, effectiveEnd
     finalCheckout: from, endpointEvidence: { from, to }, recoveredFinalEndpoints: from.recovered || to.recovered };
 }
 
-function buildCompletedTravelLegs(attendance, visits = [], effectiveEnd = {}) {
+export function buildCompletedTravelLegs(attendance, visits = [], effectiveEnd = {}, options = {}) {
   const legs = [];
   const orderedVisits = [...visits]
     .filter((visit) => visitCheckInTime(visit))
@@ -2444,7 +2431,7 @@ function buildCompletedTravelLegs(attendance, visits = [], effectiveEnd = {}) {
   const loginTime = parseValidDate(attendance?.login_time);
   const firstVisit = orderedVisits[0];
   const firstCheckIn = visitCheckInTime(firstVisit);
-  const firstDestination = visitCheckInCoordinate(firstVisit);
+  const firstDestination = visitCheckInCoordinate(firstVisit) || firstVisit.km_store_coordinate;
   legs.push({
     type: 'start_to_first_checkin',
     fromTime: loginTime,
@@ -2460,14 +2447,19 @@ function buildCompletedTravelLegs(attendance, visits = [], effectiveEnd = {}) {
   for (let index = 1; index < orderedVisits.length; index += 1) {
     const previousVisit = orderedVisits[index - 1];
     const nextVisit = orderedVisits[index];
+    if (!visitCheckOutTime(previousVisit) && options.sharedRecovery) {
+      const site=visitCheckInCoordinate(previousVisit)||previousVisit.km_store_coordinate;
+      const departure=detectSiteDeparture(options.validPoints||[],site,previousVisit.check_in_time,nextVisit.check_in_time);
+      legs.push({type:'site_checkout_to_next_checkin',fromTime:departure?.capturedAt||null,toTime:visitCheckInTime(nextVisit),from:departure||site,to:visitCheckInCoordinate(nextVisit)||nextVisit.km_store_coordinate,fromVisitId:previousVisit.id,toVisitId:nextVisit.id,fromSource:departure?'corroborated_mobile_departure':null,toSource:'next_site_checkin',forcedSkipReason:departure?null:'departure_evidence_unresolved',reviewFlags:departure?['RECOVERED_MISSING_CHECKOUT']:['MISSING_CHECKOUT_TRAVEL_WINDOW_REVIEW']});continue;
+    }
     if (!visitCheckOutTime(previousVisit)) continue;
     legs.push({
       type: 'site_checkout_to_next_checkin',
-      fromTime: visitCheckOutTime(previousVisit),
+      fromTime: options.sharedRecovery ? previousVisit.km_checkout_time || visitCheckOutTime(previousVisit) : visitCheckOutTime(previousVisit),
       toTime: visitCheckInTime(nextVisit),
-      from: visitCheckOutCoordinate(previousVisit),
-      to: visitCheckInCoordinate(nextVisit),
-      fromSource: 'previous_site_checkout',
+      from: options.sharedRecovery ? previousVisit.km_checkout_coordinate || coordinateFrom(previousVisit,['check_out_latitude'],['check_out_longitude']) || previousVisit.km_store_coordinate || visitCheckInCoordinate(previousVisit) : visitCheckOutCoordinate(previousVisit),
+      to: visitCheckInCoordinate(nextVisit) || nextVisit.km_store_coordinate,
+      fromSource: previousVisit.km_checkout_source || (previousVisit.check_out_latitude != null ? 'previous_site_checkout' : previousVisit.km_store_coordinate ? 'store_master' : 'recorded_site_checkin'),
       toSource: 'next_site_checkin',
       fromVisitId: previousVisit.id || null,
       toVisitId: nextVisit.id || null,
@@ -2477,6 +2469,11 @@ function buildCompletedTravelLegs(attendance, visits = [], effectiveEnd = {}) {
   }
 
   const lastVisit = orderedVisits.at(-1);
+  if (!visitCheckOutTime(lastVisit) && options.sharedRecovery) {
+    const site=visitCheckInCoordinate(lastVisit)||lastVisit.km_store_coordinate;
+    const departure=endTime&&detectSiteDeparture(options.validPoints||[],site,lastVisit.check_in_time,endTime);
+    legs.push({type:'last_checkout_to_end_day',fromTime:departure?.capturedAt||null,toTime:endTime,from:departure||site,to:endCoordinate,fromVisitId:lastVisit.id,fromSource:departure?'corroborated_mobile_departure':null,toSource:effectiveEnd.source,forcedSkipReason:departure?null:'departure_evidence_unresolved',reviewFlags:departure?['RECOVERED_MISSING_CHECKOUT']:['MISSING_CHECKOUT_TRAVEL_WINDOW_REVIEW']});return legs;
+  }
   if (!visitCheckOutTime(lastVisit)) {
     if (isStaleAutoEndedAttendance(attendance)) {
       const departure = confirmedOpenSiteDeparture(effectiveEnd.validPoints || [], lastVisit, endTime);
@@ -2513,12 +2510,12 @@ function buildCompletedTravelLegs(attendance, visits = [], effectiveEnd = {}) {
   }
   legs.push({
     type: 'last_checkout_to_end_day',
-    fromTime: visitCheckOutTime(lastVisit),
+    fromTime: options.sharedRecovery ? lastVisit.km_checkout_time || visitCheckOutTime(lastVisit) : visitCheckOutTime(lastVisit),
     toTime: endTime,
-    from: effectiveEnd.finalCheckout?.coordinate || coordinateFrom(lastVisit, ['check_out_latitude'], ['check_out_longitude']),
+    from: effectiveEnd.finalCheckout?.coordinate || coordinateFrom(lastVisit, ['check_out_latitude'], ['check_out_longitude']) || (options.sharedRecovery ? lastVisit.km_checkout_coordinate || lastVisit.km_store_coordinate || visitCheckInCoordinate(lastVisit) : null),
     to: endCoordinate,
     endpointEvidence: effectiveEnd.endpointEvidence || null,
-    fromSource: effectiveEnd.finalCheckout?.source || 'last_site_checkout',
+    fromSource: effectiveEnd.finalCheckout?.source || lastVisit.km_checkout_source || (lastVisit.check_out_latitude != null ? 'last_site_checkout' : lastVisit.km_store_coordinate ? 'store_master' : 'recorded_site_checkin'),
     toSource: effectiveEnd.source || 'attendance_end',
     fromVisitId: lastVisit.id || null,
     fromSiteName: lastVisit.store_name || lastVisit.site_name || lastVisit.client_name || null,
@@ -2586,7 +2583,7 @@ export async function calculateTravelLegKm({
     };
   }
 
-  const evidence = await loadGpsLogsForWindowWithBinding(client, attendance, legStart, legEnd);
+  const evidence = options.evidenceRows?{rows:options.evidenceRows.filter(r=>new Date(r.captured_at)>legStart&&new Date(r.captured_at)<=legEnd),bindingSource:'verified_attendance_evidence'}:await loadGpsLogsForWindowWithBinding(client, attendance, legStart, legEnd);
   const gpsRows = evidence.rows;
   fallbackBase.sourceRowIds = gpsRows.map((row) => row.id).filter(Boolean).sort();
   const normalizedEvidence = normalizeGpsLogs(gpsRows, attendance);
@@ -2680,7 +2677,7 @@ export async function calculateTravelLegKm({
   let googleDirectKm = null;
   let googleDirectRoute = null;
   if (hasRouteAnchors) {
-    googleDirectRoute = await googleDirectionsRoute(from, to, options);
+    googleDirectRoute = routeEvidence?.trusted===true?{ok:true,distanceKm:routeEvidence.distanceKm,durationSeconds:routeEvidence.durationSeconds??null}:await googleDirectionsRoute(from, to, options);
     googleDirectKm = googleDirectRoute.ok
       ? Number(googleDirectRoute.distanceKm.toFixed(2))
       : null;
@@ -2834,50 +2831,9 @@ export async function calculateTravelLegKm({
     };
   }
 
-  const haversineFallbackKm = Number(haversineKm(from, to).toFixed(2));
-  if (haversineFallbackKm < MIN_MEANINGFUL_FINAL_RETURN_LEG_KM) {
-    return {
-      ...fallbackBase,
-      legKm: 0,
-      legSource: 'SKIPPED',
-      payable: false,
-      gpsLogCount,
-      validPoints,
-      rejectedPoints,
-      rawGpsKm,
-      filteredGpsKm: gpsBasedKm,
-      googleDirectRouteKm: googleDirectKm,
-      gpsLogBindingSource: evidence.bindingSource,
-      payableKmSourceReason: 'no_usable_gps_or_meaningful_route_fallback',
-      fallbackReason: 'no_usable_gps_or_meaningful_route_fallback',
-      reviewFlags: ['INSUFFICIENT_GPS_NO_MEANINGFUL_ROUTE_FALLBACK'],
-    };
-  }
-  const wholeLegGate = applyWholeLegSanityGate({
-    calculatedKm: haversineFallbackKm,
-    straightLineKm: haversineFallbackKm,
-    elapsedSeconds: (legEnd - legStart) / 1000,
-    existingRiskFlags: shortWindowSpeedUncertain ? ['SHORT_WINDOW_SPEED_UNCERTAIN'] : [],
-    policy: options.kmV2Policy,
-  });
-  return {
-    ...fallbackBase,
-    legKm: haversineFallbackKm,
-    legSource: 'HAVERSINE_ROUTE_FALLBACK',
-    payable: [KM_DECISION.ACCEPTED, KM_DECISION.ACCEPTED_WITH_WARNING].includes(wholeLegGate.decision),
-    decision: wholeLegGate.decision,
-    calculationVersion: KM_ENGINE_VERSION,
-    gpsLogCount,
-    validPoints,
-    rejectedPoints,
-    rawGpsKm,
-    filteredGpsKm: gpsBasedKm,
-    googleDirectRouteKm: googleDirectKm,
-    gpsLogBindingSource: evidence.bindingSource,
-    payableKmSourceReason: 'haversine_used_because_google_route_unavailable',
-    fallbackReason: 'google_route_unavailable',
-    reviewFlags: [...new Set(['GOOGLE_ROUTE_FAILED_USED_HAVERSINE', ...wholeLegGate.riskFlags])],
-  };
+  return {...fallbackBase,legKm:null,legSource:'UNRESOLVED',payable:false,gpsLogCount,validPoints,rejectedPoints,rawGpsKm,filteredGpsKm:gpsBasedKm,
+    straightLineSupportingKm:legStraightLineKm,fallbackReason:googleRoute.errorCode||'road_route_unavailable',reviewFlags:['ROAD_DISTANCE_UNRESOLVED']};
+
 }
 
 export async function recalculateAttendanceTravelLegs(serviceRoleClient, attendanceId, options = {}) {
@@ -2889,14 +2845,14 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
     error.statusCode = 400;
     throw error;
   }
-  const attendance = await findAttendance(client, { attendance_id: attendanceId });
-  const visits = await loadSiteVisits(client, attendance);
+  const attendance=options.evidenceSnapshot?.attendance||await findAttendance(client,{attendance_id:attendanceId});
+  const visits=options.evidenceSnapshot?.visits||await loadSiteVisits(client,attendance);
   const travelPolicy = travelModeAllowsPayableKm(attendance);
   let effectiveEnd = options.evidenceOnly === true && !attendance.logout_time
     ? { time: null, coordinate: null, source: 'active_attendance_closed_windows_only', bindingSource: 'none', rows: [] }
-    : await resolveEffectiveAttendanceEnd(client, attendance, { includeEvidence: true });
-  if (options.evidenceOnly === true) effectiveEnd = await recoverFinalLegEndpoints(client, attendance, visits, effectiveEnd);
-  const persistedLegSnapshots = await loadPersistedTravelLegSnapshots(client, attendance);
+    : await resolveEffectiveAttendanceEnd(client, attendance, { includeEvidence:true,evidenceRows:options.evidenceRows });
+  if (options.evidenceOnly === true && !options.sharedRecovery) effectiveEnd = await recoverFinalLegEndpoints(client, attendance, visits, effectiveEnd);
+  const persistedLegSnapshots=options.evidenceSnapshot?.snapshots||await loadPersistedTravelLegSnapshots(client,attendance);
   const canonicalSnapshots = canonicalizePersistedTravelLegSnapshots(persistedLegSnapshots);
   const activePrivateLegs = canonicalSnapshots.active.filter((snapshot) => (
     travelModeAllowsPayableKm(snapshot).payableKmAllowed
@@ -2909,7 +2865,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
     error.code = 'travel_leg_closure_pending';
     throw error;
   }
-  if (canonicalSnapshots.invalid.length || canonicalSnapshots.overlaps.length) {
+  if (!options.sharedRecovery && (canonicalSnapshots.invalid.length || canonicalSnapshots.overlaps.length)) {
     const error = new Error(
       'Travel-leg boundaries overlap or are invalid. Manual review is required before recalculation.',
     );
@@ -2921,7 +2877,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
     };
     throw error;
   }
-  const expectedLegs = buildCompletedTravelLegs(attendance, visits, effectiveEnd);
+  const expectedLegs=buildCompletedTravelLegs(attendance,visits,effectiveEnd,{...options,validPoints:trustworthyFixes(options.evidenceRows||effectiveEnd.rows||[],attendance)});
   const persistedCandidateLegs = completedPersistedTravelLegs(canonicalSnapshots.completed, expectedLegs);
   let candidateLegs = persistedCandidateLegs.length > 0
     ? persistedCandidateLegs
@@ -2936,6 +2892,19 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
     candidateLegs = candidateLegs.filter(leg => leg.fromTime && leg.toTime && leg.toTime > leg.fromTime &&
       (attendance.logout_time || leg.type !== 'last_checkout_to_end_day'));
     candidateLegs.sort((a, b) => a.fromTime - b.fromTime);
+  }
+  if(options.sharedRecovery) {
+    candidateLegs=[];
+    for(const expected of expectedLegs) {
+      const overlaps=persistedCandidateLegs.filter(p=>expected.fromTime&&expected.toTime&&p.fromTime<expected.toTime&&p.toTime>expected.fromTime).sort((a,b)=>a.fromTime-b.fromTime);
+      const mixed=overlaps.some(p=>normalizeTravelMode(p.travel_mode)!==normalizeTravelMode(attendance.travel_mode));
+      const historicalSwitch=Boolean(safeAttendanceMetadata(attendance).previous_travel_mode||safeAttendanceMetadata(attendance).travel_mode_changed_at);
+      if(mixed||historicalSwitch) {
+        const complete=overlaps.length>0&&+overlaps[0].fromTime===+expected.fromTime&&+overlaps.at(-1).toTime===+expected.toTime&&overlaps.every((p,i)=>i===0||+overlaps[i-1].toTime===+p.fromTime);
+        if(complete)candidateLegs.push(...overlaps.map(p=>({...p,mode_segment:true,type:expected.type,fromVisitId:expected.fromVisitId,toVisitId:expected.toVisitId})));
+        else candidateLegs.push({...expected,forcedSkipReason:'recorded_mode_requires_review'});
+      } else candidateLegs.push(expected);
+    }
   }
   const legAudit = [];
   const delayedCheckoutAudits = [];
@@ -2973,6 +2942,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       error.code = 'KM_EVIDENCE_TIMEOUT';
       throw error;
     }
+    if(options.sharedRecovery && canonicalSnapshots.overlaps.some(o=>[o.previous_id,o.current_id].some(id=>persistedLegSnapshots.some(p=>p.id===id&&leg.fromTime&&leg.toTime&&new Date(p.started_at)<leg.toTime&&new Date(p.ended_at)>leg.fromTime)))){legAudit.push(skippedLegAudit(leg,'persisted_boundaries_require_review'));continue;}
     if (leg.forcedSkipReason) {
       legAudit.push(skippedLegAudit(leg, leg.forcedSkipReason));
       continue;
@@ -3025,7 +2995,13 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
     const expectedWindow = options.evidenceOnly === true ? expectedLegs.find(expected =>
       expected.fromTime && expected.toTime && expected.fromTime <= leg.fromTime && expected.toTime >= leg.toTime) : null;
     const originVisit = expectedWindow?.fromVisitId ? visits.find(visit => visit.id === expectedWindow.fromVisitId) : null;
-    const checkoutReview = options.evidenceOnly === true && originVisit && originVisit.petrol_eligible_after_checkout !== true;
+    // An absent checkout cannot have a successful-checkout eligibility flag.
+    // Corroborated physical departure is separate evidence, never approval of
+    // an actual wrong-location checkout or an explicit review restriction.
+    const recoveredDeparture = options.sharedRecovery && leg.fromSource === 'corroborated_mobile_departure' && originVisit && !visitCheckOutTime(originVisit);
+    const checkoutReview = options.evidenceOnly === true && originVisit && (recoveredDeparture
+      ? safeVisitMetadata(originVisit).requires_checkout_review === true || Number(originVisit.checkout_distance_meters) > 1000
+      : originVisit.petrol_eligible_after_checkout !== true);
     const legPayable = result.payable === true && legPolicy.payableKmAllowed && !checkoutReview;
     const legPayableKm = legPayable && Number.isFinite(Number(result.legKm))
       ? Number(Number(result.legKm).toFixed(2))
@@ -3042,6 +3018,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
         : 'update'
       : 'insert';
     legAudit.push({
+      mode_segment:leg.mode_segment===true,
       persisted_travel_leg_id: persistedLegSnapshot?.id || null,
       persistence_action: persistenceAction,
       endpoint_evidence: leg.endpointEvidence || null,
@@ -3050,7 +3027,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       persisted_rate_per_km: persistedLegSnapshot?.rate_per_km ?? null,
       persisted_payable_amount: persistedLegSnapshot?.payable_amount ?? persistedLegSnapshot?.fare_amount ?? null,
       type: leg.type,
-      status: result.legSource === 'SKIPPED' ? 'skipped' : 'calculated',
+      status:['SKIPPED','UNRESOLVED'].includes(result.legSource)?'skipped':'calculated',
       reason: result.fallbackReason || null,
       from_time: isoOrNull(leg.fromTime),
       to_time: isoOrNull(leg.toTime),
@@ -3064,7 +3041,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       to_visit_id: leg.toVisitId || null,
       from_site_name: leg.fromSiteName || null,
       to_site_name: leg.toSiteName || null,
-      km: roundedKm,
+      km: options.sharedRecovery && result.legKm == null ? null : roundedKm,
       source,
       payable: legPayable,
       decision: result.decision || (result.payable === true ? KM_DECISION.ACCEPTED : KM_DECISION.REJECTED),
@@ -3091,6 +3068,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       fare_amount: roundedPayableAmount,
       review_flags: [...new Set([...(leg.reviewFlags || []), ...(result.reviewFlags || []), ...(checkoutReview ? ['CHECKOUT_ELIGIBILITY_REVIEW_REQUIRED'] : [])])],
       rejected_point_reasons: result.rejectionReasonCounts || {},
+      source_row_ids:result.sourceRowIds||[],
     });
   }
 
@@ -3101,6 +3079,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
     throw error;
   }
 
+  if(options.sharedRecovery)for(const leg of legAudit)if(leg.status==='skipped')leg.km=null;
   const totalLegKmBeforePolicy = Number(legAudit.reduce((sum, leg) => (
     leg.status === 'calculated' && Number.isFinite(Number(leg.payable_km)) ? sum + Number(leg.payable_km) : sum
   ), 0).toFixed(2));
@@ -3199,6 +3178,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
     effective_end_time: isoOrNull(effectiveEnd.time),
     effective_end_coordinate: effectiveEnd.coordinate,
     effective_end_source: effectiveEnd.source,
+    effective_end_evidence:{source:effectiveEnd.source,captured_at:isoOrNull(effectiveEnd.time),latitude:effectiveEnd.coordinate?.latitude??null,longitude:effectiveEnd.coordinate?.longitude??null,administrative_end_at:attendance.logout_time,age_minutes:effectiveEnd.ageMinutes??null,status:effectiveEnd.evidenceStatus||null},
     gps_log_binding_source: gpsLogBindingSource,
     accepted_gps_km: acceptedGpsKm,
     reconstructed_gap_km: reconstructedGapKm,
@@ -4200,58 +4180,6 @@ export function previousFinalLegContribution(snapshot, metadata = {}) {
 
 function roundMoney(value) {
   return Number(Number(value || 0).toFixed(2));
-}
-
-async function persistFinalLegOnly(client, attendance, leg, snapshot, values) {
-  if (snapshot?.id) {
-    const { error } = await client
-      .from('fo_travel_legs')
-      .update(values)
-      .eq('id', snapshot.id)
-      .eq('attendance_id', attendance.id);
-    if (error) throw error;
-    return snapshot.id;
-  }
-
-  const { data: existing, error: lookupError } = await client
-    .from('fo_travel_legs')
-    .select('id')
-    .eq('attendance_id', attendance.id)
-    .eq('started_at', leg.fromTime.toISOString())
-    .maybeSingle();
-  if (lookupError) throw lookupError;
-  if (existing?.id) {
-    const { error } = await client
-      .from('fo_travel_legs')
-      .update(values)
-      .eq('id', existing.id)
-      .eq('attendance_id', attendance.id);
-    if (error) throw error;
-    return existing.id;
-  }
-
-  const { data: inserted, error: insertError } = await client
-    .from('fo_travel_legs')
-    .insert(values)
-    .select('id')
-    .single();
-  if (!insertError) return inserted?.id || null;
-  if (insertError.code !== '23505') throw insertError;
-  const { data: raced, error: raceError } = await client
-    .from('fo_travel_legs')
-    .select('id')
-    .eq('attendance_id', attendance.id)
-    .eq('started_at', leg.fromTime.toISOString())
-    .maybeSingle();
-  if (raceError) throw raceError;
-  if (!raced?.id) throw insertError;
-  const { error: updateError } = await client
-    .from('fo_travel_legs')
-    .update(values)
-    .eq('id', raced.id)
-    .eq('attendance_id', attendance.id);
-  if (updateError) throw updateError;
-  return raced.id;
 }
 
 export async function reconcileFinalLegOnly(serviceRoleClient, payload = {}, options = {}) {

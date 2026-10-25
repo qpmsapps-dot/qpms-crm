@@ -440,7 +440,11 @@ export function normalizeGpsEvidence({ rows = [], attendance = {}, now = new Dat
     // them operational, but mark the weaker boundary instead of pretending a
     // true provider timestamp was supplied.
     const capturedAt = providerTimestamp || validDate(row?.logged_at || row?.created_at);
-    const receivedAt = validDate(row?.logged_at || row?.received_at || row?.created_at);
+    // Mobile records the original local receipt, independently of upload time.
+    // Retain the existing provider-age threshold against that original receipt.
+    const originalReceipt = String(row?.source || '').toLowerCase() === 'mobile' && row?.metadata?.provider_timestamp_quality === 'provider_timestamp'
+      ? validDate(row?.metadata?.received_at) : null;
+    const receivedAt = originalReceipt || validDate(row?.logged_at || row?.received_at || row?.created_at);
     const identity = pointIdentity(row);
     const timestampQuality = String(row?.metadata?.provider_timestamp_quality || '').trim().toLowerCase();
 

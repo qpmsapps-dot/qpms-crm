@@ -27,11 +27,12 @@ test('stopping an evidence run prevents later dates and does not send a save req
 test('GPS failures and pending retrieval are not rendered as zero; genuine empty results are zero', () => {
   assert.match(gpsEvidenceDisplay('failed', 0), /retrieval failed/); assert.equal(gpsEvidenceDisplay('loading', 0), 'Loading…'); assert.equal(gpsEvidenceDisplay('loaded', 0), 0);
 });
-test('employee loading no longer POSTs review refresh; evidence button and financial review remain separate', () => {
+test('employee loading never POSTs review refresh; explicit recalculation uses the shared authenticated pipeline', () => {
   const source = readFileSync(new URL('../src/pages/FOActivities.jsx', import.meta.url), 'utf8');
   const loader = source.slice(source.indexOf('const loadSelectedEmployeeRange ='), source.indexOf('const selectedOfficer =', source.indexOf('const loadSelectedEmployeeRange =')));
   assert.doesNotMatch(loader, /employee-missing-km-reviews\/refresh|method: "POST"/);
-  assert.match(source, /setTravelEvidenceSelection\(\{ employee, from: selectedRange.fromDate, to: selectedRange.toDate \}\)/);
+  assert.match(source, /async function recalculateSelectedOfficerKm/);
+  assert.match(source, /runSupportedKmPeriod\([\s\S]*request:authenticatedFetch/);
   assert.match(source, /routeLogsState=\{selectedRouteLogsState\}/);
-  assert.match(source, /TravelEvidenceDialog/); assert.match(source, /ManualKmRefreshDialog/);
+  assert.doesNotMatch(source, /import (TravelEvidenceDialog|ManualKmRefreshDialog|OctoberKmRecoveryDialog)/);
 });

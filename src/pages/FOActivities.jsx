@@ -1,7 +1,5 @@
+import { runSupportedKmPeriod } from '../utils/supportedKmReconciliation.js';
 import { octoberRecoveryExportRows } from '../utils/octoberRecoveryExport.js';
-import OctoberKmRecoveryDialog from '../components/OctoberKmRecoveryDialog.jsx';
-import ManualKmRefreshDialog from '../components/ManualKmRefreshDialog.jsx';
-import TravelEvidenceDialog from '../components/TravelEvidenceDialog.jsx';
 import { evidenceDates, gpsEvidenceDisplay } from '../utils/travelEvidenceRecalculation.js';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -6052,6 +6050,8 @@ function detailRouteAnchor(id, type, label, coordinates, title) {
 
 function routePointFromAttendanceEnd(attendance) {
   const metadata = attendanceMetadata(attendance);
+  const derived=metadata.effective_end_evidence;
+  if(derived && (/auto ended/i.test(attendance?.status||'') || attendance?.end_latitude==null || attendance?.end_longitude==null))return derived.latitude!=null&&derived.longitude!=null?[Number(derived.latitude),Number(derived.longitude)]:null;
   const lat = numberOrNull(
     attendance?.end_latitude ??
       attendance?.logout_latitude ??
@@ -8365,7 +8365,11 @@ function FieldOfficerDetailsView({
     });
     if (lastAttendance.logout_time) {
       const endCoordinates = attendanceEndCoordinates(lastAttendance);
-      const staleAutoEndNote = staleAutoEndReviewNote(lastAttendance);
+      const storedFinal=attendanceMetadata(lastAttendance);
+      const finalEvidence=storedFinal.shared_km_final_leg||(storedFinal.final_return_leg_included_in_payable===true&&storedFinal.final_return_leg_km!=null?{source:storedFinal.final_return_leg_provider,already_included_km:storedFinal.final_return_leg_km,new_eligible_km:0}:null);
+      const effectiveEndEvidence=attendanceMetadata(lastAttendance).effective_end_evidence;
+      const staleAutoEndNote = [staleAutoEndReviewNote(lastAttendance),effectiveEndEvidence?
+        'GPS-derived: '+(effectiveEndEvidence.captured_at?formatDateTime(effectiveEndEvidence.captured_at):effectiveEndEvidence.status)+'; source '+effectiveEndEvidence.source+'; age '+(effectiveEndEvidence.age_minutes??'unknown')+' min. Administrative end remains separate.':''].filter(Boolean).join(' ');
       const finalReturnLegKm = finalReturnLegKmFromAttendance(lastAttendance);
       const finalReturnLegDistance =
         finalReturnLegKm === null ? "--" : numberLabel(finalReturnLegKm, " km");
@@ -8409,7 +8413,8 @@ function FieldOfficerDetailsView({
         duration: durationMinutesLabel(workingMinutes),
         travelFromPrevious: visits.length ? visitTitle(visits.at(-1)) : "--",
         distance: finalReturnLegDistance,
-        missingKm: "--",
+        missingKm: finalEvidence ? numberLabel(finalEvidence.new_eligible_km," km added") : "--",
+        missingEvidence: finalEvidence ? `Source: ${finalEvidence.source}; already included: ${finalEvidence.already_included_km} km` : "",
         remarks: staleAutoEndNote || "End of day",
       });
     }
@@ -11653,10 +11658,8 @@ export default function FOActivities() {
   const [mapControlsCollapsed, setMapControlsCollapsed] = useState(false);
   const [mapCommand, setMapCommand] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
-  const [manualKmEmployee, setManualKmEmployee] = useState(null);
-  const [travelEvidenceSelection, setTravelEvidenceSelection] = useState(null);
-  const [octoberRecoveryEmployee, setOctoberRecoveryEmployee] = useState(null);
-  const kmRecalcBusy = manualKmEmployee !== null || travelEvidenceSelection !== null;
+  const [supportedKmBusy,setSupportedKmBusy]=useState(false);
+  const kmRecalcBusy = supportedKmBusy;
   const [kmRecalcResult, setKmRecalcResult] = useState(null);
   const [switchKmRecalcBusy, setSwitchKmRecalcBusy] = useState(false);
   const [batchKmRecalcBusy, setBatchKmRecalcBusy] = useState(false);
@@ -12934,41 +12937,24 @@ export default function FOActivities() {
     setCustomToDate(detailDraftToDate);
   }
 
-  function recalculateSelectedOfficerKm() {
+  async function recalculateSelectedOfficerKm() {
+    if(supportedKmBusy)return;
     try {
       assertDemoWriteAllowed(user);
-      if (!['admin', 'qpmsadmin'].includes(currentRole)) throw new Error('An authenticated Admin is required to recalculate travel evidence.');
-      const officer = selectedOfficer || supportOfficer || routeOfficer;
-      const employee = officer?.employeeCode || officer?.attendance?.employee_code;
-      if (!employee) throw new Error('Select an employee before recalculation.');
-      evidenceDates(selectedRange.fromDate, selectedRange.toDate);
-      setTravelEvidenceSelection({ employee, from: selectedRange.fromDate, to: selectedRange.toDate });
-    } catch (error) { setKmRecalcResult({ ok: false, message: error.message, confidence: 'BLOCKED' }); }
+      if(!['admin','qpmsadmin'].includes(currentRole))throw Error('An authenticated Admin is required.');
+      const officer=selectedOfficer||supportOfficer||routeOfficer;
+      const employee=officer?.employeeCode||officer?.attendance?.employee_code;
+      if(!employee)throw Error('Select an employee.');
+      const dates=evidenceDates(selectedRange.fromDate,selectedRange.toDate);
+      setSupportedKmBusy(true);
+      const result=await runSupportedKmPeriod({employee,dates,endpoint:API_BASE_URL+'/api/fo/km/reconcile-supported',request:authenticatedFetch,
+        onProgress:message=>{setSupportMessage(message);setKmRecalcResult({message});}});
+      setKmRecalcResult(result);setSupportMessage(result.message);
+      setRefreshToken(value=>value+1);setSummaryRefreshToken(value=>value+1);
+      const refreshed=await loadSelectedEmployeeRange();if(refreshed)setEmployeeRangeDataset(refreshed);
+    } catch(error){setKmRecalcResult({ok:false,message:error.message,confidence:'BLOCKED'});setSupportMessage(error.message);}
+    finally{setSupportedKmBusy(false);}
   }
-
-  const manualKmDialog = <>
-    {!readOnlyDemo && ['admin', 'qpmsadmin'].includes(currentRole) && selectedOfficer?.employeeCode ? <button type="button" className="fixed bottom-5 right-5 z-30 rounded-lg border border-qpms-300 bg-white px-4 py-3 font-bold text-qpms-800 shadow-lg" onClick={() => setOctoberRecoveryEmployee(selectedOfficer.employeeCode)}>October KM Recovery</button> : null}
-    {octoberRecoveryEmployee ? <OctoberKmRecoveryDialog employee={octoberRecoveryEmployee}
-      endpoint={API_BASE_URL + '/api/fo/km/october-recovery'} onClose={() => setOctoberRecoveryEmployee(null)}
-      onApproved={() => { setRefreshToken(value => value + 1); setSummaryRefreshToken(value => value + 1); loadSelectedEmployeeRange().then(result => { if (result) setEmployeeRangeDataset(result); }); }} /> : null}
-    {travelEvidenceSelection ? <TravelEvidenceDialog selection={travelEvidenceSelection}
-      endpoint={`${API_BASE_URL}/api/fo/km/travel-evidence`}
-      onClose={() => setTravelEvidenceSelection(null)}
-      onFinancialReview={() => { setManualKmEmployee(travelEvidenceSelection.employee); setTravelEvidenceSelection(null); }} /> : null}
-    {manualKmEmployee ? <ManualKmRefreshDialog
-    employee={manualKmEmployee}
-    endpoint={`${API_BASE_URL}/api/fo/km/recalculate`}
-    onClose={() => setManualKmEmployee(null)}
-    onCommitted={async (result) => {
-      setKmRecalcResult({ ...result, message: result.mode === 'range'
-        ? `${result.summary.applied} of ${result.summary.total_days} selected dates saved. Review per-date results.`
-        : 'Selected attendance KM recalculated and saved.' });
-      setRefreshToken(value => value + 1);
-      setSummaryRefreshToken(value => value + 1);
-      const refreshed = await loadSelectedEmployeeRange();
-      if (refreshed) setEmployeeRangeDataset(refreshed);
-    }}
-  /> : null}</>;
 
   async function recalculateTemporarySwitchKmForOfficer(officer = selectedOfficer) {
     if (!officer || !canRunTemporarySwitchKm) return;
@@ -13318,7 +13304,6 @@ export default function FOActivities() {
   if (selectedOfficer) {
     return (
       <>
-      {manualKmDialog}
       <FieldOfficerDetailsView
         key={selectedOfficer.id}
         officer={selectedOfficer}
@@ -13371,7 +13356,6 @@ export default function FOActivities() {
 
   return (
     <div className="space-y-3">
-      {manualKmDialog}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-xl font-black tracking-normal text-slate-950 dark:text-white sm:text-2xl">
           Operations Command Center
