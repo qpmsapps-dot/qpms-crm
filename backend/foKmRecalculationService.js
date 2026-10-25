@@ -270,6 +270,23 @@ export async function estimateOctoberRecoveryRoute(start, end, options = {}) {
 
 async function googleDirectionsRoute(start, end, options = {}) {
   const context = googleDirectionsContext(options);
+  // Preliminary and anchor-connected passes can request the same gap twice.
+  // Reuse its result within this calculation; retain the original retry/budget
+  // controls on actual requests, including concurrent identical lookups.
+  context.routeCache ||= new Map();
+  const key = JSON.stringify([start.latitude, start.longitude, end.latitude, end.longitude]);
+  if (context.routeCache.has(key)) return context.routeCache.get(key);
+  const pending = requestGoogleDirectionsRoute(start, end, options);
+  context.routeCache.set(key, pending);
+  try {
+    const result = await pending;
+    if (['google_call_limit', 'google_disabled', 'google_key_missing'].includes(result.errorCode)) context.routeCache.delete(key);
+    return result;
+  } catch (error) { context.routeCache.delete(key); throw error; }
+}
+
+async function requestGoogleDirectionsRoute(start, end, options = {}) {
+  const context = googleDirectionsContext(options);
   if (!context.enabled) {
     if (!context.disabledLogged) {
       context.disabledLogged = true;
@@ -2955,6 +2972,16 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       legAudit.push(skippedLegAudit(leg, 'missing_leg_coordinates'));
       continue;
     }
+    const persistedLegSnapshot = persistedSnapshotForLeg(leg, persistedLegSnapshots);
+    const legMode = normalizeTravelMode(leg.travel_mode || persistedLegSnapshot?.travel_mode || attendance.travel_mode);
+    const legPolicy = travelModeAllowsPayableKm({
+      travel_mode: legMode,
+      payable_km_allowed: leg.payable_km_allowed ?? persistedLegSnapshot?.payable_km_allowed ?? attendance.payable_km_allowed,
+      metadata: {},
+    });
+    const calculationOptions = options.sharedRecovery && !legPolicy.payableKmAllowed
+      ? { ...options, googleDirectionsContext: { enabled: false, callsAttempted: 0, maxCalls: 0 }, maxGoogleDirectionsCalls: 0 }
+      : options;
     const routeEvidence = trustedSiteRouteEvidenceForLeg(leg, visits, attendance);
     const result = await calculateTravelLegKm({
       client,
@@ -2969,25 +2996,11 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       attendanceId: attendance.id,
       legType: leg.type,
       routeEvidence,
-      options,
+      options: calculationOptions,
     });
     const source = leg.type === 'full_day_no_site' && result.legSource === 'GPS_BASED'
       ? 'FULL_DAY_GPS_NO_SITE'
       : result.legSource;
-    const persistedLegSnapshot = persistedSnapshotForLeg(leg, persistedLegSnapshots);
-    const legMode = normalizeTravelMode(
-      leg.travel_mode ||
-        persistedLegSnapshot?.travel_mode ||
-        attendance.travel_mode,
-    );
-    const legPolicy = travelModeAllowsPayableKm({
-      travel_mode: legMode,
-      payable_km_allowed:
-        leg.payable_km_allowed ??
-        persistedLegSnapshot?.payable_km_allowed ??
-        attendance.payable_km_allowed,
-      metadata: {},
-    });
     const legRatePerKm = ratePerKmForTravelMode(
       legMode,
       persistedLegSnapshot?.rate_per_km ?? leg.rate_per_km ?? attendance.rate_per_km,
@@ -3029,8 +3042,12 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       type: leg.type,
       status:['SKIPPED','UNRESOLVED'].includes(result.legSource)?'skipped':'calculated',
       reason: result.fallbackReason || null,
-      from_time: isoOrNull(leg.fromTime),
-      to_time: isoOrNull(leg.toTime),
+      // Preserve the recorded boundary's precision when this is that exact
+      // persisted window; the financial RPC compares its timestamps exactly.
+      from_time: persistedLegSnapshot && travelLegTimestamp(persistedLegSnapshot.started_at) === travelLegTimestamp(leg.fromTime)
+        ? persistedLegSnapshot.started_at : isoOrNull(leg.fromTime),
+      to_time: persistedLegSnapshot && travelLegTimestamp(persistedLegSnapshot.ended_at) === travelLegTimestamp(leg.toTime)
+        ? persistedLegSnapshot.ended_at : isoOrNull(leg.toTime),
       from_lat: leg.from.latitude,
       from_lng: leg.from.longitude,
       to_lat: leg.to.latitude,

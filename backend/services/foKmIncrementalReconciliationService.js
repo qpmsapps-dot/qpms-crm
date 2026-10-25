@@ -13,6 +13,9 @@ export function buildIncrementalKmPlan(evidence, calculation, existingCredits = 
   const { attendance, snapshots, visits, recoveries, corrections } = evidence;
   const receiptKm = existingCredits.filter(c => c.applied_to_attendance).reduce((s, c) => s + Number(c.added_km), 0);
   const base = Number(attendance.total_approved_km);
+  const legacyPayableKm = base - receiptKm;
+  const inboundLegCounts = new Map();
+  for (const leg of calculation.travel_legs) if (leg.to_visit_id) inboundLegCounts.set(leg.to_visit_id, (inboundLegCounts.get(leg.to_visit_id) || 0) + 1);
   const usedSnapshots = new Set();
   const correctionLegs = corrections.flatMap(c => c.before_state?.leg_breakdown || c.before_state?.legBreakdown || []);
   const correctionHistoryKnown = corrections.every(c => (c.before_state?.leg_breakdown || c.before_state?.legBreakdown || []).length > 0) && correctionLegs.every(l => (l.started_at || l.startedAt) && (l.ended_at || l.endedAt));
@@ -27,7 +30,11 @@ export function buildIncrementalKmPlan(evidence, calculation, existingCredits = 
     // was paid on the attendance. This is usable only when the full baseline
     // reconciles below; a bare zero-valued lifecycle row is not proof of zero pay.
     const visit = visits.find(v => v.id === leg.to_visit_id);
-    if (visit && Number(visit.route_km) > included) included = Number(visit.route_km);
+    // Route metadata is not itself a paid credit. It may explain a positive
+    // legacy attendance baseline, once, for an unsplit inbound window only.
+    // Never duplicate the whole route on each transport segment or invent a
+    // baseline when the attendance has never paid any KM.
+    if (visit && legacyPayableKm > 0.01 && inboundLegCounts.get(visit.id) === 1 && !leg.mode_segment && Number(visit.route_km) > included) included = Number(visit.route_km);
     if (leg.type === 'last_checkout_to_end_day' && attendance.metadata?.final_return_leg_included_in_payable === true) {
       const recorded = Number(attendance.metadata.final_return_leg_km);
       if (Number.isFinite(recorded)) included = Math.max(included, recorded);
