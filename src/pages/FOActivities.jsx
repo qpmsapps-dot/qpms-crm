@@ -1,4 +1,4 @@
-import { runSupportedKmPeriod } from '../utils/supportedKmReconciliation.js';
+import { runSupportedKmPeriod, supportedKmDryRun } from '../utils/supportedKmReconciliation.js';
 import { octoberRecoveryExportRows } from '../utils/octoberRecoveryExport.js';
 import { evidenceDates, gpsEvidenceDisplay } from '../utils/travelEvidenceRecalculation.js';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -2819,12 +2819,12 @@ function SelectedOfficerSummary({
         </button>
       ) : null}
       {recalculationResult?.ok === true ? (
-        <p className="mt-2 text-[11px] font-semibold text-slate-500">
-          KM recalculation completed. Refreshing payable values.
+        <p className="mt-2 max-h-80 overflow-auto whitespace-pre-line text-[11px] font-semibold text-slate-500">
+          {recalculationResult.mode === 'preview' ? recalculationResult.message : 'KM recalculation completed. Refreshing payable values.'}
         </p>
       ) : null}
       {recalculationResult?.ok === false && recalculationResult?.message ? (
-        <p className="mt-2 text-[11px] font-semibold text-amber-700">
+        <p className="mt-2 max-h-80 overflow-auto whitespace-pre-line text-[11px] font-semibold text-amber-700">
           {recalculationResult.message}
         </p>
       ) : null}
@@ -10620,7 +10620,7 @@ function FieldOfficerDetailsView({
                 </button>
               </div>
             </div>
-            {recalculationResult?.message ? <p className={`mt-3 rounded-lg p-3 text-xs font-semibold ${recalculationResult.ok ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{recalculationResult.message}</p> : null}
+            {recalculationResult?.message ? <p className={`mt-3 max-h-80 overflow-auto whitespace-pre-line rounded-lg p-3 text-xs font-semibold ${recalculationResult.ok ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{recalculationResult.message}</p> : null}
             {routeLogsState?.status === 'failed' ? <p role="alert" className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">GPS retrieval failed: {routeLogsState.error}. This does not mean zero GPS logs. Stored period GPS Audit KM is shown independently.</p> : null}
             <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {[
@@ -11332,12 +11332,12 @@ function FoSupportActionPanel({
               ) : null}
 
               {recalculationResult?.ok === true ? (
-                <p className="text-[11px] font-semibold text-slate-500">
-                  KM recalculation completed. Refreshing payable values.
+                <p className="max-h-80 overflow-auto whitespace-pre-line text-[11px] font-semibold text-slate-500">
+                  {recalculationResult.mode === 'preview' ? recalculationResult.message : 'KM recalculation completed. Refreshing payable values.'}
                 </p>
               ) : null}
               {recalculationResult?.ok === false && recalculationResult?.message ? (
-                <p className="text-[11px] font-semibold text-amber-700">
+                <p className="max-h-80 overflow-auto whitespace-pre-line text-[11px] font-semibold text-amber-700">
                   {recalculationResult.message}
                 </p>
               ) : null}
@@ -12947,7 +12947,7 @@ export default function FOActivities() {
       if(!employee)throw Error('Select an employee.');
       const dates=evidenceDates(selectedRange.fromDate,selectedRange.toDate);
       setSupportedKmBusy(true);
-      const result=await runSupportedKmPeriod({employee,dates,endpoint:API_BASE_URL+'/api/fo/km/reconcile-supported',request:authenticatedFetch,
+      const result=await runSupportedKmPeriod({employee,dates,endpoint:API_BASE_URL+'/api/fo/km/reconcile-supported',request:authenticatedFetch,dryRun:supportedKmDryRun(import.meta.env),
         onProgress:message=>{setSupportMessage(message);setKmRecalcResult({message});}});
       setKmRecalcResult(result);setSupportMessage(result.message);
       setRefreshToken(value=>value+1);setSummaryRefreshToken(value=>value+1);
