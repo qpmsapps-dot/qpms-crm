@@ -1,3 +1,4 @@
+import CurrentDayCalculatedKm, { currentIndiaDate } from '../components/CurrentDayCalculatedKm.jsx';
 import { runSupportedKmPeriod, supportedKmDryRun } from '../utils/supportedKmReconciliation.js';
 import { octoberRecoveryExportRows } from '../utils/octoberRecoveryExport.js';
 import { evidenceDates, gpsEvidenceDisplay } from '../utils/travelEvidenceRecalculation.js';
@@ -2460,7 +2461,7 @@ function OperationsAvatar({ officer, size = "h-10 w-10", iconSize = "h-5 w-5" })
   );
 }
 
-function OfficerDirectoryRow({ officer, selected, onSelect }) {
+function OfficerDirectoryRow({ officer, selected, onSelect, calculationDate }) {
   const distanceToday = Number(
     officer.eligibleKm ?? officer.routeKmToday ?? 0,
   );
@@ -2503,6 +2504,7 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
             {officer.designation || officer.role || "Field Operations"} -{" "}
             {officer.state || "--"}
           </p>
+          {calculationDate === currentIndiaDate() ? <CurrentDayCalculatedKm employeeCode={officer.employeeCode || officer.foId} date={calculationDate} /> : <>
           <div className="mt-3 grid grid-cols-2 gap-3 border-t border-slate-100 pt-2.5 dark:border-slate-800">
             <div>
               <span className="block text-[9px] font-bold uppercase tracking-wide text-slate-400">
@@ -2521,6 +2523,7 @@ function OfficerDirectoryRow({ officer, selected, onSelect }) {
               </strong>
             </div>
           </div>
+          </>}
           <p className="mt-2 truncate text-[10px] font-bold text-slate-500">
             Travel Mode: {officer.travelModeLabel || travelModeLabel(officer.travelMode)}
           </p>
@@ -13888,6 +13891,7 @@ export default function FOActivities() {
                 className="w-full min-w-0 rounded-lg border border-slate-200 bg-white py-3 pl-10 pr-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400 focus:border-qpms-400 focus:ring-2 focus:ring-qpms-100 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
               />
             </label>
+            <CurrentDayCalculatedKm employeeCode={(supportOfficer || routeOfficer)?.employeeCode || (supportOfficer || routeOfficer)?.foId} date={selectedRange.fromDate === selectedRange.toDate ? selectedRange.fromDate : null} />
             {fullTechnicalAccess ? (
               <FoSupportActionPanel
                 officer={supportOfficer || routeOfficer}
@@ -13941,6 +13945,7 @@ export default function FOActivities() {
                 <OfficerDirectoryRow
                   key={officer.id}
                   officer={officer}
+                  calculationDate={selectedRange.fromDate === selectedRange.toDate ? selectedRange.fromDate : null}
                   selected={routeOfficer?.id === officer.id}
                   onSelect={() => openSupportActions(officer.id)}
                 />

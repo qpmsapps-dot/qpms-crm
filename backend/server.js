@@ -1,3 +1,4 @@
+import { buildOperationsCalculatedKm } from './services/operationsSummaryService.js';
 import { createKmReconciliationRouter } from './routes/foKmReconciliationRoutes.js';
 import { processKmReconciliationJobs } from './services/foKmReconciliationWorker.js';
 import { createRelianceRetailManagementRouter } from './routes/relianceRetailManagementRoutes.js';
@@ -10229,6 +10230,10 @@ app.get('/api/fo/operations/summary', requireSupabaseJwtOrDemoApiRead, requireFo
     const client = requireServiceRoleSupabase();
     const actorConfig = await loadFieldOperationsConfiguredAccess(client, [request.profile?.id]);
     const actor = attachFoConfiguredAccess(request.profile || {}, actorConfig);
+    if (request.query.calculated_employee_code !== undefined) {
+      const calculation = await buildOperationsCalculatedKm(client, actor, request.query, currentIndiaDateInput());
+      return response.json({ok:true, ...calculation});
+    }
     const summary = await buildOperationsSummary(
       client,
       actor,

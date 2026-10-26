@@ -1,3 +1,4 @@
+import { calculateCurrentDayEvidenceKm } from './foCurrentDayCalculatedKmService.js';
 import { loadApprovedOctoberRecoveries, overlayRecoveryRows } from './foOctoberRecoveryReportingService.js';
 import {
   canAccessOperationsCommandCenter,
@@ -753,4 +754,18 @@ export async function buildOperationsSummary(client, actor, query, today) {
   });
   const liveRows = await fetchAuthorizedLiveStatusRows(client, authorizedLiveIdentifiers);
   return summarizeOperationsRows({ attendances, profiles, hierarchyRows, liveRows, actor, filters });
+}
+
+export async function buildOperationsCalculatedKm(client, actor, query, today) {
+  if (!canAccessOperationsSummary(actor)) throw Object.assign(new Error('Operations access required.'), {statusCode:403});
+  const code = String(query.calculated_employee_code || '').trim().toUpperCase();
+  if (!/^[A-Z0-9_-]{2,40}$/.test(code) || query.date !== today) throw Object.assign(new Error('Select one employee and the current India date.'), {statusCode:400});
+  const [profiles, hierarchy] = await Promise.all([
+    fetchPaged(() => client.from('profiles').select('*').eq('is_active', true)),
+    fetchPaged(() => client.from('employee_hierarchy').select('*').eq('is_active', true)),
+  ]);
+  if (!operationsSummaryAllowedEmployeeCodes(actor, profiles, hierarchy).has(code)) throw Object.assign(new Error('Employee is outside your Operations scope.'), {statusCode:403});
+  const rows = await fetchPaged(() => client.from('fo_attendance').select('*').eq('employee_code',code).eq('attendance_date',today).order('id'));
+  if (rows.length > 10) throw Object.assign(new Error('Attendance requires review.'), {statusCode:409});
+  return {date:today, employee_code:code, ...(await calculateCurrentDayEvidenceKm(client, rows, today))};
 }
