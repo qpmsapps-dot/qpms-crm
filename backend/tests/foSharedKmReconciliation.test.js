@@ -74,11 +74,11 @@ test('active attendance yields calculated closed evidence without persistence; A
  const rpcClient={...client,rpc:async name=>{assert.equal(name,'rpc_fo_km_reconciliation_state_v1');return {data:{digest:'state',credits:[]}};}};
  const r=await reconcileSupportedKm(rpcClient,{attendance_id:'a'},{evidence:e,persist:true,trigger:'manual_end_day',actorSource:'lease',environment:{KM_SHARED_RECONCILIATION_ENABLED:'true',KM_INCREMENTAL_REPORTING_ENABLED:'true'}});assert.equal(r.status,'active_closed_windows_only');assert.equal(r.additionalKm,0);assert.equal(r.financial_posted,false);
 });
-test('worker reports paused posting as deferred, not completed; disabled workers do not query',async()=>{
- assert.equal((await processKmReconciliationJobs(client,{environment:{}})).disabled,true);
- let claimed=false;const calls=[];const c={rpc:async(name,args)=>{calls.push({name,args});if(name==='rpc_claim_fo_km_reconciliation_v1'){if(claimed)return {data:null};claimed=true;return {data:{attendance_id:'a',lease:'lease',trigger_source:'manual_end_day'}};}return {data:null};}};
- await processKmReconciliationJobs(c,{environment:{KM_SHARED_RECONCILIATION_ENABLED:'true',KM_INCREMENTAL_REPORTING_ENABLED:'true',END_DAY_KM_AUTO_RECALC_ENABLED:'true'},reconcile:async()=>({status:'deferred',code:'KM_FINANCIAL_WRITES_MAINTENANCE',financial_posted:false})});
- assert.equal(calls.find(c=>c.name==='rpc_finish_fo_km_reconciliation_v1').args.p_posted,false);
+test('worker without attendance policy authorization never claims legacy jobs',async()=>{
+ const calls=[];const c={rpc:async(name)=>{calls.push(name);throw Error('Must not claim');}};
+ assert.equal((await processKmReconciliationJobs(c,{environment:{}})).disabled,true);
+ const r=await processKmReconciliationJobs(c,{environment:{KM_SHARED_RECONCILIATION_ENABLED:'true',KM_INCREMENTAL_REPORTING_ENABLED:'true',END_DAY_KM_AUTO_RECALC_ENABLED:'true'}});
+ assert.equal(r.code,'KM_ATTENDANCE_AUTHORIZATION_REQUIRED');assert.deepEqual(calls,[]);
 });
 test('16 October representative route retains existing inbound legs and calculates only supported final GPS window',async()=>{
  const e={attendance:{...attendance,status:'Stale Auto Ended',logout_time:'2026-10-16T18:29:59Z',end_latitude:null,end_longitude:null,total_approved_km:27.83,petrol_amount:111.32},visits:[
@@ -120,12 +120,10 @@ test('public-transport snapshots cannot be repriced as Bike when persisted mode 
  const r=await recalculateAttendanceTravelLegs(client,'a',{evidenceSnapshot:e,evidenceRows:gps,evidenceOnly:true,sharedRecovery:true});
  const final=r.travel_legs.find(l=>l.type==='last_checkout_to_end_day');assert.equal(final.payable_km,undefined);assert.equal(final.reason,'recorded_mode_requires_review');
 });
-test('held outbox work defers without calculating or reporting financial posting',async()=>{
- const {processKmReconciliationJobs}=await import('../services/foKmReconciliationWorker.js');
- const calls=[];const db={async rpc(name,args){calls.push({name,args});return {data:name==='rpc_claim_fo_km_reconciliation_v1'?{attendance_id:'a',lease:'lease'}:null,error:null};}};
- const r=await processKmReconciliationJobs(db,{limit:1,environment:{KM_SHARED_RECONCILIATION_ENABLED:'true',KM_INCREMENTAL_REPORTING_ENABLED:'true',END_DAY_KM_AUTO_RECALC_ENABLED:'true',KM_FINANCIAL_WRITES_EMERGENCY_PAUSE:'true'},reconcile(){throw Error('Must not calculate while held');}});
- assert.equal(r.results[0].status,'deferred');assert.equal(r.results[0].financial_posted,false);
- assert.equal(calls[1].args.p_posted,false);assert.equal(calls[1].args.p_error,'KM_FINANCIAL_WRITES_MAINTENANCE');
+test('emergency-held policy worker neither claims nor calculates',async()=>{
+ const calls=[];const db={async rpc(name){calls.push(name);throw Error('Must not claim while held');}};
+ const r=await processKmReconciliationJobs(db,{limit:1,environment:{KM_SHARED_RECONCILIATION_ENABLED:'true',KM_INCREMENTAL_REPORTING_ENABLED:'true',END_DAY_KM_AUTO_RECALC_ENABLED:'true',KM_CANONICAL_POLICY_ENABLED:'true',KM_FINANCIAL_WRITES_EMERGENCY_PAUSE:'true'},reconcile(){throw Error('Must not calculate while held');}});
+ assert.equal(r.disabled,true);assert.equal(r.code,'KM_FINANCIAL_WRITES_MAINTENANCE');assert.deepEqual(calls,[]);
 });
 
 test('recorded segment modes override the day mode; only Bike, mapped Own Vehicle and Car pay', async () => {
@@ -166,7 +164,7 @@ test('enabled unavailable Migration239 read or outbox RPC yields controlled depe
   const calls=[];const db={from(){throw Error('No table writes allowed');},async rpc(name){calls.push(name);return {error:{code,message:'Isolated missing schema'}};}};
   await assert.rejects(reconcileSupportedKm(db,{attendance_id:'a'},{environment,trigger:'admin_recalculation',adminAuthorization:{userId:'admin'},evidence:{attendance:{id:'a'}}}),e=>e.statusCode===503&&e.code==='KM_SHARED_SCHEMA_UNAVAILABLE'&&e.retryable);
   assert.deepEqual(calls,['rpc_fo_km_reconciliation_state_v1']);calls.length=0;
-  await assert.rejects(processKmReconciliationJobs(db,{environment}),e=>e.code==='KM_SHARED_SCHEMA_UNAVAILABLE');
-  assert.deepEqual(calls,['rpc_claim_fo_km_reconciliation_v1']);
+  await assert.rejects(processKmReconciliationJobs(db,{environment:{...environment,KM_CANONICAL_POLICY_ENABLED:'true',KM_FINANCIAL_WRITES_EMERGENCY_PAUSE:'false'}}),e=>e.code==='KM_SHARED_SCHEMA_UNAVAILABLE');
+  assert.deepEqual(calls,['rpc_fo_km_attendance_authorization_version_v1']);
  }
 });
