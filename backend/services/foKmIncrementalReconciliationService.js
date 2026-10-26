@@ -4,6 +4,13 @@ import { persistCanonicalKmV2 } from './foKmV2PersistenceService.js';
 import { loadKmEvidence, kmError } from './foKmEvidenceService.js';
 
 const round = n => Math.round(Number(n) * 100) / 100;
+function timestampMicros(value) {
+  const text = value instanceof Date ? value.toISOString() : String(value || '');
+  const ms = Date.parse(text);
+  if (!Number.isFinite(ms)) return null;
+  const fraction = (text.match(/\.(\d+)(?:Z|[+-]\d\d:?\d\d)$/)?.[1] || '').padEnd(6,'0');
+  return BigInt(ms) * 1000n + BigInt(fraction.slice(3,6) || '0');
+}
 const overlap = (a, b) => new Date(a.from_time) < new Date(b.journey_end || b.ended_at || b.endedAt) && new Date(a.to_time) > new Date(b.journey_start || b.started_at || b.startedAt);
 export function stableKmLegKey(attendanceId, leg) {
   return createHash('sha256').update(JSON.stringify([attendanceId, leg.type, leg.from_visit_id || 'start', leg.to_visit_id || 'end', leg.travel_mode, leg.mode_segment ? leg.persisted_travel_leg_id || null : null])).digest('hex');
@@ -21,6 +28,14 @@ export function buildIncrementalKmPlan(evidence, calculation, existingCredits = 
   const correctionHistoryKnown = corrections.every(c => (c.before_state?.leg_breakdown || c.before_state?.legBreakdown || []).length > 0) && correctionLegs.every(l => (l.started_at || l.startedAt) && (l.ended_at || l.endedAt));
   const legs = calculation.travel_legs.map(leg => {
     const key = stableKmLegKey(attendance.id, leg);
+    const recorded = snapshots.find(s => s.id === leg.persisted_travel_leg_id);
+    // The posting RPC binds exact saved boundaries, including microseconds.
+    // Reconstructed windows spanning reopen/pause legs are not the saved leg.
+    // Keep them unresolved rather than failing all independent eligible windows.
+    const invalidRecordedWindow = Boolean(leg.persisted_travel_leg_id) && (!recorded ||
+      timestampMicros(leg.from_time) === null || timestampMicros(leg.to_time) === null ||
+      timestampMicros(leg.from_time) !== timestampMicros(recorded.started_at) ||
+      timestampMicros(leg.to_time) !== timestampMicros(recorded.ended_at));
     const matches = snapshots.filter(s => s.status !== 'cancelled' && s.ended_at &&
       Math.abs(new Date(s.started_at) - new Date(leg.from_time)) <= 120000 &&
       (!s.ended_at || new Date(s.ended_at) <= new Date(leg.to_time).getTime() + 120000));
@@ -44,7 +59,7 @@ export function buildIncrementalKmPlan(evidence, calculation, existingCredits = 
     const partialSupplement = supplements.some(r => new Date(r.journey_start) < new Date(leg.from_time) || new Date(r.journey_end) > new Date(leg.to_time));
     const supplement = supplements.reduce((s, r) => s + Number(r.approved_additional_km), 0);
     const corrected = correctionLegs.some(c => overlap(leg, c));
-    const status = ambiguousPersisted ? 'persisted_overlap_requires_review' : corrected ? 'applied_correction_preserved' : leg.status !== 'calculated' || !leg.payable ? leg.reason || 'not_eligible_or_unresolved'
+    const status = invalidRecordedWindow ? 'recorded_leg_window_requires_review' : ambiguousPersisted ? 'persisted_overlap_requires_review' : corrected ? 'applied_correction_preserved' : leg.status !== 'calculated' || !leg.payable ? leg.reason || 'not_eligible_or_unresolved'
       : partialSupplement ? 'supplement_overlap_requires_review' : 'supported';
     return { ...leg, leg_key: key, baseline_km: round(included), already_included_km: round(included + credited + supplement),
       new_eligible_km: status === 'supported' ? round(Math.max(0, Number(leg.payable_km) - included - credited - supplement)) : 0,
@@ -88,6 +103,12 @@ export async function reconcileSupportedKm(client, payload, options = {}) {
   const evidence = options.evidence || await loadKmEvidence(client, payload.attendance_id);
   const { data: state, error } = await client.rpc('rpc_fo_km_reconciliation_state_v1', { p_attendance_id: evidence.attendance.id });
   if (error) throw kmReconciliationDependencyError(error); // Never interpret an unavailable ledger as zero.
+  if (options.persist !== false && (!evidence.attendance.logout_time ||
+      !['completed','ended','ended day','closed','auto ended','stale auto ended'].includes(String(evidence.attendance.status || '').toLowerCase()))) {
+    return {attendance_id:evidence.attendance.id,date:evidence.attendance.attendance_date,
+      status:evidence.attendance.logout_time ? 'deferred' : 'active_closed_windows_only',
+      code:'KM_COMPLETED_ATTENDANCE_REQUIRED',additionalKm:0,financial_posted:false,updated:false};
+  }
   const calculation = await recalculateAttendanceTravelLegs(client, evidence.attendance.id, {
     ...options, evidenceSnapshot: evidence, evidenceRows: evidence.rows,
     evidenceOnly: true, sharedRecovery: true, auditDelayedCheckout: false,

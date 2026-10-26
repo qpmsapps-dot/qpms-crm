@@ -124,12 +124,47 @@ test('241 canonical policy, real financial triggers and non-superuser requests',
    const a=seed();sql(`insert into fo_monthly_travel_settlements(profile_id,employee_code,state,period_start,period_end,calculated_claim_amount,approved_payable_amount,adjustment_amount,adjustment_type,source_reference,approved_at) values('${a.profile}','${a.code}','Kerala','2026-10-01','2026-10-31',0,0,0,'none','isolated241',now());`);const p=plan(a),before=sql(`select to_jsonb(s) from fo_monthly_travel_settlements s where employee_code='${a.code}';`);
    const r=JSON.parse(service(call(a,p)));assert.equal(r.applied_to_attendance,false);assert.equal(sql(`select total_approved_km::float||':'||petrol_amount::float from fo_attendance where id='${a.id}';`),'0:0');assert.equal(sql(`select to_jsonb(s) from fo_monthly_travel_settlements s where employee_code='${a.code}';`),before);assert.equal(JSON.parse(service(call(a,p))).additionalKm,0);assert.equal(credits(a),1);
   });
+  await check('partial supported legs post once without inventing an unresolved final window',()=>{
+   const a=seed(),p=plan(a);p.unresolved=[{type:'last_checkout_to_end_day',source:'UNRESOLVED',new_eligible_km:0}];
+   p.legs.push({leg_key:hash(a.id+':unresolved'),type:'unresolved',source:'UNRESOLVED',evidence_status:'unresolved',new_eligible_km:0});
+   const j=claim(a),r=JSON.parse(service(call(a,p,'manual_end_day',null,j.lease)));
+   assert.equal(r.additionalKm,6.25);assert.equal(credits(a),1);
+   assert.equal(sql(`select metadata->>'km_recalculation_status' from fo_attendance where id='${a.id}';`),'partial');
+   assert.equal(JSON.parse(service(call(a,p,'manual_end_day',null,j.lease))).additionalKm,0);
+  });
+  await check('reopening blocks claimed work and reclosure invalidates the canceled End Day lease',()=>{
+   const a=seed(),p=plan(a),j=claim(a);
+   sql(`update fo_attendance set logout_time=null,status='Active' where id='${a.id}';`);
+   assert.throws(()=>service(call(a,p,'manual_end_day',null,j.lease)),/km_completed_attendance_required/);
+   sql(`update fo_attendance set logout_time='2026-10-23T16:00Z',status='Completed' where id='${a.id}';`);
+   assert.throws(()=>service(call(a,p,'manual_end_day',null,j.lease)),/km_policy_verified_lease_required/);
+   assert.equal(credits(a),0);
+  });
   await check('late genuine GPS produces generation; newer evidence invalidates claimed lease',()=>{
    const a=seed();sql(`update fo_attendance set login_time=now()-interval '2 hours',logout_time=now()-interval '1 hour' where id='${a.id}';insert into fo_location_logs(id,attendance_id,employee_code,fo_user_id,latitude,longitude,accuracy,source,captured_at) values(gen_random_uuid(),'${a.id}','${a.code}','${a.code}',12,75,5,'mobile',now()-interval '90 minutes');`);
    const j=claim(a);assert.equal(j.trigger_source,'late_gps');const p=plan(a,{from_time:new Date(Date.now()-100*60000).toISOString(),to_time:new Date(Date.now()-70*60000).toISOString()});
    sql(`insert into fo_location_logs(id,attendance_id,employee_code,fo_user_id,latitude,longitude,accuracy,source,captured_at) values(gen_random_uuid(),'${a.id}','${a.code}','${a.code}',12.01,75,5,'mobile',now()-interval '80 minutes');`);
    assert.throws(()=>service(call(a,p,'late_gps',null,j.lease)),/km_policy_verified_lease_required/);assert.equal(credits(a),0);
   });
+  if (process.env.KM_REAL_CASE_FIXTURE_FILE) {
+   const cases=JSON.parse(fs.readFileSync(process.env.KM_REAL_CASE_FIXTURE_FILE,'utf8')).cases;
+   for (const actual of cases) await check('real '+actual.evidence.attendance.employee_code+' eligible windows persist exactly once in isolated DB',()=>{
+    const e=actual.evidence,a=e.attendance,profile=crypto.randomUUID();
+    sql(`insert into profiles(id,auth_user_id,employee_code,full_name,role,is_active,status,web_access_enabled) values('${profile}','${profile}',${q(a.employee_code)},'Isolated real-evidence rehearsal','FO',true,'active',true);
+     insert into fo_attendance(id,fo_user_id,employee_code,attendance_date,login_time,status,total_approved_km,eligible_km,total_route_km,petrol_amount,travel_mode,payable_km_allowed,rate_per_km,metadata) values('${a.id}',${q(a.employee_code)},${q(a.employee_code)},${q(a.attendance_date)},${q(a.login_time)},'Active',0,0,0,0,${q(a.travel_mode)},true,${a.rate_per_km},'{}');
+     update fo_attendance set logout_time=${q(a.logout_time)},status='Completed' where id='${a.id}';`);
+    for(const l of e.snapshots)sql(`insert into fo_travel_legs(id,attendance_id,employee_code,fo_user_id,travel_mode,payable_km_allowed,started_at,ended_at,status,rate_per_km,payable_km,calculated_km) values('${l.id}','${a.id}',${q(a.employee_code)},${q(a.employee_code)},${q(l.travel_mode)},${l.payable_km_allowed!==false},${q(l.started_at)},${l.ended_at?q(l.ended_at):'null'},${q(l.status)},${l.rate_per_km||0},${Number(l.payable_km||0)},0);`);
+    const p=buildIncrementalKmPlan(e,{travel_legs:actual.plan.legs,effective_end_evidence:actual.plan.effectiveEnd},[]);
+    p.snapshot=JSON.parse(service(`select rpc_fo_km_reconciliation_state_v1('${a.id}');`)).digest;p.inputDigest=hash(JSON.stringify(p));
+    assert.equal(p.baselineKnown,true);assert.ok(p.additionalKm>0);assert.ok(p.unresolved.length>0);
+    if(a.employee_code==='QPMSTNC16951'){assert.equal(p.additionalKm,42.51);assert.equal(p.legs.filter(l=>l.evidence_status==='recorded_leg_window_requires_review'&&l.payable_km>0).length,2);}else assert.equal(p.additionalKm,11.42);
+    const j=claim(a),r=JSON.parse(service(call(a,p,'manual_end_day',null,j.lease)));
+    assert.equal(r.additionalKm,p.additionalKm);assert.equal(r.additionalAmount,p.additionalAmount);
+    assert.equal(credits(a),p.legs.filter(l=>l.new_eligible_km>0).length);
+    assert.equal(JSON.parse(service(call(a,p,'manual_end_day',null,j.lease))).additionalKm,0);
+    assert.equal(sql(`select total_approved_km::float from fo_attendance where id='${a.id}';`),String(p.additionalKm));
+   });
+  }
   await check('installed 240 exact-scope authorization remains compatible',()=>{
    const a=seed(),p=plan(a),ref='EXISTING_240_'+crypto.randomBytes(5).toString('hex').toUpperCase();
    sql(`insert into fo_km_scope_authorizations(reference,attendance_id,employee_code,attendance_date,admin_auth_user_id,starts_at,expires_at,maximum_km,maximum_amount,input_digest,snapshot_digest,approved_calculation) values('${ref}','${a.id}','${a.code}','2026-10-23','${admin}',now()-interval '1 minute',now()+interval '10 minutes',6.25,25,'${p.inputDigest}','${p.snapshot}',${q(JSON.stringify(p))});`);

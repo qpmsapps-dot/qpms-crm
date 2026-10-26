@@ -1,3 +1,4 @@
+import { ownedEndDayKmStatus } from './services/foOwnedEndDayKmService.js';
 import { createKmReconciliationRouter } from './routes/foKmReconciliationRoutes.js';
 import { processKmReconciliationJobs } from './services/foKmReconciliationWorker.js';
 import { createRelianceRetailManagementRouter } from './routes/relianceRetailManagementRoutes.js';
@@ -10722,6 +10723,13 @@ app.post('/api/fo/km/recalculate', requireSupabaseJwt, async (request, response)
         message: error.statusCode ? error.message : 'Manual KM recalculation is temporarily unavailable.' });
     }
     return;
+  }
+  try {
+    const endDay = await ownedEndDayKmStatus(client, request.profile, payload, process.env);
+    if (endDay) return response.status(endDay.status === 'persisted' ? 200 : 202).json({ok:true,...endDay});
+  } catch (error) {
+    return response.status(error.statusCode || 503).json({ok:false,code:error.code || 'KM_END_DAY_STATUS_UNAVAILABLE',retryable:!error.statusCode || error.statusCode >= 500,
+      message:error.statusCode ? error.message : 'End Day KM confirmation is temporarily unavailable.'});
   }
   if (kmFinancialWritesMaintenanceEnabled(process.env) && payload.dry_run !== true && payload.dryRun !== true) {
     response.status(423).json({ ok: false, code: 'KM_MANUAL_PREVIEW_REQUIRED', message: 'Use the Admin preview and approval workflow during maintenance.' });

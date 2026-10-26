@@ -108,6 +108,11 @@ void main() {
       expect(refresh, contains('_recalculationResultBelongsToAttendance'));
       expect(refresh, contains('_applyBackendAttendance'));
       expect(refresh, contains('await LocalStore.saveAttendance'));
+      final completion = File('lib/services/end_day_km_completion.dart').readAsStringSync();
+      expect(completion, contains("status == 'canonical_v2_persisted'"));
+      expect(completion, contains("result['calculation_run_id']"));
+      expect(completion, contains("result['input_digest']"));
+      expect(completion, contains("result['attendance_id'] == id"));
     });
 
     test('Today KM updates only from refreshed backend attendance', () {
@@ -120,7 +125,7 @@ void main() {
       );
       expect(body, isNot(contains('_km = attendance.eligibleKm;')));
       expect(refresh, contains('_km = current.eligibleKm;'));
-      expect(refresh, contains('_km = refreshedAttendance.eligibleKm;'));
+      expect(refresh, contains('endDayKmSnapshotMatches('));
       expect(homeSource, contains("value: _todayKmLabel()"));
       expect(homeSource, contains("if (_finalKmAwaitingBackend) return '--';"));
     });
@@ -171,8 +176,8 @@ void main() {
       () {
         final refresh = refreshBody();
 
-        expect(refresh, contains('_endDayKmRecalculationRetryDelays'));
-        expect(refresh, contains('Future<void>.delayed'));
+        expect(refresh, contains('_scheduleEndDayKmRefresh'));
+        expect(homeSource, contains('Timer(delay'));
         expect(refresh, contains('catch (error, stackTrace)'));
         expect(refresh, contains('END_DAY_KM_RECALCULATION_RETRY_PENDING'));
         expect(refresh, isNot(contains('reopenAttendanceForToday')));

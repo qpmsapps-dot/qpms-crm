@@ -1,3 +1,4 @@
+import { savedFoPayableKm, savedFoPetrolAmount } from '../utils/savedFoFinancials.js';
 import { runSupportedKmPeriod, supportedKmDryRun } from '../utils/supportedKmReconciliation.js';
 import { octoberRecoveryExportRows } from '../utils/octoberRecoveryExport.js';
 import { evidenceDates, gpsEvidenceDisplay } from '../utils/travelEvidenceRecalculation.js';
@@ -1149,12 +1150,6 @@ function firstNonEmptyText(...values) {
     .find(Boolean) || "";
 }
 
-function firstPositiveNumber(...values) {
-  return values
-    .map(Number)
-    .find((value) => Number.isFinite(value) && value > 0) ?? null;
-}
-
 function optionalFiniteNumber(value) {
   if (value === null || value === undefined || String(value).trim() === "") {
     return null;
@@ -1229,26 +1224,8 @@ function enrichOfficer({ officer, attendance, visits = [], live, profilesByCode 
   const coordinates = locationMatch?.[0] || null;
   const locationSource = locationMatch?.[1] || "none";
 
-  const attendanceKm = firstPositiveNumber(
-    attendance?.total_route_km,
-    attendance?.eligible_km,
-    attendance?.total_approved_km,
-  );
-  const liveKm = firstPositiveNumber(live?.route_km_today);
-  const siteVisitKm = visits.reduce((sum, visit) => {
-    const routeKm = Number(visit?.route_km);
-    return Number.isFinite(routeKm) && routeKm > 0 ? sum + routeKm : sum;
-  }, 0);
-  const activeVisitKm = firstPositiveNumber(activeVisit?.route_km);
-  const kmCandidates = [
-    [attendanceKm, "attendance"],
-    [liveKm, "live_status.route_km_today"],
-    [siteVisitKm > 0 ? siteVisitKm : null, "site_visits.route_km_sum"],
-    [activeVisitKm, "active_site_visit.route_km"],
-    [0, "zero"],
-  ];
-  const kmMatch = kmCandidates.find(([value]) => value !== null && value !== undefined);
-  const eligibleKm = Number(kmMatch?.[0] || 0);
+  const eligibleKm = savedFoPayableKm(attendance || {});
+  const kmMatch = [eligibleKm, 'attendance'];
   const travelMode = currentTravelModeFromRows({ live, attendance, officer });
   const ratePerKm = travelModeRatePerKm(
     travelMode,
@@ -1322,7 +1299,7 @@ function enrichOfficer({ officer, attendance, visits = [], live, profilesByCode 
     ratePerKm,
     petrolAmount: petrolAmountPending
       ? null
-      : storedPetrolAmount ?? calculatePetrolAmount(eligibleKm, ratePerKm),
+      : storedPetrolAmount,
     petrolAmountPending,
     routeKmSource: kmSource,
     kmSource,
@@ -1588,24 +1565,8 @@ function emptyFoSafeKmMetrics(fallbackKm = 0) {
   };
 }
 
-function sumSiteVisitRouteKm(visits = []) {
-  return visits.reduce((sum, visit) => {
-    const routeKm = Number(visit?.route_km);
-    return Number.isFinite(routeKm) && routeKm > 0 ? sum + routeKm : sum;
-  }, 0);
-}
-
 function payableKmFromAttendance(row) {
-  const candidates = [
-    row?.total_approved_km,
-    row?.eligible_km,
-    row?.total_route_km,
-    0,
-  ];
-  const value = candidates
-    .map((item) => Number(item))
-    .find((item) => Number.isFinite(item));
-  const storedPayableKm = value || 0;
+  const storedPayableKm = savedFoPayableKm(row || {});
   const metadata = attendanceMetadata(row);
   const adjustmentIncluded =
     metadata.approved_adjustment_included_in_payable === true ||
@@ -1617,13 +1578,7 @@ function payableKmFromAttendance(row) {
 }
 
 function petrolAmountFromAttendance(row) {
-  if (isCanonicalPetrolPending(row)) return null;
-  const stored = numberOrNull(row?.petrol_amount);
-  if (stored !== null) return stored;
-  return calculatePetrolAmount(
-    payableKmFromAttendance(row),
-    travelModeRatePerKm(row?.travel_mode, row?.rate_per_km),
-  );
+  return savedFoPetrolAmount(row || {});
 }
 
 function sumAttendancePetrolAmount(rows = []) {
@@ -1633,6 +1588,7 @@ function sumAttendancePetrolAmount(rows = []) {
 }
 
 function isCanonicalPetrolPending(row) {
+  if (savedFoPetrolAmount(row || {}) !== null) return false;
   const metadata = attendanceMetadata(row);
   return (
     String(row?.route_sync_status || "").toLowerCase() ===
@@ -1718,60 +1674,10 @@ function gpsFallbackReviewFromAttendance(attendance) {
   };
 }
 
-function payableRouteKmForOfficer({ foId, live, attendance, visits = [] }) {
-  const siteVisitRouteKm = sumSiteVisitRouteKm(visits);
-  const liveKm = Number(live?.route_km_today);
-  const attendanceCandidates = [
-    ["fo_attendance.eligible_km", attendance?.eligible_km],
-    ["fo_attendance.total_route_km", attendance?.total_route_km],
-    ["fo_attendance.total_approved_km", attendance?.total_approved_km],
-  ]
-    .map(([source, value]) => ({ source, km: Number(value) }))
-    .filter((item) => Number.isFinite(item.km) && item.km > 0);
-  const attendancePayable = attendanceCandidates.sort((a, b) => b.km - a.km)[0] || null;
-  const attendanceCompleted =
-    Boolean(attendance?.logout_time) ||
-    /completed|closed|ended|logout/i.test(String(attendance?.status || ""));
-
-  if (attendanceCompleted && attendancePayable) {
-    logPayableKmSource(foId, attendancePayable.source, attendancePayable.km);
-    return {
-      km: attendancePayable.km,
-      source: attendancePayable.source,
-    };
-  }
-
-  const candidates = [
-    { source: "fo_site_visits.route_km_sum", km: siteVisitRouteKm },
-    { source: "fo_live_status.route_km_today", km: liveKm },
-    attendancePayable,
-  ].filter((item) => item && Number.isFinite(item.km) && item.km > 0);
-  const selected = candidates.sort((a, b) => b.km - a.km)[0];
-  if (selected) {
-    logPayableKmSource(foId, selected.source, selected.km);
-    return {
-      km: selected.km,
-      source: selected.source,
-    };
-  }
-
-  const gpsFallbackReview = gpsFallbackReviewFromAttendance(attendance);
-  if (visits.length > 0 && gpsFallbackReview.reviewRequired) {
-    const source = gpsFallbackReview.fallbackKm
-      ? `Needs Review (GPS fallback ${gpsFallbackReview.fallbackKm.toFixed(1)} km)`
-      : "Needs Review";
-    logPayableKmSource(foId, source, 0);
-    return {
-      km: 0,
-      source,
-    };
-  }
-
-  logPayableKmSource(foId, "zero", 0);
-  return {
-    km: 0,
-    source: "zero",
-  };
+function payableRouteKmForOfficer({ foId, attendance }) {
+  const km = savedFoPayableKm(attendance || {});
+  logPayableKmSource(foId, 'fo_attendance.saved_payable_km', km);
+  return {km, source:'fo_attendance.saved_payable_km'};
 }
 
 function reviewFlagsForOfficer({ systemKm = 0, attendance, visits = [], logs = [] }) {
@@ -1885,7 +1791,7 @@ function officerFromRows({ foId, live, attendance, visits, logs, statusDate, pro
   const petrolAmountPending = isCanonicalPetrolPending(record);
   const petrolAmount = petrolAmountPending
     ? null
-    : storedPetrolAmount ?? calculatePetrolAmount(eligibleKm, ratePerKm);
+    : storedPetrolAmount;
   const reviewFlags = reviewFlagsForOfficer({
     systemKm: eligibleKm,
     attendance: record,

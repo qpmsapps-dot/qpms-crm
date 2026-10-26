@@ -14,6 +14,7 @@ import '../build_info.dart';
 import '../models/fo_models.dart';
 import '../services/app_state_sync_service.dart';
 import '../services/crash_log_service.dart';
+import '../services/end_day_km_completion.dart';
 import '../services/local_store.dart';
 import '../services/performance_log_service.dart';
 import '../services/permission_service.dart';
@@ -108,6 +109,7 @@ class _HomeScreenState extends State<HomeScreen>
   bool _busy = false;
   String? _busyMessage;
   bool _endDayKmRefreshInFlight = false;
+  Timer? _endDayKmRefreshTimer;
   bool _finalKmAwaitingBackend = false;
   int? _battery;
   double _km = 0;
@@ -120,11 +122,6 @@ class _HomeScreenState extends State<HomeScreen>
   int? _localGpsLogsToday;
   int? _syncedGpsLogsToday;
 
-  static const List<Duration> _endDayKmRecalculationRetryDelays = [
-    Duration(seconds: 5),
-    Duration(seconds: 15),
-    Duration(seconds: 30),
-  ];
 
   bool get _showTrackingDebug {
     return isMobileDebugVisible(
@@ -144,6 +141,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void dispose() {
+    _endDayKmRefreshTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -152,6 +150,8 @@ class _HomeScreenState extends State<HomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _load();
+    } else {
+      _endDayKmRefreshTimer?.cancel();
     }
   }
 
@@ -381,8 +381,9 @@ class _HomeScreenState extends State<HomeScreen>
       _attendance = attendance;
       final eligibleKm = attendance?.eligibleKm ?? 0;
       final totalRouteKm = attendance?.totalRouteKm ?? 0;
-      _km = eligibleKm > 0 ? eligibleKm : totalRouteKm;
-      _finalKmAwaitingBackend = false;
+      _km = attendance?.isActive == true ? (eligibleKm > 0 ? eligibleKm : totalRouteKm) : eligibleKm;
+      _finalKmAwaitingBackend = attendance != null && !attendance.isActive && SupabaseService.isValidUuid(attendance.remoteId);
+
       _sitesToday = visits
           .where((visit) => visit.checkInTime.isAfter(today))
           .length;
@@ -395,6 +396,9 @@ class _HomeScreenState extends State<HomeScreen>
               .map((visit) => visit.storeName)
               .firstOrNull;
     });
+    if (attendance != null && !attendance.isActive && SupabaseService.isValidUuid(attendance.remoteId)) {
+      unawaited(_refreshEndDayKmFromBackend(attendanceId: attendance.remoteId!, attendanceDate: _attendanceDateKey(attendance)));
+    }
     if (hasActiveAttendanceToday && attendance != null) {
       if (activeVisit != null) {
         await TrackingService.pauseForSiteVisit(
@@ -1867,12 +1871,7 @@ class _HomeScreenState extends State<HomeScreen>
   bool _recalculationResultBelongsToAttendance(
     Map<String, dynamic> result,
     String attendanceId,
-  ) {
-    final resultAttendanceId = result['attendance_id']?.toString().trim();
-    return resultAttendanceId == null ||
-        resultAttendanceId.isEmpty ||
-        resultAttendanceId == attendanceId.trim();
-  }
+  ) => endDayKmResultIsPersisted(result, attendanceId.trim());
 
   void _applyBackendAttendance({
     required Attendance target,
@@ -1892,90 +1891,78 @@ class _HomeScreenState extends State<HomeScreen>
       ..metadata = source.metadata;
   }
 
+  void _scheduleEndDayKmRefresh(String id, String? date, int? battery, Duration delay) {
+    _endDayKmRefreshTimer?.cancel();
+    if (!mounted || WidgetsBinding.instance.lifecycleState == AppLifecycleState.paused) {
+      return;
+    }
+    _endDayKmRefreshTimer = Timer(delay, () {
+      final current = _attendance;
+      if (!mounted || current == null || current.isActive ||
+          (current.remoteId ?? current.id).trim() != id) {
+        return;
+      }
+      unawaited(_refreshEndDayKmFromBackend(attendanceId: id, attendanceDate: date, fallbackBattery: battery));
+    });
+  }
+
   Future<void> _refreshEndDayKmFromBackend({
     required String attendanceId,
     String? attendanceDate,
     int? fallbackBattery,
   }) async {
     final id = attendanceId.trim();
-    if (_endDayKmRefreshInFlight ||
-        !SupabaseService.isReady ||
+    if (_endDayKmRefreshInFlight || !mounted || !SupabaseService.isReady ||
         !SupabaseService.isValidUuid(id)) {
       return;
     }
+    final selected = _attendance;
+    if (selected == null || selected.isActive || (selected.remoteId ?? selected.id).trim() != id) {
+      return;
+    }
     _endDayKmRefreshInFlight = true;
+    _endDayKmRefreshTimer?.cancel();
+    var retry = true;
+    var delay = const Duration(seconds: 30);
     try {
-      for (
-        var attempt = 0;
-        attempt <= _endDayKmRecalculationRetryDelays.length;
-        attempt += 1
-      ) {
-        if (attempt > 0) {
-          await Future<void>.delayed(
-            _endDayKmRecalculationRetryDelays[attempt - 1],
-          );
-        }
-        try {
-          final recalcResult = await SupabaseService.triggerFoKmRecalculation(
-            attendanceId: id,
-            foUserId: widget.user.employeeCode,
-            date: attendanceDate,
-          );
-          if (!_recalculationResultBelongsToAttendance(recalcResult, id)) {
-            throw StateError('KM recalculation returned a different record.');
-          }
-          final refreshedAttendance = await SupabaseService.findAttendanceById(
-            user: widget.user,
-            attendanceId: id,
-          );
-          if (refreshedAttendance == null) {
-            throw StateError('KM recalculation attendance refresh failed.');
-          }
-          final current = _attendance;
-          if (current != null &&
-              (current.remoteId ?? current.id).trim() == id) {
-            _applyBackendAttendance(
-              target: current,
-              source: refreshedAttendance,
-              fallbackBattery: fallbackBattery ?? _battery,
-            );
-            await LocalStore.saveAttendance(current);
-            if (!mounted) return;
-            setState(() {
-              _attendance = current;
-              _km = current.eligibleKm;
-              _battery = current.batteryEnd ?? _battery;
-              _finalKmAwaitingBackend = false;
-            });
-          } else {
-            await LocalStore.saveAttendance(refreshedAttendance);
-            if (!mounted) return;
-            setState(() {
-              _attendance = refreshedAttendance;
-              _km = refreshedAttendance.eligibleKm;
-              _battery = refreshedAttendance.batteryEnd ?? _battery;
-              _finalKmAwaitingBackend = false;
-            });
-          }
-          await CrashLogService.record(
-            employeeCode: widget.user.employeeCode,
-            screen: 'home',
-            action: 'END_DAY_KM_RECALCULATION_REFRESHED',
-            error: 'attendance_id=$id route_km=$_km',
-          );
-          return;
-        } catch (error, stackTrace) {
-          await CrashLogService.record(
-            employeeCode: widget.user.employeeCode,
-            screen: 'home',
-            action: 'END_DAY_KM_RECALCULATION_RETRY_PENDING',
-            error: error,
-            stackTrace: stackTrace,
-          );
-        }
+      final recalcResult = await SupabaseService.triggerFoKmRecalculation(
+        attendanceId: id, foUserId: widget.user.employeeCode, date: attendanceDate,
+      );
+      delay = endDayKmRetryDelay(recalcResult);
+      if (!_recalculationResultBelongsToAttendance(recalcResult, id)) return;
+      final refreshedAttendance = await SupabaseService.findAttendanceById(
+        user: widget.user, attendanceId: id,
+      );
+      if (refreshedAttendance == null || !endDayKmSnapshotMatches(
+        result: recalcResult, attendanceId: id, endTime: refreshedAttendance.endTime,
+        savedKm: refreshedAttendance.eligibleKm, savedPetrol: refreshedAttendance.petrolAmount,
+        metadata: refreshedAttendance.metadata,
+      )) {
+        return;
       }
+      final current = _attendance;
+      if (!mounted || current == null || current.isActive || (current.remoteId ?? current.id).trim() != id ||
+          current.endTime == null || !current.endTime!.isAtSameMomentAs(refreshedAttendance.endTime!)) {
+        return;
+      }
+      _applyBackendAttendance(target: current, source: refreshedAttendance, fallbackBattery: fallbackBattery ?? _battery);
+      await LocalStore.saveAttendance(current);
+      if (!mounted) return;
+      setState(() {
+        _attendance = current;
+        _km = current.eligibleKm;
+        _battery = current.batteryEnd ?? _battery;
+        _finalKmAwaitingBackend = false;
+      });
+      retry = false;
+      await CrashLogService.record(employeeCode: widget.user.employeeCode, screen: 'home',
+        action: 'END_DAY_KM_RECALCULATION_REFRESHED', error: 'attendance_id=$id route_km=$_km');
+    } catch (error, stackTrace) {
+      await CrashLogService.record(employeeCode: widget.user.employeeCode, screen: 'home',
+        action: 'END_DAY_KM_RECALCULATION_RETRY_PENDING', error: error, stackTrace: stackTrace);
     } finally {
       _endDayKmRefreshInFlight = false;
+      if (retry) _scheduleEndDayKmRefresh(id, attendanceDate, fallbackBattery, delay);
     }
   }
 
@@ -1999,8 +1986,11 @@ class _HomeScreenState extends State<HomeScreen>
           setState(() {
             _attendance = completed;
             _km = completed.eligibleKm;
-            _finalKmAwaitingBackend = false;
+            _finalKmAwaitingBackend = SupabaseService.isValidUuid(completed.remoteId);
           });
+        }
+        if (SupabaseService.isValidUuid(completed.remoteId)) {
+          unawaited(_refreshEndDayKmFromBackend(attendanceId: completed.remoteId!, attendanceDate: _attendanceDateKey(completed)));
         }
         _toast('Today\'s duty is already completed.');
         return true;
