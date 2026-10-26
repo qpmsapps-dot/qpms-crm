@@ -245,6 +245,7 @@ function safeEmployee(profile = {}) {
 }
 
 const SAFE_ATTENDANCE_METADATA_KEYS = [
+  'shared_km_last_receipt',
   'effective_end_evidence',
   'shared_km_final_leg',
   'approved_adjustment_included_in_payable',

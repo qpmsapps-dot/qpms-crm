@@ -279,8 +279,21 @@ export function operationsSummaryAllowedEmployeeCodes(actor, profiles = [], hier
   return operationsCommandCenterAllowedEmployeeCodes(actor, profiles, hierarchyRows);
 }
 
+// The incremental executor verifies recorded segment modes/windows and writes
+// these totals atomically with its immutable receipt. The attendance mode is
+// only the day's final label; applying it again would hide approved Bike/Car
+// segments. Do not extend this to raw route KM or derive a mixed day's amount
+// from its final mode/rate.
+function hasCanonicalIncrementalTotals(row) {
+  return row.route_sync_status === 'canonical_v2_incremental_persisted' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.metadata?.shared_km_last_receipt || '') &&
+    [row.total_approved_km, row.petrol_amount].every(value =>
+      hasStoredValue(value) && Number.isFinite(Number(value)) && Number(value) >= 0);
+}
+
 export function storedAttendancePayableKm(row = {}) {
   if (Number(row.recovery_approved_km) > 0) return rounded(storedAttendancePayableKm({ ...row, recovery_approved_km: 0 }) + Number(row.recovery_approved_km));
+  if (hasCanonicalIncrementalTotals(row)) return rounded(row.total_approved_km);
   if (row.payable_km_allowed === false || String(row.payable_km_allowed).toLowerCase() === 'false') {
     return 0;
   }
@@ -294,6 +307,7 @@ export function storedAttendancePayableKm(row = {}) {
 
 export function storedAttendancePetrolAmount(row = {}, payableKm = storedAttendancePayableKm(row)) {
   if (Number(row.recovery_additional_amount) > 0) return rounded(storedAttendancePetrolAmount({ ...row, recovery_additional_amount: 0, recovery_approved_km: 0 }, payableKm - Number(row.recovery_approved_km || 0)) + Number(row.recovery_additional_amount));
+  if (hasCanonicalIncrementalTotals(row)) return rounded(row.petrol_amount);
   if (row.payable_km_allowed === false || String(row.payable_km_allowed).toLowerCase() === 'false') {
     return 0;
   }

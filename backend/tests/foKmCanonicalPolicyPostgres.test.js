@@ -5,6 +5,10 @@ import crypto from 'node:crypto';
 import {spawnSync,spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {loadApprovedOctoberRecoveries,attachRangeRecovery,recoveryCsv} from '../services/foOctoberRecoveryReportingService.js';
+import {storedAttendancePayableKm,storedAttendancePetrolAmount,buildConsolidatedTravelClaimReportDataset} from '../services/operationsSummaryService.js';
+import {buildEmployeeRangeDataset,kolkataPeriodBounds} from '../services/employeeRangeReportService.js';
+import {recalculateAttendanceTravelLegs} from '../foKmRecalculationService.js';
+import {buildIncrementalKmPlan} from '../services/foKmIncrementalReconciliationService.js';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const q=x=>"'"+String(x).replaceAll("'","''")+"'";
 const hash=x=>crypto.createHash('sha256').update(x).digest('hex');
@@ -16,7 +20,7 @@ test('241 canonical policy, real financial triggers and non-superuser requests',
  const prefix=role=>`set role ${role};set request.jwt.claim.role=${q(role)};`;
  const service=(s,role='service_role')=>run(args('test','authenticator'),prefix(role)+s);
  const parallel=s=>new Promise(resolve=>{let stdout='',stderr='';const p=spawn('docker',args('test','authenticator'),{windowsHide:true});p.stdout.on('data',b=>stdout+=b);p.stderr.on('data',b=>stderr+=b);p.on('close',code=>resolve({code,stdout:stdout.trim(),stderr}));p.stdin.end(prefix('service_role')+s);});
- const read=p=>fs.readFileSync(root+p,'utf8');const proposal=read('supabase/proposals/241_canonical_km_policy.sql'),rollback=read('supabase/proposals/241_canonical_km_policy_rollback.sql');
+ const read=p=>fs.readFileSync(root+p,'utf8').replace(/\r/g,'');const proposal=read('supabase/proposals/241_canonical_km_policy.sql'),rollback=read('supabase/proposals/241_canonical_km_policy_rollback.sql');
  const admin=crypto.randomUUID();let seq=0;
  const check=(name,fn)=>t.test(name,async()=>{await fn();checks.push(name);});
  const seed=(mode='bike',source='manual_end_day')=>{
@@ -72,6 +76,49 @@ test('241 canonical policy, real financial triggers and non-superuser requests',
    for(const mode of ['bike','own_vehicle','car','train','bus','auto','other','unknown']){const a=seed(mode==='unknown'?'bike':mode),p=plan(a,mode==='unknown'?{travel_mode:'unknown'}:{});if(['bike','own_vehicle','car'].includes(mode))assert.equal(JSON.parse(service(call(a,p))).additionalAmount,6.25*a.rate);else{assert.throws(()=>service(call(a,p)),/km_increment_evidence_invalid/);assert.equal(credits(a),0);}}
    const a=seed(),id=crypto.randomUUID();sql(`insert into fo_travel_legs(id,attendance_id,employee_code,fo_user_id,travel_mode,payable_km_allowed,started_at,ended_at,status,rate_per_km,payable_km,calculated_km) values('${id}','${a.id}','${a.code}','${a.code}','car',true,'2026-10-23T10:00Z','2026-10-23T11:00Z','completed',8,0,0);`);
    const p=plan(a,{persisted_travel_leg_id:id,travel_mode:'car',rate_per_km:8});assert.equal(JSON.parse(service(call(a,p))).additionalAmount,50);
+  });
+  await check('Train day with recorded Bike/Car windows reports only eligible segments for Admin and both End Day triggers',()=>{
+   for(const source of ['admin_recalculation','manual_end_day','auto_end_day'])for(const modes of [['bike','train','bike'],['car','train','bike']]){
+    const a=seed('train',source==='admin_recalculation'?'manual_end_day':source),segments=[];
+    modes.forEach((mode,i)=>{
+     const id=crypto.randomUUID(),from=`2026-10-23T${String(6+i).padStart(2,'0')}:00:00Z`,to=`2026-10-23T${String(7+i).padStart(2,'0')}:00:00Z`,rate=mode==='car'?8:mode==='bike'?4:0;
+     sql(`insert into fo_travel_legs(id,attendance_id,employee_code,fo_user_id,travel_mode,payable_km_allowed,started_at,ended_at,status,rate_per_km,payable_km,calculated_km) values('${id}','${a.id}','${a.code}','${a.code}',${q(mode)},${rate>0},${q(from)},${q(to)},'completed',${rate},0,0);`);
+     segments.push({...plan(a).legs[0],leg_key:hash(id),persisted_travel_leg_id:id,mode_segment:true,travel_mode:mode,rate_per_km:rate,from_time:from,to_time:to,payable:rate>0,payable_km:rate>0?3.125:0,new_eligible_km:rate>0?3.125:0,evidence_status:rate>0?'supported':'non_payable_mode'});
+    });
+    // Use hundredth-KM segments; 3 + 3.25 = the incident's 6.25 total.
+    segments[0].payable_km=segments[0].new_eligible_km=3;segments[2].payable_km=segments[2].new_eligible_km=3.25;
+    const p={...plan(a),legs:segments},job=source==='admin_recalculation'?null:claim(a),actor=source==='admin_recalculation'?admin:null;
+    const r=JSON.parse(service(call(a,p,source,actor,job?.lease)));const amount=modes[0]==='car'?37:25;
+    assert.equal(r.additionalKm,6.25);assert.equal(r.additionalAmount,amount);
+    assert.equal(JSON.parse(service(call(a,p,source,actor,job?.lease))).additionalKm,0);
+    const row=JSON.parse(sql(`select to_jsonb(a) from fo_attendance a where id='${a.id}';`));
+    assert.equal(row.travel_mode,'train');assert.equal(row.payable_km_allowed,false);
+    assert.equal(storedAttendancePayableKm(row),6.25);assert.equal(storedAttendancePetrolAmount(row),amount);
+    const range=buildEmployeeRangeDataset({employee:{employee_code:a.code},period:kolkataPeriodBounds('2026-10-23','2026-10-23'),attendances:[row]});
+    assert.equal(range.period_summary.canonical_payable_km,6.25);assert.equal(range.period_summary.canonical_petrol_amount,amount);
+    const monthly=buildConsolidatedTravelClaimReportDataset({attendances:[row],profiles:[{id:a.profile,employee_code:a.code,role:'FO',state:'KL',is_active:true,status:'active'}],actor:{role:'Admin',employee_code:'ADMIN',is_active:true,status:'active'},filters:{date_from:'2026-10-01',date_to:'2026-10-31'}});
+    assert.equal(monthly.rows[0].total_km_travelled,6.25);assert.equal(monthly.rows[0].distance_reimbursement,amount);
+    assert.equal(sql(`select count(*) from fo_km_incremental_credits where attendance_id='${a.id}' and rate=0;`),'0');
+    if(job)service(`select rpc_finish_fo_km_reconciliation_v1('${a.id}','${job.lease}',true,null);`);
+   }
+  });
+  if(process.env.KM_MIXED_MODE_EVIDENCE_FILE)await check('real October 13 GPS replay posts 6.25 Bike KM at 25 only in isolated PostgreSQL, retry zero',async()=>{
+   const saved=JSON.parse(fs.readFileSync(process.env.KM_MIXED_MODE_EVIDENCE_FILE,'utf8')),e=saved.evidence;
+   assert.equal(e.attendance.id,'8e3a259d-9d7c-4feb-b3a9-e092718ad86a');assert.equal(e.attendance.travel_mode,'train');
+   const calc=await recalculateAttendanceTravelLegs({from(){throw Error('Unexpected database access during replay');}},e.attendance.id,{evidenceSnapshot:e,evidenceRows:e.rows,evidenceOnly:true,sharedRecovery:true,auditDelayedCheckout:false,maxGoogleDirectionsCalls:0});
+   const replay=buildIncrementalKmPlan(e,calc,saved.prior.credits);
+   assert.equal(replay.existingPayableKm,0);assert.equal(replay.additionalKm,6.25);assert.equal(replay.additionalAmount,25);
+   assert.equal(replay.legs.filter(l=>l.new_eligible_km>0).length,1);
+   const bike=replay.legs.find(l=>l.new_eligible_km>0);assert.equal(bike.travel_mode,'bike');assert.equal(bike.already_included_km,0);
+   const a=seed('train');sql(`update fo_attendance set attendance_date='2026-10-13',login_time=${q(e.attendance.login_time)},logout_time=${q(e.attendance.logout_time)} where id='${a.id}';`);
+   for(const leg of replay.legs.filter(l=>l.new_eligible_km>0)){
+    const s=e.snapshots.find(s=>s.id===leg.persisted_travel_leg_id);assert(s);
+    sql(`insert into fo_travel_legs(id,attendance_id,employee_code,fo_user_id,travel_mode,payable_km_allowed,started_at,ended_at,status,rate_per_km,payable_km,calculated_km) values('${s.id}','${a.id}','${a.code}','${a.code}',${q(s.travel_mode)},${s.payable_km_allowed},${q(s.started_at)},${q(s.ended_at)},'completed',${s.rate_per_km},0,0);`);
+   }
+   const p={...replay,snapshot:JSON.parse(service(`select rpc_fo_km_reconciliation_state_v1('${a.id}');`)).digest,inputDigest:hash(crypto.randomUUID())};
+   const r=JSON.parse(service(call(a,p)));assert.equal(r.additionalKm,6.25);assert.equal(r.additionalAmount,25);
+   const row=JSON.parse(sql(`select to_jsonb(a) from fo_attendance a where id='${a.id}';`));assert.equal(storedAttendancePayableKm(row),6.25);assert.equal(storedAttendancePetrolAmount(row),25);
+   assert.equal(JSON.parse(service(call(a,p))).additionalKm,0);assert.equal(credits(a),1);
   });
   await check('settled claims unchanged, immutable supplement counted once',()=>{
    const a=seed();sql(`insert into fo_monthly_travel_settlements(profile_id,employee_code,state,period_start,period_end,calculated_claim_amount,approved_payable_amount,adjustment_amount,adjustment_type,source_reference,approved_at) values('${a.profile}','${a.code}','Kerala','2026-10-01','2026-10-31',0,0,0,'none','isolated241',now());`);const p=plan(a),before=sql(`select to_jsonb(s) from fo_monthly_travel_settlements s where employee_code='${a.code}';`);
