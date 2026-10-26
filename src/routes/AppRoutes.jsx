@@ -37,6 +37,7 @@ import RetailAttendance from '../pages/reliance-retail/RetailAttendance.jsx';
 import FaultTracker from '../pages/FaultTracker.jsx';
 import DeepCleaning from '../pages/DeepCleaning.jsx';
 import UserManagement from '../pages/settings/UserManagement.jsx';
+import ClientTicketingManagement from '../pages/settings/ClientTicketingManagement.jsx';
 import FieldOperationsAccess from '../pages/settings/FieldOperationsAccess.jsx';
 import HospitalFeedbackQrGenerator from '../pages/HospitalFeedbackQrGenerator.jsx';
 import HospitalFeedbackDashboard from '../pages/HospitalFeedbackDashboard.jsx';
@@ -147,6 +148,7 @@ const productionRoutes = [
           { path: 'settings', element: <Settings /> },
           { path: 'settings/access-management/field-operations', element: <FieldOperationsAccess /> },
           { path: 'settings/user-management', element: <UserManagement /> },
+          { path: 'settings/user-management/client-ticketing', element: <ClientTicketingManagement /> },
           { path: 'settings/hospital-feedback/qr-generator', element: <HospitalFeedbackQrGenerator /> },
           { path: 'operations/hospital-feedback/dashboard', element: <HospitalFeedbackDashboard /> },
           { path: 'profile', element: <Profile /> },

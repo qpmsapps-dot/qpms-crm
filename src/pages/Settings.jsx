@@ -10,6 +10,7 @@ const settings = [
   { title: 'Field Operations Access', description: 'Preview current Command Center permissions, business scope, and visible employee coverage.', icon: ShieldCheck, to: '/settings/access-management/field-operations' },
   { title: 'User roles', description: 'Configure access levels for administrators, managers, and agents.', icon: UserCog },
   { title: 'User Management', description: 'Preview employee hierarchy, HOD mapping, imports, and app account onboarding.', icon: Users, to: '/settings/user-management' },
+  { title: 'Client Ticketing - Client Management', description: 'Prepare inactive CGE client, blocks, staff scopes and Client Persons.', icon: Building, to: '/settings/user-management/client-ticketing' },
   { title: 'Client Feedback QR', description: 'Generate secure public QR codes for client hospital locations.', icon: QrCode, to: '/settings/hospital-feedback/qr-generator' },
   { title: 'Notifications', description: 'Set ticket, task, SLA, and approval notification preferences.', icon: Bell },
   { title: 'Security', description: 'Prepare authentication, session, and audit settings for backend integration.', icon: ShieldCheck },
@@ -20,6 +21,7 @@ export default function Settings() {
   const { user } = useAuth();
   const visibleSettings = settings.filter((item) => {
     if (item.to?.startsWith('/settings/access-management')) return canAccessUserManagementAdmin(user);
+    if (item.to === '/settings/user-management/client-ticketing') return ['ADMIN','QPMSADMIN','DEVELOPER','DEV'].includes(String(user?.rawRole || user?.raw_role || user?.role || '').toUpperCase().replace(/[^A-Z0-9]/g,''));
     if (item.to === '/settings/user-management') return canAccessUserManagementAdmin(user);
     return true;
   });

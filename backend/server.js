@@ -21,6 +21,7 @@ import { createClientDeepCleaningRouter } from './routes/clientDeepCleaningRoute
 import { createTrainingRouter } from './routes/trainingRoutes.js';
 import { createMomRouter } from './routes/momRoutes.js';
 import { createHospitalTicketRouter } from './routes/hospitalTicketRoutes.js';
+import { createClientTicketingManagementRouter } from './routes/clientTicketingManagementRoutes.js';
 import { registerPreSalesRoutes } from './routes/preSalesRoutes.js';
 import { registerTenderRoutes } from './routes/tenderRoutes.js';
 import {
@@ -474,6 +475,13 @@ app.use(
     requireAuth: requireSupabaseJwt,
     getClient: requireServiceRoleSupabase,
   }),
+);
+
+app.use(
+  '/api/admin/client-ticketing',
+  requireSupabaseJwt,
+  requireUserManagementPermission,
+  createClientTicketingManagementRouter({ getClient: requireServiceRoleSupabase }),
 );
 
 app.get(
