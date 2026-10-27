@@ -44,6 +44,7 @@ test('ordinary site arrivals persist verified closed journeys before End Day wit
   sql(oldVisit.match(/create or replace function public\.trg_refresh_fo_attendance_payable_route_km\(\)[\s\S]*?\$\$;/i)[0]);
   sql('create trigger trg_fo_site_visits_payable_route_km after insert or delete or update of route_km,attendance_id on fo_site_visits for each row execute function trg_refresh_fo_attendance_payable_route_km()');
   sql(fs.readFileSync(root+'supabase/migrations_2_0/249_fo_live_journey_km.sql','utf8').replaceAll('\r',''));
+  sql(fs.readFileSync(root+'supabase/migrations_2_0/250_fo_active_mode_receipt_compatibility.sql','utf8').replaceAll('\r',''));
   const history=crypto.randomUUID();
   // Historical values are fixture input established before this acceptance run,
   // never inserted as expected results for an attendance under test.
@@ -120,6 +121,17 @@ test('ordinary site arrivals persist verified closed journeys before End Day wit
   });
   await check('unresolved checkout eligibility excludes inter-site KM without blocking independent start journey',async()=>{
    const review=fixture('LOCAL_LIVE_REVIEW');const a=arrival(review,'20',75.0066667);const start=await dispatch(review.id);assert.equal(start.financial_posted,true,JSON.stringify(start));const before=state(review.id);checkout(a,'25',75.0083333,false);arrival(review,'40',75.0133333);const r=await dispatch(review.id);assert.equal(r.additionalKm,0);assert.equal(r.financial_posted,false);assert.deepEqual(state(review.id).credits,before.credits);assert.ok(r.unresolved.some(l=>(l.review_flags||[]).includes('CHECKOUT_ELIGIBILITY_REVIEW_REQUIRED')));
+  });
+  await check('authenticated owner can switch modes after live payment without repricing or losing receipts',async()=>{
+   const change=fixture('LOCAL_LIVE_CHANGE');const visit=arrival(change,'20',75.0066667);await dispatch(change.id);const before=state(change.id);
+   sql('grant select,update on fo_attendance to authenticated');
+   sql("create policy test_live_owner_mode on fo_attendance for all to authenticated using(exists(select 1 from profiles p where p.auth_user_id=auth.uid() and p.employee_code=fo_attendance.employee_code)) with check(exists(select 1 from profiles p where p.auth_user_id=auth.uid() and p.employee_code=fo_attendance.employee_code))");
+   const mode=(value,allowed,actor=change.profile)=>sql(`set role authenticated;set request.jwt.claim.role='authenticated';set request.jwt.claim.sub='${actor}';update fo_attendance set travel_mode='${value}',rate_per_km=4,payable_km_allowed=${allowed},metadata=jsonb_build_object('previous_travel_mode',travel_mode,'travel_mode_changed_at',clock_timestamp()) where id='${change.id}'`);
+   mode('train',false,crypto.randomUUID());assert.equal(state(change.id).attendance.travel_mode,'bike');mode('train',false);assert.equal(state(change.id).attendance.travel_mode,'train');assert.equal(state(change.id).attendance.total_approved_km,before.attendance.total_approved_km);assert.equal(state(change.id).attendance.metadata.shared_km_last_receipt,before.attendance.metadata.shared_km_last_receipt);mode('bike',true);
+   sql(`insert into fo_travel_legs(id,attendance_id,employee_code,fo_user_id,travel_mode,payable_km_allowed,started_at,ended_at,start_lat,start_lng,end_lat,end_lng,status,rate_per_km) values(gen_random_uuid(),'${change.id}','${change.code}','${change.code}','bike',true,'2026-10-26T03:00:00.000567Z','2026-10-26T03:20:00.000432Z',12,75,12,75.0066667,'completed',4),(gen_random_uuid(),'${change.id}','${change.code}','${change.code}','bike',true,'2026-10-26T03:25:00.000654Z','2026-10-26T03:40:00.000432Z',12,75.0083333,12,75.0133333,'completed',4)`);
+   checkout(visit,'25',75.0083333);arrival(change,'40',75.0133333);const next=await dispatch(change.id);assert.equal(next.financial_posted,true,JSON.stringify(next));assert.ok(next.additionalKm>0);const after=state(change.id);for(const c of before.credits)assert.deepEqual(after.credits.find(x=>x.id===c.id),c);assert.equal(after.credits.filter(c=>c.evidence.type==='start_to_first_checkin').length,before.credits.length);
+   assert.throws(()=>sql(`update fo_attendance set travel_mode='car',rate_per_km=8 where id='${change.id}'`,true),/identity_mode_protected/);
+   end(change);assert.throws(()=>mode('train',false),/identity_mode_protected/);
   });
   await check('live kill switch blocks active pickup while existing normal End Day still processes',async()=>{
    sql("update fo_km_automatic_control set live_site_enabled=false,reason='Isolated live journey stop'");const off=fixture('LOCAL_LIVE_OFF');arrival(off,'20',75.0066667);due(off.id);assert.equal((await processKmReconciliationJobs(db.client,{environment,limit:1})).processed,0);assert.equal(state(off.id).attendance.total_approved_km,0);end(off);const r=await dispatch(off.id);assert.equal(r.financial_posted,true,JSON.stringify(r));assert.ok(state(off.id).attendance.total_approved_km>0);

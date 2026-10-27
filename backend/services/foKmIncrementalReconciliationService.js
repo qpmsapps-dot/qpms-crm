@@ -47,7 +47,13 @@ export function buildIncrementalKmPlan(evidence, calculation, existingCredits = 
         if (fixes.length===1) leg.from_time=fixes[0].captured_at;
       }
     }
-    const key = stableKmLegKey(attendance.id, leg);
+    // A later lifecycle snapshot can describe an already-paid whole window.
+    // Retain that exact receipt key; never guess inclusion across partial windows.
+    const sameWindow=existingCredits.find(c=>c.evidence?.type===leg.type && c.evidence?.travel_mode===leg.travel_mode &&
+      (c.evidence?.from_visit_id||null)===(leg.from_visit_id||null) && (c.evidence?.to_visit_id||null)===(leg.to_visit_id||null) &&
+      timestampMicros(c.started_at)!==null && timestampMicros(c.started_at)===timestampMicros(leg.from_time) &&
+      timestampMicros(c.ended_at)===timestampMicros(leg.to_time));
+    const key = sameWindow?.leg_key || stableKmLegKey(attendance.id, leg);
     const recorded = snapshots.find(s => s.id === leg.persisted_travel_leg_id);
     // The posting RPC binds exact saved boundaries, including microseconds.
     // Reconstructed windows spanning reopen/pause legs are not the saved leg.

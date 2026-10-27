@@ -16,6 +16,12 @@ test('equivalent timezone representations preserve the exact recorded window',()
  const r=buildIncrementalKmPlan(evidence,{travel_legs:[{...leg,from_time:'2026-10-26T11:44:07.068960+05:30'}]},[]);
  assert.equal(r.additionalKm,0.1);
 });
+test('a later exact lifecycle snapshot retains its paid window key without double credit',()=>{
+ const credit={leg_key:'original-key',started_at:start,ended_at:end,added_km:0.1,applied_to_attendance:true,evidence:{...leg,persisted_travel_leg_id:null}};
+ const e={...evidence,attendance:{...evidence.attendance,total_approved_km:0.1,petrol_amount:0.4}};
+ const r=buildIncrementalKmPlan(e,{travel_legs:[{...leg,mode_segment:true}]},[credit]);assert.equal(r.legs[0].leg_key,'original-key');assert.equal(r.additionalKm,0);
+ const partial=buildIncrementalKmPlan(e,{travel_legs:[{...leg,mode_segment:true,from_time:'2026-10-26T06:14:10Z'}]},[credit]);assert.notEqual(partial.legs[0].leg_key,'original-key');assert.equal(partial.additionalKm,0);
+});
 test('reconstructed site arrivals and checkouts retain recorded microseconds without rebinding saved legs',()=>{
  const e={...evidence,snapshots:[],visits:[{id:'origin',check_out_time:start},{id:'destination',check_in_time:end}]};
  const reconstructed={...leg,persisted_travel_leg_id:null,from_visit_id:'origin',to_visit_id:'destination',from_time:new Date(start).toISOString(),to_time:new Date(end).toISOString()};
