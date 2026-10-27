@@ -26,7 +26,17 @@ export function buildIncrementalKmPlan(evidence, calculation, existingCredits = 
   const usedSnapshots = new Set();
   const correctionLegs = corrections.flatMap(c => c.before_state?.leg_breakdown || c.before_state?.legBreakdown || []);
   const correctionHistoryKnown = corrections.every(c => (c.before_state?.leg_breakdown || c.before_state?.legBreakdown || []).length > 0) && correctionLegs.every(l => (l.started_at || l.startedAt) && (l.ended_at || l.endedAt));
-  const legs = calculation.travel_legs.map(leg => {
+  const legs = calculation.travel_legs.map(calculatedLeg => {
+    const leg = { ...calculatedLeg };
+    // Reconstructed Date values lose sub-millisecond precision. For new legs,
+    // retain the authoritative attendance endpoint when it is the same instant
+    // at Date precision; never relax exact saved-leg boundary verification.
+    if (!leg.persisted_travel_leg_id) {
+      if (leg.from_source === 'attendance_start' && attendance.login_time &&
+          Number.isFinite(Date.parse(leg.from_time)) && Date.parse(leg.from_time) === Date.parse(attendance.login_time)) leg.from_time = attendance.login_time;
+      if (leg.to_source === 'attendance_end_location' && attendance.logout_time &&
+          Number.isFinite(Date.parse(leg.to_time)) && Date.parse(leg.to_time) === Date.parse(attendance.logout_time)) leg.to_time = attendance.logout_time;
+    }
     const key = stableKmLegKey(attendance.id, leg);
     const recorded = snapshots.find(s => s.id === leg.persisted_travel_leg_id);
     // The posting RPC binds exact saved boundaries, including microseconds.

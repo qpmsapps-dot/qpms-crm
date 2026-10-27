@@ -24,3 +24,40 @@ test('reopened or canceled work stops before calculator and financial persistenc
   assert.equal(r.code,'KM_COMPLETED_ATTENDANCE_REQUIRED');assert.equal(r.financial_posted,false);assert.deepEqual(calls,['rpc_fo_km_reconciliation_state_v1']);
  }
 });
+
+test('new attendance-bound legs preserve microseconds without changing KM or mutating calculation', () => {
+  const login = '2026-10-26T05:36:59.524568+00:00', logout = '2026-10-26T16:34:36.854359+00:00';
+  const newLeg = { ...leg, persisted_travel_leg_id: null, from_source: 'attendance_start', to_source: 'attendance_end_location', from_time: new Date(login).toISOString(), to_time: new Date(logout).toISOString(), payable_km: 4.39 };
+  const result = buildIncrementalKmPlan({ ...evidence, snapshots: [], attendance: { ...evidence.attendance, login_time: login, logout_time: logout } }, { travel_legs: [newLeg] });
+  assert.equal(result.legs[0].from_time, login);
+  assert.equal(result.legs[0].to_time, logout);
+  assert.equal(result.additionalKm, 4.39);
+  assert.equal(result.additionalAmount, 17.56);
+  assert.equal(newLeg.from_time, '2026-10-26T05:36:59.524Z');
+});
+
+test('attendance endpoints cannot rewrite a saved leg or a different reconstructed window', () => {
+  const login = '2026-10-26T06:14:07.068960Z';
+  const e = { ...evidence, attendance: { ...evidence.attendance, login_time: login } };
+  const recorded = buildIncrementalKmPlan(e, { travel_legs: [{ ...leg, from_source: 'attendance_start', from_time: '2026-10-26T06:14:07.068Z' }] });
+  assert.equal(recorded.additionalKm, 0);
+  assert.equal(recorded.legs[0].evidence_status, 'recorded_leg_window_requires_review');
+  const other = buildIncrementalKmPlan({ ...e, snapshots: [] }, { travel_legs: [{ ...leg, persisted_travel_leg_id: null, from_source: 'attendance_start', from_time: '2026-10-26T06:14:08.068Z' }] });
+  assert.equal(other.legs[0].from_time, '2026-10-26T06:14:08.068Z');
+});
+
+test('all three saved journey types retain exact boundaries and reject truncated endpoints', () => {
+  for (const type of ['start_to_first_checkin', 'site_checkout_to_next_checkin', 'last_checkout_to_end_day']) {
+    const savedLeg = { ...leg, type, from_source: 'attendance_start', to_source: 'attendance_end_location' };
+    const e = { ...evidence, attendance: { ...evidence.attendance, login_time: start, logout_time: end } };
+    const exact = buildIncrementalKmPlan(e, { travel_legs: [savedLeg] });
+    assert.equal(exact.additionalKm, 0.1, type);
+    assert.equal(exact.legs[0].from_time, start);
+    assert.equal(exact.legs[0].to_time, end);
+    for (const endpoint of ['from_time', 'to_time']) {
+      const truncated = buildIncrementalKmPlan(e, { travel_legs: [{ ...savedLeg, [endpoint]: new Date(savedLeg[endpoint]).toISOString() }] });
+      assert.equal(truncated.additionalKm, 0, `${type}: ${endpoint}`);
+      assert.equal(truncated.legs[0].evidence_status, 'recorded_leg_window_requires_review');
+    }
+  }
+});
