@@ -36,6 +36,16 @@ export function buildIncrementalKmPlan(evidence, calculation, existingCredits = 
           Number.isFinite(Date.parse(leg.from_time)) && Date.parse(leg.from_time) === Date.parse(attendance.login_time)) leg.from_time = attendance.login_time;
       if (leg.to_source === 'attendance_end_location' && attendance.logout_time &&
           Number.isFinite(Date.parse(leg.to_time)) && Date.parse(leg.to_time) === Date.parse(attendance.logout_time)) leg.to_time = attendance.logout_time;
+      const arrival=visits.find(v=>v.id===leg.to_visit_id);
+      if (arrival?.check_in_time && Date.parse(leg.to_time)===Date.parse(arrival.check_in_time)) leg.to_time=arrival.check_in_time;
+      const departure=visits.find(v=>v.id===leg.from_visit_id);
+      const checkout=departure?.check_out_time||departure?.checkout_time;
+      if (checkout && Date.parse(leg.from_time)===Date.parse(checkout)) leg.from_time=checkout;
+      if (['corroborated_mobile_departure','verified_mobile_near_checkout'].includes(leg.from_source)) {
+        const fixes=evidence.originalRows.filter(r=>(leg.source_row_ids||[]).includes(r.id) &&
+          Number.isFinite(Date.parse(r.captured_at)) && Date.parse(r.captured_at)===Date.parse(leg.from_time));
+        if (fixes.length===1) leg.from_time=fixes[0].captured_at;
+      }
     }
     const key = stableKmLegKey(attendance.id, leg);
     const recorded = snapshots.find(s => s.id === leg.persisted_travel_leg_id);
@@ -110,10 +120,13 @@ export async function reconcileSupportedKm(client, payload, options = {}) {
   const adminPreview = options.persist === false && (options.trigger || 'admin_recalculation') === 'admin_recalculation' && sharedKmPreviewEnabled(environment);
   if (!sharedKmReconciliationEnabled(environment) && !adminPreview) return {attendance_id:payload.attendance_id, status:'deferred', code:'KM_SHARED_RECONCILIATION_INACTIVE', financial_posted:false, updated:false, retryable:true};
   if ((options.trigger || 'admin_recalculation') === 'admin_recalculation' && !options.adminAuthorization?.userId) throw kmError('KM_ADMIN_REQUIRED','An authenticated Admin is required.',403);
-  const evidence = options.evidence || await loadKmEvidence(client, payload.attendance_id);
+  const evidence = options.evidence || await loadKmEvidence(client, payload.attendance_id, {closedJourneysOnly:options.automaticKm===true});
   const { data: state, error } = await client.rpc('rpc_fo_km_reconciliation_state_v1', { p_attendance_id: evidence.attendance.id });
   if (error) throw kmReconciliationDependencyError(error); // Never interpret an unavailable ledger as zero.
-  if (options.persist !== false && (!evidence.attendance.logout_time ||
+  const liveAutomatic=options.automaticKm===true && environment.KM_CANONICAL_AUTOMATION_ENABLED==='true' &&
+    ['site_visit','late_gps'].includes(options.trigger) && !evidence.attendance.logout_time &&
+    String(evidence.attendance.status||'').toLowerCase()==='active';
+  if (options.persist !== false && !liveAutomatic && (!evidence.attendance.logout_time ||
       !['completed','ended','ended day','closed','auto ended','stale auto ended'].includes(String(evidence.attendance.status || '').toLowerCase()))) {
     return {attendance_id:evidence.attendance.id,date:evidence.attendance.attendance_date,
       status:evidence.attendance.logout_time ? 'deferred' : 'active_closed_windows_only',
@@ -127,7 +140,7 @@ export async function reconcileSupportedKm(client, payload, options = {}) {
   plan.snapshot = state.digest;
   plan.inputDigest = createHash('sha256').update(JSON.stringify({ attendance: evidence.attendance.id, legs: plan.legs, snapshot: state.digest, sources: plan.sourceRowIds })).digest('hex');
   const response = { attendance_id: evidence.attendance.id, date: evidence.attendance.attendance_date, ...plan, updated: false, financial_posted: false };
-  if (!evidence.attendance.logout_time) return { ...response, status: 'active_closed_windows_only', additionalKm: 0, message: 'Closed travel evidence calculated; active attendance payable unchanged.' };
+  if (!evidence.attendance.logout_time && !liveAutomatic) return { ...response, status: 'active_closed_windows_only', additionalKm: 0, message: 'Closed travel evidence calculated; active attendance payable unchanged.' };
   if (options.persist === false) return { ...response, authorization_calculation: plan, status: 'calculated_not_posted', message: 'Evidence calculated only. No KM or petrol credit was posted.' };
   if (!plan.additionalKm) return { ...response, status: plan.unresolved.length ? 'partial_unresolved' : 'unchanged', message: 'Recalculation completed — no additional supported KM found. Existing payable unchanged.' };
   if(options.deadlineAt && Date.now()>=options.deadlineAt)return {...response,status:'deferred',code:'KM_EVIDENCE_TIMEOUT',retryable:true,message:'Calculation exceeded its bounded window; no financial posting was attempted.'};

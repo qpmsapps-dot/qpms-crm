@@ -16,6 +16,21 @@ test('equivalent timezone representations preserve the exact recorded window',()
  const r=buildIncrementalKmPlan(evidence,{travel_legs:[{...leg,from_time:'2026-10-26T11:44:07.068960+05:30'}]},[]);
  assert.equal(r.additionalKm,0.1);
 });
+test('reconstructed site arrivals and checkouts retain recorded microseconds without rebinding saved legs',()=>{
+ const e={...evidence,snapshots:[],visits:[{id:'origin',check_out_time:start},{id:'destination',check_in_time:end}]};
+ const reconstructed={...leg,persisted_travel_leg_id:null,from_visit_id:'origin',to_visit_id:'destination',from_time:new Date(start).toISOString(),to_time:new Date(end).toISOString()};
+ const result=buildIncrementalKmPlan(e,{travel_legs:[reconstructed]});
+ assert.equal(result.legs[0].from_time,start);assert.equal(result.legs[0].to_time,end);assert.equal(result.additionalKm,0.1);
+ const saved=buildIncrementalKmPlan({...e,snapshots:evidence.snapshots},{travel_legs:[{...reconstructed,persisted_travel_leg_id:'saved'}]});
+ assert.equal(saved.additionalKm,0);assert.equal(saved.legs[0].evidence_status,'recorded_leg_window_requires_review');
+});
+test('an exactly identified reconstructed GPS departure retains its own recorded precision',()=>{
+ const e={...evidence,snapshots:[],originalRows:[{id:'fix',captured_at:start}]};
+ const input={...leg,persisted_travel_leg_id:null,from_time:new Date(start).toISOString(),from_source:'corroborated_mobile_departure',source_row_ids:['fix']};
+ const result=buildIncrementalKmPlan(e,{travel_legs:[input]});assert.equal(result.legs[0].from_time,start);
+ const ambiguous=buildIncrementalKmPlan({...e,originalRows:[...e.originalRows,{id:'second',captured_at:start}]},{travel_legs:[{...input,source_row_ids:['fix','second']}]});
+ assert.equal(ambiguous.legs[0].from_time,input.from_time);
+});
 test('reopened or canceled work stops before calculator and financial persistence',async()=>{
  for(const attendance of [{id:'a',logout_time:null,status:'Active'},{id:'a',logout_time:end,status:'Canceled'}]) {
   const calls=[];

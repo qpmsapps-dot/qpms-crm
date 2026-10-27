@@ -18,7 +18,7 @@ export async function persistCanonicalKmV2(client, {
     if (automaticKm) {
       if (environment.KM_CANONICAL_AUTOMATION_ENABLED !== 'true' || environment.END_DAY_KM_AUTO_RECALC_ENABLED !== 'true' ||
           environment.KM_SHARED_RECONCILIATION_ENABLED !== 'true' || environment.KM_INCREMENTAL_REPORTING_ENABLED !== 'true' ||
-          adminAuthorization || scopedAuthorizationReference || !['manual_end_day','auto_end_day','late_gps'].includes(sourceEntryPoint) ||
+          adminAuthorization || scopedAuthorizationReference || !['manual_end_day','auto_end_day','late_gps','site_visit'].includes(sourceEntryPoint) ||
           !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(actorSource || '')) {
         throw Object.assign(new Error('Ordinary KM requires the enabled automatic worker and its current lease.'), {code:'KM_AUTOMATIC_AUTHORIZATION_REQUIRED'});
       }

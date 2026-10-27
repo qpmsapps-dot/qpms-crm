@@ -2894,7 +2894,8 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
     };
     throw error;
   }
-  const expectedLegs=buildCompletedTravelLegs(attendance,visits,effectiveEnd,{...options,validPoints:trustworthyFixes(options.evidenceRows||effectiveEnd.rows||[],attendance)});
+  const expectedLegs=buildCompletedTravelLegs(attendance,visits,effectiveEnd,{...options,validPoints:trustworthyFixes(options.evidenceRows||effectiveEnd.rows||[],attendance)})
+    .filter(leg=>attendance.logout_time || !['last_checkout_to_end_day','full_day_no_site'].includes(leg.type));
   const persistedCandidateLegs = completedPersistedTravelLegs(canonicalSnapshots.completed, expectedLegs);
   let candidateLegs = persistedCandidateLegs.length > 0
     ? persistedCandidateLegs

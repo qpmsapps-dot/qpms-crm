@@ -42,7 +42,7 @@ export function detectSiteDeparture(points, site, checkIn, until) {
   }
   return null;
 }
-export async function loadKmEvidence(client, attendanceId) {
+export async function loadKmEvidence(client, attendanceId, {closedJourneysOnly=false}={}) {
   const { data: attendance, error } = await client.from('fo_attendance').select('*').eq('id', attendanceId).single();
   if (error) throw error;
   const code = String(attendance.employee_code || attendance.fo_user_id || '').toUpperCase();
@@ -52,12 +52,16 @@ export async function loadKmEvidence(client, attendanceId) {
   const identities = new Set([code, attendance.fo_user_id, profiles[0].id, profiles[0].auth_user_id].filter(Boolean).map(String));
   const [dayStart, dayEnd] = attendanceDayBounds(attendance.attendance_date);
   const start = new Date(Math.max(+dayStart, +new Date(attendance.login_time)));
+  const activeVisits=closedJourneysOnly && !attendance.logout_time
+    ? await evidencePages(()=>client.from('fo_site_visits').select('*').eq('attendance_id',attendance.id).order('check_in_time').order('id')) : null;
+  const arrivals=activeVisits?.map(v=>Date.parse(v.check_in_time)).filter(t=>Number.isFinite(t)&&t>=+start&&t<=Date.now())||[];
+  const closedCutoff=arrivals.length?Math.max(...arrivals)+1:Date.now();
   const autoEnded = /auto ended/i.test(attendance.status || '') || attendance.metadata?.auto_ended === true;
-  const end = autoEnded ? dayEnd : new Date(Math.min(+dayEnd, attendance.logout_time ? +new Date(attendance.logout_time) + 1 : Date.now()));
+  const end = autoEnded ? dayEnd : new Date(Math.min(+dayEnd, attendance.logout_time ? +new Date(attendance.logout_time) + 1 : activeVisits ? closedCutoff : Date.now()));
   const or = `employee_code.eq.${code},fo_user_id.in.(${[...identities].join(',')})`;
   const [allRows, visits, snapshots, sessions, recoveries, corrections] = await Promise.all([
     evidencePages(() => client.from('fo_location_logs').select('*').or(or).gte('captured_at', start.toISOString()).lt('captured_at', end.toISOString()).order('captured_at').order('id')),
-    evidencePages(() => client.from('fo_site_visits').select('*').eq('attendance_id', attendance.id).order('check_in_time').order('id')),
+    activeVisits || evidencePages(() => client.from('fo_site_visits').select('*').eq('attendance_id', attendance.id).order('check_in_time').order('id')),
     evidencePages(() => client.from('fo_travel_legs').select('*').eq('attendance_id', attendance.id).order('started_at').order('id')),
     evidencePages(() => client.from('fo_attendance').select('id,login_time,logout_time').eq('employee_code', code).eq('attendance_date', attendance.attendance_date).order('id')),
     evidencePages(() => client.from('fo_october_km_recoveries').select('*').eq('employee_code', code).eq('attendance_date', attendance.attendance_date).eq('status', 'approved').order('id')),
