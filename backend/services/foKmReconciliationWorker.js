@@ -26,14 +26,20 @@ export async function processKmReconciliationJobs(client, { environment = proces
     let result;
     try {
       const held=(automatic ? environment.KM_CANONICAL_AUTOMATION_ENABLED!=='true' : String(environment.KM_FINANCIAL_WRITES_EMERGENCY_PAUSE).toLowerCase()!=='false')||environment.KM_CANONICAL_POLICY_ENABLED!=='true';
-      result = held ? {status:'deferred',code:'KM_FINANCIAL_WRITES_MAINTENANCE',financial_posted:false} : await reconcile(client, { attendance_id: job.attendance_id }, { environment, persist: true, trigger: job.trigger_source, actorSource: job.lease,automaticKm:automatic,deadlineAt:Date.now()+20000,maxGoogleDirectionsCalls:roadBudget });
+      result = held ? {status:'deferred',code:'KM_FINANCIAL_WRITES_MAINTENANCE',financial_posted:false} : await reconcile(client, { attendance_id: job.attendance_id }, { environment, persist: true, trigger: job.trigger_source, actorSource: job.lease,automaticKm:automatic,finalLegOnly:job.final_leg_only===true,deadlineAt:Date.now()+20000,maxGoogleDirectionsCalls:roadBudget });
     } catch (error) { result = { status: 'deferred', code: error.code || 'km_reconciliation_failed', message:error.message, financial_posted: false }; }
     // Preserve supported committed legs while retrying temporary road-provider
     // failures. Permanent eligibility/evidence rejections remain review-only.
     const routingRetry=automatic && result.baselineKnown !== false && (result.unresolved||[]).some(l=>
       l.payable_km_allowed !== false && !(l.review_flags||[]).includes('CHECKOUT_ELIGIBILITY_REVIEW_REQUIRED') &&
-      /^google_(timeout|deadline_exceeded|fetch_error|unavailable|unknown_error|over_query_limit|http_429|http_5\d\d)$/.test(l.evidence_status||l.reason||l.fallback_reason||''));
+      (/^google_(timeout|deadline_exceeded|fetch_error|unavailable|unknown_error|over_query_limit|http_429|http_5\d\d)$/.test(l.evidence_status||l.reason||l.fallback_reason||'') ||
+       (roadBudget>0 && (l.evidence_status||l.reason||l.fallback_reason)==='google_call_limit')));
     const done = !routingRetry && (result.financial_posted === true || ['unchanged','partial_unresolved'].includes(result.status));
+    const finalEvidence=result.legs?.find(l=>l.type==='last_checkout_to_end_day');
+    if(automatic && job.final_leg_only===true && finalEvidence){
+      const recorded=await client.rpc('rpc_record_final_leg_evidence_v251',{p_attendance:job.attendance_id,p_lease:job.lease,p_final:finalEvidence});
+      if(recorded.error)throw kmReconciliationDependencyError(recorded.error);
+    }
     const finished = await client.rpc('rpc_finish_fo_km_reconciliation_v1', {
       p_attendance: job.attendance_id, p_lease: job.lease, p_posted: done,
       p_error: routingRetry ? 'KM_ROUTING_RETRYABLE' : !result.financial_posted && done ? (automatic ? result.status : 'unchanged') : done ? null : result.code || result.status,

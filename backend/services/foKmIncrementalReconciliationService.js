@@ -143,6 +143,13 @@ export async function reconcileSupportedKm(client, payload, options = {}) {
     evidenceOnly: true, sharedRecovery: true, auditDelayedCheckout: false,
   });
   const plan = buildIncrementalKmPlan(evidence, calculation, state.credits || []);
+  if(options.finalLegOnly===true){
+    for(const leg of plan.legs)if(leg.type!=='last_checkout_to_end_day')leg.new_eligible_km=0;
+    plan.additionalKm=round(plan.legs.reduce((sum,l)=>sum+l.new_eligible_km,0));
+    plan.additionalAmount=round(plan.legs.reduce((sum,l)=>sum+l.new_eligible_km*Number(l.rate_per_km||0),0));
+    plan.finalPayableKm=plan.existingPayableKm==null?null:round(plan.existingPayableKm+plan.additionalKm);
+    plan.finalLegOnly=true;
+  }
   plan.snapshot = state.digest;
   plan.inputDigest = createHash('sha256').update(JSON.stringify({ attendance: evidence.attendance.id, legs: plan.legs, snapshot: state.digest, sources: plan.sourceRowIds })).digest('hex');
   const response = { attendance_id: evidence.attendance.id, date: evidence.attendance.attendance_date, ...plan, updated: false, financial_posted: false };

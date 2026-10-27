@@ -45,6 +45,7 @@ test('ordinary site arrivals persist verified closed journeys before End Day wit
   sql('create trigger trg_fo_site_visits_payable_route_km after insert or delete or update of route_km,attendance_id on fo_site_visits for each row execute function trg_refresh_fo_attendance_payable_route_km()');
   sql(fs.readFileSync(root+'supabase/migrations_2_0/249_fo_live_journey_km.sql','utf8').replaceAll('\r',''));
   sql(fs.readFileSync(root+'supabase/migrations_2_0/250_fo_active_mode_receipt_compatibility.sql','utf8').replaceAll('\r',''));
+  sql(fs.readFileSync(root+'supabase/migrations_2_0/251_fo_final_leg_reconciliation.sql','utf8').replaceAll('\r',''));
   const history=crypto.randomUUID();
   // Historical values are fixture input established before this acceptance run,
   // never inserted as expected results for an attendance under test.
@@ -135,6 +136,25 @@ test('ordinary site arrivals persist verified closed journeys before End Day wit
   });
   await check('live kill switch blocks active pickup while existing normal End Day still processes',async()=>{
    sql("update fo_km_automatic_control set live_site_enabled=false,reason='Isolated live journey stop'");const off=fixture('LOCAL_LIVE_OFF');arrival(off,'20',75.0066667);due(off.id);assert.equal((await processKmReconciliationJobs(db.client,{environment,limit:1})).processed,0);assert.equal(state(off.id).attendance.total_approved_km,0);end(off);const r=await dispatch(off.id);assert.equal(r.financial_posted,true,JSON.stringify(r));assert.ok(state(off.id).attendance.total_approved_km>0);
+  });
+  await check('bounded historical reconciliation posts only the final return, protects prior journeys and replays zero',async()=>{
+   const old=fixture('LOCAL_HISTORICAL_FINAL');const visit=arrival(old,'20',75.0066667);checkout(visit,'25',75.0083333);end(old);
+   sql("update fo_km_automatic_control set effective_from='2026-10-27',reason='Isolated effective date boundary'");due(old.id);assert.equal((await processKmReconciliationJobs(db.client,{environment,limit:1})).processed,0);
+   assert.throws(()=>sql(`select fo_queue_final_leg_reconciliation_v251(array['${old.id}']::uuid[],'Unauthorized')`,true),/permission denied/);
+   sql(`select fo_queue_final_leg_reconciliation_v251(array['${old.id}']::uuid[],'Isolated supported historical final return')`);const r=await dispatch(old.id);assert.equal(r.financial_posted,true,JSON.stringify(r));assert.ok(r.additionalKm>0);let s=state(old.id);assert.ok(s.credits.every(c=>c.evidence.type==='last_checkout_to_end_day'));assert.equal(s.attendance.metadata.shared_km_final_leg.financial_receipt_id,s.credits[0].id);
+   const before=s.credits;sql(`select fo_queue_final_leg_reconciliation_v251(array['${old.id}']::uuid[],'Isolated zero-addition verification')`);const retry=await dispatch(old.id);assert.equal(retry.additionalKm,0);assert.deepEqual(state(old.id).credits,before);assert.equal(state(old.id).attendance.metadata.shared_km_final_leg.last_reconciliation_additional_km,0);assert.equal(state(old.id).attendance.metadata.final_return_leg_km,r.additionalKm);
+   assert.throws(()=>sql(`select fo_queue_final_leg_reconciliation_v251(array['${history}']::uuid[],'Protected unmatched identity')`),/ineligible/);
+  });
+  await check('sparse final GPS uses actual provider response through real guarded persistence and outage retries',async()=>{
+   const oldKey=process.env.GOOGLE_MAPS_API_KEY;const oldGoogleEnabled=process.env.ENABLE_GOOGLE_DIRECTIONS;
+   try{process.env.ENABLE_GOOGLE_DIRECTIONS='true';process.env.GOOGLE_MAPS_API_KEY='isolated-provider-fixture';
+    const routed=fixture('LOCAL_SPARSE_FINAL');const visit=arrival(routed,'20',75.0066667);checkout(visit,'25',75.0083333);end(routed);sql(`delete from fo_location_logs where attendance_id='${routed.id}';update fo_attendance set metadata=metadata||'{"end_location_accuracy":5,"end_location_captured_at":"2026-10-26T04:00Z"}' where id='${routed.id}';select fo_queue_final_leg_reconciliation_v251(array['${routed.id}']::uuid[],'Isolated sparse final recovery')`);due(routed.id);
+    globalThis.fetch=async()=>({ok:false,status:503,statusText:'Fixture outage'});
+    const env={...environment,END_DAY_KM_AUTO_RECALC_MAX_GOOGLE_DIRECTIONS_CALLS:'4'};const failed=await processKmReconciliationJobs(db.client,{environment:env,limit:1});assert.equal(failed.results[0].financial_posted,false);assert.equal(state(routed.id).job.state,'deferred');assert.equal(state(routed.id).credits.length,0);
+    let providerCalls=0;globalThis.fetch=async url=>{assert.equal(new URL(url).hostname,'maps.googleapis.com');providerCalls++;return{ok:true,status:200,json:async()=>({status:'OK',routes:[{legs:[{distance:{value:1800},duration:{value:300}}]}]})};};due(routed.id);
+    const success=await processKmReconciliationJobs(db.client,{environment:env,limit:1});assert.equal(success.results[0].financial_posted,true,JSON.stringify(success));assert.equal(success.results[0].additionalKm,1.8);assert.equal(success.results[0].additionalAmount,7.2);assert.ok(providerCalls>0);assert.equal(state(routed.id).attendance.metadata.shared_km_final_leg.source,'GOOGLE_ROUTE_FALLBACK');const credits=state(routed.id).credits;
+    sql(`select fo_queue_final_leg_reconciliation_v251(array['${routed.id}']::uuid[],'Sparse final zero addition retry')`);due(routed.id);const retry=await processKmReconciliationJobs(db.client,{environment:env,limit:1});assert.equal(retry.results[0].additionalKm,0);assert.deepEqual(state(routed.id).credits,credits);
+   }finally{globalThis.fetch=async()=>{throw Error('External network forbidden');};process.env.ENABLE_GOOGLE_DIRECTIONS=oldGoogleEnabled;if(oldKey===undefined)delete process.env.GOOGLE_MAPS_API_KEY;else process.env.GOOGLE_MAPS_API_KEY=oldKey;}
   });
   await check('emergency/general controls, manual approval separation and historical values remain unchanged',()=>{
    assert.equal(json('select to_jsonb(emergency_pause) from fo_km_scope_control'),true);assert.equal(json('select to_jsonb(financial_writes_enabled) from fo_km_financial_control'),false);assert.equal(json('select to_jsonb(enabled) from fo_km_canonical_policy'),false);assert.equal(json('select to_jsonb(enabled) from fo_km_missing_approval_control'),false);assert.equal(json('select count(*) from fo_km_attendance_authorizations'),0);assert.deepEqual(state(history),historyBefore);

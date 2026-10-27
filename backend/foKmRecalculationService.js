@@ -748,7 +748,13 @@ async function loadGpsLogsForWindowWithBinding(client, attendance, fromTime, toT
 
 export async function resolveEffectiveAttendanceEnd(client, attendance, options = {}) {
   const manualEndTime = parseValidDate(attendance?.logout_time);
-  const manualEndCoordinate = attendanceEndCoordinate(attendance);
+  let manualEndCoordinate = attendanceEndCoordinate(attendance);
+  const endMetadata=safeAttendanceMetadata(attendance);
+  const captured=parseValidDate(endMetadata.end_location_captured_at);
+  const accuracy=normalizeNumber(endMetadata.end_location_accuracy);
+  if (manualEndCoordinate && ((manualEndCoordinate.latitude===0&&manualEndCoordinate.longitude===0) ||
+      endMetadata.end_location_is_mocked===true || (accuracy!==null&&accuracy>MAX_ACCURACY_METERS) ||
+      (captured&&manualEndTime&&Math.abs(captured-manualEndTime)>120000))) manualEndCoordinate=null;
   if (!isStaleAutoEndedAttendance(attendance)) {
     if (!manualEndCoordinate && manualEndTime && options.evidenceRows) {
       const last = trustworthyFixes(options.evidenceRows, attendance).filter(p => p.capturedAt <= manualEndTime && manualEndTime - p.capturedAt <= 120000).at(-1);
@@ -2430,7 +2436,7 @@ export function buildCompletedTravelLegs(attendance, visits = [], effectiveEnd =
     .filter((visit) => visitCheckInTime(visit))
     .sort((a, b) => visitCheckInTime(a) - visitCheckInTime(b));
   const endTime = effectiveEnd.time || parseValidDate(attendance?.logout_time);
-  const endCoordinate = effectiveEnd.coordinate || attendanceEndCoordinate(attendance);
+  const endCoordinate = Object.hasOwn(effectiveEnd,'coordinate') ? effectiveEnd.coordinate : attendanceEndCoordinate(attendance);
   if (!orderedVisits.length) {
     legs.push({
       type: 'full_day_no_site',
@@ -2953,7 +2959,11 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
     }
   }
 
-  for (const leg of candidateLegs) {
+  // Give the final return its opportunity before previously paid inbound legs
+  // consume the shared, bounded provider budget. Results remain chronological.
+  const calculationOrder=options.sharedRecovery && attendance.logout_time
+    ? [...candidateLegs].sort((a,b)=>Number(b.type==='last_checkout_to_end_day')-Number(a.type==='last_checkout_to_end_day')) : candidateLegs;
+  for (const leg of calculationOrder) {
     if (options.deadlineAt && Date.now() >= options.deadlineAt) {
       const error = new Error('Travel evidence calculation exceeded its time budget. Retry this date.');
       error.statusCode = 504;
@@ -3113,6 +3123,7 @@ export async function recalculateAttendanceTravelLegs(serviceRoleClient, attenda
       .filter((leg) => leg.status === 'calculated')
       .map((leg) => leg.source),
   );
+  legAudit.sort((a,b)=>Date.parse(a.from_time)-Date.parse(b.from_time));
   const selectedKmSource = calculatedSources.size > 1
     ? 'MIXED_LEG_BASED'
     : calculatedSources.has('GPS_BASED') || calculatedSources.has('GPS_ROUTE_SUPPORTED') || calculatedSources.has('FULL_DAY_GPS_NO_SITE')
