@@ -4906,6 +4906,10 @@ function manualApprovalRoleKey(value) {
   return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
 }
 
+export function missingKmFinancialApprovalRole(value) {
+  return ['ADMIN', 'QPMSADMIN', 'SUPERADMIN', 'DEVELOPER'].includes(manualApprovalRoleKey(value));
+}
+
 export function missingKmManualApprovalUpperBound(review = {}) {
   const metadata = review.metadata && typeof review.metadata === 'object' && !Array.isArray(review.metadata)
     ? review.metadata
@@ -4922,8 +4926,8 @@ export function missingKmManualApprovalUpperBound(review = {}) {
 }
 
 export function validateMissingKmManualApproval(review = {}, payload = {}, actor = {}) {
-  if (manualApprovalRoleKey(actor.role) !== 'ADMIN') {
-    const error = new Error('Only an Admin can manually approve clarification-required Missing KM.');
+  if (!missingKmFinancialApprovalRole(actor.role)) {
+    const error = new Error('An authorized Admin or Developer is required for manual Missing KM approval.');
     error.statusCode = 403;
     throw error;
   }
@@ -4971,7 +4975,7 @@ export function missingKmApprovedAmount(approvedKm, rate) {
 export function classifyMissingKmApprovalRetry(review = {}, payload = {}) {
   if (String(review.status || '').trim().toLowerCase() !== 'approved') return 'new_decision';
   const requestedKm = normalizeNumber(payload.approved_missing_km ?? payload.approved_km);
-  const existingKm = normalizeNumber(review.approved_missing_km) || 0;
+  const existingKm = normalizeNumber(review.metadata?.missing_km_approval_requested_km ?? review.approved_missing_km) || 0;
   return Number.isFinite(requestedKm) && Math.abs(requestedKm - existingKm) <= 0.001
     ? 'same_value_retry'
     : 'financial_adjustment';
@@ -4995,7 +4999,13 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
     throw error;
   }
   if (normalizedAction === 'approve') {
-    assertKmFinancialWritesAvailable({ dryRun: false, authorizedAdminAction: true });
+    // Only the dedicated service RPC can admit this exact reviewed increment.
+    // Full recalculation, legacy Admin corrections and workers retain their guards.
+    if (!actor.auth_user_id || !missingKmFinancialApprovalRole(actor.role)) {
+      const error = new Error('Authenticated Admin or Developer identity is required for Missing KM approval.');
+      error.statusCode = 403;
+      throw error;
+    }
   }
   const { data: review, error: reviewError } = await client
     .from('fo_missing_km_reviews')
@@ -5091,31 +5101,21 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
     },
   };
   if (normalizedAction === 'approve') {
-    if (!actor.auth_user_id || !['ADMIN', 'QPMSADMIN'].includes(manualApprovalRoleKey(actor.role))) {
-      const error = new Error('Authenticated Admin identity is required for financial approval.');
-      error.statusCode = 403;
+    if (!remarks) {
+      const error = new Error('Approval remarks are required for Missing KM approval.');
+      error.statusCode = 400;
       throw error;
     }
-    const reviewDecision = {
-      reviewId: review.id, expectedUpdatedAt: review.updated_at,
-      expectedStatus: review.status, update,
-    };
-    const receiptDigest = review.metadata?.atomic_approval_input_digest;
-    const retry = review.status === 'approved' && receiptDigest;
-    const preview = retry ? null : await recalculateFoKm(client, {
-      attendance_id: review.attendance_id, dry_run: true,
-    }, {
-      prepareOnly: true, refreshMissingKmReviews: false,
-      missingKmReviewDecision: reviewDecision, maxGoogleDirectionsCalls: 0,
+    const { data: persistence, error: approvalError } = await client.rpc('rpc_approve_fo_missing_km_v1', {
+      p_review_id: review.id, p_expected_review_updated_at: review.updated_at,
+      p_admin_user_id: actor.auth_user_id, p_approved_km: Number(approvedKm.toFixed(2)),
+      p_reason: remarks, p_manual_override: manualOverride, p_elevated_override: payload.elevated_override === true,
     });
-    const persistence = await persistCanonicalKmV2(client, {
-      attendanceId: review.attendance_id,
-      expectedAttendanceUpdatedAt: preview?.expected_attendance_updated_at || review.updated_at,
-      calculation: preview?.canonical_calculation || { calculationVersion: KM_ENGINE_VERSION, inputDigest: receiptDigest },
-      sourceEntryPoint: 'missing_km_approval', actorSource: actor.employee_code,
-      adminAuthorization: { userId: actor.auth_user_id, reason: remarks || 'Approve evidenced Missing KM review' },
-      reviewDecision,
+    if (approvalError) throw Object.assign(new Error(approvalError.message), {
+      code: approvalError.code, statusCode: approvalError.code === '42501' ? 403 : approvalError.code === '22023' ? 400
+        : ['40001','55000','P0002'].includes(approvalError.code) ? 409 : 500,
     });
+    if (!persistence?.receipt_id) throw Object.assign(new Error('Missing KM approval returned no immutable receipt.'), {code:'KM_APPROVAL_RECEIPT_MISSING',statusCode:503});
     return {
       review: persistence.review,
       totals: { attendance_id: review.attendance_id,
@@ -5123,7 +5123,8 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
         canonical_travel_leg_payable_km: persistence.total_route_km,
         approved_missing_km: persistence.approved_missing_km,
         approved_missing_review_count: persistence.approved_missing_review_count,
-        calculation_run_id: persistence.calculation_run_id },
+        calculation_run_id: persistence.calculation_run_id || null },
+      receipt_id: persistence.receipt_id, additionalKm: persistence.additionalKm, additionalAmount: persistence.additionalAmount,
       no_change: review.status === 'approved' || persistence.idempotent_replay === true,
     };
   }
@@ -5136,6 +5137,8 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
     .from('fo_missing_km_reviews')
     .update(update)
     .eq('id', reviewId)
+    .eq('status', review.status)
+    .eq('updated_at', review.updated_at)
     .select('*')
     .single();
   if (updateError) throw updateError;
@@ -5145,7 +5148,13 @@ export async function decideMissingKmReview(client, reviewId, action, payload = 
     .eq('id', updated.site_visit_id)
     .maybeSingle();
   if (visit?.id) await writeMissingKmReviewSummaryToVisit(client, visit.id, updated, safeVisitMetadata(visit));
-  const totals = await syncAttendanceApprovedKmTotals(client, updated.attendance_id);
+  // A rejection/clarification is nonfinancial. Preserve already payable travel
+  // rather than invoking a full recalculation under the general financial hold.
+  const attendance = await findAttendance(client, {attendance_id:updated.attendance_id});
+  const approved = await loadApprovedMissingKmSummary(client, updated.attendance_id);
+  const totals = {attendance_id:updated.attendance_id,total_approved_km:attendance.total_approved_km,
+    petrol_amount:attendance.petrol_amount,canonical_travel_leg_payable_km:attendance.total_route_km,
+    approved_missing_km:approved.approvedKm,approved_missing_review_count:approved.count};
   return { review: updated, totals };
 }
 

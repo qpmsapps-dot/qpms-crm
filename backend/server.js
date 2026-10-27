@@ -1998,6 +1998,7 @@ function hasCheckoutMissingKmReviewPermission(profile) {
   return new Set([
     'ADMIN',
     'QPMSADMIN',
+    'SUPERADMIN',
     'DEVELOPER',
     'OPERATIONSMANAGER',
     'OPERATIONMANAGER',
@@ -10146,7 +10147,8 @@ app.post(
         fo_user_id: visit.fo_user_id || attendance?.fo_user_id,
         username: visit.employee_code || attendance?.username,
       };
-      if (!isProfileInOperationsCommandCenterScope(actor, scopedTarget, profilesRes.data || [], hierarchyRes.data || [])) {
+      const reviewScopeActor = normalizePermissionRole(actor.role) === 'SUPERADMIN' ? {...actor,role:'Admin'} : actor;
+      if (!isProfileInOperationsCommandCenterScope(reviewScopeActor, scopedTarget, profilesRes.data || [], hierarchyRes.data || [])) {
         response.status(403).json({
           ok: false,
           message: 'You cannot review Missing KM outside your Field Operations scope.',
@@ -10218,6 +10220,10 @@ app.post(
         payable_application: action === 'approve'
           ? 'approved_missing_km_added_to_total_approved_km'
           : 'no_payable_km_added',
+        receipt_id: result.receipt_id || null,
+        additional_km: result.additionalKm || 0,
+        additional_petrol_amount: result.additionalAmount || 0,
+        no_change: result.no_change === true,
       });
     } catch (error) {
       response.status(error.statusCode || 500).json({ ok: false, message: error.message });

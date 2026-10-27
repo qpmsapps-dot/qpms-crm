@@ -25,7 +25,7 @@ test('maintenance gate permits dry-runs and is disabled by default', () => {
   }));
 });
 
-test('real recalculation, batch, persistence and Missing-KM approval paths enforce the gate', async () => {
+test('general paths enforce the hold; Missing-KM is admitted only through its independent guarded RPC', async () => {
   const recalculation = await readFile(new URL('../foKmRecalculationService.js', import.meta.url), 'utf8');
   const persistence = await readFile(new URL('../services/foKmV2PersistenceService.js', import.meta.url), 'utf8');
   const main = recalculation.slice(
@@ -38,7 +38,8 @@ test('real recalculation, batch, persistence and Missing-KM approval paths enfor
   );
   const batch = recalculation.slice(recalculation.indexOf('export async function recalculateFoKmBatch'));
   assert.match(main, /assertKmFinancialWritesAvailable\(\{ dryRun/);
-  assert.match(missing, /normalizedAction === 'approve'[\s\S]+assertKmFinancialWritesAvailable/);
+  assert.match(missing, /client\.rpc\('rpc_approve_fo_missing_km_v1'/);
+  assert.doesNotMatch(missing, /persistCanonicalKmV2|recalculateFoKm\(/);
   assert.match(batch, /assertKmFinancialWritesAvailable\(\{ dryRun/);
   assert.match(persistence, /assertKmFinancialWritesAvailable\(\{ dryRun: false/);
 });

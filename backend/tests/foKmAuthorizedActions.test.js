@@ -177,12 +177,10 @@ test('Missing KM persistence failure leaves review and attendance untouched in J
     const calls = [];
     client.rpc = async (name, args) => {
       calls.push({ name, args });
-      assert.equal(name, 'rpc_apply_fo_admin_km_correction_v1');
-      assert.equal(args.p_source_entry_point, 'missing_km_approval');
+      assert.equal(name, 'rpc_approve_fo_missing_km_v1');
       assert.equal(args.p_admin_user_id, admin.auth_user_id);
-      assert.equal(args.p_review_decision.expectedStatus, 'pending');
-      assert.equal(args.p_review_decision.update.approved_missing_km, 2);
-      assert.equal(args.p_calculation.approvedMissingKm, 2);
+      assert.equal(args.p_review_id, 'previously-approved');
+      assert.equal(args.p_approved_km, 2);
       return { data: null, error: { code, message } };
     };
     await assert.rejects(decideMissingKmReview(client, 'previously-approved', 'approve', {
@@ -214,29 +212,27 @@ test('explicit Admin correction uses the existing engine and service-only approv
   assert.equal(calls, 1);
 });
 
-test('Missing KM uses one atomic RPC despite legacy maintenance; emergency pause still blocks', async () => {
+test('Missing KM reaches only its dedicated guarded approval RPC under both legacy holds', async () => {
   const { client, rows } = pendingReviewFixture();
   const priorHold = process.env.KM_FINANCIAL_WRITES_MAINTENANCE;
   const priorEmergency = process.env.KM_FINANCIAL_WRITES_EMERGENCY_PAUSE;
   let calls = 0;
   client.rpc = async (name, args) => {
     calls += 1;
-    assert.equal(name, 'rpc_apply_fo_admin_km_correction_v1');
-    assert.equal(args.p_calculation.approvedMissingKm, 2);
+    assert.equal(name, 'rpc_approve_fo_missing_km_v1');
+    assert.equal(args.p_approved_km, 2);
     return { data: { ok: true, review: { ...rows.fo_missing_km_reviews[0], status: 'approved' },
-      payable_km: args.p_calculation.payableKm, reimbursement: args.p_calculation.reimbursement,
-      calculation_run_id: 'test-run' }, error: null };
+      receipt_id:'test-receipt',payable_km: 41, reimbursement: 164,additionalKm:2,additionalAmount:8 }, error: null };
   };
   try {
     process.env.KM_FINANCIAL_WRITES_MAINTENANCE = 'true';
     process.env.KM_FINANCIAL_WRITES_EMERGENCY_PAUSE = 'false';
-    const result = await decideMissingKmReview(client, 'previously-approved', 'approve', { approved_missing_km: 2 }, admin);
+    const result = await decideMissingKmReview(client, 'previously-approved', 'approve', { approved_missing_km: 2,remarks:'Verified missing increment' }, admin);
     assert.equal(result.review.status, 'approved');
     assert.equal(calls, 1);
     process.env.KM_FINANCIAL_WRITES_EMERGENCY_PAUSE = 'true';
-    await assert.rejects(decideMissingKmReview(client, 'previously-approved', 'approve', { approved_missing_km: 2 }, admin),
-      (error) => error.statusCode === 503);
-    assert.equal(calls, 1);
+    await decideMissingKmReview(client, 'previously-approved', 'approve', { approved_missing_km: 2,remarks:'Verified missing increment' }, admin);
+    assert.equal(calls, 2);
   } finally {
     for (const [key, value] of [['KM_FINANCIAL_WRITES_MAINTENANCE', priorHold], ['KM_FINANCIAL_WRITES_EMERGENCY_PAUSE', priorEmergency]]) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
@@ -254,11 +250,11 @@ test('duplicate approval returns committed receipt without loading GPS or writin
   let calls = 0;
   client.rpc = async (name, args) => {
     calls += 1;
-    assert.equal(name, 'rpc_apply_fo_admin_km_correction_v1');
-    assert.equal(args.p_input_digest, review.metadata.atomic_approval_input_digest);
-    return { data: { review, idempotent_replay: true, payable_km: 12, reimbursement: 48 }, error: null };
+    assert.equal(name, 'rpc_approve_fo_missing_km_v1');
+    assert.equal(args.p_approved_km, 2);
+    return { data: { review,receipt_id:'test-receipt',idempotent_replay: true, payable_km: 12, reimbursement: 48,additionalKm:0,additionalAmount:0 }, error: null };
   };
-  assert.equal((await decideMissingKmReview(client, review.id, 'approve', { approved_missing_km: 2 }, admin)).no_change, true);
+  assert.equal((await decideMissingKmReview(client, review.id, 'approve', { approved_missing_km: 2,remarks:'Receipt retry' }, admin)).no_change, true);
   await assert.rejects(decideMissingKmReview(client, review.id, 'approve', { approved_missing_km: 3 }, admin),
     (error) => error.statusCode === 409);
   assert.equal(calls, 1);

@@ -38,6 +38,7 @@ const review = {
 const admin = { role: 'Admin', employee_code: 'ADMIN01', full_name: 'Admin User' };
 
 test('clarification-required review accepts an explicit Admin manual approval', () => {
+  assert.equal(missingKmManualApprovalUpperBound(review), 8.25);
   assert.deepEqual(
     validateMissingKmManualApproval(review, {
       approved_missing_km: 5,
@@ -60,7 +61,7 @@ test('manual approval amount uses server-side Car and Bike rates', () => {
 test('manual approval rejects unauthorized, invalid, excessive, and unknown-mode decisions', () => {
   assert.throws(
     () => validateMissingKmManualApproval(review, { approved_missing_km: 5, remarks: 'Reviewed.' }, { ...admin, role: 'Branch Head' }),
-    /Only an Admin/,
+    /authorized Admin or Developer/,
   );
   assert.throws(
     () => validateMissingKmManualApproval(review, { approved_missing_km: -1, remarks: 'Reviewed.' }, admin),

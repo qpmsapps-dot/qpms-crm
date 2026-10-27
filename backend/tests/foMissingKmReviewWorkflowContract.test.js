@@ -47,7 +47,8 @@ test('approval workflow syncs attendance totals and supports reject and clarific
     service.indexOf('export async function reconcileFinalLegOnlyBatch'),
   );
   assert.match(decision, /\['approve', 'reject', 'clarification'\]/);
-  assert.match(decision, /syncAttendanceApprovedKmTotals/);
+  assert.match(decision, /rpc_approve_fo_missing_km_v1/);
+  assert.doesNotMatch(decision, /syncAttendanceApprovedKmTotals|recalculateFoKm\(/);
   assert.match(decision, /status = 'clarification_required'/);
   assert.match(decision, /Approved KM above suggestion requires elevated_override/);
   assert.match(decision, /Incremental Missing KM is not defensible yet/);
