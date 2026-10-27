@@ -69,6 +69,18 @@ test('ordinary site arrivals persist verified closed journeys before End Day wit
    const s=state(bike.id);assert.equal(s.attendance.logout_time,null);assert.equal(s.attendance.total_approved_km,r.additionalKm);assert.equal(s.attendance.petrol_amount,r.additionalAmount);assert.equal(storedAttendancePayableKm(s.attendance),r.additionalKm);assert.equal(storedAttendancePetrolAmount(s.attendance),r.additionalAmount);assert.ok(s.credits.length>0);assert.deepEqual([...new Set(s.credits.map(c=>c.evidence.type))],['start_to_first_checkin']);
    assert.equal(json('select count(*) from fo_km_attendance_authorizations'),0);assert.equal(json('select count(*) from fo_missing_km_reviews'),0);
   });
+  await check('exact spaced employee identities resume live and final KM after guarded identity migration',async()=>{
+   const spaced=fixture('LOCAL TN 252');const visit=arrival(spaced,'20',75.0066667);due(spaced.id);
+   assert.equal(json(`select to_jsonb(fo_km_automatic_eligible(a)) from fo_attendance a where id='${spaced.id}'`),false);
+   assert.equal((await processKmReconciliationJobs(db.client,{environment,limit:1})).processed,0);
+   sql(fs.readFileSync(root+'supabase/migrations_2_0/252_fo_exact_legacy_employee_identity.sql','utf8').replaceAll('\r',''));
+   assert.equal(json(`select to_jsonb(fo_km_automatic_eligible(a)) from fo_attendance a where id='${spaced.id}'`),true);
+   const first=await dispatch(spaced.id);assert.equal(first.financial_posted,true);assert.ok(first.additionalKm>0);assert.equal(first.additionalAmount,Math.round(first.additionalKm*400)/100);
+   checkout(visit,'25',75.0083333);end(spaced);const last=await dispatch(spaced.id);assert.equal(last.financial_posted,true);const saved=state(spaced.id);assert.ok(saved.credits.some(c=>c.evidence.type==='last_checkout_to_end_day'));assert.equal(saved.attendance.employee_code,spaced.code);
+   sql(`select fo_queue_final_leg_reconciliation_v251(array['${spaced.id}']::uuid[],'Isolated exact identity final retry')`);assert.equal((await dispatch(spaced.id)).additionalKm,0);assert.deepEqual(state(spaced.id).credits,saved.credits);
+   const ambiguous=fixture('LOCAL TN DUP');arrival(ambiguous,'20',75.0066667);sql(`insert into profiles(id,auth_user_id,employee_code,full_name,role,is_active,status) values(gen_random_uuid(),gen_random_uuid(),'${ambiguous.code}','Duplicate synthetic identity','FO',true,'Active')`);assert.equal(json(`select to_jsonb(fo_km_automatic_eligible(a)) from fo_attendance a where id='${ambiguous.id}'`),false);
+   const forged=fixture('LOCAL TN FORGE');arrival(forged,'20',75.0066667);sql(`update fo_attendance set fo_user_id='DIFFERENT_EMPLOYEE' where id='${forged.id}'`);assert.equal(json(`select to_jsonb(fo_km_automatic_eligible(a)) from fo_attendance a where id='${forged.id}'`),false);
+  });
   await check('active leg validator rejects missing type, shortened unrecorded windows and forged mode segments',()=>{
    const before=state(bike.id),leg=before.credits[0].evidence;
    const accepts=value=>json(`select to_jsonb(fo_km_live_leg_v249(a,${db.q(JSON.stringify(value))}::jsonb)) from fo_attendance a where id='${bike.id}'`);

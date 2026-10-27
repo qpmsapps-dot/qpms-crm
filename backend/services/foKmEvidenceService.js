@@ -46,7 +46,7 @@ export async function loadKmEvidence(client, attendanceId, {closedJourneysOnly=f
   const { data: attendance, error } = await client.from('fo_attendance').select('*').eq('id', attendanceId).single();
   if (error) throw error;
   const code = String(attendance.employee_code || attendance.fo_user_id || '').toUpperCase();
-  if (!/^[A-Z0-9_-]+$/.test(code)) throw kmError('km_identity_invalid', 'Attendance employee identity is not verifiable.');
+  if (!/^[A-Z0-9_-]+(?: [A-Z0-9_-]+)*$/.test(code)) throw kmError('km_identity_invalid', 'Attendance employee identity is not verifiable.');
   const profiles = await evidencePages(() => client.from('profiles').select('id,auth_user_id,employee_code').eq('employee_code', code).order('id'));
   if (profiles.length !== 1) throw kmError('km_identity_ambiguous', 'Employee identity is ambiguous.');
   const identities = new Set([code, attendance.fo_user_id, profiles[0].id, profiles[0].auth_user_id].filter(Boolean).map(String));
@@ -59,8 +59,18 @@ export async function loadKmEvidence(client, attendanceId, {closedJourneysOnly=f
   const autoEnded = /auto ended/i.test(attendance.status || '') || attendance.metadata?.auto_ended === true;
   const end = autoEnded ? dayEnd : new Date(Math.min(+dayEnd, attendance.logout_time ? +new Date(attendance.logout_time) + 1 : activeVisits ? closedCutoff : Date.now()));
   const or = `employee_code.eq.${code},fo_user_id.in.(${[...identities].join(',')})`;
+  // Legacy canonical employee codes can contain spaces. Keep exact identity
+  // lookup and use typed filters rather than interpolating them into OR grammar.
+  const gpsRows = code.includes(' ') ? Promise.all([
+    evidencePages(() => client.from('fo_location_logs').select('*').eq('employee_code',code).gte('captured_at',start.toISOString()).lt('captured_at',end.toISOString()).order('captured_at').order('id')),
+    evidencePages(() => client.from('fo_location_logs').select('*').in('fo_user_id',[...identities]).gte('captured_at',start.toISOString()).lt('captured_at',end.toISOString()).order('captured_at').order('id')),
+  ]).then(pages=>{
+    const rows=[...new Map(pages.flat().map(row=>[row.id,row])).values()];
+    if(rows.length>50000)throw kmError('km_evidence_limit','Evidence exceeds the bounded limit; no partial calculation was saved.');
+    return rows.sort((a,b)=>Date.parse(a.captured_at)-Date.parse(b.captured_at)||String(a.id).localeCompare(String(b.id)));
+  }) : evidencePages(() => client.from('fo_location_logs').select('*').or(or).gte('captured_at', start.toISOString()).lt('captured_at', end.toISOString()).order('captured_at').order('id'));
   const [allRows, visits, snapshots, sessions, recoveries, corrections] = await Promise.all([
-    evidencePages(() => client.from('fo_location_logs').select('*').or(or).gte('captured_at', start.toISOString()).lt('captured_at', end.toISOString()).order('captured_at').order('id')),
+    gpsRows,
     activeVisits || evidencePages(() => client.from('fo_site_visits').select('*').eq('attendance_id', attendance.id).order('check_in_time').order('id')),
     evidencePages(() => client.from('fo_travel_legs').select('*').eq('attendance_id', attendance.id).order('started_at').order('id')),
     evidencePages(() => client.from('fo_attendance').select('id,login_time,logout_time').eq('employee_code', code).eq('attendance_date', attendance.attendance_date).order('id')),
