@@ -1,32 +1,86 @@
-import { useEffect, useMemo, useState } from 'react';
-import { MapPin, Store, Users, Wrench } from 'lucide-react';
+import { createElement, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { CalendarDays, ClipboardCheck, ScanLine, Phone, Sparkles, GraduationCap, Users, Download, ArrowUpRight } from 'lucide-react';
 import { usePageTitle } from '../../hooks/usePageTitle.js';
+import { useAuth } from '../../context/auth-context.js';
+import { canAccessRoute } from '../../utils/authRoles.js';
 import { relianceRetailApi } from '../../services/relianceRetailApi.js';
+import { indiaToday } from '../../../backend/shared/retailAttendance.js';
+import { REPORTING_STATES, reportingRows, reportingPeriod, callWindow, emptyOperations, selectRows, sum, percent } from './ifmsDashboardModel.js';
+import { Metric, StateTable, OperationsRing, AttendanceTrend } from './IfmsDashboardParts.jsx';
+import './ifmsDashboard.css';
 
+const modules = [
+  { id: 'attendance', title: 'Attendance', icon: ClipboardCheck, color: '#16a875', route: '/reliance-retail/attendance' },
+  { id: 'thermography', title: 'Thermography', icon: ScanLine, color: '#9254de' },
+  { id: 'cm', title: 'CM Calls', icon: Phone, color: '#1677ff' },
+  { id: 'pm', title: 'PM Calls', icon: Phone, color: '#ee861b' },
+  { id: 'cleaning', title: 'Deep Cleaning', icon: Sparkles, color: '#16a875', route: '/reliance-retail/deep-cleaning' },
+  { id: 'technical', title: 'Technical Training', icon: GraduationCap, color: '#1677ff', route: '/reliance-retail/training' },
+  { id: 'soft', title: 'Soft Skill Training', icon: Users, color: '#ed3d82' },
+];
+function StateFilter({ label, value, onChange, global = '' }) {
+  return <label className="ifms-filter"><span className="sr-only">{label}</span><select aria-label={label} value={value} onChange={e => onChange(e.target.value)}><option value="">All States</option>{REPORTING_STATES.map(state => <option key={state.code} value={state.code} disabled={Boolean(global && global !== state.code)}>{state.label}</option>)}</select></label>;
+}
+function ModuleBody({ id, rows, stores, storeStatus }) {
+  const total = field => sum(rows, field);
+  if (id === 'attendance') return <>
+    <div className="ifms-metrics"><Metric label="Present" value="0%"/><Metric label="Half Day" value="0%"/><Metric label="Absent" value="0%"/><Metric label="Total Man-Days" value="0"/></div>
+    <div className="ifms-card-content"><AttendanceTrend points={[]}/><StateTable rows={rows} columns={[{ key: 'presentPct', label: 'Attendance %', bar: true, percentage: true }]}/></div>
+    <p className="ifms-note">No attendance data connected. Percentages await verified status counts and expected employee-days.</p>
+  </>;
+  if (id === 'technical' || id === 'soft') return <>
+    <div className="ifms-card-content ifms-training"><div><Metric label="Trainings completed" value={total('completed')}/><div className="ifms-store-total"><Metric label="Total stores" value={storeStatus === 'ready' ? stores.length : '—'}/></div></div><StateTable rows={rows} columns={[{ key: 'completed', label: 'Trainings' }]}/></div>
+    <p className="ifms-note">Training records unavailable. Total stores: {storeStatus === 'ready' ? 'current store inventory, not trained stores' : 'awaiting verified store inventory'}.</p>
+  </>;
+  const scans = id === 'thermography';
+  const cleaning = id === 'cleaning';
+  const denominator = scans ? total('normal') + total('notNormal') : total(cleaning ? 'scheduled' : 'eligible');
+  const completed = total(scans ? 'normal' : 'completed');
+  const remaining = scans ? total('notNormal') : Math.max(0, denominator - completed);
+  const first = scans ? 'Normal' : cleaning ? 'Done' : 'Completed';
+  const second = scans ? 'Not Normal' : cleaning ? 'Not Done' : 'Remaining';
+  return <>
+    <div className="ifms-metrics"><Metric label={scans ? 'Total scans' : cleaning ? 'Scheduled' : 'Applicable stores'} value={denominator}/><Metric label={first} value={completed}/><Metric label={second} value={remaining}/>{!scans && <Metric label="Completion" value={`${percent(completed, denominator)}%`}/>}</div>
+    <div className="ifms-card-content"><OperationsRing total={denominator} segments={[{ label: first, value: completed, color: 'var(--module-color)' }, { label: second, value: remaining, color: scans ? '#f05269' : cleaning ? '#e6ae2e' : '#cbd5e1' }]} label={scans ? 'Scans' : cleaning ? 'Scheduled' : 'Stores'}/><StateTable rows={rows} columns={scans ? [{ key: 'normal', label: 'Normal' }, { key: 'notNormal', label: 'Not Normal' }] : [{ key: 'completed', label: first }, { key: 'remaining', label: second }]}/></div>
+    <p className="ifms-note">{scans ? 'No scan results connected.' : cleaning ? 'No scheduled cleaning data connected.' : 'Eligible stores and unique completed stores unavailable.'} Zero values await data.</p>
+  </>;
+}
 export default function RetailDashboard() {
-  usePageTitle('Reliance Retail Dashboard');
-  const [data, setData] = useState(null); const [error, setError] = useState('');
-  const [zones, setZones] = useState([]); const [allStores, setAllStores] = useState([]);
-  const [filters, setFilters] = useState({ month: new Date().toISOString().slice(0, 7), state: '', zone_id: '', store_id: '' });
-  useEffect(() => { let live = true; setError(''); relianceRetailApi.dashboard(filters).then((r) => { if (!live) return; setData(r.dashboard); if (!filters.state && !filters.zone_id && !filters.store_id) { setZones(r.dashboard.zones || []); setAllStores(r.dashboard.stores || []); } }).catch((e) => live && setError(e.response?.data?.message || e.message)); return () => { live = false; }; }, [filters]);
-  const states = useMemo(() => [...new Set(allStores.map((row) => row.state).filter(Boolean))].sort(), [allStores]);
-  const stores = useMemo(() => allStores.filter((row) => (!filters.state || row.state === filters.state) && (!filters.zone_id || row.zone_id === filters.zone_id)), [allStores, filters.state, filters.zone_id]);
-  const update = (key, value) => setFilters((current) => ({ ...current, [key]: value, ...(key === 'state' || key === 'zone_id' ? { store_id: '' } : {}) }));
-  const cards = data ? [
-    ['Total Stores', data.total_stores, Store], ['Active / Inactive', `${data.active_stores} / ${data.inactive_stores}`, Store],
-    ['Active Zones', data.active_zones, MapPin], ['Assigned FOs', data.assigned_fo_count, Users],
-    ['GPS Ready / Pending', `${data.gps_ready} / ${data.location_pending}`, MapPin],
-    ['Deep Cleaning', data.deep_cleaning_submissions, Wrench], ['Training Sessions', data.training_sessions, Users],
-    ['Fault Tracker', data.fault_tracker ?? 'Data Not Available', Wrench],
-  ] : [];
-  return <div className="space-y-6"><div><p className="text-sm font-bold text-qpms-600">Reliance Retail</p><h1 className="text-2xl font-black">Consolidated Dashboard</h1><p className="text-sm text-slate-500">Actual stored data only. No polling or estimated metrics.</p></div>
-    <div className="grid gap-3 rounded-2xl border bg-white p-4 sm:grid-cols-2 xl:grid-cols-4">
-      <label className="text-xs font-bold text-slate-600">Month / Year<input type="month" value={filters.month} onChange={(e) => update('month', e.target.value)} className="mt-1 h-10 w-full rounded-xl border px-3 text-sm" /></label>
-      <label className="text-xs font-bold text-slate-600">State<select value={filters.state} onChange={(e) => update('state', e.target.value)} className="mt-1 h-10 w-full rounded-xl border px-3 text-sm"><option value="">All States</option>{states.map((value) => <option key={value}>{value}</option>)}</select></label>
-      <label className="text-xs font-bold text-slate-600">Zone<select value={filters.zone_id} onChange={(e) => update('zone_id', e.target.value)} className="mt-1 h-10 w-full rounded-xl border px-3 text-sm"><option value="">All Zones</option>{zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.zone_name}</option>)}</select></label>
-      <label className="text-xs font-bold text-slate-600">Store<select value={filters.store_id} onChange={(e) => update('store_id', e.target.value)} className="mt-1 h-10 w-full rounded-xl border px-3 text-sm"><option value="">All Stores</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.store_code} · {store.store_name}</option>)}</select></label>
-    </div>
-    {error ? <div className="rounded-xl bg-red-50 p-4 text-red-700">{error}</div> : null}
-    {!data && !error ? <div className="rounded-2xl bg-white p-8">Loading dashboard…</div> : <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards.map(([label, value, Icon]) => <div key={label} className="rounded-2xl border bg-white p-5 shadow-sm"><Icon className="h-5 w-5 text-qpms-600"/><p className="mt-4 text-xs font-black uppercase text-slate-400">{label}</p><p className="mt-1 text-2xl font-black">{value}</p></div>)}</div>}
+  usePageTitle('South Zone – IFMS Operations Summary');
+  const { user } = useAuth();
+  const today = indiaToday();
+  const [month, setMonth] = useState(today.slice(0, 7));
+  const [global, setGlobal] = useState('');
+  const [local, setLocal] = useState({});
+  const [inventory, setInventory] = useState({ status: 'loading', rows: [], error: '' });
+  const period = reportingPeriod(month, today);
+  useEffect(() => {
+    let live = true;
+    // Only reuse store inventory. Submission totals do not supply the required metrics.
+    relianceRetailApi.dashboard({ month }).then(response => {
+      if (!live) return;
+      const stores = response.dashboard?.stores;
+      // The existing endpoint caps inventory at 5,000; a capped result is not complete.
+      if (!Array.isArray(stores) || stores.length >= 5000) throw new Error('Complete store inventory unavailable');
+      setInventory({ status: 'ready', rows: reportingRows(stores), error: '' });
+    }).catch(error => { if (live) setInventory({ status: 'unavailable', rows: [], error: error.response?.data?.message || error.message }); });
+    return () => { live = false; };
+  }, [month]);
+  return <div className="ifms-dashboard">
+    <header className="ifms-page-header"><div><p className="ifms-eyebrow">Reliance Retail / Dashboard</p><h1>South Zone – IFMS Operations Summary</h1><p>This Month Till Today</p></div><div className="ifms-updated"><span className="ifms-status-dot"/>Last Updated: awaiting data</div></header>
+    <div className="ifms-toolbar"><div className="ifms-toolbar-filters"><StateFilter label="Global reporting state" value={global} onChange={value => { setGlobal(value); setLocal({}); }}/><label className="ifms-month"><CalendarDays size={16}/><span className="sr-only">Reporting month</span><input aria-label="Reporting month" type="month" min="2000-01" max="9999-12" value={month} onChange={e => { if (/^\d{4}-\d{2}$/.test(e.target.value)) setMonth(e.target.value); }}/></label><span className="ifms-date-range">{period.label}</span></div><button disabled title="No compatible summary export is available"><Download size={15}/> Export unavailable</button></div>
+    <p className="ifms-data-status" role="status">Operational metrics await compatible data. {inventory.status === 'loading' ? 'Loading store inventory…' : inventory.status === 'unavailable' ? `Store inventory unavailable: ${inventory.error}` : 'Store inventory connected.'}</p>
+    <div className="ifms-grid">{modules.map(({ id, title, icon: Icon, color, route }, index) => {
+      const rows = selectRows(emptyOperations(), global, local[id] || '');
+      const stores = selectRows(inventory.rows, global, local[id] || '');
+      const window = id === 'cm' || id === 'pm' ? callWindow(month, id, today) : null;
+      return <section key={id} className={`ifms-card ${index < 4 ? 'ifms-wide' : 'ifms-third'}`} style={{ '--module-color': color }} aria-labelledby={`ifms-${id}`}>
+        <div className="ifms-card-header"><div className="ifms-card-heading"><span className="ifms-icon">{createElement(Icon, { size: 21 })}</span><div><h2 id={`ifms-${id}`}>{title}</h2><p>{window ? window.label : 'This Month Till Today'}</p></div></div><StateFilter label={`${title} reporting state`} value={local[id] || ''} global={global} onChange={value => setLocal(previous => ({ ...previous, [id]: value }))}/></div>
+        {window && <p className="ifms-window">{window.status} · All applicable stores due by {window.endLabel}</p>}
+        <ModuleBody id={id} rows={rows} stores={stores} storeStatus={inventory.status}/>
+        <footer className="ifms-card-footer"><span>{global || local[id] ? REPORTING_STATES.find(state => state.code === (global || local[id]))?.label : 'All six reporting states'}</span>{route && canAccessRoute(user, route) && <Link to={route}>View Details <ArrowUpRight size={13}/></Link>}</footer>
+      </section>;
+    })}</div>
   </div>;
 }
