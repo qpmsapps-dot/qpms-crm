@@ -239,8 +239,8 @@ const FO_KM_RECALCULATION_LOCK_TTL_MS =
 const foKmRecalculationLockStartedAt = new Map();
 const foKmRecalculateAllLockStartedAt = new Map();
 const FO_STALE_CLEANUP_INTERVAL_MS = Number(process.env.FO_STALE_CLEANUP_INTERVAL_MS || 30 * 60 * 1000);
-const END_DAY_KM_AUTO_RECALC_INTERVAL_MS = 5 * 60 * 1000;
-const END_DAY_KM_AUTO_RECALC_LIMIT = 50;
+const END_DAY_KM_AUTO_RECALC_INTERVAL_MS = 30 * 1000;
+const END_DAY_KM_AUTO_RECALC_LIMIT = 5;
 const END_DAY_KM_AUTO_RECALC_LOOKBACK_DAYS = 31;
 const END_DAY_KM_AUTO_RECALC_MAX_ATTEMPTS = 2;
 const END_DAY_KM_AUTO_RECALC_EFFECTIVE_FROM = '2026-10-16';
@@ -11327,10 +11327,17 @@ async function loadEndDayKmAutoRecalcCandidates(client, date) {
   return (data || []).filter((row) => attendanceNeedsEndDayKmAutoRecalc(row, now));
 }
 
+let endDayKmWorkerRunning = false;
 async function runEndDayKmAutoRecalc(reason = 'interval') {
-  if(!endDayKmAutoRecalcEnabled() || process.env.KM_SHARED_RECONCILIATION_ENABLED!=='true')return;
-  try { return await processKmReconciliationJobs(requireServiceRoleSupabase(),{environment:process.env,limit:END_DAY_KM_AUTO_RECALC_LIMIT}); }
+  if(!endDayKmAutoRecalcEnabled() || process.env.KM_SHARED_RECONCILIATION_ENABLED!=='true' || endDayKmWorkerRunning)return;
+  endDayKmWorkerRunning = true;
+  try {
+    const result=await processKmReconciliationJobs(requireServiceRoleSupabase(),{environment:process.env,limit:END_DAY_KM_AUTO_RECALC_LIMIT});
+    if(result.processed || result.disabled)console.log('END_DAY_KM_RECONCILIATION_RESULT',{reason,automatic:process.env.KM_CANONICAL_AUTOMATION_ENABLED==='true',...result,results:result.results?.map(r=>({attendance_id:r.attendance_id,status:r.status,code:r.code,receipt_id:r.receipt_id,additionalKm:r.additionalKm,additionalAmount:r.additionalAmount,financial_posted:r.financial_posted}))});
+    return result;
+  }
   catch(error){ console.error('END_DAY_KM_RECONCILIATION_DEFERRED',{reason,code:error.code||'KM_FAILED'}); }
+  finally { endDayKmWorkerRunning = false; }
 }
 
 app.use('/api/fo/site-visits', (request, response) => {
@@ -11345,6 +11352,7 @@ function startEndDayKmAutoRecalcScheduler() {
   const enabled = endDayKmAutoRecalcEnabled();
   console.log('[myQPMS End Day KM Auto Recalc] started', {
     enabled,
+    automatic: process.env.KM_CANONICAL_AUTOMATION_ENABLED === 'true',
     intervalMs: END_DAY_KM_AUTO_RECALC_INTERVAL_MS,
     timezone: 'Asia/Kolkata',
     cooldownMinutes: endDayKmAutoRecalcCooldownMs() / 60000,

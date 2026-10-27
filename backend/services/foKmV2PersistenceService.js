@@ -12,8 +12,24 @@ export async function persistCanonicalKmV2(client, {
   adminAuthorization = null,
   reviewDecision = null,
   scopedAuthorizationReference = null,
+  automaticKm = false,
 }) {
   if (calculation?.incrementalRecovery === true) {
+    if (automaticKm) {
+      if (environment.KM_CANONICAL_AUTOMATION_ENABLED !== 'true' || environment.END_DAY_KM_AUTO_RECALC_ENABLED !== 'true' ||
+          environment.KM_SHARED_RECONCILIATION_ENABLED !== 'true' || environment.KM_INCREMENTAL_REPORTING_ENABLED !== 'true' ||
+          adminAuthorization || scopedAuthorizationReference || !['manual_end_day','auto_end_day','late_gps'].includes(sourceEntryPoint) ||
+          !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(actorSource || '')) {
+        throw Object.assign(new Error('Ordinary KM requires the enabled automatic worker and its current lease.'), {code:'KM_AUTOMATIC_AUTHORIZATION_REQUIRED'});
+      }
+      // This RPC grants no general financial authority. Database 247 checks its
+      // separate kill switch, identity, generation, evidence, baseline and caps.
+      const {data,error}=await client.rpc('rpc_reconcile_fo_automatic_km_v1',{
+        p_attendance_id:attendanceId,p_calculation:calculation,p_trigger:sourceEntryPoint,p_admin:null,p_lease:actorSource,
+      });
+      if(error)throw Object.assign(new Error(error.message),{code:error.code,retryable:['40001','40P01','55P03','55000'].includes(error.code)});
+      return data;
+    }
     const scoped = scopedAuthorizationReference != null;
     const policy = !scoped && environment.KM_CANONICAL_POLICY_ENABLED === 'true';
     if (scoped && (sourceEntryPoint !== 'admin_recalculation' || !adminAuthorization?.userId || actorSource || !/^[A-Z0-9_-]{8,100}$/.test(scopedAuthorizationReference))) throw Object.assign(new Error('Scoped KM authorization requires a trusted Admin action.'),{code:'KM_SCOPE_ADMIN_REQUIRED',statusCode:403});

@@ -138,6 +138,7 @@ export async function reconcileSupportedKm(client, payload, options = {}) {
       calculation: plan, sourceEntryPoint: options.trigger || 'admin_recalculation', environment,
       adminAuthorization: options.adminAuthorization, actorSource: options.actorSource,
       scopedAuthorizationReference: options.scopedAuthorizationReference,
+      automaticKm: options.automaticKm === true,
     });
     if (!posted?.receipt_id) throw kmError('km_posting_unverified', 'Persistence returned no atomic receipt.');
     return { ...response, ...posted, status: 'posted', financial_posted: true, updated: true };
