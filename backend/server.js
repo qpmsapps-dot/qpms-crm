@@ -11333,7 +11333,7 @@ async function runEndDayKmAutoRecalc(reason = 'interval') {
   endDayKmWorkerRunning = true;
   try {
     const result=await processKmReconciliationJobs(requireServiceRoleSupabase(),{environment:process.env,limit:END_DAY_KM_AUTO_RECALC_LIMIT});
-    if(result.processed || result.disabled)console.log('END_DAY_KM_RECONCILIATION_RESULT',{reason,automatic:process.env.KM_CANONICAL_AUTOMATION_ENABLED==='true',...result,results:result.results?.map(r=>({attendance_id:r.attendance_id,status:r.status,code:r.code,receipt_id:r.receipt_id,additionalKm:r.additionalKm,additionalAmount:r.additionalAmount,financial_posted:r.financial_posted}))});
+    if(result.processed || result.disabled)console.log('END_DAY_KM_RECONCILIATION_RESULT',{reason,automatic:process.env.KM_CANONICAL_AUTOMATION_ENABLED==='true',...result,results:result.results?.map(r=>({attendance_id:r.attendance_id,status:r.status,code:r.code,message:r.message,receipt_id:r.receipt_id,additionalKm:r.additionalKm,additionalAmount:r.additionalAmount,financial_posted:r.financial_posted,unresolved:r.unresolved?.map(l=>({type:l.type,reason:l.evidence_status||l.reason}))}))});
     return result;
   }
   catch(error){ console.error('END_DAY_KM_RECONCILIATION_DEFERRED',{reason,code:error.code||'KM_FAILED'}); }
