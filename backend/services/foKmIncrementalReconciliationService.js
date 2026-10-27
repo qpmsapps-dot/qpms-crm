@@ -81,6 +81,15 @@ export function buildIncrementalKmPlan(evidence, calculation, existingCredits = 
       if (Number.isFinite(recorded)) included = Math.max(included, recorded);
     }
     const credited = existingCredits.filter(c => c.leg_key === key).reduce((s, c) => s + Number(c.added_km), 0);
+    // Road reconstruction can vary between requests even when the recorded
+    // final journey has not changed. A provider refresh is not new GPS evidence
+    // and must not turn a replay into another financial increment.
+    const previousFinal = sameWindow?.evidence;
+    const sameFinalEvidence = leg.type === 'last_checkout_to_end_day' && previousFinal?.evidence_status === 'supported' &&
+      ['from_lat','from_lng','to_lat','to_lng','rate_per_km','raw_gps_km','accepted_gps_km'].every(k =>
+        previousFinal[k] != null && leg[k] != null ? Number(previousFinal[k]) === Number(leg[k]) : previousFinal[k] == null && leg[k] == null) &&
+      Array.isArray(previousFinal.source_row_ids) && Array.isArray(leg.source_row_ids) &&
+      JSON.stringify([...previousFinal.source_row_ids].sort()) === JSON.stringify([...leg.source_row_ids].sort());
     const supplements = recoveries.filter(r => overlap(leg, r));
     const partialSupplement = supplements.some(r => new Date(r.journey_start) < new Date(leg.from_time) || new Date(r.journey_end) > new Date(leg.to_time));
     const supplement = supplements.reduce((s, r) => s + Number(r.approved_additional_km), 0);
@@ -88,7 +97,8 @@ export function buildIncrementalKmPlan(evidence, calculation, existingCredits = 
     const status = invalidRecordedWindow ? 'recorded_leg_window_requires_review' : ambiguousPersisted ? 'persisted_overlap_requires_review' : corrected ? 'applied_correction_preserved' : leg.status !== 'calculated' || !leg.payable ? leg.reason || 'not_eligible_or_unresolved'
       : partialSupplement ? 'supplement_overlap_requires_review' : 'supported';
     return { ...leg, leg_key: key, baseline_km: round(included), already_included_km: round(included + credited + supplement),
-      new_eligible_km: status === 'supported' ? round(Math.max(0, Number(leg.payable_km) - included - credited - supplement)) : 0,
+      new_eligible_km: status === 'supported' && !sameFinalEvidence ? round(Math.max(0, Number(leg.payable_km) - included - credited - supplement)) : 0,
+      ...(sameFinalEvidence ? { unchanged_recorded_final_evidence: true } : {}),
       evidence_status: status };
   });
   const assigned = legs.reduce((s, l) => s + l.baseline_km, 0) + snapshots.filter(s => s.status !== 'cancelled' && !usedSnapshots.has(s.id)).reduce((s, l) => s + Number(l.payable_km || 0), 0);

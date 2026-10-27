@@ -1,9 +1,20 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {buildCompletedTravelLegs,recalculateAttendanceTravelLegs,resolveEffectiveAttendanceEnd} from '../foKmRecalculationService.js';
 import {processKmReconciliationJobs} from '../services/foKmReconciliationWorker.js';
+import {buildIncrementalKmPlan} from '../services/foKmIncrementalReconciliationService.js';
 const time=n=>new Date(Date.parse('2026-10-20T03:00Z')+n*60000).toISOString();
 const attendance={id:'a',fo_user_id:'FO',employee_code:'FO',attendance_date:'2026-10-20',login_time:time(0),logout_time:time(60),status:'Completed',start_latitude:12,start_longitude:75,end_latitude:12,end_longitude:75.03,travel_mode:'bike',rate_per_km:4,payable_km_allowed:true,total_approved_km:0,petrol_amount:0,metadata:{}};
 const db={from(){throw Error('No database or financial writes expected');}};
+
+test('unchanged final journey evidence cannot earn extra KM from fluctuating route reconstruction',()=>{
+ const leg={type:'last_checkout_to_end_day',travel_mode:'bike',from_visit_id:'v',from_time:time(35),to_time:time(60),from_lat:12,from_lng:75.01,to_lat:12,to_lng:75.03,rate_per_km:4,raw_gps_km:34.52,accepted_gps_km:17.83,source_row_ids:['gps-1','gps-2'],status:'calculated',payable:true,payable_km:42.44,evidence_status:'supported'};
+ const receipt={leg_key:'saved-final',started_at:leg.from_time,ended_at:leg.to_time,added_km:42.44,applied_to_attendance:true,evidence:leg};
+ const evidence={attendance:{...attendance,total_approved_km:42.44,petrol_amount:169.76},snapshots:[],visits:[],recoveries:[],corrections:[],originalRows:[]};
+ const replay=buildIncrementalKmPlan(evidence,{travel_legs:[{...leg,payable_km:42.55,source_row_ids:['gps-2','gps-1']}]},[receipt]);
+ assert.equal(replay.baselineKnown,true);assert.equal(replay.additionalKm,0);assert.equal(replay.additionalAmount,0);assert.equal(replay.legs[0].unchanged_recorded_final_evidence,true);
+ const delayed=buildIncrementalKmPlan(evidence,{travel_legs:[{...leg,payable_km:43,source_row_ids:['gps-1','gps-2','new-delayed-fix']}]},[receipt]);
+ assert.equal(delayed.additionalKm,0.56);assert.equal(delayed.additionalAmount,2.24);
+});
 test('final return receives the bounded routing opportunity before earlier journeys',async()=>{
  const prior=globalThis.fetch;const urls=[];try{globalThis.fetch=async url=>{urls.push(new URL(url));return{ok:true,status:200,json:async()=>({status:'OK',routes:[{legs:[{distance:{value:2400},duration:{value:500}}]}]})};};
  const evidence={attendance,visits:[{id:'v',attendance_id:'a',check_in_time:time(20),check_out_time:time(35),check_in_latitude:12,check_in_longitude:75.01,check_out_latitude:12,check_out_longitude:75.01,petrol_eligible_after_checkout:true}],snapshots:[]};
