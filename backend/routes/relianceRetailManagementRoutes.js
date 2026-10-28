@@ -1,5 +1,6 @@
 import express from 'express';
 import { createRetailAttendanceRouter } from './retailAttendanceRoutes.js';
+import { createRetailStoreImportRouter } from './retailStoreImportRoutes.js';
 import {
   assertRetailAccess,
   assignZoneFo,
@@ -26,6 +27,7 @@ function sendError(response, error) {
 export function createRelianceRetailManagementRouter({ requireAuth, getClient }) {
   const router = express.Router();
   router.use(requireAuth);
+  router.use('/store-import', createRetailStoreImportRouter({ getClient }));
   router.use('/attendance', createRetailAttendanceRouter({ getClient }));
   router.get('/access', (req, res) => res.json({ ok: true, access: retailAccess(req.profile) }));
   router.get('/dashboard', async (req, res) => { try { res.json({ ok: true, dashboard: await retailDashboard(getClient(), req.profile, req.query) }); } catch (e) { sendError(res, e); } });

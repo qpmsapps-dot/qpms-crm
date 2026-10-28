@@ -5,6 +5,7 @@ import { usePageTitle } from '../../hooks/usePageTitle.js';
 import { retailAttendanceApi } from '../../services/retailAttendanceApi.js';
 import { attendanceColumns, exportRetailAttendance, exportRetailAttendanceSource } from '../../utils/retailAttendanceExport.js';
 import { ATTENDANCE_MAX_FILE_BYTES, indiaToday, STATE_OPTIONS } from '../../../backend/shared/retailAttendance.js';
+import { StoreImportButton } from '../../components/reliance-retail/StoreImportDialog.jsx';
 
 const number = value => value == null ? 'N/A' : Number(value).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const pct = value => value == null ? 'N/A' : `${number(value)}%${value > 100 ? ' ↑' : ''}`;
@@ -108,6 +109,7 @@ export default function RetailAttendance() {
   return <div className="space-y-4 rounded-xl bg-white p-4 text-slate-800 md:p-5">
     <header className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-bold text-blue-950">Reliance Retail Attendance</h1><p className="text-sm text-slate-500">Manpower attendance summary using daily uploaded data.</p><p className="mt-2 font-semibold text-blue-950">Latest imported attendance date: {report?.latest_imported_date || 'No attendance imported'}</p></div>
       <div className="flex flex-wrap gap-2"><label className={button}><CalendarDays size={16}/><input aria-label="Month and year" type="month" max={today.slice(0,7)} value={cutoff.slice(0,7)} onChange={e => selectMonth(e.target.value)}/></label>
+        <StoreImportButton onImported={() => setRefresh(value => value + 1)}/>
         {report?.can_upload && <button onClick={() => setUpload(true)} className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white"><Upload size={16}/>Upload Day Attendance</button>}
       </div></header>
     <div className="flex flex-wrap items-center justify-between gap-3"><div role="tablist" aria-label="Attendance view" className="inline-flex rounded-lg border border-blue-100 bg-blue-50 p-1">{[['mtd','Month-to-Date'],['daily','Daily View']].map(([value,label]) => <button key={value} role="tab" aria-selected={view===value} onClick={() => setView(value)} className={`rounded-md px-5 py-2 text-xs font-semibold ${view===value ? 'bg-blue-600 text-white' : 'text-blue-950'}`}>{label}</button>)}</div>
