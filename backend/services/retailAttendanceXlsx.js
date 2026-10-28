@@ -118,6 +118,7 @@ async function xmlPart(bytes, part, budget, callbacks = {}) {
   };
   try {
     for await (const chunk of stream) {
+      if(budget.signal?.aborted)fail('XLSX_RESOURCE_LIMIT','Preview processing was cancelled or exceeded its time budget. Please retry.',408);
       actual += chunk.length; budget.expanded += chunk.length;
       if (actual > part.size) invalid();
       if (budget.expanded > XLSX_LIMITS.expandedBytes || Date.now() - budget.started > XLSX_LIMITS.milliseconds) resource();
@@ -135,9 +136,10 @@ async function xmlPart(bytes, part, budget, callbacks = {}) {
   } finally { stream.destroy(); source.destroy(); }
 }
 
-export async function parseAttendanceWorkbookStreaming(bytes, filename, columns) {
+export async function parseAttendanceWorkbookStreaming(bytes, filename, columns, options = {}) {
+  if(options.signal?.aborted)fail('XLSX_RESOURCE_LIMIT','Preview processing was cancelled or exceeded its time budget. Please retry.',408);
   const archive = inspectAttendanceZip(bytes, filename), budget = { started: Date.now(), expanded: 0,
-    extensions: new Set([...archive.parts.values()].map(p => path.posix.extname(p.name).slice(1).toLowerCase())) };
+    extensions: new Set([...archive.parts.values()].map(p => path.posix.extname(p.name).slice(1).toLowerCase())),signal:options.signal };
   const done = new Set(), get = name => archive.parts.get(name.toLowerCase());
   const read = async (name, callbacks) => { const part = get(name); if (!part) invalid(); await xmlPart(bytes, part, budget, callbacks); done.add(name.toLowerCase()); };
   const shared = [], formats = new Map(), styles = [], relationships = new Map(), sheets = [];

@@ -112,6 +112,22 @@ test('latest imported date is selected automatically and prominently displayed',
   await expect(page.getByText('Latest imported attendance date: 2026-10-20')).toBeVisible();
 });
 
+test('large previews disclose sampled exceptions and failed retry clears stale import confirmation',async({page})=>{
+  await seed(page,{empty:true});
+  let attempts=0;
+  await page.route('**/attendance/preview',route=>++attempts===1
+    ?route.fulfill({json:{preview:{id:'large',preview_key:'key',total_rows:64838,valid_rows:9578,rejected_rows:55233,excluded_rows:27,rejected:[{source_row:3,store_code:'UNKNOWN',reasons:['Unknown Reliance Retail Store Code']}],excluded:[],rejected_sampled:true,exception_sample_limit:100,dates:['2026-10-27'],preview:[],affected_records:[],can_commit:true}}})
+    :route.fulfill({status:503,json:{code:'PREVIEW_AUDIT_UNAVAILABLE',message:'Preview audit could not be saved. No attendance was imported. Retry Validate and Preview.'}}));
+  await page.getByRole('button',{name:'Upload Day Attendance'}).click();
+  await page.getByLabel('Attendance Excel file').setInputFiles({name:'large.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:Buffer.from('local transport fixture')});
+  await page.getByRole('button',{name:'Validate and Preview'}).click();
+  await expect(page.getByText(/Showing the first 100 of 55233 rejected rows/)).toBeVisible();
+  await expect(page.getByRole('button',{name:'Confirm Import'})).toBeEnabled();
+  await page.getByRole('button',{name:'Validate and Preview'}).click();
+  await expect(page.getByRole('alert')).toContainText('No attendance was imported');
+  await expect(page.getByRole('button',{name:'Confirm Import'})).toHaveCount(0);
+});
+
 test('partial import confirmation, retained history and downloadable source exceptions',async({page})=>{
   await seed(page);
   const batch={id:'phase1',filename:'multi-date.xlsx',checksum:'synthetic-checksum',status:'committed',uploaded_at:'2026-10-21T04:00:00Z',committed_at:'2026-10-21T04:01:00Z',date_from:'2026-10-19',date_to:'2026-10-20',valid_rows:1,rejected_rows:1,raw_source:{headers:['EP No','Site Code','Class'],rows:[{source_row:2,raw_cells:['E1','T1','House Keeping']},{source_row:3,raw_cells:['E2','UNKNOWN','MEPC']},{source_row:4,raw_cells:['E3','T1','Goods Receiving']}],rejected:[{source_row:3,store_code:'UNKNOWN',attendance_date:'2026-10-20',reasons:['Unknown Reliance Retail Store Code']}],excluded:[{source_row:4,original_class:'Goods Receiving',reasons:['Excluded class']} ]}};

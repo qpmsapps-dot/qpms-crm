@@ -32,7 +32,7 @@ function UploadDialog({ onClose, onImported }) {
     setFile(value); setError('');
   }
   async function validate() {
-    if (!file || busy) return; setBusy(true); setError('');
+    if (!file || busy) return; setBusy(true); setError(''); setPreview(null);
     try { setPreview((await retailAttendanceApi.preview(file)).preview); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }
   async function commit() {
@@ -53,9 +53,9 @@ function UploadDialog({ onClose, onImported }) {
       <p className="font-semibold">{preview.total_rows} rows · {preview.valid_rows} valid · {preview.rejected_rows} rejected ? {preview.excluded_rows || 0} excluded</p>
       <p className="text-sm">Dates: {(preview.dates || []).join(', ')}</p>
       <details className="text-sm"><summary>Date / class / status counts</summary>{[['Dates',preview.date_counts],['Classes',preview.class_counts],['Statuses',preview.status_counts]].map(([label,counts])=><p key={label}>{label}: {Object.entries(counts || {}).map(([k,v])=>k+': '+v).join(' ? ')}</p>)}</details>
-      {!!preview.excluded_rows && <details className="text-sm"><summary>{preview.excluded_rows} excluded source rows (no HK/MEPC credit)</summary>{preview.excluded.map(row=><p key={row.source_row}>Row {row.source_row}: {row.original_class}</p>)}</details>}
+      {!!preview.excluded_rows && <details className="text-sm"><summary>{preview.excluded_rows} excluded source rows (no HK/MEPC credit)</summary>{preview.excluded_sampled && <p>Showing the first {preview.exception_sample_limit}. All source rows and exceptions are retained in import history and source export.</p>}{preview.excluded.map(row=><p key={row.source_row}>Row {row.source_row}: {row.original_class}</p>)}</details>}
       {preview.committed ? <p className="rounded-lg bg-green-50 p-3 text-green-800">This exact file was already imported. No duplicate records were written.</p> : <>
-        {preview.rejected_rows > 0 && <div className="rounded-lg bg-amber-50 p-3 text-sm"><p>Rejected rows receive no credit. Valid rows can be imported; resolve exceptions and submit a corrected file.</p><div className="max-h-48 overflow-auto">{preview.rejected.map(row => <p key={row.source_row}>Row {row.source_row} · {row.store_code || 'Missing store'}: {row.reasons.join('; ')}</p>)}</div></div>}
+        {preview.rejected_rows > 0 && <div className="rounded-lg bg-amber-50 p-3 text-sm"><p>Rejected rows receive no credit. Valid rows can be imported; resolve exceptions and submit a corrected file.</p>{preview.rejected_sampled && <p>Showing the first {preview.exception_sample_limit} of {preview.rejected_rows} rejected rows. All source rows and exceptions are retained in import history and source export.</p>}<div className="max-h-48 overflow-auto">{preview.rejected.map(row => <p key={row.source_row}>Row {row.source_row} · {row.store_code || 'Missing store'}: {row.reasons.join('; ')}</p>)}</div></div>}
         {corrections > 0 && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm"><p>{corrections} existing employee/date records will be replaced. All previous site rows for each corrected employee/day are superseded together. Prior versions remain in source history; other employee/days remain unchanged.</p>
           <details><summary>Review affected records</summary><div className="max-h-40 overflow-auto">{preview.affected_records.map(row => <p key={row.id}>{row.employee_code} · {row.attendance_date} · {row.class} · {row.credit}</p>)}</div></details>
           <label className="mt-2 block"><input type="checkbox" checked={replace} onChange={e => setReplace(e.target.checked)}/> I confirm this correction</label>

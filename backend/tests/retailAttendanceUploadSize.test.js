@@ -7,6 +7,7 @@ import XLSX from 'xlsx';
 import { ATTENDANCE_MAX_FILE_BYTES } from '../shared/retailAttendance.js';
 import { createRetailAttendanceRouter } from '../routes/retailAttendanceRoutes.js';
 import { parseAttendanceWorkbook, validateExcelContainer } from '../services/retailAttendanceService.js';
+import {decodeAttendanceSource} from '../services/retailAttendancePreviewAudit.js';
 
 // Real, uncompressed XLSX source cells, all below Excel's 32,767-character cell limit.
 // No appended junk, fake ZIP lengths, external links or relaxed expansion limits.
@@ -47,7 +48,7 @@ async function serverForPreview(run) {
       assert.equal(input.p_batch, 'size-preview');
       assert.equal(input.p_preview_key, state.batch.validation_summary.preview_key);
       assert.equal(input.p_replace, false);
-      assert.equal(state.batch.raw_source.rows.length, 512);
+      assert.equal((await decodeAttendanceSource(state.batch.raw_source)).rows.length, 512);
       assert.equal(state.batch.payload.reduce((sum, row) => sum + row.credit, 0), 512);
       state.commits++;
       return { data: 'size-preview' };
@@ -75,7 +76,8 @@ for (const mib of [12, 15]) {
       assert.equal(preview.rejected_rows, 0);
       assert.equal(preview.can_commit, true);
       assert.equal(state.batch.checksum, createHash('sha256').update(bytes).digest('hex'));
-      assert.equal(state.batch.raw_source.rows[0].raw_cells[6].length, state.batch.raw_source.rows[1].raw_cells[6].length);
+      const retained=await decodeAttendanceSource(state.batch.raw_source);
+      assert.equal(retained.rows[0].raw_cells[6].length, retained.rows[1].raw_cells[6].length);
       const commit = await fetch(base + '/commit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: preview.id, preview_key: preview.preview_key, replace: false }) });
       assert.equal(commit.status, 200);
       assert.equal((await commit.json()).batch_id, 'size-preview');

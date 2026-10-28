@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
 import XLSX from 'xlsx';
 import { acquireAttendancePreviewSlot, parseAttendanceWorkbookStreaming } from './retailAttendanceXlsx.js';
+import {compactPreviewSummary,encodeAttendanceSource,decodeAttendanceSource,previewDatabase} from './retailAttendancePreviewAudit.js';
 import { retailAccess, assertRetailAccess } from './relianceRetailManagementService.js';
 import { ATTENDANCE_MAX_FILE_BYTES, attendanceClass, attendanceCredit, validDate, stateLabel, reportingState, STATE_OPTIONS, storeKey, summarizeAttendance, indiaToday } from '../shared/retailAttendance.js';
 
@@ -120,45 +121,57 @@ export function validateAttendanceRows(rows, stores) {
 }
 
 async function data(query) { const result = await query; if (result.error) throw result.error; return result.data; }
-async function pages(makeQuery) {
+async function pages(makeQuery, read = data) {
   const rows = [];
   for (let from = 0; from < 100000; from += 1000) {
-    const page = await data(makeQuery().range(from, from + 999)); rows.push(...(page || []));
+    const page = await read(makeQuery().range(from, from + 999)); rows.push(...(page || []));
     if (page.length < 1000) return rows;
   }
   throw attendanceError(413, 'Result exceeds the reporting limit. Narrow the selected scope.');
 }
-async function scopedStores(client, profile, state = '') {
+async function scopedStores(client, profile, state = '', read = data) {
   const scope = attendanceAccess(profile);
   if (state && scope.state && reportingState(state) !== reportingState(scope.state)) throw attendanceError(403, 'State is outside your authorized Retail scope.');
-  const stores = await pages(() => client.from('reliance_retail_store_master').select('id,store_code,store_name,state,status').order('id'));
+  const stores = await pages(() => client.from('reliance_retail_store_master').select('id,store_code,store_name,state,status').order('id'), read);
   return stores.filter(s => (!scope.state || stateLabel(s.state) === scope.state) && (!state || reportingState(s.state) === reportingState(state)));
 }
 
-export async function previewRetailAttendance(client, profile, bytes, filename) {
+export async function previewRetailAttendance(client, profile, bytes, filename, context = {}) {
   attendanceAccess(profile, true);
   const releasePreview = acquireAttendancePreviewSlot();
+  const started=performance.now(),timings={},countsLog={};let currentStage='parse',failure=null;
+  const step=async(stage,run)=>{currentStage=stage;const t=performance.now();try{return await run()}finally{timings[stage]=Math.round(performance.now()-t)}};
   try {
-  const parsed = await parseAttendanceWorkbookStreaming(bytes, filename, ATTENDANCE_COLUMNS);
-  const stores = await scopedStores(client, profile);
-  const result = validateAttendanceRows(parsed.rows, stores);
+  const parsed = await step('parse',()=>parseAttendanceWorkbookStreaming(bytes, filename, ATTENDANCE_COLUMNS,{signal:context.signal}));
+  const stores = await step('store_master',()=>scopedStores(client, profile,'',query=>previewDatabase(query,'store_master',context.signal)));
+  const result = await step('validation',()=>validateAttendanceRows(parsed.rows, stores));
+  Object.assign(countsLog,{source_rows:parsed.rows.length,valid_rows:result.valid.length,rejected_rows:result.rejected.length,excluded_rows:result.excluded.length});
   const checksum = createHash('sha256').update(bytes).digest('hex');
-  const existing = await data(client.from('retail_attendance_uploads').select('id,status,uploaded_by,validation_summary').eq('kind', 'attendance').eq('checksum', checksum).maybeSingle());
-  if (existing?.status === 'committed') return { ...existing.validation_summary, id: existing.id, idempotent: true, committed: true };
-  const conflicts = await data(client.rpc('rpc_retail_attendance_conflicts', { p_rows: result.valid }));
+  const existing = await step('lookup',()=>previewDatabase(client.from('retail_attendance_uploads').select('id,status,uploaded_by,validation_summary').eq('kind', 'attendance').eq('checksum', checksum).maybeSingle(),'lookup',context.signal));
+  if (existing?.status === 'committed') return { ...compactPreviewSummary(existing.validation_summary), id: existing.id, idempotent: true, committed: true };
+  const conflicts = await step('conflicts',()=>previewDatabase(client.rpc('rpc_retail_attendance_conflicts', { p_rows: result.valid }),'conflicts',context.signal));
   const dates = [...new Set(result.valid.map(r => r.attendance_date))].sort();
-  const counts = key => Object.fromEntries([...new Set(parsed.rows.map(r => String(r[key] ?? '')))].sort().map(value => [value, parsed.rows.filter(r => String(r[key] ?? '') === value).length]));
-  const summary = { total_rows: parsed.rows.length, valid_rows: result.valid.length, rejected_rows: result.rejected.length, rejected: result.rejected,
+  const countStart=performance.now();const countMaps=Object.fromEntries(['attendance_date','class','original_status'].map(k=>[k,new Map()]));
+  for(const row of parsed.rows)for(const [key,map]of Object.entries(countMaps)){const value=String(row[key]??'');map.set(value,(map.get(value)||0)+1)}
+  const counts = key => Object.fromEntries([...countMaps[key]].sort(([a],[b])=>a<b?-1:a>b?1:0));
+  const summary = compactPreviewSummary({ total_rows: parsed.rows.length, valid_rows: result.valid.length, rejected_rows: result.rejected.length, rejected: result.rejected,
     excluded_rows: result.excluded.length, excluded: result.excluded, date_counts: counts('attendance_date'), class_counts: counts('class'), status_counts: counts('original_status'), affected_records: conflicts, dates, sheet: parsed.sheet, preview: result.valid.slice(0, 100), can_commit: result.valid.length > 0,
-    note: 'Only validated rows are imported. Rejected/conflicting and excluded rows remain in source history and receive no attendance credit.' };
+    note: 'Only validated rows are imported. Rejected/conflicting and excluded rows remain in source history and receive no attendance credit.' });
+  timings.summary=Math.round(performance.now()-countStart);
   const previewKey = randomUUID();
+  const rawSource=await step('audit_encode',()=>encodeAttendanceSource({sheet:parsed.sheet,headers:parsed.headers,rows:parsed.rows,excluded:result.excluded,rejected:result.rejected}));
+  Object.assign(countsLog,{source_audit_json_bytes:rawSource.uncompressed_bytes,compressed_source_base64_bytes:rawSource.data.length});
   const batch = { kind: 'attendance', filename, checksum, uploaded_by: profile.id, uploaded_at: new Date().toISOString(), date_from: dates[0] || null, date_to: dates.at(-1) || null,
     total_rows: summary.total_rows, valid_rows: summary.valid_rows, rejected_rows: summary.rejected_rows, validation_summary: { ...summary, preview_key: previewKey },
-    raw_source: { sheet: parsed.sheet, headers: parsed.headers, rows: parsed.rows, excluded: result.excluded, rejected: result.rejected }, payload: result.valid, expected_ids: conflicts.map(row => row.id).sort() };
-  const saved = existing ? await data(client.from('retail_attendance_uploads').update(batch).eq('id', existing.id).eq('status', 'preview').select('id').single())
-    : await data(client.from('retail_attendance_uploads').insert(batch).select('id').single());
+    raw_source: rawSource, payload: result.valid, expected_ids: conflicts.map(row => row.id).sort() };
+  const saved = await step('audit_save',()=>previewDatabase(existing ? client.from('retail_attendance_uploads').update(batch).eq('id', existing.id).eq('status', 'preview').select('id').single()
+    : client.from('retail_attendance_uploads').insert(batch).select('id').single(),'audit_save',context.signal));
   return { ...summary, id: saved.id, preview_key: previewKey };
-  } finally { releasePreview(); }
+  } catch(error){failure={stage:error.stage||currentStage,code:error.code||'PREVIEW_FAILED',dependency_code:error.dependency_code||null,dependency_status:error.dependency_status||null};throw error;
+  } finally {
+    releasePreview();
+    try{(context.log||console.info)('[RetailAttendancePreview]',JSON.stringify({request_id:context.requestId||null,upload_ms:context.uploadMs??null,timings,...countsLog,total_ms:Math.round(performance.now()-started),rss_bytes:process.memoryUsage().rss,outcome:failure?'failed':'completed',failure}));}catch{/* Diagnostics must not change preview/audit semantics. */}
+  }
 }
 
 export async function commitRetailAttendance(client, profile, input) {
@@ -205,7 +218,10 @@ export async function retailAttendanceEmployees(client, profile, input) {
 // Raw employee source history is administrative only; state readers keep the existing scoped report APIs.
 export async function retailAttendanceHistory(client, profile, input = {}) {
   attendanceAccess(profile, true);
-  if (input.id) return data(client.from('retail_attendance_uploads').select('id,filename,checksum,status,uploaded_at,committed_at,correction_reason,raw_source,validation_summary').eq('id', input.id).single());
+  if (input.id) {
+    const batch=await data(client.from('retail_attendance_uploads').select('id,filename,checksum,status,uploaded_at,committed_at,correction_reason,raw_source,validation_summary').eq('id', input.id).single());
+    return {...batch,raw_source:await decodeAttendanceSource(batch.raw_source)};
+  }
   const page = Math.max(0, Number.parseInt(input.page,10) || 0);
   return data(client.from('retail_attendance_uploads').select('id,filename,checksum,status,uploaded_at,committed_at,date_from,date_to,total_rows,valid_rows,rejected_rows,correction_reason').eq('kind','attendance').order('uploaded_at',{ascending:false}).range(page*20,page*20+20));
 }
