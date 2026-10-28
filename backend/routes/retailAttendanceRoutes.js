@@ -1,5 +1,6 @@
 import express from 'express';
 import { ATTENDANCE_MAX_FILE_BYTES } from '../shared/retailAttendance.js';
+import { XLSX_ERROR_CODES } from '../services/retailAttendanceXlsx.js';
 import { attendanceAccess, previewRetailAttendance, commitRetailAttendance, retailAttendanceReport, retailAttendanceEmployees, retailAttendanceHistory } from '../services/retailAttendanceService.js';
 
 export function createRetailAttendanceRouter({ getClient, environment = process.env }) {
@@ -13,7 +14,7 @@ export function createRetailAttendanceRouter({ getClient, environment = process.
     catch (error) {
       const conflict = ['23505', '40001'].includes(error.code);
       const status = error.statusCode || (conflict ? 409 : error.code === 'P0001' ? 409 : 500);
-      res.status(status).json({ ok: false, message: status >= 500 ? 'Attendance service unavailable. Contact your administrator.' : conflict ? 'Data changed or file already exists. Preview again before importing.' : error.message });
+      res.status(status).json({ ok: false, ...(XLSX_ERROR_CODES.has(error.code) ? { code: error.code } : {}), message: status >= 500 ? 'Attendance service unavailable. Contact your administrator.' : conflict ? 'Data changed or file already exists. Preview again before importing.' : error.message });
     }
   };
   router.get('/summary', run(async req => ({ report: await retailAttendanceReport(getClient(), req.profile, req.query) })));
@@ -29,7 +30,7 @@ export function createRetailAttendanceRouter({ getClient, environment = process.
   router.post('/commit', run(async req => ({ batch_id: await commitRetailAttendance(getClient(), req.profile, req.body || {}) })));
   router.use((error, req, res, next) => {
     if (!error) return next();
-    return res.status(error.type === 'entity.too.large' ? 413 : 400).json({ ok: false, message: 'Invalid or oversized upload; maximum 15 MB.' });
+    return res.status(error.type === 'entity.too.large' ? 413 : 400).json({ ok: false, code: error.type === 'entity.too.large' ? 'FILE_TOO_LARGE' : 'INVALID_XLSX', message: 'Invalid or oversized upload; maximum 15 MB.' });
   });
   return router;
 }

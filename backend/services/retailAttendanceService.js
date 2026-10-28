@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
 import XLSX from 'xlsx';
+import { acquireAttendancePreviewSlot, parseAttendanceWorkbookStreaming } from './retailAttendanceXlsx.js';
 import { retailAccess, assertRetailAccess } from './relianceRetailManagementService.js';
 import { ATTENDANCE_MAX_FILE_BYTES, attendanceClass, attendanceCredit, validDate, stateLabel, reportingState, STATE_OPTIONS, storeKey, summarizeAttendance, indiaToday } from '../shared/retailAttendance.js';
 
@@ -136,7 +137,9 @@ async function scopedStores(client, profile, state = '') {
 
 export async function previewRetailAttendance(client, profile, bytes, filename) {
   attendanceAccess(profile, true);
-  const parsed = parseAttendanceWorkbook(bytes, filename);
+  const releasePreview = acquireAttendancePreviewSlot();
+  try {
+  const parsed = await parseAttendanceWorkbookStreaming(bytes, filename, ATTENDANCE_COLUMNS);
   const stores = await scopedStores(client, profile);
   const result = validateAttendanceRows(parsed.rows, stores);
   const checksum = createHash('sha256').update(bytes).digest('hex');
@@ -155,6 +158,7 @@ export async function previewRetailAttendance(client, profile, bytes, filename) 
   const saved = existing ? await data(client.from('retail_attendance_uploads').update(batch).eq('id', existing.id).eq('status', 'preview').select('id').single())
     : await data(client.from('retail_attendance_uploads').insert(batch).select('id').single());
   return { ...summary, id: saved.id, preview_key: previewKey };
+  } finally { releasePreview(); }
 }
 
 export async function commitRetailAttendance(client, profile, input) {
