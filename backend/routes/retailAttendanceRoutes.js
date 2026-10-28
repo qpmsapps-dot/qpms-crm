@@ -1,5 +1,5 @@
 import express from 'express';
-import { attendanceAccess, previewRetailAttendance, commitRetailAttendance, retailAttendanceReport, retailAttendanceEmployees } from '../services/retailAttendanceService.js';
+import { attendanceAccess, previewRetailAttendance, commitRetailAttendance, retailAttendanceReport, retailAttendanceEmployees, retailAttendanceHistory } from '../services/retailAttendanceService.js';
 
 export function createRetailAttendanceRouter({ getClient, environment = process.env }) {
   const router = express.Router(); // Mounted AFTER the established Retail JWT middleware.
@@ -16,6 +16,7 @@ export function createRetailAttendanceRouter({ getClient, environment = process.
     }
   };
   router.get('/summary', run(async req => ({ report: await retailAttendanceReport(getClient(), req.profile, req.query) })));
+  router.get('/history', run(async req => ({ history: await retailAttendanceHistory(getClient(), req.profile, req.query) })));
   router.get('/employees', run(async req => ({ rows: await retailAttendanceEmployees(getClient(), req.profile, req.query) })));
   router.post('/preview', (req, res, next) => {
     try { attendanceAccess(req.profile, true); next(); } catch (e) { res.status(e.statusCode || 403).json({ ok: false, message: e.message }); }

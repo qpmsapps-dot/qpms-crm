@@ -33,11 +33,16 @@ export function monthDates(cutoff) {
   validDate(cutoff);
   return Array.from({ length: Number(cutoff.slice(8)) }, (_, i) => `${cutoff.slice(0, 7)}-${String(i + 1).padStart(2, '0')}`);
 }
-export function dailyTarget(aop, date, kind) {
+// Aggregate planning cycle only. Never infer an individual employee's absence/off-day from this target.
+// The established month-based default gives day 8 = 7 and day 15 = 13 eligible planning days.
+export function dailyTarget(aop, date, kind, cycleAnchor = date.slice(0,7) + '-01') {
   validDate(date);
   if (!['HK','MEPC'].includes(kind)) throw new Error('Invalid manpower class.');
   if (aop == null || aop === '' || !Number.isFinite(Number(aop)) || Number(aop) < 0) throw new Error('Invalid approved AOP count.');
-  return Number(aop) * (kind === 'MEPC' && Number(date.slice(8)) % 7 === 0 ? 0 : 1);
+  validDate(cycleAnchor);
+  const elapsed = Math.floor((Date.parse(date) - Date.parse(cycleAnchor)) / 86400000);
+  const cycleDay = ((elapsed % 7) + 7) % 7;
+  return Number(aop) * (kind === 'MEPC' && cycleDay === 6 ? 0 : 1);
 }
 export function percentage(actual, target) { return target === 0 ? null : actual / target * 100; }
 const rounded = value => Math.round((value + Number.EPSILON) * 1e8) / 1e8;
@@ -50,7 +55,7 @@ function finalize(row) {
   row.hk_pct = row.complete ? percentage(row.hk_actual, row.hk_target) : null;
   row.mepc_pct = row.complete ? percentage(row.mepc_actual, row.mepc_target) : null;
   row.overall_pct = row.complete ? percentage(row.total_actual, row.total_target) : null;
-  row.shortfall = row.missing_aop.length ? null : rounded(row.total_target - row.total_actual);
+  row.shortfall = !row.complete ? null : rounded(row.total_target - row.total_actual);
   row.over_target = row.missing_aop.length === 0 && row.total_actual > row.total_target;
   return row;
 }
@@ -80,7 +85,7 @@ export function summarizeAttendance({ stores, attendance, aop, cutoff, view = 'm
       else {
         const config = configs[0];
         hkTarget = dailyTarget(config.hk_count, date, 'HK');
-        mepcTarget = dailyTarget(config.mepc_count, date, 'MEPC');
+        mepcTarget = dailyTarget(config.mepc_count, date, 'MEPC', config.mepc_cycle_anchor || date.slice(0,7) + '-01');
         result.hk_target += hkTarget;
         result.mepc_target += mepcTarget;
         if (date === cutoff) { result.hk_aop = Number(config.hk_count); result.mepc_aop = Number(config.mepc_count); }
@@ -102,5 +107,5 @@ export function summarizeAttendance({ stores, attendance, aop, cutoff, view = 'm
     }
     states.set(row.state, group);
   }
-  return { cutoff, view, states: [...states.values()].map(finalize).sort((a, b) => a.state.localeCompare(b.state)), stores: details, total: finalize(total) };
+  return { cutoff, view, hk_replacement_count: null, replacement_mapping_status: 'Unavailable: source does not identify replacement relationships.', mepc_target_policy: 'Aggregate 7-day planning cycle (day 8: 7 eligible days; day 15: 13). Not an employee weekly-off roster. Approved cycle anchors override the month-start planning default.', states: [...states.values()].map(finalize).sort((a, b) => a.state.localeCompare(b.state)), stores: details, total: finalize(total) };
 }

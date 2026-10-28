@@ -3,7 +3,7 @@ import { BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, Legend, Responsive
 import { CalendarDays, Upload, Download, Users, ClipboardCheck, Target, Wrench, TrendingUp, AlertTriangle, X } from 'lucide-react';
 import { usePageTitle } from '../../hooks/usePageTitle.js';
 import { retailAttendanceApi } from '../../services/retailAttendanceApi.js';
-import { attendanceColumns, exportRetailAttendance } from '../../utils/retailAttendanceExport.js';
+import { attendanceColumns, exportRetailAttendance, exportRetailAttendanceSource } from '../../utils/retailAttendanceExport.js';
 import { indiaToday, STATE_OPTIONS } from '../../../backend/shared/retailAttendance.js';
 
 const number = value => value == null ? 'N/A' : Number(value).toLocaleString('en-IN', { maximumFractionDigits: 2 });
@@ -44,11 +44,13 @@ function UploadDialog({ onClose, onImported }) {
     <button disabled={!file || busy} onClick={validate} className={`${button} mt-3`}>{busy ? 'Processing…' : 'Validate and Preview'}</button>
     {error && <p role="alert" className="my-3 rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p>}
     {preview && <div className="mt-4 space-y-3">
-      <p className="font-semibold">{preview.total_rows} rows · {preview.valid_rows} valid · {preview.rejected_rows} rejected</p>
+      <p className="font-semibold">{preview.total_rows} rows · {preview.valid_rows} valid · {preview.rejected_rows} rejected ? {preview.excluded_rows || 0} excluded</p>
       <p className="text-sm">Dates: {(preview.dates || []).join(', ')}</p>
+      <details className="text-sm"><summary>Date / class / status counts</summary>{[['Dates',preview.date_counts],['Classes',preview.class_counts],['Statuses',preview.status_counts]].map(([label,counts])=><p key={label}>{label}: {Object.entries(counts || {}).map(([k,v])=>k+': '+v).join(' ? ')}</p>)}</details>
+      {!!preview.excluded_rows && <details className="text-sm"><summary>{preview.excluded_rows} excluded source rows (no HK/MEPC credit)</summary>{preview.excluded.map(row=><p key={row.source_row}>Row {row.source_row}: {row.original_class}</p>)}</details>}
       {preview.committed ? <p className="rounded-lg bg-green-50 p-3 text-green-800">This exact file was already imported. No duplicate records were written.</p> : <>
-        {preview.rejected_rows > 0 && <div className="rounded-lg bg-amber-50 p-3 text-sm"><p>Import blocked. Resolve the affected rows; unknown classes/statuses are not converted to attendance.</p><div className="max-h-48 overflow-auto">{preview.rejected.map(row => <p key={row.source_row}>Row {row.source_row} · {row.store_code || 'Missing store'}: {row.reasons.join('; ')}</p>)}</div></div>}
-        {corrections > 0 && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm"><p>{corrections} existing employee/date records will be replaced. Previous versions remain in the audit history; records absent from this file remain unchanged.</p>
+        {preview.rejected_rows > 0 && <div className="rounded-lg bg-amber-50 p-3 text-sm"><p>Rejected rows receive no credit. Valid rows can be imported; resolve exceptions and submit a corrected file.</p><div className="max-h-48 overflow-auto">{preview.rejected.map(row => <p key={row.source_row}>Row {row.source_row} · {row.store_code || 'Missing store'}: {row.reasons.join('; ')}</p>)}</div></div>}
+        {corrections > 0 && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm"><p>{corrections} existing employee/date records will be replaced. All previous site rows for each corrected employee/day are superseded together. Prior versions remain in source history; other employee/days remain unchanged.</p>
           <details><summary>Review affected records</summary><div className="max-h-40 overflow-auto">{preview.affected_records.map(row => <p key={row.id}>{row.employee_code} · {row.attendance_date} · {row.class} · {row.credit}</p>)}</div></details>
           <label className="mt-2 block"><input type="checkbox" checked={replace} onChange={e => setReplace(e.target.checked)}/> I confirm this correction</label>
           <input aria-label="Correction reason" maxLength={500} value={reason} onChange={e => setReason(e.target.value)} placeholder="Required correction reason" className="mt-2 w-full rounded border p-2"/>
@@ -64,14 +66,14 @@ function UploadDialog({ onClose, onImported }) {
 export default function RetailAttendance() {
   usePageTitle('Reliance Retail Attendance');
   const today = indiaToday();
-  const [cutoff, setCutoff] = useState(today); const [view, setView] = useState('mtd'); const [state, setState] = useState('');
+  const [cutoff, setCutoff] = useState(''); const [view, setView] = useState('mtd'); const [state, setState] = useState('');
   const [report, setReport] = useState(null); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [refresh, setRefresh] = useState(0);
   const [upload, setUpload] = useState(false); const [drill, setDrill] = useState(null); const [employeeStore, setEmployeeStore] = useState(null); const [employees, setEmployees] = useState([]); const [employeeDate, setEmployeeDate] = useState(today); const [employeePage, setEmployeePage] = useState(0); const [employeeBusy, setEmployeeBusy] = useState(false); const [employeeError, setEmployeeError] = useState('');
   useEffect(() => {
     // Reset server-request state on filter changes; cleanup prevents stale responses.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     let live = true; setBusy(true); setError(''); setReport(null); setDrill(null); setEmployeeStore(null);
-    retailAttendanceApi.summary({ cutoff, view, state }).then(r => { if (live) setReport(r.report); }).catch(e => { if (live) setError(errorText(e)); }).finally(() => { if (live) setBusy(false); });
+    retailAttendanceApi.summary({ cutoff: cutoff || undefined, view, state }).then(r => { if (live) { setReport(r.report); if (!cutoff) setCutoff(r.report.cutoff); } }).catch(e => { if (live) setError(errorText(e)); }).finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
   }, [cutoff, view, state, refresh]);
   useEffect(() => {
@@ -98,7 +100,7 @@ export default function RetailAttendance() {
   const states = STATE_OPTIONS;
   const period = view === 'daily' ? cutoff : `${cutoff.slice(0,7)}-01 to ${cutoff}`;
   return <div className="space-y-4 rounded-xl bg-white p-4 text-slate-800 md:p-5">
-    <header className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-bold text-blue-950">Reliance Retail Attendance</h1><p className="text-sm text-slate-500">Manpower attendance summary using daily uploaded data.</p></div>
+    <header className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-bold text-blue-950">Reliance Retail Attendance</h1><p className="text-sm text-slate-500">Manpower attendance summary using daily uploaded data.</p><p className="mt-2 font-semibold text-blue-950">Latest imported attendance date: {report?.latest_imported_date || 'No attendance imported'}</p></div>
       <div className="flex flex-wrap gap-2"><label className={button}><CalendarDays size={16}/><input aria-label="Month and year" type="month" max={today.slice(0,7)} value={cutoff.slice(0,7)} onChange={e => selectMonth(e.target.value)}/></label>
         {report?.can_upload && <button onClick={() => setUpload(true)} className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white"><Upload size={16}/>Upload Day Attendance</button>}
       </div></header>
@@ -113,7 +115,7 @@ export default function RetailAttendance() {
       {!total.complete && <div role="status" className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"><AlertTriangle size={18}/><div>Incomplete data. Missing store attendance dates: {total.missing_dates.join(', ') || 'None'}. Missing AOP dates: {total.missing_aop.join(', ') || 'None'}. Attendance percentages are N/A until coverage and approved AOP are complete. Missing uploads are not employee absence.</div></div>}
       {report.aop_mapping_blocked && <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">Approved effective-dated AOP configuration is pending budget-source confirmation. Existing Store Master budgets have not been substituted or changed.</p>}
       {!report.stores.length && <p className="rounded-lg border p-6 text-sm">No Retail stores in this authorized state/filter.</p>}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">{cards.map(([label,value,Icon],index) => <article key={label} className={`flex min-h-28 items-start gap-3 rounded-xl border border-slate-100 p-4 ${['bg-blue-50/70','bg-green-50/70','bg-amber-50/70','bg-orange-50/70','bg-violet-50/70','bg-red-50/70'][index]}`}>{createElement(Icon,{className:'mt-1 h-6 w-6 shrink-0 text-blue-600'})}<div><p className="text-xs text-blue-950">{label}</p><p className="mt-2 text-xl font-bold text-blue-950">{value}</p>{index < 3 && <p className="mt-1 text-[10px] text-slate-500">HK: {index!==1 && !targetKnown ? 'N/A' : number(index===0 ? total.hk_aop : index===1 ? total.hk_actual : view==='daily' ? total.hk_target-total.hk_actual : total.hk_target)} | MEPC: {index!==1 && !targetKnown ? 'N/A' : number(index===0 ? total.mepc_aop : index===1 ? total.mepc_actual : view==='daily' ? total.mepc_target-total.mepc_actual : total.mepc_target)}</p>}</div></article>)}</div>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">{cards.map(([label,value,Icon],index) => <article key={label} className={`flex min-h-28 items-start gap-3 rounded-xl border border-slate-100 p-4 ${['bg-blue-50/70','bg-green-50/70','bg-amber-50/70','bg-orange-50/70','bg-violet-50/70','bg-red-50/70'][index]}`}>{createElement(Icon,{className:'mt-1 h-6 w-6 shrink-0 text-blue-600'})}<div><p className="text-xs text-blue-950">{label}</p><p className="mt-2 text-xl font-bold text-blue-950">{value}</p>{index < 3 && <p className="mt-1 text-[10px] text-slate-500">HK: {index!==1 && !targetKnown ? 'N/A' : number(index===0 ? total.hk_aop : index===1 ? total.hk_actual : view==='daily' ? total.complete ? total.hk_target-total.hk_actual : null : total.hk_target)} | MEPC: {index!==1 && !targetKnown ? 'N/A' : number(index===0 ? total.mepc_aop : index===1 ? total.mepc_actual : view==='daily' ? total.complete ? total.mepc_target-total.mepc_actual : null : total.mepc_target)}</p>}</div></article>)}</div>
       {total.over_target && <p className="text-xs font-semibold text-blue-700">Over target: actual credits exceed target. Values above 100% are retained.</p>}
       <div className="grid gap-4 xl:grid-cols-[minmax(300px,0.8fr)_minmax(0,1.5fr)]">
         <section className="min-w-0 rounded-xl border border-slate-200 p-3"><h3 className="mb-3 text-sm font-bold text-blue-950">State-wise HK vs MEPC Attendance %</h3><ResponsiveContainer width="100%" height={260}><BarChart data={report.states} margin={{left:0,right:10,top:10,bottom:5}}><CartesianGrid vertical={false} stroke="#edf1f7"/><XAxis dataKey="state" tick={{fontSize:11}}/><YAxis domain={[0, dataMax => Math.max(100, dataMax)]} tick={{fontSize:10}} tickFormatter={v=>`${v}%`}/><Tooltip formatter={pct}/><Legend iconType="circle" wrapperStyle={{fontSize:11}}/><Bar isAnimationActive={false} name="HK %" dataKey="hk_pct" fill="#1685ff" radius={[3,3,0,0]}/><Bar isAnimationActive={false} name="MEPC %" dataKey="mepc_pct" fill="#a46af4" radius={[3,3,0,0]}/></BarChart></ResponsiveContainer></section>
@@ -126,6 +128,26 @@ export default function RetailAttendance() {
         </div>}
       </section>}
     </>}
-    {upload && <UploadDialog onClose={()=>setUpload(false)} onImported={async()=>{setRefresh(n=>n+1);}}/>}
+    <p className="text-xs text-slate-500">Unique employees with positive attendance: {number(report?.employee_counts?.unique_employees)}; attended employee-days: {number(report?.employee_counts?.employee_days)}. Attendance credits remain separate from headcount. HK replacement attendance: {report?.replacement_mapping_status || 'Unavailable / pending source mapping'}. MEPC targets use an aggregate 7-day planning cycle; they do not assign employee weekly-off dates.</p>
+    {report?.can_upload && <ImportHistory refresh={refresh}/>}
+    {upload && <UploadDialog onClose={()=>setUpload(false)} onImported={async()=>{setCutoff('');setRefresh(n=>n+1);}}/>}
   </div>;
+}
+
+function ImportHistory({ refresh }) {
+  const [open,setOpen]=useState(false), [rows,setRows]=useState([]), [selected,setSelected]=useState(null), [page,setPage]=useState(0), [error,setError]=useState(''), [busy,setBusy]=useState(false);
+  useEffect(()=>{
+    if(!open) return;
+    let live=true;
+    retailAttendanceApi.history({page}).then(r=>{if(live){setRows(r.history);setError('');}}).catch(e=>{if(live)setError(errorText(e));});
+    return()=>{live=false;};
+  },[open,page,refresh]);
+  async function inspect(id) { setBusy(true);setError('');try {setSelected((await retailAttendanceApi.history({id})).history);} catch(e){setError(errorText(e));}finally{setBusy(false);} }
+  async function download() {try{await exportRetailAttendanceSource(selected);}catch(e){setError(errorText(e));}}
+  return <section className="rounded-xl border p-4"><button className={button} onClick={()=>setOpen(v=>!v)}>Import history and exceptions</button>
+    {open && <div className="mt-3 space-y-3">{error && <p role="alert">{error}</p>}<div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr>{['File / imported at','Status','Dates','Valid / rejected','Correction / source'].map(h=><th key={h} className="p-2">{h}</th>)}</tr></thead><tbody>{rows.slice(0,20).map(row=><tr key={row.id} className="border-t"><td className="p-2">{row.filename}<br/>{row.uploaded_at}</td><td>{row.status}</td><td>{row.date_from} to {row.date_to}</td><td>{row.valid_rows} / {row.rejected_rows}</td><td>{row.correction_reason}<button disabled={busy} className={button} onClick={()=>inspect(row.id)}>Source and exceptions</button></td></tr>)}</tbody></table></div>
+    <button className={button} disabled={!page} onClick={()=>setPage(n=>n-1)}>Previous imports</button><button className={button} disabled={rows.length<=20} onClick={()=>setPage(n=>n+1)}>Next imports</button>
+    {selected && <div className="rounded border p-3 text-xs"><p>{selected.filename} ? SHA-256: {selected.checksum}</p><p>{selected.raw_source?.rows?.length || 0} retained source rows ? {selected.raw_source?.headers?.length || 0} source columns</p><button className={button} onClick={download}>Export source and exceptions</button><div className="max-h-64 overflow-auto">{[...(selected.raw_source?.rejected || []),...(selected.raw_source?.excluded || [])].map(row=><p key={row.source_row}>Row {row.source_row} ? {row.store_code} ? {row.attendance_date}: {row.reasons.join('; ')}</p>)}</div></div>}
+    </div>}
+  </section>;
 }

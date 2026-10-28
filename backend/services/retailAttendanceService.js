@@ -64,11 +64,13 @@ export function parseAttendanceWorkbook(bytes, filename) {
   for (let index = 1; index < grid.length; index++) {
     const values = grid[index];
     if (values.every(v => v === '')) continue;
-    const row = { source_row: index + 1 };
+    const row = { source_row: index + 1, raw_cells: values, raw_formulas: {} };
+    for (let c = 0; c < values.length; c++) { const cell = sheet[XLSX.utils.encode_cell({r:index,c})]; if (cell?.f) row.raw_formulas[c] = cell.f; }
     for (const [key, column] of Object.entries(indexes)) {
       const cell = sheet[XLSX.utils.encode_cell({ r: index, c: column })];
       if (cell?.f) throw attendanceError(400, `Formula in mandatory attendance field at row ${index + 1}.`);
       row[key] = values[column];
+      if (['employee_code','store_code'].includes(key) && cell?.t === 'n') row[key] = XLSX.utils.format_cell(cell);
       if (key === 'attendance_date' && typeof row[key] === 'number') {
         const date = XLSX.SSF.parse_date_code(row[key], { date1904: !!book.Workbook?.WBProps?.date1904 });
         row[key] = date ? `${date.y}-${String(date.m).padStart(2, '0')}-${String(date.d).padStart(2, '0')}` : '';
@@ -76,17 +78,23 @@ export function parseAttendanceWorkbook(bytes, filename) {
     }
     rows.push(row);
   }
-  return { sheet: sheets[0], rows };
+  return { sheet: sheets[0], headers: grid[0], rows };
 }
 
 export function validateAttendanceRows(rows, stores) {
   const masters = new Map();
   for (const store of stores) { const code = storeKey(store.store_code); if (masters.has(code)) throw attendanceError(409, 'Duplicate normalized Retail Store Master code.'); masters.set(code, store); }
   const keys = new Map(); const duplicates = new Set();
-  for (const r of rows) { const key = `${storeKey(r.employee_code)}:${r.attendance_date}`; if (keys.has(key)) duplicates.add(key); keys.set(key, true); }
-  const valid = []; const rejected = [];
+  for (const r of rows) { try { attendanceClass(r.class); } catch { continue; } const key = `${storeKey(r.employee_code)}:${storeKey(r.store_code)}:${r.attendance_date}`; if (keys.has(key)) duplicates.add(key); keys.set(key, true); }
+  const valid = []; const rejected = []; const excluded = [];
   for (const row of rows) {
     const errors = [];
+    if (String(row.class ?? '').trim()) {
+      try { attendanceClass(row.class); } catch {
+        excluded.push({source_row: row.source_row, employee_code: storeKey(row.employee_code), store_code: storeKey(row.store_code), attendance_date: String(row.attendance_date ?? ''), original_class: String(row.class), reasons: ['Excluded class; retained as source evidence, not an HK/MEPC attendance credit.']});
+        continue;
+      }
+    }
     const store = masters.get(storeKey(row.store_code));
     if (!store) errors.push('Unknown Reliance Retail Store Code');
     if (!storeKey(row.employee_code)) errors.push('Missing Employee Code');
@@ -96,12 +104,18 @@ export function validateAttendanceRows(rows, stores) {
     try { credit = attendanceCredit(row.original_status); } catch (e) { errors.push(e.message); }
     try { validDate(row.attendance_date); } catch (e) { errors.push(e.message); }
     if (typeof row.attendance_date === 'string' && row.attendance_date > indiaToday()) errors.push('Future Attendance Date');
-    if (duplicates.has(`${storeKey(row.employee_code)}:${row.attendance_date}`)) errors.push('Duplicate Employee Code / Attendance Date');
+    if (duplicates.has(`${storeKey(row.employee_code)}:${storeKey(row.store_code)}:${row.attendance_date}`)) errors.push('Duplicate Employee / Site / Attendance Date');
     if (errors.length) rejected.push({ source_row: row.source_row, employee_code: storeKey(row.employee_code), store_code: storeKey(row.store_code), attendance_date: String(row.attendance_date ?? ''), original_class: String(row.class ?? ''), original_status: String(row.original_status ?? ''), reasons: errors });
-    else valid.push({ employee_code: storeKey(row.employee_code), employee_name: String(row.employee_name).trim(), retail_store_id: store.id, store_code: store.store_code,
+    else valid.push({ source_row: row.source_row, employee_code: storeKey(row.employee_code), employee_name: String(row.employee_name).trim(), retail_store_id: store.id, store_code: store.store_code,
       class: kind, original_status: String(row.original_status), credit, attendance_date: row.attendance_date });
   }
-  return { valid, rejected };
+  const totals = new Map();
+  for (const row of valid) { const key = row.employee_code + ':' + row.attendance_date; totals.set(key, (totals.get(key) || 0) + row.credit); }
+  const accepted = valid.filter(row => {
+    if (totals.get(row.employee_code + ':' + row.attendance_date) <= 1) return true;
+    rejected.push({...row, reasons:['Employee daily credit exceeds 1 across sites; resolve allocation before importing this employee/day.']}); return false;
+  });
+  return { valid: accepted, rejected, excluded };
 }
 
 async function data(query) { const result = await query; if (result.error) throw result.error; return result.data; }
@@ -130,13 +144,14 @@ export async function previewRetailAttendance(client, profile, bytes, filename) 
   if (existing?.status === 'committed') return { ...existing.validation_summary, id: existing.id, idempotent: true, committed: true };
   const conflicts = await data(client.rpc('rpc_retail_attendance_conflicts', { p_rows: result.valid }));
   const dates = [...new Set(result.valid.map(r => r.attendance_date))].sort();
+  const counts = key => Object.fromEntries([...new Set(parsed.rows.map(r => String(r[key] ?? '')))].sort().map(value => [value, parsed.rows.filter(r => String(r[key] ?? '') === value).length]));
   const summary = { total_rows: parsed.rows.length, valid_rows: result.valid.length, rejected_rows: result.rejected.length, rejected: result.rejected,
-    affected_records: conflicts, dates, sheet: parsed.sheet, preview: result.valid.slice(0, 100), can_commit: result.valid.length > 0 && result.rejected.length === 0,
-    note: 'Rejected rows block this file. Correct or remove them and preview again. No records have been imported.' };
+    excluded_rows: result.excluded.length, excluded: result.excluded, date_counts: counts('attendance_date'), class_counts: counts('class'), status_counts: counts('original_status'), affected_records: conflicts, dates, sheet: parsed.sheet, preview: result.valid.slice(0, 100), can_commit: result.valid.length > 0,
+    note: 'Only validated rows are imported. Rejected/conflicting and excluded rows remain in source history and receive no attendance credit.' };
   const previewKey = randomUUID();
   const batch = { kind: 'attendance', filename, checksum, uploaded_by: profile.id, uploaded_at: new Date().toISOString(), date_from: dates[0] || null, date_to: dates.at(-1) || null,
     total_rows: summary.total_rows, valid_rows: summary.valid_rows, rejected_rows: summary.rejected_rows, validation_summary: { ...summary, preview_key: previewKey },
-    payload: result.valid, expected_ids: conflicts.map(row => row.id).sort() };
+    raw_source: { sheet: parsed.sheet, headers: parsed.headers, rows: parsed.rows, excluded: result.excluded, rejected: result.rejected }, payload: result.valid, expected_ids: conflicts.map(row => row.id).sort() };
   const saved = existing ? await data(client.from('retail_attendance_uploads').update(batch).eq('id', existing.id).eq('status', 'preview').select('id').single())
     : await data(client.from('retail_attendance_uploads').insert(batch).select('id').single());
   return { ...summary, id: saved.id, preview_key: previewKey };
@@ -150,8 +165,8 @@ export async function commitRetailAttendance(client, profile, input) {
 }
 
 export async function retailAttendanceReport(client, profile, input = {}) {
-  const cutoff = validDate(input.cutoff || indiaToday());
-  if (cutoff > indiaToday()) throw attendanceError(400, 'Future attendance cutoff is not supported.');
+  let cutoff = input.cutoff ? validDate(input.cutoff) : null;
+  if (cutoff && cutoff > indiaToday()) throw attendanceError(400, 'Future attendance cutoff is not supported.');
   if (input.view && !['daily', 'mtd'].includes(input.view)) throw attendanceError(400, 'Invalid attendance view.');
   const scope = attendanceAccess(profile);
   const allStores = await scopedStores(client, profile);
@@ -160,11 +175,15 @@ export async function retailAttendanceReport(client, profile, input = {}) {
   if (requestedState && !STATE_OPTIONS.includes(requestedState)) throw attendanceError(400, 'Invalid reporting state.');
   if (requestedState && scope.state && requestedState !== reportingState(scope.state)) throw attendanceError(403, 'State is outside your authorized scope.');
   const selected = allStores.filter(s => !requestedState || reportingState(s.state) === requestedState);
+  if (!cutoff) {
+    const latest = await data(client.from('retail_employee_daily_attendance').select('attendance_date').in('retail_store_id', selected.map(s => s.id)).is('superseded_at', null).order('attendance_date', {ascending:false}).limit(1));
+    cutoff = latest?.[0]?.attendance_date || indiaToday(new Date(Date.now() - 86400000));
+  }
   const from = input.view === 'daily' ? cutoff : `${cutoff.slice(0, 7)}-01`;
   const source = await data(client.rpc('rpc_retail_attendance_report_source', { p_store_ids: selected.map(s => s.id), p_from: from, p_to: cutoff }));
   const summary = summarizeAttendance({ stores: selected.filter(s => s.status === 'Active' || source.attendance.some(r => r.retail_store_id === s.id) || source.aop.some(r => r.retail_store_id === s.id)),
     attendance: source.attendance, aop: source.aop, cutoff, view: input.view || 'mtd' });
-  return { ...summary, available_states: states, latest_imported_date: source.latest_date, can_upload: scope.admin,
+  return { ...summary, employee_counts: source.employee_counts || null, available_states: states, latest_imported_date: source.latest_date, can_upload: scope.admin,
     aop_mapping_blocked: 'Budget workbook has conflicting proposed/current/WO and regional sources. Approved sheet, component totals and effective dates must be confirmed before AOP import.' };
 }
 
@@ -177,4 +196,12 @@ export async function retailAttendanceEmployees(client, profile, input) {
   const rows = await data(client.from('retail_employee_daily_attendance').select('employee_code,employee_name,store_code_snapshot,class,attendance_date,original_status,credit')
     .eq('retail_store_id', input.store_id).eq('attendance_date', date).is('superseded_at', null).order('employee_code').range(page * 100, page * 100 + 100));
   return rows.map(row => ({ ...row, reporting_state: reportingState(store.state), original_geographic_state: store.state }));
+}
+
+// Raw employee source history is administrative only; state readers keep the existing scoped report APIs.
+export async function retailAttendanceHistory(client, profile, input = {}) {
+  attendanceAccess(profile, true);
+  if (input.id) return data(client.from('retail_attendance_uploads').select('id,filename,checksum,status,uploaded_at,committed_at,correction_reason,raw_source,validation_summary').eq('id', input.id).single());
+  const page = Math.max(0, Number.parseInt(input.page,10) || 0);
+  return data(client.from('retail_attendance_uploads').select('id,filename,checksum,status,uploaded_at,committed_at,date_from,date_to,total_rows,valid_rows,rejected_rows,correction_reason').eq('kind','attendance').order('uploaded_at',{ascending:false}).range(page*20,page*20+20));
 }

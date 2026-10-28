@@ -2,6 +2,7 @@ import { authenticatedApiRequest } from './api.js';
 const base = '/api/reliance-retail/attendance';
 async function request(config) { return (await authenticatedApiRequest(config)).data; }
 export const retailAttendanceApi = {
+  history: params => request({ url: `${base}/history`, params }),
   summary: params => request({ url: `${base}/summary`, params }),
   employees: params => request({ url: `${base}/employees`, params }),
   preview: file => request({ method: 'POST', url: `${base}/preview`, data: file,
