@@ -1,5 +1,7 @@
 // Pure shared reporting engine, packaged with the backend and bundled by the web app.
 // No payroll, FO attendance, KM or reimbursement writes.
+// Attendance .xlsx upload only: 15 MiB inclusive (UI labels this as 15 MB).
+export const ATTENDANCE_MAX_FILE_BYTES = 15 * 1024 * 1024;
 export const STATUS_CREDITS = Object.freeze({ A: 0, T: 0, H: 0, 'NO-SHOW': 0, 'H-P': 1, P: 1, 'H-HD': 0.5, HD: 0.5 });
 export const STATE_OPTIONS = ['AP-1', 'AP-2', 'KL', 'KN', 'TG', 'TN'];
 export const storeKey = value => String(value ?? '').trim().toUpperCase();

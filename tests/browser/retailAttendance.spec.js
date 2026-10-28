@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { summarizeAttendance } from '../../backend/shared/retailAttendance.js';
+import { ATTENDANCE_MAX_FILE_BYTES, summarizeAttendance } from '../../backend/shared/retailAttendance.js';
 const stores = [{ id:'kn', store_code:'K1', store_name:'Synthetic Karnataka Store', state:'KA', status:'Active' }, { id:'tn',store_code:'T1',store_name:'Synthetic Tamil Nadu Store',state:'TN',status:'Active' }];
 function source(cutoff, view, state, partial = false) {
   const days = Number(cutoff.slice(8));
@@ -28,6 +28,34 @@ async function seed(page, { partial = false, empty = false, fail = false, delay 
   });
   await page.goto('/reliance-retail/attendance', { waitUntil: 'domcontentloaded' });
 }
+
+test('attendance picker and drop use the inclusive 15 MiB boundary without reading workbook contents', async({page})=>{
+  await seed(page,{empty:true});
+  await page.getByRole('button',{name:'Upload Day Attendance'}).click();
+  await expect(page.getByText('Select or drop an .xlsx file (maximum 15 MB)',{exact:false})).toBeVisible();
+  let requests=0;
+  await page.route('**/attendance/preview',route=>{requests++;return route.fulfill({json:{preview:{id:'boundary',preview_key:'key',total_rows:1,valid_rows:1,rejected_rows:0,rejected:[],affected_records:[],dates:['2026-10-20'],preview:[],can_commit:true}}});});
+  const choose=async(size,drop=false)=>page.getByLabel('Attendance Excel file').evaluate((input,{size,drop})=>{
+    const file=new File([new ArrayBuffer(size)],'boundary.xlsx',{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const data=new DataTransfer();data.items.add(file);
+    if(drop)input.closest('label').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:data}));
+    else{input.files=data.files;input.dispatchEvent(new Event('change',{bubbles:true}));}
+  },{size,drop});
+  for(const [size,drop] of [[12*1024*1024,false],[ATTENDANCE_MAX_FILE_BYTES,true]]){
+    await choose(size,drop);
+    await expect(page.getByRole('button',{name:'Validate and Preview'})).toBeEnabled();
+    await page.getByRole('button',{name:'Validate and Preview'}).click();
+    await expect(page.getByRole('button',{name:'Confirm Import'})).toBeEnabled();
+  }
+  expect(requests).toBe(2);
+  for(const drop of [false,true]){
+    await choose(ATTENDANCE_MAX_FILE_BYTES+1,drop);
+    await expect(page.getByRole('alert')).toHaveText('Select an .xlsx file, maximum 15 MB.');
+    await expect(page.getByRole('button',{name:'Validate and Preview'})).toBeDisabled();
+    await expect(page.getByRole('button',{name:'Confirm Import'})).toHaveCount(0);
+  }
+  expect(requests).toBe(2);
+});
 test('MTD, Daily, historical month, state filter and export use the same selected scope', async({page},testInfo)=>{
   await seed(page);
   await expect(page.getByRole('heading',{name:'Reliance Retail Attendance',exact:true})).toBeVisible();

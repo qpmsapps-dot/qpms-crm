@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
 import XLSX from 'xlsx';
 import { retailAccess, assertRetailAccess } from './relianceRetailManagementService.js';
-import { attendanceClass, attendanceCredit, validDate, stateLabel, reportingState, STATE_OPTIONS, storeKey, summarizeAttendance, indiaToday } from '../shared/retailAttendance.js';
+import { ATTENDANCE_MAX_FILE_BYTES, attendanceClass, attendanceCredit, validDate, stateLabel, reportingState, STATE_OPTIONS, storeKey, summarizeAttendance, indiaToday } from '../shared/retailAttendance.js';
 
 export const ATTENDANCE_COLUMNS = Object.freeze({ employee_code: 'EP No', employee_name: 'EP Name', store_code: 'Site Code', attendance_date: 'Att. Date', original_status: 'Att. Status', class: 'Class' });
 export function attendanceError(statusCode, message, code = 'retail_attendance_invalid') { return Object.assign(new Error(message), { statusCode, code }); }
@@ -19,7 +19,7 @@ export function attendanceAccess(profile, write = false) {
 
 // Check declared ZIP expansion before invoking the existing Excel parser.
 export function validateExcelContainer(bytes, filename) {
-  if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > 10 * 1024 * 1024 || !/\.xlsx$/i.test(filename) || filename.length > 200) throw attendanceError(400, 'Select a non-empty .xlsx file, maximum 10 MB.');
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > ATTENDANCE_MAX_FILE_BYTES || !/\.xlsx$/i.test(filename) || filename.length > 200) throw attendanceError(400, 'Select a non-empty .xlsx file, maximum 15 MB.');
   let end = -1;
   for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--) if (bytes.readUInt32LE(i) === 0x06054b50) { end = i; break; }
   if (end < 0) throw attendanceError(400, 'Invalid Excel ZIP container.');

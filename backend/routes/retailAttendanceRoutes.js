@@ -1,4 +1,5 @@
 import express from 'express';
+import { ATTENDANCE_MAX_FILE_BYTES } from '../shared/retailAttendance.js';
 import { attendanceAccess, previewRetailAttendance, commitRetailAttendance, retailAttendanceReport, retailAttendanceEmployees, retailAttendanceHistory } from '../services/retailAttendanceService.js';
 
 export function createRetailAttendanceRouter({ getClient, environment = process.env }) {
@@ -20,7 +21,7 @@ export function createRetailAttendanceRouter({ getClient, environment = process.
   router.get('/employees', run(async req => ({ rows: await retailAttendanceEmployees(getClient(), req.profile, req.query) })));
   router.post('/preview', (req, res, next) => {
     try { attendanceAccess(req.profile, true); next(); } catch (e) { res.status(e.statusCode || 403).json({ ok: false, message: e.message }); }
-  }, express.raw({ type: 'application/octet-stream', limit: '10mb' }), run(async req => {
+  }, express.raw({ type: 'application/octet-stream', limit: ATTENDANCE_MAX_FILE_BYTES }), run(async req => {
     let filename;
     try { filename = decodeURIComponent(req.get('x-file-name') || ''); } catch { filename = ''; }
     return { preview: await previewRetailAttendance(getClient(), req.profile, req.body, filename) };
@@ -28,7 +29,7 @@ export function createRetailAttendanceRouter({ getClient, environment = process.
   router.post('/commit', run(async req => ({ batch_id: await commitRetailAttendance(getClient(), req.profile, req.body || {}) })));
   router.use((error, req, res, next) => {
     if (!error) return next();
-    return res.status(error.type === 'entity.too.large' ? 413 : 400).json({ ok: false, message: 'Invalid or oversized upload; maximum 10 MB.' });
+    return res.status(error.type === 'entity.too.large' ? 413 : 400).json({ ok: false, message: 'Invalid or oversized upload; maximum 15 MB.' });
   });
   return router;
 }

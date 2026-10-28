@@ -4,7 +4,7 @@ import { CalendarDays, Upload, Download, Users, ClipboardCheck, Target, Wrench, 
 import { usePageTitle } from '../../hooks/usePageTitle.js';
 import { retailAttendanceApi } from '../../services/retailAttendanceApi.js';
 import { attendanceColumns, exportRetailAttendance, exportRetailAttendanceSource } from '../../utils/retailAttendanceExport.js';
-import { indiaToday, STATE_OPTIONS } from '../../../backend/shared/retailAttendance.js';
+import { ATTENDANCE_MAX_FILE_BYTES, indiaToday, STATE_OPTIONS } from '../../../backend/shared/retailAttendance.js';
 
 const number = value => value == null ? 'N/A' : Number(value).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const pct = value => value == null ? 'N/A' : `${number(value)}%${value > 100 ? ' ↑' : ''}`;
@@ -24,7 +24,13 @@ function SummaryTable({ rows, total, onState }) {
 function UploadDialog({ onClose, onImported }) {
   const [file, setFile] = useState(null); const [preview, setPreview] = useState(null); const [busy, setBusy] = useState(false);
   const [error, setError] = useState(''); const [replace, setReplace] = useState(false); const [reason, setReason] = useState('');
-  function select(value) { setFile(value); setPreview(null); setError(''); setReplace(false); setReason(''); }
+  function select(value) {
+    setPreview(null); setReplace(false); setReason('');
+    if (value && value.size > ATTENDANCE_MAX_FILE_BYTES) {
+      setFile(null); setError('Select an .xlsx file, maximum 15 MB.'); return;
+    }
+    setFile(value); setError('');
+  }
   async function validate() {
     if (!file || busy) return; setBusy(true); setError('');
     try { setPreview((await retailAttendanceApi.preview(file)).preview); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
@@ -39,7 +45,7 @@ function UploadDialog({ onClose, onImported }) {
     <div className="flex items-center justify-between"><h2 className="text-lg font-bold text-blue-950">Upload Day Attendance</h2><button aria-label="Close upload" disabled={busy} onClick={onClose}><X size={20}/></button></div>
     <p className="my-3 text-sm text-slate-600">Preview the M-here workbook before import. Store and state are resolved from the Reliance Retail Store Master.</p>
     <label onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (!busy) select(event.dataTransfer.files[0]); }} className="block rounded-xl border-2 border-dashed border-blue-200 bg-blue-50/40 p-6 text-center text-sm">
-      Select or drop an .xlsx file (maximum 10 MB)<input aria-label="Attendance Excel file" disabled={busy} type="file" accept=".xlsx" onChange={e => select(e.target.files[0])} className="mx-auto mt-3 block max-w-full"/>
+      Select or drop an .xlsx file (maximum 15 MB)<input aria-label="Attendance Excel file" disabled={busy} type="file" accept=".xlsx" onChange={e => select(e.target.files[0])} className="mx-auto mt-3 block max-w-full"/>
     </label>
     <button disabled={!file || busy} onClick={validate} className={`${button} mt-3`}>{busy ? 'Processing…' : 'Validate and Preview'}</button>
     {error && <p role="alert" className="my-3 rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p>}
