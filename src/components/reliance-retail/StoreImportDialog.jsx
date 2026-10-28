@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { authenticatedApiRequest } from '../../services/api.js';
 import { exportRetailStoreReview } from '../../utils/retailStoreReviewExport.js';
+import BulkIdentityReview from './BulkIdentityReview.jsx';
 
 const base='/api/reliance-retail/store-import';
 async function request(path,config={}) { return (await authenticatedApiRequest({url:base+path,...config})).data; }
@@ -61,6 +62,7 @@ export default function StoreImportDialog({onClose,onImported}) {
       {!enabled&&<p className="text-sm text-amber-900">Activation is awaiting review of the preview and approval decisions.</p>}
       <div className="overflow-auto"><table className="w-full text-left text-xs"><thead><tr>{['Geography','Reporting','Existing','Upload rows','Existing matches','Proposed new codes','Approved identities','Approved AOP'].map(h=><th className="p-2" key={h}>{h}</th>)}</tr></thead><tbody>{preview.states.map(s=><tr className="border-t" key={s.state}>{[s.state,s.reporting_state,s.existing,s.uploaded_rows,s.existing_matches,s.proposed_new_codes.length,s.approved_identity_rows,s.approved_aop_rows].map((v,i)=><td className="p-2" key={i}>{v}</td>)}</tr>)}</tbody></table></div>
       <h3 className="font-semibold">Conflict Review</h3><input aria-label="Filter store conflicts" placeholder="Filter by code, state or issue" className="w-full rounded border p-2 text-sm" value={filter} onChange={e=>setFilter(e.target.value)}/>
+      {preview.id&&preview.status==='preview'&&<BulkIdentityReview key={preview.preview_key} batchId={preview.id} onChanged={()=>setPreview({...preview,can_confirm:false})}/>}
       <div className="max-h-72 overflow-auto"><table className="w-full text-left text-xs"><thead><tr>{['Row','Store code','Name','Geography','Identity','AOP','Issues / pending decisions'].map(h=><th key={h} className="p-2">{h}</th>)}</tr></thead><tbody>{rows.map(r=><tr className="border-t" key={r.source_row}>{[r.source_row,r.store_code,r.store_name,r.state,r.identity_action,r.aop_action,r.issues.join('; ')].map((v,i)=><td key={i} className="p-2 align-top">{v}</td>)}</tr>)}</tbody></table></div>
       <button className={button} disabled={busy} onClick={download}>Export Excel review</button>
       <p className="text-xs text-slate-600">Excel decision fields are review requests. Editing the workbook never approves a store or AOP. Re-upload the final reviewed source for fresh row-bound validation before explicit Admin confirmation.</p>

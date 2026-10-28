@@ -51,6 +51,15 @@ test('isolated PostgreSQL: approved independent scopes, replay, stale preview, R
   sql(read('supabase/migrations_2_0/232_reliance_retail_uploaded_attendance.sql'));
   sql(`insert into profiles(id,role,is_active,status) values('${actor}','ADMIN',true,'Active');`);
   const before=sql('select count(*) from reliance_retail_store_master;');sql(read('supabase/proposals/retail_store_aop_upload.sql'));assert.equal(sql('select count(*) from reliance_retail_store_master;'),before);
+  sql(read('supabase/proposals/retail_bulk_identity_approval.sql'));
+  await t.test('bulk decision receipt binds exact rows, is idempotent and never imports identities or AOP',()=>{
+   const p=book('KL-BULK','KL');const b=stage(p);const r=b.review.rows[0];const payload={state:'KL',decision_file_sha256:'d'.repeat(64),decisions:[{source_row:r.source_row,store_code:r.store_code,decision:'Approve Identity',store_name:r.store_name,store_status:'Active',approval_ref:'REF-1',reviewer_id:actor,evidence_sha256:'a'.repeat(64),operational_model:'SUPERVISOR_ONLY',supervisor_name:'Actual verified supervisor',file_sha256:p.checksum,row_digest:r.row_digest}]};
+   sql(`update retail_store_import_batches set review=jsonb_set(review,'{bulk_identity}',${q(JSON.stringify(payload))}::jsonb) where id='${b.id}';`);
+   const call=`public.rpc_confirm_retail_bulk_identity('${actor}','${b.id}','${b.key}')`;const receipt=rpc(call);assert.equal(receipt.approved_count,1);assert.deepEqual(rpc(call),receipt);assert.equal(source().stores.length,0);assert.equal(source().aop.length,0);
+   assert.equal(sql("select count(*) from retail_store_import_approvals where store_code='KL-BULK';").trim(),'1');
+   assert.throws(()=>sql(`set role authenticated;select ${call};`),/permission denied/);
+   assert.throws(()=>confirm(b),/changed/);
+  });
   await t.test('RLS, ACL and Admin role required at database boundary',()=>{
    for(const table of ['retail_store_import_approvals','retail_store_import_batches','retail_store_import_events'])for(const role of ['anon','authenticated'])assert.throws(()=>sql(`select * from ${table};`,role));
    assert.throws(()=>sql(`select public.rpc_retail_store_import_source('${actor}');`,'authenticated'));
@@ -104,6 +113,8 @@ test('isolated PostgreSQL: approved independent scopes, replay, stale preview, R
       assert.equal(download.suggestedFilename(),'retail-store-master-aop-review.xlsx');const ExcelJS=(await import('exceljs')).default;const exported=new ExcelJS.Workbook();await exported.xlsx.readFile(await download.path());
       assert.equal(exported.getWorksheet('Proposed stores').rowCount,855);assert.equal(exported.getWorksheet('STORE UPLOAD REVIEW').rowCount,855);assert.ok(exported.getWorksheet('Independent AOP').autoFilter);
       const exportedBytes=await fs.readFile(await download.path());const roundtrip=await previewStoreImport(client,profile,exportedBytes,'exported-review.xlsx');assert.equal(roundtrip.total_rows,854);assert.equal(roundtrip.identity_ready,0);assert.equal(roundtrip.aop_ready,0);
+      const row=data.preview.rows[0];const decisions=XLSX.utils.book_new();XLSX.utils.book_append_sheet(decisions,XLSX.utils.aoa_to_sheet([['Source row','Store Code','Decision','Corrected official name','Operating status','Evidence reference','Reviewer profile ID','Evidence SHA-256','Ownership model','Supervisor name','Final file SHA-256','Final row digest'],[row.source_row,row.store_code,'Hold','','','Isolated HOLD evidence',actor,'a'.repeat(64),'','',data.preview.checksum,row.row_digest]]),'Identity decisions');
+      await page.getByText('Bulk identity decisions (Admin)',{exact:true}).click();await page.getByLabel('Bulk identity decision workbook').setInputFiles({name:'decisions.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:XLSX.write(decisions,{type:'buffer',bookType:'xlsx'})});await page.getByRole('button',{name:'Validate bulk decisions'}).click();await page.getByText(/0 request approval · 0 reject · 1 hold/).waitFor();assert.equal(await page.getByRole('button',{name:'Confirm identity decisions'}).isDisabled(),true);
      }finally{await browser.close();await vite.close();}
     }
    }finally{await new Promise(r=>server.close(r));}

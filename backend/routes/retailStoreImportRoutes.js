@@ -1,6 +1,7 @@
 import express from 'express';
 import { storeImportAdmin,storeImportCapability,previewStoreImport,confirmStoreImport,rollbackStoreImport,storeImportHistory } from '../services/retailStoreImportService.js';
 import { previewStoreAttendanceRecovery,confirmStoreAttendanceRecovery } from '../services/retailStoreAttendanceRecovery.js';
+import { previewBulkIdentity,confirmBulkIdentity } from '../services/retailBulkIdentityService.js';
 
 export function createRetailStoreImportRouter({getClient,environment=process.env}) {
   const router=express.Router();
@@ -12,6 +13,8 @@ export function createRetailStoreImportRouter({getClient,environment=process.env
     return {preview:await previewStoreImport(getClient(),req.profile,req.body,name),activation_enabled:environment.RETAIL_STORE_IMPORT_WRITES_ENABLED==='true'};
   }));
   router.get('/history',run(async req=>({history:await storeImportHistory(getClient(),req.profile)})));
+  router.post('/bulk-identity/preview',express.raw({type:'application/octet-stream',limit:'10mb'}),run(async req=>({preview:await previewBulkIdentity(getClient(),req.profile,req.body,decodeURIComponent(req.get('x-file-name')||''),req.get('x-source-batch-id')),approval_enabled:environment.RETAIL_BULK_IDENTITY_APPROVALS_ENABLED==='true'})));
+  router.post('/bulk-identity/confirm',run(async req=>({receipt:await confirmBulkIdentity(getClient(),req.profile,req.body||{},environment)})));
   router.post('/confirm',run(async req=>({receipt:await confirmStoreImport(getClient(),req.profile,req.body||{},environment)})));
   router.post('/rollback',run(async req=>({receipt:await rollbackStoreImport(getClient(),req.profile,req.body||{},environment)})));
   router.post('/recovery/preview',run(async req=>({preview:await previewStoreAttendanceRecovery(getClient(),req.profile,req.body||{}),activation_enabled:environment.RETAIL_STORE_ATTENDANCE_REPROCESS_ENABLED==='true'})));
