@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { authenticatedApiRequest } from '../../services/api.js';
+import { exportRetailStoreReview } from '../../utils/retailStoreReviewExport.js';
 
 const base='/api/reliance-retail/store-import';
 async function request(path,config={}) { return (await authenticatedApiRequest({url:base+path,...config})).data; }
@@ -47,7 +48,7 @@ export default function StoreImportDialog({onClose,onImported}) {
     catch(e){setError(message(e));}finally{setBusy(false);}}
   async function confirm(){setBusy(true);setError('');try{const r=await request('/confirm',{method:'POST',data:{id:preview.id,preview_key:preview.preview_key,identity,aop}});setPreview({...preview,status:'committed',receipt:r.receipt,can_confirm:false});await loadHistory();await onImported();}catch(e){setError(message(e));}finally{setBusy(false);}}
   const rows=(preview?.rows||[]).filter(r=>!filter||`${r.store_code} ${r.store_name} ${r.state} ${r.issues.join(' ')}`.toLowerCase().includes(filter.toLowerCase()));
-  function download(){const blob=new Blob([JSON.stringify(preview,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='store-master-aop-review.json';a.click();URL.revokeObjectURL(url);}
+  async function download(){setBusy(true);setError('');try{await exportRetailStoreReview(preview,{filename:file?.name||''});}catch(e){setError(message(e));}finally{setBusy(false);}}
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"><section role="dialog" aria-modal="true" aria-label="Upload Store Master and AOP" className="max-h-[90vh] w-full max-w-6xl overflow-auto rounded-2xl bg-white p-6 shadow-xl">
     <div className="flex justify-between"><h2 className="text-lg font-bold">Upload Store Master &amp; AOP</h2><button aria-label="Close store upload" disabled={busy} onClick={onClose}>Close</button></div>
     <p className="my-3 text-sm">Use the Store Master Audit Upload Review template. Existing canonical identities are preserved. Rows marked NO or missing approved evidence stay pending. Identity approval and effective-dated AOP approval are separate.</p>
@@ -61,7 +62,8 @@ export default function StoreImportDialog({onClose,onImported}) {
       <div className="overflow-auto"><table className="w-full text-left text-xs"><thead><tr>{['Geography','Reporting','Existing','Upload rows','Existing matches','Proposed new codes','Approved identities','Approved AOP'].map(h=><th className="p-2" key={h}>{h}</th>)}</tr></thead><tbody>{preview.states.map(s=><tr className="border-t" key={s.state}>{[s.state,s.reporting_state,s.existing,s.uploaded_rows,s.existing_matches,s.proposed_new_codes.length,s.approved_identity_rows,s.approved_aop_rows].map((v,i)=><td className="p-2" key={i}>{v}</td>)}</tr>)}</tbody></table></div>
       <h3 className="font-semibold">Conflict Review</h3><input aria-label="Filter store conflicts" placeholder="Filter by code, state or issue" className="w-full rounded border p-2 text-sm" value={filter} onChange={e=>setFilter(e.target.value)}/>
       <div className="max-h-72 overflow-auto"><table className="w-full text-left text-xs"><thead><tr>{['Row','Store code','Name','Geography','Identity','AOP','Issues / pending decisions'].map(h=><th key={h} className="p-2">{h}</th>)}</tr></thead><tbody>{rows.map(r=><tr className="border-t" key={r.source_row}>{[r.source_row,r.store_code,r.store_name,r.state,r.identity_action,r.aop_action,r.issues.join('; ')].map((v,i)=><td key={i} className="p-2 align-top">{v}</td>)}</tr>)}</tbody></table></div>
-      <button className={button} onClick={download}>Download full validation review</button>
+      <button className={button} disabled={busy} onClick={download}>Export Excel review</button>
+      <p className="text-xs text-slate-600">Excel decision fields are review requests. Editing the workbook never approves a store or AOP. Re-upload the final reviewed source for fresh row-bound validation before explicit Admin confirmation.</p>
       {preview.status==='committed'?<p className="rounded bg-green-50 p-3">This file was imported. Replay returns the original receipt and adds no duplicate rows.</p>:preview.status==='rolled_back'?<p>This import was rolled back. A new reviewed file is required.</p>:<>
         <label className="block text-sm"><input type="checkbox" disabled={!preview.identity_ready||busy} checked={identity} onChange={e=>setIdentity(e.target.checked)}/> Import approved Store Master additions ({preview.identity_ready})</label>
         <label className="block text-sm"><input type="checkbox" disabled={!preview.aop_ready||busy} checked={aop} onChange={e=>setAop(e.target.checked)}/> Import independently approved AOP values ({preview.aop_ready})</label>
