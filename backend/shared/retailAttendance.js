@@ -83,17 +83,13 @@ export function summarizeAttendance({ stores, attendance, aop, cutoff, view = 'm
     for (const date of dates) {
       const configs = (configurations.get(store.id) || []).filter(v => v.effective_from <= date && (!v.effective_to || date <= v.effective_to));
       let hkTarget = null; let mepcTarget = null;
-      if (configs.length !== 1) result.missing_aop.push(date);
-      else {
-        const config = configs[0];
-        hkTarget = dailyTarget(config.hk_count, date, 'HK');
-        mepcTarget = dailyTarget(config.mepc_count, date, 'MEPC', config.mepc_cycle_anchor || date.slice(0,7) + '-01');
-        result.hk_target += hkTarget;
-        result.mepc_target += mepcTarget;
-        if (date === cutoff) { result.hk_aop = Number(config.hk_count); result.mepc_aop = Number(config.mepc_count); }
-      }
+      const hk = configs.filter(c => (!c.aop_class || c.aop_class === 'HK') && c.hk_count != null);
+      const mepc = configs.filter(c => (!c.aop_class || c.aop_class === 'MEPC') && c.mepc_count != null);
+      if (hk.length !== 1 || mepc.length !== 1) result.missing_aop.push(date);
+      if (hk.length === 1) { hkTarget = dailyTarget(hk[0].hk_count,date,'HK'); result.hk_target += hkTarget; if(date===cutoff) result.hk_aop=Number(hk[0].hk_count); }
+      if (mepc.length === 1) { mepcTarget = dailyTarget(mepc[0].mepc_count,date,'MEPC',mepc[0].mepc_cycle_anchor || date.slice(0,7)+'-01'); result.mepc_target += mepcTarget; if(date===cutoff) result.mepc_aop=Number(mepc[0].mepc_count); }
       const actual = byStore.get(`${store.id}:${date}`);
-      if ((hkTarget > 0 && !actual?.classes.has('HK')) || (mepcTarget > 0 && !actual?.classes.has('MEPC')) || (!actual && configs.length !== 1)) result.missing_dates.push(date);
+      if ((hkTarget > 0 && !actual?.classes.has('HK')) || (mepcTarget > 0 && !actual?.classes.has('MEPC')) || (!actual && (hk.length !== 1 || mepc.length !== 1))) result.missing_dates.push(date);
       if (actual) { result.hk_actual += actual.HK; result.mepc_actual += actual.MEPC; }
     }
     return finalize(result);

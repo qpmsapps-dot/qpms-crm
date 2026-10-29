@@ -13,7 +13,8 @@ test('Retail role access separates HK, technical and KAM and denies other busine
  assert.equal(canAccessRoute(hk,'/reliance-retail/store-master'),true);
  assert.equal(canAccessRoute(hk,'/reliance-retail/fault-tracker'),false);
  assert.equal(canAccessRoute(technical,'/reliance-retail/fault-tracker'),true);
- assert.equal(canAccessRoute(technical,'/reliance-retail/store-master'),false);
+ // Unified master navigation is shared; database state grants still gate all data/actions.
+ assert.equal(canAccessRoute(technical,'/reliance-retail/store-master'),true);
  assert.equal(canAccessRoute(kam,'/reliance-retail/thermography'),true);
  assert.equal(canAccessRoute({...hk,business:'Other'},'/reliance-retail'),false);
  assert.equal(canAccessRoute({role:'DEMO_VIEWER'},'/reliance-retail'),false);

@@ -71,6 +71,7 @@ function matchesFilter(row, filter) {
   }
   if (filter.type === 'gte') return String(actual ?? '') >= String(filter.value ?? '');
   if (filter.type === 'lte') return String(actual ?? '') <= String(filter.value ?? '');
+  if (filter.type === 'gt') return String(actual ?? '') > String(filter.value ?? '');
   if (filter.type === 'is') return actual === filter.value || (actual == null && filter.value == null);
   if (filter.type === 'in') return filter.values.includes(actual);
   if (filter.type === 'or') return filter.conditions.some((condition) => matchesFilter(row, condition));
@@ -153,6 +154,8 @@ class Query {
       .map((part) => {
         const match = part.match(/^([^.]*)\.ilike\.(.*)$/i);
         if (match) return { type: 'ilike', column: match[1], value: match[2] };
+        const end = part.match(/^([^.]*)\.(is|gt)\.(.*)$/i);
+        if (end) return {type:end[2].toLowerCase(),column:end[1],value:end[3]==='null'?null:end[3]};
         return null;
       })
       .filter(Boolean);
@@ -189,7 +192,9 @@ class Query {
   }
 
   async execute() {
-    const rows = this.db.tables[this.table];
+    // Existing submission tests use a fixed current zone projection. Temporal
+    // Store/Zone/FO behavior is exercised against actual PostgreSQL separately.
+    const rows = this.db.tables[this.table === 'reliance_retail_store_operational_ownership' ? 'reliance_retail_store_master' : this.table];
     if (!rows) return { data: null, error: new Error(`Unknown table ${this.table}`), count: null };
     const matches = () => rows.filter((row) => this.filters.every((filter) => matchesFilter(row, filter)));
     if (this._operation === 'insert') {

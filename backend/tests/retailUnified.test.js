@@ -1,0 +1,144 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import {randomUUID} from 'node:crypto';import {execFileSync} from 'node:child_process';import express from 'express';
+import {parseUnifiedMaster,previewUnifiedMaster} from '../services/retailUnifiedImport.js';
+import {unifiedReport,ownershipAt} from '../shared/retailUnifiedModel.js';
+import {attendanceCredit,summarizeAttendance} from '../shared/retailAttendance.js';
+import {createRetailUnifiedRouter} from '../routes/retailUnifiedRoutes.js';
+import {applyUnified} from '../services/retailUnifiedService.js';
+import XLSX from 'xlsx';
+const primary=process.env.RETAIL_UNIFIED_PRIMARY||'C:/Users/qpmsd/Downloads/Reliance_Retail_Store_Master_Audit_Upload_Review (2).xlsx';
+const mapping=process.env.RETAIL_UNIFIED_MAPPING||'C:/Users/qpmsd/Downloads/Reliance_Retail_Consolidated_Store_AOP_FO_Mapping.xlsx';
+const root=new URL('../../',import.meta.url),read=p=>fs.readFileSync(new URL(p,root),'utf8');
+test('real audit and consolidated sources preserve all rows, decimals, sheets, duplicates and missing AOP',{skip:!fs.existsSync(primary)},()=>{
+ const p=parseUnifiedMaster(fs.readFileSync(primary),'primary.xlsx');assert.equal(p.rows.length,854);assert.equal(new Set(p.rows.map(r=>r.store_code)).size,852);assert.deepEqual(Object.keys(p.sheets),['READ ME','STORE UPLOAD REVIEW','EXCEPTIONS','STATE COUNTS']);
+ assert.equal(p.rows.find(r=>r.store_code==='1973').review.mepc.shared,0.25);assert.equal(p.rows.find(r=>r.store_code==='1973').review.mepc.supervisor,0.14);assert.ok(p.rows.every(r=>r.review.hk.total===null&&r.review.mepc.total===null));
+ const c=parseUnifiedMaster(fs.readFileSync(mapping),'mapping.xlsx');assert.equal(c.rows.length,854);assert.ok(c.rows.some(r=>r.review.fo_evidence.name));assert.ok(c.rows.every(r=>r.review.fo_evidence.verification==='PENDING_VERIFICATION'));
+ if(process.env.RETAIL_UNIFIED_EXPANDED){const expanded=parseUnifiedMaster(fs.readFileSync(process.env.RETAIL_UNIFIED_EXPANDED),'expanded.xlsx');assert.equal(expanded.rows.length,854);assert.equal(expanded.format,'UNIFIED MASTER');assert.ok(expanded.rows.every(r=>r.review.hk.total===null));}
+ const preview=previewUnifiedMaster(p,{stores:[],rows:[],fos:[],permissions:[{state:'TN',permission:'editor'}],admin:false,stamp:'test'});assert.equal(preview.can_save,false);assert.equal(preview.receipt.staged_rows,854);assert.ok(preview.rows.filter(r=>r.issues.includes('DUPLICATE_SOURCE_CODE')).length>=4);
+});
+test('class AOP remains independently pending; all existing attendance credits preserved',()=>{
+ for(const [status,value] of Object.entries({A:0,T:0,H:0,'NO-SHOW':0,P:1,'H-P':1,HD:0.5,'H-HD':0.5}))assert.equal(attendanceCredit(status),value);
+ const s={id:'s',store_code:'S',store_name:'Store',state:'PY',observed_zone_id:'z',ownership:{known:true,zone_id:'z',fo_profile_id:'f'}};
+ const snapshot={from:'2026-10-01',to:'2026-10-01',epoch_at:'2026-10-01T00:00:00Z',stores:[s],rows:[],zones:[],assignments:[],store_zone_history:[],attendance:[{retail_store_id:'s',attendance_date:'2026-10-01',class:'HK',credit:1}],aop:[{retail_store_id:'s',aop_class:'HK',hk_count:1.25,mepc_count:null,effective_from:'2026-10-01',effective_to:null}],deep_cleaning:[],training:[],schedules:null};
+ const report=unifiedReport(snapshot);assert.equal(report.daily[0].reporting_state,'TN');assert.equal(report.daily[0].target,1.25);assert.equal(report.daily[0].shortage,0.25);assert.equal(report.daily[1].target,null);assert.equal(report.daily[1].shortage,null);
+ assert.equal(ownershipAt(snapshot,s,'2026-09-30T00:00:00Z').known,false);
+ const legacy=summarizeAttendance({stores:[s],attendance:snapshot.attendance,aop:snapshot.aop,cutoff:'2026-10-01',view:'daily'});assert.equal(legacy.stores[0].shortfall,null);assert.ok(legacy.stores[0].missing_aop.length);
+});
+test('operational activation retains existing closed write gate',async()=>{await assert.rejects(()=>applyUnified(null,{id:'actor'},{proposal_id:'p'},{}),/existing Store Master write gate/);});
+
+test('isolated PostgreSQL and real browser unified lifecycle',{skip:process.env.RETAIL_UNIFIED_POSTGRES!=='1',timeout:300000},async t=>{
+ const container='qpms-unified-'+randomUUID().slice(0,8),docker=args=>execFileSync('docker',args,{encoding:'utf8',maxBuffer:50e6,stdio:['pipe','pipe','pipe']});
+ const sql=(text,role='')=>execFileSync('docker',['exec','-i',container,'psql','-h','127.0.0.1','-U','postgres','-qAt','-v','ON_ERROR_STOP=1'],{input:(role?'set role '+role+';':'')+text,encoding:'utf8',maxBuffer:80e6,stdio:['pipe','pipe','pipe']}).trim();
+ const q=v=>v==null?'null':typeof v==='boolean'||typeof v==='number'?String(v):"'"+String(typeof v==='object'?JSON.stringify(v):v).replaceAll("'","''")+"'"+(typeof v==='object'?'::jsonb':'');
+ const call=(name,args,role='service_role')=>JSON.parse(sql(`select to_jsonb(public.${name}(${Object.entries(args).map(([k,v])=>k+'=>'+q(v)).join(',')}));`,role));
+ const ids=Array.from({length:8},(_,i)=>`00000000-0000-4000-8000-${String(i+101).padStart(12,'0')}`),[admin,second,editor,viewer,reviewer,ka,foA,foB]=ids;
+ const zone1=randomUUID(),zone2=randomUUID(),store1=randomUUID(),store2=randomUUID();
+ const snapshot=(actor=admin)=>call('rpc_retail_unified_snapshot',{p_actor:actor,p_from:'2026-10-01',p_to:'2026-10-31'});
+ const profile={id:admin},client={rpc:async(name,args)=>{try{return {data:call(name,args)};}catch(e){return {error:{code:e.stderr?.includes('permission')?'42501':'P0001',message:e.stderr}};}}};
+ let http,web,browser;const output=new URL('artifacts/retail-unified-test/',root);fs.mkdirSync(output,{recursive:true});
+ const propose=(kind,changes,{actor=editor,state='TN',store=store1,zone=null,row=null,revision=null}={})=>call('rpc_retail_unified_propose',{p_actor:actor,p_kind:kind,p_state:state,p_store:store,p_zone:zone,p_row:row,p_revision:revision,p_changes:changes,p_reason:'Isolated evidence REF-TEST'});
+ const decide=(p,actor=reviewer,approve=true)=>call('rpc_retail_unified_decide',{p_actor:actor,p_proposal:p,p_approve:approve,p_reason:'Independent approval TEST-REF'});
+ const apply=p=>call('rpc_retail_unified_apply',{p_actor:admin,p_proposal:p});
+ const digest=table=>sql(`select md5(coalesce(jsonb_agg(to_jsonb(x) order by id),'[]')::text) from ${table} x;`);
+ docker(['run','--detach','--name',container,'--network','none','--tmpfs','/var/lib/postgresql/data','-e','POSTGRES_HOST_AUTH_METHOD=trust','postgres:17']);
+ try{
+  for(let i=0;;i++){try{docker(['exec',container,'pg_isready','-h','127.0.0.1','-U','postgres']);break;}catch(e){if(i>80)throw e;await new Promise(r=>setTimeout(r,200));}}
+  sql(read('backend/tests/fixtures/retailStoreImportBaseline.sql'));sql(read('supabase/migrations_2_0/232_reliance_retail_uploaded_attendance.sql'));sql(read('supabase/proposals/retail_store_aop_upload.sql'));sql(read('supabase/proposals/retail_bulk_identity_approval.sql'));sql(read('supabase/proposals/retail_provisional_stores.sql'));
+  sql(`create table reliance_retail_zones(id uuid primary key default gen_random_uuid(),zone_code text unique,zone_name text,state text,status text default 'Active',created_by_profile_id uuid,created_at timestamptz default now(),updated_at timestamptz default now());
+  create table reliance_retail_zone_fo_assignments(id uuid primary key default gen_random_uuid(),zone_id uuid references reliance_retail_zones(id),fo_profile_id uuid references profiles(id),fo_employee_code text,effective_from timestamptz,effective_to timestamptz,status text,assigned_by_profile_id uuid,metadata jsonb default '{}');
+  create unique index ux_retail_zone_current_fo on reliance_retail_zone_fo_assignments(zone_id) where status='Active' and effective_to is null;
+  create table reliance_retail_store_zone_history(id uuid primary key default gen_random_uuid(),retail_store_id uuid references reliance_retail_store_master(id),previous_zone_id uuid,new_zone_id uuid,changed_by_profile_id uuid,changed_at timestamptz default now(),reason text,metadata jsonb default '{}');
+  create table reliance_retail_management_audit(id uuid primary key default gen_random_uuid(),action text,entity_type text,entity_id uuid,actor_profile_id uuid,before_state jsonb,after_state jsonb,created_at timestamptz default now());
+  create table reliance_retail_store_manpower_budgets(id uuid primary key default gen_random_uuid());
+  create function rpc_sync_reliance_retail_fo_zones(uuid,uuid,uuid[]) returns jsonb language sql as 'select ''{}''::jsonb';
+  revoke all on function rpc_sync_reliance_retail_fo_zones(uuid,uuid,uuid[]) from public,anon,authenticated;grant execute on function rpc_sync_reliance_retail_fo_zones(uuid,uuid,uuid[]) to service_role;
+  create table client_deep_cleaning_submissions(id uuid primary key default gen_random_uuid(),retail_store_id uuid,store_code text,deep_cleaning_date date,status text,submitted_at timestamptz,created_at timestamptz default now());
+  create table client_deep_cleaning_uploads(id uuid primary key default gen_random_uuid(),submission_id uuid,upload_type text,upload_status text);
+  create table training_sessions(id uuid primary key default gen_random_uuid(),retail_store_id uuid,store_code_snapshot text,training_date date,status text,trainer_name_snapshot text,submitted_at timestamptz,created_at timestamptz default now());`);
+  for(const [id,role,state,business] of [[admin,'ADMIN','TN',''],[second,'ADMIN','TN',''],[editor,'HK MIS','TN','Reliance Retail'],[viewer,'HK MIS','TN','Reliance Retail'],[reviewer,'MIS','TN','Reliance Retail'],[ka,'MIS','KA','Reliance Retail'],[foA,'FO','TN','Reliance Retail'],[foB,'FO','TN','Reliance Retail']])sql(`insert into profiles(id,employee_code,full_name,role,state,business,is_active,status) values('${id}',${q('EMP-'+id.slice(-3))},${q(role+' '+id.slice(-3))},${q(role)},${q(state)},${q(business)},true,'Active');`);
+  sql(`insert into reliance_retail_zones(id,zone_code,zone_name,state) values('${zone1}','TN-ONE','TN One','TN'),('${zone2}','KA-ONE','KA One','KA');insert into reliance_retail_zone_fo_assignments(zone_id,fo_profile_id,fo_employee_code,effective_from,status) values('${zone1}','${foA}','EMP-107','2026-01-01','Active');
+  insert into reliance_retail_store_master(id,store_code,store_name,state,zone_id,source_name,metadata,assigned_fo_profile_id,assigned_fo_employee_code,assigned_fo_name_snapshot) values('${store1}','TEST-TN','TN Fixture','TN','${zone1}','fixture','{}','${foA}','EMP-107','FO A'),('${store2}','TEST-PY','PY Fixture','PY',null,'fixture','{"operational_model":"SUPERVISOR_ONLY"}',null,null,null);
+  insert into retail_attendance_uploads(id,kind,filename,checksum,uploaded_by,total_rows,valid_rows,rejected_rows,status,validation_summary,payload,raw_source) values('00000000-0000-4000-8000-000000000201','attendance','fixture.xlsx','fixture','${admin}',1,1,0,'committed','{}','[]','{}');
+  insert into retail_employee_daily_attendance(attendance_date,employee_code,employee_name,retail_store_id,store_code_snapshot,class,original_status,source_row,credit,batch_id) values('2026-10-27','E1','Fixture employee','${store1}','TEST-TN','HK','P',2,1,'00000000-0000-4000-8000-000000000201');
+  insert into client_deep_cleaning_submissions(retail_store_id,store_code,deep_cleaning_date,status,submitted_at) values('${store1}','TEST-TN','2026-10-27','SUBMITTED','2026-10-27');insert into training_sessions(retail_store_id,store_code_snapshot,training_date,status,trainer_name_snapshot,submitted_at) values('${store1}','TEST-TN','2026-10-27','SUBMITTED','Recorded Trainer','2026-10-27');`);
+  const canonicalBefore=digest('reliance_retail_store_master'),attendanceBefore=digest('retail_employee_daily_attendance'),dcBefore=digest('client_deep_cleaning_submissions'),trainingBefore=digest('training_sessions');
+  const identity=()=>sql("select md5(string_agg(pg_get_functiondef(oid),'' order by oid)) from pg_proc where proname in ('rpc_confirm_retail_store_import','rpc_confirm_retail_bulk_identity','retail_store_import_admin');");const identityBefore=identity();
+  sql('create schema supabase_migrations;create table supabase_migrations.schema_migrations(version text primary key,name text,statements text[]);');
+  sql(`insert into supabase_migrations.schema_migrations values('20261029120000','retail_provisional_stores',array[${q(read('supabase/proposals/retail_provisional_stores.sql').replaceAll('\r\n','\n'))}]);`);
+  sql(read('supabase/proposals/retail_unified_apply_and_record.sql'));assert.equal(digest('reliance_retail_store_master'),canonicalBefore);
+  assert.equal(sql("select cardinality(statements) from supabase_migrations.schema_migrations where version='20261029140000';"),'1');
+  assert.equal(sql("select md5(replace(statements[1],E'\\r\\n',E'\\n')) from supabase_migrations.schema_migrations where version='20261029140000';"),read('supabase/verification/retail_unified_source_digest.txt').trim());
+  assert.throws(()=>sql(read('supabase/proposals/retail_unified_apply_and_record.sql')));
+  sql(`insert into retail_provisional_access(actor_id,state,permission) values('${editor}','TN','editor'),('${viewer}','TN','viewer'),('${reviewer}','TN','reviewer'),('${ka}','KA','editor');`);
+  await t.test('state grants, viewer refusal, RPC ACLs and legacy bypass refusal',()=>{
+   assert.equal(snapshot(editor).stores.length,1);assert.ok(snapshot(ka).stores.every(s=>s.state==='KA'));
+   assert.throws(()=>propose('identity',{store_name:'Forbidden'},{actor:viewer}));assert.throws(()=>propose('identity',{store_name:'Forbidden'},{actor:ka}));
+   for(const role of ['anon','authenticated'])assert.throws(()=>call('rpc_retail_unified_snapshot',{p_actor:admin,p_from:'2026-10-01',p_to:'2026-10-31'},role));
+   assert.throws(()=>sql("update reliance_retail_store_master set store_name='bypass';",'service_role'));assert.throws(()=>sql(`select rpc_sync_reliance_retail_fo_zones('${admin}','${foA}','{}');`,'service_role'));
+  });
+  let sourceRow;
+  await t.test('real 854-row stage, all sheets, replay, source correction and reimport retain reviewed values',()=>{
+   const bytes=fs.readFileSync(primary),parsed=parseUnifiedMaster(bytes,'source.xlsx'),preview=previewUnifiedMaster(parsed,snapshot());
+   const stage=()=>call('rpc_retail_unified_stage',{p_actor:admin,p_filename:'source.xlsx',p_sha256:parsed.checksum,p_original:bytes.toString('base64'),p_rows:preview.rows,p_sheets:preview.sheets,p_format:preview.format,p_stamp:snapshot().stamp,p_receipt:preview.receipt});
+   const first=stage();assert.equal(first.receipt.inserted,854);assert.equal(snapshot().rows.length,854);assert.equal(stage().receipt.unchanged,854);assert.equal(sql('select count(*) from retail_provisional_files f,jsonb_object_keys(f.source_sheets) k;'),'4');
+   sourceRow=snapshot(editor).rows[0];const change=propose('identity',{store_name:'MIS corrected source',state:'TN',operating_status:'Inactive'},{store:null,row:sourceRow.id,revision:sourceRow.revision});assert.throws(()=>decide(change,editor));decide(change);
+   assert.throws(()=>call('rpc_retail_provisional_propose',{p_actor:viewer,p_row:sourceRow.id,p_revision:1,p_changes:{store_name:'Bypass',state:'TN',city:'City',operating_status:'Inactive',duplicate_of:null},p_reason:'Legacy viewer bypass attempt'}));
+   stage();assert.equal(snapshot().rows.find(r=>r.id===sourceRow.id).review.store_name,'MIS corrected source');assert.equal(snapshot().rows.length,854);assert.equal(digest('reliance_retail_store_master'),canonicalBefore);
+   assert.throws(()=>call('rpc_retail_unified_stage',{p_actor:editor,p_filename:'source.xlsx',p_sha256:parsed.checksum,p_original:bytes.toString('base64'),p_rows:preview.rows,p_sheets:preview.sheets,p_format:preview.format,p_stamp:snapshot(editor).stamp,p_receipt:preview.receipt}));
+   const book=XLSX.read(bytes);book.Sheets['READ ME'].A10={t:'s',v:'Isolated updated file version'};book.Sheets['READ ME']['!ref']='A1:B10';const nextBytes=XLSX.write(book,{type:'buffer',bookType:'xlsx'}),next=parseUnifiedMaster(nextBytes,'v2.xlsx'),nextPreview=previewUnifiedMaster(next,snapshot());
+   call('rpc_retail_unified_stage',{p_actor:admin,p_filename:'v2.xlsx',p_sha256:next.checksum,p_original:nextBytes.toString('base64'),p_rows:nextPreview.rows,p_sheets:nextPreview.sheets,p_format:nextPreview.format,p_stamp:snapshot().stamp,p_receipt:nextPreview.receipt});assert.equal(snapshot().rows.length,1708);assert.equal(snapshot().rows.find(r=>r.id===sourceRow.id).review.store_name,'MIS corrected source');
+  });
+  await t.test('approved decimal HK and MEPC independent dates, safe replacement and overlap refusal',()=>{
+   const aop=(kind,total,extra={})=>({total,components:kind==='HK'?{staff:1,supervisor:0.25}:{shared:0.25,supervisor:0.14,stationed:null},effective_from:'2026-04-01',effective_to:'2027-03-31',approval_ref:'AOP-TEST',calculation_ref:'Explicit business-approved total; no inferred sum',...extra});
+   let p=propose('HK',aop('HK',1.25));assert.throws(()=>apply(p));decide(p);apply(p);assert.equal(apply(p).proposal_id,p);
+   p=propose('MEPC',aop('MEPC',0.14,{effective_from:'2026-05-01'}));decide(p);apply(p);assert.equal(snapshot().aop.filter(a=>a.aop_class==='MEPC')[0].mepc_count,0.14);
+   p=propose('HK',aop('HK',2));decide(p);assert.throws(()=>apply(p),/Overlapping/);
+   const old=snapshot().aop.find(a=>a.aop_class==='HK');p=propose('HK',aop('HK',2,{effective_from:'2026-10-01',effective_to:'2026-12-31',supersede_version_id:old.id}));decide(p);apply(p);
+   const hk=call('rpc_retail_unified_snapshot',{p_actor:admin,p_from:'2026-04-01',p_to:'2027-03-31'}).aop.filter(a=>a.aop_class==='HK');assert.equal(hk.length,3);assert.ok(hk.some(a=>a.hk_count===1.25&&a.effective_to==='2026-09-30'));assert.ok(hk.some(a=>a.hk_count===1.25&&a.effective_from==='2027-01-01'));
+  });
+  await t.test('one Zone primary FO, replacement derives every store, history intact, unassigned store supported',()=>{
+   const before=snapshot(),past=before.epoch_at;
+   const p=propose('zone_fo',{fo_profile_id:foB,effective_from:'ON_ACTIVATION',effective_to:''},{store:null,zone:zone1});decide(p);apply(p);
+   assert.equal(snapshot().stores.find(s=>s.id===store1).ownership.fo_profile_id,foB);assert.equal(call('retail_unified_owner',{p_store:store1,p_at:past},'postgres').fo_profile_id,foA);
+   assert.throws(()=>sql(`insert into reliance_retail_zone_fo_assignments(zone_id,fo_profile_id,fo_employee_code,effective_from,status) values('${zone1}','${foA}','FOA',now(),'Active');`));
+   const move=propose('store_zone',{zone_id:null,effective_from:'ON_ACTIVATION',effective_to:''});decide(move);apply(move);assert.equal(snapshot().stores.find(s=>s.id===store1).ownership.zone_id,null);assert.equal(snapshot().stores.length,2);
+  });
+  await t.test('multiple Zones per FO, future replacement, current view and stale ownership proposal refusal',()=>{
+   let p=propose('zone',{zone_code:'TN-TWO',zone_name:'TN Two',status:'Active'},{store:null});decide(p);const added=apply(p).zone_id;
+   p=propose('zone_fo',{fo_profile_id:foB,effective_from:'ON_ACTIVATION',effective_to:''},{store:null,zone:added});decide(p);apply(p);
+   assert.equal(snapshot().assignments.filter(a=>a.fo_profile_id===foB&&!a.effective_to).length,2);
+   p=propose('store_zone',{zone_id:added,effective_from:'ON_ACTIVATION',effective_to:''});decide(p);apply(p);
+   const future=new Date(Date.now()+86400000).toISOString();
+   p=propose('zone_fo',{fo_profile_id:foA,effective_from:future,effective_to:''},{store:null,zone:added});const stale=propose('zone_fo',{fo_profile_id:foA,effective_from:'ON_ACTIVATION',effective_to:''},{store:null,zone:added});decide(p);decide(stale);apply(p);assert.throws(()=>apply(stale),/ownership changed/);
+   assert.equal(snapshot().stores.find(s=>s.id===store1).ownership.fo_profile_id,foB);
+   assert.equal(call('retail_unified_owner',{p_store:store1,p_at:new Date(Date.parse(future)+1000).toISOString()},'postgres').fo_profile_id,foA);
+   assert.equal(sql(`select current_responsible_fo_profile_id from reliance_retail_store_operational_ownership where id='${store1}';`,'service_role'),foB);
+  });
+  await t.test('history, attendance, activities and original identity gates remain preserved',()=>{
+   assert.equal(digest('retail_employee_daily_attendance'),attendanceBefore);assert.equal(digest('client_deep_cleaning_submissions'),dcBefore);assert.equal(digest('training_sessions'),trainingBefore);assert.equal(identity(),identityBefore);
+   const snap=snapshot();assert.deepEqual(snap.schedules,[]);assert.equal(snap.deep_cleaning[0].ownership.known,false);assert.equal(snap.training[0].trainer_name_snapshot,'Recorded Trainer');
+   const report=unifiedReport(snap);assert.ok(report.daily.some(r=>r.class==='MEPC'&&r.actual===null));
+   fs.writeFileSync(new URL('preservation.json',output),JSON.stringify({attendance_before:attendanceBefore,attendance_after:digest('retail_employee_daily_attendance'),deep_cleaning_before:dcBefore,deep_cleaning_after:digest('client_deep_cleaning_submissions'),training_before:trainingBefore,training_after:digest('training_sessions'),identity_before:identityBefore,identity_after:identity()},null,2));
+  });
+  await t.test('approved planning uses the existing Deep Cleaning evidence without rewriting submissions',()=>{
+   const p=propose('DC_SCHEDULE',{scheduled_date:'2026-10-27'});decide(p);apply(p);assert.equal(snapshot().schedules.length,1);
+   const report=unifiedReport(snapshot());assert.equal(report.schedules[0].status,'Completed');assert.equal(report.counts.deep_cleaning_pending,0);assert.equal(digest('client_deep_cleaning_submissions'),dcBefore);
+  });
+  await t.test('real browser: actual master route, all-row preview, pending Store, AOP proposal and Excel export',async()=>{
+   let actor=admin;const app=express();app.use(express.json());app.use('/api/reliance-retail/unified-master',(req,res,next)=>{req.profile={id:actor};next();},createRetailUnifiedRouter({getClient:()=>client,environment:{}}));http=app.listen(0,'127.0.0.1');await new Promise(r=>http.once('listening',r));const api='http://127.0.0.1:'+http.address().port;
+   const {preview}=await import('vite'),{chromium}=await import('@playwright/test');web=await preview({configFile:false,root:new URL('../../',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1'),build:{outDir:'dist'},preview:{host:'127.0.0.1',port:4197,strictPort:true}});browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000}});page.setDefaultTimeout(30000);
+   await page.addInitScript(()=>{localStorage.setItem('qpms-crm-auth-user',JSON.stringify({id:'test-admin',role:'Admin',rawRole:'Admin',isDemoReadOnly:true,is_demo:true,read_only:false,status:'Active',isActive:true,webAccessEnabled:true}));sessionStorage.setItem('qpms-crm-backend-token','isolated-session');});
+   await page.route('**/api/**',async route=>{const url=new URL(route.request().url());if(url.pathname.includes('/unified-master')){const response=await route.fetch({url:api+url.pathname+url.search});return route.fulfill({response});}return route.fulfill({json:{ok:true,rows:[],zones:[],employees:[],total:0}});});
+   await page.goto('http://127.0.0.1:4197/reliance-retail/store-master',{waitUntil:'domcontentloaded'});await page.getByRole('heading',{name:'Reliance Retail Management',exact:true}).waitFor();await page.getByRole('button',{name:'Import Consolidated Master',exact:true}).click();await page.getByLabel('Consolidated source workbook').setInputFiles(primary);await page.getByRole('button',{name:'Preview all source rows',exact:true}).click();try{await page.getByText('854 source rows retained in preview.',{exact:false}).waitFor();}catch(e){fs.writeFileSync(new URL('browser-failure.txt',output),await page.locator('body').innerText());throw e;}
+   const dl=page.waitForEvent('download');await page.getByRole('button',{name:'Download errors & suggested fixes'}).click();assert.equal((await dl).suggestedFilename(),'Retail-Import-Errors-Review.xlsx');
+   await page.getByRole('button',{name:'Add Store',exact:true}).click();await page.getByLabel('Pending Store Code').fill('MANUAL-PENDING');await page.getByRole('button',{name:'Save pending Store',exact:true}).click();await page.getByRole('button',{name:'Save pending Store',exact:true}).waitFor({state:'hidden'});assert.ok(snapshot().rows.some(r=>r.store_code==='MANUAL-PENDING'&&r.verification_status==='PENDING_VERIFICATION'));assert.equal(snapshot().stores.length,2);
+   await page.getByRole('button',{name:'Stores',exact:true}).last().click();await page.getByRole('button',{name:'Update HK AOP',exact:true}).first().click();await page.getByLabel('Proposal total').fill('3.25');await page.getByLabel('Proposal approval_ref').fill('BROWSER-AOP');await page.getByLabel('Proposal calculation_ref').fill('Explicit browser review');await page.getByLabel('Proposal reason').fill('Proposed through actual browser');await page.getByRole('button',{name:'Submit independent review proposal'}).click();await page.getByText('Proposal retained for independent review.',{exact:false}).waitFor();
+   await page.getByRole('button',{name:'Dashboard',exact:true}).click();await page.screenshot({path:new URL('dashboard.png',output).pathname.replace(/^\/([A-Za-z]:)/,'$1'),fullPage:true});
+   actor=viewer;await page.getByRole('button',{name:'Refresh unified master'}).click();await page.waitForFunction(()=>Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Add Store')?.disabled===true);
+  });
+  await t.test('owner verification SQL and non-destructive write quarantine preserve evidence',()=>{
+   sql(read('supabase/verification/retail_unified_preflight.sql'));const verification=sql(read('supabase/verification/retail_unified_postinstall.sql'));assert.ok(verification.includes('20261029140000|retail_unified_master|t|t|'));
+   const rows=digest('retail_provisional_rows'),versions=digest('retail_provisional_files');sql(read('supabase/verification/retail_unified_quarantine.sql'));
+   assert.throws(()=>propose('identity',{store_name:'Quarantined'}));assert.equal(digest('retail_provisional_rows'),rows);assert.equal(digest('retail_provisional_files'),versions);assert.ok(snapshot().rows.length>854);
+  });
+ }finally{if(browser)await browser.close();if(web)await new Promise(r=>web.httpServer.close(r));if(http)await new Promise(r=>http.close(r));docker(['rm','--force',container]);}
+});

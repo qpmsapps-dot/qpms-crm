@@ -1,4 +1,5 @@
 import express from 'express';
+import { createRetailUnifiedRouter } from './retailUnifiedRoutes.js';
 import { createRetailProvisionalRouter } from './retailProvisionalRoutes.js';
 import { createRetailAttendanceRouter } from './retailAttendanceRoutes.js';
 import { createRetailStoreImportRouter } from './retailStoreImportRoutes.js';
@@ -28,9 +29,25 @@ function sendError(response, error) {
 export function createRelianceRetailManagementRouter({ requireAuth, getClient }) {
   const router = express.Router();
   router.use(requireAuth);
+  router.use('/unified-master', createRetailUnifiedRouter({ getClient }));
   router.use('/provisional-stores', createRetailProvisionalRouter({ getClient }));
   router.use('/store-import', createRetailStoreImportRouter({ getClient }));
   router.use('/attendance', createRetailAttendanceRouter({ getClient }));
+  // Legacy direct Store/Zone writes are replaced by the independently reviewed workflow.
+  let unifiedInstalled=false;
+  router.use(async(req,res,next) => {
+    if (!/^\/(stores|zones|fos|history)(\/|$)/.test(req.path)) return next();
+    if (!unifiedInstalled) {
+      const {error}=await getClient().rpc('rpc_retail_unified_capability');
+      if (error?.code==='PGRST202') return next(); // Existing behavior until authorized installation.
+      if (error) return res.status(503).json({ok:false,message:'Store Master authorization check is unavailable.'});
+      unifiedInstalled=true;
+    }
+    if (req.method !== 'GET') return res.status(409).json({ok:false,message:'Use Unified Management proposals and independent approval for Store, Zone, FO and AOP changes.'});
+    const role=String(req.profile?.role||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+    if (!['ADMIN','QPMSADMIN','SUPERADMIN'].includes(role)) return res.status(403).json({ok:false,message:'Use the state-scoped Unified Management view.'});
+    return next();
+  });
   router.get('/access', (req, res) => res.json({ ok: true, access: retailAccess(req.profile) }));
   router.get('/dashboard', async (req, res) => { try { res.json({ ok: true, dashboard: await retailDashboard(getClient(), req.profile, req.query) }); } catch (e) { sendError(res, e); } });
   router.get('/deep-cleaning/records', async (req, res) => { try { res.json({ ok: true, ...(await listRetailDeepCleaningRecords(getClient(), req.profile)) }); } catch (e) { sendError(res, e); } });

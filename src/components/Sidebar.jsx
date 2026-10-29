@@ -307,7 +307,7 @@ export default function Sidebar({ isOpen, onClose }) {
   const roleNavGroups = canShowHospitalTicketing
     ? insertHospitalTicketingGroup(baseNavGroups)
     : baseNavGroups;
-  const authorizedNavGroups = isDemoUser(user) ? roleNavGroups : [...roleNavGroups, ...(retailWebAccess(user).dashboard ? [relianceRetailNavGroup] : [])];
+  const authorizedNavGroups = isDemoUser(user) ? roleNavGroups : [...roleNavGroups, ...((retailWebAccess(user).dashboard || retailWebAccess(user).master) ? [relianceRetailNavGroup] : [])];
   const canSeeFaultTracker = canAccessNavRoute(user, '/fault-tracker');
   const navGroups = canSeeFaultTracker && !authorizedNavGroups.some((group) => group.items.some((item) => item.to === '/fault-tracker'))
     ? [

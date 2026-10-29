@@ -181,9 +181,8 @@ async function loadAuthorizedRetailZones(client, profile) {
     .from('reliance_retail_zone_fo_assignments')
     .select('zone_id')
     .eq('fo_profile_id', profile.id)
-    .eq('status', 'Active')
-    .is('effective_to', null)
-    .lte('effective_from', new Date().toISOString());
+    .lte('effective_from', new Date().toISOString())
+    .or(`effective_to.is.null,effective_to.gt.${new Date().toISOString()}`);
   if (assignmentError) throw assignmentError;
   const zoneIds = [...new Set((assignments || []).map((row) => row.zone_id).filter(Boolean))];
   if (!zoneIds.length) return [];
@@ -205,7 +204,7 @@ export async function loadRelianceRetailStore(client, profile, storeCode) {
   const zones = await loadAuthorizedRetailZones(client, profile);
   if (!zones.length) throw clientDeepCleaningError(403, 'no_zone_assigned', 'No Zone assigned. Contact your administrator.');
   const { data, error } = await client
-    .from('reliance_retail_store_master')
+    .from('reliance_retail_store_operational_ownership')
     .select(storeSelect())
     .in('zone_id', zones.map((zone) => zone.id))
     .eq('store_code', code)
@@ -282,7 +281,7 @@ export async function searchRelianceRetailStores(client, profile, filters = {}) 
   }
   if (!zones.length) return { rows: [], zones: [], pagination: { page, limit, total: 0 } };
   let query = client
-    .from('reliance_retail_store_master')
+    .from('reliance_retail_store_operational_ownership')
     .select(storeSelect(), { count: 'exact' })
     .in('zone_id', requestedZone ? [requestedZone] : zones.map((zone) => zone.id))
     .in('state', retailStateQueryValues(profile.state))

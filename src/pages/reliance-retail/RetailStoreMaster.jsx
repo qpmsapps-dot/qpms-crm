@@ -3,15 +3,16 @@ import { Plus, RefreshCw, Search } from 'lucide-react';
 import { usePageTitle } from '../../hooks/usePageTitle.js';
 import { relianceRetailApi } from '../../services/relianceRetailApi.js';
 import RetailProvisionalStores from './RetailProvisionalStores.jsx';
+import RetailUnifiedMaster from './RetailUnifiedMaster.jsx';
 
-const tabs = ['Stores', 'Provisional MIS Review', 'Zones', 'FO Mapping', 'Manpower'];
+const tabs = ['Unified Management', 'Stores', 'Provisional MIS Review', 'Zones', 'FO Mapping', 'Manpower'];
 const blankStore = { store_code: '', store_name: '', state: 'TN', city: '', store_format: '', zone_id: '', status: 'Inactive' };
 export default function RetailStoreMaster() {
   usePageTitle('Reliance Retail Store Master');
-  const [tab, setTab] = useState('Stores'); const [stores, setStores] = useState([]); const [zones, setZones] = useState([]); const [fos, setFos] = useState([]);
+  const [tab, setTab] = useState('Unified Management'); const [stores, setStores] = useState([]); const [zones, setZones] = useState([]); const [fos, setFos] = useState([]);
   const [query, setQuery] = useState(''); const [page, setPage] = useState(1); const [total, setTotal] = useState(0); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [editor, setEditor] = useState(null);
   const load = useCallback(async () => { setBusy(true); setError(''); try { const [s, z, f] = await Promise.all([relianceRetailApi.stores({ page, limit: 50, q: query }), relianceRetailApi.zones({ include_inactive: true }), relianceRetailApi.employees()]); setStores(s.rows); setTotal(s.total); setZones(z.zones); setFos(f.employees); } catch (e) { setError(e.response?.data?.message || e.message); } finally { setBusy(false); } }, [page, query]);
-  useEffect(() => { const timer = setTimeout(() => void load(), 200); return () => clearTimeout(timer); }, [load]);
+  useEffect(() => { if(tab === 'Unified Management') return; const timer = setTimeout(() => void load(), 200); return () => clearTimeout(timer); }, [load, tab]);
   const zoneById = useMemo(() => new Map(zones.map((z) => [z.id, z])), [zones]);
   async function saveStore(event) { event.preventDefault(); const action = editor.id ? relianceRetailApi.updateStore(editor.id, editor) : relianceRetailApi.createStore(editor); await action; setEditor(null); await load(); }
   async function createZone() { const zone_name = window.prompt('Zone name'); if (!zone_name) return; const zone_code = window.prompt('Unique Zone code', zone_name.toUpperCase().replace(/\s+/g, '-')); if (!zone_code) return; await relianceRetailApi.createZone({ zone_code, zone_name, status: 'Active' }); await load(); }
@@ -20,6 +21,7 @@ export default function RetailStoreMaster() {
   return <div className="space-y-5"><div><p className="text-sm font-bold text-qpms-600">Reliance Retail</p><h1 className="text-2xl font-black">Store Master</h1><p className="text-sm text-slate-500">Independent from the platform Store Master.</p></div>
     <div className="flex flex-wrap gap-2">{tabs.map((x) => <button key={x} onClick={() => setTab(x)} className={`rounded-xl px-4 py-2 text-sm font-bold ${tab === x ? 'bg-qpms-600 text-white' : 'border bg-white'}`}>{x}</button>)}</div>
     {tab === 'Provisional MIS Review' ? <RetailProvisionalStores /> : null}
+    {tab === 'Unified Management' ? <RetailUnifiedMaster /> : null}
     {error ? <div className="rounded-xl bg-red-50 p-3 text-red-700">{error}</div> : null}
     {tab === 'Stores' ? <><div className="flex gap-3"><label className="relative flex-1"><Search className="absolute left-3 top-3 h-4 w-4"/><input value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }} placeholder="Search Store Code or Store Name" className="h-10 w-full rounded-xl border pl-9"/></label><button onClick={() => setEditor({ ...blankStore })} className="flex items-center gap-2 rounded-xl bg-qpms-600 px-4 text-sm font-bold text-white"><Plus className="h-4 w-4"/>Add Store</button><button onClick={load} className="rounded-xl border px-3"><RefreshCw className="h-4 w-4"/></button></div>
       <div className="overflow-x-auto rounded-2xl border bg-white"><table className="min-w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase text-slate-500"><tr>{['Code','Store','State / City','Format','Zone','Responsible FO','Status','GPS','Coordinates','Actions'].map((h) => <th key={h} className="p-3">{h}</th>)}</tr></thead><tbody>{stores.map((s) => <tr key={s.id} className="border-t"><td className="p-3 font-bold">{s.store_code}</td><td className="p-3">{s.store_name}</td><td className="p-3">{s.state} / {s.city || '--'}</td><td className="p-3">{s.store_format || '--'}</td><td className="p-3">{s.zone_name || 'Unassigned'}</td><td className="p-3">{s.current_responsible_fo_employee_code || '--'}</td><td className="p-3">{s.status}</td><td className="p-3">{s.location_status}</td><td className="p-3">{s.latitude == null ? '--' : `${s.latitude}, ${s.longitude}`}</td><td className="p-3"><button className="font-bold text-qpms-700" onClick={() => setEditor(s)}>Edit</button></td></tr>)}</tbody></table></div><div className="flex justify-between text-sm"><span>{total} stores</span><div className="flex gap-2"><button disabled={page === 1} onClick={() => setPage((x) => x - 1)}>Previous</button><span>Page {page}</span><button disabled={page * 50 >= total} onClick={() => setPage((x) => x + 1)}>Next</button></div></div></> : null}

@@ -267,11 +267,13 @@ export function canManageHospitalFeedbackQr(user) {
 
 export function retailWebAccess(user) {
   if (!user) return { dashboard: false };
-  if (isPlatformAdmin(user)) return { dashboard: true, hk: true, technical: true, kam: true };
+  if (isPlatformAdmin(user)) return { dashboard: true, master: true, hk: true, technical: true, kam: true };
   const business = normalizeRawRole(user.business);
   const keys = [user.rawRole, user.role, user.designation, user.department].map(normalizeRawRole);
   const retail = ['RELIANCE', 'RELIANCERETAIL'].includes(business);
   return {
+    // Navigation only; database state grants determine every unified data/action permission.
+    master: retail,
     dashboard: retail && keys.some((key) => ['HKMIS', 'HOUSEKEEPINGMIS', 'TECHNICALMIS', 'TECHMIS', 'KAM'].includes(key)),
     hk: retail && keys.some((key) => ['HKMIS', 'HOUSEKEEPINGMIS'].includes(key)),
     technical: retail && keys.some((key) => ['TECHNICALMIS', 'TECHMIS'].includes(key)),
@@ -284,7 +286,8 @@ export function canAccessRoute(user, pathname) {
   if (isPlatformAdmin(user)) return true;
   if (pathname.startsWith('/reliance-retail')) {
     const access = retailWebAccess(user);
-    if (pathname.startsWith('/reliance-retail/store-master') || pathname.startsWith('/reliance-retail/deep-cleaning') || pathname.startsWith('/reliance-retail/training') || pathname.startsWith('/reliance-retail/manpower')) return Boolean(access.hk);
+    if (pathname.startsWith('/reliance-retail/store-master')) return Boolean(access.master);
+    if (pathname.startsWith('/reliance-retail/deep-cleaning') || pathname.startsWith('/reliance-retail/training') || pathname.startsWith('/reliance-retail/manpower')) return Boolean(access.hk);
     if (pathname.startsWith('/reliance-retail/fault-tracker') || pathname.startsWith('/reliance-retail/oos')) return Boolean(access.technical);
     if (pathname.startsWith('/reliance-retail/cmpm') || pathname.startsWith('/reliance-retail/thermography')) return Boolean(access.kam);
     return Boolean(access.dashboard);
