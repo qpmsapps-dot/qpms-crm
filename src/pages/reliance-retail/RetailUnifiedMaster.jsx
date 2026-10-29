@@ -16,7 +16,7 @@ export default function RetailUnifiedMaster(){
  const load=useCallback(async()=>{setBusy(true);setError('');try{setSnapshot(await api.snapshot({from,to}));}catch(e){setError(e.response?.data?.message||e.message);}finally{setBusy(false);}},[from,to]);
  useEffect(()=>{const timer=setTimeout(()=>void load(),0);return()=>clearTimeout(timer);},[load]);
  async function act(fn){setBusy(true);setError('');try{await fn();}catch(e){setError(e.response?.data?.message||e.message);}finally{setBusy(false);}}
- const report=useMemo(()=>snapshot?{...unifiedReport(snapshot,{from,to,state,zone_id:zone,fo_id:fo,store_id:store,activity_status:activityStatus}),filter_state:state,filter_zone:zone,filter_fo:fo,filter_store:store}:null,[snapshot,from,to,state,zone,fo,store,activityStatus]);
+ const report=useMemo(()=>snapshot?{...unifiedReport(snapshot,{from:snapshot.from,to:snapshot.to,state,zone_id:zone,fo_id:fo,store_id:store,activity_status:activityStatus}),filter_state:state,filter_zone:zone,filter_fo:fo,filter_store:store}:null,[snapshot,state,zone,fo,store,activityStatus]);
  const canEdit=s=>snapshot?.admin||snapshot?.permissions.some(p=>(!s||p.state===s)&&['editor','reviewer'].includes(p.permission));
  const canReview=s=>snapshot?.admin||snapshot?.permissions.some(p=>p.state===s&&p.permission==='reviewer');
  const filteredStores=report?.stores.filter(s=>`${s.store_code} ${s.store_name}`.toLowerCase().includes(query.toLowerCase()))||[];
