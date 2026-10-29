@@ -1,4 +1,5 @@
 import express from 'express';
+import { createRetailProvisionalRouter } from './retailProvisionalRoutes.js';
 import { createRetailAttendanceRouter } from './retailAttendanceRoutes.js';
 import { createRetailStoreImportRouter } from './retailStoreImportRoutes.js';
 import {
@@ -27,6 +28,7 @@ function sendError(response, error) {
 export function createRelianceRetailManagementRouter({ requireAuth, getClient }) {
   const router = express.Router();
   router.use(requireAuth);
+  router.use('/provisional-stores', createRetailProvisionalRouter({ getClient }));
   router.use('/store-import', createRetailStoreImportRouter({ getClient }));
   router.use('/attendance', createRetailAttendanceRouter({ getClient }));
   router.get('/access', (req, res) => res.json({ ok: true, access: retailAccess(req.profile) }));
