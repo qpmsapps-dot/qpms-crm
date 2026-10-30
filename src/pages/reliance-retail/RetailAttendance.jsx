@@ -1,3 +1,4 @@
+import RetailResponsibilityPanel from '../../components/reliance-retail/RetailResponsibilityPanel.jsx';
 import { createElement, useEffect, useState } from 'react';
 import { BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { CalendarDays, Upload, Download, Users, ClipboardCheck, Target, Wrench, TrendingUp, AlertTriangle, X } from 'lucide-react';
@@ -116,6 +117,7 @@ export default function RetailAttendance() {
       <div className="flex gap-2"><input aria-label="Attendance cutoff date" type="date" value={cutoff} max={today} onChange={e => { if (e.target.value) setCutoff(e.target.value); }} className="rounded-lg border p-2 text-xs"/>
         <select aria-label="State filter" value={state} onChange={e => setState(e.target.value)} className="rounded-lg border p-2 text-xs"><option value="">All States</option>{states.map(s => <option key={s}>{s}</option>)}</select></div>
     </div>
+    <details open className="rounded-xl border p-4"><summary className="cursor-pointer font-bold">All-state coverage, FO ownership and source AOP review</summary><RetailResponsibilityPanel/></details>
     {busy && <p role="status" className="rounded-lg bg-blue-50 p-6">Loading attendance…</p>}
     {error && <div role="alert" className="rounded-lg bg-red-50 p-4 text-sm text-red-800">{error}<button className={`${button} ml-3`} onClick={() => setRefresh(n => n+1)}>Retry</button></div>}
     {report && <>

@@ -1,3 +1,4 @@
+import RetailResponsibilityPanel,{isRetailFoProfile} from '../reliance-retail/RetailResponsibilityPanel.jsx';
 import { AlertTriangle, KeyRound, ShieldOff, ShieldCheck, Trash2, Wrench, X } from 'lucide-react';
 import { useState } from 'react';
 import UserStatusBadge from './UserStatusBadge.jsx';
@@ -323,6 +324,7 @@ export default function EmployeeDetailsDrawer({
               This user has operational history. Deactivate instead of hard delete.
             </div>
           ) : null}
+          {isRetailFoProfile(employee)&&<RetailResponsibilityPanel key={employee.id} profileId={employee.id}/>}
           {sections.map(([title, fields]) => (
             <section key={title} className="rounded-xl border border-slate-200 p-4">
               <h3 className="text-sm font-bold text-slate-950">{title}</h3>
