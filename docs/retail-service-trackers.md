@@ -19,9 +19,9 @@ at 200; narrow dates when that cap is reached. No submission flow is changed.
 ## New OOS and fault development
 
 Store Master → Unified Management → Service Trackers contains the new workflows.
-They require the **new**, separately authorized
-`supabase/proposals/retail_service_trackers.sql`. This proposal was tested only in
-disposable PostgreSQL; it is not automatically installed by deploying the code.
+They require the **new**, separately authorized combined package in
+`supabase/proposals/retail_operational_activation/INSTALL.md`. The bare service
+proposal is review/test source. Neither is automatically installed by deployment.
 Until installed the API returns a setup-pending message and cannot persist orders.
 Do not rerun any existing Unified or provisional migration for this feature.
 
@@ -47,7 +47,8 @@ independent reviewer. Fund and payment steps record evidence references only:
 they do not initiate transfers or change financial ledgers, calculations or rates.
 
 Fault stages: REGISTERED → ASSIGNED → IN_PROGRESS → RESOLVED → CLOSED. Register
-category, priority, description and Store ID; assign an active in-state employee.
+category, priority, description and Store ID; assign a verified active Reliance
+Retail FO in the existing operational/reporting scope, including TN/PY compatibility.
 Escalation adds an event while retaining the current stage. Resolution and closure
 require evidence references. Closure requires reviewer permission. Backward and
 skipped stages are rejected in the database. Revisions prevent stale updates, and
@@ -61,12 +62,11 @@ viewers receive only their orders and events. No financial transaction is posted
 
 ## New SQL installation and quarantine
 
-Only after explicit authorization: save the output of
-`retail_service_trackers_preflight.sql`, require the installed access/ownership
-functions and absent new relations, apply the new proposal once, then run
-`retail_service_trackers_postinstall.sql` and compare protected digests. Expect
+Only after explicit owner authorization: run combined package files 01, 02, 03
+in order and compare protected digests. Do not install the bare proposals separately.
+The installer records version 20261030140000 and verifies an exact safe replay. Expect
 zero initial orders/events, no direct table privileges, and only service_role RPC
-execution. No existing migration needs to be rerun. Quarantine SQL revokes the new
+execution. No existing migration needs to be rerun. Package 04 quarantine revokes new
 RPCs while retaining service orders, source files and audit history; do not drop
 tables containing submitted work.
 

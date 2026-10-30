@@ -1,5 +1,7 @@
 -- NEW PROPOSAL ONLY. Explicit production authorization required; do not rerun
 -- installed Unified migrations. No source, canonical or ownership rows are seeded.
+-- Production: use the combined retail_operational_activation package, not this
+-- bare source. It installs both modules atomically and records exact source history.
 begin;
 -- Enforce a defined group on future writes without rewriting legacy mappings.
 alter table public.reliance_retail_zones add constraint retail_zones_defined_state check(state is not null and state in ('TN','PY','KA','KL','TG','AP-1','AP-2')) not valid;

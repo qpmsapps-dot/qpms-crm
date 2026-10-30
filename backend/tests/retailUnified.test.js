@@ -151,7 +151,21 @@ test('isolated PostgreSQL and real browser unified lifecycle',{skip:process.env.
   });
   await t.test('all-state bulk Zone review and immutable provisional drafts preserve operational gates',async()=>{
    const rawCanonical=digest('reliance_retail_store_master'),sourceDigest=digest('retail_provisional_rows'),zoneDigest=digest('reliance_retail_zones'),foDigest=digest('reliance_retail_zone_fo_assignments');
-   sql(read('supabase/proposals/retail_zone_mapping_drafts.sql'));
+   if(process.env.RETAIL_ACTIVATION_PACKAGE==='1'){
+    const preflight=read('supabase/proposals/retail_operational_activation/01_PREFLIGHT_READ_ONLY.sql'),installer=read('supabase/proposals/retail_operational_activation/02_INSTALL_AND_RECORD.sql'),post=read('supabase/proposals/retail_operational_activation/03_POSTINSTALL_READ_ONLY.sql');
+    sql(preflight);sql(installer);sql(installer);assert.equal(sql("select count(*) from supabase_migrations.schema_migrations where version='20261030140000';"),'1');assert.ok(sql(post).includes('20261030140000|retail_operational_activation|t|t'));
+    // An unrecorded/partial installation is rejected, and the outer failed
+    // transaction restores the intentionally removed fixture history row.
+    const inner=installer.slice(installer.indexOf('\nbegin;\n')+8).replace(/\ncommit;\s*$/,'');assert.throws(()=>sql("begin;delete from supabase_migrations.schema_migrations where version='20261030140000';"+inner));assert.equal(sql("select count(*) from supabase_migrations.schema_migrations where version='20261030140000';"),'1');
+    sql('alter function public.retail_service_public_order(jsonb) set search_path=public;');assert.throws(()=>sql(installer));sql('alter function public.retail_service_public_order(jsonb) set search_path=pg_catalog,public;');sql(installer);
+    const raw=Buffer.from('Isolated source evidence'),hash=(await import('node:crypto')).createHash('sha256').update(raw).digest('hex');
+    const order=call('rpc_retail_service_command',{p_actor:admin,p_request:randomUUID(),p_action:'CREATE_OOS',p_order:null,p_revision:null,p_data:{reference:'PACKAGE-PY',store_ids:[store2],items:[{store_id:store2,description:'Package fixture',quantity:0.25,unit_rate:0.14}],file_sha256:hash,original_base64:raw.toString('base64')}}).order;
+    assert.equal(order.state,'PY');assert.equal(sql(`select count(*) from retail_service_order_stores where order_id='${order.id}';`),'1');assert.throws(()=>sql(`delete from reliance_retail_store_master where id='${store2}';`));
+    const fault=call('rpc_retail_service_command',{p_actor:admin,p_request:randomUUID(),p_action:'REGISTER_FAULT',p_order:null,p_revision:null,p_data:{reference:'PACKAGE-FAULT',store_ids:[store2],category:'Electrical',priority:'HIGH',description:'Verified Store with no FO, Zone or AOP'}});assert.equal(fault.order.status,'REGISTERED');
+    assert.throws(()=>call('rpc_retail_service_command',{p_actor:admin,p_request:randomUUID(),p_action:'ASSIGNED',p_order:fault.order.id,p_revision:fault.order.revision,p_data:{assigned_profile_id:reviewer}}));
+    const assigned=call('rpc_retail_service_command',{p_actor:admin,p_request:randomUUID(),p_action:'ASSIGNED',p_order:fault.order.id,p_revision:fault.order.revision,p_data:{assigned_profile_id:foA}});assert.equal(assigned.order.assigned_profile_id,foA);
+    const orders=digest('retail_service_orders'),events=digest('retail_service_events');sql(installer);assert.equal(digest('retail_service_orders'),orders);assert.equal(digest('retail_service_events'),events);
+   }else sql(read('supabase/proposals/retail_zone_mapping_drafts.sql'));
    assert.throws(()=>sql("insert into reliance_retail_zones(zone_code,zone_name,state) values('INVALID','No state',null);"));
    const source=snapshot(editor).rows.find(r=>!snapshot().stores.some(s=>s.store_code===r.store_code));
    const args={p_actor:editor,p_row:source.id,p_revision:source.revision,p_zone:zone1,p_effective_from:'ON_ACTIVATION',p_effective_to:null,p_reason:'Prepared source-bound Zone review'};

@@ -1,0 +1,53 @@
+{
+  "version": "20261030140000",
+  "source_md5": "822536657943ff7c88b644358e870621",
+  "base_unified_md5": "0800864af23894d608e5a0d11e65f0c4",
+  "tables": [
+    "retail_service_orders",
+    "retail_service_events",
+    "retail_service_order_stores",
+    "retail_zone_mapping_drafts"
+  ],
+  "functions": [
+    {
+      "signature": "public.retail_service_event_immutable()",
+      "body_md5": "e1e6489bc7f34e0a60813676a3815409",
+      "rpc": false
+    },
+    {
+      "signature": "public.retail_service_public_order(jsonb)",
+      "body_md5": "33261ca49e4ace82c54ad44aa844745c",
+      "rpc": false
+    },
+    {
+      "signature": "public.rpc_retail_service_snapshot(uuid)",
+      "body_md5": "bd40e5ca30d4f6fb1049891b2f257339",
+      "rpc": true
+    },
+    {
+      "signature": "public.rpc_retail_service_command(uuid,uuid,text,uuid,integer,jsonb)",
+      "body_md5": "efabf57819cd99a3514da79ca8662e39",
+      "rpc": true
+    },
+    {
+      "signature": "public.rpc_retail_service_import(uuid,text,text,text,jsonb)",
+      "body_md5": "d8b0498b3670eac2c4bfea497f63426c",
+      "rpc": true
+    },
+    {
+      "signature": "public.retail_zone_draft_immutable()",
+      "body_md5": "60c8bfc28e8f7b5066e1ca04906c48da",
+      "rpc": false
+    },
+    {
+      "signature": "public.rpc_retail_zone_draft_save(uuid,uuid,integer,uuid,text,timestamptz,text)",
+      "body_md5": "8e91db6c1a78f4634c99adf62edb5768",
+      "rpc": true
+    },
+    {
+      "signature": "public.rpc_retail_zone_drafts(uuid)",
+      "body_md5": "e3d9b3738c93426dbb8ce3673350df0c",
+      "rpc": true
+    }
+  ]
+}

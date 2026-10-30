@@ -90,11 +90,12 @@ Zones, move stores, replace FOs, modify existing functions, or grant employee ac
 Until installed, operational proposal management works and provisional drafts can
 be prepared/exported, while server draft saving/history explicitly awaits setup.
 
-After authorization only: run `retail_zone_mapping_preflight.sql`, inspect unknown
-states and save protected digests, apply the new proposal once, then run
-`retail_zone_mapping_postinstall.sql` and compare protected digests. Do not repeat
-installed Unified/provisional migrations. The quarantine script revokes new draft
-RPCs and preserves all evidence and operational records.
+After owner authorization only: use the combined
+`supabase/proposals/retail_operational_activation/INSTALL.md` procedure (01 → 02 → 03).
+It installs both pending modules atomically and records exact migration history;
+do not run bare proposals or repeat installed Unified/provisional migrations.
+Package 04 quarantine revokes the new draft and service RPCs, preserving
+all evidence and operational records.
 
 ## Dependent modules and validation
 
