@@ -29,9 +29,9 @@ import HospitalTicketRouteGuard from '../components/hospital-ticketing/HospitalT
 import NimsTicketingPage, { LegacyHospitalTicketsRedirect } from '../pages/hospital-ticketing/NimsTicketingPage.jsx';
 import RetailDashboard from '../pages/reliance-retail/RetailDashboard.jsx';
 import RetailStoreMaster from '../pages/reliance-retail/RetailStoreMaster.jsx';
+import RetailOperationalTrackers from '../pages/reliance-retail/RetailOperationalTrackers.jsx';
 import RetailComingSoon from '../pages/reliance-retail/RetailComingSoon.jsx';
 import RetailScopedDeepCleaning from '../pages/reliance-retail/RetailScopedDeepCleaning.jsx';
-import RetailScopedFaultTracker from '../pages/reliance-retail/RetailScopedFaultTracker.jsx';
 import RetailTraining from '../pages/reliance-retail/RetailTraining.jsx';
 import RetailAttendance from '../pages/reliance-retail/RetailAttendance.jsx';
 import FaultTracker from '../pages/FaultTracker.jsx';
@@ -124,11 +124,11 @@ const productionRoutes = [
           { path: 'reliance-retail', element: <RetailDashboard /> },
           { path: 'reliance-retail/store-master', element: <RetailStoreMaster /> },
           { path: 'reliance-retail/deep-cleaning', element: <RetailScopedDeepCleaning /> },
-          { path: 'reliance-retail/fault-tracker', element: <RetailScopedFaultTracker /> },
+          { path: 'reliance-retail/fault-tracker', element: <RetailOperationalTrackers kind="FAULT" /> },
           { path: 'reliance-retail/training', element: <RetailTraining /> },
           { path: 'reliance-retail/attendance', element: <RetailAttendance /> },
           { path: 'reliance-retail/m-here-attendance', element: <Navigate to="/reliance-retail/attendance" replace /> },
-          { path: 'reliance-retail/oos', element: <RetailComingSoon title="OOS Tracker" /> },
+          { path: 'reliance-retail/oos', element: <RetailOperationalTrackers kind="OOS" /> },
           { path: 'reliance-retail/cmpm', element: <RetailComingSoon title="CMPM" /> },
           { path: 'reliance-retail/thermography', element: <RetailComingSoon title="Thermography" /> },
           { path: 'reliance-retail/manpower', element: <RetailComingSoon title="Manpower Vacancy" /> },

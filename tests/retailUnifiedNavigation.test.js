@@ -6,3 +6,9 @@ test('Retail master navigation admits existing MIS accounts without opening othe
  assert.equal(canAccessRoute(viewer,'/reliance-retail/fault-tracker'),false);assert.equal(canAccessRoute(viewer,'/reliance-retail/deep-cleaning'),false);
  assert.equal(canAccessRoute({...viewer,business:'Standalone'},'/reliance-retail/store-master'),false);
 });
+
+test('OOS MIS navigation and HK Fault navigation do not open commercial permissions for generic MIS',()=>{
+ assert.equal(canAccessRoute({role:'OOS MIS',business:'Reliance Retail'},'/reliance-retail/oos'),true);
+ assert.equal(canAccessRoute({role:'HK MIS',business:'Reliance Retail'},'/reliance-retail/fault-tracker'),true);
+ assert.equal(canAccessRoute({role:'MIS',business:'Reliance Retail'},'/reliance-retail/oos'),false);
+});
