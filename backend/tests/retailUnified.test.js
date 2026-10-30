@@ -135,6 +135,19 @@ test('isolated PostgreSQL and real browser unified lifecycle',{skip:process.env.
    await page.getByRole('button',{name:'Dashboard',exact:true}).click();await page.screenshot({path:new URL('dashboard.png',output).pathname.replace(/^\/([A-Za-z]:)/,'$1'),fullPage:true});
    actor=viewer;await page.getByRole('button',{name:'Refresh unified master'}).click();await page.waitForFunction(()=>Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Add Store')?.disabled===true);
   });
+  await t.test('full classified workbook Save remains staging-only, version-preserving and idempotent',{skip:!process.env.RETAIL_CLASSIFICATION_WORKBOOK},()=>{
+   const bytes=fs.readFileSync(process.env.RETAIL_CLASSIFICATION_WORKBOOK),parsed=parseUnifiedMaster(bytes,'classified.xlsx'),preview=previewUnifiedMaster(parsed,snapshot());
+   const protectedTables=['reliance_retail_store_master','reliance_retail_zones','reliance_retail_zone_fo_assignments','retail_attendance_aop_versions','retail_employee_daily_attendance'];
+   const before=Object.fromEntries(protectedTables.map(table=>[table,digest(table)])),old=snapshot(),oldRows=new Map(old.rows.map(r=>[r.id,r]));
+   const stage=()=>call('rpc_retail_unified_stage',{p_actor:admin,p_filename:'classified.xlsx',p_sha256:parsed.checksum,p_original:bytes.toString('base64'),p_rows:preview.rows,p_sheets:preview.sheets,p_format:preview.format,p_stamp:snapshot().stamp,p_receipt:preview.receipt});
+   assert.equal(preview.rows.length,854);assert.equal(preview.receipt.pending_fields_rows,854);assert.equal(preview.can_save,true);
+   const receipt=stage();assert.equal(receipt.receipt.inserted,854);assert.equal(receipt.receipt.operational_writes,0);
+   const saved=snapshot(),newRows=saved.rows.filter(r=>r.batch_id===receipt.batch_id);assert.equal(newRows.length,854);assert.ok(newRows.every(r=>r.verification_status==='PENDING_VERIFICATION'));
+   for(const row of newRows){const source=preview.rows.find(r=>r.source_row===row.source_row);assert.deepEqual(row.source.raw,source.raw);assert.equal(row.row_digest,source.row_digest);assert.equal(row.review.fo_evidence.verification,'PENDING_VERIFICATION');assert.equal(row.review.hk.verification,'PENDING_VERIFICATION');}
+   for(const row of saved.rows)if(oldRows.has(row.id))assert.deepEqual(row,oldRows.get(row.id));assert.equal(saved.files.length,old.files.length+1);
+   const replay=stage();assert.equal(replay.batch_id,receipt.batch_id);assert.equal(replay.replayed,true);assert.equal(replay.receipt.inserted,0);assert.equal(replay.receipt.unchanged,854);assert.equal(snapshot().rows.length,saved.rows.length);
+   for(const table of protectedTables)assert.equal(digest(table),before[table]);
+  });
   await t.test('owner verification SQL and non-destructive write quarantine preserve evidence',()=>{
    sql(read('supabase/verification/retail_unified_preflight.sql'));const verification=sql(read('supabase/verification/retail_unified_postinstall.sql'));assert.ok(verification.includes('20261029140000|retail_unified_master|t|t|'));
    const rows=digest('retail_provisional_rows'),versions=digest('retail_provisional_files');sql(read('supabase/verification/retail_unified_quarantine.sql'));

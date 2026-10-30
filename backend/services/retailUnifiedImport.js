@@ -3,6 +3,7 @@ import {createHash} from 'node:crypto';
 import {validateExcelContainer} from './retailAttendanceService.js';
 import {reportingState,storeKey,indiaToday,validDate} from '../shared/retailAttendance.js';
 import {UNIFIED_HEADERS} from '../shared/retailUnifiedColumns.js';
+import {classifyUnifiedRow,IMPORT_CLASSIFICATIONS,sourceNoteIssues} from '../shared/retailUnifiedClassification.js';
 export {UNIFIED_HEADERS};
 const hash=v=>createHash('sha256').update(v).digest('hex');
 const text=v=>String(v??'').trim();
@@ -37,7 +38,7 @@ export function parseUnifiedMaster(bytes,filename){
   if(!review.store_name)issues.push('MISSING_STORE_NAME');if(!review.zone.id)issues.push('ZONE_PENDING');if(!review.fo_evidence.employee_code)issues.push('FO_IDENTITY_UNVERIFIED');
   if(get('Reporting State')&&reportingState(get('Reporting State'))!==review.reporting_state)issues.push('REPORTING_STATE_MISMATCH');
   for(const kind of ['hk','mepc']){const a=review[kind];if(a.total===null)issues.push(`${kind.toUpperCase()}_TOTAL_PENDING`);for(const d of [a.effective_from,a.effective_to].filter(Boolean)){try{validDate(d);}catch{issues.push('INVALID_BUDGET_DATE');}}if(a.effective_to&&a.effective_to<indiaToday())issues.push('EXPIRED_BUDGET');}
-  if(get('Conflict / Closed Evidence','Mapping Conflict / Note'))issues.push('SOURCE_CONFLICT');
+  issues.push(...sourceNoteIssues(raw));
   const source_exceptions=exceptions.filter(e=>storeKey(e['Site Code'])===store_code&&(!e.State||state(e.State)===geography));if(source_exceptions.length)issues.push('EXCEPTION_SHEET_REVIEW');
   rows.push({source_row:r+1,row_digest:hash(JSON.stringify(cells)),raw,raw_cells:cells,source_sheet:sheet,source_reference:text(get('Source Sheet Row','Master Source Row')),source_exceptions,store_code,state:geography,store_name:review.store_name,city:review.city,review,issues:[...new Set(issues)]});
  }
@@ -47,7 +48,10 @@ export function parseUnifiedMaster(bytes,filename){
 }
 export function previewUnifiedMaster(parsed,snapshot){
  const groups=new Map();for(const row of parsed.rows)groups.set(row.store_code,(groups.get(row.store_code)||0)+1);
- const rows=parsed.rows.map(r=>{const canonical=snapshot.stores.find(s=>storeKey(s.store_code)===r.store_code);const previous=snapshot.rows.filter(s=>s.store_code===r.store_code&&!s.withdrawn_at);const issues=[...r.issues];if(groups.get(r.store_code)>1)issues.push('DUPLICATE_SOURCE_CODE');if(canonical&&canonical.state!==r.state)issues.push('CANONICAL_GEOGRAPHY_CONFLICT');if(canonical&&storeKey(canonical.store_name)!==storeKey(r.store_name))issues.push('CANONICAL_NAME_CONFLICT');if(r.review.fo_evidence.employee_code&&!snapshot.fos.some(f=>storeKey(f.employee_code)===storeKey(r.review.fo_evidence.employee_code)))issues.push('FO_IDENTITY_UNVERIFIED');return {...r,canonical_id:canonical?.id||null,previous_rows:previous.length,classification:canonical?'MATCHED_CANONICAL':previous.length?'MATCHED_PROVISIONAL':'NEW_CANDIDATE',issues:[...new Set(issues)]};});
- const technical=rows.filter(r=>r.issues.includes('TECHNICAL_FORMULA_OR_CELL_ERROR')||r.issues.includes('MISSING_STORE_CODE'));
- return {...parsed,rows,stamp:snapshot.stamp,receipt:{source_rows:rows.length,inserted:0,staged_rows:rows.length,matched:rows.filter(r=>r.classification!=='NEW_CANDIDATE').length,new_candidates:rows.filter(r=>r.classification==='NEW_CANDIDATE').length,proposed_updates:rows.filter(r=>r.canonical_id).length,unchanged:0,conflicts:rows.filter(r=>r.issues.some(i=>/CONFLICT|DUPLICATE|AMBIGUOUS/.test(i))).length,rejected_technical_rows:technical.length,operational_writes:0},can_save:rows.every(r=>snapshot.permissions.some(p=>p.state===r.state&&['editor','reviewer','admin'].includes(p.permission))||snapshot.admin)};
+ const rows=parsed.rows.map(r=>{const canonical=snapshot.stores.find(s=>storeKey(s.store_code)===r.store_code);const previous=snapshot.rows.filter(s=>s.store_code===r.store_code&&!s.withdrawn_at);const issues=[...r.issues];if(groups.get(r.store_code)>1)issues.push('DUPLICATE_SOURCE_CODE');if(canonical&&canonical.state!==r.state)issues.push('CANONICAL_GEOGRAPHY_CONFLICT');if(canonical&&storeKey(canonical.store_name)!==storeKey(r.store_name))issues.push('CANONICAL_NAME_CONFLICT');if(r.review.fo_evidence.employee_code&&!snapshot.fos.some(f=>storeKey(f.employee_code)===storeKey(r.review.fo_evidence.employee_code)))issues.push('FO_IDENTITY_UNVERIFIED');return {...r,canonical_id:canonical?.id||null,previous_rows:previous.length,match_type:canonical?'MATCHED_CANONICAL':previous.length?'MATCHED_PROVISIONAL':'NEW_CANDIDATE',...classifyUnifiedRow({...r,issues})};});
+ const classification_counts=Object.fromEntries(IMPORT_CLASSIFICATIONS.map(label=>[label,rows.filter(r=>r.classification===label).length]));
+ const pending_fields={};for(const row of rows)for(const issue of row.pending_issues)pending_fields[issue]=(pending_fields[issue]||0)+1;
+ const recorded=snapshot.files?.find(f=>f.sha256===parsed.checksum);
+ const conflicts=rows.filter(r=>r.actual_conflict_issues.length).length;
+ return {...parsed,rows,stamp:snapshot.stamp,receipt:{source_rows:rows.length,inserted:0,staged_rows:recorded?0:rows.length,matched:rows.filter(r=>r.match_type!=='NEW_CANDIDATE').length,canonical_matches:rows.filter(r=>r.match_type==='MATCHED_CANONICAL').length,provisional_matches:rows.filter(r=>r.match_type==='MATCHED_PROVISIONAL').length,new_candidates:rows.filter(r=>r.match_type==='NEW_CANDIDATE').length,proposed_updates:0,unchanged:recorded?rows.length:0,is_replay:!!recorded,pending_fields_rows:rows.filter(r=>r.pending_issues.length).length,pending_field_flags:rows.reduce((n,r)=>n+r.pending_issues.length,0),pending_fields,conflicts,actual_conflict_rows:conflicts,blocking_identity_rows:classification_counts['Blocking Identity Conflict'],needs_review_rows:classification_counts['Needs Review'],ready_for_staging_rows:classification_counts['Ready for Staging'],classification_counts,rejected_technical_rows:rows.filter(r=>r.technical_issues.length).length,operational_writes:0},can_save:rows.every(r=>snapshot.permissions.some(p=>p.state===r.state&&['editor','reviewer','admin'].includes(p.permission))||snapshot.admin)};
 }
