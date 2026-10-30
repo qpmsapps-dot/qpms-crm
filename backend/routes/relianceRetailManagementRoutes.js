@@ -1,3 +1,4 @@
+import {createRetailFoSelfRouter} from './retailFoSelfRoutes.js';
 import express from 'express';
 import {createRetailServiceTrackerRouter} from './retailServiceTrackerRoutes.js';
 import { createRetailUnifiedRouter } from './retailUnifiedRoutes.js';
@@ -30,6 +31,7 @@ function sendError(response, error) {
 export function createRelianceRetailManagementRouter({ requireAuth, getClient }) {
   const router = express.Router();
   router.use(requireAuth);
+  router.use('/fo-self',createRetailFoSelfRouter({getClient}));
   router.use('/service-trackers',createRetailServiceTrackerRouter({getClient}));
   router.use('/unified-master', createRetailUnifiedRouter({ getClient }));
   router.use('/provisional-stores', createRetailProvisionalRouter({ getClient }));

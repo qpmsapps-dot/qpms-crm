@@ -1,0 +1,15 @@
+-- DB OWNER, READ ONLY. Retain counts/digests for comparison. No earlier migration is rerun.
+begin transaction read only;
+do $guard$ begin if not exists(select 1 from pg_proc where oid=to_regprocedure('public.retail_unified_owner(uuid,timestamptz)') and md5(replace(prosrc,E'\r\n',E'\n'))='a62460b7543b8b131593494af1ba610a' and prosecdef and provolatile='s' and exists(select 1 from unnest(proconfig) cfg where regexp_replace(cfg,'[[:space:]]','','g')='search_path=pg_catalog,public')) then raise exception 'Reviewed ownership helper missing or changed; do not install against drift';end if; if has_function_privilege('anon','public.retail_unified_owner(uuid,timestamptz)','EXECUTE') or has_function_privilege('authenticated','public.retail_unified_owner(uuid,timestamptz)','EXECUTE') then raise exception 'Ownership helper public EXECUTE drift; inspect existing security first';end if;
+perform t.id,t.employee_code,t.full_name,t.state,t.role,t.business,t.is_active,t.status from public.profiles t where false;
+perform t.id,t.store_code,t.store_name,t.state,t.status from public.reliance_retail_store_master t where false;
+perform t.id,t.zone_name,t.state,t.status from public.reliance_retail_zones t where false;
+perform t.id,t.zone_id,t.fo_profile_id,t.effective_from,t.effective_to,t.status from public.reliance_retail_zone_fo_assignments t where false;
+perform t.retail_store_id,t.attendance_date,t.class,t.credit,t.superseded_at from public.retail_employee_daily_attendance t where false;
+perform t.retail_store_id,t.aop_class,t.hk_count,t.mepc_count,t.mepc_cycle_anchor,t.effective_from,t.effective_to,t.superseded_at from public.retail_attendance_aop_versions t where false;
+end;$guard$;
+select version,name,cardinality(statements)=1 and md5(replace(statements[1],E'\r\n',E'\n'))='970d3b52d83453d5d3ce14730f5c8700' as expected_new_source from supabase_migrations.schema_migrations where version='20261030170000';
+select to_regprocedure('public.rpc_retail_fo_self_snapshot(uuid,date,date)') as self_reader;
+select count(distinct p.id) as current_verified_fo_accounts from public.profiles p join public.reliance_retail_zone_fo_assignments a on a.fo_profile_id=p.id where p.is_active and upper(coalesce(p.status,'Active'))='ACTIVE' and regexp_replace(upper(p.role),'[^A-Z0-9]','','g') in ('FO','FIELDOFFICER') and regexp_replace(upper(p.business),'[^A-Z0-9]','','g') in ('RELIANCE','RELIANCERETAIL') and a.effective_from<=now() and (a.effective_to is null or now()<a.effective_to);
+select name,(xpath('/table/row/n/text()',report))[1]::text::bigint as row_count,(xpath('/table/row/digest/text()',report))[1]::text as digest from unnest(array['profiles','reliance_retail_store_master','reliance_retail_zones','reliance_retail_zone_fo_assignments','reliance_retail_store_zone_history','retail_unified_epoch','retail_employee_daily_attendance','retail_attendance_aop_versions','retail_provisional_access']) name cross join lateral (select query_to_xml(format('select count(*) n,md5(coalesce(jsonb_agg(to_jsonb(x) order by to_jsonb(x)::text),''[]''::jsonb)::text) digest from public.%I x',name),false,false,'' ) report) q;
+rollback;

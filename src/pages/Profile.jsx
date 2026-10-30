@@ -272,7 +272,7 @@ export default function Profile() {
       {error ? <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</p> : null}
       {message ? <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">{message}</p> : null}
 
-      {isRetailFoProfile(profile)&&<RetailResponsibilityPanel profileId={profile.id||user?.id}/>}
+      {isRetailFoProfile(profile)&&<RetailResponsibilityPanel selfService profileId={profile.id||user?.profileId||user?.id}/>}
       <div className="flex justify-end">
         <button type="submit" disabled={saving} className="focus-ring inline-flex items-center gap-2 rounded-xl bg-qpms-600 px-4 py-2.5 text-sm font-black text-white disabled:opacity-60">
           <Save className="h-4 w-4" />
