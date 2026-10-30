@@ -1,6 +1,7 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {parseUnifiedMaster,previewUnifiedMaster} from './retailUnifiedImport.js';
 import {indiaToday} from '../shared/retailAttendance.js';
+import {canEditZone,previewZoneMappings} from '../shared/retailZoneMapping.js';
 const sha=v=>createHash('sha256').update(v).digest('hex');
 async function rpc(client,name,args){const {data,error}=await client.rpc(name,args);if(error)throw error;return data;}
 export const unifiedSnapshot=(client,profile,input={})=>rpc(client,'rpc_retail_unified_snapshot',{p_actor:profile.id,p_from:input.from||indiaToday(),p_to:input.to||indiaToday()});
@@ -19,7 +20,24 @@ export async function createPendingStore(client,profile,input){
  const row={source_row:2,source_sheet:'MANUAL PENDING STORE',row_digest:sha(bytes),store_code:code,state,raw:source,review:{store_name:source.store_name,state,city:'',operating_status:'UNKNOWN',store_format:'',mis_remarks:'Manual pending record'},issues:['PENDING_IDENTITY_APPROVAL','ZONE_PENDING','FO_IDENTITY_UNVERIFIED','HK_TOTAL_PENDING','MEPC_TOTAL_PENDING']};
  return rpc(client,'rpc_retail_unified_stage',{p_actor:profile.id,p_filename:'Manual pending store.json',p_sha256:sha(bytes),p_original:bytes.toString('base64'),p_rows:[row],p_sheets:{manual:[source]},p_format:'MANUAL PENDING STORE',p_stamp:snapshot.stamp,p_receipt:{source_rows:1,inserted:0,matched:snapshot.stores.some(s=>s.store_code===code)?1:0,proposed_updates:0,conflicts:0,rejected_technical_rows:0,operational_writes:0}});
 }
-export const proposeUnified=(client,profile,input)=>rpc(client,'rpc_retail_unified_propose',{p_actor:profile.id,p_kind:input.kind,p_state:input.state,p_store:input.store_id||null,p_zone:input.zone_id||null,p_row:input.row_id||null,p_revision:input.revision??null,p_changes:input.changes,p_reason:input.reason});
+async function proposeWithSnapshot(client,profile,input,validatedSnapshot=null){
+ if(['zone','zone_fo','store_zone'].includes(input.kind)){
+  const snapshot=validatedSnapshot||await unifiedSnapshot(client,profile),c=input.changes||{};
+  if(!canEditZone(snapshot,input.state))throw Object.assign(Error('A defined permitted State / Business Group is required.'),{statusCode:403});
+  if(input.kind==='zone'){
+   if(!String(c.zone_name||'').trim()||!['Active','Inactive'].includes(c.status)||!input.zone_id&&!String(c.zone_code||'').trim())throw Object.assign(Error('Zone code, name and explicit status are required.'),{statusCode:400});
+   if(input.zone_id&&!snapshot.zones.some(z=>z.id===input.zone_id&&z.state===input.state))throw Object.assign(Error('Zone/state mismatch.'),{statusCode:400});
+   if(Object.keys(c).some(k=>!['zone_name','zone_code','status'].includes(k)))throw Object.assign(Error('Zone geography cannot be changed through rename.'),{statusCode:400});
+  }else{
+   const store=snapshot.stores.find(s=>s.id===input.store_id),zone=snapshot.zones.find(z=>z.id===(input.kind==='zone_fo'?input.zone_id:c.zone_id)),fo=snapshot.fos.find(f=>f.id===c.fo_profile_id);
+   const row={'Record Type':input.kind==='zone_fo'?'ZONE_FO':'STORE','State / Business Group':input.state,'Store Code':input.kind==='store_zone'?store?.store_code||'UNKNOWN':'','Zone Code':zone?.zone_code||(c.zone_id||input.zone_id?'UNKNOWN':'UNASSIGNED'),'FO Employee Code':input.kind==='zone_fo'?(c.fo_profile_id?fo?.employee_code||'UNKNOWN_FO_ID':'UNASSIGNED'):'','Effective From':c.effective_from,'Effective To':c.effective_to,Reason:input.reason};
+   const preview=previewZoneMappings([row],snapshot);if(!preview.can_submit)throw Object.assign(Error('Mapping conflict: '+preview.rows[0].issues.join(', ')),{statusCode:400});
+  }
+ }
+ return rpc(client,'rpc_retail_unified_propose',{p_actor:profile.id,p_kind:input.kind,p_state:input.state,p_store:input.store_id||null,p_zone:input.zone_id||null,p_row:input.row_id||null,p_revision:input.revision??null,p_changes:input.changes,p_reason:input.reason});
+}
+export const proposeUnified=(client,profile,input)=>proposeWithSnapshot(client,profile,input);
+export const proposeZoneFromSnapshot=(client,profile,input,snapshot)=>proposeWithSnapshot(client,profile,input,snapshot);
 export const decideUnified=(client,profile,input)=>rpc(client,'rpc_retail_unified_decide',{p_actor:profile.id,p_proposal:input.proposal_id,p_approve:input.approve,p_reason:input.reason});
 export async function applyUnified(client,profile,input,environment=process.env){
  if(environment.RETAIL_STORE_IMPORT_WRITES_ENABLED!=='true')throw Object.assign(Error('Operational changes are awaiting separately authorized activation of the existing Store Master write gate.'),{statusCode:409});
