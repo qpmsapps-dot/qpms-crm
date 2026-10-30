@@ -1,0 +1,32 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import {identityBatchFields,identityBatchPlan} from '../shared/retailIdentityBatchPlan.js';
+import {allStateActivationSummary} from '../shared/retailSavedReview.js';
+const item=(id,state,supervisor='',status='READY_FOR_IDENTITY_REVIEW')=>({row:{id},state,store_name:'Source identity',source_supervisor:supervisor,review_status:status});
+test('missing ownership and ambiguous identities cannot block unrelated valid batches',()=>{
+ const rows=[item('a','KA','Source supervisor'),item('b','TG'),item('c','TG','','BLOCKED_IDENTITY_CONFLICT')],plan=identityBatchPlan(rows);
+ assert.deepEqual(plan.eligible.map(i=>i.row.id),['a']);assert.deepEqual(plan.ownership_states,[{state:'TG',count:1}]);assert.equal(plan.invalid.length,1);
+});
+test('explicit state ownership evidence prepares multiple missing cases without overriding existing evidence or another state',()=>{
+ const rows=[item('a','TG'),item('b','TG'),item('c','KA'),item('d','TG','Original supervisor')],options={supervisorByState:{TG:'Genuine TG supervisor'}};
+ const plan=identityBatchPlan(rows,options);assert.deepEqual(plan.eligible.map(i=>i.row.id),['a','b','d']);assert.equal(plan.ownership.length,1);assert.equal(identityBatchFields(rows[3],options).supervisor_name,'Original supervisor');assert.equal(identityBatchFields(rows[0],options).supervisor_name,'Genuine TG supervisor');
+ assert.equal(identityBatchPlan(rows,{supervisorByState:{TG:'  '}}).eligible.length,1);
+});
+test('explicit row and global corrections remain proposals, and canonical or evidence-required cases stay excluded',()=>{
+ const a=item('a','TG'),b={...item('b','KA','Existing'),canonical_id:'canonical'},c=item('c','KL','Existing','IDENTITY_REVIEW_REQUIRED');
+ const options={drafts:{a:{store_name:'Corrected official name',supervisor_name:'Genuine row owner'}}};assert.deepEqual(identityBatchFields(a,options),{store_name:'Corrected official name',supervisor_name:'Genuine row owner'});assert.deepEqual(identityBatchPlan([a,b,c],options).eligible.map(i=>i.row.id),['a']);assert.equal(identityBatchFields(a,{...options,supervisor:'Genuine shared owner'}).supervisor_name,'Genuine shared owner');
+});
+test('browser submits full saved-source eligible scope and consolidates TG ownership without selecting the ambiguous code',{skip:process.env.RETAIL_BATCH_BROWSER!=='1',timeout:90000},async()=>{
+ const snapshot=JSON.parse(fs.readFileSync(process.env.RETAIL_BATCH_SNAPSHOT));
+ assert.equal(snapshot.rows.length,1708);assert.equal(snapshot.proposals.length,0);
+ const {preview}=await import('vite'),{chromium,expect}=await import('@playwright/test');
+ const web=await preview({configFile:false,root:new URL('../../',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1'),build:{outDir:'dist'},preview:{host:'127.0.0.1',port:4197,strictPort:true}}),browser=await chromium.launch({headless:true}),page=await browser.newPage({viewport:{width:1440,height:1100}}),submissions=[];
+ try{
+  await page.addInitScript(()=>{localStorage.setItem('qpms-crm-auth-user',JSON.stringify({id:'batch-fixture-admin',role:'Admin',rawRole:'Admin',isDemoReadOnly:true,is_demo:true,read_only:false,status:'Active',isActive:true,webAccessEnabled:true}));sessionStorage.setItem('qpms-crm-backend-token','isolated-session');});
+  await page.route('**/api/**',async route=>{const u=new URL(route.request().url());let result={};if(u.pathname.endsWith('/saved-review/identity-propose')){submissions.push(route.request().postDataJSON());result={recorded:submissions.at(-1).rows.length,failed:0,results:[]};}else if(u.pathname.endsWith('/saved-review'))result={gates:{canonical_writes:false,identity_approval:false},summary:allStateActivationSummary(snapshot,{decisions:[]})};else if(u.pathname.endsWith('/unified-master'))result=snapshot;return route.fulfill({json:{ok:true,result,rows:[],total:0}});});
+  await page.goto('http://127.0.0.1:4197/reliance-retail/store-master');await page.getByRole('button',{name:'Identity Review',exact:true}).click();const panel=page.getByRole('region',{name:'Consolidated state approval console'});
+  await expect(panel.getByText('601 eligible; 116 ownership cases held separately.',{exact:false})).toBeVisible();await panel.getByRole('button',{name:'Select eligible records in this state scope'}).click();await expect(panel.getByText('601 selected.',{exact:false})).toBeVisible();await panel.getByLabel('Bulk operating status').selectOption('Active');await panel.getByLabel('Bulk maker reason').fill('Isolated test of already confirmed source data');await panel.getByLabel('Confirm bulk review scope').check();await panel.getByRole('button',{name:'Submit selected proposals'}).click();await expect(panel.getByText('0 selected.',{exact:false})).toBeVisible();assert.equal(submissions.reduce((n,p)=>n+p.rows.length,0),601);assert.ok(submissions.every(p=>p.rows.length<=100&&p.rows.every(r=>r.supervisor_name.trim())));
+  await page.getByLabel('Unified state').selectOption('TG');await expect(panel.getByText('0 eligible; 86 ownership cases held separately.',{exact:false})).toBeVisible();await panel.getByLabel('Missing ownership evidence TG').fill('Genuine TG owner - isolated fixture only');await panel.getByRole('button',{name:'Select eligible records in this state scope'}).click();await expect(panel.getByText('86 selected.',{exact:false})).toBeVisible();await panel.getByLabel('Confirm bulk review scope').check();await panel.getByRole('button',{name:'Submit selected proposals'}).click();await expect(panel.getByText('0 selected.',{exact:false})).toBeVisible();assert.equal(submissions.at(-1).rows.length,86);const ambiguous=snapshot.rows.filter(r=>r.store_code==='SLAS/TXJA').map(r=>r.id);assert.ok(submissions.at(-1).rows.every(r=>!ambiguous.includes(r.row_id)));assert.equal(snapshot.proposals.length,0);
+ }finally{await page.close();await browser.close();await new Promise(r=>web.httpServer.close(r));}
+});

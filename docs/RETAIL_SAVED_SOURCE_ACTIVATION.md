@@ -8,6 +8,14 @@ Open Reliance Retail → Store Master → Identity Review → Consolidated state
 
 The existing identity contract requires a genuine supervisor-only owner name. Imported supervisor text is editable matching evidence, not a verified FO assignment. Do not substitute an invented name for missing evidence. This requirement comes from the existing secured identity RPC; no Zone, FO account or AOP is required.
 
+### Minimum batch actions
+
+Keep All States selected for one consolidated scope, or choose a state for state-wise submission. **Select eligible records in this state scope** excludes unresolved ownership cases, ambiguous identities and evidence-required identities. One maker submission automatically handles requests of at most 100 rows; those technical chunks are not separate human approvals. A different authorized Admin can select the entire pending scope and make one consolidated approval decision. The recorded reviewer then performs one controlled activation action. Opening and closing the existing production write gates remain separate authorized operational actions, not extra identity-review decisions.
+
+The consolidated ownership-evidence panel groups missing owners by state. A maker may enter a genuine common owner once per state only when applicable to every missing case there; existing source owners stay unchanged. Different owners remain editable in row fields. These values become source-bound proposals requiring the same independent checker, not operational FO assignments. TG has 86 ready identities without supervisor evidence and one ambiguous identity (`SLAS/TXJA`); confirmed genuine state ownership evidence can prepare those 86 together while retaining the ambiguous code separately.
+
+The installed SQL functions enforce `SUPERVISOR_ONLY` plus a nonblank genuine supervisor; this is an existing database contract, not a frontend requirement that can be removed safely here. Whether that contract should support identity-only ownership is a separate business/schema policy change. This release does not alter it. Immutable source hashes, maker/checker identity, revisions, timestamps and audit events continue through existing RPCs.
+
 The backend binds proposals to saved file SHA-256, row digest and revision. It derives an identity-only approval manifest only after recorded independent approval, and uses the existing bulk identity registry and canonical import RPCs. This is not a provisional reimport: source files, immutable raw rows and versions are retained. Existing canonical records are skipped on retry. Activation sets neither Zone/FO mappings nor AOP. Partial state failures and registry receipts remain visible; refresh counts before retrying.
 
 ## AOP
