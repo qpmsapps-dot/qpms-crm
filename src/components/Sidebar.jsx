@@ -62,7 +62,7 @@ const relianceRetailNavGroup = {
     { label: 'Dashboard', to: '/reliance-retail', icon: Home },
     { label: 'Attendance', to: '/reliance-retail/attendance', icon: ClipboardCheck },
     { label: 'Deep Cleaning', to: '/reliance-retail/deep-cleaning', icon: Sparkles },
-    { label: 'Technical Training', to: '/reliance-retail/training', icon: ListChecks },
+    { label: 'HK & MEPC Training', to: '/reliance-retail/training', icon: ListChecks },
     { label: 'Fault Tracker', to: '/reliance-retail/fault-tracker', icon: ClipboardList },
     { label: 'OOS Tracker', to: '/reliance-retail/oos', icon: ClipboardList },
     { label: 'CMPM', to: '/reliance-retail/cmpm', icon: Wrench },

@@ -1,4 +1,5 @@
 import express from 'express';
+import {createRetailServiceTrackerRouter} from './retailServiceTrackerRoutes.js';
 import { createRetailUnifiedRouter } from './retailUnifiedRoutes.js';
 import { createRetailProvisionalRouter } from './retailProvisionalRoutes.js';
 import { createRetailAttendanceRouter } from './retailAttendanceRoutes.js';
@@ -29,6 +30,7 @@ function sendError(response, error) {
 export function createRelianceRetailManagementRouter({ requireAuth, getClient }) {
   const router = express.Router();
   router.use(requireAuth);
+  router.use('/service-trackers',createRetailServiceTrackerRouter({getClient}));
   router.use('/unified-master', createRetailUnifiedRouter({ getClient }));
   router.use('/provisional-stores', createRetailProvisionalRouter({ getClient }));
   router.use('/store-import', createRetailStoreImportRouter({ getClient }));
