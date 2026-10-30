@@ -1,3 +1,4 @@
+import {savedReviewSource,proposeSavedIdentities,decideSavedReviews,activateSavedIdentities,proposeSavedAop,applySavedAop} from '../services/retailSavedReviewService.js';
 import express from 'express';
 import {previewZoneWorkbook,parseZoneMappingWorkbook,submitZoneRecords} from '../services/retailZoneMappingService.js';
 import {previewZoneMappings} from '../shared/retailZoneMapping.js';
@@ -5,6 +6,12 @@ import {unifiedSnapshot,previewUnified,stageUnified,createPendingStore,proposeUn
 export function createRetailUnifiedRouter({getClient,environment=process.env}){
  const router=express.Router();
  const run=handler=>async(req,res)=>{try{res.json({ok:true,result:await handler(getClient(),req.profile,req.body,req)});}catch(e){const status=e.statusCode||({'42501':403,'40001':409,'23505':409,P0001:409,'22P02':400,'22007':400,PGRST202:503,'42P01':503}[e.code])||500;res.status(status).json({ok:false,message:status===503?(req.path.startsWith('/zone-mapping')?'Provisional Zone draft storage awaits separate authorized setup. Do not rerun installed Unified migrations.':'Unified Store Master setup is awaiting authorized database installation.'):status>=500?'Unified Store Master is unavailable.':e.message});}};
+ router.get('/saved-review',run((c,p,b,r)=>savedReviewSource(c,p,r.query,environment)));
+ router.post('/saved-review/identity-propose',run(proposeSavedIdentities));
+ router.post('/saved-review/decide',run(decideSavedReviews));
+ router.post('/saved-review/identity-activate',run((c,p,b)=>activateSavedIdentities(c,p,b,environment)));
+ router.post('/saved-review/aop-propose',run(proposeSavedAop));
+ router.post('/saved-review/aop-apply',run((c,p,b)=>applySavedAop(c,p,b,environment)));
  router.get('/',run((c,p,b,r)=>unifiedSnapshot(c,p,r.query)));
  for(const operation of ['preview','submit'])router.post('/zone-mapping/'+operation,express.raw({type:'application/octet-stream',limit:'10mb'}),run((c,p,b,r)=>{
   let name;try{name=decodeURIComponent(r.get('x-file-name')||'');}catch{throw Object.assign(Error('Invalid filename.'),{statusCode:400});}

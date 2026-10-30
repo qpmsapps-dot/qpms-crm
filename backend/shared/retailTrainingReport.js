@@ -1,3 +1,4 @@
+import {stateLabel} from './retailAttendance.js';
 import {ownershipAt} from './retailUnifiedModel.js';
 export function trainingReport(sessions,snapshot,filter={}){
  return sessions.map(session=>{
@@ -6,5 +7,5 @@ export function trainingReport(sessions,snapshot,filter={}){
   const store=candidates.length===1?candidates[0]:null;
   const ownership=store?ownershipAt(snapshot,store,session.submitted_at||`${session.training_date}T23:59:59+05:30`):{known:false,zone_id:null,fo_profile_id:null};
   return {...session,training_class,canonical_store_id:store?.id||null,state:session.store?.state||'',ownership};
- }).filter(s=>(!filter.state||s.state===filter.state)&&(!filter.class||s.training_class===filter.class)&&(!filter.zone||s.ownership.zone_id===filter.zone)&&(!filter.fo||s.ownership.fo_profile_id===filter.fo)&&(!filter.store||s.canonical_store_id===filter.store)&&(!filter.status||s.status===filter.status));
+ }).filter(s=>(!filter.state||stateLabel(s.state)===stateLabel(filter.state))&&(!filter.class||s.training_class===filter.class)&&(!filter.zone||s.ownership.zone_id===filter.zone)&&(!filter.fo||s.ownership.fo_profile_id===filter.fo)&&(!filter.store||s.canonical_store_id===filter.store)&&(!filter.status||s.status===filter.status));
 }

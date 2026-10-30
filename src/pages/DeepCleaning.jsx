@@ -1,3 +1,5 @@
+import {RETAIL_GEOGRAPHIES} from '../../backend/shared/retailReadinessReport.js';
+import {stateLabel} from '../../backend/shared/retailAttendance.js';
 import { createElement, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CalendarDays,
@@ -444,7 +446,7 @@ export default function DeepCleaning({ initialBusiness = 'All', lockBusiness = f
     const search = filters.search.trim().toLowerCase();
     return records.filter((record) => {
       if (filters.business !== 'All' && record.business !== filters.business) return false;
-      if (filters.state !== 'All' && record.state !== filters.state) return false;
+      if (filters.state !== 'All' && (lockBusiness&&initialBusiness==='Reliance Retail'?stateLabel(record.state)!==stateLabel(filters.state):record.state!==filters.state)) return false;
       if (filters.city !== 'All' && record.city !== filters.city) return false;
       if (filters.status !== 'All' && record.status !== filters.status) return false;
       const recordDate = dateInput(record.date);
@@ -493,10 +495,10 @@ export default function DeepCleaning({ initialBusiness = 'All', lockBusiness = f
   }, [allVisibleUploads, signedUrls]);
 
   const options = useMemo(() => ({
-    states: uniqueOptions(records.map((record) => record.state)),
+    states: lockBusiness&&initialBusiness==='Reliance Retail'?RETAIL_GEOGRAPHIES:uniqueOptions(records.map((record) => record.state)),
     cities: uniqueOptions(records.map((record) => record.city)),
     statuses: uniqueOptions(records.map((record) => record.status)),
-  }), [records]);
+  }), [records,lockBusiness,initialBusiness]);
 
   const summary = useMemo(() => {
     const siteKeys = new Set(records.map((record) => `${record.business}:${record.storeCode || record.storeName}`));

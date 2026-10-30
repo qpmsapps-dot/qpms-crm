@@ -1,0 +1,10 @@
+import {useEffect,useState} from 'react';
+import {allStateActivationSummary} from '../../../backend/shared/retailSavedReview.js';
+import {indiaToday} from '../../../backend/shared/retailAttendance.js';
+import {retailUnifiedApi} from '../../services/retailUnifiedApi.js';
+export default function RetailStateCoverage({snapshot:provided}){
+ const [loaded,setLoaded]=useState(null),[error,setError]=useState('');
+ useEffect(()=>{if(provided)return;let live=true;retailUnifiedApi.snapshot({from:indiaToday().slice(0,7)+'-01',to:indiaToday()}).then(s=>live&&setLoaded(s)).catch(e=>live&&setError(e.response?.data?.message||e.message));return()=>{live=false;};},[provided]);
+ const snapshot=provided||loaded,rows=snapshot?allStateActivationSummary(snapshot):[];
+ return <section className="space-y-2 rounded-xl border bg-white p-3" aria-label="All-state operational availability"><h2 className="font-bold">All-state operational availability</h2><p>Provisional source records remain separate from operational stores. Zone, FO and AOP can remain pending after identity activation. PY reports under TN with its geography preserved.</p>{error&&<p>Authorized state coverage unavailable: {error}. Existing module records remain available.</p>}{!snapshot&&!error&&<p>Loading authorized states...</p>}{snapshot&&<div className="overflow-auto"><p>Attendance coverage period: {snapshot.from} to {snapshot.to}</p><table className="min-w-full text-sm"><thead><tr>{['State','Source unique codes','Active stores','New candidates pending','Evidence / blocked','Attendance availability'].map(h=><th key={h} className="p-2 text-left">{h}</th>)}</tr></thead><tbody>{rows.map(r=><tr className="border-t" key={r.state}><td className="p-2">{r.state}</td>{snapshot.admin||snapshot.permissions.some(p=>p.state===r.state)?<><td>{r.source_unique_codes}</td><td>{r.active_stores}</td><td>{r.pending_new_codes}</td><td>{r.evidence_required} / {r.blocked}</td><td>{r.attendance_availability}</td></>:<td colSpan="5">Outside authorized scope</td>}</tr>)}</tbody></table></div>}<a className="font-semibold underline" href="/reliance-retail/store-master">Open state-wise Store Master review</a></section>;
+}

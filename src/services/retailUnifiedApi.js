@@ -6,3 +6,5 @@ export const retailZoneMappingApi={preview:file=>upload('zone-mapping/preview',f
 export const retailUnifiedApi={snapshot:params=>request({url:base,params}),preview:file=>upload('preview',file),stage:(file,stamp)=>upload('stage',file,stamp),pending:data=>request({method:'POST',url:base+'/pending-store',data}),propose:data=>request({method:'POST',url:base+'/propose',data}),decide:data=>request({method:'POST',url:base+'/decide',data}),apply:proposal_id=>request({method:'POST',url:base+'/apply',data:{proposal_id}})};
 
 export const retailFoSelfSnapshot=params=>request({url:'/api/reliance-retail/fo-self',params});
+
+export const retailSavedReviewApi={source:params=>request({url:base+'/saved-review',params}),identityPropose:data=>request({method:'POST',url:base+'/saved-review/identity-propose',data}),decide:data=>request({method:'POST',url:base+'/saved-review/decide',data}),activate:data=>request({method:'POST',url:base+'/saved-review/identity-activate',data}),aopPropose:data=>request({method:'POST',url:base+'/saved-review/aop-propose',data}),aopApply:data=>request({method:'POST',url:base+'/saved-review/aop-apply',data})};
