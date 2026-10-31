@@ -1,4 +1,4 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {authenticatedApiRequest} from '../../services/api.js';
 import {indiaToday,reportingState} from '../../../backend/shared/retailAttendance.js';
 import {REPORTING_STATES} from './ifmsDashboardModel.js';
@@ -12,6 +12,7 @@ import {isPlatformAdmin} from '../../utils/authRoles.js';
 const emptyForm=()=>({store_id:'',scheduled_date:indiaToday(),request_id:crypto.randomUUID()});
 export default function RetailOperations({kind='maintenance'}) {
  const {user}=useAuth();
+ const entry=useRef(null);
  const maintenance=kind==='maintenance',title=maintenance?'CM / PM Calls':'Thermography';
  usePageTitle(`Reliance Retail ${title}`);
  const [month,setMonth]=useState(indiaToday().slice(0,7)),[state,setState]=useState(''),[store,setStore]=useState(''),[query,setQuery]=useState('');
@@ -24,6 +25,10 @@ export default function RetailOperations({kind='maintenance'}) {
   authenticatedApiRequest({url:endpoint,params:{month,state,store}}).then(r=>{if(live)setReport(r.data.result);}).catch(e=>{if(live)setError(e.response?.data?.message||e.message);}).finally(()=>{if(live)setBusy(false);});
   return()=>{live=false;};
  },[endpoint,month,state,store,refresh]);
+ useEffect(()=>{
+  if(maintenance&&report?.today&&month===report.today.slice(0,7))queueMicrotask(()=>setCallKind(Number(report.today.slice(8,10))<=15?'CM':'PM'));
+ },[maintenance,report?.today,month]);
+ function openEntry(){entry.current?.scrollIntoView({behavior:'smooth',block:'center'});entry.current?.querySelector('select')?.focus({preventScroll:true});}
  const selected=report?.stores.find(s=>s.id===form.store_id);
  const module=report?.modules?.[callKind.toLowerCase()];
  const rows=(maintenance?module?.stores||[]:report?.rows||[]).filter(r=>matchesReportQuery([r.store_code||r.store?.store_code,r.store_name||r.store?.store_name,r.status,r.reporting_state],query));
@@ -56,6 +61,7 @@ export default function RetailOperations({kind='maintenance'}) {
  const stats=maintenance?report?[{label:'Applicable stores',value:module.total.eligible},{label:`${callKind} completed`,value:module.total.completed},{label:`${callKind} pending`,value:module.total.remaining}]:[]:report?[{label:'Scheduled',value:report.total.scheduled},{label:'Completed awaiting approval',value:report.total.awaiting},{label:'Client Approved',value:report.total.approved},{label:'Approval overdue',value:report.total.overdue}]:[];
  return <section className="retail-report">
   <ReportHeader title={title} description={maintenance?'Record completed CM and PM calls and review monthly progress.':'Schedule inspections, record completion and track client approval within 10 calendar days.'}>
+   <button disabled={!report||busy||saving} onClick={openEntry}>{maintenance?'Record CM/PM Call':'Schedule Thermography'}</button>
    <button onClick={()=>setRefresh(v=>v+1)} disabled={busy||saving}>Refresh</button><button disabled={!report||busy} onClick={()=>void exportReport()}>Export Excel</button>
   </ReportHeader>
   <ReportFilters>
@@ -69,10 +75,10 @@ export default function RetailOperations({kind='maintenance'}) {
   {report&&<>
    <ReportStats items={stats}/>
    <ReportNotice>{maintenance?`${callKind}: ${window.start} through ${window.end} · ${window.status}. Today (India): ${report.today}. Previous months are locked. Completed calls cannot be edited or deleted.`:`Reports follow the scheduled month. Client approval is due 10 calendar days after completion; overdue starts the next day. Late approvals remain marked late.`}</ReportNotice>
-   <form onSubmit={prepare} className="retail-report-filters" aria-label={`${title} entry`}>
+   <form ref={entry} onSubmit={prepare} className="retail-report-filters" aria-label={`${title} entry`}>
     <label>Store Code<select required aria-label={`${title} entry Store Code`} value={form.store_id} onChange={e=>{setConfirmation(null);setForm({...emptyForm(),store_id:e.target.value});}}><option value="">Select authorized store</option>{report.stores.filter(s=>s.can_save&&s.status==='Active').map(s=><option key={s.id} value={s.id}>{s.store_code} · {s.store_name}</option>)}</select></label>
     {!maintenance&&<label>Scheduled Date<input required aria-label="Thermography Scheduled Date" type="date" value={form.scheduled_date} onChange={e=>setForm(f=>({...f,scheduled_date:e.target.value,request_id:crypto.randomUUID()}))}/></label>}
-    <button disabled={saving||busy||!(maintenance?canComplete:canSchedule)}>{maintenance?`Record ${callKind} Call`:'Schedule Thermography'}</button>
+    <button disabled={saving||busy||!(maintenance?canComplete:canSchedule)}>{maintenance?`Record ${callKind} Call`:'Save scheduled inspection'}</button>
     {selected&&<p>{selected.store_code} · {selected.store_name} · {REPORTING_STATES.find(s=>s.code===reportingState(selected.state))?.label} · {selected.store_format||'Format unavailable'} · {selected.city||'City unavailable'}</p>}
    </form>
    {maintenance&&<section className="retail-report-panel retail-report-table" aria-label="CM PM state summary"><table><thead><tr>{['State','CM completed','CM pending','PM completed','PM pending'].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{report.modules.cm.rows.map(cm=>{const pm=report.modules.pm.rows.find(r=>r.state===cm.state);return <tr key={cm.state}><td>{REPORTING_STATES.find(s=>s.code===cm.state)?.label}</td><td>{cm.completed}</td><td>{cm.remaining}</td><td>{pm?.completed}</td><td>{pm?.remaining}</td></tr>;})}</tbody></table></section>}

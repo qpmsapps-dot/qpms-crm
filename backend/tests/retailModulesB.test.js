@@ -2,6 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {canonicalActivityStore,cleaningReport,completedTrainingReport} from '../shared/retailModuleReports.js';
 import {dailyTarget,summarizeAttendance} from '../shared/retailAttendance.js';
+import {retailAccess} from '../services/relianceRetailManagementService.js';
+import {attendanceAccess} from '../services/retailAttendanceService.js';
+import {canAccessRoute} from '../../src/utils/authRoles.js';
+
+test('existing Admin and QPMS Admin roles retain all Retail routes and Admin attendance writes; unrelated roles do not',()=>{
+ for(const role of ['Admin','QPMS Admin']){
+  const profile={id:'existing-admin-fixture',role,is_active:true,status:'Active'};
+  for(const capability of ['dashboard','deepCleaning','training','cmpm','thermography','faultTracker'])assert.equal(retailAccess(profile)[capability],true);
+  for(const route of ['/reliance-retail','/reliance-retail/attendance','/reliance-retail/deep-cleaning','/reliance-retail/training','/reliance-retail/cmpm','/reliance-retail/thermography','/fault-tracker'])assert.equal(canAccessRoute(profile,route),true);
+  assert.deepEqual(attendanceAccess(profile,true),{admin:true,state:null});
+  assert.throws(()=>attendanceAccess({...profile,is_active:false},true),e=>e.statusCode===403);
+ }
+ assert.throws(()=>attendanceAccess({id:'mis-fixture',role:'HK MIS',business:'Reliance Retail',state:'TN'},true),e=>e.statusCode===403);
+ assert.equal(canAccessRoute({role:'FO',business:'Other'},'/reliance-retail/thermography'),false);
+});
 const stores=[{id:'tn',store_code:'T1',state:'TN',status:'Active'},{id:'py',store_code:'P1',state:'PY',status:'Active'},{id:'ap1',store_code:'A1',state:'AP-1',status:'Active'},{id:'ap2',store_code:'A2',state:'AP-2',status:'Active'}];
 test('attendance retains decimal approved AOP, consolidates PY and keeps AP regions separate',()=>{
  const report=summarizeAttendance({stores,aop:stores.map(s=>({retail_store_id:s.id,hk_count:1.25,mepc_count:2.5,effective_from:'2026-10-01'})),attendance:[],cutoff:'2026-10-01',view:'daily'});

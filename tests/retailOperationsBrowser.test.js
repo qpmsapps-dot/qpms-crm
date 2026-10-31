@@ -50,7 +50,9 @@ test('operational pages confirm saves, enforce period UX, retain Thermography la
   assert.equal(await page.getByLabel('CM / PM Calls entry Store Code').locator('option').filter({hasText:'VIEW01'}).count(),0);
   await page.goto(base+'/reliance-retail/thermography',{waitUntil:'domcontentloaded',timeout:60000});
   await page.getByLabel('Thermography entry Store Code').selectOption(store);await page.getByLabel('Thermography Scheduled Date').fill(source.today);
-  await page.getByRole('button',{name:'Schedule Thermography',exact:true}).click();await page.getByRole('button',{name:'Confirm save',exact:true}).click();
+  await page.getByRole('button',{name:'Schedule Thermography',exact:true}).click();
+  assert.equal(await page.getByLabel('Thermography entry Store Code').evaluate(el=>el===document.activeElement),true);
+  await page.getByRole('button',{name:'Save scheduled inspection',exact:true}).click();await page.getByRole('button',{name:'Confirm save',exact:true}).click();
   await page.getByRole('button',{name:'Record completion',exact:true}).click();await page.getByRole('button',{name:'Confirm save',exact:true}).click();
   await page.getByRole('button',{name:'Record client approval',exact:true}).waitFor();
   const row=source.thermography[0],afterDue=new Date(row.approval_due_on+'T00:00:00Z');afterDue.setUTCDate(afterDue.getUTCDate()+1);source.today=afterDue.toISOString().slice(0,10);
@@ -64,6 +66,11 @@ test('operational pages confirm saves, enforce period UX, retain Thermography la
   const chunks=[];for await(const chunk of await (await download).createReadStream())chunks.push(chunk);
   const {default:ExcelJS}=await import('exceljs'),book=new ExcelJS.Workbook();await book.xlsx.load(Buffer.concat(chunks));assert.equal(book.getWorksheet('Store details').rowCount,2);
   if(process.env.RETAIL_WORKFLOW_ONLY!=='true')for(const width of [1920,1024,390]){await page.setViewportSize({width,height:1000});assert.equal(await page.locator('.retail-report').evaluate(r=>r.scrollWidth<=r.clientWidth+1),true,`Thermography fits at ${width}`);}
+  source.today=month+'-16';await page.goto(base+'/reliance-retail/cmpm');
+  await page.waitForFunction(()=>document.querySelector('[aria-label="Maintenance kind"]')?.value==='PM');
+  await page.getByLabel('CM / PM Calls entry Store Code').selectOption(store);
+  assert.equal(await page.getByRole('button',{name:'Record PM Call',exact:true}).isDisabled(),false,'PM is selected from the authoritative server date');
+  for(const width of [1024,390]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1),true,`New primary action fits ${width}px`);}
   await page.goto(base+'/reliance-retail',{waitUntil:'domcontentloaded'});await page.locator('#ifms-thermography').waitFor();
   const card=page.locator('#ifms-thermography').locator('xpath=ancestor::section');
   assert.equal(await card.getByText('Normal',{exact:true}).count(),0);

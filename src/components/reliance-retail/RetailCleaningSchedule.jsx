@@ -10,6 +10,7 @@ export default function RetailCleaningSchedule({onClose,readOnly=false}) {
  const [error,setError]=useState(''),[busy,setBusy]=useState(false),[saved,setSaved]=useState(false);
  useEffect(()=>{let live=true;retailUnifiedApi.snapshot({from:indiaToday(),to:indiaToday()}).then(r=>{if(live)setSnapshot(r);}).catch(e=>{if(live)setError(e.response?.data?.message||e.message);});return()=>{live=false;};},[]);
  const stores=(snapshot?.stores||[]).filter(s=>s.status==='Active'&&(snapshot.admin||snapshot.permissions?.some(p=>p.state===s.state&&['editor','reviewer'].includes(p.permission))));
+ const selected=stores.find(s=>s.id===storeId);
  async function save(e){
   e.preventDefault();const store=stores.find(s=>s.id===storeId);if(!store||busy||readOnly)return;
   setBusy(true);setError('');
@@ -26,6 +27,7 @@ export default function RetailCleaningSchedule({onClose,readOnly=false}) {
    <label>Reason / approval reference<input required minLength={3} maxLength={2000} aria-label="Cleaning schedule reason" value={reason} onChange={e=>setReason(e.target.value)} disabled={busy||readOnly}/></label>
    <button disabled={busy||readOnly||!storeId||reason.trim().length<3}>{busy?'Saving request…':'Submit schedule request'}</button>
   </form>}
+  {selected&&<p aria-label="Selected cleaning store">{selected.store_code} · {selected.store_name} · {selected.state}{selected.city?` · ${selected.city}`:''}{selected.store_format?` · ${selected.store_format}`:''}</p>}
   {!snapshot&&!error&&<ReportNotice>Loading permitted stores…</ReportNotice>}
   {snapshot&&!stores.length&&<ReportNotice>No active stores are available for scheduling under your existing permissions.</ReportNotice>}
   {readOnly&&<ReportNotice>Read-only access. Schedule requests cannot be submitted.</ReportNotice>}

@@ -30,6 +30,7 @@ test('CRM scheduling saves an approval request, handles failure, preserves scope
   await page.getByLabel('Schedule cleaning store').locator('option[value="tn"]').waitFor({state:'attached'});
   assert.equal(await page.getByLabel('Schedule cleaning store').locator('option[value="ka"]').count(),0);
   await page.getByLabel('Schedule cleaning store').selectOption('tn');
+  await page.getByLabel('Selected cleaning store').filter({hasText:'TN01 · Local fixture · TN'}).waitFor();
   await page.getByLabel('Cleaning schedule reason').fill('Existing approval reference TEST');
   await page.getByRole('button',{name:'Submit schedule request',exact:true}).click();
   await page.getByRole('alert').filter({hasText:'Existing permission denied'}).waitFor();
@@ -43,6 +44,9 @@ test('CRM scheduling saves an approval request, handles failure, preserves scope
   assert.equal(await page.getByText('Admin: coverage and source reconciliation',{exact:true}).count(),0);
   await page.evaluate(()=>{const u=JSON.parse(localStorage.getItem('qpms-crm-auth-user'));u.role='Admin';u.rawRole='Admin';localStorage.setItem('qpms-crm-auth-user',JSON.stringify(u));});
   await page.reload();await page.getByText('Admin: coverage and source reconciliation',{exact:true}).waitFor();
+  const sidebar=page.locator('aside').first();
+  for(const label of ['Dashboard','Attendance','Deep Cleaning','Training','CM/PM','Thermography','Fault Tracker'])assert.equal(await sidebar.getByRole('link',{name:label,exact:true}).count(),1,label);
+  assert.equal(await sidebar.getByRole('link',{name:'Pre-Sales',exact:true}).count(),0);
   assert.equal(await page.getByText('Admin: coverage and source reconciliation',{exact:true}).evaluate(el=>el.parentElement.open),false);
   await page.evaluate(()=>{const u=JSON.parse(localStorage.getItem('qpms-crm-auth-user'));u.read_only=true;localStorage.setItem('qpms-crm-auth-user',JSON.stringify(u));});
   await page.goto(base+'/reliance-retail/deep-cleaning');
@@ -50,6 +54,11 @@ test('CRM scheduling saves an approval request, handles failure, preserves scope
   await page.getByText('Read-only access. Schedule requests cannot be submitted.',{exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Submit schedule request',exact:true}).isDisabled(),true);
   assert.equal(writes.length,2);
+  for(const width of [1440,1024,390]){
+   await page.setViewportSize({width,height:1000});
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1),true,`New Retail navigation and schedule form fit ${width}px`);
+   await page.screenshot({path:path.join(os.tmpdir(),`retail-final-scheduling-${width}.png`),fullPage:true,animations:'disabled'});
+  }
   assert.deepEqual(errors,[]);
  }finally{await browser.close();await server.close();}
 });
