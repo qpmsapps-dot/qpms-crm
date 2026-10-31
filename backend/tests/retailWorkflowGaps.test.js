@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {execFileSync} from 'node:child_process';
+import {execFileSync,spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {verifiedWeeklyCompletions,RETAIL_FAULT_STAGES} from '../shared/retailFaultWorkflow.js';
 import {updateRetailFault} from '../services/retailFaultUpdateService.js';
@@ -55,19 +55,23 @@ test('isolated PostgreSQL persists ticket+audit atomically and links only explic
   sql(`create role anon;create role authenticated;create role service_role;
   create table profiles(id uuid primary key,auth_user_id uuid,employee_code text,role text,is_active boolean,status text,state text);
   create table reliance_retail_store_master(id uuid primary key,store_code text,state text,status text,owner_id uuid);
+  create table retail_attendance_aop_versions(id uuid primary key);
+  create table fault_tracker_import_batches(id uuid primary key);
   create table fault_tracker_tickets(id uuid primary key,import_batch_id uuid,store_code text,is_active boolean,stage text,stage_group text,remarks text,raw_row jsonb,metadata jsonb default '{}',updated_at timestamptz default now());
   create table fault_tracker_ticket_updates(id uuid primary key default gen_random_uuid(),ticket_id uuid,updated_by_auth_user_id uuid,updated_by_employee_code text,update_type text,previous_stage text,new_stage text,remarks text,metadata jsonb,created_at timestamptz default now());
-  create table client_deep_cleaning_schedules(id uuid primary key,retail_store_id uuid,scheduled_date date,assigned_fo_profile_id uuid,status text,source_reference text,metadata jsonb default '{}',completed_at timestamptz,updated_at timestamptz default now(),created_at timestamptz);
-  create table retail_provisional_proposals(id uuid,kind text,status text,target_store uuid,decided_by uuid,proposed_by uuid);
+  create table client_deep_cleaning_schedules(id uuid primary key,retail_store_id uuid,scheduled_date date,assigned_fo_profile_id uuid,status text check(status in ('Planned','Completed','Not Done','Cancelled')),source_reference text unique,metadata jsonb not null default '{}',completed_at timestamptz,updated_at timestamptz default now(),created_at timestamptz,unique(retail_store_id,scheduled_date));
+  create table retail_provisional_proposals(id uuid,kind text,status text check(status in ('PENDING','APPROVED','REJECTED')),target_store uuid,decided_by uuid,proposed_by uuid);
   create table fo_activity_submissions(id uuid primary key,employee_code text,activity_type text,status text,store_code text,metadata jsonb,submitted_at timestamptz);
   create table fo_activity_uploads(id uuid primary key default gen_random_uuid(),submission_id uuid,employee_code text,activity_type text,store_code text,uploaded_at timestamptz,storage_bucket text,upload_role text,file_type text,file_size integer,file_url text,file_name text);
   create table reliance_retail_management_audit(action text,entity_type text,entity_id uuid,actor_profile_id uuid,before_state jsonb,after_state jsonb);
   create schema storage;create table storage.objects(bucket_id text,name text);
+  create table storage.buckets(id text primary key,public boolean);insert into storage.buckets values('fo-activity-uploads',false);
   create function retail_unified_access(actor uuid,statecode text,action text) returns boolean language sql as $$select exists(select 1 from profiles p where p.id=actor and p.is_active and (p.role='Admin' or p.state=statecode))$$;
   create function retail_unified_owner(store uuid,at_time timestamptz) returns jsonb language sql as $$select jsonb_build_object('known',true,'fo_profile_id',owner_id) from reliance_retail_store_master where id=store$$;
   insert into profiles values('${admin}','${id(101)}','ADMIN','Admin',true,'Active','TN'),('${fo}','${id(102)}','FO1','FO',true,'Active','TN'),('${mis}','${id(103)}','MIS','MIS',true,'Active','KA');
   insert into reliance_retail_store_master values('${store}','T1','TN','Active','${fo}');
   insert into fault_tracker_tickets(id,store_code,is_active,stage,raw_row,updated_at) values('${ticket}','T1',true,${q(RETAIL_FAULT_STAGES[0])},'{"source":"unchanged"}','2026-10-01');`);
+  sql(fs.readFileSync(new URL('../../supabase/verification/retail_workflow_updates_preinstall.sql',import.meta.url),'utf8'));
   sql(fs.readFileSync(new URL('../../supabase/proposals/retail_fault_tracker_updates.sql',import.meta.url),'utf8'));
   const request=randomUUID(),update=(actor=admin,stage=RETAIL_FAULT_STAGES[5],expected='2026-10-01',req=request)=>`select rpc_retail_fault_update('${actor}','${ticket}',${q(stage)},'Genuine work record',${q(expected)},'${req}');`;
   assert.throws(()=>sql(update(mis)),e=>/manager required/.test(String(e.stderr)));
@@ -82,13 +86,19 @@ test('isolated PostgreSQL persists ticket+audit atomically and links only explic
   assert.equal(sql('select count(*) from fault_tracker_ticket_updates'),'1','Failed ticket write must roll back its audit insert');
   sql('drop trigger test_ticket_failure on fault_tracker_tickets;');
   assert.equal(sql("select has_function_privilege('authenticated','rpc_retail_fault_update(uuid,uuid,text,text,timestamptz,uuid)','EXECUTE')"),'f');
-  sql(`insert into retail_provisional_proposals values('${proposal}','DC_SCHEDULE','APPLIED','${store}','${id(104)}','${admin}');
+  sql(`insert into retail_provisional_proposals values('${proposal}','DC_SCHEDULE','APPROVED','${store}','${id(104)}','${admin}');
   insert into client_deep_cleaning_schedules(id,retail_store_id,scheduled_date,status,source_reference,created_at) values('${plan}','${store}','2026-10-31','Planned','${proposal}','2026-10-30');
   insert into fo_activity_submissions values('${submission}','FO1','deep_cleaning','submitted','T1','{"pending_images":false,"activity_date":"2026-10-31","state":"TN"}','2026-10-31 00:00Z');`);
   for(const kind of ['before','after']){const path=`FO1/2026-10-31/deep_cleaning/${submission}/${kind}.jpg`;sql(`insert into fo_activity_uploads(submission_id,employee_code,activity_type,store_code,uploaded_at,storage_bucket,upload_role,file_type,file_size,file_url,file_name) values('${submission}','FO1','deep_cleaning','T1',now(),'fo-activity-uploads','deep_cleaning_${kind}','image/jpeg',1,'fo-activity-uploads/${path}','${kind}.jpg');insert into storage.objects values('fo-activity-uploads','${path}');`);}
   sql(fs.readFileSync(new URL('../../supabase/proposals/retail_cleaning_fo_link.sql',import.meta.url),'utf8'));
   const link=(actor=admin)=>`select rpc_retail_cleaning_link_fo('${actor}','${plan}','${submission}');`;
   assert.throws(()=>sql(link(mis)),e=>/Admin required/.test(String(e.stderr)));
+  assert.throws(()=>sql(link()),e=>/Independently approved/.test(String(e.stderr)));
+  sql(`insert into reliance_retail_management_audit(action,entity_type,entity_id,actor_profile_id,after_state) values('UNIFIED_APPLY','proposal','${proposal}','${admin}','{"proposal_id":"${proposal}","kind":"DC_SCHEDULE","store_id":"${store}","changes":{"scheduled_date":"2026-10-31"}}');`);
+  sql("update reliance_retail_management_audit set after_state=jsonb_set(after_state,'{changes,scheduled_date}','\"2026-10-30\"');");assert.throws(()=>sql(link()),e=>/Independently approved/.test(String(e.stderr)));sql("update reliance_retail_management_audit set after_state=jsonb_set(after_state,'{changes,scheduled_date}','\"2026-10-31\"');");
+  sql(`update profiles set role=null where id='${admin}';`);assert.throws(()=>sql(link()),e=>/Admin required/.test(String(e.stderr)));
+  sql(`update profiles set role='QPMSADMIN' where id='${admin}';`);
+  sql(`update storage.buckets set public=true;`);assert.throws(()=>sql(link()),e=>/Private legacy FO/.test(String(e.stderr)));sql('update storage.buckets set public=false;');
   sql(`update retail_provisional_proposals set decided_by=proposed_by;`);assert.throws(()=>sql(link()),e=>/Independently approved/.test(String(e.stderr)));sql(`update retail_provisional_proposals set decided_by='${id(104)}';`);
   sql(`update fo_activity_submissions set store_code=null;`);assert.throws(()=>sql(link()),e=>/Verified submitted/.test(String(e.stderr)));sql("update fo_activity_submissions set store_code='T1';");
   sql(`update client_deep_cleaning_schedules set assigned_fo_profile_id='${mis}';`);assert.throws(()=>sql(link()),e=>/FO ownership/.test(String(e.stderr)));sql('update client_deep_cleaning_schedules set assigned_fo_profile_id=null;');
@@ -96,8 +106,27 @@ test('isolated PostgreSQL persists ticket+audit atomically and links only explic
   sql(`update fo_activity_submissions set metadata=jsonb_set(metadata,'{pending_images}','false'),submitted_at='2026-10-29';`);assert.throws(()=>sql(link()),e=>/Verified submitted/.test(String(e.stderr)));
   sql(`update fo_activity_submissions set submitted_at='2026-10-31 00:00Z';delete from storage.objects where name like '%after.jpg';`);assert.throws(()=>sql(link()),e=>/before and after/.test(String(e.stderr)));
   sql(`insert into storage.objects values('fo-activity-uploads','FO1/2026-10-31/deep_cleaning/${submission}/after.jpg');`);
-  const before=sql('select md5(row_to_json(f)::text) from fo_activity_submissions f');sql(link());sql(link());assert.equal(sql('select status from client_deep_cleaning_schedules'),'Completed');assert.equal(sql('select count(*) from reliance_retail_management_audit'),'1');assert.equal(sql('select md5(row_to_json(f)::text) from fo_activity_submissions f'),before);
+  const before=sql('select md5(row_to_json(f)::text) from fo_activity_submissions f');sql(link());sql(link());assert.equal(sql('select status from client_deep_cleaning_schedules'),'Completed');assert.equal(sql("select count(*) from reliance_retail_management_audit where action='VERIFIED_FO_CLEANING_LINK'"),'1');assert.equal(sql('select md5(row_to_json(f)::text) from fo_activity_submissions f'),before);
   assert.throws(()=>sql(`select rpc_retail_cleaning_link_source('${mis}','${plan}');`),e=>/Outside schedule scope/.test(String(e.stderr)));
   assert.equal(sql("select has_function_privilege('authenticated','rpc_retail_cleaning_link_fo(uuid,uuid,uuid)','EXECUTE')"),'f');
+  for(const signature of ['rpc_retail_cleaning_link_fo(uuid,uuid,uuid)','rpc_retail_cleaning_link_source(uuid,uuid)','rpc_retail_fault_update(uuid,uuid,text,text,timestamptz,uuid)','rpc_retail_fault_update_capability()']){
+   for(const role of ['anon','authenticated'])assert.equal(sql(`select has_function_privilege('${role}','${signature}','EXECUTE')`),'f');
+   assert.equal(sql(`select has_function_privilege('service_role','${signature}','EXECUTE')`),'t');
+   assert.equal(sql(`select prosecdef and proconfig @> array['search_path=pg_catalog, public'] from pg_proc where oid='${signature}'::regprocedure`),'t');
+  }
+  sql(fs.readFileSync(new URL('../../supabase/verification/retail_workflow_updates_postinstall.sql',import.meta.url),'utf8'));
+  assert.throws(()=>sql('set role authenticated;'+link()),e=>/permission denied/.test(String(e.stderr)));
+  sql('set role service_role;'+link());
+  sql('create role unintended_rpc_reader;grant execute on function rpc_retail_cleaning_link_source(uuid,uuid) to unintended_rpc_reader;');
+  assert.throws(()=>sql(fs.readFileSync(new URL('../../supabase/verification/retail_workflow_updates_postinstall.sql',import.meta.url),'utf8')),e=>/Unexpected RPC execution grantee/.test(String(e.stderr)));
+  sql('revoke execute on function rpc_retail_cleaning_link_source(uuid,uuid) from unintended_rpc_reader;');
+  const concurrent=text=>new Promise((resolve,reject)=>{
+   const child=spawn('docker',['exec','-i',container,'psql','-U','postgres','-qAt','-v','ON_ERROR_STOP=1']);let output='',errors='';
+   child.stdout.on('data',x=>{output+=x;});child.stderr.on('data',x=>{errors+=x;});child.on('error',reject);child.on('close',code=>resolve({code,output,errors}));child.stdin.end(text);
+  });
+  const current=sql('select updated_at from fault_tracker_tickets'),beforeHistory=Number(sql('select count(*) from fault_tracker_ticket_updates'));
+  const race=await Promise.all([concurrent(update(admin,RETAIL_FAULT_STAGES[6],current,randomUUID())),concurrent(update(admin,RETAIL_FAULT_STAGES[6],current,randomUUID()))]);
+  assert.equal(race.filter(r=>r.code===0).length,1);assert.match(race.find(r=>r.code!==0).errors,/Ticket changed/);assert.equal(Number(sql('select count(*) from fault_tracker_ticket_updates')),beforeHistory+1);
+  const replay=await Promise.all([concurrent(link()),concurrent(link())]);assert.ok(replay.every(r=>r.code===0));assert.equal(sql("select count(*) from reliance_retail_management_audit where action='VERIFIED_FO_CLEANING_LINK'"),'1');
  }finally{docker(['rm','--force',container]);}
 });
