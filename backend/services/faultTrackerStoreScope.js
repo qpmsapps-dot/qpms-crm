@@ -67,6 +67,19 @@ export async function scopedFaultTrackerReport(client,profile,input,authorizatio
  ]);
  const scoped=scopeFaultTickets(source,master,{...authorization,profileState:profile.state,grants});
  const filtered=filterScopedFaultTickets(scoped.tickets,input,authorization.stateCode);
+ let historyAvailable=false;
+ try{
+  if(typeof client.rpc==='function'){
+   const capability=await client.rpc('rpc_retail_fault_update_capability');
+   if(!capability.error&&capability.data===true){
+    const history=[];
+    for(let i=0;i<filtered.length;i+=200)history.push(...await pages(()=>client.from('fault_tracker_ticket_updates').select('id,ticket_id,update_type,previous_stage,new_stage,remarks,created_at,updated_by_employee_code,metadata').in('ticket_id',filtered.slice(i,i+200).map(t=>t.id)).order('created_at')));
+    for(const ticket of filtered)ticket.verified_updates=history.filter(e=>e.ticket_id===ticket.id&&e.metadata?.retail_workflow_version===1);
+    historyAvailable=true;
+   }
+  }
+ }catch{/* Missing history is unavailable, never an invented zero completion count. */}
+ for(const ticket of filtered){ticket.can_update=historyAvailable&&authorization.isAdmin===true;if(!historyAvailable)delete ticket.verified_updates;}
  if((input.ticket_id||input.id||input.ticket_no)&&!filtered.length)throw fail(404,'Ticket unavailable in the authorized operational scope.');
  const batches=await rows(client.from('fault_tracker_import_batches').select('*').eq('id',batchId).limit(1)),batch=batches[0];
  let tickets=filtered;

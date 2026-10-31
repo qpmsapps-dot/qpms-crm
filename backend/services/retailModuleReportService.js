@@ -8,6 +8,7 @@ import {attendanceAccess} from './retailAttendanceService.js';
 import {CLIENT_DEEP_CLEANING_BUCKET,buildClientDeepCleaningStoragePath,verifyClientDeepCleaningStorageObject} from './clientDeepCleaningService.js';
 import {retailOperationsSource} from './retailOperationsService.js';
 import {maintenanceReport,thermographyReport} from '../shared/retailOperations.js';
+import {linkedFoCleaningSource,signLinkedFoCleaningEvidence} from './retailCleaningFoLinkService.js';
 const fail=(statusCode,message)=>Object.assign(Error(message),{statusCode});
 export function moduleReportRange(input={}) {
  let to,from;try{to=validDate(input.to||indiaToday());from=validDate(input.from||to.slice(0,7)+'-01');}catch{throw fail(400,'Select valid reporting dates.');}
@@ -23,7 +24,14 @@ async function authorizedSnapshot(client,profile,range){
 export async function retailCleaningReport(client,profile,input={}) {
  assertRetailAccess(profile,'deepCleaning');
  if(profile.is_active===false||['INACTIVE','DISABLED'].includes(String(profile.status||'').toUpperCase()))throw fail(403,'Active Retail access required.');
- const range=moduleReportRange(input),snapshot=await authorizedSnapshot(client,profile,range);
+ const range=moduleReportRange(input),original=await authorizedSnapshot(client,profile,range);
+ const snapshot={...original,deep_cleaning:[...(original.deep_cleaning||[])],images:[...(original.images||[])]};
+ const linked=(snapshot.schedules||[]).filter(s=>s.metadata?.retail_fo_completion);
+ if(linked.length>1000)throw fail(413,'Narrow the schedule reporting range.');
+ for(const schedule of linked){
+  const source=await linkedFoCleaningSource(client,profile,schedule.id);
+  if(source){snapshot.deep_cleaning=[...(snapshot.deep_cleaning||[]),{...source,uploads:undefined}];snapshot.images=[...(snapshot.images||[]),...(source.uploads||[]).map(u=>({submission_id:source.id,photo_type:u.upload_role==='deep_cleaning_before'?'before':'after',uploaded:true}))];}
+ }
  return {...range,...cleaningReport(snapshot,{state:input.state,store:input.store,to:range.to}),stores:snapshot.stores.map(({id,store_code,store_name,state})=>({id,store_code,store_name,state}))};
 }
 export async function retailCleaningEvidence(client,profile,id,input={}) {
@@ -31,6 +39,7 @@ export async function retailCleaningEvidence(client,profile,id,input={}) {
  const report=await retailCleaningReport(client,profile,input);
  const submission=report.submissions.find(s=>s.id===id);
  if(!submission)throw fail(403,'Submission is outside the authorized report scope.');
+ if(submission.source_kind==='verified_fo_link')return signLinkedFoCleaningEvidence(client,profile,submission.schedule_id);
  const prefix=buildClientDeepCleaningStoragePath({submission:{...submission,store_code:submission.store_code||submission.store.store_code},uploadType:'before',mimeType:'image/jpeg',id:'prefix'}).split('/').slice(0,-2).join('/')+'/';
  const {data,error}=await client.from('client_deep_cleaning_uploads').select('id,submission_id,upload_type,storage_bucket,storage_path,original_filename,mime_type,file_size').eq('submission_id',id).eq('upload_status','uploaded').order('id').limit(101);
  if(error)throw error;if(data.length>100)throw fail(413,'This submission exceeds the evidence viewing limit.');

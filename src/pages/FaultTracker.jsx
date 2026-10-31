@@ -32,6 +32,7 @@ import {
 } from 'recharts';
 import * as XLSX from 'xlsx';
 import {scopedFaultExportRows} from '../utils/faultTrackerExport.js';
+import {verifiedWeeklyCompletions} from '../../backend/shared/retailFaultWorkflow.js';
 import { useAuth } from '../context/auth-context.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { authenticatedFetch } from '../services/api.js';
@@ -367,7 +368,7 @@ function buildManagementData(tickets) {
     .sort((a, b) => b.count - a.count)[0] || { bucket: '> 90 Days', count: 0 };
   const bestState = groupedStates
     .map((state) => ({ state, score: 0, count: stateCounts[state] || 0 }))
-    .sort((a, b) => b.score - a.score || b.count - a.count)[0] || { state: 'TN', score: 84, count: 880 };
+    .sort((a, b) => b.score - a.score || b.count - a.count)[0] || { state: null, score: null, count: 0 };
 
   return {
     hasImport,
@@ -375,7 +376,7 @@ function buildManagementData(tickets) {
     pendingTickets,
     criticalTickets,
     averageAgeing,
-    completedThisWeek: totalFaults ? Math.round(totalFaults * 0.11) : 0,
+    completedThisWeek: verifiedWeeklyCompletions(tickets),
     performanceScore: totalFaults ? Math.max(0, Math.min(100, Math.round(((totalFaults - pendingTickets) / Math.max(1, totalFaults)) * 100))) : 0,
     stateCounts,
     criticalByState,
@@ -608,11 +609,15 @@ function ticketFromDatabaseRow(row) {
     supName: row.supervisor_name || '',
     createdAtRaw: row.created_at_source || '',
     createdAt: row.created_at_source || '',
-    updatedAt: row.updated_at_source || '',
+    updatedAt: row.verified_updates?.length ? row.updated_at : row.updated_at_source || '',
     ifmsStage: row.stage || '',
     remarks: row.remarks || '',
     lastUpdatedBy: row.metadata?.lastUpdatedBy || '',
     rawRow: row.raw_row || {},
+    version:row.updated_at,
+    importBatchId:row.import_batch_id,
+    canUpdate:row.can_update===true,
+    verifiedUpdates:Array.isArray(row.verified_updates)?row.verified_updates:undefined,
   };
 }
 
@@ -713,7 +718,7 @@ function buildPcSummaryRows(tickets) {
       average: averageAgeing(scoped),
       oldest: oldestAgeing(scoped),
       lastUpdated: formatDateTime(newestTicketDate(scoped)),
-      trend: stage === 'Grand Total' ? '—' : '0 (0.0%)',
+      trend: 'N/A',
     };
   });
 }
@@ -1329,7 +1334,7 @@ function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, ca
     { label: 'Pending Tickets', value: formatNumber(data.pendingTickets), trend: safePerformanceMonth === 'all' ? 'Open in-scope tickets' : monthScopeLabel, icon: Clock3, tone: 'orange' },
     { label: 'Critical Tickets', value: formatNumber(data.criticalTickets), trend: safePerformanceMonth === 'all' ? 'Ageing risk for in-scope tickets' : monthScopeLabel, icon: AlertTriangle, tone: 'red' },
     { label: 'Avg Ageing', value: `${data.averageAgeing.toFixed(1)} Days`, trend: safePerformanceMonth === 'all' ? 'Calculated from imported rows' : monthScopeLabel, icon: CalendarDays, tone: 'purple' },
-    { label: 'Completed This Week', value: formatNumber(data.completedThisWeek), trend: safePerformanceMonth === 'all' ? 'Estimated from current dump' : monthScopeLabel, icon: CheckCircle2, tone: 'green' },
+    { label: 'Completed This Week', value: data.completedThisWeek==null?'N/A':formatNumber(data.completedThisWeek), trend: 'Verified saved completion events only; imported history is not inferred', icon: CheckCircle2, tone: 'green' },
     { label: 'South Performance Score', value: `${data.performanceScore}%`, trend: 'Calculated from open vs total', icon: Star, tone: 'blue' },
   ];
 
@@ -1408,6 +1413,7 @@ export default function FaultTracker({ retailScope = false }) {
   const [manualViewMode, setManualViewMode] = useState('');
   const [ticketPage, setTicketPage] = useState(1);
   const [isDetailedViewOpen, setIsDetailedViewOpen] = useState(false);
+  const [updateBusy,setUpdateBusy]=useState(false);
 
   const userId = user?.id || '';
   const demoReadOnly = isReadOnlyUser(user);
@@ -1464,11 +1470,13 @@ export default function FaultTracker({ retailScope = false }) {
       setReconciliation(result.reconciliation||null);
       setFilters(emptyFilters);
       setTicketPage(1);
+      return true;
     } catch (error) {
       setTickets([]);
       setActiveImportBatch(null);
       setReconciliation(null);
       setImportError(error?.message || 'Unable to load saved Fault Tracker tickets.');
+      return false;
     } finally {
       setIsFaultTrackerLoading(false);
     }
@@ -1520,27 +1528,30 @@ export default function FaultTracker({ retailScope = false }) {
   }
 
   function openUpdate(ticket) {
-    if (demoReadOnly) {
+    if (demoReadOnly || !ticket.canUpdate) {
       setImportError(demoReadOnlyMessage);
       return;
     }
-    setEditingTicket(ticket);
+    setEditingTicket({...ticket,requestId:crypto.randomUUID()});
     setDraftStage(ticket.ifmsStage || ifmsStages[0]);
     setDraftRemarks(ticket.remarks || '');
   }
 
-  function saveUpdate() {
+  async function saveUpdate() {
     if (demoReadOnly) {
       setImportError(demoReadOnlyMessage);
       return;
     }
-    const updatedBy = user?.displayName || user?.name || user?.email || 'Demo User';
-    setTickets((current) => current.map((ticket) => (
-      ticket.id === editingTicket.id
-        ? { ...ticket, ifmsStage: draftStage, remarks: draftRemarks, lastUpdatedBy: updatedBy }
-        : ticket
-    )));
-    setEditingTicket(null);
+    if(updateBusy||!editingTicket?.canUpdate)return;
+    setUpdateBusy(true);setImportError('');
+    try{
+      await faultTrackerApiRequest({method:'PATCH',url:`/api/fault-tracker/tickets/${encodeURIComponent(editingTicket.id)}`,data:{stage:draftStage,remarks:draftRemarks,expected_updated_at:editingTicket.version,import_batch_id:editingTicket.importBatchId,request_id:editingTicket.requestId}});
+      const refreshed=await loadFaultTrackerTickets({import_batch_id:editingTicket.importBatchId,latest:false});
+      if(refreshed)setEditingTicket(null);
+      else setImportError('Update saved, but the saved record could not be reloaded. Refresh and reopen before making another change.');
+    }
+    catch(error){setImportError(error.message||'Update was not confirmed. Refresh before retrying.');}
+    finally{setUpdateBusy(false);}
   }
 
   if (viewMode === 'Management View') {
@@ -1802,7 +1813,7 @@ export default function FaultTracker({ retailScope = false }) {
                     <td className="max-w-64 px-3 py-2.5 font-semibold text-slate-600">{ticket.remarks || '-'}</td>
                     <td className="px-3 py-2.5 font-semibold text-slate-600">{ticket.lastUpdatedBy || '-'}</td>
                     <td className="px-3 py-2.5">
-                      {demoReadOnly ? (
+                      {demoReadOnly || !ticket.canUpdate ? (
                         <span className="rounded-lg bg-slate-100 px-3 py-1.5 text-[11px] font-black text-slate-500">Read-only</span>
                       ) : (
                         <button onClick={() => openUpdate(ticket)} className="rounded-lg bg-slate-950 px-3 py-1.5 text-[11px] font-black text-white hover:bg-slate-800">Update</button>
@@ -1838,21 +1849,23 @@ export default function FaultTracker({ retailScope = false }) {
               </div>
               <label className="space-y-1.5">
                 <span className="text-xs font-black uppercase tracking-wide text-slate-500">IFMS Stage</span>
-                <select value={draftStage} onChange={(event) => setDraftStage(event.target.value)} className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm font-semibold text-slate-800 outline-none focus:border-qpms-500 focus:ring-4 focus:ring-qpms-100">
+                <select aria-label="Update IFMS stage" value={draftStage} onChange={(event) => setDraftStage(event.target.value)} className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm font-semibold text-slate-800 outline-none focus:border-qpms-500 focus:ring-4 focus:ring-qpms-100">
                   {ifmsStages.map((stage) => <option key={stage} value={stage}>{stage}</option>)}
                 </select>
               </label>
               <label className="space-y-1.5">
                 <span className="text-xs font-black uppercase tracking-wide text-slate-500">Remarks</span>
-                <textarea value={draftRemarks} onChange={(event) => setDraftRemarks(event.target.value)} rows={5} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-800 outline-none focus:border-qpms-500 focus:ring-4 focus:ring-qpms-100" />
+                <textarea aria-label="Update remarks" value={draftRemarks} onChange={(event) => setDraftRemarks(event.target.value)} rows={5} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-800 outline-none focus:border-qpms-500 focus:ring-4 focus:ring-qpms-100" />
               </label>
               <div className="flex items-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-800">
                 <AlertTriangle className="h-4 w-4 shrink-0" />
-                This save updates only frontend local state for the current browser session.
+                Save records the authorized update and history. Imported source fields are retained.
               </div>
+              {importError&&<p role="alert">{importError}</p>}
+              <section aria-label="Saved ticket history"><h3>Saved history</h3>{(editingTicket.verifiedUpdates||[]).map(e=><p key={e.id}>{e.created_at} · {e.previous_stage} → {e.new_stage} · {e.updated_by_employee_code} · {e.remarks}</p>)}</section>
               <div className="flex justify-end gap-2">
                 <button onClick={() => setEditingTicket(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-black text-slate-600 hover:bg-slate-50">Cancel</button>
-                <button onClick={saveUpdate} className="rounded-xl bg-qpms-600 px-4 py-2.5 text-sm font-black text-white hover:bg-qpms-700">Save</button>
+                <button disabled={updateBusy} onClick={()=>void saveUpdate()} className="rounded-xl bg-qpms-600 px-4 py-2.5 text-sm font-black text-white hover:bg-qpms-700">{updateBusy?'Saving…':'Save'}</button>
               </div>
             </div>
           </aside>

@@ -1,4 +1,5 @@
 import {scopedFaultTrackerReport} from './services/faultTrackerStoreScope.js';
+import {updateRetailFault} from './services/retailFaultUpdateService.js';
 import { ownedEndDayKmStatus } from './services/foOwnedEndDayKmService.js';
 import { createKmReconciliationRouter } from './routes/foKmReconciliationRoutes.js';
 import { processKmReconciliationJobs } from './services/foKmReconciliationWorker.js';
@@ -5286,6 +5287,10 @@ app.get('/api/fault-tracker/imports', requireSupabaseJwtOrDemoApiRead, requireFa
   }
 });
 
+app.patch('/api/fault-tracker/tickets/:id',requireSupabaseJwt,requireFaultTrackerManage,async(request,response)=>{
+ try{response.json({ok:true,result:await updateRetailFault(requireServiceRoleSupabase(),request.profile,request.params.id,request.body||{},{readAll:true,isAdmin:faultTrackerCanManage(request.profile),stateCode:faultTrackerStateCode})});}
+ catch(error){respondFaultTrackerError(response,error);}
+});
 app.get('/api/fault-tracker/tickets', requireSupabaseJwtOrDemoApiRead, requireFaultTrackerAccess, async (request, response) => {
   try {
     const result = await scopedFaultTrackerReport(requireServiceRoleSupabase(),request.profile,request.query,{

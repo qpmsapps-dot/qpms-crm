@@ -1,5 +1,7 @@
 # Reliance Retail workflow audit matrix
 
+**Correction notice:** this is the original 130-action baseline audit at `212171ff`. The Fault Tracker browser-only Save, estimated weekly KPI and missing legacy FO linkage findings are superseded locally by [Critical workflow corrections](MIS_OPERATING_GUIDE.md#critical-workflow-corrections-after-the-baseline-audit). Production installation and authenticated acceptance remain pending. No new Training authoring permissions are granted.
+
 Audit date: 31 October 2026. Application source baseline: `0a9da9135357aa28eb83a3bf55d0ce5d3ea5e9b2`. Documentation changes do not deploy this candidate or change any business rule.
 
 ## Evidence and status rules

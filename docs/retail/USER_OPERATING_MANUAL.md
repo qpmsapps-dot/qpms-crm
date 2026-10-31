@@ -1,5 +1,7 @@
 # Reliance Retail: practical user manual
 
+**Correction notice:** this manual retains the `212171ff` baseline/screenshots. Fault Tracker browser-only Save, estimated weekly completion and missing legacy FO linkage findings are superseded locally by [Critical workflow corrections](MIS_OPERATING_GUIDE.md#critical-workflow-corrections-after-the-baseline-audit). Production installation and authenticated acceptance remain pending. Training authoring permissions are unchanged.
+
 Reviewed 31 October 2026 against committed candidate `0a9da9135357aa28eb83a3bf55d0ce5d3ea5e9b2`.
 
 **Read this first:** the screenshots are actual application screens at the **local read-only production-data snapshot preview**, not authenticated live-production acceptance. Its banner says **NOT DEPLOYED · NO SAVES**. Do not use it to prove a save. The candidate's authenticated production workflows are **NOT VERIFIED IN PRODUCTION**. Obtain your existing authorized login; never borrow another user's password. New MIS accounts/state permissions still require configuration by the authorized administrator. Training authoring remains FO-only.

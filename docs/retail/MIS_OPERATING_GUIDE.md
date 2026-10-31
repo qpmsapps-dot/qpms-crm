@@ -6,7 +6,7 @@ Documentation reviewed against candidate `0a9da9135357aa28eb83a3bf55d0ce5d3ea5e9
 - [Complete action audit and role matrix](WORKFLOW_AUDIT_MATRIX.md): 13 audit checks per module/tool, actual API/table paths, partial/missing functions and production-verification limits.
 - [Screenshot provenance](screenshots/20261031/manifest.json): ten local read-only snapshot screens, not authenticated production acceptance.
 
-**Audit corrections:** imported Fault Tracker **Save is local-only**, not a persistent ticket update. The committed FO Deep Cleaning form uses legacy activity tables; its connection to the dedicated Retail schedule/completion report is **PARTIAL / NOT VERIFIED IN PRODUCTION**. Manpower Vacancy is **MISSING** beyond its Under Development screen. Technical/MEPC MIS and management access must not be assumed from names; see the role matrix. No permissions or application code were changed for this documentation audit.
+**Baseline audit at `212171ff`:** Fault Tracker Save was browser-only and legacy FO cleaning linkage was missing. The local corrections below supersede those findings. Manpower Vacancy remains MISSING beyond its Under Development screen. Technical/MEPC MIS and management access must not be assumed from names; see the role matrix. Production authenticated acceptance remains pending.
 
 Use your existing authorized account. Available stores, states and actions follow its existing permissions. Read-only previews do not save operational records. Production authenticated acceptance remains **PENDING**; local workflow tests are not production sign-off.
 
@@ -19,6 +19,32 @@ Use your existing authorized account. Available stores, states and actions follo
 | CM/PM | Choose **Record CM/PM Call** at the top-right. For the current month, CM or PM is selected from the server's India date. Select a permitted store and review its details; choose **Record CM Call** or **Record PM Call**, then **Confirm save**. Refresh and confirm the completed row. Export monthly state/store reports. |
 | Thermography | Choose **Schedule Thermography** at the top-right. Select a store, review its details and choose a scheduled date. Select **Save scheduled inspection**, then confirm. On or after the scheduled date, use **Record completion** and confirm. After client approval, use **Record client approval** and confirm. Review due dates and overdue/late status. |
 | Fault Tracker | Use the existing Fault Tracker; filter state, store, stage and date, then export scoped tickets. The last production read-only reconciliation found 680 eligible tickets in the latest 2,979-ticket import. Additional user scope can reduce that number. Source tickets are retained. |
+
+## Critical workflow corrections after the baseline audit
+
+These are local candidate corrections. Neither new SQL proposal was installed in production by this task. The original 130-action matrix and screenshots remain baseline evidence; the affected Fault Tracker and Deep Cleaning findings below supersede them locally.
+
+### Fault Tracker saved updates
+
+1. Existing permitted ticket managers open **Fault Tracker**, choose **Project Coordinator / MIS View**, **Detailed View**, then **Update**. Ordinary MIS read access is not new edit permission.
+2. Select **IFMS Stage**, enter **Remarks**, then **Save**. The authenticated PATCH endpoint checks the unchanged active unique Store Code scope. A service-only transaction updates the existing ticket and appends existing ticket-update history atomically.
+3. Failed saves leave the drawer open with an error. After a successful save, refresh and reopen; check **Saved history**. Stale updates are refused and identical request retries are idempotent. Imported raw rows/source dates and excluded tickets are retained.
+4. **Export scoped tickets** includes saved stage, remarks and workflow history for the filtered authorized rows.
+5. **Completed This Week** counts distinct scoped tickets with verified saved work-completion transition events since Monday 00:00 India time. Imported stages do not prove completion dates. Unavailable capability/history shows **N/A**; an available empty event history means zero verified saved events. Unsupported trend values also show N/A.
+
+### Deep Cleaning: explicit verified FO linkage
+
+1. Preserve independent request/review/Admin apply. The existing FO completes genuine work and submits stored before/after images.
+2. An authorized Admin obtains the exact existing FO submission ID through authorized operational review. In the relevant Scheduled row open **Link verified FO completion**, enter **Existing FO submission ID**, tick the verification confirmation and choose **Confirm verified link**.
+3. The transaction requires independent approval/application, unique exact store identity and state/date, known historical FO ownership, compatible assigned FO, submission after schedule creation, completed uploads and physical before/after objects. Missing or mismatched evidence fails without a partial link. No historical candidates are guessed or backfilled.
+4. Refresh: only the explicitly linked schedule becomes Completed. Completion time, source ID, verifying Admin and audit are retained. Reporting/export includes the linked work/image counts. **Before / after evidence** and **View evidence** use scoped, short-lived links.
+5. Evidence access checks user scope before signing, requires a private legacy bucket, and verifies exact object paths and sizes. The repository's older legacy bucket policy permits broad authenticated access. The effective production policy and denied-scope storage behavior are NOT VERIFIED IN PRODUCTION and remain a release blocker. No storage permissions were changed here.
+
+### Database prerequisites and Training boundary
+
+Separately reviewed installation prerequisites: `supabase/proposals/retail_fault_tracker_updates.sql` and `supabase/proposals/retail_cleaning_fo_link.sql`. Both reuse existing tables, fix search paths and permit execution only to service_role. Unsupported saves fail closed. SQL persistence was exercised only in disposable PostgreSQL.
+
+Training create/edit/submit remains FO-only. Admin/MIS authoring first needs an explicitly approved policy defining eligible roles, HK/MEPC and state/store scope, on-behalf-of FO/attendance/visit attribution, evidence ownership, submit/cancel rules and audit responsibility. Then the backend role/context checks, matching database/RLS rules and a real authoring form require implementation and testing. This correction grants no new write permissions.
 
 ## Deep Cleaning: request to reporting
 
