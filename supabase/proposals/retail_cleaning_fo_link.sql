@@ -1,5 +1,7 @@
 -- PROPOSAL ONLY: explicit Admin-verified linkage; no historical backfill or source copying.
 begin;
+set local lock_timeout='5s';
+set local statement_timeout='60s';
 create or replace function public.rpc_retail_cleaning_link_source(p_actor uuid,p_schedule uuid) returns jsonb
 language plpgsql security definer set search_path=pg_catalog,public as $$
 declare s public.client_deep_cleaning_schedules%rowtype;m public.reliance_retail_store_master%rowtype;f public.fo_activity_submissions%rowtype;u jsonb;owner jsonb;
