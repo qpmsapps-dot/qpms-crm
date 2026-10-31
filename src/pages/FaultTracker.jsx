@@ -31,6 +31,7 @@ import {
   YAxis,
 } from 'recharts';
 import * as XLSX from 'xlsx';
+import {scopedFaultExportRows} from '../utils/faultTrackerExport.js';
 import { useAuth } from '../context/auth-context.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { authenticatedFetch } from '../services/api.js';
@@ -589,14 +590,14 @@ function ticketFromDatabaseRow(row) {
   return {
     id: row.id,
     ticketNumber: row.ticket_no || '',
-    storeId: row.store_code || '',
+    storeId: row.canonical_store_code || row.store_code || '',
     storeName: row.store_name || '',
     status: row.stage || '',
     ageingDays: numberValue(row.ageing_days),
     ageingBucket: row.ageing_bucket || '',
     zone: 'south',
-    state: row.state_label || row.state_code || '',
-    groupedState: row.state_code || '',
+    state: row.operational_state_code || row.state_label || row.state_code || '',
+    groupedState: row.operational_state_code || row.state_code || '',
     category: row.category || '',
     subCategory: row.metadata?.subCategory || row.raw_row?.subCategory || row.raw_row?.['Sub Category'] || '',
     issueType: row.metadata?.issueType || row.raw_row?.issueType || row.raw_row?.['Issue Type'] || '',
@@ -1292,6 +1293,16 @@ function StageProgress({ tickets, selectedState, onSelectedStateChange }) {
   );
 }
 
+function exportScopedFaults(tickets) {
+  const book=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet(scopedFaultExportRows(tickets)),'Scoped IFMS tickets');
+  XLSX.writeFile(book,'Reliance_Retail_IFMS_Scoped_Tickets.xlsx');
+}
+function FaultStoreReconciliation({summary}) {
+  if(!summary)return null;
+  return <details className="mb-4 rounded-xl border border-slate-200 bg-white p-4 text-sm"><summary className="font-bold">Admin store-scope reconciliation</summary><p>Total imported tickets: {summary.imported_tickets.toLocaleString('en-IN')} · Matched in-scope tickets: {summary.matched_in_scope_tickets.toLocaleString('en-IN')} · Excluded out-of-scope tickets: {summary.excluded_tickets.toLocaleString('en-IN')}</p><p>Unmatched Store Codes ({summary.unmatched_store_codes.length}): {summary.unmatched_store_codes.join(', ')||'None'}</p><p className="text-xs text-slate-500">Source records are preserved. Operational dashboards, details and exports contain only eligible active Store Codes.</p></details>;
+}
+
 function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, canImport, onImport, isLoading, activeImportBatch }) {
   const [stageProgressState, setStageProgressState] = useState('');
   const monthOptions = useMemo(() => buildMonthOptions(tickets), [tickets]);
@@ -1311,12 +1322,12 @@ function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, ca
     [tickets, safePerformanceMonth],
   );
   const monthScopeLabel = safePerformanceMonth === 'all'
-    ? 'Imported South Zone dump'
+    ? 'Eligible active Retail Store Codes'
     : `Filtered by ${monthLabelFromKey(safePerformanceMonth)}`;
   const kpis = [
     { label: 'Total Faults', value: formatNumber(data.totalFaults), trend: monthScopeLabel, icon: FolderOpen, tone: 'blue' },
-    { label: 'Pending Tickets', value: formatNumber(data.pendingTickets), trend: safePerformanceMonth === 'all' ? 'Open tickets in full dump' : monthScopeLabel, icon: Clock3, tone: 'orange' },
-    { label: 'Critical Tickets', value: formatNumber(data.criticalTickets), trend: safePerformanceMonth === 'all' ? 'Ageing risk from full dump' : monthScopeLabel, icon: AlertTriangle, tone: 'red' },
+    { label: 'Pending Tickets', value: formatNumber(data.pendingTickets), trend: safePerformanceMonth === 'all' ? 'Open in-scope tickets' : monthScopeLabel, icon: Clock3, tone: 'orange' },
+    { label: 'Critical Tickets', value: formatNumber(data.criticalTickets), trend: safePerformanceMonth === 'all' ? 'Ageing risk for in-scope tickets' : monthScopeLabel, icon: AlertTriangle, tone: 'red' },
     { label: 'Avg Ageing', value: `${data.averageAgeing.toFixed(1)} Days`, trend: safePerformanceMonth === 'all' ? 'Calculated from imported rows' : monthScopeLabel, icon: CalendarDays, tone: 'purple' },
     { label: 'Completed This Week', value: formatNumber(data.completedThisWeek), trend: safePerformanceMonth === 'all' ? 'Estimated from current dump' : monthScopeLabel, icon: CheckCircle2, tone: 'green' },
     { label: 'South Performance Score', value: `${data.performanceScore}%`, trend: 'Calculated from open vs total', icon: Star, tone: 'blue' },
@@ -1331,6 +1342,7 @@ function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, ca
         canImport={canImport}
         onImport={onImport}
       />
+      <button className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold" onClick={()=>exportScopedFaults(scopedManagementTickets.filter(t=>!stageProgressState||t.groupedState===stageProgressState))}>Export scoped tickets</button>
       {isLoading ? (
         <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
           Loading saved Reliance Retail IFMS dump...
@@ -1338,7 +1350,7 @@ function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, ca
       ) : null}
       {activeImportBatch && tickets.length ? (
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-500">
-          Latest saved dump: {activeImportBatch.original_file_name || 'Pending Tickets'} • {formatNumber(activeImportBatch.ticket_count || tickets.length)} tickets • {formatDateTime(activeImportBatch.imported_at)}
+          Eligible tickets from saved dump: {activeImportBatch.original_file_name || 'Pending Tickets'} • {formatNumber(activeImportBatch.ticket_count || tickets.length)} tickets • {formatDateTime(activeImportBatch.imported_at)}
         </div>
       ) : null}
       {!tickets.length ? (
@@ -1388,6 +1400,7 @@ export default function FaultTracker({ retailScope = false }) {
   const [importError, setImportError] = useState('');
   const [isFaultTrackerLoading, setIsFaultTrackerLoading] = useState(false);
   const [activeImportBatch, setActiveImportBatch] = useState(null);
+  const [reconciliation,setReconciliation]=useState(null);
   const [filters, setFilters] = useState(emptyFilters);
   const [editingTicket, setEditingTicket] = useState(null);
   const [draftStage, setDraftStage] = useState('');
@@ -1448,11 +1461,13 @@ export default function FaultTracker({ retailScope = false }) {
       });
       setTickets((result.tickets || []).map(ticketFromDatabaseRow));
       setActiveImportBatch(result.import_batch || null);
+      setReconciliation(result.reconciliation||null);
       setFilters(emptyFilters);
       setTicketPage(1);
     } catch (error) {
       setTickets([]);
       setActiveImportBatch(null);
+      setReconciliation(null);
       setImportError(error?.message || 'Unable to load saved Fault Tracker tickets.');
     } finally {
       setIsFaultTrackerLoading(false);
@@ -1530,7 +1545,7 @@ export default function FaultTracker({ retailScope = false }) {
 
   if (viewMode === 'Management View') {
     return (
-      <ManagementView
+      <><FaultStoreReconciliation summary={canSwitchView?reconciliation:null}/><ManagementView
         tickets={tickets}
         viewMode={viewMode}
         onViewModeChange={setManualViewMode}
@@ -1539,7 +1554,7 @@ export default function FaultTracker({ retailScope = false }) {
         onImport={handleImport}
         isLoading={isFaultTrackerLoading}
         activeImportBatch={activeImportBatch}
-      />
+      /></>
     );
   }
 
@@ -1553,6 +1568,7 @@ export default function FaultTracker({ retailScope = false }) {
         canImport={canImport}
       />
 
+      <FaultStoreReconciliation summary={canSwitchView?reconciliation:null}/>
       {(importMessage || importError) ? (
         <div className={`rounded-2xl border px-4 py-3 text-sm font-semibold ${
           importError ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'
@@ -1569,7 +1585,7 @@ export default function FaultTracker({ retailScope = false }) {
 
       {activeImportBatch && tickets.length ? (
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-500">
-          Latest saved dump: {activeImportBatch.original_file_name || 'Pending Tickets'} • {formatNumber(activeImportBatch.ticket_count || tickets.length)} tickets • {formatDateTime(activeImportBatch.imported_at)}
+          Eligible tickets from saved dump: {activeImportBatch.original_file_name || 'Pending Tickets'} • {formatNumber(activeImportBatch.ticket_count || tickets.length)} tickets • {formatDateTime(activeImportBatch.imported_at)}
         </div>
       ) : null}
 
@@ -1659,6 +1675,7 @@ export default function FaultTracker({ retailScope = false }) {
         </div>
 
         <div className="flex justify-end border-t border-slate-100 px-5 py-3">
+          <button type="button" onClick={()=>exportScopedFaults(pcFilteredTickets)} className="mr-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold">Export scoped tickets</button>
           <button
             type="button"
             onClick={() => {

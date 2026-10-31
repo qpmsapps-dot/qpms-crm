@@ -4,12 +4,29 @@ export const attendanceColumns = [
   ['hk_target', 'HK target'], ['mepc_target', 'MEPC target'], ['total_target', 'Total target'],
   ['hk_pct', 'HK %'], ['mepc_pct', 'MEPC %'], ['overall_pct', 'Overall %'],
 ];
+export function attendanceAopCoverage(report, state) {
+  const stores = (report?.stores || []).filter(store => !state || store.state === state);
+  const configured = stores.filter(store => !store.missing_aop.includes(report.cutoff));
+  // Match the report's eight-decimal presentation precision after summing; avoid
+  // exposing binary floating-point noise in Excel without changing AOP inputs.
+  const rounded = value => Math.round((value + Number.EPSILON) * 1e8) / 1e8;
+  const hk_aop = rounded(configured.reduce((total, store) => total + store.hk_aop, 0));
+  const mepc_aop = rounded(configured.reduce((total, store) => total + store.mepc_aop, 0));
+  return { stores: stores.length, configured: configured.length, missing: stores.length - configured.length, hk_aop, mepc_aop, total_aop: rounded(hk_aop + mepc_aop) };
+}
+export function attendanceAopValue(report, row, key) {
+  if (row.store_code) return row.missing_aop.includes(report.cutoff) ? null : row[key];
+  const state = row.state === report.total.state ? undefined : row.state.replace(/ Total$/, '');
+  const coverage = attendanceAopCoverage(report, state);
+  return coverage.configured ? coverage[key] : null;
+}
 export function attendanceExportRows(report, scope = 'states') {
   const store = scope === 'stores';
   const columns = store ? [['store_code', 'Store Code'], ['store_name', 'Store Name'], ['source_state', 'Original Geographic State'], ...attendanceColumns] : attendanceColumns;
   const rows = scope === 'consolidated' ? [report.total] : scope === 'stores' ? report.stores : [...report.states, report.total];
   return [columns.map(([, label]) => label), ...rows.map(row => columns.map(([key]) =>
-    (row.missing_aop.length && (key.includes('aop') || key.includes('target'))) || (key.endsWith('_pct') && row[key] == null) ? 'N/A' : row[key] ?? ''))];
+    key.includes('aop') ? attendanceAopValue(report, row, key) ?? 'N/A' :
+      (row.missing_aop.length && key.includes('target')) || (key.endsWith('_pct') && row[key] == null) ? 'N/A' : row[key] ?? ''))];
 }
 export async function exportRetailAttendance(report, scope) {
   const ExcelJS = (await import('exceljs')).default;
@@ -18,6 +35,8 @@ export async function exportRetailAttendance(report, scope) {
   sheet.addRow(['Reliance Retail Attendance', report.view, report.cutoff]);
   sheet.addRow(['Missing attendance dates', report.total.missing_dates.join(', ')]);
   sheet.addRow(['Missing AOP dates', report.total.missing_aop.join(', ')]);
+  const coverage = attendanceAopCoverage(report);
+  sheet.addRow(['AOP coverage at cutoff', `${coverage.configured} of ${coverage.stores} stores; ${coverage.missing} missing. Aggregate AOP is the configured subtotal; incomplete targets and percentages remain N/A.`]);
   sheet.addRow(['MEPC target policy', report.mepc_target_policy || 'Aggregate 7-day planning cycle; not employee weekly-off allocation']);
   sheet.addRow(['Unique employees with positive attendance', report.employee_counts?.unique_employees ?? 'N/A']);
   sheet.addRow(['Attended employee-days', report.employee_counts?.employee_days ?? 'N/A']);

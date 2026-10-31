@@ -16,17 +16,18 @@ export function retailAccess(profile) {
   const hk = retail && keys.some((key) => HK.has(key));
   const technical = retail && keys.some((key) => TECH.has(key));
   const kam = retail && keys.some((key) => KAM.has(key));
+  const operationsMis = retail && keys.includes('MIS');
   return {
-    allowed: admin || hk || technical || kam,
-    dashboard: admin || hk || technical || kam,
+    allowed: admin || hk || technical || kam || operationsMis,
+    dashboard: admin || hk || technical || kam || operationsMis,
     stores: admin || hk,
     zones: admin || hk,
     deepCleaning: admin || hk,
     training: admin || hk,
     faultTracker: admin || technical,
     oos: admin || technical,
-    cmpm: admin || kam,
-    thermography: admin || kam,
+    cmpm: admin || hk || technical || kam || operationsMis,
+    thermography: admin || hk || technical || kam || operationsMis,
     manpower: admin || hk,
   };
 }

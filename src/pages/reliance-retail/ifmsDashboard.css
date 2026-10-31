@@ -17,3 +17,6 @@
 @media(max-width:1199px){.ifms-third{grid-column:span 3}.ifms-card-content{grid-template-columns:1fr}.ifms-ring-layout{justify-content:center}.ifms-third .ifms-card-content{grid-template-columns:1fr}.ifms-training{grid-template-columns:1fr 1.3fr!important}.ifms-page-header{align-items:flex-start}.ifms-updated{white-space:normal}}
 @media(max-width:700px){.ifms-grid{grid-template-columns:minmax(0,1fr);gap:14px}.ifms-wide,.ifms-third{grid-column:auto}.ifms-page-header{flex-direction:column;gap:12px}.ifms-toolbar{padding:12px}.ifms-toolbar-filters{gap:10px}.ifms-date-range{width:100%}.ifms-card-header{padding:12px}.ifms-card-heading{gap:8px}.ifms-card-header select{width:112px}.ifms-card h2{font-size:14px}.ifms-icon{width:30px;height:32px}.ifms-metrics{gap:9px;padding:15px 12px}.ifms-metric strong{font-size:23px}.ifms-card-content{padding:8px 12px 14px}.ifms-table-wrap table{font-size:12px}.ifms-table-wrap thead th{font-size:11px}}
 @media(prefers-reduced-motion:reduce){.ifms-dashboard *{transition:none!important}}
+
+@media(min-width:1201px) and (max-width:1500px){.ifms-thermography-content{grid-template-columns:minmax(132px,.65fr) minmax(0,1.35fr)}}
+.ifms-card-footer{margin-top:auto}.ifms-card-content{align-content:start}

@@ -13,10 +13,17 @@ test('existing Retail dashboard and detail routes resolve within the existing sh
   for (const route of ['attendance','deep-cleaning','training']) assert.ok(routes.includes(`path: 'reliance-retail/${route}'`));
   assert.match(routes, /element: <MainLayout/);
 });
+test('Retail Fault Tracker redirects to the existing IFMS import dashboard, preserving its original component',()=>{
+  assert.match(routes,/path: 'fault-tracker', element: <FaultTracker \/>/);
+  assert.match(routes,/path: 'reliance-retail\/fault-tracker', element: <Navigate to="\/fault-tracker" replace \/>/);
+  assert.doesNotMatch(routes,/path: 'reliance-retail\/fault-tracker', element: <RetailOperationalTrackers/);
+  const group=sidebar.slice(sidebar.indexOf('const relianceRetailNavGroup'),sidebar.indexOf('function insertHospitalTicketingGroup'));
+  assert.match(group,/label: 'Fault Tracker', to: '\/fault-tracker'/);
+});
 test('Retail sidebar retains its ordered existing navigation and access gate', () => {
   const group = sidebar.slice(sidebar.indexOf('const relianceRetailNavGroup'),sidebar.indexOf('function insertHospitalTicketingGroup'));
   let previous = -1;
-  for (const label of ['Dashboard','Attendance','Deep Cleaning','Technical Training','Fault Tracker','OOS Tracker','CMPM','Thermography','Manpower Vacancy','Reliance Retail Store Master']) {
+  for (const label of ['Dashboard','Attendance','Deep Cleaning','Training','CM/PM','Thermography','Fault Tracker','OOS Tracker','Manpower Vacancy','Reliance Retail Store Master']) {
     const index=group.indexOf(`label: '${label}'`);assert.ok(index>previous,label);previous=index;
   }
   assert.match(sidebar,/retailWebAccess\(user\)\.dashboard/);
@@ -35,7 +42,7 @@ test('dashboard preserves role boundaries and existing detail-route authorizatio
   assert.match(dashboard,/canAccessRoute\(user, route\)/);
 });
 test('dashboard reuses read-only API and reporting model without polling or write calls', () => {
-  assert.match(dashboard,/relianceRetailApi\.dashboard\(\{ month \}\)/);
-  assert.match(dashboard,/selectRows\(emptyOperations\(\), global, local\[id\]/);
+  assert.match(dashboard,/\/api\/reliance-retail\/module-reports\/dashboard/);
+  assert.match(dashboard,/selectRows\(source\?\.rows\|\|\[\], global, local\[id\]/);
   assert.doesNotMatch(dashboard,/setInterval\s*\(|method:\s*['"](?:POST|PATCH|PUT|DELETE)['"]/);
 });

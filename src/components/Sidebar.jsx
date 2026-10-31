@@ -62,11 +62,11 @@ const relianceRetailNavGroup = {
     { label: 'Dashboard', to: '/reliance-retail', icon: Home },
     { label: 'Attendance', to: '/reliance-retail/attendance', icon: ClipboardCheck },
     { label: 'Deep Cleaning', to: '/reliance-retail/deep-cleaning', icon: Sparkles },
-    { label: 'HK & MEPC Training', to: '/reliance-retail/training', icon: ListChecks },
-    { label: 'Fault Tracker', to: '/reliance-retail/fault-tracker', icon: ClipboardList },
-    { label: 'OOS Tracker', to: '/reliance-retail/oos', icon: ClipboardList },
-    { label: 'CMPM', to: '/reliance-retail/cmpm', icon: Wrench },
+    { label: 'Training', to: '/reliance-retail/training', icon: ListChecks },
+    { label: 'CM/PM', to: '/reliance-retail/cmpm', icon: Wrench },
     { label: 'Thermography', to: '/reliance-retail/thermography', icon: BarChart3 },
+    { label: 'Fault Tracker', to: '/fault-tracker', icon: ClipboardList },
+    { label: 'OOS Tracker', to: '/reliance-retail/oos', icon: ClipboardList },
     { label: 'Manpower Vacancy', to: '/reliance-retail/manpower', icon: Users },
     { label: 'Reliance Retail Store Master', to: '/reliance-retail/store-master', icon: Store },
   ],
@@ -307,7 +307,12 @@ export default function Sidebar({ isOpen, onClose }) {
   const roleNavGroups = canShowHospitalTicketing
     ? insertHospitalTicketingGroup(baseNavGroups)
     : baseNavGroups;
-  const authorizedNavGroups = isDemoUser(user) ? roleNavGroups : [...roleNavGroups, ...((retailWebAccess(user).dashboard || retailWebAccess(user).master) ? [relianceRetailNavGroup] : [])];
+  const retailWorkspace = location.pathname.startsWith('/reliance-retail') || (location.pathname === '/fault-tracker' && retailWebAccess(user).dashboard);
+  const authorizedNavGroups = retailWorkspace ? [
+    {...relianceRetailNavGroup,items:relianceRetailNavGroup.items.slice(0,7)},
+    {title:'Retail tools',items:relianceRetailNavGroup.items.slice(7)},
+    {title:'Workspace',items:[{label:'Back to QPMS',to:'/dashboard',icon:Home}]},
+  ] : isDemoUser(user) ? roleNavGroups : [...roleNavGroups, ...((retailWebAccess(user).dashboard || retailWebAccess(user).master) ? [relianceRetailNavGroup] : [])];
   const canSeeFaultTracker = canAccessNavRoute(user, '/fault-tracker');
   const navGroups = canSeeFaultTracker && !authorizedNavGroups.some((group) => group.items.some((item) => item.to === '/fault-tracker'))
     ? [

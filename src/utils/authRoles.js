@@ -274,11 +274,12 @@ export function retailWebAccess(user) {
   return {
     // Navigation only; database state grants determine every unified data/action permission.
     master: retail,
-    dashboard: retail && keys.some((key) => ['HKMIS', 'HOUSEKEEPINGMIS', 'TECHNICALMIS', 'TECHMIS', 'KAM'].includes(key)),
+    dashboard: retail && keys.some((key) => ['HKMIS', 'HOUSEKEEPINGMIS', 'TECHNICALMIS', 'TECHMIS', 'KAM', 'MIS'].includes(key)),
     hk: retail && keys.some((key) => ['HKMIS', 'HOUSEKEEPINGMIS'].includes(key)),
     technical: retail && keys.some((key) => ['TECHNICALMIS', 'TECHMIS'].includes(key)),
     oos: retail && keys.some(key=>['OOSMIS','OUTOFSCOPEMIS','TECHNICALMIS','TECHMIS'].includes(key)),
     kam: retail && keys.includes('KAM'),
+    operations: retail && keys.some(key=>['HKMIS','HOUSEKEEPINGMIS','TECHNICALMIS','TECHMIS','KAM','MIS'].includes(key)),
   };
 }
 
@@ -291,7 +292,7 @@ export function canAccessRoute(user, pathname) {
     if (pathname.startsWith('/reliance-retail/deep-cleaning') || pathname.startsWith('/reliance-retail/training') || pathname.startsWith('/reliance-retail/manpower')) return Boolean(access.hk);
     if (pathname.startsWith('/reliance-retail/fault-tracker')) return Boolean(access.technical || access.hk);
     if (pathname.startsWith('/reliance-retail/oos')) return Boolean(access.oos);
-    if (pathname.startsWith('/reliance-retail/cmpm') || pathname.startsWith('/reliance-retail/thermography')) return Boolean(access.kam);
+    if (pathname.startsWith('/reliance-retail/cmpm') || pathname.startsWith('/reliance-retail/thermography')) return Boolean(access.operations || access.kam);
     return Boolean(access.dashboard);
   }
 
