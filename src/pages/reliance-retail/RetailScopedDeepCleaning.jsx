@@ -6,9 +6,14 @@ import {REPORTING_STATES} from './ifmsDashboardModel.js';
 import {usePageTitle} from '../../hooks/usePageTitle.js';
 import {ReportHeader,ReportFilters,ReportStats,ReportNotice,ReportPager} from '../../components/reliance-retail/RetailReportUi.jsx';
 import {matchesReportQuery,reportPage} from '../../utils/retailReportView.js';
+import RetailCleaningSchedule from '../../components/reliance-retail/RetailCleaningSchedule.jsx';
+import {useAuth} from '../../context/auth-context.js';
+import {isReadOnlyUser} from '../../utils/demoAccess.js';
 
 export default function RetailScopedDeepCleaning() {
  usePageTitle('Reliance Retail Deep Cleaning');
+ const {user}=useAuth();
+ const [scheduling,setScheduling]=useState(false);
  const today=indiaToday();
  const [from,setFrom]=useState(today.slice(0,7)+'-01'),[to,setTo]=useState(today),[state,setState]=useState(''),[store,setStore]=useState(''),[status,setStatus]=useState('');
  const [query,setQuery]=useState(''),[page,setPage]=useState(0),[workPage,setWorkPage]=useState(0),[size,setSize]=useState(25),[refresh,setRefresh]=useState(0);
@@ -46,10 +51,12 @@ export default function RetailScopedDeepCleaning() {
   }catch(e){setError(e.message);}finally{setExporting(false);}
  }
  return <section className="retail-report">
-  <ReportHeader title="Reliance Retail Deep Cleaning" description="Track recorded schedules, completed work and private before/after evidence by canonical Store Code. Reporting consolidates Tamil Nadu and Puducherry under Tamil Nadu.">
+  <ReportHeader title="Reliance Retail Deep Cleaning" description="Plan cleaning visits, track completion and review before/after evidence.">
+   <button onClick={()=>setScheduling(true)}>Schedule Deep Cleaning</button>
    <button disabled={busy} onClick={()=>{resetView();setRefresh(value=>value+1);}}><RefreshCw size={15}/>Refresh</button>
    <button disabled={!report||busy||exporting} onClick={()=>void exportReport()}><Download size={15}/>{exporting?'Exporting…':'Export cleaning report'}</button>
   </ReportHeader>
+  {scheduling&&<RetailCleaningSchedule readOnly={isReadOnlyUser(user)} onClose={()=>setScheduling(false)}/>}
   <ReportFilters>
    <label>From<input aria-label="Cleaning from" type="date" value={from} max={to} onChange={e=>{if(e.target.value){resetView();setFrom(e.target.value);}}}/></label>
    <label>To<input aria-label="Cleaning to" type="date" value={to} min={from} onChange={e=>{if(e.target.value){resetView();setTo(e.target.value);}}}/></label>
@@ -78,9 +85,9 @@ export default function RetailScopedDeepCleaning() {
     {!work.length&&<p className="retail-report-empty">No authorized submissions match this period, scope and search.</p>}
     <ReportPager label="Cleaning work" count={work.length} page={workPage} size={size} onPage={setWorkPage} onSize={setSize}/>
    </div>
-   <p className="retail-report-description">Search applies to both tables and exports. Status filters apply to schedules only. Exports include all matching rows, not just the current page. No Start Day or Check-In prerequisite is added.</p>
+   <p className="retail-report-description">Export includes all matching records. Completed work is recorded by the assigned FO with before/after evidence.</p>
   </>}
   {evidenceBusy&&<ReportNotice>Checking authorization and loading private evidence…</ReportNotice>}
-  {evidence&&<section className="retail-report-evidence" aria-label="Authorized cleaning evidence"><header><h2>Authorized evidence</h2><button onClick={clearEvidence}>Close evidence</button></header><p className="retail-report-description">Temporary links are issued only after submission authorization is rechecked.</p>{!evidence.length&&<ReportNotice>No uploaded evidence recorded.</ReportNotice>}<div className="retail-report-images">{evidence.map(item=><a key={item.id} href={item.url} target="_blank" rel="noreferrer"><span>{item.type} · {item.name}</span>{item.mime_type.startsWith('image/')?<img src={item.url} alt={`${item.type} cleaning evidence`}/>:'Open document'}</a>)}</div></section>}
+  {evidence&&<section className="retail-report-evidence" aria-label="Authorized cleaning evidence"><header><h2>Authorized evidence</h2><button onClick={clearEvidence}>Close evidence</button></header>{!evidence.length&&<ReportNotice>No uploaded evidence recorded.</ReportNotice>}<div className="retail-report-images">{evidence.map(item=><a key={item.id} href={item.url} target="_blank" rel="noreferrer"><span>{item.type} · {item.name}</span>{item.mime_type.startsWith('image/')?<img src={item.url} alt={`${item.type} cleaning evidence`}/>:'Open document'}</a>)}</div></section>}
  </section>;
 }

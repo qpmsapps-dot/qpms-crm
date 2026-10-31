@@ -6,9 +6,12 @@ import {ReportHeader,ReportFilters,ReportStats,ReportNotice,ReportPager} from '.
 import {matchesReportQuery,reportPage} from '../../utils/retailReportView.js';
 import {downloadUnified} from '../../utils/retailUnifiedExport.js';
 import {usePageTitle} from '../../hooks/usePageTitle.js';
+import {useAuth} from '../../context/auth-context.js';
+import {isPlatformAdmin} from '../../utils/authRoles.js';
 
 const emptyForm=()=>({store_id:'',scheduled_date:indiaToday(),request_id:crypto.randomUUID()});
 export default function RetailOperations({kind='maintenance'}) {
+ const {user}=useAuth();
  const maintenance=kind==='maintenance',title=maintenance?'CM / PM Calls':'Thermography';
  usePageTitle(`Reliance Retail ${title}`);
  const [month,setMonth]=useState(indiaToday().slice(0,7)),[state,setState]=useState(''),[store,setStore]=useState(''),[query,setQuery]=useState('');
@@ -32,7 +35,7 @@ export default function RetailOperations({kind='maintenance'}) {
  function prepare(e){e.preventDefault();if(!(maintenance?canComplete:canSchedule))return;setConfirmation({data:{...form,...(maintenance?{kind:callKind,month}:{status:'Scheduled'})},label:maintenance?`Record ${callKind} completion for ${selected.store_code}? Completion is recorded now and cannot be edited or deleted.`:`Schedule Thermography for ${selected.store_code} on ${form.scheduled_date}?`});}
  async function save(){
   setSaving(true);setError('');
-  try{await authenticatedApiRequest({method:'POST',url:endpoint,data:confirmation.data});if(!maintenance&&confirmation.data.status==='Scheduled')setMonth(confirmation.data.scheduled_date.slice(0,7));setConfirmation(null);setForm(emptyForm());setNotice('Saved. The report has been refreshed from the operational source.');setRefresh(v=>v+1);}
+  try{await authenticatedApiRequest({method:'POST',url:endpoint,data:confirmation.data});if(!maintenance&&confirmation.data.status==='Scheduled')setMonth(confirmation.data.scheduled_date.slice(0,7));setConfirmation(null);setForm(emptyForm());setNotice('Saved. Refreshing the report.');setRefresh(v=>v+1);}
   catch(e){setError(e.response?.data?.message||e.message);}
   finally{setSaving(false);}
  }
@@ -52,7 +55,7 @@ export default function RetailOperations({kind='maintenance'}) {
  }
  const stats=maintenance?report?[{label:'Applicable stores',value:module.total.eligible},{label:`${callKind} completed`,value:module.total.completed},{label:`${callKind} pending`,value:module.total.remaining}]:[]:report?[{label:'Scheduled',value:report.total.scheduled},{label:'Completed awaiting approval',value:report.total.awaiting},{label:'Client Approved',value:report.total.approved},{label:'Approval overdue',value:report.total.overdue}]:[];
  return <section className="retail-report">
-  <ReportHeader title={title} description={maintenance?'Live authorized Store Master. Saving records one completed call per store, kind and month.':'Scheduled → Completed → Client Approved. Approval is due within 10 calendar days of actual completion.'}>
+  <ReportHeader title={title} description={maintenance?'Record completed CM and PM calls and review monthly progress.':'Schedule inspections, record completion and track client approval within 10 calendar days.'}>
    <button onClick={()=>setRefresh(v=>v+1)} disabled={busy||saving}>Refresh</button><button disabled={!report||busy} onClick={()=>void exportReport()}>Export Excel</button>
   </ReportHeader>
   <ReportFilters>
@@ -65,11 +68,11 @@ export default function RetailOperations({kind='maintenance'}) {
   {busy&&<ReportNotice>Loading authorized operational data…</ReportNotice>}{error&&<ReportNotice error>{error}</ReportNotice>}{notice&&<ReportNotice>{notice}</ReportNotice>}
   {report&&<>
    <ReportStats items={stats}/>
-   <ReportNotice>{maintenance?`${callKind}: ${window.start} through ${window.end} · ${window.status}. Server date (India): ${report.today}. Previous months are permanently closed; completed calls cannot be edited or deleted. Applicable stores use the current active inventory plus stores with recorded completion in this month.`:`Reporting by scheduled month; statuses are current. The tenth calendar day is on time; overdue starts the next day. Late approvals remain recorded as late after approval.`}</ReportNotice>
+   <ReportNotice>{maintenance?`${callKind}: ${window.start} through ${window.end} · ${window.status}. Today (India): ${report.today}. Previous months are locked. Completed calls cannot be edited or deleted.`:`Reports follow the scheduled month. Client approval is due 10 calendar days after completion; overdue starts the next day. Late approvals remain marked late.`}</ReportNotice>
    <form onSubmit={prepare} className="retail-report-filters" aria-label={`${title} entry`}>
     <label>Store Code<select required aria-label={`${title} entry Store Code`} value={form.store_id} onChange={e=>{setConfirmation(null);setForm({...emptyForm(),store_id:e.target.value});}}><option value="">Select authorized store</option>{report.stores.filter(s=>s.can_save&&s.status==='Active').map(s=><option key={s.id} value={s.id}>{s.store_code} · {s.store_name}</option>)}</select></label>
     {!maintenance&&<label>Scheduled Date<input required aria-label="Thermography Scheduled Date" type="date" value={form.scheduled_date} onChange={e=>setForm(f=>({...f,scheduled_date:e.target.value,request_id:crypto.randomUUID()}))}/></label>}
-    <button disabled={saving||busy||!(maintenance?canComplete:canSchedule)}>{maintenance?`Record completed ${callKind}`:'Schedule inspection'}</button>
+    <button disabled={saving||busy||!(maintenance?canComplete:canSchedule)}>{maintenance?`Record ${callKind} Call`:'Schedule Thermography'}</button>
     {selected&&<p>{selected.store_code} · {selected.store_name} · {REPORTING_STATES.find(s=>s.code===reportingState(selected.state))?.label} · {selected.store_format||'Format unavailable'} · {selected.city||'City unavailable'}</p>}
    </form>
    {maintenance&&<section className="retail-report-panel retail-report-table" aria-label="CM PM state summary"><table><thead><tr>{['State','CM completed','CM pending','PM completed','PM pending'].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{report.modules.cm.rows.map(cm=>{const pm=report.modules.pm.rows.find(r=>r.state===cm.state);return <tr key={cm.state}><td>{REPORTING_STATES.find(s=>s.code===cm.state)?.label}</td><td>{cm.completed}</td><td>{cm.remaining}</td><td>{pm?.completed}</td><td>{pm?.remaining}</td></tr>;})}</tbody></table></section>}
@@ -79,7 +82,7 @@ export default function RetailOperations({kind='maintenance'}) {
     {maintenance?<><td>{REPORTING_STATES.find(s=>s.code===r.reporting_state)?.label}</td><td>{r.completed?'Completed':'Pending'}</td><td>{r.completed_on||'—'}</td><td>{r.record_id&&<button onClick={()=>setHistory(r.record_id)}>View history</button>}</td></>:<><td>{r.scheduled_date}</td><td>{r.status}</td><td>{r.completed_on||'—'}</td><td>{r.approval_due_on||'—'}</td><td>{r.approved_on||'—'}</td><td>{r.approval_overdue?'Approval overdue':r.approved_late?'Approved late — retained':'—'}</td><td><button onClick={()=>setHistory(r.id)}>View history</button>{r.store.can_save&&r.status!=='Client Approved'&&<button disabled={saving||(r.status==='Scheduled'&&report.today<r.scheduled_date)} onClick={()=>setConfirmation({data:{id:r.id,status:r.status==='Scheduled'?'Completed':'Client Approved',revision:r.revision,request_id:crypto.randomUUID()},label:`Record ${r.status==='Scheduled'?'completion':'client approval'} for ${r.store.store_code}? The actual date is recorded by the server.`})}>{r.status==='Scheduled'?'Record completion':'Record client approval'}</button>}</td></>}
    </tr>)}</tbody></table>{!rows.length&&<ReportNotice>No operational records match this authorized scope.</ReportNotice>}</section>
    <ReportPager label={title} count={rows.length} page={page} size={size} onPage={setPage} onSize={setSize}/>
-   {history&&<section aria-label="Operational audit history"><h2>Recorded history</h2>{report.events.filter(e=>e.entity_id===history).map(e=><p key={e.id}>{e.created_at} · {e.action} · Actor {e.actor_profile_id}</p>)}<button onClick={()=>setHistory(null)}>Close history</button></section>}
+   {history&&<section aria-label="Operational audit history"><h2>Recorded history</h2>{report.events.filter(e=>e.entity_id===history).map(e=><p key={e.id}>{e.created_at} · {e.action}{isPlatformAdmin(user)&&<> · Actor {e.actor_profile_id}</>}</p>)}<button onClick={()=>setHistory(null)}>Close history</button></section>}
   </>}
   {confirmation&&<section role="dialog" aria-modal="false" aria-label="Confirm operational save" className="retail-report-notice"><p>{confirmation.label}</p><button disabled={saving} onClick={()=>void save()}>{saving?'Saving…':'Confirm save'}</button><button autoFocus disabled={saving} onClick={()=>setConfirmation(null)}>Cancel</button></section>}
  </section>;

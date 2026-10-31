@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 export async function verifyRetailLayout(page, name) {
+  if(process.env.RETAIL_WORKFLOW_ONLY==='true')return;
   for (const width of [1440, 1024, 390]) {
     await page.setViewportSize({width, height:1000});
     await page.evaluate(() => document.fonts.ready);

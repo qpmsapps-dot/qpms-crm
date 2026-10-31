@@ -10,8 +10,11 @@ import {retailUnifiedApi} from '../../services/retailUnifiedApi.js';
 import {trainingReport} from '../../../backend/shared/retailTrainingReport.js';
 import {ReportHeader,ReportFilters,ReportStats,ReportNotice,ReportPager} from '../../components/reliance-retail/RetailReportUi.jsx';
 import {matchesReportQuery,reportPage} from '../../utils/retailReportView.js';
+import {useAuth} from '../../context/auth-context.js';
+import {isPlatformAdmin} from '../../utils/authRoles.js';
 
 export default function RetailTraining() {
+ const {user}=useAuth();
  usePageTitle('Reliance Retail HK & MEPC Training');
  const [sessions,setSessions]=useState([]),[snapshot,setSnapshot]=useState(null),[error,setError]=useState(''),[ownershipError,setOwnershipError]=useState(''),[busy,setBusy]=useState(false),[detail,setDetail]=useState(null),[evidenceLinks,setEvidenceLinks]=useState({});
  const [from,setFrom]=useState(indiaToday().slice(0,7)+'-01'),[to,setTo]=useState(indiaToday()),[filter,setFilter]=useState({}),[query,setQuery]=useState('');
@@ -58,7 +61,7 @@ export default function RetailTraining() {
  const hk=rows.filter(row=>row.training_class==='HK').length,mepc=rows.filter(row=>row.training_class==='MEPC').length;
  const trainedStores=new Set(rows.filter(row=>row.canonical_store_id).map(row=>row.canonical_store_id)).size;
  return <section className="retail-report">
-  <ReportHeader title="HK & MEPC Training" description="Completed training, authorized employee details and private evidence by canonical Store Code. Counts retain the existing hierarchy and employee-envelope restrictions.">
+  <ReportHeader title="HK & MEPC Training" description="Review completed HK and MEPC sessions, attendees, topics and evidence.">
    <button disabled={busy} onClick={()=>{resetView();setRefresh(value=>value+1);}}><RefreshCw size={15}/>Refresh</button><button disabled={busy||!sessions.length||exporting} onClick={()=>void exportReport()}><Download size={15}/>{exporting?'Exporting…':'Export Training review'}</button>
   </ReportHeader>
   <ReportFilters>
@@ -69,7 +72,7 @@ export default function RetailTraining() {
   </ReportFilters>
   {busy&&<ReportNotice>Loading Training records…</ReportNotice>}{error&&<ReportNotice error>{error}</ReportNotice>}{ownershipError&&<ReportNotice>{ownershipError}</ReportNotice>}
   {!busy&&!error&&<ReportStats items={[{label:'HK trainings completed',value:hk},{label:'MEPC trainings completed',value:mepc},{label:'Completed training records',value:rows.length},{label:'Verified trained stores',value:snapshot?trainedStores:null,note:snapshot?'Distinct stores, not training count':'Canonical store coverage unavailable'}]}/>}
-  <details className="retail-report-panel"><summary className="retail-report-panel-heading">Authorized state coverage and ownership</summary><RetailStateCoverage snapshot={snapshot||undefined}/></details>
+  {isPlatformAdmin(user)&&<details className="retail-report-panel"><summary className="retail-report-panel-heading">Admin: state coverage and ownership</summary><RetailStateCoverage snapshot={snapshot||undefined}/></details>}
   {!!rows.length&&<div className="retail-report-filters" aria-label="State-wise completed trainings">{[...new Set(rows.map(row=>reportingState(row.state)))].sort().map(state=><p key={state}>{state}: HK {rows.filter(row=>reportingState(row.state)===state&&row.training_class==='HK').length} · MEPC {rows.filter(row=>reportingState(row.state)===state&&row.training_class==='MEPC').length}</p>)}</div>}
   <div className="retail-report-panel"><div className="retail-report-panel-heading"><h2>Completed training records</h2><span>{rows.length} matching records</span></div>
    <div className="retail-report-table" role="region" aria-label="Completed training records" tabIndex={0}><table><thead><tr>{['Date / Class','Store','Trainer','Status','Historical Zone / FO','Attendees / Topics / Evidence','Details'].map(label=><th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{reportPage(rows,page,size).map(row=><tr key={row.id}>
@@ -80,7 +83,7 @@ export default function RetailTraining() {
    {!busy&&!rows.length&&!error&&<p className="retail-report-empty">No authorized Training records match these filters.</p>}
    <ReportPager label="Training records" count={rows.length} page={page} size={size} onPage={setPage} onSize={setSize}/>
   </div>
-  <p className="retail-report-description">Exports include every matching record, not just the current page. Historical ownership is shown only when available. Submission workflows are unchanged; no scheduled-training workflow is introduced.</p>
+  <p className="retail-report-description">Export includes every matching record. Unknown historical ownership is shown as unavailable.</p>
   {detailBusy&&<ReportNotice>Loading authorized Training details…</ReportNotice>}
   {detail&&<section className="retail-report-evidence" aria-label="Training evidence and history"><header><h2>Training evidence and history</h2><button onClick={closeDetail}>Close Training details</button></header><p>{detail.session?.training_date} · {detail.session?.trainer_name_snapshot||'Trainer not recorded'} · {detail.session?.status}</p>
    <div>{!(detail.evidence||[]).length&&<p className="retail-report-description">No evidence recorded for this session.</p>}{(detail.evidence||[]).map(item=><p key={item.id||item.file_name}>{item.file_name} {evidenceLinks[item.id]?<a className="retail-report-button" href={evidenceLinks[item.id]} target="_blank" rel="noreferrer">Open authorized evidence</a>:<button onClick={()=>void viewEvidence(item)}>Get evidence link</button>}</p>)}</div>

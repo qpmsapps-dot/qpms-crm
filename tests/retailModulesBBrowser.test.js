@@ -89,7 +89,7 @@ test('Retail module pages use real report responses, filters, evidence and unava
   assert.match(await page.getByLabel('Approved AOP coverage').textContent(),/HK: 1.25 · MEPC: 0.55/);
   assert.equal(await page.getByText('Configured AOP Count',{exact:true}).locator('..').getByText('1.8',{exact:true}).count(),1);
   assert.equal(await page.getByText('Approved effective-dated AOP configuration is pending budget-source confirmation.',{exact:false}).count(),0);
-  await page.getByText('Counts use the latest saved source version; provisional identities are not operational stores.',{exact:true}).waitFor();
+  await page.getByText('Admin: coverage and source reconciliation',{exact:true}).waitFor();
   await verifyRetailLayout(page,'attendance');
   await page.goto(base+'/reliance-retail/deep-cleaning');await page.getByText('Recorded reason',{exact:true}).waitFor();
   await page.getByLabel('Search cleaning records').fill('Recorded reason');

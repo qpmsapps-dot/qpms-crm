@@ -40,17 +40,17 @@ test('operational pages confirm saves, enforce period UX, retain Thermography la
   await page.getByLabel('CM / PM Calls entry Store Code').waitFor();
   await verifyRetailLayout(page,'cmpm');
   await page.getByLabel('CM / PM Calls entry Store Code').selectOption(store);
-  await page.getByRole('button',{name:'Record completed CM',exact:true}).click();
+  await page.getByRole('button',{name:'Record CM Call',exact:true}).click();
   await page.getByRole('button',{name:'Cancel',exact:true}).click();assert.equal(writes.length,0);
-  await page.getByRole('button',{name:'Record completed CM',exact:true}).click();await page.getByRole('button',{name:'Confirm save',exact:true}).click();
-  await page.getByText('Saved. The report has been refreshed from the operational source.',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Record CM Call',exact:true}).click();await page.getByRole('button',{name:'Confirm save',exact:true}).click();
+  await page.getByText('Saved. Refreshing the report.',{exact:true}).waitFor();
   assert.equal(writes.length,1);assert.equal(source.calls[0].kind,'CM');
-  await page.getByLabel('CM / PM Calls entry Store Code').selectOption(store);assert.equal(await page.getByRole('button',{name:'Record completed CM',exact:true}).isDisabled(),true);
-  await page.getByLabel('Maintenance kind').selectOption('PM');assert.equal(await page.getByRole('button',{name:'Record completed PM',exact:true}).isDisabled(),true,'PM is upcoming on the fifteenth');
+  await page.getByLabel('CM / PM Calls entry Store Code').selectOption(store);assert.equal(await page.getByRole('button',{name:'Record CM Call',exact:true}).isDisabled(),true);
+  await page.getByLabel('Maintenance kind').selectOption('PM');assert.equal(await page.getByRole('button',{name:'Record PM Call',exact:true}).isDisabled(),true,'PM is upcoming on the fifteenth');
   assert.equal(await page.getByLabel('CM / PM Calls entry Store Code').locator('option').filter({hasText:'VIEW01'}).count(),0);
   await page.goto(base+'/reliance-retail/thermography',{waitUntil:'domcontentloaded',timeout:60000});
   await page.getByLabel('Thermography entry Store Code').selectOption(store);await page.getByLabel('Thermography Scheduled Date').fill(source.today);
-  await page.getByRole('button',{name:'Schedule inspection',exact:true}).click();await page.getByRole('button',{name:'Confirm save',exact:true}).click();
+  await page.getByRole('button',{name:'Schedule Thermography',exact:true}).click();await page.getByRole('button',{name:'Confirm save',exact:true}).click();
   await page.getByRole('button',{name:'Record completion',exact:true}).click();await page.getByRole('button',{name:'Confirm save',exact:true}).click();
   await page.getByRole('button',{name:'Record client approval',exact:true}).waitFor();
   const row=source.thermography[0],afterDue=new Date(row.approval_due_on+'T00:00:00Z');afterDue.setUTCDate(afterDue.getUTCDate()+1);source.today=afterDue.toISOString().slice(0,10);
@@ -63,11 +63,11 @@ test('operational pages confirm saves, enforce period UX, retain Thermography la
   const download=page.waitForEvent('download');await page.getByRole('button',{name:'Export Excel',exact:true}).click();
   const chunks=[];for await(const chunk of await (await download).createReadStream())chunks.push(chunk);
   const {default:ExcelJS}=await import('exceljs'),book=new ExcelJS.Workbook();await book.xlsx.load(Buffer.concat(chunks));assert.equal(book.getWorksheet('Store details').rowCount,2);
-  for(const width of [1920,1024,390]){await page.setViewportSize({width,height:1000});assert.equal(await page.locator('.retail-report').evaluate(r=>r.scrollWidth<=r.clientWidth+1),true,`Thermography fits at ${width}`);}
+  if(process.env.RETAIL_WORKFLOW_ONLY!=='true')for(const width of [1920,1024,390]){await page.setViewportSize({width,height:1000});assert.equal(await page.locator('.retail-report').evaluate(r=>r.scrollWidth<=r.clientWidth+1),true,`Thermography fits at ${width}`);}
   await page.goto(base+'/reliance-retail',{waitUntil:'domcontentloaded'});await page.locator('#ifms-thermography').waitFor();
   const card=page.locator('#ifms-thermography').locator('xpath=ancestor::section');
   assert.equal(await card.getByText('Normal',{exact:true}).count(),0);
-  for(const width of [1920,1366,1024,390]){await page.setViewportSize({width,height:1000});assert.equal(await page.locator('.ifms-dashboard').evaluate(root=>[...root.querySelectorAll('.ifms-card,.ifms-table-wrap,.ifms-card-header')].every(el=>el.scrollWidth<=el.clientWidth+1)),true,`Live operation Dashboard fits at ${width}`);}
+  if(process.env.RETAIL_WORKFLOW_ONLY!=='true')for(const width of [1920,1366,1024,390]){await page.setViewportSize({width,height:1000});assert.equal(await page.locator('.ifms-dashboard').evaluate(root=>[...root.querySelectorAll('.ifms-card,.ifms-table-wrap,.ifms-card-header')].every(el=>el.scrollWidth<=el.clientWidth+1)),true,`Live operation Dashboard fits at ${width}`);}
   assert.deepEqual(errors,[]);
  }finally{await browser.close();await server.close();}
 });

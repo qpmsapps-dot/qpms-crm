@@ -23,7 +23,7 @@ test('Retail Fault Tracker redirects to the existing IFMS import dashboard, pres
 test('Retail sidebar retains its ordered existing navigation and access gate', () => {
   const group = sidebar.slice(sidebar.indexOf('const relianceRetailNavGroup'),sidebar.indexOf('function insertHospitalTicketingGroup'));
   let previous = -1;
-  for (const label of ['Dashboard','Attendance','Deep Cleaning','HK & MEPC Training','Fault Tracker','OOS Tracker','CMPM','Thermography','Manpower Vacancy','Reliance Retail Store Master']) {
+  for (const label of ['Dashboard','Attendance','Deep Cleaning','HK & MEPC Training','CM/PM','Thermography','Fault Tracker','OOS Tracker','Manpower Vacancy','Reliance Retail Store Master']) {
     const index=group.indexOf(`label: '${label}'`);assert.ok(index>previous,label);previous=index;
   }
   assert.match(sidebar,/retailWebAccess\(user\)\.dashboard/);
