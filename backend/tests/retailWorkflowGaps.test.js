@@ -128,5 +128,22 @@ test('isolated PostgreSQL persists ticket+audit atomically and links only explic
   const race=await Promise.all([concurrent(update(admin,RETAIL_FAULT_STAGES[6],current,randomUUID())),concurrent(update(admin,RETAIL_FAULT_STAGES[6],current,randomUUID()))]);
   assert.equal(race.filter(r=>r.code===0).length,1);assert.match(race.find(r=>r.code!==0).errors,/Ticket changed/);assert.equal(Number(sql('select count(*) from fault_tracker_ticket_updates')),beforeHistory+1);
   const replay=await Promise.all([concurrent(link()),concurrent(link())]);assert.ok(replay.every(r=>r.code===0));assert.equal(sql("select count(*) from reliance_retail_management_audit where action='VERIFIED_FO_CLEANING_LINK'"),'1');
+  // Targeted new conditional security patch: preserve reads/import service and
+  // refuse inherited writes rather than silently weakening an unrelated role.
+  sql('grant select,insert,update,delete on fault_tracker_import_batches,fault_tracker_tickets,fault_tracker_ticket_updates to service_role,authenticated,anon;grant update(remarks) on fault_tracker_tickets to authenticated;create role legacy_fault_writer;grant update on fault_tracker_tickets to legacy_fault_writer;grant legacy_fault_writer to authenticated;');
+  const securityPatch=fs.readFileSync(new URL('../../supabase/proposals/retail_fault_api_only_writes.sql',import.meta.url),'utf8');
+  assert.throws(()=>sql(securityPatch),e=>/Inherited\/owner direct-write privilege remains/.test(String(e.stderr)));
+  assert.equal(sql("select has_table_privilege('authenticated','fault_tracker_ticket_updates','UPDATE')"),'t','Failed patch rolls back earlier revokes');
+  sql('revoke legacy_fault_writer from authenticated;');
+  const preserved=sql('select md5(row_to_json(t)::text) from fault_tracker_tickets t');sql(securityPatch);
+  assert.equal(sql('select md5(row_to_json(t)::text) from fault_tracker_tickets t'),preserved);
+  for(const table of ['fault_tracker_import_batches','fault_tracker_tickets','fault_tracker_ticket_updates']){
+   assert.equal(sql(`select has_table_privilege('authenticated','${table}','SELECT')`),'t');
+   for(const role of ['anon','authenticated'])assert.equal(sql(`select has_table_privilege('${role}','${table}','INSERT,UPDATE,DELETE') or has_any_column_privilege('${role}','${table}','INSERT,UPDATE')`),'f');
+   for(const verb of ['SELECT','INSERT','UPDATE','DELETE'])assert.equal(sql(`select has_table_privilege('service_role','${table}','${verb}')`),'t');
+  }
+  assert.throws(()=>sql("set role authenticated;update fault_tracker_tickets set remarks='forbidden' where false;"),e=>/permission denied/.test(String(e.stderr)));
+  assert.equal(sql('set role service_role;select rpc_retail_fault_update_capability();'),'t');
+  sql(fs.readFileSync(new URL('../../supabase/verification/retail_production_security_gate.sql',import.meta.url),'utf8'));
  }finally{docker(['rm','--force',container]);}
 });
