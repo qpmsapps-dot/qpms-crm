@@ -1,0 +1,155 @@
+[
+  {
+    "module": "dashboard",
+    "route": "/reliance-retail",
+    "file": "dashboard.png",
+    "headings": [
+      "South Zone – IFMS Operations Summary",
+      "Attendance",
+      "Thermography",
+      "CM Calls",
+      "PM Calls",
+      "Deep Cleaning",
+      "MEPC Training",
+      "HK Training"
+    ],
+    "javascriptErrors": [],
+    "reactErrorBoundary": 0,
+    "evidence": "LOCAL READ-ONLY PRODUCTION-SNAPSHOT PREVIEW; NOT AUTHENTICATED PRODUCTION ACCEPTANCE",
+    "candidate": "0a9da9135357aa28eb83a3bf55d0ce5d3ea5e9b2",
+    "capturedAt": "2026-10-31T11:08:32.927Z"
+  },
+  {
+    "module": "attendance",
+    "route": "/reliance-retail/attendance",
+    "file": "attendance.png",
+    "headings": [
+      "Reliance Retail Attendance",
+      "All-state attendance and AOP coverage",
+      "Month-to-Date Attendance (2026-10-01 to 2026-10-27)"
+    ],
+    "javascriptErrors": [],
+    "reactErrorBoundary": 0,
+    "evidence": "LOCAL READ-ONLY PRODUCTION-SNAPSHOT PREVIEW; NOT AUTHENTICATED PRODUCTION ACCEPTANCE",
+    "candidate": "0a9da9135357aa28eb83a3bf55d0ce5d3ea5e9b2",
+    "capturedAt": "2026-10-31T11:08:38.738Z"
+  },
+  {
+    "module": "deep-cleaning",
+    "route": "/reliance-retail/deep-cleaning",
+    "file": "deep-cleaning.png",
+    "headings": [
+      "Reliance Retail Deep Cleaning",
+      "Store-wise cleaning schedules",
+      "Store-wise submitted work"
+    ],
+    "javascriptErrors": [],
+    "reactErrorBoundary": 0,
+    "evidence": "LOCAL READ-ONLY PRODUCTION-SNAPSHOT PREVIEW; NOT AUTHENTICATED PRODUCTION ACCEPTANCE",
+    "candidate": "0a9da9135357aa28eb83a3bf55d0ce5d3ea5e9b2",
+    "capturedAt": "2026-10-31T11:08:39.702Z"
+  },
+  {
+    "module": "training",
+    "route": "/reliance-retail/training",
+    "file": "training.png",
+    "headings": [
+      "HK & MEPC Training",
+      "All-state operational availability",
+      "Completed training records"
+    ],
+    "javascriptErrors": [],
+    "reactErrorBoundary": 0,
+    "evidence": "LOCAL READ-ONLY PRODUCTION-SNAPSHOT PREVIEW; NOT AUTHENTICATED PRODUCTION ACCEPTANCE",
+    "candidate": "0a9da9135357aa28eb83a3bf55d0ce5d3ea5e9b2",
+    "capturedAt": "2026-10-31T11:08:41.758Z"
+  },
+  {
+    "module": "cmpm",
+    "route": "/reliance-retail/cmpm",
+    "file": "cmpm.png",
+    "headings": [
+      "CM / PM Calls"
+    ],
+    "javascriptErrors": [],
+    "reactErrorBoundary": 0,
+    "evidence": "LOCAL READ-ONLY PRODUCTION-SNAPSHOT PREVIEW; NOT AUTHENTICATED PRODUCTION ACCEPTANCE",
+    "candidate": "0a9da9135357aa28eb83a3bf55d0ce5d3ea5e9b2",
+    "capturedAt": "2026-10-31T11:08:42.780Z"
+  },
+  {
+    "module": "thermography",
+    "route": "/reliance-retail/thermography",
+    "file": "thermography.png",
+    "headings": [
+      "Thermography"
+    ],
+    "javascriptErrors": [],
+    "reactErrorBoundary": 0,
+    "evidence": "LOCAL READ-ONLY PRODUCTION-SNAPSHOT PREVIEW; NOT AUTHENTICATED PRODUCTION ACCEPTANCE",
+    "candidate": "0a9da9135357aa28eb83a3bf55d0ce5d3ea5e9b2",
+    "capturedAt": "2026-10-31T11:08:43.768Z"
+  },
+  {
+    "module": "fault-tracker",
+    "route": "/fault-tracker",
+    "file": "fault-tracker.png",
+    "headings": [
+      "Reliance Retail IFMS Fault Tracker",
+      "State Performance Overview",
+      "Ageing Distribution",
+      "Pending Tickets by State",
+      "Supervisor Wise Pending Tickets",
+      "House Keeping & Pest Control Tickets by State",
+      "Stage-wise Progress (All States)"
+    ],
+    "javascriptErrors": [],
+    "reactErrorBoundary": 0,
+    "evidence": "LOCAL READ-ONLY PRODUCTION-SNAPSHOT PREVIEW; NOT AUTHENTICATED PRODUCTION ACCEPTANCE",
+    "candidate": "0a9da9135357aa28eb83a3bf55d0ce5d3ea5e9b2",
+    "capturedAt": "2026-10-31T11:08:44.815Z"
+  },
+  {
+    "module": "oos",
+    "route": "/reliance-retail/oos",
+    "file": "oos.png",
+    "headings": [
+      "Store Service Trackers",
+      "All-state operational availability"
+    ],
+    "javascriptErrors": [],
+    "reactErrorBoundary": 0,
+    "evidence": "LOCAL READ-ONLY PRODUCTION-SNAPSHOT PREVIEW; NOT AUTHENTICATED PRODUCTION ACCEPTANCE",
+    "candidate": "0a9da9135357aa28eb83a3bf55d0ce5d3ea5e9b2",
+    "capturedAt": "2026-10-31T11:08:46.554Z"
+  },
+  {
+    "module": "manpower",
+    "route": "/reliance-retail/manpower",
+    "file": "manpower.png",
+    "headings": [
+      "Manpower Vacancy",
+      "Under Development"
+    ],
+    "javascriptErrors": [],
+    "reactErrorBoundary": 0,
+    "evidence": "LOCAL READ-ONLY PRODUCTION-SNAPSHOT PREVIEW; NOT AUTHENTICATED PRODUCTION ACCEPTANCE",
+    "candidate": "0a9da9135357aa28eb83a3bf55d0ce5d3ea5e9b2",
+    "capturedAt": "2026-10-31T11:08:47.469Z"
+  },
+  {
+    "module": "store-master",
+    "route": "/reliance-retail/store-master",
+    "file": "store-master.png",
+    "headings": [
+      "Store Master",
+      "Reliance Retail Management",
+      "All-state operational availability"
+    ],
+    "javascriptErrors": [],
+    "reactErrorBoundary": 0,
+    "evidence": "LOCAL READ-ONLY PRODUCTION-SNAPSHOT PREVIEW; NOT AUTHENTICATED PRODUCTION ACCEPTANCE",
+    "candidate": "0a9da9135357aa28eb83a3bf55d0ce5d3ea5e9b2",
+    "capturedAt": "2026-10-31T11:08:49.247Z"
+  }
+]
