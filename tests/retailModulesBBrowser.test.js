@@ -20,7 +20,7 @@ test('Retail module pages use real report responses, filters, evidence and unava
  const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));
  await context.addInitScript(()=>{localStorage.setItem('qpms-crm-auth-user',JSON.stringify({id:'local-admin',profileId:'local-profile',name:'Local Admin',role:'Admin',rawRole:'Admin',status:'Active',isActive:true,webAccessEnabled:true,authProvider:'demo-fixture',is_demo:true,isDemoReadOnly:true,read_only:false}));sessionStorage.setItem('qpms-crm-backend-token','synthetic-local-test-token');});
  const source={status:'ready',rows:[{state:'TN',hk_actual:12.5,mepc_actual:2,total_actual:14.5,total_target:20,complete:true,overall_pct:72.5}]};
- let cleaningRows=[{state:'TN',scheduled:3,completed:1,not_completed:1,pending:1,remaining:2}],masterUnavailable=false;
+ let cleaningRows=[{state:'TN',scheduled:3,completed:1,not_completed:1,pending:1,remaining:2}],masterUnavailable=false,attendanceConfigured=false;
  const training=[{id:'t1',store,canonical_store_id:'s',category:{code:'hk'},training_date:today,status:'submitted'},{id:'t2',store,canonical_store_id:'s',category:{code:'technical_mep'},training_date:today,status:'submitted'}];
  await page.route('**/api/**',async route=>{
   const request=route.request(),url=new URL(request.url());requests.push({method:request.method(),path:url.pathname});
@@ -28,7 +28,7 @@ test('Retail module pages use real report responses, filters, evidence and unava
   if(url.pathname.endsWith('/module-reports/deep-cleaning/d/evidence'))return route.fulfill({json:{uploads:[{id:'image',type:'before',name:'before.jpg',mime_type:'image/jpeg',url:'https://example.test/signed-before.jpg'}]}});
   if(url.pathname.endsWith('/module-reports/deep-cleaning'))return route.fulfill({json:{report:{stores:[store],exceptions:[],totals:{scheduled:3,completed:1,not_completed:1,pending:1},schedules:[{id:'plan',store,reporting_state:'TN',scheduled_date:today,display_status:'Completed',submission_ids:['d']},{id:'notdone',store,reporting_state:'TN',scheduled_date:today,display_status:'Not Completed',submission_ids:[],not_done_reason:'Recorded reason'}],submissions:[{id:'d',store,deep_cleaning_date:today,status:'submitted',before_count:1,after_count:1}]}}});
   if(url.pathname.endsWith('/module-reports/training'))return route.fulfill({json:{report:{rows:training,complete:true}}});
-  if(url.pathname.endsWith('/attendance/summary'))return route.fulfill({json:{report:{...summarizeAttendance({stores:[store],aop:[],attendance:[{retail_store_id:'s',attendance_date:today,class:'HK',credit:12.5},{retail_store_id:'s',attendance_date:today,class:'MEPC',credit:2}],cutoff:today,view:url.searchParams.get('view')||'mtd'}),latest_imported_date:today,can_upload:false}}});
+  if(url.pathname.endsWith('/attendance/summary'))return route.fulfill({json:{report:{...summarizeAttendance({stores:attendanceConfigured?[store,{id:'missing',store_code:'MISSING',store_name:'Missing target',state:'TN'}]:[store],aop:attendanceConfigured?[{retail_store_id:'s',hk_count:1.25,mepc_count:0.55,effective_from:today.slice(0,7)+'-01',effective_to:null}]:[],attendance:[{retail_store_id:'s',attendance_date:today,class:'HK',credit:12.5},{retail_store_id:'s',attendance_date:today,class:'MEPC',credit:2}],cutoff:today,view:url.searchParams.get('view')||'mtd'}),latest_imported_date:today,can_upload:false,aop_mapping_blocked:'Obsolete source-pending flag'}}});
   if(url.pathname.endsWith('/unified-master'))return route.fulfill(masterUnavailable?{status:503,json:{message:'Synthetic ownership unavailable'}}:{json:{result:{stores:[store],epoch_at:'2026-01-01',store_zone_history:[],assignments:[],zones:[],fos:[],rows:[],files:[],attendance:[],aop:[],deep_cleaning:[],images:[],schedules:[],training:[],events:[],proposals:[],permissions:[],from:today,to:today}}});
   return route.fulfill({json:{}});
  });
@@ -81,6 +81,11 @@ test('Retail module pages use real report responses, filters, evidence and unava
   await page.getByText('Actual Man-days',{exact:true}).waitFor();
   assert.ok(await page.getByText('14.5',{exact:true}).count()>0,'Actual credits remain visible with missing AOP');
   assert.ok(await page.getByText('N/A',{exact:true}).count()>0,'Missing AOP is never converted to zero');
+  attendanceConfigured=true;await page.reload();
+  await page.getByLabel('Approved AOP coverage').filter({hasText:'1 of 2 stores configured; 1 without AOP'}).waitFor();
+  assert.match(await page.getByLabel('Approved AOP coverage').textContent(),/HK: 1.25 · MEPC: 0.55/);
+  assert.equal(await page.getByText('Configured AOP Count',{exact:true}).locator('..').getByText('1.8',{exact:true}).count(),1);
+  assert.equal(await page.getByText('Approved effective-dated AOP configuration is pending budget-source confirmation.',{exact:false}).count(),0);
   await page.goto(base+'/reliance-retail/deep-cleaning');await page.getByText('Recorded reason',{exact:true}).waitFor();
   await page.getByLabel('Search cleaning records').fill('Recorded reason');
   assert.equal(await page.getByRole('region',{name:'Cleaning schedules',exact:true}).locator('tbody tr').count(),1);
