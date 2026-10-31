@@ -16,7 +16,7 @@ const button = 'inline-flex items-center justify-center gap-2 rounded-lg border 
 const errorText = error => error.response?.data?.message || error.message;
 
 function SummaryTable({ rows, total, onState, report }) {
-  return <div className="overflow-x-auto"><table className="w-full min-w-[650px] table-fixed text-right text-[10px]"><thead className="bg-blue-50 text-blue-950"><tr>{attendanceColumns.map(([key, label]) => <th key={key} className={`px-1 py-3 ${key === 'state' ? 'text-left' : ''}`}>{label}</th>)}</tr></thead>
+  return <div className="overflow-x-auto"><table className="retail-attendance-summary w-full text-right text-[10px]"><thead className="bg-blue-50 text-blue-950"><tr>{attendanceColumns.map(([key, label]) => <th key={key} className={`px-1 py-3 ${key === 'state' ? 'text-left' : ''}`}>{label}</th>)}</tr></thead>
     <tbody>{[...rows, total].map((row, index) => <tr key={row.state} className={`border-t border-slate-100 ${index === rows.length ? 'bg-blue-50 font-bold' : ''}`}>
       {attendanceColumns.map(([key]) => <td key={key} className={`whitespace-nowrap px-1 py-3 ${key.endsWith('_pct') ? color(row[key]) : ''} ${key === 'state' ? 'text-left font-semibold' : ''}`}>
         {key === 'state' ? onState && index !== rows.length ? <button className="text-blue-700 underline" onClick={() => onState(row.state)}>{row.state}</button> : row.state : key.endsWith('_pct') ? pct(row[key]) : key.includes('aop') ? number(attendanceAopValue(report, row, key)) : row.missing_aop.length && key.includes('target') ? 'N/A' : number(row[key])}
@@ -116,7 +116,7 @@ export default function RetailAttendance() {
         {report?.can_upload && <button onClick={() => setUpload(true)} className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white"><Upload size={16}/>Upload Day Attendance</button>}
       </div></header>
     <div className="flex flex-wrap items-center justify-between gap-3"><div role="tablist" aria-label="Attendance view" className="inline-flex rounded-lg border border-blue-100 bg-blue-50 p-1">{[['mtd','Month-to-Date'],['daily','Daily View']].map(([value,label]) => <button key={value} role="tab" aria-selected={view===value} onClick={() => setView(value)} className={`rounded-md px-5 py-2 text-xs font-semibold ${view===value ? 'bg-blue-600 text-white' : 'text-blue-950'}`}>{label}</button>)}</div>
-      <div className="flex gap-2"><input aria-label="Attendance cutoff date" type="date" value={cutoff} max={today} onChange={e => { if (e.target.value) setCutoff(e.target.value); }} className="rounded-lg border p-2 text-xs"/>
+      <div className="flex min-w-0 flex-wrap gap-2"><input aria-label="Attendance cutoff date" type="date" value={cutoff} max={today} onChange={e => { if (e.target.value) setCutoff(e.target.value); }} className="min-w-0 max-w-full rounded-lg border p-2 text-xs"/>
         <select aria-label="State filter" value={state} onChange={e => setState(e.target.value)} className="rounded-lg border p-2 text-xs"><option value="">All States</option>{states.map(s => <option key={s}>{s}</option>)}</select></div>
     </div>
     <details open className="rounded-xl border p-4"><summary className="cursor-pointer font-bold">All-state coverage, FO ownership and source AOP review</summary><RetailResponsibilityPanel/></details>

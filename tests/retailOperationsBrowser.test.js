@@ -7,6 +7,7 @@ import {createServer} from 'vite';
 import {chromium} from '@playwright/test';
 import {indiaToday} from '../backend/shared/retailAttendance.js';
 import {maintenanceReport,thermographyReport} from '../backend/shared/retailOperations.js';
+import {verifyRetailLayout} from './retailLayoutQa.js';
 
 // Isolated automated test fixtures only. No production connection or real login.
 test('operational pages confirm saves, enforce period UX, retain Thermography late history and export all rows',{timeout:120000},async()=>{
@@ -36,6 +37,8 @@ test('operational pages confirm saves, enforce period UX, retain Thermography la
  try{
   await page.goto(base+'/reliance-retail/cmpm',{waitUntil:'domcontentloaded',timeout:60000});
   await page.getByRole('heading',{name:'CM / PM Calls',exact:true}).waitFor();
+  await page.getByLabel('CM / PM Calls entry Store Code').waitFor();
+  await verifyRetailLayout(page,'cmpm');
   await page.getByLabel('CM / PM Calls entry Store Code').selectOption(store);
   await page.getByRole('button',{name:'Record completed CM',exact:true}).click();
   await page.getByRole('button',{name:'Cancel',exact:true}).click();assert.equal(writes.length,0);
@@ -55,6 +58,7 @@ test('operational pages confirm saves, enforce period UX, retain Thermography la
   assert.equal(await page.locator('.retail-report-stats article').filter({hasText:'Approval overdue'}).locator('strong').textContent(),'1');
   await page.getByRole('button',{name:'Record client approval',exact:true}).click();await page.getByRole('button',{name:'Confirm save',exact:true}).click();
   await page.getByText('Approved late — retained',{exact:true}).waitFor();
+  await verifyRetailLayout(page,'thermography');
   assert.equal(await page.getByRole('button',{name:'Record completion',exact:true}).count(),0);
   const download=page.waitForEvent('download');await page.getByRole('button',{name:'Export Excel',exact:true}).click();
   const chunks=[];for await(const chunk of await (await download).createReadStream())chunks.push(chunk);

@@ -19,3 +19,4 @@
 @media(prefers-reduced-motion:reduce){.ifms-dashboard *{transition:none!important}}
 
 @media(min-width:1201px) and (max-width:1500px){.ifms-thermography-content{grid-template-columns:minmax(132px,.65fr) minmax(0,1.35fr)}}
+.ifms-card-footer{margin-top:auto}.ifms-card-content{align-content:start}

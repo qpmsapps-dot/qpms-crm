@@ -5,6 +5,7 @@ import path from 'node:path';
 import {createServer} from 'vite';
 import {chromium} from '@playwright/test';
 import {indiaToday,summarizeAttendance} from '../backend/shared/retailAttendance.js';
+import {verifyRetailLayout} from './retailLayoutQa.js';
 
 async function workbookFromDownload(download){
  const {default:ExcelJS}=await import('exceljs'),chunks=[];
@@ -16,7 +17,7 @@ async function workbookFromDownload(download){
 test('Retail module pages use real report responses, filters, evidence and unavailable states',{timeout:120000},async()=>{
  Object.assign(process.env,{VITE_ENABLE_DEMO_AUTH:'true',VITE_APP_MODE:'demo',VITE_SUPABASE_URL:'',VITE_SUPABASE_ANON_KEY:'',VITE_API_URL:'http://127.0.0.1:4999'});
  const server=await createServer({cacheDir:path.join(os.tmpdir(),'qpms-retail-modules-b-vite'),server:{host:'127.0.0.1',port:0},logLevel:'error'});await server.listen();
- const browser=await chromium.launch({headless:true}),context=await browser.newContext(),page=await context.newPage(),today=indiaToday(),store={id:'s',store_code:'P1',store_name:'Canonical Puducherry',state:'PY'};
+ const browser=await chromium.launch({headless:true}),context=await browser.newContext(),page=await context.newPage(),today=indiaToday(),store={id:'s',store_code:'P1',store_name:'Canonical Puducherry',state:'PY',ownership:{known:true,zone_id:null,fo_profile_id:null}};
  const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));
  await context.addInitScript(()=>{localStorage.setItem('qpms-crm-auth-user',JSON.stringify({id:'local-admin',profileId:'local-profile',name:'Local Admin',role:'Admin',rawRole:'Admin',status:'Active',isActive:true,webAccessEnabled:true,authProvider:'demo-fixture',is_demo:true,isDemoReadOnly:true,read_only:false}));sessionStorage.setItem('qpms-crm-backend-token','synthetic-local-test-token');});
  const source={status:'ready',rows:[{state:'TN',hk_actual:12.5,mepc_actual:2,total_actual:14.5,total_target:20,complete:true,overall_pct:72.5}]};
@@ -30,6 +31,7 @@ test('Retail module pages use real report responses, filters, evidence and unava
   if(url.pathname.endsWith('/module-reports/training'))return route.fulfill({json:{report:{rows:training,complete:true}}});
   if(url.pathname.endsWith('/attendance/summary'))return route.fulfill({json:{report:{...summarizeAttendance({stores:attendanceConfigured?[store,{id:'missing',store_code:'MISSING',store_name:'Missing target',state:'TN'}]:[store],aop:attendanceConfigured?[{retail_store_id:'s',hk_count:1.25,mepc_count:0.55,effective_from:today.slice(0,7)+'-01',effective_to:null}]:[],attendance:[{retail_store_id:'s',attendance_date:today,class:'HK',credit:12.5},{retail_store_id:'s',attendance_date:today,class:'MEPC',credit:2}],cutoff:today,view:url.searchParams.get('view')||'mtd'}),latest_imported_date:today,can_upload:false,aop_mapping_blocked:'Obsolete source-pending flag'}}});
   if(url.pathname.endsWith('/unified-master'))return route.fulfill(masterUnavailable?{status:503,json:{message:'Synthetic ownership unavailable'}}:{json:{result:{stores:[store],epoch_at:'2026-01-01',store_zone_history:[],assignments:[],zones:[],fos:[],rows:[],files:[],attendance:[],aop:[],deep_cleaning:[],images:[],schedules:[],training:[],events:[],proposals:[],permissions:[],from:today,to:today}}});
+  if(url.pathname.endsWith('/fault-tracker/tickets'))return route.fulfill({json:{ok:true,import_batch:{id:'fixture',original_file_name:'ISOLATED LAYOUT FIXTURE',ticket_count:3},tickets:[1,2,3].map(i=>({id:`fixture-${i}`,ticket_no:`LAYOUT-${i}`,store_code:'P1',store_name:'Canonical Puducherry',state:'PY',operational_state_code:'TN',stage:'Fault Raised - Quote Yet to Submit',category_group:'HK',is_active:true}))}});
   return route.fulfill({json:{}});
  });
  await page.route('https://example.test/**',route=>route.fulfill({status:204,body:''}));
@@ -72,6 +74,7 @@ test('Retail module pages use real report responses, filters, evidence and unava
   assert.equal(trainingBook.getWorksheet('Training').rowCount,253,'Export includes all 252 filtered records, not just one page');
   await page.getByLabel('Search Training records').fill('Pagination Trainer 249');
   assert.equal(await page.getByRole('button',{name:'View Training evidence'}).count(),1);
+  await verifyRetailLayout(page,'training');
   for(const width of [1920,1024,390]){await page.setViewportSize({width,height:1000});assert.equal(await page.locator('.retail-report').evaluate(root=>root.scrollWidth<=root.clientWidth+1),true,`Training fits at ${width}px`);if(process.env.RETAIL_MODULES_B_VISUAL_QA==='true'&&width!==1024)await page.screenshot({path:path.join(os.tmpdir(),`retail-b-training-${width}.png`),fullPage:true,animations:'disabled'});}
   masterUnavailable=true;await page.reload();await page.getByText('Zone/FO ownership unavailable in your authorized scope. Training records remain available.',{exact:true}).waitFor();
   assert.equal(await page.getByText('Verified trained stores',{exact:true}).locator('..').locator('strong').textContent(),'N/A');
@@ -86,13 +89,20 @@ test('Retail module pages use real report responses, filters, evidence and unava
   assert.match(await page.getByLabel('Approved AOP coverage').textContent(),/HK: 1.25 · MEPC: 0.55/);
   assert.equal(await page.getByText('Configured AOP Count',{exact:true}).locator('..').getByText('1.8',{exact:true}).count(),1);
   assert.equal(await page.getByText('Approved effective-dated AOP configuration is pending budget-source confirmation.',{exact:false}).count(),0);
+  await page.getByText('Counts use the latest saved source version; provisional identities are not operational stores.',{exact:true}).waitFor();
+  await verifyRetailLayout(page,'attendance');
   await page.goto(base+'/reliance-retail/deep-cleaning');await page.getByText('Recorded reason',{exact:true}).waitFor();
   await page.getByLabel('Search cleaning records').fill('Recorded reason');
   assert.equal(await page.getByRole('region',{name:'Cleaning schedules',exact:true}).locator('tbody tr').count(),1);
+  await verifyRetailLayout(page,'deep-cleaning');
   for(const width of [1920,1024,390]){await page.setViewportSize({width,height:1000});assert.equal(await page.locator('.retail-report').evaluate(root=>root.scrollWidth<=root.clientWidth+1),true,`Cleaning fits at ${width}px`);if(process.env.RETAIL_MODULES_B_VISUAL_QA==='true'&&width!==1024)await page.screenshot({path:path.join(os.tmpdir(),`retail-b-cleaning-${width}.png`),fullPage:true,animations:'disabled'});}
   assert.equal(requests.some(r=>r.method!=='GET'),false,'Reporting must not mutate operational data');
   await page.goto(base+'/reliance-retail');await page.getByText('14.5',{exact:true}).waitFor();
   for(const width of [1920,1024,390]){await page.setViewportSize({width,height:1000});assert.equal(await page.locator('.ifms-dashboard').evaluate(root=>[...root.querySelectorAll('.ifms-card,.ifms-table-wrap,.ifms-card-header')].every(el=>el.scrollWidth<=el.clientWidth+1)),true,`Dashboard fits at ${width}px`);}
+  await verifyRetailLayout(page,'dashboard');
+  await page.goto(base+'/reliance-retail/fault-tracker');
+  await page.getByText(/Eligible tickets from saved dump:/).waitFor();
+  await verifyRetailLayout(page,'fault-tracker');
   assert.deepEqual(errors,[]);
  }finally{await browser.close();await server.close();}
 });
