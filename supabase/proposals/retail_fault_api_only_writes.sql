@@ -1,6 +1,7 @@
--- CONDITIONAL DRAFT ONLY. NOT production-approved or installed.
--- Use only if owner catalog review confirms a direct-write bypass and approves
--- API-only writes. Keep existing SELECT/RLS and trusted backend imports intact.
+-- PREPARED ONLY. Owner export (9), SHA256
+-- 6336bc0a619edffad0b32e07c7350534f24898457978b83f2771dcf33b2b2c02,
+-- confirms the direct-write bypass. Not installed by this preparation task.
+-- Keep existing SELECT/RLS and trusted backend imports intact.
 -- Review ALL callable definer functions separately: table revokes do not revoke RPCs.
 begin;
 set local lock_timeout='5s';

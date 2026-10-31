@@ -1,5 +1,7 @@
 # Workstream B: workflow SQL installation and security readiness
 
+**Owner export now reviewed:** follow [Production-evidence security corrections](PRODUCTION_SECURITY_CORRECTIONS.md) for the confirmed findings, validated corrections, current controlled installation order and remaining gate. It supersedes the historical pending-catalog entries below; no repeat eight-section verification is requested.
+
 Review date: 31 October 2026. Baseline candidate: `8ffd12edae36416fe9b03e55fecdb09a174dcea7`. This plan is not authorization to execute production DDL, change storage policies, or release the candidate. No production writes were executed for this review.
 
 ## Exact proposal files and dependencies
