@@ -1,3 +1,4 @@
+import {scopedFaultTrackerReport} from './services/faultTrackerStoreScope.js';
 import { ownedEndDayKmStatus } from './services/foOwnedEndDayKmService.js';
 import { createKmReconciliationRouter } from './routes/foKmReconciliationRoutes.js';
 import { processKmReconciliationJobs } from './services/foKmReconciliationWorker.js';
@@ -5278,7 +5279,7 @@ app.get('/api/fault-tracker/imports', requireSupabaseJwtOrDemoApiRead, requireFa
     }
     const imports = isDemoUser(request.profile)
       ? (data || []).map((row) => sanitizeDemoRecord(row, ['metadata']))
-      : data || [];
+      : (data || []).map(row=>faultTrackerCanManage(request.profile)?row:({id:row.id,original_file_name:row.original_file_name,imported_at:row.imported_at}));
     response.json({ ok: true, imports });
   } catch (error) {
     respondFaultTrackerError(response, error);
@@ -5287,134 +5288,13 @@ app.get('/api/fault-tracker/imports', requireSupabaseJwtOrDemoApiRead, requireFa
 
 app.get('/api/fault-tracker/tickets', requireSupabaseJwtOrDemoApiRead, requireFaultTrackerAccess, async (request, response) => {
   try {
-    const client = requireServiceRoleSupabase();
-    const roleCanReadAll = faultTrackerCanReadAll(request.profile);
-    const mappedState = faultTrackerStateCode(request.profile?.state);
-    console.log('[Fault Tracker] tickets route hit', {
-      auth_user_id: request.authUser?.id || null,
-      employee_code: request.employeeCode || null,
-      role: request.profile?.role || null,
-      state: request.profile?.state || null,
-      roleCanReadAll,
-      mappedState: mappedState || null,
-      query: {
-        latest: request.query.latest || null,
-        import_batch_id: request.query.import_batch_id || null,
-        state: request.query.state || null,
-      },
+    const result = await scopedFaultTrackerReport(requireServiceRoleSupabase(),request.profile,request.query,{
+      readAll:faultTrackerCanReadAll(request.profile)&&(!isRetailTechnicalMis(request.profile)||FAULT_TRACKER_READ_ALL_ROLE_KEYS.has(faultTrackerRoleKey(request.profile))),
+      isAdmin:faultTrackerCanManage(request.profile),stateCode:faultTrackerStateCode,
     });
-    if (!roleCanReadAll && !mappedState) {
-      response.status(403).json({
-        ok: false,
-        code: 'state_mapping_missing',
-        message: 'State mapping not configured for your profile. Please contact Admin.',
-      });
-      return;
-    }
-
-    let importBatchId = faultTrackerText(request.query.import_batch_id);
-    if (!importBatchId || request.query.latest === 'true') {
-      const { data: latestBatches, error: batchError } = await client
-        .from('fault_tracker_import_batches')
-        .select('*')
-        .order('imported_at', { ascending: false })
-        .limit(1);
-      if (batchError) {
-        logFaultTrackerDbError('GET /api/fault-tracker/tickets', 'fault_tracker_import_batches', 'select_latest_batch', batchError);
-        throw batchError;
-      }
-      const latestBatch = Array.isArray(latestBatches) ? latestBatches[0] : null;
-      importBatchId = latestBatch?.id || null;
-      if (!importBatchId) {
-        response.json({ ok: true, import_batch: null, tickets: [] });
-        return;
-      }
-    }
-
-    let retailStoreCodes = null;
-    const retailOnly = isRetailTechnicalMis(request.profile) || faultTrackerKey(request.query.business) === 'RELIANCERETAIL';
-    if (retailOnly) {
-      const { data: retailStores, error: retailStoreError } = await client
-        .from('reliance_retail_store_master')
-        .select('store_code')
-        .limit(500);
-      if (retailStoreError) throw retailStoreError;
-      retailStoreCodes = (retailStores || []).map((row) => row.store_code).filter(Boolean);
-    }
-    const buildTicketQuery = () => {
-      let query = client
-        .from('fault_tracker_tickets')
-        .select('*')
-        .eq('import_batch_id', importBatchId)
-        .eq('is_active', true)
-        .order('created_at_source', { ascending: false, nullsFirst: false });
-      if (retailStoreCodes) query = retailStoreCodes.length ? query.in('store_code', retailStoreCodes) : query.eq('store_code', '__NO_RETAIL_STORE__');
-
-      if (roleCanReadAll) {
-        const state = faultTrackerStateCode(request.query.state);
-        if (state) query = query.eq('state_code', state);
-      } else {
-        query = query.eq('state_code', mappedState);
-      }
-
-      const stage = faultTrackerText(request.query.stage);
-      if (stage) query = query.eq('stage', stage);
-      const ageingBucket = faultTrackerText(request.query.ageing_bucket);
-      if (ageingBucket) query = query.eq('ageing_bucket', ageingBucket);
-      const category = faultTrackerText(request.query.category);
-      if (category) query = query.eq('category_group', category);
-      const supervisor = faultTrackerText(request.query.supervisor);
-      if (supervisor) query = query.eq('supervisor_name', supervisor);
-      const month = faultTrackerText(request.query.month);
-      if (month && /^\d{4}-\d{2}$/.test(month)) {
-        query = query
-          .gte('created_at_source', `${month}-01T00:00:00.000Z`)
-          .lt('created_at_source', new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 1)).toISOString());
-      }
-      const search = faultTrackerText(request.query.search);
-      if (search) {
-        const safeSearch = search.replace(/[%(),]/g, ' ');
-        query = query.or(`ticket_no.ilike.%${safeSearch}%,store_code.ilike.%${safeSearch}%,store_name.ilike.%${safeSearch}%,supervisor_name.ilike.%${safeSearch}%,remarks.ilike.%${safeSearch}%`);
-      }
-      return query;
-    };
-
-    const tickets = [];
-    const pageSize = 1000;
-    for (let from = 0; from < (retailOnly ? 5000 : 50000); from += pageSize) {
-      const to = from + pageSize - 1;
-      const { data: pageTickets, error: ticketsError } = await buildTicketQuery().range(from, to);
-      if (ticketsError) {
-        logFaultTrackerDbError('GET /api/fault-tracker/tickets', 'fault_tracker_tickets', 'select_tickets', ticketsError, {
-          import_batch_id: importBatchId,
-          range_from: from,
-          range_to: to,
-        });
-        throw ticketsError;
-      }
-      tickets.push(...(pageTickets || []));
-      if (!pageTickets || pageTickets.length < pageSize) break;
-    }
-    const { data: importBatches, error: importBatchError } = await client
-      .from('fault_tracker_import_batches')
-      .select('*')
-      .eq('id', importBatchId)
-      .limit(1);
-    if (importBatchError) {
-      logFaultTrackerDbError('GET /api/fault-tracker/tickets', 'fault_tracker_import_batches', 'select_import_batch', importBatchError, {
-        import_batch_id: importBatchId,
-      });
-      throw importBatchError;
-    }
-    const importBatch = Array.isArray(importBatches) ? importBatches[0] : null;
-    response.json({
-      ok: true,
-      import_batch: isDemoUser(request.profile) ? sanitizeDemoRecord(importBatch || null, ['metadata']) : importBatch || null,
-      tickets: isDemoUser(request.profile) ? (tickets || []).map((row) => sanitizeDemoRecord(row)) : tickets || [],
-    });
-  } catch (error) {
-    respondFaultTrackerError(response, error);
-  }
+    if(isDemoUser(request.profile))result.tickets=result.tickets.map(row=>sanitizeDemoRecord(row));
+    response.json(result);
+  } catch(error) { respondFaultTrackerError(response,error); }
 });
 
 app.post('/api/fault-tracker/import', requireSupabaseJwtOrDemoApiRead, requireFaultTrackerManage, async (request, response) => {
