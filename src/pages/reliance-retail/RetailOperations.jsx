@@ -8,6 +8,7 @@ import {downloadUnified} from '../../utils/retailUnifiedExport.js';
 import {usePageTitle} from '../../hooks/usePageTitle.js';
 import {useAuth} from '../../context/auth-context.js';
 import {isPlatformAdmin} from '../../utils/authRoles.js';
+import {isCompleteOperationsReport} from '../../utils/retailOperationsReport.js';
 
 const emptyForm=()=>({store_id:'',scheduled_date:indiaToday(),request_id:crypto.randomUUID()});
 export default function RetailOperations({kind='maintenance'}) {
@@ -16,15 +17,17 @@ export default function RetailOperations({kind='maintenance'}) {
  const maintenance=kind==='maintenance',title=maintenance?'CM / PM Calls':'Thermography';
  usePageTitle(`Reliance Retail ${title}`);
  const [month,setMonth]=useState(indiaToday().slice(0,7)),[state,setState]=useState(''),[store,setStore]=useState(''),[query,setQuery]=useState('');
- const [report,setReport]=useState(null),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[saving,setSaving]=useState(false),[refresh,setRefresh]=useState(0);
+ const [loadedReport,setReport]=useState(null),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[saving,setSaving]=useState(false),[refresh,setRefresh]=useState(0);
  const [form,setForm]=useState(emptyForm),[confirmation,setConfirmation]=useState(null),[history,setHistory]=useState(null),[callKind,setCallKind]=useState('CM'),[page,setPage]=useState(0),[size,setSize]=useState(25);
  const endpoint=`/api/reliance-retail/operations/${kind}`;
+ const reportKey=JSON.stringify([kind,month,state,store]);
+ const report=loadedReport?.key===reportKey&&isCompleteOperationsReport(loadedReport.data,kind)?loadedReport.data:null;
  useEffect(()=>{
   let live=true;
   queueMicrotask(()=>{if(live){setBusy(true);setReport(null);setError('');setHistory(null);setConfirmation(null);setPage(0);}});
-  authenticatedApiRequest({url:endpoint,params:{month,state,store}}).then(r=>{if(live)setReport(r.data.result);}).catch(e=>{if(live)setError(e.response?.data?.message||e.message);}).finally(()=>{if(live)setBusy(false);});
+  authenticatedApiRequest({url:endpoint,params:{month,state,store}}).then(r=>{if(live){setReport({key:reportKey,data:r.data?.result});if(!isCompleteOperationsReport(r.data?.result,kind))setError('Operational report is incomplete or unavailable. Refresh to try again.');}}).catch(e=>{if(live)setError(e.response?.data?.message||e.message);}).finally(()=>{if(live)setBusy(false);});
   return()=>{live=false;};
- },[endpoint,month,state,store,refresh]);
+ },[endpoint,kind,month,state,store,refresh,reportKey]);
  useEffect(()=>{
   if(maintenance&&report?.today&&month===report.today.slice(0,7))queueMicrotask(()=>setCallKind(Number(report.today.slice(8,10))<=15?'CM':'PM'));
  },[maintenance,report?.today,month]);
