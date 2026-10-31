@@ -12,6 +12,7 @@ const manualKmRangeRefresh = createManualKmRangeRefreshService();
 import { createHmac, randomUUID } from 'node:crypto';
 import dotenv from 'dotenv';
 import express from 'express';
+import { createHttpLifecycle } from './services/httpLifecycle.js';
 import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
 import {
@@ -4933,6 +4934,11 @@ function routeSendMom(type) {
 app.get('/', (request, response) => {
   response.json({ success: true, message: 'myQPMS Mail API running' });
 });
+
+const httpLifecycle = createHttpLifecycle({
+  isReady: () => supabaseConfigStatus.configured && Boolean(serviceRoleSupabase),
+});
+app.get('/ready', httpLifecycle.readiness);
 
 app.get('/health', (request, response) => {
   response.json({
@@ -11382,7 +11388,7 @@ function startFoStaleSessionCleanupScheduler() {
   }
 }
 
-app.listen(port, () => {
+const httpServer = app.listen(port, () => {
   console.log('[myQPMS Mail API] Startup complete', {
     port,
     allowedOrigins,
@@ -11408,3 +11414,4 @@ app.listen(port, () => {
     },
   });
 });
+httpLifecycle.attach(httpServer);
