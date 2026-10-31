@@ -125,7 +125,7 @@ const productionRoutes = [
           { path: 'reliance-retail', element: <RetailDashboard /> },
           { path: 'reliance-retail/store-master', element: <RetailStoreMaster /> },
           { path: 'reliance-retail/deep-cleaning', element: <RetailScopedDeepCleaning /> },
-          { path: 'reliance-retail/fault-tracker', element: <RetailOperationalTrackers kind="FAULT" /> },
+          { path: 'reliance-retail/fault-tracker', element: <Navigate to="/fault-tracker" replace /> },
           { path: 'reliance-retail/training', element: <RetailTraining /> },
           { path: 'reliance-retail/attendance', element: <RetailAttendance /> },
           { path: 'reliance-retail/m-here-attendance', element: <Navigate to="/reliance-retail/attendance" replace /> },

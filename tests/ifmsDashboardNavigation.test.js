@@ -13,6 +13,13 @@ test('existing Retail dashboard and detail routes resolve within the existing sh
   for (const route of ['attendance','deep-cleaning','training']) assert.ok(routes.includes(`path: 'reliance-retail/${route}'`));
   assert.match(routes, /element: <MainLayout/);
 });
+test('Retail Fault Tracker redirects to the existing IFMS import dashboard, preserving its original component',()=>{
+  assert.match(routes,/path: 'fault-tracker', element: <FaultTracker \/>/);
+  assert.match(routes,/path: 'reliance-retail\/fault-tracker', element: <Navigate to="\/fault-tracker" replace \/>/);
+  assert.doesNotMatch(routes,/path: 'reliance-retail\/fault-tracker', element: <RetailOperationalTrackers/);
+  const group=sidebar.slice(sidebar.indexOf('const relianceRetailNavGroup'),sidebar.indexOf('function insertHospitalTicketingGroup'));
+  assert.match(group,/label: 'Fault Tracker', to: '\/fault-tracker'/);
+});
 test('Retail sidebar retains its ordered existing navigation and access gate', () => {
   const group = sidebar.slice(sidebar.indexOf('const relianceRetailNavGroup'),sidebar.indexOf('function insertHospitalTicketingGroup'));
   let previous = -1;
