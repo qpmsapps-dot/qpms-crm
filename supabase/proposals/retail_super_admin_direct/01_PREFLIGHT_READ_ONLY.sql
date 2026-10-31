@@ -1,6 +1,7 @@
 begin transaction read only;
 select version,name from supabase_migrations.schema_migrations where version='20261031090000';
 do $verify$ begin
+perform p.id,p.auth_user_id,p.username,p.role,p.is_active,p.status from public.profiles p where false;
 if exists(select 1 from supabase_migrations.schema_migrations where version='20261031090000') then raise exception 'Already installed; use postinstall, never reinstall';end if;
 if not exists(select 1 from pg_proc where oid=to_regprocedure('public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)') and prosecdef and provolatile='s' and md5(replace(prosrc,E'\r\n',E'\n'))='f3dc5882e6363359ee1c9b6a24ccc9e9') then raise exception 'Reviewed identity proof helper drift';end if;
 if has_function_privilege('anon','public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)','EXECUTE') or has_function_privilege('authenticated','public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)','EXECUTE') or has_function_privilege('service_role','public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)','EXECUTE') then raise exception 'Private proof helper ACL drift';end if;

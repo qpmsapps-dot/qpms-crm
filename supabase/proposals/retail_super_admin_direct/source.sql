@@ -1,8 +1,8 @@
 create table public.retail_identity_final_authority (
- id uuid primary key default gen_random_uuid(),actor_id uuid not null references public.profiles(id),
+ id uuid primary key default gen_random_uuid(),actor_id uuid not null references public.profiles(id),auth_user_id uuid not null,
  source_sha256 text not null check(source_sha256 ~ '^[a-f0-9]{64}$'),enabled boolean not null default true,
  granted_at timestamptz not null default now(),authorization_reference text not null check(length(btrim(authorization_reference))>=3),
- granted_by_db_role text not null default current_user,unique(actor_id,source_sha256)
+ granted_by_db_role text not null default current_user,unique(actor_id,source_sha256),unique(auth_user_id,source_sha256)
 );
 alter table public.retail_identity_final_authority enable row level security;
 revoke all on public.retail_identity_final_authority from public,anon,authenticated,service_role;
@@ -10,8 +10,8 @@ revoke all on public.retail_identity_final_authority from public,anon,authentica
 create function public.retail_identity_final_authorized(p_actor uuid,p_sha text) returns boolean
 language sql stable security definer set search_path=pg_catalog,public as $$
  select public.retail_provisional_admin(p_actor) and exists(select 1 from public.retail_identity_final_authority a
- join public.retail_provisional_files f on f.sha256=a.source_sha256
- where a.actor_id=p_actor and a.enabled and a.source_sha256=p_sha and f.version=2 and f.withdrawn_at is null and f.source_format='UNIFIED MASTER');
+ join public.retail_provisional_files f on f.sha256=a.source_sha256 join public.profiles p on p.id=a.actor_id and p.auth_user_id=a.auth_user_id
+ where a.actor_id=p_actor and a.enabled and a.auth_user_id in ('79cd196c-c6f3-404a-b22a-d4683afefa3f'::uuid,'7e84cddf-821a-4513-b7ce-25895d660393'::uuid,'f9238141-8f44-4073-86aa-2749b8a3dccf'::uuid,'377ca7a2-95cc-4891-8840-338f2cb20bb9'::uuid) and a.source_sha256=p_sha and f.version=2 and f.withdrawn_at is null and f.source_format='UNIFIED MASTER');
 $$;
 revoke all on function public.retail_identity_final_authorized(uuid,text) from public,anon,authenticated,service_role;
 
@@ -26,7 +26,7 @@ grant execute on function public.rpc_retail_identity_direct_capability(uuid) to 
 create function public.rpc_retail_identity_direct_approve(p_actor uuid,p_proposals uuid[],p_reason text) returns jsonb
 language plpgsql security definer set search_path=pg_catalog,public as $$
 declare pid uuid;p public.retail_provisional_proposals%rowtype;r public.retail_provisional_rows%rowtype;f public.retail_provisional_files%rowtype;
- grant_id uuid;file_id uuid;source_sha text;receipt bigint;e jsonb;valid uuid[]:='{}';replayed uuid[]:='{}';held jsonb:='[]';receipt_ids jsonb:='[]';
+ grant_id uuid;approver_auth_id uuid;file_id uuid;source_sha text;receipt bigint;e jsonb;valid uuid[]:='{}';replayed uuid[]:='{}';held jsonb:='[]';receipt_ids jsonb:='[]';
 begin
  if not public.retail_provisional_admin(p_actor) then raise exception using errcode='42501',message='Authenticated active Admin identity required';end if;
  if p_reason is distinct from 'Super Admin authorized Reliance Retail Store Master activation.' then raise exception 'Explicit Super Admin approval reason required';end if;
@@ -57,11 +57,11 @@ begin
   exception when others then held:=held||jsonb_build_array(jsonb_build_object('proposal_id',pid,'reason',sqlerrm));end;
  end loop;
  if cardinality(valid)>0 then
-  select a.id into strict grant_id from public.retail_identity_final_authority a where a.actor_id=p_actor and a.source_sha256=source_sha and a.enabled for share;
-  insert into public.retail_provisional_events(batch_id,actor_id,action,details) values(file_id,p_actor,'SUPER_ADMIN_DIRECT_IDENTITY_APPROVAL',jsonb_build_object('approval_mode','SUPER_ADMIN_DIRECT','reason',p_reason,'authority_grant_id',grant_id,'approved_proposal_ids',to_jsonb(valid),'source_sha256',source_sha,'source_version',2,'approved_at',now(),'held',held)) returning id into receipt;
+  select a.id,a.auth_user_id into strict grant_id,approver_auth_id from public.retail_identity_final_authority a where a.actor_id=p_actor and a.source_sha256=source_sha and a.enabled for share;
+  insert into public.retail_provisional_events(batch_id,actor_id,action,details) values(file_id,p_actor,'SUPER_ADMIN_DIRECT_IDENTITY_APPROVAL',jsonb_build_object('approval_mode','SUPER_ADMIN_DIRECT','reason',p_reason,'authority_grant_id',grant_id,'approver_auth_user_id',approver_auth_id,'approved_proposal_ids',to_jsonb(valid),'source_sha256',source_sha,'source_version',2,'approved_at',now(),'held',held)) returning id into receipt;
   foreach pid in array valid loop
    select * into p from public.retail_provisional_proposals where id=pid;
-   e:=jsonb_build_object('scope','SAVED_SOURCE_IDENTITY','approval_mode','SUPER_ADMIN_DIRECT','reason',p_reason,'reference','SUPER_ADMIN_DIRECT:'||receipt::text,'direct_receipt_id',receipt::text,'authority_grant_id',grant_id,'evidence_kind','CONFIRMED_SOURCE_FILE','evidence_sha256',source_sha);
+   e:=jsonb_build_object('scope','SAVED_SOURCE_IDENTITY','approval_mode','SUPER_ADMIN_DIRECT','reason',p_reason,'reference','SUPER_ADMIN_DIRECT:'||receipt::text,'direct_receipt_id',receipt::text,'authority_grant_id',grant_id,'approver_auth_user_id',approver_auth_id,'evidence_kind','CONFIRMED_SOURCE_FILE','evidence_sha256',source_sha);
    update public.retail_provisional_proposals set status='APPROVED',decided_by=p_actor,decided_at=now(),decision_reason=e::text where id=p.id;
    update public.retail_provisional_rows set review=review||p.changes,revision=revision+1,verification_status='VERIFIED' where id=p.row_id;
    insert into public.reliance_retail_management_audit(action,entity_type,entity_id,actor_profile_id,after_state) values('SUPER_ADMIN_DIRECT_IDENTITY_APPROVAL','proposal',p.id,p_actor,jsonb_build_object('state',p.state,'approval',e,'approval_reason',p_reason));
@@ -96,6 +96,7 @@ begin
    or not exists(select 1 from public.retail_provisional_events ev join public.retail_identity_final_authority a on a.id=(e->>'authority_grant_id')::uuid
     where ev.id=(e->>'direct_receipt_id')::bigint and ev.actor_id=p_actor and ev.batch_id=f.id and ev.action='SUPER_ADMIN_DIRECT_IDENTITY_APPROVAL'
     and a.actor_id=p_actor and a.enabled and a.source_sha256=f.sha256 and ev.details->>'authority_grant_id'=a.id::text
+    and ev.details->>'approver_auth_user_id'=a.auth_user_id::text and e->>'approver_auth_user_id'=a.auth_user_id::text
     and ev.details->>'reason'='Super Admin authorized Reliance Retail Store Master activation.' and ev.details->>'source_sha256'=f.sha256
     and ev.details->'approved_proposal_ids' @> jsonb_build_array(p.id::text)) then return false;end if;
  else

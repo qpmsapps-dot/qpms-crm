@@ -3,14 +3,14 @@ begin;set local lock_timeout='5s';set local statement_timeout='60s';
 do $install$ begin
 perform pg_advisory_xact_lock(hashtextextended('retail_super_admin_direct_install',0));
 if exists(select 1 from supabase_migrations.schema_migrations where version='20261031090000') then
- if not exists(select 1 from supabase_migrations.schema_migrations where version='20261031090000' and cardinality(statements)=1 and md5(replace(statements[1],E'\r\n',E'\n'))='5ac524717a5e7592c5b3d73b98028719') then raise exception 'Direct-approval ledger drift';end if;
- if not exists(select 1 from pg_proc where oid=to_regprocedure('public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)') and prosecdef and provolatile='s' and md5(replace(prosrc,E'\r\n',E'\n'))='00c2c18644a72ae7961adbdbfcd5607b') then raise exception 'Reviewed identity proof helper drift';end if;
+ if not exists(select 1 from supabase_migrations.schema_migrations where version='20261031090000' and cardinality(statements)=1 and md5(replace(statements[1],E'\r\n',E'\n'))='f2087eb8651b01334bdc6762f8892048') then raise exception 'Direct-approval ledger drift';end if;
+ if not exists(select 1 from pg_proc where oid=to_regprocedure('public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)') and prosecdef and provolatile='s' and md5(replace(prosrc,E'\r\n',E'\n'))='0378a20524bdbf1e50bfbcce9cdb4b66') then raise exception 'Reviewed identity proof helper drift';end if;
 if has_function_privilege('anon','public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)','EXECUTE') or has_function_privilege('authenticated','public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)','EXECUTE') or has_function_privilege('service_role','public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)','EXECUTE') then raise exception 'Private proof helper ACL drift';end if;
-if not exists(select 1 from pg_proc where oid=to_regprocedure('public.retail_identity_final_authorized(uuid,text)') and prosecdef and provolatile='s' and md5(replace(prosrc,E'\r\n',E'\n'))='a6ac053c4336fec05ccfb165c7ab7e9a' and exists(select 1 from unnest(proconfig) cfg where regexp_replace(cfg,'[[:space:]]','','g')='search_path=pg_catalog,public')) then raise exception 'Direct approval function drift: retail_identity_final_authorized';end if;
+if not exists(select 1 from pg_proc where oid=to_regprocedure('public.retail_identity_final_authorized(uuid,text)') and prosecdef and provolatile='s' and md5(replace(prosrc,E'\r\n',E'\n'))='558355a93f78cf5d74a286a3a1a28bd9' and exists(select 1 from unnest(proconfig) cfg where regexp_replace(cfg,'[[:space:]]','','g')='search_path=pg_catalog,public')) then raise exception 'Direct approval function drift: retail_identity_final_authorized';end if;
 if has_function_privilege('anon','public.retail_identity_final_authorized(uuid,text)','EXECUTE') or has_function_privilege('authenticated','public.retail_identity_final_authorized(uuid,text)','EXECUTE') or has_function_privilege('service_role','public.retail_identity_final_authorized(uuid,text)','EXECUTE') is distinct from false then raise exception 'Direct approval function ACL drift: retail_identity_final_authorized';end if;
 if not exists(select 1 from pg_proc where oid=to_regprocedure('public.rpc_retail_identity_direct_capability(uuid)') and prosecdef and provolatile='s' and md5(replace(prosrc,E'\r\n',E'\n'))='6f676d5f92d57227091e229e3bcfd643' and exists(select 1 from unnest(proconfig) cfg where regexp_replace(cfg,'[[:space:]]','','g')='search_path=pg_catalog,public')) then raise exception 'Direct approval function drift: rpc_retail_identity_direct_capability';end if;
 if has_function_privilege('anon','public.rpc_retail_identity_direct_capability(uuid)','EXECUTE') or has_function_privilege('authenticated','public.rpc_retail_identity_direct_capability(uuid)','EXECUTE') or has_function_privilege('service_role','public.rpc_retail_identity_direct_capability(uuid)','EXECUTE') is distinct from true then raise exception 'Direct approval function ACL drift: rpc_retail_identity_direct_capability';end if;
-if not exists(select 1 from pg_proc where oid=to_regprocedure('public.rpc_retail_identity_direct_approve(uuid,uuid[],text)') and prosecdef and provolatile='v' and md5(replace(prosrc,E'\r\n',E'\n'))='ee27aa0fcdac415e1b96748cab678d95' and exists(select 1 from unnest(proconfig) cfg where regexp_replace(cfg,'[[:space:]]','','g')='search_path=pg_catalog,public')) then raise exception 'Direct approval function drift: rpc_retail_identity_direct_approve';end if;
+if not exists(select 1 from pg_proc where oid=to_regprocedure('public.rpc_retail_identity_direct_approve(uuid,uuid[],text)') and prosecdef and provolatile='v' and md5(replace(prosrc,E'\r\n',E'\n'))='267d419e1ee31eb286590cdcdee6dfd8' and exists(select 1 from unnest(proconfig) cfg where regexp_replace(cfg,'[[:space:]]','','g')='search_path=pg_catalog,public')) then raise exception 'Direct approval function drift: rpc_retail_identity_direct_approve';end if;
 if has_function_privilege('anon','public.rpc_retail_identity_direct_approve(uuid,uuid[],text)','EXECUTE') or has_function_privilege('authenticated','public.rpc_retail_identity_direct_approve(uuid,uuid[],text)','EXECUTE') or has_function_privilege('service_role','public.rpc_retail_identity_direct_approve(uuid,uuid[],text)','EXECUTE') is distinct from true then raise exception 'Direct approval function ACL drift: rpc_retail_identity_direct_approve';end if;
 if not exists(select 1 from pg_class where oid=to_regclass('public.retail_identity_final_authority') and relrowsecurity) then raise exception 'Authority RLS missing';end if;
  return;end if;
@@ -18,10 +18,10 @@ if not exists(select 1 from pg_proc where oid=to_regprocedure('public.retail_ide
 if has_function_privilege('anon','public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)','EXECUTE') or has_function_privilege('authenticated','public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)','EXECUTE') or has_function_privilege('service_role','public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)','EXECUTE') then raise exception 'Private proof helper ACL drift';end if;
 if to_regclass('public.retail_identity_final_authority') is not null then raise exception 'Unexpected final-authority table';end if;
 execute $source$create table public.retail_identity_final_authority (
- id uuid primary key default gen_random_uuid(),actor_id uuid not null references public.profiles(id),
+ id uuid primary key default gen_random_uuid(),actor_id uuid not null references public.profiles(id),auth_user_id uuid not null,
  source_sha256 text not null check(source_sha256 ~ '^[a-f0-9]{64}$'),enabled boolean not null default true,
  granted_at timestamptz not null default now(),authorization_reference text not null check(length(btrim(authorization_reference))>=3),
- granted_by_db_role text not null default current_user,unique(actor_id,source_sha256)
+ granted_by_db_role text not null default current_user,unique(actor_id,source_sha256),unique(auth_user_id,source_sha256)
 );
 alter table public.retail_identity_final_authority enable row level security;
 revoke all on public.retail_identity_final_authority from public,anon,authenticated,service_role;
@@ -29,8 +29,8 @@ revoke all on public.retail_identity_final_authority from public,anon,authentica
 create function public.retail_identity_final_authorized(p_actor uuid,p_sha text) returns boolean
 language sql stable security definer set search_path=pg_catalog,public as $$
  select public.retail_provisional_admin(p_actor) and exists(select 1 from public.retail_identity_final_authority a
- join public.retail_provisional_files f on f.sha256=a.source_sha256
- where a.actor_id=p_actor and a.enabled and a.source_sha256=p_sha and f.version=2 and f.withdrawn_at is null and f.source_format='UNIFIED MASTER');
+ join public.retail_provisional_files f on f.sha256=a.source_sha256 join public.profiles p on p.id=a.actor_id and p.auth_user_id=a.auth_user_id
+ where a.actor_id=p_actor and a.enabled and a.auth_user_id in ('79cd196c-c6f3-404a-b22a-d4683afefa3f'::uuid,'7e84cddf-821a-4513-b7ce-25895d660393'::uuid,'f9238141-8f44-4073-86aa-2749b8a3dccf'::uuid,'377ca7a2-95cc-4891-8840-338f2cb20bb9'::uuid) and a.source_sha256=p_sha and f.version=2 and f.withdrawn_at is null and f.source_format='UNIFIED MASTER');
 $$;
 revoke all on function public.retail_identity_final_authorized(uuid,text) from public,anon,authenticated,service_role;
 
@@ -45,7 +45,7 @@ grant execute on function public.rpc_retail_identity_direct_capability(uuid) to 
 create function public.rpc_retail_identity_direct_approve(p_actor uuid,p_proposals uuid[],p_reason text) returns jsonb
 language plpgsql security definer set search_path=pg_catalog,public as $$
 declare pid uuid;p public.retail_provisional_proposals%rowtype;r public.retail_provisional_rows%rowtype;f public.retail_provisional_files%rowtype;
- grant_id uuid;file_id uuid;source_sha text;receipt bigint;e jsonb;valid uuid[]:='{}';replayed uuid[]:='{}';held jsonb:='[]';receipt_ids jsonb:='[]';
+ grant_id uuid;approver_auth_id uuid;file_id uuid;source_sha text;receipt bigint;e jsonb;valid uuid[]:='{}';replayed uuid[]:='{}';held jsonb:='[]';receipt_ids jsonb:='[]';
 begin
  if not public.retail_provisional_admin(p_actor) then raise exception using errcode='42501',message='Authenticated active Admin identity required';end if;
  if p_reason is distinct from 'Super Admin authorized Reliance Retail Store Master activation.' then raise exception 'Explicit Super Admin approval reason required';end if;
@@ -76,11 +76,11 @@ begin
   exception when others then held:=held||jsonb_build_array(jsonb_build_object('proposal_id',pid,'reason',sqlerrm));end;
  end loop;
  if cardinality(valid)>0 then
-  select a.id into strict grant_id from public.retail_identity_final_authority a where a.actor_id=p_actor and a.source_sha256=source_sha and a.enabled for share;
-  insert into public.retail_provisional_events(batch_id,actor_id,action,details) values(file_id,p_actor,'SUPER_ADMIN_DIRECT_IDENTITY_APPROVAL',jsonb_build_object('approval_mode','SUPER_ADMIN_DIRECT','reason',p_reason,'authority_grant_id',grant_id,'approved_proposal_ids',to_jsonb(valid),'source_sha256',source_sha,'source_version',2,'approved_at',now(),'held',held)) returning id into receipt;
+  select a.id,a.auth_user_id into strict grant_id,approver_auth_id from public.retail_identity_final_authority a where a.actor_id=p_actor and a.source_sha256=source_sha and a.enabled for share;
+  insert into public.retail_provisional_events(batch_id,actor_id,action,details) values(file_id,p_actor,'SUPER_ADMIN_DIRECT_IDENTITY_APPROVAL',jsonb_build_object('approval_mode','SUPER_ADMIN_DIRECT','reason',p_reason,'authority_grant_id',grant_id,'approver_auth_user_id',approver_auth_id,'approved_proposal_ids',to_jsonb(valid),'source_sha256',source_sha,'source_version',2,'approved_at',now(),'held',held)) returning id into receipt;
   foreach pid in array valid loop
    select * into p from public.retail_provisional_proposals where id=pid;
-   e:=jsonb_build_object('scope','SAVED_SOURCE_IDENTITY','approval_mode','SUPER_ADMIN_DIRECT','reason',p_reason,'reference','SUPER_ADMIN_DIRECT:'||receipt::text,'direct_receipt_id',receipt::text,'authority_grant_id',grant_id,'evidence_kind','CONFIRMED_SOURCE_FILE','evidence_sha256',source_sha);
+   e:=jsonb_build_object('scope','SAVED_SOURCE_IDENTITY','approval_mode','SUPER_ADMIN_DIRECT','reason',p_reason,'reference','SUPER_ADMIN_DIRECT:'||receipt::text,'direct_receipt_id',receipt::text,'authority_grant_id',grant_id,'approver_auth_user_id',approver_auth_id,'evidence_kind','CONFIRMED_SOURCE_FILE','evidence_sha256',source_sha);
    update public.retail_provisional_proposals set status='APPROVED',decided_by=p_actor,decided_at=now(),decision_reason=e::text where id=p.id;
    update public.retail_provisional_rows set review=review||p.changes,revision=revision+1,verification_status='VERIFIED' where id=p.row_id;
    insert into public.reliance_retail_management_audit(action,entity_type,entity_id,actor_profile_id,after_state) values('SUPER_ADMIN_DIRECT_IDENTITY_APPROVAL','proposal',p.id,p_actor,jsonb_build_object('state',p.state,'approval',e,'approval_reason',p_reason));
@@ -115,6 +115,7 @@ begin
    or not exists(select 1 from public.retail_provisional_events ev join public.retail_identity_final_authority a on a.id=(e->>'authority_grant_id')::uuid
     where ev.id=(e->>'direct_receipt_id')::bigint and ev.actor_id=p_actor and ev.batch_id=f.id and ev.action='SUPER_ADMIN_DIRECT_IDENTITY_APPROVAL'
     and a.actor_id=p_actor and a.enabled and a.source_sha256=f.sha256 and ev.details->>'authority_grant_id'=a.id::text
+    and ev.details->>'approver_auth_user_id'=a.auth_user_id::text and e->>'approver_auth_user_id'=a.auth_user_id::text
     and ev.details->>'reason'='Super Admin authorized Reliance Retail Store Master activation.' and ev.details->>'source_sha256'=f.sha256
     and ev.details->'approved_proposal_ids' @> jsonb_build_array(p.id::text)) then return false;end if;
  else
@@ -137,20 +138,20 @@ revoke all on function public.retail_identity_only_approved(uuid,jsonb,text,text
 
 notify pgrst, 'reload schema';
 $source$;
-if not exists(select 1 from pg_proc where oid=to_regprocedure('public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)') and prosecdef and provolatile='s' and md5(replace(prosrc,E'\r\n',E'\n'))='00c2c18644a72ae7961adbdbfcd5607b') then raise exception 'Reviewed identity proof helper drift';end if;
+if not exists(select 1 from pg_proc where oid=to_regprocedure('public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)') and prosecdef and provolatile='s' and md5(replace(prosrc,E'\r\n',E'\n'))='0378a20524bdbf1e50bfbcce9cdb4b66') then raise exception 'Reviewed identity proof helper drift';end if;
 if has_function_privilege('anon','public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)','EXECUTE') or has_function_privilege('authenticated','public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)','EXECUTE') or has_function_privilege('service_role','public.retail_identity_only_approved(uuid,jsonb,text,text,text,text,text,text)','EXECUTE') then raise exception 'Private proof helper ACL drift';end if;
-if not exists(select 1 from pg_proc where oid=to_regprocedure('public.retail_identity_final_authorized(uuid,text)') and prosecdef and provolatile='s' and md5(replace(prosrc,E'\r\n',E'\n'))='a6ac053c4336fec05ccfb165c7ab7e9a' and exists(select 1 from unnest(proconfig) cfg where regexp_replace(cfg,'[[:space:]]','','g')='search_path=pg_catalog,public')) then raise exception 'Direct approval function drift: retail_identity_final_authorized';end if;
+if not exists(select 1 from pg_proc where oid=to_regprocedure('public.retail_identity_final_authorized(uuid,text)') and prosecdef and provolatile='s' and md5(replace(prosrc,E'\r\n',E'\n'))='558355a93f78cf5d74a286a3a1a28bd9' and exists(select 1 from unnest(proconfig) cfg where regexp_replace(cfg,'[[:space:]]','','g')='search_path=pg_catalog,public')) then raise exception 'Direct approval function drift: retail_identity_final_authorized';end if;
 if has_function_privilege('anon','public.retail_identity_final_authorized(uuid,text)','EXECUTE') or has_function_privilege('authenticated','public.retail_identity_final_authorized(uuid,text)','EXECUTE') or has_function_privilege('service_role','public.retail_identity_final_authorized(uuid,text)','EXECUTE') is distinct from false then raise exception 'Direct approval function ACL drift: retail_identity_final_authorized';end if;
 if not exists(select 1 from pg_proc where oid=to_regprocedure('public.rpc_retail_identity_direct_capability(uuid)') and prosecdef and provolatile='s' and md5(replace(prosrc,E'\r\n',E'\n'))='6f676d5f92d57227091e229e3bcfd643' and exists(select 1 from unnest(proconfig) cfg where regexp_replace(cfg,'[[:space:]]','','g')='search_path=pg_catalog,public')) then raise exception 'Direct approval function drift: rpc_retail_identity_direct_capability';end if;
 if has_function_privilege('anon','public.rpc_retail_identity_direct_capability(uuid)','EXECUTE') or has_function_privilege('authenticated','public.rpc_retail_identity_direct_capability(uuid)','EXECUTE') or has_function_privilege('service_role','public.rpc_retail_identity_direct_capability(uuid)','EXECUTE') is distinct from true then raise exception 'Direct approval function ACL drift: rpc_retail_identity_direct_capability';end if;
-if not exists(select 1 from pg_proc where oid=to_regprocedure('public.rpc_retail_identity_direct_approve(uuid,uuid[],text)') and prosecdef and provolatile='v' and md5(replace(prosrc,E'\r\n',E'\n'))='ee27aa0fcdac415e1b96748cab678d95' and exists(select 1 from unnest(proconfig) cfg where regexp_replace(cfg,'[[:space:]]','','g')='search_path=pg_catalog,public')) then raise exception 'Direct approval function drift: rpc_retail_identity_direct_approve';end if;
+if not exists(select 1 from pg_proc where oid=to_regprocedure('public.rpc_retail_identity_direct_approve(uuid,uuid[],text)') and prosecdef and provolatile='v' and md5(replace(prosrc,E'\r\n',E'\n'))='267d419e1ee31eb286590cdcdee6dfd8' and exists(select 1 from unnest(proconfig) cfg where regexp_replace(cfg,'[[:space:]]','','g')='search_path=pg_catalog,public')) then raise exception 'Direct approval function drift: rpc_retail_identity_direct_approve';end if;
 if has_function_privilege('anon','public.rpc_retail_identity_direct_approve(uuid,uuid[],text)','EXECUTE') or has_function_privilege('authenticated','public.rpc_retail_identity_direct_approve(uuid,uuid[],text)','EXECUTE') or has_function_privilege('service_role','public.rpc_retail_identity_direct_approve(uuid,uuid[],text)','EXECUTE') is distinct from true then raise exception 'Direct approval function ACL drift: rpc_retail_identity_direct_approve';end if;
 if not exists(select 1 from pg_class where oid=to_regclass('public.retail_identity_final_authority') and relrowsecurity) then raise exception 'Authority RLS missing';end if;
 insert into supabase_migrations.schema_migrations(version,name,statements) values('20261031090000','retail_super_admin_direct',array[$source$create table public.retail_identity_final_authority (
- id uuid primary key default gen_random_uuid(),actor_id uuid not null references public.profiles(id),
+ id uuid primary key default gen_random_uuid(),actor_id uuid not null references public.profiles(id),auth_user_id uuid not null,
  source_sha256 text not null check(source_sha256 ~ '^[a-f0-9]{64}$'),enabled boolean not null default true,
  granted_at timestamptz not null default now(),authorization_reference text not null check(length(btrim(authorization_reference))>=3),
- granted_by_db_role text not null default current_user,unique(actor_id,source_sha256)
+ granted_by_db_role text not null default current_user,unique(actor_id,source_sha256),unique(auth_user_id,source_sha256)
 );
 alter table public.retail_identity_final_authority enable row level security;
 revoke all on public.retail_identity_final_authority from public,anon,authenticated,service_role;
@@ -158,8 +159,8 @@ revoke all on public.retail_identity_final_authority from public,anon,authentica
 create function public.retail_identity_final_authorized(p_actor uuid,p_sha text) returns boolean
 language sql stable security definer set search_path=pg_catalog,public as $$
  select public.retail_provisional_admin(p_actor) and exists(select 1 from public.retail_identity_final_authority a
- join public.retail_provisional_files f on f.sha256=a.source_sha256
- where a.actor_id=p_actor and a.enabled and a.source_sha256=p_sha and f.version=2 and f.withdrawn_at is null and f.source_format='UNIFIED MASTER');
+ join public.retail_provisional_files f on f.sha256=a.source_sha256 join public.profiles p on p.id=a.actor_id and p.auth_user_id=a.auth_user_id
+ where a.actor_id=p_actor and a.enabled and a.auth_user_id in ('79cd196c-c6f3-404a-b22a-d4683afefa3f'::uuid,'7e84cddf-821a-4513-b7ce-25895d660393'::uuid,'f9238141-8f44-4073-86aa-2749b8a3dccf'::uuid,'377ca7a2-95cc-4891-8840-338f2cb20bb9'::uuid) and a.source_sha256=p_sha and f.version=2 and f.withdrawn_at is null and f.source_format='UNIFIED MASTER');
 $$;
 revoke all on function public.retail_identity_final_authorized(uuid,text) from public,anon,authenticated,service_role;
 
@@ -174,7 +175,7 @@ grant execute on function public.rpc_retail_identity_direct_capability(uuid) to 
 create function public.rpc_retail_identity_direct_approve(p_actor uuid,p_proposals uuid[],p_reason text) returns jsonb
 language plpgsql security definer set search_path=pg_catalog,public as $$
 declare pid uuid;p public.retail_provisional_proposals%rowtype;r public.retail_provisional_rows%rowtype;f public.retail_provisional_files%rowtype;
- grant_id uuid;file_id uuid;source_sha text;receipt bigint;e jsonb;valid uuid[]:='{}';replayed uuid[]:='{}';held jsonb:='[]';receipt_ids jsonb:='[]';
+ grant_id uuid;approver_auth_id uuid;file_id uuid;source_sha text;receipt bigint;e jsonb;valid uuid[]:='{}';replayed uuid[]:='{}';held jsonb:='[]';receipt_ids jsonb:='[]';
 begin
  if not public.retail_provisional_admin(p_actor) then raise exception using errcode='42501',message='Authenticated active Admin identity required';end if;
  if p_reason is distinct from 'Super Admin authorized Reliance Retail Store Master activation.' then raise exception 'Explicit Super Admin approval reason required';end if;
@@ -205,11 +206,11 @@ begin
   exception when others then held:=held||jsonb_build_array(jsonb_build_object('proposal_id',pid,'reason',sqlerrm));end;
  end loop;
  if cardinality(valid)>0 then
-  select a.id into strict grant_id from public.retail_identity_final_authority a where a.actor_id=p_actor and a.source_sha256=source_sha and a.enabled for share;
-  insert into public.retail_provisional_events(batch_id,actor_id,action,details) values(file_id,p_actor,'SUPER_ADMIN_DIRECT_IDENTITY_APPROVAL',jsonb_build_object('approval_mode','SUPER_ADMIN_DIRECT','reason',p_reason,'authority_grant_id',grant_id,'approved_proposal_ids',to_jsonb(valid),'source_sha256',source_sha,'source_version',2,'approved_at',now(),'held',held)) returning id into receipt;
+  select a.id,a.auth_user_id into strict grant_id,approver_auth_id from public.retail_identity_final_authority a where a.actor_id=p_actor and a.source_sha256=source_sha and a.enabled for share;
+  insert into public.retail_provisional_events(batch_id,actor_id,action,details) values(file_id,p_actor,'SUPER_ADMIN_DIRECT_IDENTITY_APPROVAL',jsonb_build_object('approval_mode','SUPER_ADMIN_DIRECT','reason',p_reason,'authority_grant_id',grant_id,'approver_auth_user_id',approver_auth_id,'approved_proposal_ids',to_jsonb(valid),'source_sha256',source_sha,'source_version',2,'approved_at',now(),'held',held)) returning id into receipt;
   foreach pid in array valid loop
    select * into p from public.retail_provisional_proposals where id=pid;
-   e:=jsonb_build_object('scope','SAVED_SOURCE_IDENTITY','approval_mode','SUPER_ADMIN_DIRECT','reason',p_reason,'reference','SUPER_ADMIN_DIRECT:'||receipt::text,'direct_receipt_id',receipt::text,'authority_grant_id',grant_id,'evidence_kind','CONFIRMED_SOURCE_FILE','evidence_sha256',source_sha);
+   e:=jsonb_build_object('scope','SAVED_SOURCE_IDENTITY','approval_mode','SUPER_ADMIN_DIRECT','reason',p_reason,'reference','SUPER_ADMIN_DIRECT:'||receipt::text,'direct_receipt_id',receipt::text,'authority_grant_id',grant_id,'approver_auth_user_id',approver_auth_id,'evidence_kind','CONFIRMED_SOURCE_FILE','evidence_sha256',source_sha);
    update public.retail_provisional_proposals set status='APPROVED',decided_by=p_actor,decided_at=now(),decision_reason=e::text where id=p.id;
    update public.retail_provisional_rows set review=review||p.changes,revision=revision+1,verification_status='VERIFIED' where id=p.row_id;
    insert into public.reliance_retail_management_audit(action,entity_type,entity_id,actor_profile_id,after_state) values('SUPER_ADMIN_DIRECT_IDENTITY_APPROVAL','proposal',p.id,p_actor,jsonb_build_object('state',p.state,'approval',e,'approval_reason',p_reason));
@@ -244,6 +245,7 @@ begin
    or not exists(select 1 from public.retail_provisional_events ev join public.retail_identity_final_authority a on a.id=(e->>'authority_grant_id')::uuid
     where ev.id=(e->>'direct_receipt_id')::bigint and ev.actor_id=p_actor and ev.batch_id=f.id and ev.action='SUPER_ADMIN_DIRECT_IDENTITY_APPROVAL'
     and a.actor_id=p_actor and a.enabled and a.source_sha256=f.sha256 and ev.details->>'authority_grant_id'=a.id::text
+    and ev.details->>'approver_auth_user_id'=a.auth_user_id::text and e->>'approver_auth_user_id'=a.auth_user_id::text
     and ev.details->>'reason'='Super Admin authorized Reliance Retail Store Master activation.' and ev.details->>'source_sha256'=f.sha256
     and ev.details->'approved_proposal_ids' @> jsonb_build_array(p.id::text)) then return false;end if;
  else
