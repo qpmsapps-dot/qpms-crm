@@ -193,8 +193,14 @@ export async function retailAttendanceReport(client, profile, input = {}) {
   if (requestedState && scope.state && requestedState !== reportingState(scope.state)) throw attendanceError(403, 'State is outside your authorized scope.');
   const selected = allStores.filter(s => !requestedState || reportingState(s.state) === requestedState);
   if (!cutoff) {
-    const latest = await data(client.from('retail_employee_daily_attendance').select('attendance_date').in('retail_store_id', selected.map(s => s.id)).is('superseded_at', null).order('attendance_date', {ascending:false}).limit(1));
-    cutoff = latest?.[0]?.attendance_date || indiaToday(new Date(Date.now() - 86400000));
+    // Keep PostgREST URLs bounded as Store Master grows. Each batch stays inside
+    // the actor's selected scope; the newest result across batches is the cutoff.
+    for (let from = 0; from < selected.length; from += 100) {
+      const latest = await data(client.from('retail_employee_daily_attendance').select('attendance_date').in('retail_store_id', selected.slice(from, from + 100).map(s => s.id)).is('superseded_at', null).order('attendance_date', {ascending:false}).limit(1));
+      const date = latest?.[0]?.attendance_date;
+      if (date && (!cutoff || date > cutoff)) cutoff = date;
+    }
+    cutoff ||= indiaToday(new Date(Date.now() - 86400000));
   }
   const from = input.view === 'daily' ? cutoff : `${cutoff.slice(0, 7)}-01`;
   const source = await data(client.rpc('rpc_retail_attendance_report_source', { p_store_ids: selected.map(s => s.id), p_from: from, p_to: cutoff }));
