@@ -1,5 +1,22 @@
 # Production-evidence security corrections
 
+## Security installation reported successful; FO preservation reconciled
+
+The operator reports the revised Cleaning isolation file completed COMMIT and its seven-section postcheck confirms all four helpers, four restrictive policies and three guards; existing Training/audit guards, blocked Fault direct writes, backend rights, private bucket and all four absent/on-hold workflow RPCs. Treat this as operator-provided postcheck evidence, not an installation executed by the agent. The named export `C:\Users\qpmsd\Downloads\retail_security_postinstall_20261031.csv` was not accessible at the supplied path during this turn (ENOENT); full direct CSV review is pending file availability, and no repeat SQL audit is requested.
+
+Independent read-only reconciliation found exactly 1,704 FO submissions. The two newest rows are inspection/submitted records:
+
+| Source ID | Created, 31 October 2026 IST | Read-only findings |
+| --- | --- | --- |
+| `87f83ae1-3c0f-4155-bbc4-345a482b4814` | 18:43:35 | Unique active auth-linked FO owner; matching existing attendance/visit/store and activity date; mobile submit marker/local ID; pending images; zero uploads; updated_at equals created_at. |
+| `870fdbd9-ae1a-4d1a-b16f-368dc34aa45e` | 19:15:14 | Same consistency checks pass; pending images; zero uploads; updated_at equals created_at. |
+
+Reading the table without changing it and excluding exactly these IDs reproduced the original 1,702-row digest **`adf2fcb4ecce6304cfd0b42532ff404f`**. The full 1,704-row digest is **`49b21a6eecf15e89742025ddddefbcb9`**. Raw JSON numeric spelling was retained and PostgreSQL JSONB key ordering/spacing reproduced for the existing MD5 aggregation. The exact original-digest match independently establishes no detected change to the original records. The two new rows are consistent with normal FO inspection activity; uploads pending explains the unchanged upload count. Neither the security DDL nor its triggers insert inspection rows. No row was altered/deleted, no GPS/financial value was changed, and no private evidence URL was issued.
+
+Next manual workflow step, based on the operator-confirmed security postchecks: execute the complete [retail_fault_tracker_updates.sql](../../supabase/proposals/retail_fault_tracker_updates.sql) once in the existing authorized SQL Editor. Its function bodies are unchanged; local lock/statement timeouts now bound the transaction. Do not rerun the already committed Fault privilege correction or Cleaning isolation. After successful COMMIT, execute the new [Fault-only read-only postcheck](../../supabase/verification/retail_fault_tracker_updates_postinstall_read_only.sql). It checks exact function-body fingerprints, SECURITY DEFINER/search path, only owner/service execution, exact unique request-index shape, retained direct-write denial and backend/report privileges, then returns four labelled rows including all-import ticket/source digests. It invokes no Save/import function and does not require the still-held Cleaning link RPCs.
+
+Keep `retail_cleaning_fo_link.sql` on hold until the Fault installation and this postcheck pass. Then install that file separately and run the existing full workflow postcheck. QPMSADMIN-only backend enforcement and mandatory authenticated acceptance still precede GitHub main/Railway deployment. No MIS accounts are needed. Do not label owner/service-role catalog reads as authenticated acceptance.
+
 ## Next executable step: Supabase-compatible Cleaning retry
 
 The operator has now confirmed the targeted partial-install results: Fault direct table/column writes are denied to anon/authenticated with authenticated SELECT and service privileges preserved; all eleven Cleaning objects are absent; `postgres` has public CREATE, storage.objects TRIGGER and platform policy delegation, despite no native ownership and a NULL supautils.version. These are accepted results; do not repeat that verification or rerun the committed Fault correction.

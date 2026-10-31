@@ -1,6 +1,8 @@
 -- PROPOSAL ONLY. Requires explicit production installation authorization.
 -- Reuse existing ticket/update tables; never rewrite imported raw_row/source dates.
 begin;
+set local lock_timeout='5s';
+set local statement_timeout='60s';
 create unique index if not exists retail_fault_update_request on public.fault_tracker_ticket_updates(ticket_id,(metadata->>'retail_request_id')) where metadata ? 'retail_request_id';
 create or replace function public.rpc_retail_fault_update_capability() returns boolean
 language sql stable security definer set search_path=pg_catalog,public as $$select true$$;
