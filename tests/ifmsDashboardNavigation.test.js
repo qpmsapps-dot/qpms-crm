@@ -16,7 +16,7 @@ test('existing Retail dashboard and detail routes resolve within the existing sh
 test('Retail sidebar retains its ordered existing navigation and access gate', () => {
   const group = sidebar.slice(sidebar.indexOf('const relianceRetailNavGroup'),sidebar.indexOf('function insertHospitalTicketingGroup'));
   let previous = -1;
-  for (const label of ['Dashboard','Attendance','Deep Cleaning','Technical Training','Fault Tracker','OOS Tracker','CMPM','Thermography','Manpower Vacancy','Reliance Retail Store Master']) {
+  for (const label of ['Dashboard','Attendance','Deep Cleaning','HK & MEPC Training','Fault Tracker','OOS Tracker','CMPM','Thermography','Manpower Vacancy','Reliance Retail Store Master']) {
     const index=group.indexOf(`label: '${label}'`);assert.ok(index>previous,label);previous=index;
   }
   assert.match(sidebar,/retailWebAccess\(user\)\.dashboard/);
@@ -35,7 +35,7 @@ test('dashboard preserves role boundaries and existing detail-route authorizatio
   assert.match(dashboard,/canAccessRoute\(user, route\)/);
 });
 test('dashboard reuses read-only API and reporting model without polling or write calls', () => {
-  assert.match(dashboard,/relianceRetailApi\.dashboard\(\{ month \}\)/);
-  assert.match(dashboard,/selectRows\(emptyOperations\(\), global, local\[id\]/);
+  assert.match(dashboard,/\/api\/reliance-retail\/module-reports\/dashboard/);
+  assert.match(dashboard,/selectRows\(source\?\.rows\|\|\[\], global, local\[id\]/);
   assert.doesNotMatch(dashboard,/setInterval\s*\(|method:\s*['"](?:POST|PATCH|PUT|DELETE)['"]/);
 });

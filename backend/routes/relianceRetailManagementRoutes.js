@@ -1,5 +1,6 @@
 import {createRetailFoSelfRouter} from './retailFoSelfRoutes.js';
 import express from 'express';
+import {retailCleaningReport,retailCleaningEvidence,retailCompletedTraining,retailModuleDashboard} from '../services/retailModuleReportService.js';
 import {createRetailServiceTrackerRouter} from './retailServiceTrackerRoutes.js';
 import { createRetailUnifiedRouter } from './retailUnifiedRoutes.js';
 import { createRetailProvisionalRouter } from './retailProvisionalRoutes.js';
@@ -31,6 +32,10 @@ function sendError(response, error) {
 export function createRelianceRetailManagementRouter({ requireAuth, getClient }) {
   const router = express.Router();
   router.use(requireAuth);
+  router.get('/module-reports/dashboard',async(req,res)=>{try{res.json({ok:true,report:await retailModuleDashboard(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
+  router.get('/module-reports/training',async(req,res)=>{try{res.json({ok:true,report:await retailCompletedTraining(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
+  router.get('/module-reports/deep-cleaning',async(req,res)=>{try{res.json({ok:true,report:await retailCleaningReport(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
+  router.get('/module-reports/deep-cleaning/:id/evidence',async(req,res)=>{try{res.json({ok:true,uploads:await retailCleaningEvidence(getClient(),req.profile,req.params.id,req.query)});}catch(e){sendError(res,e);}});
   router.use('/fo-self',createRetailFoSelfRouter({getClient}));
   router.use('/service-trackers',createRetailServiceTrackerRouter({getClient}));
   router.use('/unified-master', createRetailUnifiedRouter({ getClient }));
