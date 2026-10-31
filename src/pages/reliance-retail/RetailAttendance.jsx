@@ -1,4 +1,5 @@
 import RetailResponsibilityPanel from '../../components/reliance-retail/RetailResponsibilityPanel.jsx';
+import '../../components/reliance-retail/retailReport.css';
 import { createElement, useEffect, useState } from 'react';
 import { BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { CalendarDays, Upload, Download, Users, ClipboardCheck, Target, Wrench, TrendingUp, AlertTriangle, X } from 'lucide-react';
@@ -107,7 +108,7 @@ export default function RetailAttendance() {
   ] : [];
   const states = STATE_OPTIONS;
   const period = view === 'daily' ? cutoff : `${cutoff.slice(0,7)}-01 to ${cutoff}`;
-  return <div className="space-y-4 rounded-xl bg-white p-4 text-slate-800 md:p-5">
+  return <div className="retail-report space-y-4 rounded-xl bg-white p-4 text-slate-800 md:p-5">
     <header className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-bold text-blue-950">Reliance Retail Attendance</h1><p className="text-sm text-slate-500">Manpower attendance summary using daily uploaded data.</p><p className="mt-2 font-semibold text-blue-950">Latest imported attendance date: {report?.latest_imported_date || 'No attendance imported'}</p></div>
       <div className="flex flex-wrap gap-2"><label className={button}><CalendarDays size={16}/><input aria-label="Month and year" type="month" max={today.slice(0,7)} value={cutoff.slice(0,7)} onChange={e => selectMonth(e.target.value)}/></label>
         <StoreImportButton onImported={() => setRefresh(value => value + 1)}/>

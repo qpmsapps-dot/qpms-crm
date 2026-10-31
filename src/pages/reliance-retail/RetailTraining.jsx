@@ -1,30 +1,90 @@
+import {useCallback,useEffect,useRef,useState} from 'react';
+import {Download,RefreshCw} from 'lucide-react';
 import RetailStateCoverage from '../../components/reliance-retail/RetailStateCoverage.jsx';
-import {STATE_OPTIONS,reportingState} from '../../../backend/shared/retailAttendance.js';
-import ExcelJS from 'exceljs';
+import {reportingState,indiaToday} from '../../../backend/shared/retailAttendance.js';
+import {REPORTING_STATES} from './ifmsDashboardModel.js';
 import {downloadUnified} from '../../utils/retailUnifiedExport.js';
-import { useEffect, useState } from 'react';
-import { usePageTitle } from '../../hooks/usePageTitle.js';
-import { authenticatedApiRequest } from '../../services/api.js';
+import {usePageTitle} from '../../hooks/usePageTitle.js';
+import {authenticatedApiRequest} from '../../services/api.js';
 import {retailUnifiedApi} from '../../services/retailUnifiedApi.js';
-import {indiaToday} from '../../../backend/shared/retailAttendance.js';
 import {trainingReport} from '../../../backend/shared/retailTrainingReport.js';
+import {ReportHeader,ReportFilters,ReportStats,ReportNotice,ReportPager} from '../../components/reliance-retail/RetailReportUi.jsx';
+import {matchesReportQuery,reportPage} from '../../utils/retailReportView.js';
 
 export default function RetailTraining() {
-  usePageTitle('Reliance Retail HK & MEPC Training');
-  const [sessions,setSessions]=useState([]),[snapshot,setSnapshot]=useState(null),[error,setError]=useState(''),[ownershipError,setOwnershipError]=useState(''),[busy,setBusy]=useState(false),[detail,setDetail]=useState(null),[evidenceLinks,setEvidenceLinks]=useState({});
-  const [from,setFrom]=useState(indiaToday().slice(0,7)+'-01'),[to,setTo]=useState(indiaToday()),[filter,setFilter]=useState({});
-  useEffect(()=>{let live=true;setBusy(true);setError('');setOwnershipError('');setSessions([]);setSnapshot(null);
-    Promise.allSettled([authenticatedApiRequest({url:'/api/reliance-retail/module-reports/training',params:{from,to}}),retailUnifiedApi.snapshot({from,to})]).then(([training,master])=>{if(!live)return;if(training.status==='fulfilled')setSessions(training.value.data?.report?.rows||[]);else setError(training.reason.response?.data?.message||training.reason.message);if(master.status==='fulfilled')setSnapshot(master.value);else setOwnershipError('Zone/FO ownership unavailable in your authorized scope. Training records remain available.');setBusy(false);});
-    return()=>{live=false;};
-  },[from,to]);
-  const rows=trainingReport(sessions,snapshot,filter),change=(key,value)=>setFilter(f=>({...f,[key]:value}));
-  async function inspect(id){try{setError('');const r=await authenticatedApiRequest({url:`/api/training/sessions/${id}`});setDetail(r.data);}catch(e){setError(e.response?.data?.message||e.message);}}
-  async function viewEvidence(evidence){try{setError('');const r=await authenticatedApiRequest({url:`/api/training/sessions/${detail.session.id}/evidence/${evidence.id}/view-url`}),url=r.data?.view?.url;if(!url||!url.startsWith('https://'))throw Error('Evidence link unavailable.');setEvidenceLinks(v=>({...v,[evidence.id]:url}));}catch(e){setError(e.response?.data?.message||e.message);}}
-  async function exportReport(){try{setError('');const book=new ExcelJS.Workbook(),sheet=book.addWorksheet('Training');sheet.addRow(['Date','Class','Source Store Code','Geographic State','Reporting State','Identity Status','Trainer','Status','Participants','Evidence Count','Historical Zone ID','Historical FO ID']);rows.forEach(s=>sheet.addRow([s.training_date,s.training_class,s.store?.store_code,s.state,reportingState(s.state),s.canonical_store_id?'Verified':'Identity review required',s.trainer_name,s.status,s.attendee_count??null,s.evidence_count??null,s.ownership.zone_id,s.ownership.fo_profile_id]));await downloadUnified(book,'Retail_Training_Review.xlsx');}catch(e){setError(e.message);}}
-  const select=(label,key,options)=><label key={key}>{label}<select className="ml-2 rounded border p-2" aria-label={`Training ${label}`} value={filter[key]||''} onChange={e=>change(key,e.target.value)}><option value="">All</option>{options.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>;
-  return <section className="space-y-5"><h1 className="text-2xl font-black">HK & MEPC Training</h1><RetailStateCoverage snapshot={snapshot||undefined}/><p>Completed HK and MEPC training records and evidence. Submission workflows remain unchanged.</p><div className="flex flex-wrap gap-3"><label>From<input aria-label="Training from" type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label>To<input aria-label="Training to" type="date" value={to} onChange={e=>setTo(e.target.value)}/></label>{select('Class','class',[['HK','HK'],['MEPC','MEPC'],['Unclassified','Unclassified']])}{select('State','state',STATE_OPTIONS.map(s=>[s,s]))}{select('Status','status',[...new Set(sessions.map(s=>s.status))].map(s=>[s,s]))}{select('Zone','zone',(snapshot?.zones||[]).map(z=>[z.id,z.zone_name]))}{select('FO','fo',(snapshot?.fos||[]).map(f=>[f.id,f.full_name||f.employee_code]))}{select('Store','store',(snapshot?.stores||[]).map(s=>[s.id,`${s.store_code} · ${s.store_name}`]))}</div>
-    {busy&&<p role="status">Loading Training records…</p>}{error&&<p role="alert" className="text-red-700">{error}</p>}{ownershipError&&<p>{ownershipError}</p>}
-    <button className="rounded border px-3 py-2" onClick={()=>void exportReport()}>Export Training review</button><p>{rows.length} matching records. Completed: {rows.filter(s=>['submitted','completed'].includes(s.status?.toLowerCase())).length}. Pending: {rows.filter(s=>['draft','planned','scheduled'].includes(s.status?.toLowerCase())).length}.</p>
-    <div className="flex flex-wrap gap-3">{[...new Set(rows.map(s=>reportingState(s.state)))].sort().map(state=><p key={state}>{state}: HK {rows.filter(s=>reportingState(s.state)===state&&s.training_class==='HK').length} · MEPC {rows.filter(s=>reportingState(s.state)===state&&s.training_class==='MEPC').length}</p>)}</div><div className="overflow-x-auto rounded-xl border bg-white"><table className="min-w-full text-sm"><thead><tr>{['Date / Class','Store','Trainer','Status','Historical Zone / FO','Attendees / Topics / Evidence','Details'].map(h=><th className="p-3 text-left" key={h}>{h}</th>)}</tr></thead><tbody>{rows.map(s=><tr className="border-t" key={s.id}><td className="p-3">{s.training_date}<p>{s.training_class}</p></td><td className="p-3">{s.store?.store_code} · {s.store?.store_name||'Store not recorded'}</td><td className="p-3">{s.trainer_name||'Not recorded'}</td><td className="p-3">{s.status}</td><td className="p-3">{s.ownership.known?(snapshot?.zones.find(z=>z.id===s.ownership.zone_id)?.zone_name||'Unassigned Zone'):'Historical ownership unknown'}<p>{s.ownership.known?(snapshot?.fos.find(f=>f.id===s.ownership.fo_profile_id)?.full_name||'Unassigned FO'):'Historical FO unknown'}</p></td><td className="p-3">{s.attendee_count??'Unknown'} / {s.topic_count??'Unknown'} / {s.evidence_count??'Unknown'}</td><td className="p-3"><button className="rounded border p-2" onClick={()=>void inspect(s.id)}>View Training evidence</button></td></tr>)}</tbody></table></div>
-    {!busy&&!rows.length&&!error&&<p>No authorized Training records match these filters.</p>}{detail&&<div className="space-y-3 rounded-xl border p-4"><button className="rounded border p-2" onClick={()=>setDetail(null)}>Close Training details</button><h2 className="font-bold">Training evidence and history</h2><p>{detail.session?.training_date} · {detail.session?.trainer_name_snapshot||'Trainer not recorded'} · {detail.session?.status}</p>{(detail.evidence||[]).map(e=><p key={e.id||e.file_name}>{e.file_name} {evidenceLinks[e.id]?<a className="underline" href={evidenceLinks[e.id]} target="_blank" rel="noreferrer">Open authorized evidence</a>:<button className="rounded border p-2" onClick={()=>void viewEvidence(e)}>Get evidence link</button>}</p>)}<h3 className="font-semibold">Attendees</h3>{(detail.attendees||[]).map(a=><p key={a.id}>{a.employee_code} · {a.employee_name}</p>)}<h3 className="font-semibold">Topics</h3>{(detail.topics||[]).map(t=><p key={t.id}>{t.topic?.module_name||t.topic?.name||'Topic'} · {t.is_covered?'Covered':'Pending'}</p>)}<h3 className="font-semibold">History</h3>{(detail.events||[]).map(e=><p key={e.id}>{e.created_at} · {e.event_type}</p>)}</div>}</section>;
+ usePageTitle('Reliance Retail HK & MEPC Training');
+ const [sessions,setSessions]=useState([]),[snapshot,setSnapshot]=useState(null),[error,setError]=useState(''),[ownershipError,setOwnershipError]=useState(''),[busy,setBusy]=useState(false),[detail,setDetail]=useState(null),[evidenceLinks,setEvidenceLinks]=useState({});
+ const [from,setFrom]=useState(indiaToday().slice(0,7)+'-01'),[to,setTo]=useState(indiaToday()),[filter,setFilter]=useState({}),[query,setQuery]=useState('');
+ const [page,setPage]=useState(0),[size,setSize]=useState(25),[refresh,setRefresh]=useState(0),[detailBusy,setDetailBusy]=useState(false),[exporting,setExporting]=useState(false);
+ const inspection=useRef(0);
+ const invalidateInspection=useCallback(()=>{inspection.current++;},[]);
+ function closeDetail(){inspection.current++;setDetail(null);setEvidenceLinks({});setDetailBusy(false);}
+ function resetView(){setPage(0);closeDetail();}
+ useEffect(()=>{
+  let live=true;invalidateInspection();
+  queueMicrotask(()=>{if(live){setBusy(true);setError('');setOwnershipError('');setSessions([]);setSnapshot(null);setDetail(null);setEvidenceLinks({});setDetailBusy(false);}});
+  Promise.allSettled([authenticatedApiRequest({url:'/api/reliance-retail/module-reports/training',params:{from,to}}),retailUnifiedApi.snapshot({from,to})]).then(([training,master])=>{
+   if(!live)return;
+   if(training.status==='fulfilled')setSessions(training.value.data?.report?.rows||[]);else setError(training.reason.response?.data?.message||training.reason.message);
+   if(master.status==='fulfilled')setSnapshot(master.value);else setOwnershipError('Zone/FO ownership unavailable in your authorized scope. Training records remain available.');
+   setBusy(false);
+  });
+  return()=>{live=false;invalidateInspection();};
+ },[from,to,refresh,invalidateInspection]);
+ const rows=trainingReport(sessions,snapshot,filter).filter(row=>matchesReportQuery([row.store?.store_code,row.store?.store_name,row.trainer_name,row.training_date,row.training_class],query));
+ const change=(key,value)=>{resetView();setFilter(previous=>({...previous,[key]:value}));};
+ async function inspect(id){
+  const request=++inspection.current;setError('');setDetail(null);setEvidenceLinks({});setDetailBusy(true);
+  try{const response=await authenticatedApiRequest({url:`/api/training/sessions/${encodeURIComponent(id)}`});if(request===inspection.current)setDetail(response.data);}
+  catch(e){if(request===inspection.current)setError(e.response?.data?.message||e.message);}
+  finally{if(request===inspection.current)setDetailBusy(false);}
+ }
+ async function viewEvidence(evidence){
+  const request=inspection.current;
+  try{setError('');const response=await authenticatedApiRequest({url:`/api/training/sessions/${encodeURIComponent(detail.session.id)}/evidence/${encodeURIComponent(evidence.id)}/view-url`}),url=response.data?.view?.url;
+   if(!url||!url.startsWith('https://'))throw Error('Evidence link unavailable.');if(request===inspection.current)setEvidenceLinks(previous=>({...previous,[evidence.id]:url}));
+  }catch(e){if(request===inspection.current)setError(e.response?.data?.message||e.message);}
+ }
+ async function exportReport(){
+  setExporting(true);setError('');
+  try{
+   const {default:ExcelJS}=await import('exceljs'),book=new ExcelJS.Workbook(),sheet=book.addWorksheet('Training');
+   sheet.addRow(['Date','Class','Source Store Code','Geographic State','Reporting State','Identity Status','Trainer','Status','Participants','Evidence Count','Historical Zone ID','Historical FO ID']);
+   rows.forEach(row=>sheet.addRow([row.training_date,row.training_class,row.store?.store_code,row.state,reportingState(row.state),row.canonical_store_id?'Verified':'Identity review required',row.trainer_name,row.status,row.attendee_count??null,row.evidence_count??null,row.ownership.zone_id,row.ownership.fo_profile_id]));
+   await downloadUnified(book,'Retail_Training_Review.xlsx');
+  }catch(e){setError(e.message);}finally{setExporting(false);}
+ }
+ const select=(label,key,options)=><label key={key}>{label}<select aria-label={`Training ${label}`} value={filter[key]||''} onChange={e=>change(key,e.target.value)}><option value="">All</option>{options.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>;
+ const hk=rows.filter(row=>row.training_class==='HK').length,mepc=rows.filter(row=>row.training_class==='MEPC').length;
+ const trainedStores=new Set(rows.filter(row=>row.canonical_store_id).map(row=>row.canonical_store_id)).size;
+ return <section className="retail-report">
+  <ReportHeader title="HK & MEPC Training" description="Completed training, authorized employee details and private evidence by canonical Store Code. Counts retain the existing hierarchy and employee-envelope restrictions.">
+   <button disabled={busy} onClick={()=>{resetView();setRefresh(value=>value+1);}}><RefreshCw size={15}/>Refresh</button><button disabled={busy||!sessions.length||exporting} onClick={()=>void exportReport()}><Download size={15}/>{exporting?'Exporting…':'Export Training review'}</button>
+  </ReportHeader>
+  <ReportFilters>
+   <label>From<input aria-label="Training from" type="date" value={from} max={to} onChange={e=>{if(e.target.value){resetView();setFrom(e.target.value);}}}/></label><label>To<input aria-label="Training to" type="date" value={to} min={from} onChange={e=>{if(e.target.value){resetView();setTo(e.target.value);}}}/></label>
+   {select('Class','class',[['HK','HK'],['MEPC','MEPC']])}{select('State','state',REPORTING_STATES.map(item=>[item.code,item.label]))}
+   {select('Zone','zone',(snapshot?.zones||[]).map(item=>[item.id,item.zone_name]))}{select('FO','fo',(snapshot?.fos||[]).map(item=>[item.id,item.full_name||item.employee_code]))}{select('Store','store',(snapshot?.stores||[]).map(item=>[item.id,`${item.store_code} · ${item.store_name}`]))}
+   <label>Search<input aria-label="Search Training records" type="search" value={query} placeholder="Store code, name or trainer" onChange={e=>{resetView();setQuery(e.target.value);}}/></label>
+  </ReportFilters>
+  {busy&&<ReportNotice>Loading Training records…</ReportNotice>}{error&&<ReportNotice error>{error}</ReportNotice>}{ownershipError&&<ReportNotice>{ownershipError}</ReportNotice>}
+  {!busy&&!error&&<ReportStats items={[{label:'HK trainings completed',value:hk},{label:'MEPC trainings completed',value:mepc},{label:'Completed training records',value:rows.length},{label:'Verified trained stores',value:snapshot?trainedStores:null,note:snapshot?'Distinct stores, not training count':'Canonical store coverage unavailable'}]}/>}
+  <details className="retail-report-panel"><summary className="retail-report-panel-heading">Authorized state coverage and ownership</summary><RetailStateCoverage snapshot={snapshot||undefined}/></details>
+  {!!rows.length&&<div className="retail-report-filters" aria-label="State-wise completed trainings">{[...new Set(rows.map(row=>reportingState(row.state)))].sort().map(state=><p key={state}>{state}: HK {rows.filter(row=>reportingState(row.state)===state&&row.training_class==='HK').length} · MEPC {rows.filter(row=>reportingState(row.state)===state&&row.training_class==='MEPC').length}</p>)}</div>}
+  <div className="retail-report-panel"><div className="retail-report-panel-heading"><h2>Completed training records</h2><span>{rows.length} matching records</span></div>
+   <div className="retail-report-table" role="region" aria-label="Completed training records" tabIndex={0}><table><thead><tr>{['Date / Class','Store','Trainer','Status','Historical Zone / FO','Attendees / Topics / Evidence','Details'].map(label=><th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{reportPage(rows,page,size).map(row=><tr key={row.id}>
+    <td>{row.training_date}<p>{row.training_class}</p></td><td>{row.store?.store_code}<p>{row.store?.store_name||'Store not recorded'}</p></td><td>{row.trainer_name||'Not recorded'}</td><td><span className="retail-report-status" data-status={row.status}>{row.status}</span></td>
+    <td>{row.ownership.known?(snapshot?.zones.find(item=>item.id===row.ownership.zone_id)?.zone_name||'Unassigned Zone'):'Historical ownership unknown'}<p>{row.ownership.known?(snapshot?.fos.find(item=>item.id===row.ownership.fo_profile_id)?.full_name||'Unassigned FO'):'Historical FO unknown'}</p></td>
+    <td>{row.attendee_count??'Unknown'} / {row.topic_count??'Unknown'} / {row.evidence_count??'Unknown'}</td><td><button disabled={detailBusy} onClick={()=>void inspect(row.id)}>View Training evidence</button></td>
+   </tr>)}</tbody></table></div>
+   {!busy&&!rows.length&&!error&&<p className="retail-report-empty">No authorized Training records match these filters.</p>}
+   <ReportPager label="Training records" count={rows.length} page={page} size={size} onPage={setPage} onSize={setSize}/>
+  </div>
+  <p className="retail-report-description">Exports include every matching record, not just the current page. Historical ownership is shown only when available. Submission workflows are unchanged; no scheduled-training workflow is introduced.</p>
+  {detailBusy&&<ReportNotice>Loading authorized Training details…</ReportNotice>}
+  {detail&&<section className="retail-report-evidence" aria-label="Training evidence and history"><header><h2>Training evidence and history</h2><button onClick={closeDetail}>Close Training details</button></header><p>{detail.session?.training_date} · {detail.session?.trainer_name_snapshot||'Trainer not recorded'} · {detail.session?.status}</p>
+   <div>{!(detail.evidence||[]).length&&<p className="retail-report-description">No evidence recorded for this session.</p>}{(detail.evidence||[]).map(item=><p key={item.id||item.file_name}>{item.file_name} {evidenceLinks[item.id]?<a className="retail-report-button" href={evidenceLinks[item.id]} target="_blank" rel="noreferrer">Open authorized evidence</a>:<button onClick={()=>void viewEvidence(item)}>Get evidence link</button>}</p>)}</div>
+   <div className="retail-report-detail-grid"><section><h3>Attendees</h3>{(detail.attendees||[]).map(item=><p key={item.id}>{item.employee_code} · {item.employee_name}</p>)}</section><section><h3>Topics</h3>{(detail.topics||[]).map(item=><p key={item.id}>{item.topic?.module_name||item.topic?.name||'Topic'} · {item.is_covered?'Covered':'Pending'}</p>)}</section><section><h3>History</h3>{(detail.events||[]).map(item=><p key={item.id}>{item.created_at} · {item.event_type}</p>)}</section></div>
+  </section>}
+ </section>;
 }
