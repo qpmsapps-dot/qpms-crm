@@ -1,5 +1,6 @@
 import {stateLabel,reportingState,validDate} from '../shared/retailAttendance.js';
 import {resolveCurrentUserAccess} from './accessControlService.js';
+import {isInitialRetailAdmin} from './retailInitialAdminAccess.js';
 
 export const normalizedFaultStoreCode=value=>String(value??'').trim().toUpperCase();
 const fail=(statusCode,message)=>Object.assign(Error(message),{statusCode});
@@ -79,7 +80,7 @@ export async function scopedFaultTrackerReport(client,profile,input,authorizatio
    }
   }
  }catch{/* Missing history is unavailable, never an invented zero completion count. */}
- for(const ticket of filtered){ticket.can_update=historyAvailable&&authorization.isAdmin===true;if(!historyAvailable)delete ticket.verified_updates;}
+ for(const ticket of filtered){ticket.can_update=historyAvailable&&authorization.isAdmin===true&&isInitialRetailAdmin(profile);if(!historyAvailable)delete ticket.verified_updates;}
  if((input.ticket_id||input.id||input.ticket_no)&&!filtered.length)throw fail(404,'Ticket unavailable in the authorized operational scope.');
  const batches=await rows(client.from('fault_tracker_import_batches').select('*').eq('id',batchId).limit(1)),batch=batches[0];
  let tickets=filtered;
