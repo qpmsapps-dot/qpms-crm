@@ -34,6 +34,7 @@ import RetailComingSoon from '../pages/reliance-retail/RetailComingSoon.jsx';
 import RetailScopedDeepCleaning from '../pages/reliance-retail/RetailScopedDeepCleaning.jsx';
 import RetailTraining from '../pages/reliance-retail/RetailTraining.jsx';
 import RetailAttendance from '../pages/reliance-retail/RetailAttendance.jsx';
+import RetailOperations from '../pages/reliance-retail/RetailOperations.jsx';
 import FaultTracker from '../pages/FaultTracker.jsx';
 import DeepCleaning from '../pages/DeepCleaning.jsx';
 import UserManagement from '../pages/settings/UserManagement.jsx';
@@ -129,8 +130,8 @@ const productionRoutes = [
           { path: 'reliance-retail/attendance', element: <RetailAttendance /> },
           { path: 'reliance-retail/m-here-attendance', element: <Navigate to="/reliance-retail/attendance" replace /> },
           { path: 'reliance-retail/oos', element: <RetailOperationalTrackers kind="OOS" /> },
-          { path: 'reliance-retail/cmpm', element: <RetailComingSoon title="CMPM" /> },
-          { path: 'reliance-retail/thermography', element: <RetailComingSoon title="Thermography" /> },
+          { path: 'reliance-retail/cmpm', element: <RetailOperations kind="maintenance" /> },
+          { path: 'reliance-retail/thermography', element: <RetailOperations kind="thermography" /> },
           { path: 'reliance-retail/manpower', element: <RetailComingSoon title="Manpower Vacancy" /> },
           { path: 'assets', element: <AssetCenterPage /> },
           { path: 'tasks', element: <Tasks /> },

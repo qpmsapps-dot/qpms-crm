@@ -33,6 +33,14 @@ function ModuleBody({ id, rows, stores, storeStatus, source }) {
     <div className="ifms-card-content ifms-training"><div><Metric label="Trainings completed" value={total('completed')}/><div className="ifms-store-total"><Metric label="Total stores" value={storeStatus === 'ready' ? stores.length : '—'}/></div></div><StateTable rows={rows} columns={[{ key: 'completed', label: 'Trainings' }]}/></div>
     <p className="ifms-note">Completed {id==='technical'?'MEPC':'HK'} sessions in the selected period. Total stores: {storeStatus === 'ready' ? 'authorized inventory, not trained stores' : 'unavailable'}.</p>
   </>;
+  if(id==='thermography'){
+    const scheduled=total('scheduled'),awaiting=total('awaiting'),approved=total('approved');
+    return <>
+      <div className="ifms-metrics"><Metric label="Scheduled" value={scheduled}/><Metric label="Awaiting approval" value={awaiting}/><Metric label="Client Approved" value={approved}/><Metric label="Approval overdue" value={total('overdue')}/></div>
+      <div className="ifms-card-content ifms-thermography-content"><OperationsRing total={scheduled+awaiting+approved} segments={[{label:'Scheduled',value:scheduled,color:'#cbd5e1'},{label:'Completed awaiting approval',value:awaiting,color:'#e6ae2e'},{label:'Client Approved',value:approved,color:'var(--module-color)'}]} label="Inspections"/><StateTable rows={rows} columns={[{key:'scheduled',label:'Scheduled'},{key:'awaiting',label:'Awaiting'},{key:'approved',label:'Approved'},{key:'overdue',label:'Overdue'}]}/></div>
+      <p className="ifms-note">Approval due within 10 calendar days of completion. Late approvals retained: {total('approved_late')}. Overdue is a subset of awaiting approval.</p>
+    </>;
+  }
   const scans = id === 'thermography';
   const cleaning = id === 'cleaning';
   const denominator = scans ? total('normal') + total('notNormal') : total(cleaning ? 'scheduled' : 'eligible');

@@ -6,6 +6,8 @@ import {retailTrainingEnvelopeIds,applyRetailTrainingStoreScope} from './retailT
 import {indiaToday,validDate,stateLabel,summarizeAttendance} from '../shared/retailAttendance.js';
 import {attendanceAccess} from './retailAttendanceService.js';
 import {CLIENT_DEEP_CLEANING_BUCKET,buildClientDeepCleaningStoragePath,verifyClientDeepCleaningStorageObject} from './clientDeepCleaningService.js';
+import {retailOperationsSource} from './retailOperationsService.js';
+import {maintenanceReport,thermographyReport} from '../shared/retailOperations.js';
 const fail=(statusCode,message)=>Object.assign(Error(message),{statusCode});
 export function moduleReportRange(input={}) {
  let to,from;try{to=validDate(input.to||indiaToday());from=validDate(input.from||to.slice(0,7)+'-01');}catch{throw fail(400,'Select valid reporting dates.');}
@@ -90,8 +92,12 @@ export async function retailModuleDashboard(client,profile,input={}) {
   modules.technical={status:'ready',rows:report.states.map(r=>({state:r.state,completed:r.mepc})),identity_exceptions:report.exceptions.length};
   modules.soft={status:'ready',rows:report.states.map(r=>({state:r.state,completed:r.hk})),identity_exceptions:report.exceptions.length};
  }catch{modules.technical=modules.soft=unavailable('Completed Training is unavailable in this authorized scope or its reporting dependency failed.');}
- // No operational CM/PM or Thermography source exists in this baseline. Training
- // topics with those names are not maintenance completions or recorded scan results.
- for(const key of ['cm','pm','thermography'])modules[key]=unavailable('An authoritative operational data source is not configured.');
+ try{
+  const {source,month}=await retailOperationsSource(client,profile,'maintenance',{month:range.from.slice(0,7)});
+  const current={...source,calls:source.calls.filter(c=>c.completed_on<=range.to),thermography:source.thermography.filter(t=>t.scheduled_date<=range.to)};
+  const maintenance=maintenanceReport(current,month),thermography=thermographyReport(current,month);
+  modules.cm=maintenance.modules.cm;modules.pm=maintenance.modules.pm;
+  modules.thermography={status:'ready',rows:thermography.states};
+ }catch(e){for(const key of ['cm','pm','thermography'])modules[key]=unavailable(e.statusCode===503?e.message:'Operational data is unavailable in this authorized scope.');}
  return {...range,updated_at:new Date().toISOString(),stores:snapshot.stores.map(({id,store_code,store_name,state})=>({id,store_code,store_name,state})),modules};
 }
