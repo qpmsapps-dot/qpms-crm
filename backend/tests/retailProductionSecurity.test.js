@@ -100,7 +100,27 @@ test('owner-export security corrections: actual policies/guards, FO lifecycle, A
   const path=kind=>`FO1/2026-10-31/deep_cleaning/${source}/${kind}.jpg`;
   actor(fo,`insert into storage.objects(bucket_id,name,metadata) values('fo-activity-uploads','${path('before')}','{"size":1}');`);
   assert.equal(actor(other,`select count(*) from storage.objects where name='${path('before')}';`),'1','Actual broad policy exposes other-owner evidence');
-  sql(file('proposals/retail_legacy_cleaning_evidence_isolation.sql'));
+  const isolation=file('proposals/retail_legacy_cleaning_evidence_isolation.sql');
+  const noCleaningResidue=()=>{
+   assert.equal(sql("select count(*) from pg_proc where pronamespace='public'::regnamespace and proname in ('retail_cleaning_object_access','retail_cleaning_has_stored_pair','retail_cleaning_legacy_guard','retail_cleaning_storage_guard')"),'0');
+   assert.equal(sql("select count(*) from pg_policies where schemaname='storage' and tablename='objects' and policyname like 'retail_cleaning_%'"),'0');
+   assert.equal(sql("select count(*) from pg_trigger where not tgisinternal and tgname in ('trg_retail_cleaning_submission_guard','trg_retail_cleaning_upload_guard','trg_retail_cleaning_storage_guard')"),'0');
+   assert.equal(fingerprints(),oldTriggers);
+   assert.equal(sql("select md5(string_agg(row_to_json(p)::text,'' order by schemaname,tablename,policyname)) from pg_policies p"),oldPolicies);
+  };
+  // Existing CREATE + TRIGGER capabilities do not prove policy DDL authority.
+  // This isolated role has no Supabase policy hook: actual CREATE POLICY must
+  // fail, and every helper created earlier in that transaction must roll back.
+  sql('create role delegated_candidate_no_policy_hook bypassrls;grant usage on schema auth,storage to delegated_candidate_no_policy_hook;grant create on schema public to delegated_candidate_no_policy_hook;grant select on all tables in schema public,storage to delegated_candidate_no_policy_hook;grant trigger on storage.objects to delegated_candidate_no_policy_hook;');
+  assert.throws(()=>sql('set role delegated_candidate_no_policy_hook;'+isolation),e=>/must be owner of table objects/.test(String(e.stderr)));noCleaningResidue();
+  // A later trigger DDL failure must also undo successful earlier policies and
+  // public-table triggers. Fault ACL revokes were committed separately and stay.
+  const lateFailure=isolation.replace('create trigger trg_retail_cleaning_storage_guard',()=>"do $$begin raise exception 'Simulated final trigger DDL denial';end;$$;\ncreate trigger trg_retail_cleaning_storage_guard");
+  assert.throws(()=>sql(lateFailure),e=>/Simulated final trigger DDL denial/.test(String(e.stderr)));noCleaningResidue();
+  assert.equal(sql("select has_table_privilege('authenticated','fault_tracker_tickets','UPDATE')"),'f');
+  const beforeInstall=sql("select md5(string_agg(j,'' order by j)) from (select to_jsonb(t)::text j from fo_activity_submissions t union all select to_jsonb(t)::text from fo_activity_uploads t union all select to_jsonb(t)::text from storage.objects t) all_rows");
+  sql(isolation);
+  assert.equal(sql("select md5(string_agg(j,'' order by j)) from (select to_jsonb(t)::text j from fo_activity_submissions t union all select to_jsonb(t)::text from fo_activity_uploads t union all select to_jsonb(t)::text from storage.objects t) all_rows"),beforeInstall);
   assert.equal(actor(other,`select count(*) from storage.objects where name='${path('before')}';`),'0');
   assert.equal(actor(fo,`select count(*) from storage.objects where name='${path('before')}';`),'1');
   sql(`update profiles set role='Operations Manager' where id='${fo}';`);assert.equal(actor(fo,`select count(*) from storage.objects where name='${path('before')}';`),'1','Historical owner role must not remove own-record access');sql(`update profiles set role='FO' where id='${fo}';`);
@@ -164,6 +184,6 @@ test('owner-export security corrections: actual policies/guards, FO lifecycle, A
   assert.equal(fingerprints(),oldTriggers);
   sql(file('verification/retail_security_corrections_postinstall_read_only.sql'));
   sql('create role limited_storage_installer bypassrls;grant usage on schema storage to limited_storage_installer;grant select on storage.buckets to limited_storage_installer;');
-  assert.throws(()=>sql('set role limited_storage_installer;'+file('proposals/retail_legacy_cleaning_evidence_isolation.sql')),e=>/Storage table owner authority/.test(String(e.stderr)));
+  assert.throws(()=>sql('set role limited_storage_installer;'+file('proposals/retail_legacy_cleaning_evidence_isolation.sql')),e=>/Existing public CREATE privilege/.test(String(e.stderr)));
  }finally{docker(['rm','--force',name]);}
 });

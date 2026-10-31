@@ -1,8 +1,11 @@
 -- REVIEWED PROPOSAL ONLY: no production execution by the preparation task.
 -- Scope: legacy deep_cleaning paths/rows only. Training and other activity paths
 -- keep their existing policies/triggers. Admin review uses the scoped server API.
--- Installer must be able to create policies AND triggers on storage.objects
--- (owned by supabase_storage_admin), not merely possess BYPASSRLS.
+-- Supabase-compatible installation: use existing delegated policy authority and
+-- the existing TRIGGER privilege; never change roles, ownership or platform GUCs.
+-- Configuration is NOT proof of authority. The actual CREATE POLICY/TRIGGER
+-- statements below must succeed before the single COMMIT. Any error aborts
+-- this transaction, including earlier helper functions and public-table guards.
 begin;
 set local lock_timeout='5s';
 set local statement_timeout='60s';
@@ -10,7 +13,11 @@ set local statement_timeout='60s';
 do $preflight$ begin
  if not exists(select 1 from storage.buckets where id='fo-activity-uploads' and public is false) then raise exception 'Private legacy FO bucket required';end if;
  if not exists(select 1 from pg_proc where oid=to_regprocedure('public.training_legacy_write_guard()') and md5(replace(prosrc,E'\r\n',E'\n'))='708d133bfea8906bf76ce0a863d12d7b') then raise exception 'Exported Training guard drift; stop without replacing it';end if;
- if not exists(select 1 from pg_class c join pg_roles actor on actor.rolname=current_user where c.oid='storage.objects'::regclass and (actor.rolsuper or pg_has_role(actor.oid,c.relowner,'USAGE'))) then raise exception 'Storage table owner authority required for policies/triggers; BYPASSRLS alone is insufficient';end if;
+ if not has_schema_privilege(current_user,'public','CREATE') then raise exception 'Existing public CREATE privilege required; no privilege escalation is performed';end if;
+ if not has_table_privilege(current_user,'storage.objects','TRIGGER') then raise exception 'Existing storage.objects TRIGGER privilege required; no privilege escalation is performed';end if;
+ -- Do not require native ownership or supautils.version. Supabase may delegate
+ -- policy management without either. PostgreSQL/platform checks on the actual
+ -- CREATE POLICY and CREATE TRIGGER statements remain the final authority.
  if (select count(*) from pg_policies where schemaname='storage' and tablename='objects' and permissive='PERMISSIVE' and roles=array['authenticated']::name[] and policyname in ('fo_activity_uploads_authenticated_read','fo_activity_uploads_authenticated_insert','fo_activity_uploads_authenticated_update','fo_activity_uploads_authenticated_delete'))<>4 then raise exception 'Exported legacy policy set drift; review current catalog before installation';end if;
 end;$preflight$;
 
@@ -129,4 +136,12 @@ create policy retail_cleaning_draft_delete on storage.objects as restrictive for
 create trigger trg_retail_cleaning_submission_guard before insert or update or delete on public.fo_activity_submissions for each row execute function public.retail_cleaning_legacy_guard();
 create trigger trg_retail_cleaning_upload_guard before insert or update or delete on public.fo_activity_uploads for each row execute function public.retail_cleaning_legacy_guard();
 create trigger trg_retail_cleaning_storage_guard before insert or update or delete on storage.objects for each row execute function public.retail_cleaning_storage_guard();
+
+-- Success is reported only after all actual DDL and these assertions succeed.
+do $postinstall$ begin
+ if (select count(*) from pg_policies where schemaname='storage' and tablename='objects' and permissive='RESTRICTIVE' and policyname in ('retail_cleaning_private_read','retail_cleaning_owned_insert','retail_cleaning_draft_update','retail_cleaning_draft_delete'))<>4 then raise exception 'All four restrictive storage policies are required; rollback installation';end if;
+ if (select count(*) from pg_trigger where not tgisinternal and (tgrelid='public.fo_activity_submissions'::regclass and tgname='trg_retail_cleaning_submission_guard' or tgrelid='public.fo_activity_uploads'::regclass and tgname='trg_retail_cleaning_upload_guard' or tgrelid='storage.objects'::regclass and tgname='trg_retail_cleaning_storage_guard'))<>3 then raise exception 'All three additive guards are required; rollback installation';end if;
+ if not exists(select 1 from pg_proc where oid=to_regprocedure('public.training_legacy_write_guard()') and md5(replace(prosrc,E'\r\n',E'\n'))='708d133bfea8906bf76ce0a863d12d7b') then raise exception 'Existing Training guard changed; rollback installation';end if;
+ if not exists(select 1 from storage.buckets where id='fo-activity-uploads' and public is false) then raise exception 'Evidence bucket must remain private; rollback installation';end if;
+end;$postinstall$;
 commit;

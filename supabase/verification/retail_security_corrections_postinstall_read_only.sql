@@ -1,5 +1,8 @@
 -- ONE combined private report. No mutation RPCs are invoked.
 -- Compare with owner export (9) and the approved pre-DDL preservation baseline.
+-- At the Cleaning-isolation-only step, the four workflow RPCs are intentionally
+-- still absent/on hold; do not mistake their diagnostic presence=false for a
+-- failed isolation installation. All four retail_cleaning_* helpers must exist.
 begin transaction read only;
 set local statement_timeout='30s';
 with required_functions(name) as (values
@@ -38,7 +41,9 @@ functions as (
  where not t.tgisinternal and t.tgname in ('trg_training_legacy_submission_write','trg_training_legacy_upload_write','trg_retail_management_audit_immutable','trg_fo_activity_submissions_updated_at','trg_retail_cleaning_submission_guard','trg_retail_cleaning_upload_guard','trg_retail_cleaning_storage_guard')
 ), installer as (
  select current_user as actor,a.rolsuper,a.rolbypassrls,o.rolname as storage_table_owner,
- (a.rolsuper or pg_has_role(a.oid,c.relowner,'USAGE')) as can_manage_storage_policies_and_triggers
+ (a.rolsuper or pg_has_role(a.oid,c.relowner,'USAGE')) as native_owner_authority_only,
+ has_table_privilege(a.oid,c.oid,'TRIGGER') as existing_trigger_privilege,
+ current_setting('supautils.policy_grants',true) as existing_platform_policy_grants
  from pg_roles a join pg_class c on c.oid=to_regclass('storage.objects') join pg_roles o on o.oid=c.relowner where a.rolname=current_user
 ), preservation as (
  select 'stores' source,count(*) rows,md5(string_agg(md5(to_jsonb(r)::text),'' order by md5(to_jsonb(r)::text))) digest from public.reliance_retail_store_master r
@@ -54,7 +59,7 @@ select 1 section_number,'Function settings and execution ACLs' section_name,coal
 union all select 2,'Effective Fault Tracker rights',coalesce(jsonb_agg(to_jsonb(r)),'[]') from rights r
 union all select 3,'All storage policies (old permissive AND new restrictive)',coalesce(jsonb_agg(to_jsonb(p)),'[]') from policies p
 union all select 4,'Preserved and new triggers',coalesce(jsonb_agg(to_jsonb(t)),'[]') from triggers t
-union all select 5,'Installer ownership (BYPASSRLS alone is insufficient)',coalesce(jsonb_agg(to_jsonb(i)),'[]') from installer i
+union all select 5,'Installer capabilities (native ownership is not required under verified delegation)',coalesce(jsonb_agg(to_jsonb(i)),'[]') from installer i
 union all select 6,'Bucket remains private',coalesce(jsonb_agg(jsonb_build_object('id',b.id,'public',b.public)),'[]') from storage.buckets b where b.id='fo-activity-uploads'
 union all select 7,'Data preservation: compare before allowing saves',coalesce(jsonb_agg(to_jsonb(p)),'[]') from preservation p
 order by section_number;
