@@ -26,7 +26,7 @@ export function cleaningReport(snapshot, filter = {}) {
     const store = canonicalActivityStore(stores,plan);
     if (!store) { exceptions.push({id:plan.id,reason:'Ambiguous, conflicting or unknown canonical Store Code'}); return []; }
     if (!visible(store)) return [];
-    const matches = submissions.filter(s => s.store.id === store.id && s.deep_cleaning_date === plan.scheduled_date && completed(s.status));
+    const matches = submissions.filter(s => s.store.id === store.id && s.deep_cleaning_date === plan.scheduled_date && completed(s.status) && (s.source_kind!=='verified_fo_link'||s.schedule_id===plan.id));
     const status = storeKey(plan.status), terminal = ['CANCELLED','NOT DONE','NOT COMPLETED'].includes(status);
     const effective = status === 'COMPLETED' || (!terminal && matches.length) ? 'Completed' : ['NOT DONE','NOT COMPLETED'].includes(status) ? 'Not Completed' : status === 'CANCELLED' ? 'Cancelled' : ['PLANNED','SCHEDULED'].includes(status) ? 'Scheduled' : 'Unknown';
     return [{...plan,store,reporting_state:reportingState(store.state),display_status:effective,submission_ids:matches.map(s=>s.id),overdue:effective==='Scheduled' && plan.scheduled_date < (filter.to || snapshot.to)}];
