@@ -104,7 +104,7 @@ export function validateStoreReview(parsed, stores, { decisions = [], aop = [], 
     // Existing identities are preserved even if the workbook claims approval.
     const identityReady = !existing && !commonBlocked && identity.length === 1 && identity[0].state === row.state &&
       identity[0].store_name === row.store_name && ['Active', 'Inactive'].includes(identity[0].store_status) &&
-      identity[0].operational_model === 'SUPERVISOR_ONLY' && !!text(identity[0].supervisor_name);
+      (identity[0].operational_model === 'IDENTITY_ONLY' || identity[0].operational_model === 'SUPERVISOR_ONLY' && !!text(identity[0].supervisor_name));
     const d = allocations.length === 1 ? allocations[0] : null;
     let aopReady = false;
     if (d && existing && storeKey(existing.status) === 'ACTIVE' && !commonBlocked) {

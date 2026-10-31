@@ -15,7 +15,7 @@ create table public.reliance_retail_store_master(
  check(location_status in ('LOCATION_PENDING','GPS_READY')),
  check((latitude is null)=(longitude is null)),
  check((location_status='LOCATION_PENDING' and latitude is null and longitude is null) or (location_status='GPS_READY' and latitude is not null and longitude is not null)),
- check((assigned_fo_profile_id is not null and nullif(btrim(assigned_fo_employee_code),'') is not null and nullif(btrim(assigned_fo_name_snapshot),'') is not null)
+ constraint reliance_retail_store_fo_assignment_consistency_check check((assigned_fo_profile_id is not null and nullif(btrim(assigned_fo_employee_code),'') is not null and nullif(btrim(assigned_fo_name_snapshot),'') is not null)
  or (assigned_fo_profile_id is null and assigned_fo_employee_code is null and assigned_fo_name_snapshot is null and assigned_fo_phone_snapshot is null and zone_id is null and upper(coalesce(metadata->>'operational_model',''))='SUPERVISOR_ONLY'))
 );
 create unique index ux_reliance_retail_store_master_code on public.reliance_retail_store_master(upper(btrim(store_code)));

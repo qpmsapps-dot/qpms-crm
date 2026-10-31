@@ -17,7 +17,7 @@ export function validateBulkIdentityDecisions(decisions,batch,profile){
  if(d.decision==='Approve Identity'){
   if(r.canonical_id)fail('Existing canonical identity is protected.');
   if(r.approval!=='YES'||r.approval_ref!==d.approval_ref)fail('Final source must explicitly say YES with the reviewed reference.');
- if(r.store_name!==d.store_name||!['Active','Inactive'].includes(d.store_status)||d.operational_model!=='SUPERVISOR_ONLY'||!d.supervisor_name)fail('Confirm exact official name, explicit status and genuine supervisor ownership.');
+ if(r.store_name!==d.store_name||!['Active','Inactive'].includes(d.store_status)||!['IDENTITY_ONLY','SUPERVISOR_ONLY'].includes(d.operational_model)||(d.operational_model==='SUPERVISOR_ONLY'&&!d.supervisor_name))fail('Confirm exact official name, explicit status and supported identity model.');
   const blockers=r.issues.filter(i=>!['INVALID_BUDGET_PERIOD','EXPIRED_BUDGET_PERIOD','INVALID_AOP_COMPONENT'].includes(i));if(blockers.length)fail('Resolve source evidence before approval: '+blockers.join('; '));
  }
  }if(states.size!==1)fail('Review and confirm one geographic state per decision batch.');return {state:[...states][0],decisions,approved:decisions.filter(d=>d.decision==='Approve Identity').length,rejected:decisions.filter(d=>d.decision==='Reject').length,held:decisions.filter(d=>d.decision==='Hold').length};

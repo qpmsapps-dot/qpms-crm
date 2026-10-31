@@ -1,0 +1,20 @@
+{
+  "version": "20261031080000",
+  "source_md5": "3de29cda20ea1106b28bdf69987d5c7c",
+  "signatures": [
+    "public.rpc_confirm_retail_bulk_identity(uuid,uuid,uuid)",
+    "public.rpc_confirm_retail_store_import(uuid,uuid,uuid,boolean,boolean)"
+  ],
+  "old_body_md5": [
+    "69d7e42f38387f7d7337a33331089420",
+    "45efdcbd007006d4474d816d1bdb0055"
+  ],
+  "new_body_md5": [
+    "d3b8de427912f4baa759c85530f81441",
+    "8f0be9c5b2ce0197309355df757f6046"
+  ],
+  "constraint_md5": {
+    "before": "02d7d7cb410123aec353cf6958b5645d",
+    "after": "be2e44e3579bd23b99ea6cb63da3a6c6"
+  }
+}

@@ -4,7 +4,7 @@ const actor={id:'00000000-0000-4000-8000-000000000001',role:'ADMIN',is_active:tr
 const d={source_row:2,store_code:'KL1',decision:'Approve Identity',store_name:'Official',store_status:'Active',approval_ref:'REF',reviewer_id:actor.id,evidence_sha256:'a'.repeat(64),operational_model:'SUPERVISOR_ONLY',supervisor_name:'Verified supervisor',file_sha256:'b'.repeat(64),row_digest:'c'.repeat(64)};
 const b={checksum:d.file_sha256,review:{rows:[{source_row:2,store_code:'KL1',state:'KL',canonical_id:null,row_digest:d.row_digest,store_name:'Official',approval:'YES',approval_ref:'REF',issues:[]}]}};
 test('explicit row-bound identity only approval validates and rejects source/reviewer/status drift',()=>{
- assert.equal(validateBulkIdentityDecisions([d],b,actor).approved,1);
+ assert.equal(validateBulkIdentityDecisions([d],b,actor).approved,1);assert.equal(validateBulkIdentityDecisions([{...d,operational_model:'IDENTITY_ONLY',supervisor_name:''}],b,actor).approved,1);
  for(const change of [{file_sha256:'x'},{row_digest:'x'},{source_row:3},{reviewer_id:'other'},{store_status:''},{supervisor_name:''},{approval_ref:''}])assert.throws(()=>validateBulkIdentityDecisions([{...d,...change}],b,actor));
  assert.throws(()=>validateBulkIdentityDecisions([d,d],b,actor),/Duplicate/);
  assert.throws(()=>validateBulkIdentityDecisions([d],{...b,review:{rows:[{...b.review.rows[0],canonical_id:'existing'}]}},actor),/protected/);
