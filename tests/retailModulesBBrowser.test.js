@@ -14,10 +14,11 @@ test('Retail module pages use real report responses, filters, evidence and unava
  const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));
  await context.addInitScript(()=>{localStorage.setItem('qpms-crm-auth-user',JSON.stringify({id:'local-admin',profileId:'local-profile',name:'Local Admin',role:'Admin',rawRole:'Admin',status:'Active',isActive:true,webAccessEnabled:true,authProvider:'demo-fixture',is_demo:true,isDemoReadOnly:true,read_only:false}));sessionStorage.setItem('qpms-crm-backend-token','synthetic-local-test-token');});
  const source={status:'ready',rows:[{state:'TN',hk_actual:12.5,mepc_actual:2,total_actual:14.5,total_target:20,complete:true,overall_pct:72.5}]};
+ let cleaningRows=[{state:'TN',scheduled:3,completed:1,not_completed:1,pending:1,remaining:2}];
  const training=[{id:'t1',store,canonical_store_id:'s',category:{code:'hk'},training_date:today,status:'submitted'},{id:'t2',store,canonical_store_id:'s',category:{code:'technical_mep'},training_date:today,status:'submitted'}];
  await page.route('**/api/**',async route=>{
   const request=route.request(),url=new URL(request.url());requests.push({method:request.method(),path:url.pathname});
-  if(url.pathname.endsWith('/module-reports/dashboard'))return route.fulfill({json:{report:{updated_at:new Date().toISOString(),stores:[store],modules:{attendance:source,cleaning:{status:'ready',rows:[{state:'TN',scheduled:3,completed:1,not_completed:1,pending:1,remaining:2}]},technical:{status:'ready',rows:[{state:'TN',completed:1}]},soft:{status:'ready',rows:[{state:'TN',completed:1}]},cm:{status:'unavailable',reason:'Authoritative CM data source missing.'},pm:{status:'unavailable',reason:'Authoritative PM data source missing.'},thermography:{status:'unavailable',reason:'Authoritative scan results missing.'}}}}});
+  if(url.pathname.endsWith('/module-reports/dashboard'))return route.fulfill({json:{report:{updated_at:new Date().toISOString(),stores:[store],modules:{attendance:source,cleaning:{status:'ready',rows:cleaningRows},technical:{status:'ready',rows:[{state:'TN',completed:1}]},soft:{status:'ready',rows:[{state:'TN',completed:1}]},cm:{status:'unavailable',reason:'Authoritative CM data source missing.'},pm:{status:'unavailable',reason:'Authoritative PM data source missing.'},thermography:{status:'unavailable',reason:'Authoritative scan results missing.'}}}}});
   if(url.pathname.endsWith('/module-reports/deep-cleaning/d/evidence'))return route.fulfill({json:{uploads:[{id:'image',type:'before',name:'before.jpg',mime_type:'image/jpeg',url:'https://example.test/signed-before.jpg'}]}});
   if(url.pathname.endsWith('/module-reports/deep-cleaning'))return route.fulfill({json:{report:{stores:[store],exceptions:[],totals:{scheduled:3,completed:1,not_completed:1,pending:1},schedules:[{id:'plan',store,reporting_state:'TN',scheduled_date:today,display_status:'Completed',submission_ids:['d']},{id:'notdone',store,reporting_state:'TN',scheduled_date:today,display_status:'Not Completed',submission_ids:[],not_done_reason:'Recorded reason'}],submissions:[{id:'d',store,deep_cleaning_date:today,status:'submitted',before_count:1,after_count:1}]}}});
   if(url.pathname.endsWith('/module-reports/training'))return route.fulfill({json:{report:{rows:training,complete:true}}});
@@ -31,8 +32,14 @@ test('Retail module pages use real report responses, filters, evidence and unava
   await page.getByText('14.5',{exact:true}).waitFor();
   assert.equal(await page.getByText('Authoritative CM data source missing.',{exact:false}).count(),1);
   assert.equal(await page.getByText('Authoritative scan results missing.',{exact:false}).count(),1);
+  const cleaning=page.locator('#ifms-cleaning').locator('xpath=ancestor::section');
+  assert.equal(await cleaning.getByText('Not Done',{exact:true}).count(),0);
+  assert.ok(await cleaning.getByText('Remaining',{exact:true}).count()>0);
+  assert.match(await cleaning.textContent(),/Recorded Not Completed: 1; Scheduled and pending: 1/);
   await page.getByLabel('Global reporting state').selectOption('AP-1');
   assert.equal(await page.locator('#ifms-attendance').locator('..').locator('..').getByText('14.5',{exact:true}).count(),0);
+  cleaningRows=[];await page.reload();await page.getByText('14.5',{exact:true}).waitFor();
+  assert.equal(await cleaning.locator('.ifms-metric').filter({hasText:'Completion'}).locator('strong').textContent(),'N/A');
   await page.goto(base+'/reliance-retail/deep-cleaning');
   await page.getByText('Recorded reason',{exact:true}).waitFor();
   await page.getByLabel('Cleaning status').selectOption('Not Completed');

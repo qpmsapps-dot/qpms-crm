@@ -38,10 +38,10 @@ function ModuleBody({ id, rows, stores, storeStatus, source }) {
   const denominator = scans ? total('normal') + total('notNormal') : total(cleaning ? 'scheduled' : 'eligible');
   const completed = total(scans ? 'normal' : 'completed');
   const remaining = scans ? total('notNormal') : Math.max(0, denominator - completed);
-  const first = scans ? 'Normal' : cleaning ? 'Done' : 'Completed';
-  const second = scans ? 'Not Normal' : cleaning ? 'Not Done' : 'Remaining';
+  const first = scans ? 'Normal' : 'Completed';
+  const second = scans ? 'Not Normal' : 'Remaining';
   return <>
-    <div className="ifms-metrics"><Metric label={scans ? 'Total scans' : cleaning ? 'Scheduled' : 'Applicable stores'} value={denominator}/><Metric label={first} value={completed}/><Metric label={second} value={remaining}/>{!scans && <Metric label="Completion" value={`${percent(completed, denominator)}%`}/>}</div>
+    <div className="ifms-metrics"><Metric label={scans ? 'Total scans' : cleaning ? 'Scheduled' : 'Applicable stores'} value={denominator}/><Metric label={first} value={completed}/><Metric label={second} value={remaining}/>{!scans && <Metric label="Completion" value={denominator>0?`${percent(completed, denominator)}%`:'N/A'}/>}</div>
     <div className="ifms-card-content"><OperationsRing total={denominator} segments={[{ label: first, value: completed, color: 'var(--module-color)' }, { label: second, value: remaining, color: scans ? '#f05269' : cleaning ? '#e6ae2e' : '#cbd5e1' }]} label={scans ? 'Scans' : cleaning ? 'Scheduled' : 'Stores'}/><StateTable rows={rows} columns={scans ? [{ key: 'normal', label: 'Normal' }, { key: 'notNormal', label: 'Not Normal' }] : [{ key: 'completed', label: first }, { key: 'remaining', label: second }]}/></div>
     <p className="ifms-note">{cleaning?`Recorded Not Completed: ${total('not_completed')}; Scheduled and pending: ${total('pending')}.`: 'Actual recorded operational results.'}</p>
   </>;
