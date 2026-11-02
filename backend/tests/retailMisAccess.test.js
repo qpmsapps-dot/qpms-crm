@@ -50,3 +50,13 @@ test('real HTTP router binds actors, denies self-assignment/admin escalation, ke
   assert.equal((await fetch(url+'/command/oos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'RETIRE',data:{}})})).status,403);
  }finally{await new Promise(r=>server.close(r));}
 });
+
+test('OOS operator capabilities bind the verified identity; deployment safety gates fail closed',async()=>{
+ for(const [active,environment,expected] of [[false,{},false],[true,{},false],[true,{RETAIL_OOS_MUTATIONS_FROZEN:'false'},false],[true,{RETAIL_OOS_MUTATIONS_FROZEN:'false',RETAIL_MIS_OOS_WRITES_ENABLED:'true'},true]]){
+ const calls=[],client={rpc:async(name,args)=>{calls.push({name,args});return {data:name==='rpc_retail_mis_access'?{active,role:'MIS_OOS',states:['TN'],operator:true}:{database_writes_enabled:true,actions:{}}};}};
+ const app=express();app.use((r,s,n)=>{r.profile={id:'verified-fixture',auth_user_id:'fixture-auth',role:'Admin'};r.authUser={id:'fixture-auth'};n();});app.use('/mis',createRetailMisRouter({getClient:()=>client,environment}));const server=app.listen(0,'127.0.0.1');await once(server,'listening');
+ try{const res=await fetch('http://127.0.0.1:'+server.address().port+'/mis/oos/capabilities?actor=forged');assert.equal(res.status,active?200:403);if(active){assert.equal((await res.json()).result.writes_enabled,expected);assert.equal(calls.at(-1).args.p_actor,'verified-fixture');}else assert.equal(calls.length,1);
+ if(active&&!expected){for(const action of ['REWORK','PO_RECORDED','RETIRE'])assert.equal((await fetch('http://127.0.0.1:'+server.address().port+'/mis/command/oos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data:{}})})).status,503);assert.equal(calls.some(c=>c.name==='rpc_retail_mis_command'),false);}}
+ finally{await new Promise(r=>server.close(r));}
+ }
+});

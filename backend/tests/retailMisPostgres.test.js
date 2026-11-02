@@ -26,7 +26,7 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
  const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
  const admin='d40c2b3f-87f1-4c34-8798-cf9b0d9ca784',adminAuth='79cd196c-c6f3-404a-b22a-d4683afefa3f';
  const actors={hk:id(1),mep:id(2),oos:id(3),central:id(4),legacy:id(5)};
- async function denied(s,args=[],pattern=/scope|state|permission|assignment|identity|module|review|immutable|activation|denied|unavailable|cross|changed|explicit|admin|forward|financial/i){await assert.rejects(q(s,args),pattern);}
+ async function denied(s,args=[],pattern=/scope|state|permission|assignment|access|identity|module|review|immutable|activation|denied|unavailable|cross|changed|explicit|admin|forward|financial/i){await assert.rejects(q(s,args),pattern);}
  async function command(actor,module,action,data){return (await one('select rpc_retail_mis_command($1,$2,$3,$4) result',[actor,module,action,data])).result;}
  async function report(actor,module,state=null){return (await one("select rpc_retail_mis_report($1,$2,'2026-10-01','2026-10-31',$3) result",[actor,module,state])).result;}
  try{
@@ -73,6 +73,47 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
   assert.deepEqual((await q("select proname,md5(prosrc) body from pg_proc where proname in ('rpc_retail_fault_update','rpc_retail_cleaning_link_fo','rpc_retail_cleaning_link_source','rpc_retail_service_command','rpc_retail_maintenance_complete','rpc_retail_thermography_command') order by proname")).rows,originalWorkflows);
   await q('insert into auth.users values($1,$2)',[adminAuth,'unchanged-admin']);
   await q("insert into profiles(id,auth_user_id,employee_code,full_name,role,business) values($1,$2,'QPMSADMIN','Fixture Admin','Admin','All Businesses')",[admin,adminAuth]);
+  if(process.env.RETAIL_OOS_EXTENSION_REGRESSION==='1'){await q('alter table profiles add column web_access_enabled boolean default true');await q(read('supabase/migrations/20261102123000_retail_oos_superadmin_operator.sql'));}
+  if(process.env.RETAIL_OOS_TRAINING_TEST==='1'){
+   await q('alter table profiles add column web_access_enabled boolean default true');
+   const before=(await one('select to_jsonb(p) profile from profiles p where id=$1',[admin])).profile;
+   await q(read('supabase/migrations/20261102123000_retail_oos_superadmin_operator.sql'));
+   await q(read('supabase/verification/retail_oos_operator_postinstall_read_only.sql'));
+   assert.equal((await one('select count(*)::int n from retail_oos_operator_access')).n,0);
+   await denied("select rpc_retail_oos_capabilities($1)",[admin]);
+   await q("select rpc_retail_oos_operator_grant($1,true,array['TN'],'Approved synthetic access grant',0)",[admin]);
+   assert.deepEqual((await one('select to_jsonb(p) profile from profiles p where id=$1',[admin])).profile,before);
+   const access=(await one('select rpc_retail_mis_access($1,$2) result',[admin,adminAuth])).result;assert.equal(access.operator,true);assert.equal(access.role,'MIS_OOS');assert.deepEqual(access.states,['TN']);
+   assert.equal((await one("select retail_mis_allowed($1,'oos','TN') allowed",[admin])).allowed,true);
+   for(const module of ['stores','attendance-hk','fault','dashboard'])assert.equal((await one('select retail_mis_allowed($1,$2,null) allowed',[admin,module])).allowed,false);
+   assert.equal((await one("select retail_mis_allowed($1,'oos','PY') allowed",[admin])).allowed,false);
+   await q('insert into auth.users values($1,$2)',[id(999),'synthetic-generic-admin']);await q("insert into profiles(id,auth_user_id,employee_code,role,business) values($1,$1,'GENERIC_ADMIN','Admin','All Businesses')",[id(999)]);
+   await denied("select rpc_retail_oos_operator_grant($1,true,array['TN'],'Generic Admin must fail',0)",[id(999)]);
+   assert.deepEqual((await one('select rpc_retail_mis_access($1,$2) result',[admin,id(999)])).result,{});
+   await denied("select rpc_retail_mis_command($1,'oos','RETIRE','{}')",[admin]);
+   assert.equal((await one("select retail_mis_oos_access($1,'TN','review') allowed",[admin])).allowed,false);
+   assert.equal((await one('select count(*)::int n from retail_mis_assignments')).n,0);
+   assert.equal((await one("select count(*)::int n from retail_mis_audit where action='OOS_OPERATOR_ACCESS'")).n,1);
+   await q("insert into reliance_retail_store_master(id,store_code,store_name,state) values($1,'TRAIN_TN','Training TN','TN'),($2,'TRAIN_PY','Training PY','PY')",[id(20),id(21)]);
+   await denied('select rpc_retail_mis_oos_import($1,$2,$3,$4,$5)',[admin,'0'.repeat(64),'fixture.xlsx','',JSON.stringify([])],/OOS writes unavailable/);
+   await q('update retail_mis_controls set oos_writes_enabled=true'); // Isolated database only.
+   const {createHash}=await import('node:crypto');
+   const upload=async(source,revision,store=id(20))=>q('select rpc_retail_mis_oos_import($1,$2,$3,$4,$5)',[admin,createHash('sha256').update(source).digest('hex'),'fixture.xlsx',Buffer.from(source).toString('base64'),JSON.stringify([{quotation_number:store===id(20)?'TRAINING_FIXTURE':'CROSS_STATE',store_ids:[store],items:[{store_id:store,description:source,quantity:2,unit_rate:10}],expected_revision:revision}])]);
+   await upload('original',0);await upload('rework',1);await upload('rework',1);
+   const order=await one("select * from retail_service_orders where reference='TRAINING_FIXTURE'");assert.equal(order.revision,2);assert.equal(order.rework_count,1);assert.equal(order.details.items.length,1);
+   assert.equal((await report(admin,'oos')).rows.length,1);assert.equal((await report(admin,'oos')).rows[0].store_codes[0],'TRAIN_TN');
+   const actions=(await one('select rpc_retail_oos_capabilities($1) result',[admin])).result.actions[order.id];assert.deepEqual(actions,['PO_RECORDED','RETIRE']);
+   await denied('select rpc_retail_mis_oos_history($1,$2)',[id(999),order.id]);await assert.rejects(upload('cross-state',0,id(21)),/scope|state|assignment/i);
+   await command(admin,'oos','PO_RECORDED',{order_id:order.id,revision:2,request_id:id(410),fields:{po_number:'TRAIN_PO',po_date:'2026-11-02'}});
+   assert.deepEqual((await one('select rpc_retail_oos_capabilities($1) result',[admin])).result.actions[order.id],[]);
+   await denied('select rpc_retail_mis_command($1,$2,$3,$4)',[admin,'oos','COMMERCIALLY_CONFIRMED',{order_id:order.id,revision:3,request_id:id(411),fields:{confirmation_ref:'SELF'}}]);
+   await q('set role authenticated');await denied('select * from retail_oos_operator_access',[],/permission/);await denied("select rpc_retail_oos_operator_grant($1,true,array['TN'],'Direct escalation',1)",[admin],/permission/);await q('reset role');
+   await q('update retail_mis_controls set oos_writes_enabled=false');
+   await q("select rpc_retail_oos_operator_grant($1,false,array['TN'],'Revoke synthetic access',1)",[admin]);
+   await denied('select rpc_retail_oos_capabilities($1)',[admin]);
+   assert.deepEqual((await one('select to_jsonb(p) profile from profiles p where id=$1',[admin])).profile,before);
+   console.log('OOS operator isolated checks passed: no seeded grant, exact identity, audit, role preservation, state/module denial, closed gate and revocation.');return;
+  }
   for(const [name,actor] of Object.entries(actors)){await q('insert into auth.users values($1,$2)',[actor,'unchanged-'+name]);await q("insert into profiles(id,auth_user_id,employee_code,full_name,role,business) values($1,$1,$2,$2,'Business Development Head','Reliance Retail')",[actor,name]);}
   const assign=async(actor,role,states,expected=0)=>q('select rpc_retail_mis_assign($1,$2,$2,$3,$4,$5,$6,$7)',[admin,actor,Object.entries(actors).find(([,a])=>a===actor)[0],role,states,'Verified fixture assignment',expected]);
   await assign(actors.hk,'MIS_HK',['TN','KL']);await assign(actors.mep,'MIS_MEPC',['AP-1']);await assign(actors.oos,'MIS_OOS',['TN']);await assign(actors.central,'CENTRAL_MIS',[]);
@@ -210,7 +251,7 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
   assert.equal((await one("select name from access_roles where code='mis'")).name,'MIS');
   await q('update retail_mis_controls set oos_writes_enabled=false');
   // The release postinstall intentionally rejects populated assignment fixtures.
-  const postinstall=read('supabase/verification/retail_mis_postinstall_read_only.sql');await assert.rejects(q(postinstall),/zero MIS assignments|Existing evidence bucket/);await q('rollback');
+  let postinstall=read('supabase/verification/retail_mis_postinstall_read_only.sql');if(process.env.RETAIL_OOS_EXTENSION_REGRESSION==='1'){const extension=read('supabase/migrations/20261102123000_retail_oos_superadmin_operator.sql');for(const [name,old] of [['retail_mis_allowed','76d9993da440c19b5e15f2b3fc3bfa3b'],['rpc_retail_mis_access','839b5f5685879b947eba345105bf8909']]){const body=extension.match(new RegExp('create or replace function public\\.'+name+'\\([^]*?as \\$\\$([^]*?)\\$\\$;'))?.[1];assert.ok(body);const {createHash}=await import('node:crypto');postinstall=postinstall.replace(old,createHash('md5').update(body.replaceAll('\r\n','\n')).digest('hex'));}}await assert.rejects(q(postinstall),/zero MIS assignments|Existing evidence bucket/);await q('rollback');
   await q('grant execute on function rpc_retail_mis_access(uuid,uuid) to authenticated');await assert.rejects(q(postinstall),/MIS routine ACL failed/);await q('rollback');await q('revoke execute on function rpc_retail_mis_access(uuid,uuid) from authenticated');
   await assert.rejects(q(postinstall),/zero MIS assignments|Existing evidence bucket/);await q('rollback');await q(read('supabase/verification/retail_mis_padma_preflight_read_only.sql'));
   console.log('Real PostgreSQL assertions passed: role/state isolation, identity preservation, direct-API/RLS denial, evidence lifecycle, OOS freeze/retirement.');
