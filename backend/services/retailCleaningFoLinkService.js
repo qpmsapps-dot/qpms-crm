@@ -12,6 +12,9 @@ export async function linkFoCleaning(client,profile,scheduleId,input){
 }
 export async function signLinkedFoCleaningEvidence(client,profile,scheduleId){
  const source=await linkedFoCleaningSource(client,profile,scheduleId);if(!source)throw fail(403,'Verified link unavailable.');
+ return signVerifiedFoCleaningSource(client,source);
+}
+export async function signVerifiedFoCleaningSource(client,source,expires=600){
  const bucket='fo-activity-uploads';
  const info=await client.storage.getBucket(bucket);if(info.error||info.data?.public!==false)throw fail(503,'Legacy evidence bucket must be private before report links are issued.');
  const prefix=`${source.employee_code}/${source.deep_cleaning_date}/deep_cleaning/${source.id.slice(3)}/`,uploads=source.uploads||[];
@@ -27,5 +30,5 @@ export async function signLinkedFoCleaningEvidence(client,profile,scheduleId){
   const size=Number(object?.size??object?.metadata?.size??object?.metadata?.contentLength);
   if(!object||!Number.isFinite(size)||size!==Number(row.file_size))throw fail(409,'Stored evidence is missing or its size no longer matches.');
  }
- return Promise.all(uploads.map(async row=>{const path=row.file_url.slice(bucket.length+1),signed=await client.storage.from(bucket).createSignedUrl(path,600);if(signed.error)throw signed.error;return {id:row.id,type:row.upload_role==='deep_cleaning_before'?'before':'after',name:row.file_name,mime_type:row.file_type,url:signed.data.signedUrl};}));
+ return Promise.all(uploads.map(async row=>{const path=row.file_url.slice(bucket.length+1),signed=await client.storage.from(bucket).createSignedUrl(path,expires);if(signed.error)throw signed.error;return {id:row.id,type:row.upload_role==='deep_cleaning_before'?'before':'after',name:row.file_name,mime_type:row.file_type,url:signed.data.signedUrl};}));
 }

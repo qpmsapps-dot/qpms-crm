@@ -31,6 +31,8 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
  async function report(actor,module,state=null){return (await one("select rpc_retail_mis_report($1,$2,'2026-10-01','2026-10-31',$3) result",[actor,module,state])).result;}
  try{
   await q(read('backend/tests/fixtures/retailMisBaseline.sql'));
+  // Replay the reviewed installed ownership resolver, not an always-allow mock.
+  const ownerDefinition=read('supabase/proposals/retail_unified_apply_and_record.sql').match(/create function public\.retail_unified_owner\([\s\S]*?\$\$;/i)?.[0];assert.ok(ownerDefinition);await q(ownerDefinition);
   await q(read('supabase/migrations_2_0/232_reliance_retail_uploaded_attendance.sql'));
   await q('alter table retail_attendance_aop_versions add column aop_class text');
   await q(read('supabase/proposals/retail_service_trackers.sql'));
@@ -39,7 +41,14 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
   const originalWorkflows=(await q("select proname,md5(prosrc) body from pg_proc where proname in ('rpc_retail_fault_update','rpc_retail_cleaning_link_fo','rpc_retail_cleaning_link_source','rpc_retail_service_command','rpc_retail_maintenance_complete','rpc_retail_thermography_command') order by proname")).rows;
   await q('alter table profiles enable row level security;grant select,insert,update,delete on profiles to authenticated;create policy synthetic_profiles_broad on profiles for all to authenticated using(true) with check(true)');
   await q("do $$declare t text;begin foreach t in array array['fault_tracker_import_batches','fault_tracker_tickets','fault_tracker_ticket_updates','fo_activity_submissions','fo_activity_uploads'] loop execute format('alter table public.%I enable row level security',t);execute format('grant select,insert,update,delete on public.%I to authenticated',t);execute format('create policy synthetic_broad_policy on public.%I for all to authenticated using(true) with check(true)',t);end loop;end;$$");
-  await q(read('supabase/migrations/20261102071258_retail_mis_four_roles.sql'));
+  const migration=read('supabase/migrations/20261102071258_retail_mis_four_roles.sql');
+  const roleConstraintBefore=(await q("select conname,convalidated,pg_get_constraintdef(oid) definition from pg_constraint where conrelid='profiles'::regclass and contype='c' order by conname")).rows;
+  await assert.rejects(q(migration.replace(/commit;\s*$/i,"select missing_mis_rollback_fixture();\ncommit;")),/missing_mis_rollback_fixture/);await q('rollback');
+  assert.equal((await one("select to_regclass('public.retail_mis_assignments') name")).name,null);
+  assert.equal((await one("select count(*)::int n from storage.buckets where id='retail-mis-evidence'")).n,0);
+  assert.deepEqual((await q("select conname,convalidated,pg_get_constraintdef(oid) definition from pg_constraint where conrelid='profiles'::regclass and contype='c' order by conname")).rows,roleConstraintBefore);
+  await q(migration);
+  assert.equal((await one("select convalidated from pg_constraint where conrelid='profiles'::regclass and conname='profiles_role_check'")).convalidated,roleConstraintBefore.find(c=>c.conname==='profiles_role_check').convalidated);
   assert.deepEqual((await q("select proname,md5(prosrc) body from pg_proc where proname in ('rpc_retail_fault_update','rpc_retail_cleaning_link_fo','rpc_retail_cleaning_link_source','rpc_retail_service_command','rpc_retail_maintenance_complete','rpc_retail_thermography_command') order by proname")).rows,originalWorkflows);
   await q('insert into auth.users values($1,$2)',[adminAuth,'unchanged-admin']);
   await q("insert into profiles(id,auth_user_id,employee_code,full_name,role,business) values($1,$2,'QPMSADMIN','Fixture Admin','Admin','All Businesses')",[admin,adminAuth]);
@@ -50,7 +59,12 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
   // Exact production identifiers are used ONLY as inert fixtures in this local DB.
   const padma='83231458-af73-435a-abda-48bec9f29e5e',padmaAuth='e843bc42-5f61-474d-8eca-1cf8d01ce2c1';
   await q('insert into auth.users values($1,$2)',[padmaAuth,'fixture-password-unchanged']);await q("insert into profiles(id,auth_user_id,employee_code,full_name,role,business,designation) values($1,$2,'QPMSAP2519','Isolated Padma fixture','Business Development Head','All Businesses','MIS')",[padma,padmaAuth]);
-  await q(read('supabase/proposals/retail_mis_padma_assignment.sql'));await q(read('supabase/proposals/retail_mis_padma_assignment.sql'));
+  const padmaScript=read('supabase/proposals/retail_mis_padma_assignment.sql');
+  await q('update profiles set designation=null where id=$1',[padma]);await assert.rejects(q(padmaScript),/Padma identity or baseline differs/);await q('rollback');
+  assert.equal((await one('select count(*)::int n from retail_mis_assignments where profile_id=$1',[padma])).n,0);
+  await q("update profiles set designation='MIS',employee_code='WRONG_ACCOUNT' where id=$1",[padma]);await assert.rejects(q(padmaScript),/Padma identity or baseline differs/);await q('rollback');
+  await q("update profiles set employee_code='QPMSAP2519' where id=$1",[padma]);
+  await q(padmaScript);await q(padmaScript);
   assert.equal((await one('select role from profiles where id=$1',[padma])).role,'CENTRAL_MIS');assert.equal((await one('select encrypted_password from auth.users where id=$1',[padmaAuth])).encrypted_password,'fixture-password-unchanged');assert.equal((await report(padma,'stores')).rows.length,7);
   assert.deepEqual((await report(actors.hk,'stores')).rows.map(s=>s.state).sort(),['KL','TN']);assert.equal((await report(actors.central,'stores')).rows.length,7);
   for(const [actor,role] of [[actors.hk,'MIS_HK'],[actors.mep,'MIS_MEPC'],[actors.oos,'MIS_OOS'],[actors.central,'CENTRAL_MIS']])for(const module of RETAIL_MIS_MODULES.CENTRAL_MIS){if(RETAIL_MIS_MODULES[role].includes(module))assert.equal((await report(actor,module)).complete,true);else await denied('select rpc_retail_mis_report($1,$2,current_date,current_date,null)',[actor,module]);}
@@ -78,6 +92,29 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
   await q("insert into retail_attendance_uploads(id,kind,filename,checksum,uploaded_by,total_rows,valid_rows,rejected_rows,validation_summary,payload,expected_ids) values($1,'attendance','bad.xlsx','bad-hash',$2,1,1,0,$3,$4,'[]')",[id(111),actors.hk,{preview_key:'bad-preview'},JSON.stringify([{...payload[0],class:'MEPC',employee_code:'BAD_CLASS'}])]);
   await denied('select rpc_retail_mis_attendance_commit($1,$2,false,null,$3)',[id(111),actors.hk,'bad-preview']);assert.equal((await one('select count(*)::int n from retail_employee_daily_attendance')).n,1);
   const storeProposal=await command(actors.hk,'stores','PROPOSE',{store_code:'S0',store_name:'Reviewed fixture name',city:'Fixture city',reason:'Reviewed source correction'});
+  await q("insert into reliance_retail_store_master(id,store_code,store_name,state) values($1,' s0 ','Duplicate fixture','PY')",[id(299)]);
+  await denied('select rpc_retail_mis_command($1,$2,$3,$4)',[actors.central,'stores','PROPOSE',{store_code:'S0',store_name:'Ambiguous',reason:'Must reject ambiguity'}]);
+  await denied("select rpc_retail_mis_report($1,'attendance-hk','2026-10-01','2026-10-31',null)",[actors.hk],/Ambiguous canonical Store Code/);
+  await denied('select rpc_retail_mis_command($1,$2,$3,$4)',[actors.central,'maintenance','COMPLETE',{store_id:id(20),kind,month,request_id:id(297)}]);
+  await q('delete from reliance_retail_store_master where id=$1',[id(299)]);
+  await q('insert into retail_unified_epoch values($1,$2)',['2026-10-01',{[id(20)]:{zone_id:id(309)}}]);
+  await q("insert into reliance_retail_zone_fo_assignments values($1,$2,$3,'legacy','2026-10-01',null)",[id(308),id(309),actors.legacy]);
+  await q("insert into storage.buckets(id,name,public) values('fo-activity-uploads','fo-activity-uploads',false)");
+  await q("insert into retail_provisional_proposals values($1,'DC_SCHEDULE','APPROVED',$2,$3,$4)",[id(310),id(20),actors.legacy,admin]);
+  await q("insert into reliance_retail_management_audit(action,entity_type,entity_id,after_state) values('UNIFIED_APPLY','proposal',$1,$2)",[id(310),{proposal_id:id(310),kind:'DC_SCHEDULE',store_id:id(20),changes:{scheduled_date:'2026-10-15'}}]);
+  await q("insert into client_deep_cleaning_schedules(id,retail_store_id,scheduled_date,assigned_fo_profile_id,source_reference,created_at) values($1,$2,'2026-10-15',$3,$4,'2026-10-01')",[id(311),id(20),actors.legacy,id(310)]);
+  await q("insert into fo_activity_submissions values($1,'legacy','S0','deep_cleaning','submitted','2026-10-15T10:00Z',$2,$3)",[id(312),{pending_images:false,activity_date:'2026-10-15',state:'TN'},id(20)]);
+  for(const [n,kind] of [[313,'before'],[314,'after']]){
+   const object=`legacy/2026-10-15/deep_cleaning/${id(312)}/${kind}.jpg`;
+   await q("insert into storage.objects(bucket_id,name) values('fo-activity-uploads',$1)",[object]);
+   await q("insert into fo_activity_uploads values($1,$2,'legacy','S0','deep_cleaning',now(),'fo-activity-uploads',$3,'image/jpeg',100,$4,$5)",[id(n),id(312),'deep_cleaning_'+kind,'fo-activity-uploads/'+object,kind+'.jpg']);
+  }
+  const originalSource=(await one('select md5(to_jsonb(f)::text) hash from fo_activity_submissions f where id=$1',[id(312)])).hash;
+  await denied('select retail_mis_cleaning_link_fo($1,$2,$3)',[actors.mep,id(311),id(312)]);
+  await q('select retail_mis_cleaning_link_fo($1,$2,$3)',[actors.hk,id(311),id(312)]);
+  assert.equal((await one('select md5(to_jsonb(f)::text) hash from fo_activity_submissions f where id=$1',[id(312)])).hash,originalSource);
+  assert.equal((await one('select rpc_retail_mis_linked_evidence($1,$2) source',[actors.hk,id(311)])).source.uploads.length,2);
+  await denied('select rpc_retail_mis_linked_evidence($1,$2)',[actors.mep,id(311)]);
   await denied('select rpc_retail_mis_store_review($1,$2,true,$3)',[actors.hk,storeProposal.proposal_id,'Self approve denied']);
   await q('select rpc_retail_mis_store_review($1,$2,true,$3)',[admin,storeProposal.proposal_id,'Independent fixture approval']);assert.equal((await one('select store_name from reliance_retail_store_master where id=$1',[id(20)])).store_name,'Reviewed fixture name');
   const record=await command(actors.hk,'pest','CREATE',{store_code:'S0',activity_date:'2026-10-15',remarks:'Pest control treatment'});assert.equal(record.status,'draft');
@@ -86,7 +123,7 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
   await q('insert into storage.objects(bucket_id,name,metadata) values($1,$2,$3)',[e.bucket,e.path,{size:100,mimetype:'image/jpeg'}]);
   await q('select rpc_retail_mis_evidence_finalize($1,$2)',[actors.hk,e.id]);
   await denied('select rpc_retail_mis_evidence_object($1,$2,false)',[actors.mep,e.id]);
-  await q('set role authenticated');assert.equal((await one('select count(*)::int n from storage.objects')).n,0);await denied('select * from retail_mis_assignments');await denied('select rpc_retail_mis_access($1,$1)',[actors.hk]);await q('reset role');
+  await q("select set_config('request.jwt.claim.sub',$1,false)",[actors.hk]);await q('set role authenticated');assert.equal((await one('select count(*)::int n from storage.objects')).n,0);await denied('select * from retail_mis_assignments');await denied('select rpc_retail_mis_access($1,$1)',[actors.hk]);await q('reset role');
   await q("insert into fault_tracker_tickets(id,store_code) values($1,'S0')",[id(120)]);await q("select set_config('request.jwt.claim.sub',$1,false)",[actors.hk]);await q('set role authenticated');assert.equal((await one('select count(*)::int n from fault_tracker_tickets')).n,0);await denied("insert into fault_tracker_tickets(id,store_code) values($1,'S1')",[id(121)],/row-level security/i);await q('reset role');
   await q('set role authenticated');assert.equal((await one('select count(*)::int n from profiles')).n,1);const escalation=await q("update profiles set role='Admin' where id=$1 returning id",[actors.hk]);assert.equal(escalation.rowCount,0);await denied("insert into profiles(id,auth_user_id,employee_code,role) values($1,$2,'ESCALATE','Admin')",[id(130),id(130)],/row-level security/i);await q('reset role');assert.equal((await one('select role from profiles where id=$1',[actors.hk])).role,'MIS_HK');
   await q("insert into storage.buckets(id,name,public) values('training-evidence','training-evidence',false)");await q("insert into storage.objects(bucket_id,name) values('training-evidence','unrelated-object')");await q("select set_config('request.jwt.claim.sub',$1,false)",[actors.hk]);await q('set role authenticated');assert.equal((await one("select count(*)::int n from storage.objects where bucket_id='training-evidence'")).n,0);await q('reset role');await q("select set_config('request.jwt.claim.sub',$1,false)",[actors.legacy]);await q('set role authenticated');assert.equal((await one("select count(*)::int n from storage.objects where bucket_id='training-evidence'")).n,1);await q('reset role');
@@ -94,9 +131,12 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
   await command(actors.hk,'pest','SUBMIT',{id:record.id,revision:1});await denied("select rpc_retail_mis_evidence_prepare($1,'pest',$2,'image/jpeg',100)",[actors.hk,record.id]);
   await denied('update retail_mis_audit set reason=$1',['tamper']);
   await q("insert into retail_service_orders(id,kind,reference,state,store_ids,status,details,created_by) values($1,'OOS','SAFE','TN',$2,'QUOTED','{}',$3)",[id(50),[id(20)],actors.oos]);
-  assert.equal((await report(actors.oos,'oos')).stores.length,0);assert.equal((await report(actors.oos,'oos')).rows.length,1);
+  assert.equal((await report(actors.oos,'oos')).stores.length,0);assert.equal((await report(actors.oos,'oos')).rows.length,1);assert.equal((await report(actors.oos,'oos')).rows[0].store_codes_by_id[id(20)],'S0');
   await denied('select rpc_retail_mis_command($1,$2,$3,$4)',[actors.oos,'oos','RETIRE',{order_id:id(50),revision:1,reason:'Cancelled quotation',request_id:id(60)}]);
   await q('update retail_mis_controls set oos_writes_enabled=true'); // isolated fixture activation only
+  await q("insert into reliance_retail_store_master(id,store_code,store_name,state) values($1,' s0 ','Duplicate fixture','PY')",[id(299)]);
+  await denied('select retail_mis_service_command($1,$2,$3,null,null,$4)',[actors.oos,id(298),'CREATE_OOS',{reference:'AMBIGUOUS',store_ids:[id(20)]}],/Ambiguous canonical Store Code/);
+  await q('delete from reliance_retail_store_master where id=$1',[id(299)]);
   await command(actors.oos,'oos','RETIRE',{order_id:id(50),revision:1,reason:'Cancelled quotation',request_id:id(60)});
   assert.equal((await one('select count(*)::int n from retail_service_orders')).n,1);assert.equal((await one('select count(*)::int n from retail_mis_oos_retirements')).n,1);
   await denied("update retail_service_orders set details='{}' where id=$1",[id(50)]);
@@ -119,7 +159,10 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
   await assign(actors.hk,null,[],2);await denied("select rpc_retail_mis_report($1,'pest',current_date,current_date,null)",[actors.hk]);assert.equal((await one('select role from profiles where id=$1',[actors.hk])).role,'Business Development Head');
   assert.equal((await one('select public.retail_unified_access($1,null,$2) allowed',[admin,'edit'])).allowed,true);
   assert.equal((await one("select name from access_roles where code='mis'")).name,'MIS');
-  await q(read('supabase/verification/retail_mis_postinstall_read_only.sql'));await q(read('supabase/verification/retail_mis_padma_preflight_read_only.sql'));
+  await q('update retail_mis_controls set oos_writes_enabled=false');
+  const postinstall=read('supabase/verification/retail_mis_postinstall_read_only.sql');await q(postinstall);
+  await q('grant execute on function rpc_retail_mis_access(uuid,uuid) to authenticated');await assert.rejects(q(postinstall),/MIS routine ACL failed/);await q('rollback');await q('revoke execute on function rpc_retail_mis_access(uuid,uuid) from authenticated');
+  await q(postinstall);await q(read('supabase/verification/retail_mis_padma_preflight_read_only.sql'));
   console.log('Real PostgreSQL assertions passed: role/state isolation, identity preservation, direct-API/RLS denial, evidence lifecycle, OOS freeze/retirement.');
  }catch(error){console.error('Local PostgreSQL verification failed:',error.message,error.where||'',error.detail||'');throw error;}finally{await db.end();execFileSync(path.join(toolDir,'node_modules/@embedded-postgres/windows-x64/native/bin/pg_ctl.exe'),['-D',databaseDir,'-m','fast','-w','stop'],{stdio:'pipe',timeout:15000});cluster.process=undefined;}
 });

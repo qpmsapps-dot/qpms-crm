@@ -6,6 +6,16 @@ import {RETAIL_MIS_ROLES,RETAIL_MIS_MODULES,retailMisCan,retailMisScopeStates,as
 import {createRetailMisRouter} from '../routes/retailMisRoutes.js';
 import {canAccessRoute} from '../../src/utils/authRoles.js';
 import {attendanceAccess} from '../services/retailAttendanceService.js';
+import {signVerifiedFoCleaningSource} from '../services/retailCleaningFoLinkService.js';
+test('MIS linked FO images verify private bucket, exact path and stored size before signing',async()=>{
+ let signs=0,size=100,isPublic=false;
+ const source={id:'fo:fixture',employee_code:'FO1',deep_cleaning_date:'2026-10-15',uploads:[{id:'image',storage_bucket:'fo-activity-uploads',file_url:'fo-activity-uploads/FO1/2026-10-15/deep_cleaning/fixture/before.jpg',file_type:'image/jpeg',file_size:100,upload_role:'deep_cleaning_before'}]};
+ const client={storage:{getBucket:async()=>({data:{public:isPublic}}),from:()=>({list:async()=>({data:[{name:'before.jpg',metadata:{size}}]}),createSignedUrl:async(path,expires)=>{signs++;assert.equal(expires,120);return {data:{signedUrl:'synthetic-private-url'}};}})}};
+ assert.equal((await signVerifiedFoCleaningSource(client,source,120)).length,1);assert.equal(signs,1);
+ size=101;await assert.rejects(()=>signVerifiedFoCleaningSource(client,source,120),/size no longer matches/);assert.equal(signs,1);
+ size=100;isPublic=true;await assert.rejects(()=>signVerifiedFoCleaningSource(client,source,120),/must be private/);assert.equal(signs,1);
+ isPublic=false;await assert.rejects(()=>signVerifiedFoCleaningSource(client,{...source,uploads:[{...source.uploads[0],file_url:'fo-activity-uploads/another-user/before.jpg'}]},120),/outside/);assert.equal(signs,1);
+});
 const roles=Object.keys(RETAIL_MIS_ROLES),all=[...new Set(Object.values(RETAIL_MIS_MODULES).flat())];
 for(const role of roles)test(role+' has exact module/navigation matrix and explicit geographic grants',()=>{
  const access={role,states:['TN','AP-1'],active:true},user={role,rawRole:role,business:'Reliance Retail'};

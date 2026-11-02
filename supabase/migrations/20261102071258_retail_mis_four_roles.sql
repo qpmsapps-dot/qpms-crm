@@ -43,12 +43,14 @@ create function public.retail_mis_immutable() returns trigger language plpgsql s
 create trigger retail_mis_audit_immutable before update or delete on public.retail_mis_audit for each row execute function public.retail_mis_immutable();
 create trigger retail_mis_retirement_immutable before update or delete on public.retail_mis_oos_retirements for each row execute function public.retail_mis_immutable();
 -- Extend only the existing profile role constraint. Do not rename legacy MIS globally.
-do $roles$ declare c record;definition text;begin
+do $roles$ declare c record;definition text;found_roles integer:=0;begin
  for c in select oid,conname,convalidated,pg_get_expr(conbin,conrelid) expression from pg_constraint where conrelid='public.profiles'::regclass and contype='c' and pg_get_constraintdef(oid) like '%role = ANY%' loop
   definition:=format('CHECK ((%s) OR role IN (''CENTRAL_MIS'',''MIS_HK'',''MIS_MEPC'',''MIS_OOS''))',c.expression);
   execute format('alter table public.profiles drop constraint %I',c.conname);
-  execute format('alter table public.profiles add constraint %I %s NOT VALID',c.conname,replace(definition,' NOT VALID',''));
+  execute format('alter table public.profiles add constraint %I %s%s',c.conname,definition,case when c.convalidated then '' else ' NOT VALID' end);
+  found_roles:=found_roles+1;
  end loop;
+ if found_roles<>1 then raise exception 'Expected exactly one installed profile role constraint';end if;
 end;$roles$;
 create function public.retail_mis_super(p_actor uuid) returns boolean language sql stable security definer set search_path=pg_catalog,public as $$
  select exists(select 1 from public.profiles p where p.id=p_actor and p.is_active is true and upper(coalesce(p.status,'Active'))='ACTIVE' and
@@ -63,6 +65,7 @@ create function public.retail_mis_allowed(p_actor uuid,p_module text,p_state tex
  when 'MIS_HK' then p_module=any(array['stores','attendance-hk','cleaning','pest','training-hk'])
  when 'MIS_MEPC' then p_module=any(array['stores','attendance-mepc','fault','maintenance','thermography']) when 'MIS_OOS' then p_module='oos' else false end);
 $$;
+create function public.retail_mis_unique_store(p_store uuid) returns boolean language sql stable security definer set search_path=pg_catalog,public as $$select exists(select 1 from public.reliance_retail_store_master s where s.id=p_store and nullif(btrim(s.store_code),'') is not null and (select count(*) from public.reliance_retail_store_master d where upper(btrim(d.store_code))=upper(btrim(s.store_code)))=1)$$;
 create function public.rpc_retail_mis_access(p_actor uuid,p_auth uuid) returns jsonb language sql stable security definer set search_path=pg_catalog,public as $$
  select coalesce((select jsonb_build_object('profile_id',a.profile_id,'role',a.role,'states',case when a.role='CENTRAL_MIS' then array['AP-1','AP-2','KA','KL','TG','TN','PY'] else a.states end,'active',a.active and p.is_active and p.role=a.role and p.auth_user_id=a.auth_user_id and p.employee_code=a.employee_code and upper(coalesce(p.status,'Active'))='ACTIVE','revision',a.revision)
  from public.retail_mis_assignments a join public.profiles p on p.id=a.profile_id where a.profile_id=p_actor and a.auth_user_id=p_auth and p.auth_user_id=p_auth),'{}');
@@ -113,6 +116,7 @@ declare ids uuid[];rows jsonb:='[]';stores jsonb:='[]';aop jsonb:='[]';evidence 
  if not public.retail_mis_allowed(p_actor,p_module,p_state) then raise exception using errcode='42501',message='Outside module/state scope';end if;
  if p_from is null or p_to is null or p_to<p_from or p_to-p_from>366 then raise exception using errcode='22023',message='Reporting range up to 366 days required';end if;
  select coalesce(array_agg(s.id),'{}') into ids from public.reliance_retail_store_master s where public.retail_mis_allowed(p_actor,p_module,s.state) and (p_state is null or s.state=p_state);
+ if p_module<>'stores' and exists(select 1 from public.reliance_retail_store_master s where s.id=any(ids) and not public.retail_mis_unique_store(s.id)) then raise exception using errcode='42501',message='Ambiguous canonical Store Code; report unavailable pending reconciliation';end if;
  if p_module<>'oos' then select coalesce(jsonb_agg(jsonb_build_object('id',s.id,'store_code',s.store_code,'store_name',s.store_name,'state',s.state,'status',s.status) order by s.store_code),'[]') into stores from public.reliance_retail_store_master s where s.id=any(ids);end if;
  if p_module='stores' then rows:=stores;
  elsif p_module like 'attendance-%' then
@@ -123,7 +127,7 @@ declare ids uuid[];rows jsonb:='[]';stores jsonb:='[]';aop jsonb:='[]';evidence 
  elsif p_module='fault' then
   select coalesce(jsonb_agg(to_jsonb(t)-'raw_row'),'[]') into rows from public.fault_tracker_tickets t where t.is_active is true and (select count(*) from public.reliance_retail_store_master s where upper(btrim(s.store_code))=upper(btrim(t.store_code)))=1 and exists(select 1 from public.reliance_retail_store_master s where s.id=any(ids) and upper(btrim(s.store_code))=upper(btrim(t.store_code)) and s.status='Active');
  elsif p_module='oos' then
-  select coalesce(jsonb_agg(public.retail_service_public_order(to_jsonb(o))||jsonb_build_object('store_codes',(select jsonb_agg(s.store_code order by s.store_code) from public.reliance_retail_store_master s where s.id=any(o.store_ids)),'retired',exists(select 1 from public.retail_mis_oos_retirements r where r.order_id=o.id))),'[]') into rows from public.retail_service_orders o where public.retail_mis_oos_order_allowed(p_actor,o.id,false) and (p_state is null or o.state=p_state);
+  select coalesce(jsonb_agg(public.retail_service_public_order(to_jsonb(o))||jsonb_build_object('store_codes_by_id',(select jsonb_object_agg(s.id::text,s.store_code) from public.reliance_retail_store_master s where s.id=any(o.store_ids)),'store_codes',(select jsonb_agg(s.store_code order by s.store_code) from public.reliance_retail_store_master s where s.id=any(o.store_ids)),'retired',exists(select 1 from public.retail_mis_oos_retirements r where r.order_id=o.id))),'[]') into rows from public.retail_service_orders o where public.retail_mis_oos_order_allowed(p_actor,o.id,false) and (p_state is null or o.state=p_state);
  elsif p_module in ('pest','cleaning','training-hk','training-mepc') then
   select coalesce(jsonb_agg(to_jsonb(r)||jsonb_build_object('store_code',s.store_code,'store_name',s.store_name,'state',s.state,'remarks',r.details->>'remarks')),'[]') into rows from public.retail_mis_records r join public.reliance_retail_store_master s on s.id=r.retail_store_id where r.module=p_module and r.retail_store_id=any(ids) and r.activity_date between p_from and p_to;
   if p_module='cleaning' then
@@ -184,13 +188,13 @@ end;$legacy_scope$;
 create function public.rpc_retail_mis_evidence_prepare(p_actor uuid,p_module text,p_record uuid,p_mime text,p_size bigint) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
 declare r public.retail_mis_records%rowtype;s public.reliance_retail_store_master%rowtype;e public.retail_mis_evidence%rowtype;eid uuid:=gen_random_uuid();begin
  select * into r from public.retail_mis_records where id=p_record for update;select * into s from public.reliance_retail_store_master where id=r.retail_store_id;
- if r.id is null or r.module is distinct from p_module or r.status<>'draft' or not public.retail_mis_allowed(p_actor,r.module,s.state,true) then raise exception using errcode='42501',message='Scoped draft required';end if;
+ if not public.retail_mis_unique_store(s.id) or r.id is null or r.module is distinct from p_module or r.status<>'draft' or not public.retail_mis_allowed(p_actor,r.module,s.state,true) then raise exception using errcode='42501',message='Scoped draft required';end if;
  insert into public.retail_mis_evidence(id,record_id,path,mime_type,file_size,created_by) values(eid,r.id,p_actor::text||'/'||s.id::text||'/'||r.module||'/'||r.id::text||'/'||eid::text,p_mime,p_size,p_actor) returning * into e;
  insert into public.retail_mis_audit(actor_id,action,target_id,reason,after_value) values(p_actor,'EVIDENCE_PREPARED',e.id,'Private draft evidence upload',to_jsonb(e));return to_jsonb(e);end;$$;
 create function public.rpc_retail_mis_evidence_object(p_actor uuid,p_evidence uuid,p_write boolean) returns jsonb language plpgsql stable security definer set search_path=pg_catalog,public as $$
 declare e public.retail_mis_evidence%rowtype;r public.retail_mis_records%rowtype;s public.reliance_retail_store_master%rowtype;begin
  select * into e from public.retail_mis_evidence where id=p_evidence;select * into r from public.retail_mis_records where id=e.record_id;select * into s from public.reliance_retail_store_master where id=r.retail_store_id;
- if e.id is null or not public.retail_mis_allowed(p_actor,r.module,s.state,p_write) or (p_write and (r.status<>'draft' or e.created_by<>p_actor or e.status<>'pending')) or (not p_write and (e.status<>'uploaded' or r.status='retired')) then raise exception using errcode='42501',message='Evidence outside scope or immutable';end if;return to_jsonb(e);end;$$;
+ if not public.retail_mis_unique_store(s.id) or e.id is null or not public.retail_mis_allowed(p_actor,r.module,s.state,p_write) or (p_write and (r.status<>'draft' or e.created_by<>p_actor or e.status<>'pending')) or (not p_write and (e.status<>'uploaded' or r.status='retired')) then raise exception using errcode='42501',message='Evidence outside scope or immutable';end if;return to_jsonb(e);end;$$;
 create function public.rpc_retail_mis_evidence_finalize(p_actor uuid,p_evidence uuid) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$declare e jsonb;begin
  perform 1 from public.retail_mis_records where id=(select record_id from public.retail_mis_evidence where id=p_evidence) for update;
  e:=public.rpc_retail_mis_evidence_object(p_actor,p_evidence,true);
@@ -263,7 +267,7 @@ declare s public.reliance_retail_store_master%rowtype;r public.retail_mis_record
   else
    select * into r from public.retail_mis_records where id=(p_data->>'id')::uuid for update;
    select * into s from public.reliance_retail_store_master where id=r.retail_store_id;
-   if r.id is null or r.module<>p_module or not public.retail_mis_allowed(p_actor,p_module,s.state,true) or r.revision is distinct from (p_data->>'revision')::integer then raise exception using errcode='40001',message='Record unavailable or changed';end if;
+   if not public.retail_mis_unique_store(s.id) or r.id is null or r.module<>p_module or not public.retail_mis_allowed(p_actor,p_module,s.state,true) or r.revision is distinct from (p_data->>'revision')::integer then raise exception using errcode='40001',message='Record unavailable or changed';end if;
    prior:=to_jsonb(r);
    if r.status<>'draft' then raise exception using errcode='42501',message='Submitted records are immutable';end if;
    if p_action='UPDATE' and length(coalesce(p_data->>'remarks',''))<=2000 then update public.retail_mis_records set details=details||jsonb_build_object('remarks',p_data->>'remarks'),revision=revision+1,updated_at=clock_timestamp() where id=r.id returning * into r;
@@ -276,7 +280,7 @@ declare s public.reliance_retail_store_master%rowtype;r public.retail_mis_record
  elsif p_module='stores' and p_action='PROPOSE' then
   -- Identity/AOP/ownership activation remains independently reviewed, never direct CRUD.
   select * into s from public.reliance_retail_store_master where upper(btrim(store_code))=upper(btrim(p_data->>'store_code'));
-  if s.id is null or not public.retail_mis_allowed(p_actor,'stores',s.state,true) then raise exception using errcode='42501',message='Store outside assignment';end if;
+  if s.id is null or (select count(*) from public.reliance_retail_store_master x where upper(btrim(x.store_code))=upper(btrim(s.store_code)))<>1 or not public.retail_mis_allowed(p_actor,'stores',s.state,true) then raise exception using errcode='42501',message='Unique canonical Store Code in assigned state required';end if;
   if length(btrim(coalesce(p_data->>'store_name','')))=0 or length(p_data->>'store_name')>250 or length(coalesce(p_data->>'city',''))>250 or length(btrim(coalesce(p_data->>'reason','')))<3 then raise exception using errcode='22023',message='Proposed name/city and evidence reason required';end if;
   insert into public.retail_mis_store_proposals(store_id,maker_id,changes,baseline,reason) values(s.id,p_actor,jsonb_build_object('store_name',p_data->>'store_name','city',p_data->>'city'),jsonb_build_object('store_name',s.store_name,'city',s.city),p_data->>'reason') returning jsonb_build_object('proposal_id',id,'status',status,'store_id',store_id) into outcome;
  elsif p_module='maintenance' and p_action='COMPLETE' then
@@ -308,7 +312,7 @@ language plpgsql security definer set search_path=pg_catalog,public as $$
 declare s public.reliance_retail_store_master%rowtype;c public.retail_maintenance_calls%rowtype;today date:=public.retail_operations_today();
 begin
  select * into s from public.reliance_retail_store_master where id=p_store;
- if not found or not public.retail_mis_operations_access(p_actor,s.state,true) then raise exception using errcode='42501',message='Store is outside assigned editor scope';end if;
+ if not found or (not public.retail_mis_unique_store(s.id) or not public.retail_mis_operations_access(p_actor,s.state,true)) then raise exception using errcode='42501',message='Store is outside assigned editor scope';end if;
  if p_request is null or p_kind is null or p_kind not in ('CM','PM') or p_month is null or extract(day from p_month)<>1 then raise exception using errcode='22023',message='Store, kind, month and request ID required';end if;
  select * into c from public.retail_maintenance_calls where request_id=p_request;
  if found then
@@ -337,7 +341,7 @@ begin
   if not found then raise exception using errcode='42501',message='Inspection unavailable in authorized scope';end if;
   select * into s from public.reliance_retail_store_master where id=t.retail_store_id;
  end if;
- if s.id is null or not public.retail_mis_operations_access(p_actor,s.state,true) then raise exception using errcode='42501',message='Store is outside assigned editor scope';end if;
+ if s.id is null or (not public.retail_mis_unique_store(s.id) or not public.retail_mis_operations_access(p_actor,s.state,true)) then raise exception using errcode='42501',message='Store is outside assigned editor scope';end if;
  if p_action='Scheduled' then
   if p_scheduled is null or s.status<>'Active' then raise exception using errcode='22023',message='Active canonical store and scheduled date required';end if;
   select * into t from public.retail_thermography_inspections where schedule_request_id=p_request;
@@ -461,6 +465,7 @@ begin
  select * into e from public.retail_service_events where request_id=p_request;
  if found then
   if e.actor_id<>p_actor or e.action<>p_action or e.evidence-'filename'<>p_data-'filename' or (p_order is not null and e.order_id<>p_order) then raise exception 'Request ID reused with different command';end if;
+  if not public.retail_mis_oos_order_allowed(p_actor,e.order_id,true) or exists(select 1 from public.retail_mis_oos_retirements r where r.order_id=e.order_id) then raise exception using errcode='42501',message='Replayed order unavailable or retired';end if;
   if not public.retail_mis_oos_access(p_actor,e.after_value->>'state','edit') then raise exception using errcode='42501',message='Outside editor scope';end if;
   return jsonb_build_object('replayed',true,'order',public.retail_service_public_order(e.after_value));
  end if;
@@ -468,6 +473,7 @@ begin
   select array_agg(value::uuid) into ids from jsonb_array_elements_text(p_data->'store_ids');
   if coalesce(cardinality(ids),0)=0 or cardinality(ids)>1000 then raise exception 'Verified stores required';end if;
   if exists(select 1 from unnest(ids) x left join public.reliance_retail_store_master s on s.id=x where s.id is null or s.status<>'Active') then raise exception 'Only active canonical stores can be used';end if;
+  if exists(select 1 from public.reliance_retail_store_master s where s.id=any(ids) and (nullif(btrim(s.store_code),'') is null or (select count(*) from public.reliance_retail_store_master d where upper(btrim(d.store_code))=upper(btrim(s.store_code)))<>1)) then raise exception using errcode='42501',message='Ambiguous canonical Store Code';end if;
   select min(state) into st from public.reliance_retail_store_master where id=any(ids);
   if (select count(distinct state) from public.reliance_retail_store_master where id=any(ids))<>1 then raise exception 'Cross-state orders are not supported';end if;
   if not public.retail_mis_oos_access(p_actor,st,'edit') then raise exception using errcode='42501',message='Outside editor scope';end if;
@@ -545,7 +551,7 @@ begin
   perform pg_advisory_xact_lock(hashtextextended('retail_uploaded_attendance',0));
   select * into b from public.retail_attendance_uploads where id = p_batch for update;
   if not found or b.uploaded_by <> p_actor then raise exception using errcode='42501',message='Upload owner mismatch'; end if;
-  if b.kind<>'attendance' or exists(select 1 from jsonb_array_elements(b.payload) v left join public.reliance_retail_store_master s on s.id=(v->>'retail_store_id')::uuid where s.id is null or not public.retail_mis_allowed(p_actor,case when v->>'class'='HK' then 'attendance-hk' when v->>'class'='MEPC' then 'attendance-mepc' else '' end,s.state,true)) then raise exception using errcode='42501',message='Entire attendance upload must remain within assigned class/state';end if;
+  if b.kind<>'attendance' or exists(select 1 from jsonb_array_elements(b.payload) v left join public.reliance_retail_store_master s on s.id=(v->>'retail_store_id')::uuid where s.id is null or not public.retail_mis_unique_store(s.id) or upper(btrim(v->>'store_code')) is distinct from upper(btrim(s.store_code)) or not public.retail_mis_allowed(p_actor,case when v->>'class'='HK' then 'attendance-hk' when v->>'class'='MEPC' then 'attendance-mepc' else '' end,s.state,true)) then raise exception using errcode='42501',message='Entire attendance upload must remain within assigned class/state';end if;
   if exists(select 1 from public.retail_employee_daily_attendance x where x.superseded_at is null and exists(select 1 from jsonb_array_elements(b.payload) v where v->>'employee_code'=x.employee_code and (v->>'attendance_date')::date=x.attendance_date) and not exists(select 1 from public.reliance_retail_store_master s where s.id=x.retail_store_id and public.retail_mis_allowed(p_actor,case when x.class='HK' then 'attendance-hk' else 'attendance-mepc' end,s.state,true))) then raise exception using errcode='42501',message='Cross-scope employee/day correction denied';end if;
   if b.status = 'committed' then return b.id; end if;
   if p_preview_key is distinct from b.validation_summary ->> 'preview_key' then raise exception using errcode='40001',message='Preview changed; review it again'; end if;

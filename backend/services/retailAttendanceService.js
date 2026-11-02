@@ -139,6 +139,7 @@ async function scopedStores(client, profile, state = '', read = data) {
   const scope = attendanceAccess(profile);
   if (state && scope.state && reportingState(state) !== reportingState(scope.state)) throw attendanceError(403, 'State is outside your authorized Retail scope.');
   const stores = await pages(() => client.from('reliance_retail_store_master').select('id,store_code,store_name,state,status').order('id'), read);
+  if(scope.mis&&stores.some(s=>(scope.mis.role==='CENTRAL_MIS'||scope.mis.states.includes(s.state))&&stores.filter(d=>storeKey(d.store_code)===storeKey(s.store_code)).length!==1))throw attendanceError(409,'Ambiguous canonical Store Code; reconcile Store Master before attendance operations.');
   if(scope.mis)return stores.filter(s=>(scope.mis.role==='CENTRAL_MIS'||scope.mis.states.includes(s.state))&&(!state||s.state===state));
   return stores.filter(s => (!scope.state || stateLabel(s.state) === scope.state) && (!state || reportingState(s.state) === reportingState(state)));
 }
@@ -159,6 +160,7 @@ export async function previewRetailAttendance(client, profile, bytes, filename, 
   Object.assign(countsLog,{source_rows:parsed.rows.length,valid_rows:result.valid.length,rejected_rows:result.rejected.length,excluded_rows:result.excluded.length});
   const checksum = createHash('sha256').update(bytes).digest('hex');
   const existing = await step('lookup',()=>previewDatabase(client.from('retail_attendance_uploads').select('id,status,uploaded_by,validation_summary').eq('kind', 'attendance').eq('checksum', checksum).maybeSingle(),'lookup',context.signal));
+  if(retailMisRole(profile?.role)&&existing&&existing.uploaded_by!==profile.id)throw attendanceError(409,'This workbook already belongs to another uploader. Its audit and ownership were not changed.');
   if (existing?.status === 'committed') return { ...compactPreviewSummary(existing.validation_summary), id: existing.id, idempotent: true, committed: true };
   const conflicts = await step('conflicts',()=>previewDatabase(client.rpc('rpc_retail_attendance_conflicts', { p_rows: result.valid }),'conflicts',context.signal));
   if(retailMisRole(profile?.role)&&conflicts.some(r=>!stores.some(s=>s.id===r.retail_store_id)||(profile._retailMisModule!=='imports'&&r.class!==(profile._retailMisModule==='attendance-hk'?'HK':'MEPC'))))throw attendanceError(403,'Employee/day conflicts extend outside this assigned scope; independent reconciliation required.');

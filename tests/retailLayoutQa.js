@@ -7,6 +7,9 @@ export async function verifyRetailLayout(page, name) {
   for (const width of [1440, 1024, 390]) {
     await page.setViewportSize({width, height:1000});
     await page.evaluate(() => document.fonts.ready);
+    // ResponsiveContainer updates through ResizeObserver after viewport changes.
+    // Wait for that render before asserting the same strict overflow limits.
+    await page.waitForFunction(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1&&[...document.querySelectorAll('.retail-report,.ifms-dashboard')].every(el=>el.scrollWidth<=el.clientWidth+1),null,{timeout:5000}).catch(()=>{});
     const overflow = await page.evaluate(() => ({
       page:document.documentElement.scrollWidth - document.documentElement.clientWidth,
       reports:[...document.querySelectorAll('.retail-report,.ifms-dashboard')].map(el => el.scrollWidth-el.clientWidth),

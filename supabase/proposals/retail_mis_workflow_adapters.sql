@@ -4,7 +4,7 @@ language plpgsql security definer set search_path=pg_catalog,public as $$
 declare s public.reliance_retail_store_master%rowtype;c public.retail_maintenance_calls%rowtype;today date:=public.retail_operations_today();
 begin
  select * into s from public.reliance_retail_store_master where id=p_store;
- if not found or not public.retail_mis_operations_access(p_actor,s.state,true) then raise exception using errcode='42501',message='Store is outside assigned editor scope';end if;
+ if not found or (not public.retail_mis_unique_store(s.id) or not public.retail_mis_operations_access(p_actor,s.state,true)) then raise exception using errcode='42501',message='Store is outside assigned editor scope';end if;
  if p_request is null or p_kind is null or p_kind not in ('CM','PM') or p_month is null or extract(day from p_month)<>1 then raise exception using errcode='22023',message='Store, kind, month and request ID required';end if;
  select * into c from public.retail_maintenance_calls where request_id=p_request;
  if found then
@@ -33,7 +33,7 @@ begin
   if not found then raise exception using errcode='42501',message='Inspection unavailable in authorized scope';end if;
   select * into s from public.reliance_retail_store_master where id=t.retail_store_id;
  end if;
- if s.id is null or not public.retail_mis_operations_access(p_actor,s.state,true) then raise exception using errcode='42501',message='Store is outside assigned editor scope';end if;
+ if s.id is null or (not public.retail_mis_unique_store(s.id) or not public.retail_mis_operations_access(p_actor,s.state,true)) then raise exception using errcode='42501',message='Store is outside assigned editor scope';end if;
  if p_action='Scheduled' then
   if p_scheduled is null or s.status<>'Active' then raise exception using errcode='22023',message='Active canonical store and scheduled date required';end if;
   select * into t from public.retail_thermography_inspections where schedule_request_id=p_request;
@@ -157,6 +157,7 @@ begin
  select * into e from public.retail_service_events where request_id=p_request;
  if found then
   if e.actor_id<>p_actor or e.action<>p_action or e.evidence-'filename'<>p_data-'filename' or (p_order is not null and e.order_id<>p_order) then raise exception 'Request ID reused with different command';end if;
+  if not public.retail_mis_oos_order_allowed(p_actor,e.order_id,true) or exists(select 1 from public.retail_mis_oos_retirements r where r.order_id=e.order_id) then raise exception using errcode='42501',message='Replayed order unavailable or retired';end if;
   if not public.retail_mis_oos_access(p_actor,e.after_value->>'state','edit') then raise exception using errcode='42501',message='Outside editor scope';end if;
   return jsonb_build_object('replayed',true,'order',public.retail_service_public_order(e.after_value));
  end if;
@@ -164,6 +165,7 @@ begin
   select array_agg(value::uuid) into ids from jsonb_array_elements_text(p_data->'store_ids');
   if coalesce(cardinality(ids),0)=0 or cardinality(ids)>1000 then raise exception 'Verified stores required';end if;
   if exists(select 1 from unnest(ids) x left join public.reliance_retail_store_master s on s.id=x where s.id is null or s.status<>'Active') then raise exception 'Only active canonical stores can be used';end if;
+  if exists(select 1 from public.reliance_retail_store_master s where s.id=any(ids) and (nullif(btrim(s.store_code),'') is null or (select count(*) from public.reliance_retail_store_master d where upper(btrim(d.store_code))=upper(btrim(s.store_code)))<>1)) then raise exception using errcode='42501',message='Ambiguous canonical Store Code';end if;
   select min(state) into st from public.reliance_retail_store_master where id=any(ids);
   if (select count(distinct state) from public.reliance_retail_store_master where id=any(ids))<>1 then raise exception 'Cross-state orders are not supported';end if;
   if not public.retail_mis_oos_access(p_actor,st,'edit') then raise exception using errcode='42501',message='Outside editor scope';end if;
@@ -241,7 +243,7 @@ begin
   perform pg_advisory_xact_lock(hashtextextended('retail_uploaded_attendance',0));
   select * into b from public.retail_attendance_uploads where id = p_batch for update;
   if not found or b.uploaded_by <> p_actor then raise exception using errcode='42501',message='Upload owner mismatch'; end if;
-  if b.kind<>'attendance' or exists(select 1 from jsonb_array_elements(b.payload) v left join public.reliance_retail_store_master s on s.id=(v->>'retail_store_id')::uuid where s.id is null or not public.retail_mis_allowed(p_actor,case when v->>'class'='HK' then 'attendance-hk' when v->>'class'='MEPC' then 'attendance-mepc' else '' end,s.state,true)) then raise exception using errcode='42501',message='Entire attendance upload must remain within assigned class/state';end if;
+  if b.kind<>'attendance' or exists(select 1 from jsonb_array_elements(b.payload) v left join public.reliance_retail_store_master s on s.id=(v->>'retail_store_id')::uuid where s.id is null or not public.retail_mis_unique_store(s.id) or upper(btrim(v->>'store_code')) is distinct from upper(btrim(s.store_code)) or not public.retail_mis_allowed(p_actor,case when v->>'class'='HK' then 'attendance-hk' when v->>'class'='MEPC' then 'attendance-mepc' else '' end,s.state,true)) then raise exception using errcode='42501',message='Entire attendance upload must remain within assigned class/state';end if;
   if exists(select 1 from public.retail_employee_daily_attendance x where x.superseded_at is null and exists(select 1 from jsonb_array_elements(b.payload) v where v->>'employee_code'=x.employee_code and (v->>'attendance_date')::date=x.attendance_date) and not exists(select 1 from public.reliance_retail_store_master s where s.id=x.retail_store_id and public.retail_mis_allowed(p_actor,case when x.class='HK' then 'attendance-hk' else 'attendance-mepc' end,s.state,true))) then raise exception using errcode='42501',message='Cross-scope employee/day correction denied';end if;
   if b.status = 'committed' then return b.id; end if;
   if p_preview_key is distinct from b.validation_summary ->> 'preview_key' then raise exception using errcode='40001',message='Preview changed; review it again'; end if;

@@ -1,98 +1,259 @@
 {
-  "base_commit": "328edd69cf9b16a1e0ee74f6b9cebdbcb2277514",
-  "workspace": "D:\\QPMS_CRM\\.worktrees\\retail-mis-access-20261102",
+  "base_commit": "9db2529a5325cc77a022434143a805ab96351a79",
+  "reviewed_original_candidate": "c957bd117980a93b7f3eb9e685e557a8502be400",
+  "hash_convention": "SHA256 of UTF-8 LF-normalized text; binary files unchanged; manifest excludes itself",
   "files": [
     {
       "file": "backend/routes/relianceRetailManagementRoutes.js",
-      "sha256": "91c29ec77b5206479bdf7efc8a7e7c11e3e0789d17f5e2744401e0d9ae606355"
+      "sha256": "12df33cdd4ea1371db628c478c0520de1a5ec1ec970bee01d4d75312a276a689"
     },
     {
       "file": "backend/routes/retailMisRoutes.js",
-      "sha256": "57f73adfe99e8fa0e4e698f1aa43cf9b8888361484c0979e8be13a44af2b22e9"
+      "sha256": "f2253092be90271ee2be226fdbdfecbc4cbfd81da31064686ee53065d9bd236b"
     },
     {
       "file": "backend/server.js",
       "sha256": "634b90dec2ef096a3437b51a5977e59814a4c4748b9cf6055e914ec059b7c731"
     },
     {
+      "file": "backend/services/faultTrackerStoreScope.js",
+      "sha256": "f94455ee0483b0c4c334dd0f503e4c3f4f76288244b2ccc05abbdab6368ca64e"
+    },
+    {
       "file": "backend/services/retailAttendanceService.js",
-      "sha256": "a47eb0ce53424dbdf38e93303805dcabc8c77974037faaca2638c6571bf86bd7"
+      "sha256": "294c6cab9c7c5936ca2dd89e2688ebee8f4e5d9c2ab1026edde54047f8057c83"
+    },
+    {
+      "file": "backend/services/retailCleaningFoLinkService.js",
+      "sha256": "77efe24e533c4c7053d617f59f95c928ec63f69e123924a38478dafca92746cc"
+    },
+    {
+      "file": "backend/services/retailFaultUpdateService.js",
+      "sha256": "6a8fbb802bdc50d93ff2fdeb90d1eac7c056591a1ef4bb94bf071c532d7e8a58"
+    },
+    {
+      "file": "backend/services/retailInitialAdminAccess.js",
+      "sha256": "20efaaefb1843c0c73bea57dce0aef114bf8cf53c915477ad3f7760497627800"
     },
     {
       "file": "backend/services/retailMisService.js",
       "sha256": "8f0bcea9c1ebe092f757ce5442166d129063402093dfc636f80a7b196977ac44"
     },
     {
+      "file": "backend/services/retailModuleReportService.js",
+      "sha256": "c8f16a60b4b541823ec8ab959a540a8aa563eaa879fdaddfc7bb4232306f91a5"
+    },
+    {
+      "file": "backend/shared/retailFaultWorkflow.js",
+      "sha256": "7a482ef3f73064308916a4521a330ea42a855d3410d9b0b66f77f82775198293"
+    },
+    {
       "file": "backend/shared/retailMisAccess.js",
       "sha256": "eeed896515622cee81d7e95bfb33eb95f44128852cfa5bcbbdecda1e2086e669"
     },
     {
+      "file": "backend/shared/retailModuleReports.js",
+      "sha256": "a007e08162297170c807aa652bbad1de127dfb580fe3b74a5c43b56d3e3ef3b2"
+    },
+    {
       "file": "backend/tests/fixtures/retailMisBaseline.sql",
-      "sha256": "9510666f61aa9cdf7f05ec03f87f1e0900993b10e7838e665cb6a1b576c00966"
+      "sha256": "07f54e896200747236d8873d680247cc420b581d8e0ba6e1098e3ae5bef6703d"
+    },
+    {
+      "file": "backend/tests/retailAttendancePreviewAudit.test.js",
+      "sha256": "9f11e81655cca15ca72bc417e782089755d387ee5610a4d91a06db6c562ec975"
+    },
+    {
+      "file": "backend/tests/retailInitialAdminAccess.test.js",
+      "sha256": "05dce3fceee3a989b33d4f96033d2331fb8349cfb5b2fe32b11b064fb10a4d73"
     },
     {
       "file": "backend/tests/retailMisAccess.test.js",
-      "sha256": "babbbb43bbe70913611a15ec28806e0501722a4d491b6c877a7bbe03e0fea4ab"
+      "sha256": "2f1ff3afab8027ccb231f90e31588d504ce00ba15f86d4aed3a9c8c98f4f028e"
+    },
+    {
+      "file": "backend/tests/retailMisGenerator.test.js",
+      "sha256": "323f5674bb442d0b06818154a6313b55fbc8c6cc2a38e06791eedc4d0dee47aa"
     },
     {
       "file": "backend/tests/retailMisPostgres.test.js",
-      "sha256": "8da225294503b0e387c23ac2345748513b67e86b8e46f7c3daf9aef3fff0ece5"
+      "sha256": "885309f4b58da58ad7ac7da43a47d3537e8df4ec31b458254bf09fbdf72a3d2b"
+    },
+    {
+      "file": "backend/tests/retailModuleReportService.test.js",
+      "sha256": "bfdf3f19f5805b3b7696ae6d374e6ae42cbb882c222747ac3e428f4f6b092cdb"
+    },
+    {
+      "file": "backend/tests/retailProductionSecurity.test.js",
+      "sha256": "9b1fff75a6a9ef717d23dbd44106a70f07fa8eba0ec00dd55188572c27724893"
+    },
+    {
+      "file": "backend/tests/retailWorkflowGaps.test.js",
+      "sha256": "e0ad81513276aa7985561c1c777f2947a019e5b27a9247b6591348bfff0f5b53"
     },
     {
       "file": "docs/retail/FOUR_ROLE_MIS_RELEASE.md",
-      "sha256": "c79f11d662e82e3c8127d617eb556efdfcdc1b5265baaea086e626d501a9de76"
+      "sha256": "9622ade001e943f1bdfc2b0538d4e37e5abf0fd70c3f5a7c04335e61e5e426d3"
+    },
+    {
+      "file": "docs/retail/FOUR_ROLE_MIS_SECURITY_REVIEW.md",
+      "sha256": "17c1905e7675a33cb55578db47a40ec027a9e0385f0833665fc4dfd25e0c1f40"
+    },
+    {
+      "file": "docs/retail/MIS_OPERATING_GUIDE.md",
+      "sha256": "c8131ec705777a8b88860ac4af7fecb4c8c1dd6af99bf48b50cfc1b33e4dbf57"
+    },
+    {
+      "file": "docs/retail/PRODUCTION_SECURITY_CORRECTIONS.md",
+      "sha256": "b7356646118c8ad75cde480249edf25f2ab8eb38dad0f5d40faa978c6482e1b9"
+    },
+    {
+      "file": "docs/retail/USER_OPERATING_MANUAL.md",
+      "sha256": "101589e79796728b5f19e8553c2b3cdd293f94b3d640dc584a23899702cab49c"
+    },
+    {
+      "file": "docs/retail/WORKFLOW_AUDIT_MATRIX.md",
+      "sha256": "f28fd42277c28dc08083b0e5f09513666a948f81d2d0025f2460cd821c3261ef"
+    },
+    {
+      "file": "docs/retail/WORKFLOW_SQL_INSTALLATION_PLAN.md",
+      "sha256": "f31d75698b61019af235c4278641f77aa2be967ff7aa246642fda12aa81716bd"
+    },
+    {
+      "file": "docs/retail/screenshots/20261031/attendance.png",
+      "sha256": "d4c9c62dd206bf9d39c5455fa961c46a656753f7079153cc118a023869442822"
+    },
+    {
+      "file": "docs/retail/screenshots/20261031/cmpm.png",
+      "sha256": "fb7d90185f899aeff90a3443810da76042a116bbdc20caee7bbd86513d7a0c10"
+    },
+    {
+      "file": "docs/retail/screenshots/20261031/dashboard.png",
+      "sha256": "a67d2634c3ae066a893cd15a948bf9dce1d8cbcc4ffc6a5e887bffb66130577e"
+    },
+    {
+      "file": "docs/retail/screenshots/20261031/deep-cleaning.png",
+      "sha256": "4d07c770bf40852d73401a5ae9df8a5e6cb4525f84724ad44047204bb84ae1b1"
+    },
+    {
+      "file": "docs/retail/screenshots/20261031/fault-tracker.png",
+      "sha256": "90975f57b570666eda5d19a1d947cc1d09ffd1e68b59ccb75bfc90aa256aa270"
+    },
+    {
+      "file": "docs/retail/screenshots/20261031/manifest.json",
+      "sha256": "67a96f2a5c368413d92c0f2c7dfb54e28e53f39aecc9e704ed7f254da6e892a9"
+    },
+    {
+      "file": "docs/retail/screenshots/20261031/manpower.png",
+      "sha256": "7442bdefcae07308a437ec573a4e964e4a1feff666bf17fccd487588a3f73380"
+    },
+    {
+      "file": "docs/retail/screenshots/20261031/oos.png",
+      "sha256": "752c0de59604324d33931c7ede8e0e9b2e1fe513a56db959e7d5e66f4e35caf3"
+    },
+    {
+      "file": "docs/retail/screenshots/20261031/store-master.png",
+      "sha256": "0c68aa39665a51d032df3f8e98704a488a435cc5003c9f9e2f5844bc1e568288"
+    },
+    {
+      "file": "docs/retail/screenshots/20261031/thermography.png",
+      "sha256": "0d9805380b712b50ccd1d80021083c27e16e98a00d0085b96ca8e50239c8b7ba"
+    },
+    {
+      "file": "docs/retail/screenshots/20261031/training.png",
+      "sha256": "a8f5968003b6519e9bee8b342971d0b18a62b24f537fbb069b27e9c23f51c6b8"
     },
     {
       "file": "scripts/buildRetailMisWorkflowAdapters.mjs",
-      "sha256": "d284e612f206fdbe7e9852e095d2974e3a7765e4808821354a62d123d872754f"
+      "sha256": "766a233501ae82c4be485e8f64aa4bc18afc20ca6b6d73e1c9f51d147621d4b2"
     },
     {
       "file": "scripts/validateRetailMis.mjs",
-      "sha256": "c87948f0f44bd0197e36ffaaf73dcb08b25004630c082e6773e60686c8a375a3"
+      "sha256": "68c8ff0caae74cd04a74d8c86681aa5d1439199b6a705fcad3601efdb2d6e1f6"
     },
     {
       "file": "src/components/Sidebar.jsx",
-      "sha256": "ad6207edbb9f5d904c55bd1568a5ca0f985e76d40d7b7136eaa9211080ac03fe"
+      "sha256": "eb254c1c4c05c8fd3c677d824b162e18826de66928b73846d90ce0dae58a2b91"
     },
     {
       "file": "src/layouts/MainLayout.jsx",
-      "sha256": "bf8bd6b771ce339df7921069836e812d59f167b539cd1925acc3c19d09cbeeb7"
+      "sha256": "d4840c1ff803a77cd4da8e2d3beefeead322783afcdc094e45afff52bb39c8a8"
+    },
+    {
+      "file": "src/pages/FaultTracker.jsx",
+      "sha256": "51e2a834232ba7e34d928033c9921f777f06d5f625c48e1d3832bc3f73961189"
     },
     {
       "file": "src/pages/Settings.jsx",
-      "sha256": "cecb5762283b7a583bc6d3179413bc5f875115e9499f3a93154e1338ba539933"
+      "sha256": "cd6b6e512a336d7f2bc8cd346ffebb4175b73df2fdc5befba7a67edb881aa981"
+    },
+    {
+      "file": "src/pages/reliance-retail/RetailAttendance.jsx",
+      "sha256": "25f88b30852432b4e470e2e6141030e1a3377dadf75b7924308d349da1cd7f22"
     },
     {
       "file": "src/pages/reliance-retail/RetailMisWorkspace.jsx",
-      "sha256": "7e11794d249290a40160dfb154ba58d53f414fd50c75e76f41e0d70936822a33"
+      "sha256": "98e7e6dcce1d9a755308b8de9ac0bb22d421b2e6991474ef76f69eeb951c796d"
+    },
+    {
+      "file": "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx",
+      "sha256": "3423465e1b200f34fb603935e394d5b84ee6754955bf9d16f83e23169db526c4"
     },
     {
       "file": "src/pages/settings/RetailMisAssignments.jsx",
-      "sha256": "97f2e4dad9e11c6cfe5704cdbe5f17bc1fb6bbd40de9f4be98df1cbd9ee5cd84"
+      "sha256": "0d87b32cc9d1768ab47352f8516f8b786a674bd77e3461a98b945d6717a2fb6d"
     },
     {
       "file": "src/routes/AppRoutes.jsx",
-      "sha256": "e2d13a72e74e8b0b8e96fba47556cd441c9a3696c9658643402156bb3d558eb2"
+      "sha256": "4aae745f9c7a65bdac805b3826b23f13c84526e3dec0c9acdcc001569da48764"
     },
     {
       "file": "src/utils/authRoles.js",
-      "sha256": "d4aba4d2039f7c118d323188ba43112ba4c97a2008cf54247557cc8bdad572fc"
+      "sha256": "b5231dfaf01815dc970dcee370801151d1c3b72949379b89ed0f0ed721811b77"
+    },
+    {
+      "file": "src/utils/faultTrackerExport.js",
+      "sha256": "d57f17202f7b79b9eaaa1f77b11db5560348263b14347ae363813cda907a9e23"
     },
     {
       "file": "supabase/migrations/20261102071258_retail_mis_four_roles.sql",
-      "sha256": "3552b30174469a1053d650f5b5c017a0d85a2e858b719e246dcd5bc050d7af60"
+      "sha256": "96f49e3dab71b7547fe8c652180cb95bf5a0bb6178238bf471d237a357ccef7f"
+    },
+    {
+      "file": "supabase/proposals/retail_cleaning_fo_link.sql",
+      "sha256": "6fd92df4d58a487ccb3590dea203f768cca3e285b85f5ac57445683a3e504600"
+    },
+    {
+      "file": "supabase/proposals/retail_fault_api_only_writes.sql",
+      "sha256": "b6fc589bab2d44193a5ca3163822c48172d1ae94021291faeef984a5195fff55"
+    },
+    {
+      "file": "supabase/proposals/retail_fault_tracker_updates.sql",
+      "sha256": "98bb5c6decc724622299715024f60e7bb15542ec7faae1c8dea46967090f0213"
+    },
+    {
+      "file": "supabase/proposals/retail_legacy_cleaning_evidence_isolation.sql",
+      "sha256": "8d1aa8a5d643158bc640e42d7a58b156f7602f3aadfc76bcd1f5b1efac6b3a62"
     },
     {
       "file": "supabase/proposals/retail_mis_commands.sql",
-      "sha256": "e766e4f834910c340ef5204f27e16f3ed88ae3a5a199a6a1d924584880e36e84"
+      "sha256": "d60787793341b31485ccf6878ccfbeb10fa59b568940ce0e272e0dd4d1c31249"
     },
     {
       "file": "supabase/proposals/retail_mis_padma_assignment.sql",
-      "sha256": "4320f0dc7664f9ef4ca305274fdd2d8a711272595a6f6f88ee453f0b99a26b2b"
+      "sha256": "124757765bc40582aac18eafdf412914efc2dbd0efcb663c5f6a918b18d623fb"
     },
     {
       "file": "supabase/proposals/retail_mis_workflow_adapters.sql",
-      "sha256": "2b7960120999bd02b46ded14b2aba348bde53572d17bc4b5b89688fcf0f4fbdb"
+      "sha256": "e7801d64a7aa9a2ed8f70be33d16894ee690af7c807035b053f3bc0c2e2b3ca3"
+    },
+    {
+      "file": "supabase/verification/retail_cleaning_fo_link_postinstall_read_only.sql",
+      "sha256": "85d1e8fa41eafb82cf8924205f2474f86592d37c64a6298815bd238dacc05747"
+    },
+    {
+      "file": "supabase/verification/retail_fault_tracker_updates_postinstall_read_only.sql",
+      "sha256": "3a90be912cba01b5a3b4b2fa3d0b2827f5d459f7f4f462b556923dfb19a27d4f"
     },
     {
       "file": "supabase/verification/retail_mis_padma_preflight_read_only.sql",
@@ -100,11 +261,47 @@
     },
     {
       "file": "supabase/verification/retail_mis_postinstall_read_only.sql",
-      "sha256": "788883a96ac50733fb63c45a3eca73c557a4977e2aaf9a73164d0c7581aa5fd7"
+      "sha256": "8c998a31ad6f2986cb0d8f47fd0df41625b1dbfa59910e00eaf1620ac52a2a0b"
+    },
+    {
+      "file": "supabase/verification/retail_owner_security_verification_combined_read_only.sql",
+      "sha256": "7ae4953611d8451f591b37cff8732f5582e9e4ab0766c6042a9974b450c3ccb7"
+    },
+    {
+      "file": "supabase/verification/retail_owner_security_verification_read_only.sql",
+      "sha256": "869225d0369600f7fcd1d6e31db063e113ef07e821b72d7e25bfb2c2029f01af"
+    },
+    {
+      "file": "supabase/verification/retail_partial_install_status_read_only.sql",
+      "sha256": "3f5d1fa1809b76f6bc9c45d4ca691b0931e5757d2938d48052b7ca2e7cc2e103"
+    },
+    {
+      "file": "supabase/verification/retail_production_security_gate.sql",
+      "sha256": "99d4d8b65cd3789a367a4256b91ce125215cfcd2061163ae1a07353b80ae482a"
+    },
+    {
+      "file": "supabase/verification/retail_security_corrections_postinstall_read_only.sql",
+      "sha256": "2c81bd228f5682e1cf35fd127d667aa55eff1d968b2517ba7fb884241c6c559d"
+    },
+    {
+      "file": "supabase/verification/retail_workflow_updates_postinstall.sql",
+      "sha256": "85e090d43d470ffe81268efd0d627692ed5d52d6b2feb497aff1f899b65d1b08"
+    },
+    {
+      "file": "supabase/verification/retail_workflow_updates_preinstall.sql",
+      "sha256": "47e08139aa1040bb0006eca4784709dbaee5226616ab1041a644c32fc2058179"
+    },
+    {
+      "file": "tests/retailLayoutQa.js",
+      "sha256": "194c7140a04764f4bcd2737b5489ec59e203cb78799604b58b52f986d8ae6694"
     },
     {
       "file": "tests/retailMisBrowser.test.js",
-      "sha256": "5eccef36036082315e031c92013785404f208cf772fb6ad80fd93d3afd9e71b7"
+      "sha256": "aac676502f2e2730496182c4f701da883aad8d9c582f890a8b986d1f61abffb5"
+    },
+    {
+      "file": "tests/retailWorkflowPersistenceBrowser.test.js",
+      "sha256": "b1df81a736cf785b4e14ab301c79ec39a031fa77082961548e9e61fd0460e72d"
     }
   ]
 }

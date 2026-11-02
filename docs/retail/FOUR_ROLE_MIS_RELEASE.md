@@ -2,6 +2,10 @@
 
 Prepared 2 November 2026 in `.worktrees/retail-mis-access-20261102`, based on integration `328edd69cf9b16a1e0ee74f6b9cebdbcb2277514`. The business owner subsequently authorized release-branch and draft-PR preparation through GitHub. Production main updates, merging, production DDL/data changes, account assignment, Railway setting changes and production deployment remain prohibited until separate go-live authorization.
 
+## Security review update: 2 November 2026
+
+See [the complete 71-path security review, fixes, staging evidence and release gates](FOUR_ROLE_MIS_SECURITY_REVIEW.md). The original c957bd11 candidate failed review; corrected controls pass local validation. Final suite: 89 tests, 87 passed, zero failed, two skipped (optional workbook and older Docker-only test). Mandatory native PostgreSQL migration/security/rollback checks and Vite build passed. Managed Supabase DDL/auth/storage acceptance is still pending. This update supersedes older test totals below. Production remains main 9db2529a and freeze=false; no production mutations or deployment occurred.
+
 ## GitHub release preparation: 2 November 2026
 
 Release branch: `release/retail-mis-four-roles-20261102`, targeting `main`. Fresh GitHub API and fetch evidence agree that main remains `9db2529a5325cc77a022434143a805ab96351a79`. It is an ancestor of the candidate base, so there is no divergent-main merge conflict. The 27 MIS candidate files all matched their original manifest before release documentation updates. The full PR also needs the nine earlier Fault/Cleaning/security commits plus their integration merge: 71 unique changed paths against main, including 46 prerequisite paths with two overlaps. Do not describe the PR as an isolated 27-file change or rerun the predecessor installation proposals.

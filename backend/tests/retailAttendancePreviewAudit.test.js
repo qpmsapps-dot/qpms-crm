@@ -27,6 +27,15 @@ test('database unavailable/slow calls fail promptly with safe stage codes and ab
  await assert.rejects(()=>previewDatabase(Promise.resolve({error:{code:'23505'}}),'audit_save',undefined,20),e=>e.code==='23505');
 });
 function workbook(){const b=XLSX.utils.book_new();XLSX.utils.book_append_sheet(b,XLSX.utils.aoa_to_sheet([['EP No','EP Name','Site Code','Att. Date','Att. Status','Class'],['E1','Local employee','S1','2026-10-01','P','House Keeping']]),'Attendance');return XLSX.write(b,{type:'buffer',bookType:'xlsx'});}
+test('MIS cannot disclose or take ownership of another uploader preview or committed batch',async()=>{
+ for(const status of ['preview','committed']){
+  let writes=0,rpcs=0;
+  const db={from(){const q={select(){return q},order(){return q},eq(){return q},range:async()=>({data:[{id:'s1',store_code:'S1',state:'TN',status:'Active'}]}),maybeSingle:async()=>({data:{id:'foreign',status,uploaded_by:'another-user',validation_summary:{private:'foreign audit'}}}),update(){writes++;return q},insert(){writes++;return q}};return q},rpc:async()=>{rpcs++;return {data:[]}}};
+  const profile={id:'fixture-hk',role:'MIS_HK',is_active:true,_retailMis:{role:'MIS_HK',active:true,states:['TN']},_retailMisModule:'attendance-hk'};
+  await assert.rejects(()=>previewRetailAttendance(db,profile,workbook(),'fixture.xlsx',{log:()=>{}}),e=>e.statusCode===409&&!e.message.includes('foreign audit'));
+  assert.equal(writes,0);assert.equal(rpcs,0);
+ }
+});
 test('concurrent preview is refused while audit is pending; failed persistence releases slot for a safe retry',async()=>{
  let release,waiting;const ready=new Promise(resolve=>waiting=resolve);let writes=0;
  const db={from(){const q={select(){return q},order(){return q},eq(){return q},range:async()=>({data:[{id:'s1',store_code:'S1',state:'TN',status:'Active'}]}),maybeSingle:async()=>({data:null}),insert(){writes++;return q},single:()=>{waiting();return new Promise(resolve=>release=resolve)}};return q},rpc:async()=>({data:[]})};

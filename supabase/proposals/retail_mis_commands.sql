@@ -56,7 +56,7 @@ declare s public.reliance_retail_store_master%rowtype;r public.retail_mis_record
   else
    select * into r from public.retail_mis_records where id=(p_data->>'id')::uuid for update;
    select * into s from public.reliance_retail_store_master where id=r.retail_store_id;
-   if r.id is null or r.module<>p_module or not public.retail_mis_allowed(p_actor,p_module,s.state,true) or r.revision is distinct from (p_data->>'revision')::integer then raise exception using errcode='40001',message='Record unavailable or changed';end if;
+   if not public.retail_mis_unique_store(s.id) or r.id is null or r.module<>p_module or not public.retail_mis_allowed(p_actor,p_module,s.state,true) or r.revision is distinct from (p_data->>'revision')::integer then raise exception using errcode='40001',message='Record unavailable or changed';end if;
    prior:=to_jsonb(r);
    if r.status<>'draft' then raise exception using errcode='42501',message='Submitted records are immutable';end if;
    if p_action='UPDATE' and length(coalesce(p_data->>'remarks',''))<=2000 then update public.retail_mis_records set details=details||jsonb_build_object('remarks',p_data->>'remarks'),revision=revision+1,updated_at=clock_timestamp() where id=r.id returning * into r;
@@ -69,7 +69,7 @@ declare s public.reliance_retail_store_master%rowtype;r public.retail_mis_record
  elsif p_module='stores' and p_action='PROPOSE' then
   -- Identity/AOP/ownership activation remains independently reviewed, never direct CRUD.
   select * into s from public.reliance_retail_store_master where upper(btrim(store_code))=upper(btrim(p_data->>'store_code'));
-  if s.id is null or not public.retail_mis_allowed(p_actor,'stores',s.state,true) then raise exception using errcode='42501',message='Store outside assignment';end if;
+  if s.id is null or (select count(*) from public.reliance_retail_store_master x where upper(btrim(x.store_code))=upper(btrim(s.store_code)))<>1 or not public.retail_mis_allowed(p_actor,'stores',s.state,true) then raise exception using errcode='42501',message='Unique canonical Store Code in assigned state required';end if;
   if length(btrim(coalesce(p_data->>'store_name','')))=0 or length(p_data->>'store_name')>250 or length(coalesce(p_data->>'city',''))>250 or length(btrim(coalesce(p_data->>'reason','')))<3 then raise exception using errcode='22023',message='Proposed name/city and evidence reason required';end if;
   insert into public.retail_mis_store_proposals(store_id,maker_id,changes,baseline,reason) values(s.id,p_actor,jsonb_build_object('store_name',p_data->>'store_name','city',p_data->>'city'),jsonb_build_object('store_name',s.store_name,'city',s.city),p_data->>'reason') returning jsonb_build_object('proposal_id',id,'status',status,'store_id',store_id) into outcome;
  elsif p_module='maintenance' and p_action='COMPLETE' then
