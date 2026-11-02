@@ -81,7 +81,7 @@
     },
     {
       "file": "backend/tests/retailMisPostgres.test.js",
-      "sha256": "351ba6725da5acb8ef0ccaa4e457ae65114b448ad1c016667b9a65751d87f921"
+      "sha256": "e0c22e780720b6ef6771615a0b5c3c7d2b9e45eae516d2fc0329fd3c7a8527c0"
     },
     {
       "file": "backend/tests/retailMisQuotationFormat.test.js",
@@ -113,7 +113,7 @@
     },
     {
       "file": "docs/retail/OOS_CONTROLLED_ACTIVATION.md",
-      "sha256": "d7f11ed91039636ec3caca1aade9b521d9e8e2f69c5879bb2025b3904c02be75"
+      "sha256": "27d21188e86f5cac63f76f2e92da1124ef392f53e1879a3fde28781107850c94"
     },
     {
       "file": "docs/retail/PRODUCTION_SECURITY_CORRECTIONS.md",
@@ -229,7 +229,7 @@
     },
     {
       "file": "supabase/migrations/20261102071258_retail_mis_four_roles.sql",
-      "sha256": "03d648aabd8c5bc39160b47fbc562649c43899c4be2c8707e90d150137fcab9d"
+      "sha256": "ab69df4803ff3ce49060d5b834ebd32f7a350ed5947f3f2a4d580950cca8aff6"
     },
     {
       "file": "supabase/proposals/retail_cleaning_fo_link.sql",
@@ -249,7 +249,7 @@
     },
     {
       "file": "supabase/proposals/retail_mis_commands.sql",
-      "sha256": "3a0880b3b3e87772cc757e4f720bcb3761b22fb1ef368812e2ec0406908feca4"
+      "sha256": "2d62cfd3cdf473fba1f7e8fd096cfdcdd68817c3a2aef03d1628d6a97f352f01"
     },
     {
       "file": "supabase/proposals/retail_mis_padma_assignment.sql",

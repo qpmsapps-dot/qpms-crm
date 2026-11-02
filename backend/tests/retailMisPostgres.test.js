@@ -168,6 +168,8 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
   await denied("update retail_service_orders set details='{}' where id=$1",[id(50)]);
   await denied('select rpc_retail_mis_command($1,$2,$3,$4)',[actors.oos,'oos','PO_RECORDED',{order_id:id(50),revision:1,request_id:id(61),fields:{po_number:'P1',po_date:'2026-10-15'}}]);
   await q("insert into retail_service_orders(id,kind,reference,state,store_ids,status,details,created_by) values($1,'OOS','UNSAFE','TN',$2,'QUOTED','{}',$3)",[id(51),[id(20),id(21)],actors.oos]);assert.equal((await report(actors.oos,'oos')).rows.length,2);
+  await q("insert into retail_service_events(order_id,request_id,actor_id,action,before_value,after_value,evidence) values($1,$2,$3,'CREATE_OOS',null,'{}',$4)",[id(51),id(411),actors.oos,{file_sha256:hash('first'),original_base64:Buffer.from('first').toString('base64')}]);
+  await denied('select rpc_retail_mis_oos_attachment($1,$2)',[actors.oos,originalEvent.id],/Shared workbook/);
   await denied('select rpc_retail_mis_command($1,$2,$3,$4)',[actors.oos,'oos','RETIRE',{order_id:id(51),revision:1,reason:'Invalid cross state',request_id:id(62)}]);
   await q("insert into retail_service_orders(id,kind,reference,state,store_ids,status,details,created_by) values($1,'OOS','REVIEW','TN',$2,'PO_RECORDED','{}',$3)",[id(52),[id(20)],actors.oos]);
   await denied('select rpc_retail_mis_command($1,$2,$3,$4)',[actors.oos,'oos','COMMERCIALLY_CONFIRMED',{order_id:id(52),revision:1,request_id:id(63),fields:{confirmation_ref:'fixture'}}]);
