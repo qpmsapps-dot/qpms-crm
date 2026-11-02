@@ -33,6 +33,8 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
   await q(read('backend/tests/fixtures/retailMisBaseline.sql'));
   // Replay the reviewed installed ownership resolver, not an always-allow mock.
   const ownerDefinition=read('supabase/proposals/retail_unified_apply_and_record.sql').match(/create function public\.retail_unified_owner\([\s\S]*?\$\$;/i)?.[0];assert.ok(ownerDefinition);await q(ownerDefinition);
+  const unifiedDefinition=read('supabase/proposals/retail_unified_apply_and_record.sql').match(/create function public\.retail_unified_access\([\s\S]*?\$\$;/i)?.[0];await q(unifiedDefinition.replace('create function','create or replace function'));await q('revoke all on function retail_unified_access(uuid,text,text) from public,anon,authenticated,service_role');
+  for(const [file,name] of [['supabase/migrations_2_0/227_reliance_training_fo_workflow.sql','training_legacy_write_guard'],['supabase/proposals/retail_legacy_cleaning_evidence_isolation.sql','retail_cleaning_storage_guard']]){const definition=read(file).match(new RegExp('create (?:or replace )?function public\\.'+name+'\\([\\s\\S]*?\\$\\$;','i'))?.[0];assert.ok(definition);await q(definition);await q('revoke all on function '+name+'() from public,anon,authenticated,service_role');}
   await q(read('supabase/migrations_2_0/232_reliance_retail_uploaded_attendance.sql'));
   await q('alter table retail_attendance_aop_versions add column aop_class text');
   await q(read('supabase/proposals/retail_service_trackers.sql'));
@@ -48,6 +50,25 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
   assert.equal((await one("select count(*)::int n from storage.buckets where id='retail-mis-evidence'")).n,0);
   assert.deepEqual((await q("select conname,convalidated,pg_get_constraintdef(oid) definition from pg_constraint where conrelid='profiles'::regclass and contype='c' order by conname")).rows,roleConstraintBefore);
   await q(migration);
+  if(process.env.RETAIL_MIS_POSTINSTALL_ONLY==='1'){
+   await q("insert into storage.buckets(id,name,public) values('fo-activity-uploads','fo-activity-uploads',false),('training-evidence','training-evidence',false),('client-deep-cleaning-uploads','client-deep-cleaning-uploads',false)");
+   const verify=read('supabase/verification/retail_mis_postinstall_read_only.sql');await q(verify);
+   async function rejectsMutation(change,restore,pattern){await q(change);await assert.rejects(q(verify),pattern);await q('rollback');await q(restore);await q(verify);}
+   await rejectsMutation('alter function training_legacy_write_guard() rename to postinstall_hidden_guard','alter function postinstall_hidden_guard() rename to training_legacy_write_guard',/Existing protected workflow missing/);
+   const original=(await one("select pg_get_functiondef('retail_cleaning_storage_guard()'::regprocedure) definition")).definition;
+   await rejectsMutation(original.replace('declare item jsonb','-- intentional local drift\ndeclare item jsonb'),original,/Existing protected workflow fingerprint drift/);
+   await rejectsMutation('grant execute on function rpc_retail_mis_access(uuid,uuid) to public','revoke execute on function rpc_retail_mis_access(uuid,uuid) from public',/MIS routine ACL failed/);
+   await rejectsMutation('grant select on retail_mis_records to public','revoke select on retail_mis_records from public',/Protected table PUBLIC/);
+   await rejectsMutation('grant select(module) on retail_mis_records to authenticated','revoke select(module) on retail_mis_records from authenticated',/Protected table PUBLIC/);
+   await rejectsMutation('alter table retail_service_orders disable trigger retail_mis_retired_order_guard','alter table retail_service_orders enable trigger retail_mis_retired_order_guard',/trigger missing/);
+   await rejectsMutation('alter policy retail_mis_private_read on storage.objects using(true)',"alter policy retail_mis_private_read on storage.objects using(bucket_id<>'retail-mis-evidence')",/policy missing/);
+   await rejectsMutation('alter table retail_mis_controls alter column oos_writes_enabled set default true','alter table retail_mis_controls alter column oos_writes_enabled set default false',/false default/);
+   await rejectsMutation('grant execute on function rpc_retail_service_import(uuid,text,text,text,jsonb) to public','revoke execute on function rpc_retail_service_import(uuid,text,text,text,jsonb) from public',/Existing OOS routine ACL drift/);
+   await rejectsMutation('alter table retail_mis_evidence disable row level security','alter table retail_mis_evidence enable row level security',/Protected table RLS/);
+   const sentinel=id(999);
+   await rejectsMutation(`insert into profiles(id,auth_user_id,employee_code,role) values('${sentinel}','${sentinel}','LOCAL_ASSIGNMENT_SENTINEL','FO');insert into retail_mis_assignments(profile_id,auth_user_id,employee_code,role,states,previous_profile,changed_by) values('${sentinel}','${sentinel}','LOCAL_ASSIGNMENT_SENTINEL','MIS_HK',array['TN'],'{}','${sentinel}')`,`delete from retail_mis_assignments where profile_id='${sentinel}';delete from profiles where id='${sentinel}'`,/zero MIS assignments/);
+   console.log('Targeted postinstall passed: exact fingerprints, PUBLIC/column grants, policies, triggers, closed default and zero assignments; negative injections rejected.');return;
+  }
   assert.equal((await one("select convalidated from pg_constraint where conrelid='profiles'::regclass and conname='profiles_role_check'")).convalidated,roleConstraintBefore.find(c=>c.conname==='profiles_role_check').convalidated);
   assert.deepEqual((await q("select proname,md5(prosrc) body from pg_proc where proname in ('rpc_retail_fault_update','rpc_retail_cleaning_link_fo','rpc_retail_cleaning_link_source','rpc_retail_service_command','rpc_retail_maintenance_complete','rpc_retail_thermography_command') order by proname")).rows,originalWorkflows);
   await q('insert into auth.users values($1,$2)',[adminAuth,'unchanged-admin']);
@@ -188,9 +209,10 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
   assert.equal((await one('select public.retail_unified_access($1,null,$2) allowed',[admin,'edit'])).allowed,true);
   assert.equal((await one("select name from access_roles where code='mis'")).name,'MIS');
   await q('update retail_mis_controls set oos_writes_enabled=false');
-  const postinstall=read('supabase/verification/retail_mis_postinstall_read_only.sql');await q(postinstall);
+  // The release postinstall intentionally rejects populated assignment fixtures.
+  const postinstall=read('supabase/verification/retail_mis_postinstall_read_only.sql');await assert.rejects(q(postinstall),/zero MIS assignments|Existing evidence bucket/);await q('rollback');
   await q('grant execute on function rpc_retail_mis_access(uuid,uuid) to authenticated');await assert.rejects(q(postinstall),/MIS routine ACL failed/);await q('rollback');await q('revoke execute on function rpc_retail_mis_access(uuid,uuid) from authenticated');
-  await q(postinstall);await q(read('supabase/verification/retail_mis_padma_preflight_read_only.sql'));
+  await assert.rejects(q(postinstall),/zero MIS assignments|Existing evidence bucket/);await q('rollback');await q(read('supabase/verification/retail_mis_padma_preflight_read_only.sql'));
   console.log('Real PostgreSQL assertions passed: role/state isolation, identity preservation, direct-API/RLS denial, evidence lifecycle, OOS freeze/retirement.');
  }catch(error){console.error('Local PostgreSQL verification failed:',error.message,error.where||'',error.detail||'');throw error;}finally{await db.end();execFileSync(path.join(toolDir,'node_modules/@embedded-postgres/windows-x64/native/bin/pg_ctl.exe'),['-D',databaseDir,'-m','fast','-w','stop'],{stdio:'pipe',timeout:15000});cluster.process=undefined;}
 });

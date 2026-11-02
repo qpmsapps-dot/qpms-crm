@@ -85,7 +85,7 @@
     },
     {
       "file": "backend/tests/retailMisPostgres.test.js",
-      "sha256": "e0c22e780720b6ef6771615a0b5c3c7d2b9e45eae516d2fc0329fd3c7a8527c0"
+      "sha256": "a5bbcdbb814a0345dea5f67fa01b4525d7990e4f230220e62db081c8c9bc47f3"
     },
     {
       "file": "backend/tests/retailMisQuotationFormat.test.js",
@@ -104,8 +104,12 @@
       "sha256": "e0ad81513276aa7985561c1c777f2947a019e5b27a9247b6591348bfff0f5b53"
     },
     {
+      "file": "docs/retail/FINAL_LIVE_EXECUTION_READINESS.md",
+      "sha256": "426df28f69d010a3ec0509a7c32d088a026020db2cff127e8235ce6964ecb542"
+    },
+    {
       "file": "docs/retail/FOUR_ROLE_MIS_RELEASE.md",
-      "sha256": "afaa14160b364527265dd1451c8d534d6ee4a9a3b2866d5f984b4986e4e10950"
+      "sha256": "59f8eb2d2a512a757a08ca7d9697121dc0fcaf5288373c516a1beea26a4108f7"
     },
     {
       "file": "docs/retail/FOUR_ROLE_MIS_SECURITY_REVIEW.md",
@@ -277,7 +281,7 @@
     },
     {
       "file": "supabase/verification/retail_mis_postinstall_read_only.sql",
-      "sha256": "8c998a31ad6f2986cb0d8f47fd0df41625b1dbfa59910e00eaf1620ac52a2a0b"
+      "sha256": "96b9732bdd89bdcd78f0c28029c6a553994f43157575c7eff3149f7ced2aa0d1"
     },
     {
       "file": "supabase/verification/retail_oos_activation_inventory_read_only.sql",
@@ -324,5 +328,5 @@
       "sha256": "b1df81a736cf785b4e14ab301c79ec39a031fa77082961548e9e61fd0460e72d"
     }
   ],
-  "local_followup": "Reviewed OOS activation follow-up after 8376a362; use release branch commit and retain closed write gates"
+  "local_followup": "Final live execution preparation; migration unchanged from 107175ec; actual recovery evidence outstanding"
 }
