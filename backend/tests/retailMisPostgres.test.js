@@ -79,6 +79,15 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
    const before=(await one('select to_jsonb(p) profile from profiles p where id=$1',[admin])).profile;
    await q(read('supabase/migrations/20261102123000_retail_oos_superadmin_operator.sql'));
    await q(read('supabase/verification/retail_oos_operator_postinstall_read_only.sql'));
+   if(process.env.RETAIL_OOS_REGISTER_TEST==='1'){
+    const registerMigration=read('supabase/migrations/20261102133951_retail_oos_register_ageing_v2_disabled.sql');
+    await assert.rejects(q(registerMigration.replace(/commit;\s*$/i,'select missing_register_rollback_fixture();commit;')),/missing_register_rollback_fixture/);await q('rollback');
+    assert.equal((await one("select to_regclass('public.retail_oos_workflow_catalog') name")).name,null);
+    await q(registerMigration);await q(read('supabase/verification/retail_oos_register_postinstall_read_only.sql'));
+    await denied('select rpc_retail_oos_register($1)',[admin]);
+    assert.equal((await one('select enabled from retail_oos_workflow_catalog where version=2')).enabled,false);
+    assert.equal((await one('select jsonb_array_length(stages) n from retail_oos_workflow_catalog')).n,12);
+   }
    assert.equal((await one('select count(*)::int n from retail_oos_operator_access')).n,0);
    await denied("select rpc_retail_oos_capabilities($1)",[admin]);
    await q("select rpc_retail_oos_operator_grant($1,true,array['TN'],'Approved synthetic access grant',0)",[admin]);
@@ -106,6 +115,25 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
    await denied('select rpc_retail_mis_oos_history($1,$2)',[id(999),order.id]);await assert.rejects(upload('cross-state',0,id(21)),/scope|state|assignment/i);
    await command(admin,'oos','PO_RECORDED',{order_id:order.id,revision:2,request_id:id(410),fields:{po_number:'TRAIN_PO',po_date:'2026-11-02'}});
    assert.deepEqual((await one('select rpc_retail_oos_capabilities($1) result',[admin])).result.actions[order.id],[]);
+   if(process.env.RETAIL_OOS_REGISTER_TEST==='1'){
+    const getRegister=async actor=>(await one('select rpc_retail_oos_register($1) result',[actor])).result;
+    const register=await getRegister(admin);assert.equal(register.complete,true);assert.equal(register.rows.length,1);assert.equal(register.twelve_stage_enabled,false);
+    const row=register.rows[0];assert.equal(row.mapped_stores[0].store_name,'Training TN');assert.equal(row.original_po_date,'2026-11-02');assert.equal(row.history.length,3);assert.equal(row.original_items[0].description,'original');assert.equal(row.details.items[0].description,'rework');
+    assert.ok(row.status_entered_at);assert.ok(!JSON.stringify(register).includes('original_base64'));assert.deepEqual(register.states,['TN']);
+    await denied('select rpc_retail_oos_register($1)',[id(999)]);
+    const snapshot=await q("select proname,md5(prosrc) digest from pg_proc where proname in ('retail_mis_service_command','rpc_retail_mis_oos_import') order by proname");
+    const {createHash}=await import('node:crypto');
+    const originalBytes=Buffer.from('original-date-source'),reworkBytes=Buffer.from('revision-date-source');
+    const dateUpload=(bytes,revision,date,amount)=>q('select rpc_retail_mis_oos_import($1,$2,$3,$4,$5)',[admin,createHash('sha256').update(bytes).digest('hex'),'dates.xlsx',bytes.toString('base64'),JSON.stringify([{quotation_number:'DATES',store_ids:[id(20)],items:[{store_id:id(20),description:'Date fixture',quantity:1,unit_rate:amount,total_amount:amount,quotation_header:{quotation_date:date,totals:{total_amount:amount}}}],expected_revision:revision}])]);
+    await dateUpload(originalBytes,0,'2026-10-01',50);await dateUpload(reworkBytes,1,'2026-11-01',99);
+    const dated=(await getRegister(admin)).rows.find(r=>r.reference==='DATES');assert.equal(dated.original_items[0].quotation_header.quotation_date,'2026-10-01');assert.equal(dated.original_items[0].total_amount,50);assert.equal(dated.details.items[0].total_amount,99);
+    const created=dated.history.find(e=>e.action==='CREATE_OOS');assert.equal(dated.status_entered_at,created.created_at);assert.equal(dated.history.length,2);
+    await q('set role authenticated');await denied('select rpc_retail_oos_register($1)',[admin],/permission/);await denied('select * from retail_oos_workflow_catalog',[],/permission/);await q('reset role');
+    await assert.rejects(q('update retail_oos_workflow_catalog set enabled=true'),/immutable|check constraint/i);
+    await assert.rejects(q('delete from retail_oos_workflow_catalog'),/immutable/i);
+    assert.deepEqual((await q("select proname,md5(prosrc) digest from pg_proc where proname in ('retail_mis_service_command','rpc_retail_mis_oos_import') order by proname")).rows,snapshot.rows);
+    console.log('Read register checks passed: disabled catalog, scoped originals/current data, canonical names, PO dates, immutable status time, source-byte exclusion, direct-API denial and unchanged mutation RPCs.');
+   }
    await denied('select rpc_retail_mis_command($1,$2,$3,$4)',[admin,'oos','COMMERCIALLY_CONFIRMED',{order_id:order.id,revision:3,request_id:id(411),fields:{confirmation_ref:'SELF'}}]);
    await q('set role authenticated');await denied('select * from retail_oos_operator_access',[],/permission/);await denied("select rpc_retail_oos_operator_grant($1,true,array['TN'],'Direct escalation',1)",[admin],/permission/);await q('reset role');
    await q('update retail_mis_controls set oos_writes_enabled=false');

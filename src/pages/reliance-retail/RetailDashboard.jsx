@@ -9,6 +9,7 @@ import { indiaToday } from '../../../backend/shared/retailAttendance.js';
 import { REPORTING_STATES, reportingRows, reportingPeriod, callWindow, selectRows, sum, percent } from './ifmsDashboardModel.js';
 import { Metric, StateTable, OperationsRing } from './IfmsDashboardParts.jsx';
 import './ifmsDashboard.css';
+import RetailOosDashboard from './RetailOosDashboard.jsx';
 
 const modules = [
   { id: 'attendance', title: 'Attendance', icon: ClipboardCheck, color: '#16a875', route: '/reliance-retail/attendance' },
@@ -84,6 +85,7 @@ export default function RetailDashboard() {
     <div className="ifms-toolbar"><div className="ifms-toolbar-filters"><StateFilter label="Global reporting state" value={global} onChange={value => { setGlobal(value); setLocal({}); }}/><label className="ifms-month"><CalendarDays size={16}/><span className="sr-only">Reporting month</span><input aria-label="Reporting month" type="month" min="2000-01" max="9999-12" value={month} onChange={e => { if (/^\d{4}-\d{2}$/.test(e.target.value)) setMonth(e.target.value); }}/></label><span className="ifms-date-range">{period.label}</span></div><button disabled={!data} onClick={()=>void exportSummary()}><Download size={15}/> Export summary</button></div>
     <p className="ifms-data-status" role="status">{inventory.status === 'loading' ? 'Loading reports…' : inventory.status === 'unavailable' ? `Reports unavailable: ${inventory.error}` : 'Showing available reports for the selected period.'}</p>
     {inventory.status==='ready'&&inventory.error&&<p role="alert" className="ifms-note">{inventory.error}</p>}
+    <RetailOosDashboard globalState={global}/>
     <div className="ifms-grid">{modules.map(({ id, title, icon: Icon, color, route }, index) => {
       const source=data?.modules[id];
       const rows = selectRows(source?.rows||[], global, local[id] || '');

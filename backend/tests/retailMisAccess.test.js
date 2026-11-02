@@ -45,6 +45,7 @@ test('real HTTP router binds actors, denies self-assignment/admin escalation, ke
  try{
   assert.equal((await fetch(url+'/report/pest?actor=forged&state=TN')).status,200);assert.equal(calls.find(c=>c.name==='rpc_retail_mis_report').args.p_actor,'fixture-profile');
   assert.equal((await fetch(url+'/report/maintenance')).status,403);
+  assert.equal((await fetch(url+'/oos/register?actor=forged')).status,403);
   assert.equal((await fetch(url+'/assignments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role:'CENTRAL_MIS',profile_id:'fixture-profile'})})).status,403);
   assert.equal((await fetch(url+'/evidence/foreign')).status,403);
   assert.equal((await fetch(url+'/command/oos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'RETIRE',data:{}})})).status,403);
@@ -56,6 +57,7 @@ test('OOS operator capabilities bind the verified identity; deployment safety ga
  const calls=[],client={rpc:async(name,args)=>{calls.push({name,args});return {data:name==='rpc_retail_mis_access'?{active,role:'MIS_OOS',states:['TN'],operator:true}:{database_writes_enabled:true,actions:{}}};}};
  const app=express();app.use((r,s,n)=>{r.profile={id:'verified-fixture',auth_user_id:'fixture-auth',role:'Admin'};r.authUser={id:'fixture-auth'};n();});app.use('/mis',createRetailMisRouter({getClient:()=>client,environment}));const server=app.listen(0,'127.0.0.1');await once(server,'listening');
  try{const res=await fetch('http://127.0.0.1:'+server.address().port+'/mis/oos/capabilities?actor=forged');assert.equal(res.status,active?200:403);if(active){assert.equal((await res.json()).result.writes_enabled,expected);assert.equal(calls.at(-1).args.p_actor,'verified-fixture');}else assert.equal(calls.length,1);
+ const register=await fetch('http://127.0.0.1:'+server.address().port+'/mis/oos/register?actor=forged');assert.equal(register.status,active?200:403);if(active){assert.equal(calls.at(-1).name,'rpc_retail_oos_register');assert.equal(calls.at(-1).args.p_actor,'verified-fixture');}
  if(active&&!expected){for(const action of ['REWORK','PO_RECORDED','RETIRE'])assert.equal((await fetch('http://127.0.0.1:'+server.address().port+'/mis/command/oos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data:{}})})).status,503);assert.equal(calls.some(c=>c.name==='rpc_retail_mis_command'),false);}}
  finally{await new Promise(r=>server.close(r));}
  }
