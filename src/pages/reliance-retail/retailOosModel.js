@@ -1,4 +1,5 @@
 // Read-only presentation model. Never infers workflow authority from labels.
+import {sourceDecimal,sumDecimals} from '../../utils/oosDecimal.js';
 export const OOS12 = [
  ['OOS12_QUOTATION_SHARED','Quotation Shared – Waiting for PO'],
  ['OOS12_PO_PENDING_COMMERCIAL','PO Pending Commercial Confirmation'],
@@ -24,11 +25,11 @@ export function validDate(value) {
 export function timestampDate(value) {if(typeof value!=='string'||!/(Z|[+-]\d{2}:\d{2})$/.test(value))return null;const d=new Date(value);return Number.isFinite(d.valueOf())?indiaDate(d):null;}
 export function daysSince(date,today=indiaDate()) {if(!validDate(date)||!validDate(today)||date>today)return null;return Math.round((Date.parse(today)-Date.parse(date))/86400000);}
 export const ageBand = days => days==null?'unknown':AGE_BANDS.find(b=>days<=b.max)?.name||'unknown';
-const finite = value => value!==null&&value!==''&&value!==undefined&&Number.isFinite(Number(value))?Number(value):null;
 function originalFinancial(items) {
  if(!Array.isArray(items)||!items.length)return null;
- const header=finite(items[0]?.quotation_header?.totals?.total_amount);if(header!==null)return header;
- const amounts=items.map(i=>finite(i.total_amount));return amounts.every(n=>n!==null)?amounts.reduce((a,b)=>a+b,0):null;
+ const totals=items[0]?.quotation_header?.totals;
+ const header=sourceDecimal(totals?.numeric_text?.total_amount??totals?.total_amount);if(header!==null)return header;
+ return sumDecimals(items.map(i=>i.numeric_text?.total_amount??i.total_amount));
 }
 export function registerRows(report,today=indiaDate()) {
  const seen=new Set();return (report?.rows||[]).filter(r=>{if(!r.id||seen.has(r.id))return false;seen.add(r.id);return true;}).map(r=>{

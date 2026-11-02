@@ -1,4 +1,5 @@
 import {retailMisRole,RETAIL_MIS_MODULES,retailMisRouteModule,RETAIL_MIS_ASSIGNMENT_ADMIN} from '../../backend/shared/retailMisAccess.js';
+import {isOos12Specialist} from '../../backend/shared/retailOos12Workflow.js';
 const viteEnv = import.meta.env || {};
 const explicitDemoAuthFlag = String(
   viteEnv.VITE_ENABLE_DEMO_AUTH ?? viteEnv.VITE_DEMO_MODE ?? '',
@@ -292,6 +293,8 @@ export function canAccessRoute(user, pathname) {
   if(mis)return pathname==='/profile'||Boolean(RETAIL_MIS_MODULES[mis].includes(retailMisRouteModule(pathname)));
   if(pathname==='/settings/retail-mis-access')return user.profileId===RETAIL_MIS_ASSIGNMENT_ADMIN.profile_id&&user.id===RETAIL_MIS_ASSIGNMENT_ADMIN.auth_user_id&&user.employeeCode===RETAIL_MIS_ASSIGNMENT_ADMIN.employee_code&&isPlatformAdmin(user);
   if (isPlatformAdmin(user)) return true;
+  // Navigation only. Verified database role plus explicit state grants decide access.
+  if (pathname==='/reliance-retail/mis/oos'&&isOos12Specialist({role:user.rawRole||user.role,business:user.business})) return true;
   if (pathname.startsWith('/reliance-retail')) {
     const access = retailWebAccess(user);
     if (pathname.startsWith('/reliance-retail/store-master')) return Boolean(access.master);

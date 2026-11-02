@@ -134,6 +134,9 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
     assert.deepEqual((await q("select proname,md5(prosrc) digest from pg_proc where proname in ('retail_mis_service_command','rpc_retail_mis_oos_import') order by proname")).rows,snapshot.rows);
     console.log('Read register checks passed: disabled catalog, scoped originals/current data, canonical names, PO dates, immutable status time, source-byte exclusion, direct-API denial and unchanged mutation RPCs.');
    }
+   if(process.env.RETAIL_OOS12_TEST==='1'){
+    const {runOos12Checks}=await import('./helpers/retailOos12Checks.js');await runOos12Checks({q,one,id,admin,read,pg,port,t});
+   }
    await denied('select rpc_retail_mis_command($1,$2,$3,$4)',[admin,'oos','COMMERCIALLY_CONFIRMED',{order_id:order.id,revision:3,request_id:id(411),fields:{confirmation_ref:'SELF'}}]);
    await q('set role authenticated');await denied('select * from retail_oos_operator_access',[],/permission/);await denied("select rpc_retail_oos_operator_grant($1,true,array['TN'],'Direct escalation',1)",[admin],/permission/);await q('reset role');
    await q('update retail_mis_controls set oos_writes_enabled=false');

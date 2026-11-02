@@ -9,6 +9,7 @@ export function OosMatrix({report,month='',state=''}) {
  const [view,setView]=useState('count'),[today,setToday]=useState(indiaDate());
  useEffect(()=>{const timer=setInterval(()=>setToday(indiaDate()),60000);return()=>clearInterval(timer);},[]);
  const states=(report.states||[]).filter(s=>!state||s===state),all=registerRows(report,today),rows=filterRegister(all,{month,state});
+ const available=report.twelve_stage_available??report.twelve_stage_enabled;
  const model=matrix(rows,states),legacy=rows.filter(r=>r.workflow_version!==2&&!r.retired);
  const legacyStages=Object.entries(LEGACY_LABELS),legacyMatrix=matrix(legacy,states,legacyStages);
  const summary=[['Waiting for PO',OOS12[0][0],'QUOTED'],['PO received, fund not raised',OOS12[2][0],'COMMERCIALLY_CONFIRMED'],['Work done, documents pending',OOS12[7][0]],['Documents received, JMS pending',OOS12[9][0]],['JMS created, invoice pending',OOS12[10][0]]];
@@ -16,10 +17,10 @@ export function OosMatrix({report,month='',state=''}) {
  {unavailable?'—':view==='count'?c.count:c.average==null?'—':`${c.average}d`}{!unavailable&&<small>Max {c.max??'—'}d · Overdue {c.overdue} · Unknown {c.unknown}</small>}</Link></td>;})}<td>{unavailable?'—':states.reduce((n,s)=>n+row.states[s].count,0)}</td></tr>)}</tbody><tfoot><tr><th>State totals (quotations)</th>{states.map(s=><td key={s}>{unavailable?'—':cells.reduce((n,r)=>n+r.states[s].count,0)}</td>)}<td>{unavailable?'—':cells.reduce((n,r)=>n+states.reduce((v,s)=>v+r.states[s].count,0),0)}</td></tr></tfoot></table></div>;}
  return <section className="oos-workspace oos-panel" aria-label="OOS Status Dashboard"><header><div><h2>OOS Status Dashboard</h2><p>One quotation, one current status, one verified state.</p></div><div className="oos-actions"><button aria-pressed={view==='count'} onClick={()=>setView('count')}>Count View</button><button aria-pressed={view==='age'} onClick={()=>setView('age')}>Ageing View</button></div></header>
  <p>Month uses original quotation date in the Asia/Kolkata calendar. All-Time includes unknown dates. Ageing is measured as of {indiaDate()}.</p>
- {!report.twelve_stage_enabled&&<p className="oos-warning">The approved 12-stage workflow is not installed for live transitions. Its matrix is unavailable; existing six-stage quotations are reported separately below.</p>}
- {table(model.cells,'Twelve-stage OOS state matrix',!report.twelve_stage_enabled)}
- {(legacy.length>0||!report.twelve_stage_enabled)&&<><h3>Existing six-stage workflow</h3>{table(legacyMatrix.cells,'Legacy OOS state matrix')}</>}
- <div className="oos-overdue-grid">{summary.map(([label,code,legacyCode])=><article key={code}><h3>{label}</h3><strong>{!report.twelve_stage_enabled&&!legacyCode?'Unavailable':rows.filter(r=>!r.retired&&(r.status===code||r.status===legacyCode)&&r.status_age>7).length}</strong><p>Current status over 7 days</p></article>)}</div>
+ {!available&&<p className="oos-warning">The twelve-stage reporting contract is unavailable. Existing six-stage quotations are reported separately below.</p>}
+ {table(model.cells,'Twelve-stage OOS state matrix',!available)}
+ {(legacy.length>0||!available)&&<><h3>Existing six-stage workflow</h3>{table(legacyMatrix.cells,'Legacy OOS state matrix')}</>}
+ <div className="oos-overdue-grid">{summary.map(([label,code,legacyCode])=><article key={code}><h3>{label}</h3><strong>{!available&&!legacyCode?'Unavailable':rows.filter(r=>!r.retired&&(r.status===code||r.status===legacyCode)&&r.status_age>7).length}</strong><p>Current status over 7 days</p></article>)}</div>
  <p>{rows.filter(r=>!r.retired&&!r.state).length} unresolved/cross-state quotations excluded from matrix. Retired quotations excluded. Missing status dates do not contribute to average/max or overdue totals.</p>
  </section>;
 }
