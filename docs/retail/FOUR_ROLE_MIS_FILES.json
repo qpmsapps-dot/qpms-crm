@@ -44,6 +44,10 @@
       "sha256": "c8f16a60b4b541823ec8ab959a540a8aa563eaa879fdaddfc7bb4232306f91a5"
     },
     {
+      "file": "backend/services/retailQuotationImport.js",
+      "sha256": "d4c353328a9e6345c74d7c5165c8b1d28575474751d670ede1abc61a7fcbdc48"
+    },
+    {
       "file": "backend/shared/retailFaultWorkflow.js",
       "sha256": "7a482ef3f73064308916a4521a330ea42a855d3410d9b0b66f77f82775198293"
     },
