@@ -5,10 +5,16 @@ import { acquireAttendancePreviewSlot, parseAttendanceWorkbookStreaming } from '
 import {compactPreviewSummary,encodeAttendanceSource,decodeAttendanceSource,previewDatabase} from './retailAttendancePreviewAudit.js';
 import { retailAccess, assertRetailAccess } from './relianceRetailManagementService.js';
 import { ATTENDANCE_MAX_FILE_BYTES, attendanceClass, attendanceCredit, validDate, stateLabel, reportingState, STATE_OPTIONS, storeKey, summarizeAttendance, indiaToday } from '../shared/retailAttendance.js';
+import {retailMisRole,assertRetailMis} from '../shared/retailMisAccess.js';
 
 export const ATTENDANCE_COLUMNS = Object.freeze({ employee_code: 'EP No', employee_name: 'EP Name', store_code: 'Site Code', attendance_date: 'Att. Date', original_status: 'Att. Status', class: 'Class' });
 export function attendanceError(statusCode, message, code = 'retail_attendance_invalid') { return Object.assign(new Error(message), { statusCode, code }); }
 export function attendanceAccess(profile, write = false) {
+  if(retailMisRole(profile?.role)){
+    assertRetailMis(profile._retailMis,profile._retailMisModule);
+    if(!['attendance-hk','attendance-mepc','imports'].includes(profile._retailMisModule))throw attendanceError(403,'Attendance class assignment required.');
+    return {admin:write,state:null,mis:profile._retailMis};
+  }
   assertRetailAccess(profile, 'dashboard');
   if (profile.is_active === false || (profile.status && storeKey(profile.status) !== 'ACTIVE')) throw attendanceError(403, 'Active profile required.');
   // Reuse the existing global Retail administrator role mapping, not browser claims.
@@ -133,6 +139,8 @@ async function scopedStores(client, profile, state = '', read = data) {
   const scope = attendanceAccess(profile);
   if (state && scope.state && reportingState(state) !== reportingState(scope.state)) throw attendanceError(403, 'State is outside your authorized Retail scope.');
   const stores = await pages(() => client.from('reliance_retail_store_master').select('id,store_code,store_name,state,status').order('id'), read);
+  if(scope.mis&&stores.some(s=>(scope.mis.role==='CENTRAL_MIS'||scope.mis.states.includes(s.state))&&stores.filter(d=>storeKey(d.store_code)===storeKey(s.store_code)).length!==1))throw attendanceError(409,'Ambiguous canonical Store Code; reconcile Store Master before attendance operations.');
+  if(scope.mis)return stores.filter(s=>(scope.mis.role==='CENTRAL_MIS'||scope.mis.states.includes(s.state))&&(!state||s.state===state));
   return stores.filter(s => (!scope.state || stateLabel(s.state) === scope.state) && (!state || reportingState(s.state) === reportingState(state)));
 }
 
@@ -144,12 +152,18 @@ export async function previewRetailAttendance(client, profile, bytes, filename, 
   try {
   const parsed = await step('parse',()=>parseAttendanceWorkbookStreaming(bytes, filename, ATTENDANCE_COLUMNS,{signal:context.signal}));
   const stores = await step('store_master',()=>scopedStores(client, profile,'',query=>previewDatabase(query,'store_master',context.signal)));
+  if(retailMisRole(profile?.role)){
+    const kinds=profile._retailMisModule==='imports'?['HK','MEPC']:[profile._retailMisModule==='attendance-hk'?'HK':'MEPC'];
+    if(parsed.rows.some(r=>{try{return !kinds.includes(attendanceClass(r.class))||!stores.some(s=>storeKey(s.store_code)===storeKey(r.store_code));}catch{return true;}}))throw attendanceError(403,'Whole upload rejected: every row must belong to the assigned attendance class and canonical state scope.');
+  }
   const result = await step('validation',()=>validateAttendanceRows(parsed.rows, stores));
   Object.assign(countsLog,{source_rows:parsed.rows.length,valid_rows:result.valid.length,rejected_rows:result.rejected.length,excluded_rows:result.excluded.length});
   const checksum = createHash('sha256').update(bytes).digest('hex');
   const existing = await step('lookup',()=>previewDatabase(client.from('retail_attendance_uploads').select('id,status,uploaded_by,validation_summary').eq('kind', 'attendance').eq('checksum', checksum).maybeSingle(),'lookup',context.signal));
+  if(retailMisRole(profile?.role)&&existing&&existing.uploaded_by!==profile.id)throw attendanceError(409,'This workbook already belongs to another uploader. Its audit and ownership were not changed.');
   if (existing?.status === 'committed') return { ...compactPreviewSummary(existing.validation_summary), id: existing.id, idempotent: true, committed: true };
   const conflicts = await step('conflicts',()=>previewDatabase(client.rpc('rpc_retail_attendance_conflicts', { p_rows: result.valid }),'conflicts',context.signal));
+  if(retailMisRole(profile?.role)&&conflicts.some(r=>!stores.some(s=>s.id===r.retail_store_id)||(profile._retailMisModule!=='imports'&&r.class!==(profile._retailMisModule==='attendance-hk'?'HK':'MEPC'))))throw attendanceError(403,'Employee/day conflicts extend outside this assigned scope; independent reconciliation required.');
   const dates = [...new Set(result.valid.map(r => r.attendance_date))].sort();
   const countStart=performance.now();const countMaps=Object.fromEntries(['attendance_date','class','original_status'].map(k=>[k,new Map()]));
   for(const row of parsed.rows)for(const [key,map]of Object.entries(countMaps)){const value=String(row[key]??'');map.set(value,(map.get(value)||0)+1)}

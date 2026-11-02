@@ -1,7 +1,11 @@
 import {createRetailFoSelfRouter} from './retailFoSelfRoutes.js';
+import {createRetailMisRouter} from './retailMisRoutes.js';
+import {retailMisRole} from '../shared/retailMisAccess.js';
 import express from 'express';
 import {createRetailOperationsRouter} from './retailOperationsRoutes.js';
 import {retailCleaningReport,retailCleaningEvidence,retailCompletedTraining,retailModuleDashboard} from '../services/retailModuleReportService.js';
+import {linkFoCleaning} from '../services/retailCleaningFoLinkService.js';
+import {createInitialRetailWriteGate,isInitialRetailAdmin} from '../services/retailInitialAdminAccess.js';
 import {createRetailServiceTrackerRouter} from './retailServiceTrackerRoutes.js';
 import { createRetailUnifiedRouter } from './retailUnifiedRoutes.js';
 import { createRetailProvisionalRouter } from './retailProvisionalRoutes.js';
@@ -33,6 +37,10 @@ function sendError(response, error) {
 export function createRelianceRetailManagementRouter({ requireAuth, getClient }) {
   const router = express.Router();
   router.use(requireAuth);
+  router.use('/mis',createRetailMisRouter({getClient}));
+  router.use((req,res,next)=>retailMisRole(req.profile?.role)&&req.path!=='/access'?res.status(403).json({ok:false,message:'Use the state-scoped Retail MIS API.'}):next());
+  router.use(createInitialRetailWriteGate({getClient}));
+  router.post('/module-reports/deep-cleaning/:id/link-fo',async(req,res)=>{try{res.json({ok:true,result:await linkFoCleaning(getClient(),req.profile,req.params.id,req.body||{})});}catch(e){sendError(res,e);}});
   router.use('/operations',createRetailOperationsRouter({getClient}));
   router.get('/module-reports/dashboard',async(req,res)=>{try{res.json({ok:true,report:await retailModuleDashboard(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
   router.get('/module-reports/training',async(req,res)=>{try{res.json({ok:true,report:await retailCompletedTraining(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
@@ -59,7 +67,7 @@ export function createRelianceRetailManagementRouter({ requireAuth, getClient })
     if (!['ADMIN','QPMSADMIN','SUPERADMIN'].includes(role)) return res.status(403).json({ok:false,message:'Use the state-scoped Unified Management view.'});
     return next();
   });
-  router.get('/access', (req, res) => res.json({ ok: true, access: retailAccess(req.profile) }));
+  router.get('/access', (req, res) => res.json({ ok: true, access: retailAccess(req.profile), initial_admin_writes: isInitialRetailAdmin(req.profile,req.authUser) }));
   router.get('/dashboard', async (req, res) => { try { res.json({ ok: true, dashboard: await retailDashboard(getClient(), req.profile, req.query) }); } catch (e) { sendError(res, e); } });
   router.get('/deep-cleaning/records', async (req, res) => { try { res.json({ ok: true, ...(await listRetailDeepCleaningRecords(getClient(), req.profile)) }); } catch (e) { sendError(res, e); } });
   router.get('/deep-cleaning/schedules', async (req, res) => { try { res.json({ ok: true, ...(await listRetailDeepCleaningSchedules(getClient(), req.profile, req.query)) }); } catch (e) { sendError(res, e); } });

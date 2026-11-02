@@ -1,4 +1,7 @@
 import {scopedFaultTrackerReport} from './services/faultTrackerStoreScope.js';
+import {updateRetailFault} from './services/retailFaultUpdateService.js';
+import {requireInitialRetailAdmin} from './services/retailInitialAdminAccess.js';
+import {retailMisApiAllowed} from './shared/retailMisAccess.js';
 import { ownedEndDayKmStatus } from './services/foOwnedEndDayKmService.js';
 import { createKmReconciliationRouter } from './routes/foKmReconciliationRoutes.js';
 import { processKmReconciliationJobs } from './services/foKmReconciliationWorker.js';
@@ -1716,6 +1719,12 @@ async function requireSupabaseJwt(request, response, next) {
     request.profile = profile;
     request.employeeCode = String(profile.employee_code || '').trim() || null;
     request.userRole = String(profile.role || '').trim();
+    // Explicit MIS roles use the scoped API only. No legacy admin/designation
+    // fallbacks, direct Training/FO API, imports, or unrestricted exports.
+    if (!retailMisApiAllowed(profile,request.path)) {
+      response.status(403).json({ok:false,message:'Use the assigned Retail MIS workspace.'});
+      return;
+    }
     if (blockDemoReadOnlyMutation(request, response, profile, authData.user)) return;
     next();
   } catch (error) {
@@ -1786,6 +1795,7 @@ async function requireSupabaseJwtAllowMissingProfile(request, response, next) {
 
     request.authUser = authData.user;
     request.profile = profile || null;
+    if(!retailMisApiAllowed(profile,request.path))return response.status(403).json({ok:false,message:'Use the assigned Retail MIS workspace.'});
     request.employeeCode = profile ? String(profile.employee_code || '').trim() || null : null;
     request.userRole = profile ? String(profile.role || '').trim() : '';
     if (profile && blockDemoReadOnlyMutation(request, response, profile, authData.user)) return;
@@ -1853,6 +1863,7 @@ async function requireSupabaseJwtWithUserScopedProfile(request, response, next) 
 
     request.authUser = authData.user;
     request.profile = profile;
+    if(!retailMisApiAllowed(profile,request.path))return response.status(403).json({ok:false,message:'Use the assigned Retail MIS workspace.'});
     request.employeeCode = String(profile.employee_code || '').trim() || null;
     request.userRole = String(profile.role || '').trim();
     if (blockDemoReadOnlyMutation(request, response, profile, authData.user)) return;
@@ -5286,6 +5297,10 @@ app.get('/api/fault-tracker/imports', requireSupabaseJwtOrDemoApiRead, requireFa
   }
 });
 
+app.patch('/api/fault-tracker/tickets/:id',requireSupabaseJwt,requireFaultTrackerManage,requireInitialRetailAdmin,async(request,response)=>{
+ try{response.json({ok:true,result:await updateRetailFault(requireServiceRoleSupabase(),request.profile,request.params.id,request.body||{},{readAll:true,isAdmin:faultTrackerCanManage(request.profile),stateCode:faultTrackerStateCode})});}
+ catch(error){respondFaultTrackerError(response,error);}
+});
 app.get('/api/fault-tracker/tickets', requireSupabaseJwtOrDemoApiRead, requireFaultTrackerAccess, async (request, response) => {
   try {
     const result = await scopedFaultTrackerReport(requireServiceRoleSupabase(),request.profile,request.query,{

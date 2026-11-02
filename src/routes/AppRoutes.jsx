@@ -28,6 +28,8 @@ import StoreMaster from '../pages/StoreMaster.jsx';
 import HospitalTicketRouteGuard from '../components/hospital-ticketing/HospitalTicketRouteGuard.jsx';
 import NimsTicketingPage, { LegacyHospitalTicketsRedirect } from '../pages/hospital-ticketing/NimsTicketingPage.jsx';
 import RetailDashboard from '../pages/reliance-retail/RetailDashboard.jsx';
+import RetailMisWorkspace from '../pages/reliance-retail/RetailMisWorkspace.jsx';
+import RetailMisAssignments from '../pages/settings/RetailMisAssignments.jsx';
 import RetailStoreMaster from '../pages/reliance-retail/RetailStoreMaster.jsx';
 import RetailOperationalTrackers from '../pages/reliance-retail/RetailOperationalTrackers.jsx';
 import RetailComingSoon from '../pages/reliance-retail/RetailComingSoon.jsx';
@@ -123,6 +125,8 @@ const productionRoutes = [
           { path: 'fault-tracker', element: <FaultTracker /> },
           { path: 'deep-cleaning', element: <DeepCleaning /> },
           { path: 'reliance-retail', element: <RetailDashboard /> },
+          { path: 'reliance-retail/mis/:module', element: <RetailMisWorkspace /> },
+          { path: 'settings/retail-mis-access', element: <RetailMisAssignments /> },
           { path: 'reliance-retail/store-master', element: <RetailStoreMaster /> },
           { path: 'reliance-retail/deep-cleaning', element: <RetailScopedDeepCleaning /> },
           { path: 'reliance-retail/fault-tracker', element: <Navigate to="/fault-tracker" replace /> },

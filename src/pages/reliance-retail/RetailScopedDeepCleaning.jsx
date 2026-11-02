@@ -9,6 +9,13 @@ import {matchesReportQuery,reportPage} from '../../utils/retailReportView.js';
 import RetailCleaningSchedule from '../../components/reliance-retail/RetailCleaningSchedule.jsx';
 import {useAuth} from '../../context/auth-context.js';
 import {isReadOnlyUser} from '../../utils/demoAccess.js';
+import {isPlatformAdmin} from '../../utils/authRoles.js';
+
+function VerifiedFoLink({scheduleId,onSaved}){
+ const [source,setSource]=useState(''),[confirmed,setConfirmed]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ async function save(e){e.preventDefault();if(!confirmed||busy)return;setBusy(true);setError('');try{await authenticatedApiRequest({method:'POST',url:`/api/reliance-retail/module-reports/deep-cleaning/${encodeURIComponent(scheduleId)}/link-fo`,data:{source_id:source}});onSaved();}catch(e){setError(e.response?.data?.message||e.message);}finally{setBusy(false);}}
+ return <details><summary>Link verified FO completion</summary><form onSubmit={save}><label>Existing FO submission ID<input required aria-label="Existing FO cleaning submission ID" value={source} onChange={e=>setSource(e.target.value)}/></label><label><input required type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>I verified this submitted work against the approved schedule.</label><p>The server requires exact store/date, verified historical FO ownership and stored before/after evidence. Older submissions are not backfilled.</p>{error&&<p role="alert">{error}</p>}<button disabled={busy||!confirmed}>Confirm verified link</button></form></details>;
+}
 
 export default function RetailScopedDeepCleaning() {
  usePageTitle('Reliance Retail Deep Cleaning');
@@ -76,7 +83,7 @@ export default function RetailScopedDeepCleaning() {
     <div className="retail-report-table" role="region" aria-label="Cleaning schedules" tabIndex={0}><table><thead><tr>{['Store Code / Name','State','Scheduled date','Status','Reason / Evidence'].map(label=><th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{reportPage(rows,page,size).map(row=><tr key={row.id}>
      <td><button className="retail-report-link" onClick={()=>{resetView();setStore(row.store.id);}}>{row.store.store_code}</button><p>{row.store.store_name||'Store name unavailable'}</p></td><td>{REPORTING_STATES.find(item=>item.code===row.reporting_state)?.label||row.reporting_state}</td><td>{row.scheduled_date}</td>
      <td><span className="retail-report-status" data-status={row.display_status}>{row.display_status}</span>{row.overdue&&<span className="retail-report-overdue">Overdue · completion not recorded</span>}</td>
-     <td>{row.not_done_reason||'—'}{(row.submission_ids||[]).map(id=><p key={id}><button className="retail-report-link" disabled={evidenceBusy} onClick={()=>void inspect(id)}>Before / after evidence</button></p>)}</td>
+     <td>{row.not_done_reason||'—'}{(row.submission_ids||[]).map(id=><p key={id}><button className="retail-report-link" disabled={evidenceBusy} onClick={()=>void inspect(id)}>Before / after evidence</button></p>)}{isPlatformAdmin(user)&&!isReadOnlyUser(user)&&row.display_status==='Scheduled'&&<VerifiedFoLink scheduleId={row.id} onSaved={()=>{resetView();setRefresh(v=>v+1);}}/>}</td>
     </tr>)}</tbody></table></div>{!rows.length&&<p className="retail-report-empty">No matching recorded schedules.</p>}
     <ReportPager label="Cleaning schedules" count={rows.length} page={page} size={size} onPage={setPage} onSize={setSize}/>
    </div>

@@ -5,6 +5,7 @@ import Sidebar from '../components/Sidebar.jsx';
 import { useAuth } from '../context/auth-context.js';
 import { canAccessRoute } from '../utils/authRoles.js';
 import { isDemoUser } from '../utils/demoAccess.js';
+import {retailMisRole,retailMisHome} from '../../backend/shared/retailMisAccess.js';
 
 export default function MainLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -29,7 +30,7 @@ export default function MainLayout() {
   }
 
   if (!canAccessRoute(user, location.pathname)) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={retailMisRole(user.rawRole||user.role)?retailMisHome(user.rawRole||user.role):'/dashboard'} replace />;
   }
 
   const usesWideWorkspace = ['/fo-activities', '/dashboard', '/existing-business', '/tickets', '/hospital-ticketing', '/store-master', '/operations/hospital-feedback'].some((path) => location.pathname.startsWith(path));

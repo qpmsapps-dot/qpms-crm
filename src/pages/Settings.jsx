@@ -3,9 +3,10 @@ import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader.jsx';
 import { useAuth } from '../context/auth-context.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
-import { canAccessUserManagementAdmin } from '../utils/authRoles.js';
+import { canAccessUserManagementAdmin,canAccessRoute } from '../utils/authRoles.js';
 
 const settings = [
+  {title:'Retail MIS Access',description:'Assign verified Retail MIS roles and geographic states with immutable audit.',icon:ShieldCheck,to:'/settings/retail-mis-access'},
   { title: 'Company profile', description: 'Manage myQPMS identity, logo, address, and workspace details.', icon: Building },
   { title: 'Field Operations Access', description: 'Preview current Command Center permissions, business scope, and visible employee coverage.', icon: ShieldCheck, to: '/settings/access-management/field-operations' },
   { title: 'User roles', description: 'Configure access levels for administrators, managers, and agents.', icon: UserCog },
@@ -20,6 +21,7 @@ export default function Settings() {
   usePageTitle('Settings');
   const { user } = useAuth();
   const visibleSettings = settings.filter((item) => {
+    if(item.to==='/settings/retail-mis-access')return canAccessRoute(user,item.to);
     if (item.to?.startsWith('/settings/access-management')) return canAccessUserManagementAdmin(user);
     if (item.to === '/settings/user-management/client-ticketing') return ['ADMIN','QPMSADMIN','DEVELOPER','DEV'].includes(String(user?.rawRole || user?.raw_role || user?.role || '').toUpperCase().replace(/[^A-Z0-9]/g,''));
     if (item.to === '/settings/user-management') return canAccessUserManagementAdmin(user);
