@@ -14,14 +14,18 @@ export async function retailMisReport(client,profile,access,module,input={}){
  if(module.startsWith('attendance-')){const kind=module==='attendance-hk'?'HK':'MEPC';result.summary=summarizeAttendance({stores:result.stores,attendance:result.rows,aop:result.aop.map(a=>({...a,hk_count:kind==='HK'?a.hk_count:0,mepc_count:kind==='MEPC'?a.mepc_count:0,aop_class:null})),cutoff:to});}
  return result;
 }
-export async function retailMisQuotation(client,profile,access,bytes,name,save,environment){
+export async function retailMisQuotation(client,profile,access,bytes,name,save,environment,reviewed){
  assertRetailMis(access,'oos');if(save&&environment.RETAIL_OOS_MUTATIONS_FROZEN!=='false')throw Object.assign(Error('OOS mutations are frozen or configuration is unverified.'),{statusCode:503});
  // New MIS OOS writes remain closed until separate production go-live approval.
  if(save&&environment.RETAIL_MIS_OOS_WRITES_ENABLED!=='true')throw Object.assign(Error('Retail MIS OOS writes await separate activation.'),{statusCode:503});
  const report=await misRpc(client,'rpc_retail_mis_oos_stores',{p_actor:profile.id});
  const parsed=parseQuotation(bytes,name,report);if(!parsed.can_save)throw Object.assign(Error('Quotation contains invalid or unauthorized Store Codes; entire file rejected.'),{statusCode:400});
  assertScopedQuotation(parsed.groups,report,access);
- if(!save)return {...parsed,original_base64:undefined};
+ const current=await misRpc(client,'rpc_retail_mis_report',{p_actor:profile.id,p_module:'oos',p_from:'2026-01-01',p_to:'2026-12-31',p_state:null});
+ const plan=parsed.groups.map(g=>{const order=current.rows.find(o=>o.reference===g.quotation_number);return {reference:g.quotation_number,expected_revision:order?.revision||0,disposition:order?'REWORK_OR_REPLAY':'CREATE'};});
+ if(!save)return {...parsed,plan,original_base64:undefined};
+ if(!Array.isArray(reviewed)||reviewed.length!==parsed.groups.length)throw Object.assign(Error('Review the exact workbook and quotation revisions before import.'),{statusCode:409});
+ for(const group of parsed.groups){const matches=reviewed.filter(p=>p.reference===group.quotation_number);if(matches.length!==1||!Number.isInteger(matches[0].expected_revision)||matches[0].expected_revision<0)throw Object.assign(Error('Invalid reviewed quotation revision.'),{statusCode:409});group.expected_revision=matches[0].expected_revision;}
  return misRpc(client,'rpc_retail_mis_oos_import',{p_actor:profile.id,p_sha256:parsed.sha256,p_filename:name,p_original:parsed.original_base64,p_groups:parsed.groups});
 }
 export function retailMisPermissions(access){return {...access,modules:RETAIL_MIS_MODULES[access?.role]||[],can_administer:false};}

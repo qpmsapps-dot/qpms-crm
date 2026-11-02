@@ -1,5 +1,7 @@
 # Four-role Retail MIS local release candidate
 
+**OOS release follow-up:** see [controlled OOS activation](OOS_CONTROLLED_ACTIVATION.md). Quotation/rework/history changes and refreshed hashes are included in the follow-up release commit after 8376a362. Use the updated PR head; do not install the old migration expecting these additions. Local affected validation: 93 passed, zero failed, three skipped.
+
 Prepared 2 November 2026 in `.worktrees/retail-mis-access-20261102`, based on integration `328edd69cf9b16a1e0ee74f6b9cebdbcb2277514`. The business owner subsequently authorized release-branch and draft-PR preparation through GitHub. Production main updates, merging, production DDL/data changes, account assignment, Railway setting changes and production deployment remain prohibited until separate go-live authorization.
 
 ## Security review update: 2 November 2026

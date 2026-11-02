@@ -192,7 +192,7 @@ begin
   if p_revision is distinct from o.revision then raise exception using errcode='40001',message='Order changed; reload before updating';end if;
   b:=to_jsonb(o);next_stage:=o.status;
   if p_action='REWORK' then
-   if o.kind<>'OOS' or o.status<>'QUOTED' then raise exception 'Rework is allowed before PO only';end if;
+   if o.kind<>'OOS' then raise exception 'OOS quotation required';end if; if o.status<>'QUOTED' and (not public.retail_mis_oos_access(p_actor,o.state,'review') or o.created_by=p_actor) then raise exception using errcode='42501',message='Advanced rework requires independent authorized reviewer';end if;
    fields:=array['reason','quotation_file_sha256','original_base64'];
    if coalesce(p_data->>'quotation_file_sha256','')!~'^[a-f0-9]{64}$' or encode(sha256(decode(p_data->>'original_base64','base64')),'hex')<>p_data->>'quotation_file_sha256' then raise exception 'Rework source hash mismatch';end if;
    if p_data->>'reference' is distinct from o.reference or p_data->'store_ids' is distinct from to_jsonb(o.store_ids) or jsonb_typeof(p_data->'items') is distinct from 'array' or jsonb_array_length(p_data->'items')=0 then raise exception 'Rework must retain quotation reference and stores';end if;
@@ -205,7 +205,7 @@ begin
    if next_stage is null or p_action<>next_stage then raise exception 'Only next forward stage allowed';end if;
    fields:=case p_action when 'PO_RECORDED' then array['po_number','po_date'] when 'COMMERCIALLY_CONFIRMED' then array['confirmation_ref'] when 'FUND_RECORDED' then array['fund_ref'] when 'PAYMENT_RECORDED' then array['payment_ref'] when 'DELIVERED' then array['delivery_ref','delivery_date'] when 'ASSIGNED' then array['assigned_profile_id'] when 'IN_PROGRESS' then array['remarks'] when 'RESOLVED' then array['resolution','closure_evidence_ref'] when 'CLOSED' then array['closure_evidence_ref'] end;
    if p_action in ('COMMERCIALLY_CONFIRMED','FUND_RECORDED','PAYMENT_RECORDED','CLOSED') and not public.retail_mis_oos_access(p_actor,o.state,'review') then raise exception using errcode='42501',message='Reviewer authorization required';end if;
-   if p_action='COMMERCIALLY_CONFIRMED' and o.created_by=p_actor then raise exception 'Independent commercial reviewer required';end if;
+   if p_action='COMMERCIALLY_CONFIRMED' and (o.created_by=p_actor or p_actor=(select author_event.actor_id from public.retail_service_events author_event where author_event.order_id=o.id and author_event.action in ('CREATE_OOS','REWORK') order by author_event.created_at desc,author_event.id desc limit 1)) then raise exception 'Independent commercial reviewer required';end if;
    if p_action='ASSIGNED' and not exists(select 1 from public.profiles p where p.id=(p_data->>'assigned_profile_id')::uuid and p.is_active is true and upper(coalesce(p.status,'Active'))='ACTIVE'
     and regexp_replace(upper(coalesce(p.role,'')),'[^A-Z0-9]','','g') in ('FO','FIELDOFFICER')
     and regexp_replace(upper(coalesce(p.business,'')),'[^A-Z0-9]','','g') in ('RELIANCE','RELIANCERETAIL')
@@ -221,14 +221,27 @@ begin
  return jsonb_build_object('replayed',false,'order',public.retail_service_public_order(to_jsonb(o)));
 end;$$;
 create function public.rpc_retail_mis_oos_import(p_actor uuid,p_sha256 text,p_filename text,p_original text,p_groups jsonb) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
-declare g jsonb;receipts jsonb:='[]';request uuid;
+declare g jsonb;receipts jsonb:='[]';request uuid;o public.retail_service_orders%rowtype;
 begin
  if not public.retail_mis_oos_enabled() or not public.retail_mis_allowed(p_actor,'oos',null,true) then raise exception using errcode='42501',message='OOS writes unavailable';end if;
- if (select count(distinct s.state) from jsonb_array_elements(p_groups) g cross join lateral jsonb_array_elements_text(g->'store_ids') i join public.reliance_retail_store_master s on s.id=i.value::uuid)<>1 then raise exception using errcode='42501',message='Cross-state file rejected in full';end if;
+ if (select count(distinct s.state) from jsonb_array_elements(p_groups) as quoted(value) cross join lateral jsonb_array_elements_text(quoted.value->'store_ids') i join public.reliance_retail_store_master s on s.id=i.value::uuid)<>1 then raise exception using errcode='42501',message='Cross-state file rejected in full';end if;
  if jsonb_typeof(p_groups) is distinct from 'array' or jsonb_array_length(p_groups)=0 or jsonb_array_length(p_groups)>1000 then raise exception 'Quotation groups required';end if;
+ perform pg_advisory_xact_lock(hashtextextended('retail_service_orders',0));
  for g in select value from jsonb_array_elements(p_groups) loop
   request:=md5(p_sha256||'|'||(g->>'quotation_number')||'|'||p_actor::text)::uuid;
-  receipts:=receipts||jsonb_build_array(public.retail_mis_service_command(p_actor,request,'CREATE_OOS',null,null,jsonb_build_object('reference',g->>'quotation_number','store_ids',g->'store_ids','items',g->'items','filename',p_filename,'file_sha256',p_sha256,'original_base64',p_original)));
+  select * into o from public.retail_service_orders where kind='OOS' and reference=g->>'quotation_number' for update;
+  if found then
+   if not public.retail_mis_oos_order_allowed(p_actor,o.id,true) or exists(select 1 from public.retail_mis_oos_retirements where order_id=o.id) then raise exception using errcode='42501',message='Quotation outside assignment or retired';end if;
+   if exists(select 1 from public.retail_service_events e where e.order_id=o.id and (e.evidence->>'file_sha256'=p_sha256 or e.evidence->>'quotation_file_sha256'=p_sha256)) then
+    receipts:=receipts||jsonb_build_array(jsonb_build_object('replayed',true,'order_id',o.id));
+   else
+    if o.revision is distinct from (g->>'expected_revision')::integer then raise exception using errcode='40001',message='Quotation changed after preview';end if;
+    receipts:=receipts||jsonb_build_array(public.retail_mis_service_command(p_actor,request,'REWORK',o.id,o.revision,jsonb_build_object('reference',g->>'quotation_number','store_ids',g->'store_ids','items',g->'items','reason','Reviewed revised quotation upload','quotation_file_sha256',p_sha256,'original_base64',p_original)));
+   end if;
+  else
+   if (g->>'expected_revision')::integer is distinct from 0 then raise exception using errcode='40001',message='Quotation identity changed after preview';end if;
+   receipts:=receipts||jsonb_build_array(public.retail_mis_service_command(p_actor,request,'CREATE_OOS',null,null,jsonb_build_object('reference',g->>'quotation_number','store_ids',g->'store_ids','items',g->'items','filename',p_filename,'file_sha256',p_sha256,'original_base64',p_original)));
+  end if;
  end loop;
  return jsonb_build_object('quotation_groups',jsonb_array_length(p_groups),'receipts',receipts);
 end;$$;

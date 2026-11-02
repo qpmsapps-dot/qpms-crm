@@ -9,7 +9,7 @@
     },
     {
       "file": "backend/routes/retailMisRoutes.js",
-      "sha256": "f2253092be90271ee2be226fdbdfecbc4cbfd81da31064686ee53065d9bd236b"
+      "sha256": "d778cccad674ea1358f44f66eafd98ad18895e547885f2ae791e8bf4e636372d"
     },
     {
       "file": "backend/server.js",
@@ -37,7 +37,7 @@
     },
     {
       "file": "backend/services/retailMisService.js",
-      "sha256": "8f0bcea9c1ebe092f757ce5442166d129063402093dfc636f80a7b196977ac44"
+      "sha256": "b38fbbff2864f1cfa4ddab425c7bf6ec08d3a1a57caa1562e9d19e1face5fac0"
     },
     {
       "file": "backend/services/retailModuleReportService.js",
@@ -54,6 +54,10 @@
     {
       "file": "backend/shared/retailModuleReports.js",
       "sha256": "a007e08162297170c807aa652bbad1de127dfb580fe3b74a5c43b56d3e3ef3b2"
+    },
+    {
+      "file": "backend/shared/retailQuotationFormat.js",
+      "sha256": "f46df21cb98d74efd0c94f785c69fb1dfa61ee7558819c5f5c2226f00a1c5e51"
     },
     {
       "file": "backend/tests/fixtures/retailMisBaseline.sql",
@@ -77,7 +81,11 @@
     },
     {
       "file": "backend/tests/retailMisPostgres.test.js",
-      "sha256": "885309f4b58da58ad7ac7da43a47d3537e8df4ec31b458254bf09fbdf72a3d2b"
+      "sha256": "351ba6725da5acb8ef0ccaa4e457ae65114b448ad1c016667b9a65751d87f921"
+    },
+    {
+      "file": "backend/tests/retailMisQuotationFormat.test.js",
+      "sha256": "709a64895c8306fb0b58828dd67125a4baa0a104a92e5c672ed924587d068de0"
     },
     {
       "file": "backend/tests/retailModuleReportService.test.js",
@@ -93,7 +101,7 @@
     },
     {
       "file": "docs/retail/FOUR_ROLE_MIS_RELEASE.md",
-      "sha256": "9622ade001e943f1bdfc2b0538d4e37e5abf0fd70c3f5a7c04335e61e5e426d3"
+      "sha256": "afaa14160b364527265dd1451c8d534d6ee4a9a3b2866d5f984b4986e4e10950"
     },
     {
       "file": "docs/retail/FOUR_ROLE_MIS_SECURITY_REVIEW.md",
@@ -102,6 +110,10 @@
     {
       "file": "docs/retail/MIS_OPERATING_GUIDE.md",
       "sha256": "c8131ec705777a8b88860ac4af7fecb4c8c1dd6af99bf48b50cfc1b33e4dbf57"
+    },
+    {
+      "file": "docs/retail/OOS_CONTROLLED_ACTIVATION.md",
+      "sha256": "d7f11ed91039636ec3caca1aade9b521d9e8e2f69c5879bb2025b3904c02be75"
     },
     {
       "file": "docs/retail/PRODUCTION_SECURITY_CORRECTIONS.md",
@@ -165,11 +177,11 @@
     },
     {
       "file": "scripts/buildRetailMisWorkflowAdapters.mjs",
-      "sha256": "766a233501ae82c4be485e8f64aa4bc18afc20ca6b6d73e1c9f51d147621d4b2"
+      "sha256": "247f1d77367a2b0ff2de460ed74154900e4de142d41467c22cecbe316017dc7b"
     },
     {
       "file": "scripts/validateRetailMis.mjs",
-      "sha256": "68c8ff0caae74cd04a74d8c86681aa5d1439199b6a705fcad3601efdb2d6e1f6"
+      "sha256": "c848aa1f59abf9c8ed59c701d422aac230c00a18ff71af3a85b0621e06b6cbcb"
     },
     {
       "file": "src/components/Sidebar.jsx",
@@ -193,7 +205,7 @@
     },
     {
       "file": "src/pages/reliance-retail/RetailMisWorkspace.jsx",
-      "sha256": "98e7e6dcce1d9a755308b8de9ac0bb22d421b2e6991474ef76f69eeb951c796d"
+      "sha256": "d888126c455798a2f7e5da625194028a53e840fb977064c3b0be6495561fceeb"
     },
     {
       "file": "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx",
@@ -217,7 +229,7 @@
     },
     {
       "file": "supabase/migrations/20261102071258_retail_mis_four_roles.sql",
-      "sha256": "96f49e3dab71b7547fe8c652180cb95bf5a0bb6178238bf471d237a357ccef7f"
+      "sha256": "03d648aabd8c5bc39160b47fbc562649c43899c4be2c8707e90d150137fcab9d"
     },
     {
       "file": "supabase/proposals/retail_cleaning_fo_link.sql",
@@ -237,7 +249,7 @@
     },
     {
       "file": "supabase/proposals/retail_mis_commands.sql",
-      "sha256": "d60787793341b31485ccf6878ccfbeb10fa59b568940ce0e272e0dd4d1c31249"
+      "sha256": "3a0880b3b3e87772cc757e4f720bcb3761b22fb1ef368812e2ec0406908feca4"
     },
     {
       "file": "supabase/proposals/retail_mis_padma_assignment.sql",
@@ -245,7 +257,7 @@
     },
     {
       "file": "supabase/proposals/retail_mis_workflow_adapters.sql",
-      "sha256": "e7801d64a7aa9a2ed8f70be33d16894ee690af7c807035b053f3bc0c2e2b3ca3"
+      "sha256": "5c59d644e041bf67337043dacce537d3affa1fe8a0e64064aebebd4d3aefd70b"
     },
     {
       "file": "supabase/verification/retail_cleaning_fo_link_postinstall_read_only.sql",
@@ -262,6 +274,10 @@
     {
       "file": "supabase/verification/retail_mis_postinstall_read_only.sql",
       "sha256": "8c998a31ad6f2986cb0d8f47fd0df41625b1dbfa59910e00eaf1620ac52a2a0b"
+    },
+    {
+      "file": "supabase/verification/retail_oos_activation_inventory_read_only.sql",
+      "sha256": "11471e64f89bba7494dfc4007b3577881c886b77378a40986ef5e5fda937fcf4"
     },
     {
       "file": "supabase/verification/retail_owner_security_verification_combined_read_only.sql",
@@ -297,11 +313,12 @@
     },
     {
       "file": "tests/retailMisBrowser.test.js",
-      "sha256": "aac676502f2e2730496182c4f701da883aad8d9c582f890a8b986d1f61abffb5"
+      "sha256": "45728c38a2a53608c8554a98a557bf1f50cd18749d1ba826db374ecbb0fb918b"
     },
     {
       "file": "tests/retailWorkflowPersistenceBrowser.test.js",
       "sha256": "b1df81a736cf785b4e14ab301c79ec39a031fa77082961548e9e61fd0460e72d"
     }
-  ]
+  ],
+  "local_followup": "Reviewed OOS activation follow-up after 8376a362; use release branch commit and retain closed write gates"
 }
