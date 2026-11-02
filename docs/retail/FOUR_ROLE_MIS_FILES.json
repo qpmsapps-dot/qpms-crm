@@ -1,0 +1,110 @@
+{
+  "base_commit": "328edd69cf9b16a1e0ee74f6b9cebdbcb2277514",
+  "workspace": "D:\\QPMS_CRM\\.worktrees\\retail-mis-access-20261102",
+  "files": [
+    {
+      "file": "backend/routes/relianceRetailManagementRoutes.js",
+      "sha256": "91c29ec77b5206479bdf7efc8a7e7c11e3e0789d17f5e2744401e0d9ae606355"
+    },
+    {
+      "file": "backend/routes/retailMisRoutes.js",
+      "sha256": "57f73adfe99e8fa0e4e698f1aa43cf9b8888361484c0979e8be13a44af2b22e9"
+    },
+    {
+      "file": "backend/server.js",
+      "sha256": "634b90dec2ef096a3437b51a5977e59814a4c4748b9cf6055e914ec059b7c731"
+    },
+    {
+      "file": "backend/services/retailAttendanceService.js",
+      "sha256": "a47eb0ce53424dbdf38e93303805dcabc8c77974037faaca2638c6571bf86bd7"
+    },
+    {
+      "file": "backend/services/retailMisService.js",
+      "sha256": "8f0bcea9c1ebe092f757ce5442166d129063402093dfc636f80a7b196977ac44"
+    },
+    {
+      "file": "backend/shared/retailMisAccess.js",
+      "sha256": "eeed896515622cee81d7e95bfb33eb95f44128852cfa5bcbbdecda1e2086e669"
+    },
+    {
+      "file": "backend/tests/fixtures/retailMisBaseline.sql",
+      "sha256": "9510666f61aa9cdf7f05ec03f87f1e0900993b10e7838e665cb6a1b576c00966"
+    },
+    {
+      "file": "backend/tests/retailMisAccess.test.js",
+      "sha256": "babbbb43bbe70913611a15ec28806e0501722a4d491b6c877a7bbe03e0fea4ab"
+    },
+    {
+      "file": "backend/tests/retailMisPostgres.test.js",
+      "sha256": "8da225294503b0e387c23ac2345748513b67e86b8e46f7c3daf9aef3fff0ece5"
+    },
+    {
+      "file": "docs/retail/FOUR_ROLE_MIS_RELEASE.md",
+      "sha256": "c79f11d662e82e3c8127d617eb556efdfcdc1b5265baaea086e626d501a9de76"
+    },
+    {
+      "file": "scripts/buildRetailMisWorkflowAdapters.mjs",
+      "sha256": "d284e612f206fdbe7e9852e095d2974e3a7765e4808821354a62d123d872754f"
+    },
+    {
+      "file": "scripts/validateRetailMis.mjs",
+      "sha256": "c87948f0f44bd0197e36ffaaf73dcb08b25004630c082e6773e60686c8a375a3"
+    },
+    {
+      "file": "src/components/Sidebar.jsx",
+      "sha256": "ad6207edbb9f5d904c55bd1568a5ca0f985e76d40d7b7136eaa9211080ac03fe"
+    },
+    {
+      "file": "src/layouts/MainLayout.jsx",
+      "sha256": "bf8bd6b771ce339df7921069836e812d59f167b539cd1925acc3c19d09cbeeb7"
+    },
+    {
+      "file": "src/pages/Settings.jsx",
+      "sha256": "cecb5762283b7a583bc6d3179413bc5f875115e9499f3a93154e1338ba539933"
+    },
+    {
+      "file": "src/pages/reliance-retail/RetailMisWorkspace.jsx",
+      "sha256": "7e11794d249290a40160dfb154ba58d53f414fd50c75e76f41e0d70936822a33"
+    },
+    {
+      "file": "src/pages/settings/RetailMisAssignments.jsx",
+      "sha256": "97f2e4dad9e11c6cfe5704cdbe5f17bc1fb6bbd40de9f4be98df1cbd9ee5cd84"
+    },
+    {
+      "file": "src/routes/AppRoutes.jsx",
+      "sha256": "e2d13a72e74e8b0b8e96fba47556cd441c9a3696c9658643402156bb3d558eb2"
+    },
+    {
+      "file": "src/utils/authRoles.js",
+      "sha256": "d4aba4d2039f7c118d323188ba43112ba4c97a2008cf54247557cc8bdad572fc"
+    },
+    {
+      "file": "supabase/migrations/20261102071258_retail_mis_four_roles.sql",
+      "sha256": "3552b30174469a1053d650f5b5c017a0d85a2e858b719e246dcd5bc050d7af60"
+    },
+    {
+      "file": "supabase/proposals/retail_mis_commands.sql",
+      "sha256": "e766e4f834910c340ef5204f27e16f3ed88ae3a5a199a6a1d924584880e36e84"
+    },
+    {
+      "file": "supabase/proposals/retail_mis_padma_assignment.sql",
+      "sha256": "4320f0dc7664f9ef4ca305274fdd2d8a711272595a6f6f88ee453f0b99a26b2b"
+    },
+    {
+      "file": "supabase/proposals/retail_mis_workflow_adapters.sql",
+      "sha256": "2b7960120999bd02b46ded14b2aba348bde53572d17bc4b5b89688fcf0f4fbdb"
+    },
+    {
+      "file": "supabase/verification/retail_mis_padma_preflight_read_only.sql",
+      "sha256": "cacbc756ce209ea0378a16889d70c20d314819dc4065412bcc93f305e5371aee"
+    },
+    {
+      "file": "supabase/verification/retail_mis_postinstall_read_only.sql",
+      "sha256": "788883a96ac50733fb63c45a3eca73c557a4977e2aaf9a73164d0c7581aa5fd7"
+    },
+    {
+      "file": "tests/retailMisBrowser.test.js",
+      "sha256": "5eccef36036082315e031c92013785404f208cf772fb6ad80fd93d3afd9e71b7"
+    }
+  ]
+}

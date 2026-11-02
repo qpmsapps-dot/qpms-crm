@@ -1,3 +1,4 @@
+import {retailMisRole,RETAIL_MIS_MODULES,retailMisRouteModule,RETAIL_MIS_ASSIGNMENT_ADMIN} from '../../backend/shared/retailMisAccess.js';
 const viteEnv = import.meta.env || {};
 const explicitDemoAuthFlag = String(
   viteEnv.VITE_ENABLE_DEMO_AUTH ?? viteEnv.VITE_DEMO_MODE ?? '',
@@ -267,6 +268,8 @@ export function canManageHospitalFeedbackQr(user) {
 
 export function retailWebAccess(user) {
   if (!user) return { dashboard: false };
+  const mis=retailMisRole(user.rawRole||user.role);
+  if(mis)return {dashboard:mis==='CENTRAL_MIS',master:mis!=='MIS_OOS',hk:['CENTRAL_MIS','MIS_HK'].includes(mis),technical:['CENTRAL_MIS','MIS_MEPC'].includes(mis),oos:['CENTRAL_MIS','MIS_OOS'].includes(mis),mis:true};
   if (isPlatformAdmin(user)) return { dashboard: true, master: true, hk: true, technical: true, oos: true, kam: true };
   const business = normalizeRawRole(user.business);
   const keys = [user.rawRole, user.role, user.designation, user.department].map(normalizeRawRole);
@@ -285,6 +288,9 @@ export function retailWebAccess(user) {
 
 export function canAccessRoute(user, pathname) {
   if (!user) return false;
+  const mis=retailMisRole(user.rawRole||user.role);
+  if(mis)return pathname==='/profile'||Boolean(RETAIL_MIS_MODULES[mis].includes(retailMisRouteModule(pathname)));
+  if(pathname==='/settings/retail-mis-access')return user.profileId===RETAIL_MIS_ASSIGNMENT_ADMIN.profile_id&&user.id===RETAIL_MIS_ASSIGNMENT_ADMIN.auth_user_id&&user.employeeCode===RETAIL_MIS_ASSIGNMENT_ADMIN.employee_code&&isPlatformAdmin(user);
   if (isPlatformAdmin(user)) return true;
   if (pathname.startsWith('/reliance-retail')) {
     const access = retailWebAccess(user);

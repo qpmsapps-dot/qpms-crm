@@ -1,4 +1,6 @@
 import {createRetailFoSelfRouter} from './retailFoSelfRoutes.js';
+import {createRetailMisRouter} from './retailMisRoutes.js';
+import {retailMisRole} from '../shared/retailMisAccess.js';
 import express from 'express';
 import {createRetailOperationsRouter} from './retailOperationsRoutes.js';
 import {retailCleaningReport,retailCleaningEvidence,retailCompletedTraining,retailModuleDashboard} from '../services/retailModuleReportService.js';
@@ -35,6 +37,8 @@ function sendError(response, error) {
 export function createRelianceRetailManagementRouter({ requireAuth, getClient }) {
   const router = express.Router();
   router.use(requireAuth);
+  router.use('/mis',createRetailMisRouter({getClient}));
+  router.use((req,res,next)=>retailMisRole(req.profile?.role)&&req.path!=='/access'?res.status(403).json({ok:false,message:'Use the state-scoped Retail MIS API.'}):next());
   router.use(createInitialRetailWriteGate({getClient}));
   router.post('/module-reports/deep-cleaning/:id/link-fo',async(req,res)=>{try{res.json({ok:true,result:await linkFoCleaning(getClient(),req.profile,req.params.id,req.body||{})});}catch(e){sendError(res,e);}});
   router.use('/operations',createRetailOperationsRouter({getClient}));
