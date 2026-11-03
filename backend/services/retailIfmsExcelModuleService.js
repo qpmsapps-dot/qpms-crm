@@ -21,7 +21,7 @@ export async function retailIfmsExcelModuleRows(client,profile,input={}){
   const module=String(input.module||'').trim();
   if(!MODULES.has(module))throw fail(400,'Unknown IFMS Excel source module.');
   const month=String(input.month||SOURCE_MONTH);
-  if(!/^\\d{4}-\\d{2}$/.test(month))throw fail(400,'Select a valid reporting month.');
+  if(!/^\d{4}-\d{2}$/.test(month))throw fail(400,'Select a valid reporting month.');
   const state=String(input.state||'').trim().toUpperCase();
   if(state&&!STATES.has(state))throw fail(400,'Select a valid Retail reporting state.');
   const page=Math.max(1,Math.min(100000,Math.floor(Number(input.page)||1)));
@@ -36,7 +36,7 @@ export async function retailIfmsExcelModuleRows(client,profile,input={}){
     .eq('module',module);
   if(state)q=q.eq('state',state);
   if(search){
-    const clean=search.replace(/[%,()\\]/g,' ').replace(/\\s+/g,' ').trim();
+    const clean=search.replace(/[%,()\\]/g,' ').replace(/\s+/g,' ').trim();
     if(clean)q=q.ilike('search_text',`%${clean}%`);
   }
   const {data,error,count}=await q.order('source_row',{ascending:true}).range((page-1)*size,page*size-1);
