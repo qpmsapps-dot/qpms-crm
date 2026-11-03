@@ -27,7 +27,7 @@ export async function retailIfmsHistoryRows(client,profile,input={}){
  if(match&&!['MATCHED','NOT_IN_MASTER','STATE_MISMATCH','NO_STORE_CODE'].includes(match))throw error(400,'Invalid store match filter.');
  const q=clean(input.q).replace(/[%,()\\]/g,'').slice(0,35);
  const page=Math.max(1,Math.min(100000,Math.trunc(Number(input.page)||1)));
- const limit=Math.max(1,Math.min(100,Math.trunc(Number(input.limit)||25)));
+ const limit=Math.max(1,Math.min(500,Math.trunc(Number(input.limit)||25)));
  if(month!=='2026-10')return {module,month,rows:[],total:0,page,limit,source:'EXCEL_REPORTED_HISTORICAL_UNVERIFIED'};
  let query=client.from('retail_ifms_source_rows')
   .select('id,source_filename,snapshot_date,snapshot_month,module,source_row,reporting_state,store_code,record_date,status,data,retail_store_id,match_status',{count:'exact'})

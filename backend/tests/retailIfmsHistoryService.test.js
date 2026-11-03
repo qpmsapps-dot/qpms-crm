@@ -51,3 +51,12 @@ test('missing source table does not return a misleading zero count',async()=>{
  const db={from:()=>({select:()=>({eq(){return this},order(){return this},range:async()=>({error:{code:'42P01'}})})})};
  await assert.rejects(retailIfmsHistoryRows(db,actor,{module:'cmpm'}),e=>e.statusCode===503);
 });
+
+test('large October inline tables use capped admin history pages without bypassing authorization',async()=>{
+ const db=client();
+ const first=await retailIfmsHistoryRows(db,actor,{module:'cmpm',limit:500});
+ assert.equal(first.limit,500);
+ assert.equal(first.total,2);
+ const capped=await retailIfmsHistoryRows(db,actor,{module:'cmpm',limit:10000});
+ assert.equal(capped.limit,500);
+});
