@@ -222,6 +222,7 @@ class DeepCleaningService {
     String? pairId,
     int? pairOrder,
     String? uploadId,
+    String? requestId,
   }) async {
     final body = <String, dynamic>{
       'upload_type': uploadType.apiValue,
@@ -231,6 +232,7 @@ class DeepCleaningService {
     };
     if (pairId != null) body['pair_id'] = pairId;
     if (uploadId != null) body['upload_id'] = uploadId;
+    if (requestId != null) body['request_id'] = requestId;
     if (pairOrder != null) body['pair_order'] = pairOrder;
     final json = await _request(
       'POST',

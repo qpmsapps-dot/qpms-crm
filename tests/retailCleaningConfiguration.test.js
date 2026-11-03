@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {checkMobileCleaningConfiguration} from '../scripts/checkRetailCleaningConfiguration.mjs';
+const jwt=role=>'synthetic.'+Buffer.from(JSON.stringify({role,ref:'synthetic-project'})).toString('base64url')+'.synthetic';
+const config={SUPABASE_URL:'https://synthetic-project.supabase.co',SUPABASE_ANON_KEY:jwt('anon'),BACKEND_API_URL:'https://synthetic-backend.example'};
+test('exact three Android configuration variables pass without exposing values',()=>{const result=checkMobileCleaningConfiguration(config);assert.equal(result.ok,true);assert.equal(JSON.stringify(result).includes(config.SUPABASE_ANON_KEY),false);assert.equal(result.apk_built,false);});
+test('missing configuration is reported by exact key name only',()=>{const result=checkMobileCleaningConfiguration({});assert.equal(result.ok,false);assert.equal(result.errors.length,3);});
+test('service-role, secret and backend database credentials are forbidden in Android',()=>{for(const changed of [{SUPABASE_ANON_KEY:jwt('service_role')},{SUPABASE_ANON_KEY:'sb_secret_synthetic'},{SUPABASE_SERVICE_ROLE_KEY:'synthetic'},{DATABASE_URL:'synthetic'}])assert.equal(checkMobileCleaningConfiguration({...config,...changed}).ok,false);});
+test('insecure URLs and mismatched Supabase projects fail before any build',()=>{for(const changed of [{SUPABASE_URL:'http://synthetic-project.supabase.co'},{BACKEND_API_URL:'https://user:password@synthetic.example'},{SUPABASE_URL:'https://another-project.supabase.co'},{SUPABASE_URL:'https://synthetic-project.supabase.co/rest/v1'}])assert.equal(checkMobileCleaningConfiguration({...config,...changed}).ok,false);});
+test('public publishable configuration uses existing SUPABASE_ANON_KEY name',()=>{assert.equal(checkMobileCleaningConfiguration({...config,SUPABASE_ANON_KEY:'sb_publishable_synthetic'}).ok,true);});

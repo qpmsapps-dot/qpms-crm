@@ -1,5 +1,7 @@
 # Reliance Retail Cleaning delivery implementation
 
+Initial implementation record. Current image configuration, verified production metadata, retry hardening and remaining owner-level reconciliation are documented in `docs/RETAIL_CLEANING_IMAGE_CONFIGURATION.md`. No APK build is authorized.
+
 Source only. No production SQL, grants, deployment, APK build or distribution.
 
 ## Baseline and isolation

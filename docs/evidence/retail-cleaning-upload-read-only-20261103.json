@@ -1,0 +1,279 @@
+{
+  "observed_at": "2026-11-03T09:43:31.767Z",
+  "read_only": true,
+  "supabase_project": "ubawkjdbtickdlrgkulz",
+  "backend": {
+    "origin": "https://myqpms-crm-back-end-production.up.railway.app",
+    "health_http": 200,
+    "ready_http": 200,
+    "ready": true,
+    "supabase": {
+      "urlPresent": true,
+      "anonKeyPresent": true,
+      "serviceRoleKeyPresent": true,
+      "serviceRoleClientConfigured": true,
+      "projectRef": "ubawkjdbtickdlrgkulz"
+    }
+  },
+  "bucket": {
+    "http": 200,
+    "id": "client-deep-cleaning-uploads",
+    "public": false,
+    "file_size_limit": null,
+    "allowed_mime_types": null
+  },
+  "tables": {
+    "client_deep_cleaning_schedules": {
+      "id": {
+        "type": "string",
+        "format": "uuid",
+        "default": "gen_random_uuid()"
+      },
+      "retail_store_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "scheduled_date": {
+        "type": "string",
+        "format": "date"
+      },
+      "assigned_fo_profile_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "status": {
+        "type": "string",
+        "format": "text",
+        "default": "Planned"
+      },
+      "not_done_reason": {
+        "type": "string",
+        "format": "text"
+      },
+      "completed_at": {
+        "type": "string",
+        "format": "timestamp with time zone"
+      },
+      "source_type": {
+        "type": "string",
+        "format": "text",
+        "default": "UNIFIED_REVIEW"
+      },
+      "source_reference": {
+        "type": "string",
+        "format": "text"
+      },
+      "created_by_profile_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "metadata": {
+        "format": "jsonb"
+      },
+      "created_at": {
+        "type": "string",
+        "format": "timestamp with time zone",
+        "default": "now()"
+      },
+      "updated_at": {
+        "type": "string",
+        "format": "timestamp with time zone",
+        "default": "now()"
+      }
+    },
+    "client_deep_cleaning_submissions": {
+      "id": {
+        "type": "string",
+        "format": "uuid",
+        "default": "gen_random_uuid()"
+      },
+      "business": {
+        "type": "string",
+        "format": "text"
+      },
+      "store_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "store_code": {
+        "type": "string",
+        "format": "text"
+      },
+      "store_name": {
+        "type": "string",
+        "format": "text"
+      },
+      "client_name": {
+        "type": "string",
+        "format": "text"
+      },
+      "state": {
+        "type": "string",
+        "format": "text"
+      },
+      "city": {
+        "type": "string",
+        "format": "text"
+      },
+      "store_format": {
+        "type": "string",
+        "format": "text"
+      },
+      "deep_cleaning_date": {
+        "type": "string",
+        "format": "date"
+      },
+      "performed_by_type": {
+        "type": "string",
+        "format": "text",
+        "default": "vendor"
+      },
+      "vendor_name": {
+        "type": "string",
+        "format": "text"
+      },
+      "submitted_by_user_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "submitted_by_employee_code": {
+        "type": "string",
+        "format": "text"
+      },
+      "remarks": {
+        "type": "string",
+        "format": "text"
+      },
+      "status": {
+        "type": "string",
+        "format": "text",
+        "default": "draft"
+      },
+      "submitted_at": {
+        "type": "string",
+        "format": "timestamp with time zone"
+      },
+      "metadata": {
+        "format": "jsonb"
+      },
+      "created_at": {
+        "type": "string",
+        "format": "timestamp with time zone",
+        "default": "now()"
+      },
+      "updated_at": {
+        "type": "string",
+        "format": "timestamp with time zone",
+        "default": "now()"
+      },
+      "retail_store_id": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "client_deep_cleaning_uploads": {
+      "id": {
+        "type": "string",
+        "format": "uuid",
+        "default": "gen_random_uuid()"
+      },
+      "submission_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "upload_type": {
+        "type": "string",
+        "format": "text"
+      },
+      "storage_bucket": {
+        "type": "string",
+        "format": "text",
+        "default": "client-deep-cleaning-uploads"
+      },
+      "storage_path": {
+        "type": "string",
+        "format": "text"
+      },
+      "original_filename": {
+        "type": "string",
+        "format": "text"
+      },
+      "mime_type": {
+        "type": "string",
+        "format": "text"
+      },
+      "file_size": {
+        "type": "integer",
+        "format": "bigint"
+      },
+      "sequence_no": {
+        "type": "integer",
+        "format": "integer",
+        "default": 1
+      },
+      "uploaded_by_user_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "upload_status": {
+        "type": "string",
+        "format": "text",
+        "default": "pending"
+      },
+      "metadata": {
+        "format": "jsonb"
+      },
+      "created_at": {
+        "type": "string",
+        "format": "timestamp with time zone",
+        "default": "now()"
+      },
+      "uploaded_at": {
+        "type": "string",
+        "format": "timestamp with time zone"
+      }
+    }
+  },
+  "exposed_cleaning_rpcs": [
+    "/rpc/retail_cleaning_has_stored_pair",
+    "/rpc/rpc_retail_cleaning_schedule_direct",
+    "/rpc/rpc_retail_cleaning_link_source",
+    "/rpc/retail_cleaning_object_access",
+    "/rpc/retail_mis_cleaning_link_source",
+    "/rpc/rpc_retail_cleaning_link_fo",
+    "/rpc/rpc_retail_cleaning_fo_schedules",
+    "/rpc/retail_mis_cleaning_access",
+    "/rpc/retail_mis_cleaning_link_fo"
+  ],
+  "submissions": {
+    "http": 200,
+    "count": 3,
+    "statuses": {
+      "submitted": 1,
+      "draft": 2
+    },
+    "linked_by_metadata": 0
+  },
+  "uploads": {
+    "http": 200,
+    "count": 8,
+    "uploaded": 8,
+    "largest_bytes": 292830,
+    "types": [
+      "image/jpeg"
+    ]
+  },
+  "existing_photo_metadata": {
+    "read_only": true,
+    "photo_contents_downloaded": false,
+    "records_checked": 8,
+    "physical_metadata_size_matches": 8
+  },
+  "railway_dashboard": {
+    "status": "cannot verify",
+    "reason": "Not Authorized"
+  },
+  "installed_catalog_definitions": "unavailable; owner-level read-only SQL required",
+  "production_mutations": 0,
+  "production_test_uploads": 0
+}

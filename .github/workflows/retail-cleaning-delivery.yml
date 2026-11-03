@@ -9,6 +9,9 @@ on:
       - 'Mobile_FO_V2/lib/deep_cleaning/**'
       - 'Mobile_FO_V2/lib/home/home_shell.dart'
       - 'Mobile_FO_V2/test/deep_cleaning_delivery_test.dart'
+      - 'Mobile_FO_V2/config/deep_cleaning.dart-defines.example.json'
+      - 'scripts/checkRetailCleaningConfiguration.mjs'
+      - 'tests/retailCleaningConfiguration.test.js'
       - 'src/pages/reliance-retail/RetailCleaningScheduleViewer.jsx'
       - 'src/pages/DeepCleaning.jsx'
       - 'src/components/Sidebar.jsx'
@@ -37,6 +40,8 @@ jobs:
       - run: npm ci --prefix backend --no-audit --no-fund
       - name: Scoped backend and access regressions
         run: node --test backend/tests/retailCleaningDelivery.test.js backend/tests/clientDeepCleaningService.test.js backend/tests/accessControlService.test.js backend/tests/retailMisAccess.test.js backend/tests/retailOperations.test.js
+      - name: Client configuration secret boundaries (no build)
+        run: node --test tests/retailCleaningConfiguration.test.js
       - name: Disposable PostgreSQL tools
         shell: pwsh
         run: |
