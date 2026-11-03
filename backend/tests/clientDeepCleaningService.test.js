@@ -672,6 +672,18 @@ test('Upload URL path is independent from attendance and site visits', async () 
   assert.equal(db.tables.client_deep_cleaning_uploads[0].upload_status, 'pending');
 });
 
+test('Upload retry renews the same owned intent without duplicate evidence rows', async () => {
+  const db=client();
+  const draft=await createClientDeepCleaningSubmission(db,FO_PROFILE,{store_code:'RR001'});
+  const payload={upload_type:'before',filename:'before.jpg',mime_type:'image/jpeg',file_size:1000,pair_id:'pair-1',pair_order:1};
+  const first=await createClientDeepCleaningUploadUrl(db,FO_PROFILE,draft.id,payload);
+  const retry=await createClientDeepCleaningUploadUrl(db,FO_PROFILE,draft.id,{...payload,upload_id:first.upload_id});
+  assert.equal(first.upload_id,retry.upload_id);assert.equal(first.storage_path,retry.storage_path);
+  assert.equal(db.tables.client_deep_cleaning_uploads.length,1);
+  assert.equal(db.tables.client_deep_cleaning_uploads[0].metadata.pair_id,'pair-1');
+  await assert.rejects(createClientDeepCleaningUploadUrl(db,FO_PROFILE,draft.id,{...payload,upload_id:first.upload_id,file_size:2000}),e=>e.statusCode===403);
+});
+
 test('Upload complete verifies issued intent and physical storage object', async () => {
   const db = client();
   const draft = await createClientDeepCleaningSubmission(db, FO_PROFILE, { store_code: 'RR001' });

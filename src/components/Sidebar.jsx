@@ -40,6 +40,8 @@ import {
 import { isDemoUser } from '../utils/demoAccess.js';
 import { useHospitalTicketAccess } from '../hooks/useHospitalTicketAccess.js';
 import Logo from './Logo.jsx';
+import {useEffect,useState} from 'react';
+import {authenticatedApiRequest} from '../services/api.js';
 
 const TEMPORARILY_HIDDEN_NAV_ROUTES = new Set([
   '/existing-business',
@@ -278,6 +280,9 @@ function navLabelForRole(item, user) {
 
 export default function Sidebar({ isOpen, onClose }) {
   const { user } = useAuth();
+  const [cleaningAccess,setCleaningAccess]=useState(null);
+  const identity=user?.id;
+  useEffect(()=>{let live=true;if(identity)authenticatedApiRequest({url:'/api/client-deep-cleaning/schedules',params:{limit:1}}).then(r=>{if(live)setCleaningAccess(r.data?.contract_version==='retail-cleaning.v1'?identity:null);}).catch(()=>{if(live)setCleaningAccess(null);});return()=>{live=false;};},[identity]);
   const hospitalAccess = useHospitalTicketAccess();
   const location = useLocation();
   const currentTarget = `${location.pathname}${location.search}`;
@@ -335,6 +340,7 @@ export default function Sidebar({ isOpen, onClose }) {
     }),
   })).filter((group) => group.items.length);
 
+  if(identity && cleaningAccess===identity) visibleNavGroups.push({title:'Retail schedules',items:[{label:'Cleaning Schedules',to:'/retail-cleaning-schedules',icon:Sparkles}]});
   const visibleNavItems = visibleNavGroups.flatMap((group) => group.items);
   const hasVisibleNav = visibleNavItems.length > 0;
   if (!hasVisibleNav) {

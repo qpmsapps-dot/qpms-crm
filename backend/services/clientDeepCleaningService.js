@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { scheduledCleaningCommand } from './retailCleaningDeliveryService.js';
 import { normalizedStateKey, stateScopeQueryValues } from './workMappingScope.js';
 
 export const CLIENT_DEEP_CLEANING_BUCKET = 'client-deep-cleaning-uploads';
@@ -293,6 +294,7 @@ export async function searchRelianceRetailStores(client, profile, filters = {}) 
 
 export async function createClientDeepCleaningSubmission(client, profile, payload = {}) {
   const actor = assertRelianceRetailFo(profile);
+  if (payload.schedule_id) return scheduledCleaningCommand(client, profile, 'begin', payload);
   const draft = validateDraftPayload(payload, { requireStore: true });
   const store = await loadRelianceRetailStore(client, profile, draft.storeCode);
   const { data, error } = await client
@@ -307,7 +309,7 @@ export async function createClientDeepCleaningSubmission(client, profile, payloa
       submitted_by_employee_code: actor.employeeCode,
       remarks: draft.remarks,
       status: 'draft',
-      metadata: { source: 'client_deep_cleaning_api_v1' },
+      metadata: { source: 'client_deep_cleaning_api_v1', ...(payload.evidence_format === 'paired_v1' ? {evidence_format:'paired_v1'} : {}) },
     })
     .select(submissionSelect())
     .single();
@@ -349,6 +351,11 @@ export async function loadOwnedSubmission(client, profile, submissionId, { inclu
   if (!data || data.submitted_by_user_id !== actor.userId) {
     throw clientDeepCleaningError(404, 'submission_not_found', 'Deep Cleaning submission was not found.');
   }
+  // Metadata keeps pre-migration ad-hoc payloads readable without selecting missing columns.
+  if (data.metadata?.source === 'retail-cleaning.v1') {
+    const scheduled = await scheduledCleaningCommand(client, profile, 'validate', { submission_id: data.id });
+    Object.assign(data, scheduled);
+  }
   if (!includeUploads) return data;
   const { data: uploads, error: uploadError } = await client
     .from('client_deep_cleaning_uploads')
@@ -366,6 +373,9 @@ export async function updateClientDeepCleaningDraft(client, profile, submissionI
     throw clientDeepCleaningError(409, 'submitted_record_locked', 'Submitted Deep Cleaning records cannot be edited.');
   }
   const patch = validateDraftPayload(payload);
+  if (existing.schedule_id && ((payload.store_code && text(payload.store_code).toUpperCase() !== text(existing.store_code).toUpperCase()) || (payload.deep_cleaning_date && payload.deep_cleaning_date !== existing.deep_cleaning_date))) {
+    throw clientDeepCleaningError(409, 'scheduled_fields_locked', 'Store and date are controlled by the schedule.');
+  }
   const update = {};
   if (Object.prototype.hasOwnProperty.call(payload, 'store_code')) {
     if (!patch.storeCode) throw clientDeepCleaningError(400, 'store_code_required', 'Store code is required.');
@@ -410,6 +420,14 @@ export async function createClientDeepCleaningUploadUrl(client, profile, submiss
     throw clientDeepCleaningError(409, 'submitted_record_locked', 'Uploads cannot be added to a submitted Deep Cleaning record.');
   }
   const upload = validateUploadInput(payload);
+  if (payload.upload_id) {
+    const {data:intent,error}=await client.from('client_deep_cleaning_uploads').select(uploadSelect()).eq('id',text(payload.upload_id)).eq('submission_id',submission.id).maybeSingle();
+    if(error)throw error;
+    if(!intent || intent.uploaded_by_user_id!==actor.userId || intent.upload_type!==upload.uploadType || intent.mime_type!==upload.mimeType || Number(intent.file_size)!==upload.fileSize || intent.storage_bucket!==CLIENT_DEEP_CLEANING_BUCKET || !intent.storage_path.startsWith(expectedStoragePrefix(submission))) throw clientDeepCleaningError(403,'upload_intent_mismatch','Owned matching upload intent required.');
+    const signed=await client.storage.from(CLIENT_DEEP_CLEANING_BUCKET).createSignedUploadUrl(intent.storage_path,{contentType:intent.mime_type});
+    if(signed.error)throw signed.error;
+    return {upload_id:intent.id,storage_bucket:intent.storage_bucket,storage_path:intent.storage_path,signed_url:signed.data.signedUrl,upload_type:intent.upload_type,mime_type:intent.mime_type,max_file_size:CLIENT_DEEP_CLEANING_MAX_BYTES};
+  }
   const { count, error: countError } = await client
     .from('client_deep_cleaning_uploads')
     .select('id', { count: 'exact', head: true })
@@ -435,7 +453,7 @@ export async function createClientDeepCleaningUploadUrl(client, profile, submiss
       uploaded_by_user_id: actor.userId,
       upload_status: 'pending',
       uploaded_at: null,
-      metadata: { source: 'client_deep_cleaning_api_v1', intent_created_at: new Date().toISOString() },
+      metadata: { source: 'client_deep_cleaning_api_v1', intent_created_at: new Date().toISOString(), ...(payload.pair_id ? {pair_id: text(payload.pair_id), pair_order: Number(payload.pair_order || 0)} : {}) },
     })
     .select(uploadSelect())
     .single();
@@ -626,8 +644,13 @@ export async function createClientDeepCleaningUploadViewUrl(client, profile, sub
   };
 }
 
-export async function submitClientDeepCleaningSubmission(client, profile, submissionId) {
+export async function submitClientDeepCleaningSubmission(client, profile, submissionId, payload = {}) {
   const submission = await loadOwnedSubmission(client, profile, submissionId, { includeUploads: true });
+  if (submission.schedule_id) {
+    if (!['Completed','NotDone','Not Done'].includes(payload.outcome || 'Completed')) throw clientDeepCleaningError(400,'invalid_outcome','Invalid completion outcome.');
+    if ((payload.outcome || 'Completed') === 'Completed') await Promise.all(submission.uploads.filter(u=>u.upload_status==='uploaded').map(u=>verifyClientDeepCleaningStorageObject(client,u.storage_bucket,u.storage_path,Number(u.file_size))));
+    return scheduledCleaningCommand(client, profile, 'finalize', { submission_id:submission.id, outcome:payload.outcome || 'Completed', not_done_reason:payload.not_done_reason });
+  }
   if (submission.status === 'submitted') return submission;
   if (!DRAFT_STATUSES.has(submission.status)) {
     throw clientDeepCleaningError(409, 'invalid_status', 'Deep Cleaning submission cannot be submitted from its current status.');

@@ -1,3 +1,5 @@
+import '../deep_cleaning/deep_cleaning_screen.dart';
+import '../deep_cleaning/deep_cleaning_service.dart';
 import 'package:flutter/material.dart';
 
 import '../admin/admin_modules_screen.dart';
@@ -345,6 +347,36 @@ class _HomeShellState extends State<HomeShell> {
       ),
     ];
     return Scaffold(
+      floatingActionButton:
+          canonicalMobileRole(widget.user.role) == 'FO' &&
+              ['RELIANCE', 'RELIANCERETAIL'].contains(
+                (widget.user.business ?? '').toUpperCase().replaceAll(
+                  RegExp('[^A-Z]'),
+                  '',
+                ),
+              )
+          ? FloatingActionButton.extended(
+              onPressed: () async {
+                try {
+                  await const DeepCleaningService().listSchedules(limit: 1);
+                  if (!context.mounted) return;
+                  await Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => DeepCleaningScreen(user: widget.user),
+                    ),
+                  );
+                } catch (error) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text(error.toString())));
+                  }
+                }
+              },
+              icon: const Icon(Icons.cleaning_services_outlined),
+              label: const Text('Assigned Cleaning'),
+            )
+          : null,
       body: PageView(
         controller: _pageController,
         onPageChanged: (value) => setState(() => _index = value),
