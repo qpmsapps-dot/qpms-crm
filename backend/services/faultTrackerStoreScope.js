@@ -83,7 +83,30 @@ export async function scopedFaultTrackerReport(client,profile,input,authorizatio
  for(const ticket of filtered){ticket.can_update=historyAvailable&&authorization.isAdmin===true&&isInitialRetailAdmin(profile);if(!historyAvailable)delete ticket.verified_updates;}
  if((input.ticket_id||input.id||input.ticket_no)&&!filtered.length)throw fail(404,'Ticket unavailable in the authorized operational scope.');
  const batches=await rows(client.from('fault_tracker_import_batches').select('*').eq('id',batchId).limit(1)),batch=batches[0];
+ // A pending IFMS Excel is a snapshot. Only compare the latest to an older
+ // same-family report; duplicate uploads must not reset the closure baseline.
+ let closed_since_previous=null;
+ if(batch && (!input.import_batch_id||input.latest==='true')){
+  const family=name=>{const key=String(name||'').trim().toLowerCase();return key.startsWith('corrective')?'corrective':key.startsWith('overall')?'overall':'other';};
+  const previous=await rows(client.from('fault_tracker_import_batches')
+   .select('id,original_file_name,imported_at,source_name').eq('source_name',batch.source_name)
+   .lt('imported_at',batch.imported_at).order('imported_at',{ascending:false}).limit(15));
+  const prior=previous.find(b=>family(b.original_file_name)===family(batch.original_file_name)
+    && b.original_file_name!==batch.original_file_name);
+  if(prior){
+   const previousSource=await pages(()=>client.from('fault_tracker_tickets').select('*')
+    .eq('import_batch_id',prior.id).order('created_at_source',{ascending:false,nullsFirst:false}).order('id'));
+   const earlier=scopeFaultTickets(previousSource,master,{...authorization,profileState:profile.state,grants}).tickets;
+   const key=t=>`${normalizedFaultStoreCode(t.store_code)}|${normalizedFaultStoreCode(t.ticket_no)}`;
+   const currentKeys=new Set(scoped.tickets.map(key));
+   const missing=earlier.filter(t=>t.ticket_no&&!currentKeys.has(key(t)));
+   const categories=new Map();
+   for(const t of missing){const category=String(t.category||'Unspecified').trim()||'Unspecified';categories.set(category,(categories.get(category)||0)+1);}
+   closed_since_previous={count:missing.length,previous_file:prior.original_file_name,latest_file:batch.original_file_name,
+    by_category:[...categories].map(([category,count])=>({category,count})).sort((a,b)=>b.count-a.count)};
+  }
+ }
  let tickets=filtered;
  if(input.page||input.limit){const size=Math.min(500,Math.max(1,parseInt(input.limit,10)||100)),page=Math.max(1,parseInt(input.page,10)||1);tickets=filtered.slice((page-1)*size,page*size);}
- return {ok:true,import_batch:batch?{id:batch.id,original_file_name:batch.original_file_name,imported_at:batch.imported_at,ticket_count:scoped.tickets.length}:null,tickets,total:filtered.length,...(scoped.reconciliation?{reconciliation:scoped.reconciliation}:{})};
+ return {ok:true,import_batch:batch?{id:batch.id,original_file_name:batch.original_file_name,imported_at:batch.imported_at,ticket_count:scoped.tickets.length}:null,tickets,total:filtered.length,closed_since_previous,...(scoped.reconciliation?{reconciliation:scoped.reconciliation}:{})};
 }
