@@ -10,7 +10,7 @@ export const OOS12_FIELDS={
  OOS12_FUND_RECEIVED:['receipt_ref','receipt_date'],
  OOS12_WIP:['handover_ref','handover_date'],
  OOS12_WORK_DONE:['work_completion_ref','completion_date'],
- OOS12_DOCUMENT_SUBMITTED:['documents_ref','submission_date'],
+ OOS12_DOCUMENT_SUBMITTED:[], // Document fields optional; unanswered work remains flagged as pending.,
  OOS12_DOCUMENT_RECEIVED:['acknowledgement_ref','received_date'],
  OOS12_JMS_CREATED:['jms_number','jms_date'],
  OOS12_INVOICE_RAISED:['invoice_number','invoice_date','invoice_amount'],

@@ -24,6 +24,20 @@ export function createClientDeepCleaningRouter({ requireAuth, getClient }) {
   const router = express.Router();
   router.use(requireAuth);
 
+  // Scheduled Deep Cleaning tasks: TN zone FO only; other states geographic FO scope.
+  router.get('/schedules', async (request, response) => {
+    try {
+      const indiaDay = () => new Date(Date.now()+330*60000).toISOString().slice(0,10);
+      const from = request.query?.from || indiaDay();
+      const to = request.query?.to || new Date(Date.now()+330*60000+30*86400000).toISOString().slice(0,10);
+      const {data,error}=await getClient().rpc('rpc_retail_cleaning_fo_schedules',{
+        p_actor:request.profile?.id,p_from:from,p_to:to
+      });
+      if(error)throw Object.assign(error,{statusCode:error.code==='42501'?403:error.code==='22023'?400:503});
+      response.json({ok:true,...data});
+    }catch(error){safeClientDeepCleaningError(response,error);}
+  });
+
   router.get('/stores', async (request, response) => {
     try {
       const result = await searchRelianceRetailStores(

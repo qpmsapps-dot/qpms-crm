@@ -39,6 +39,15 @@ async function proposeWithSnapshot(client,profile,input,validatedSnapshot=null){
 export const proposeUnified=(client,profile,input)=>proposeWithSnapshot(client,profile,input);
 export const proposeZoneFromSnapshot=(client,profile,input,snapshot)=>proposeWithSnapshot(client,profile,input,snapshot);
 export const decideUnified=(client,profile,input)=>rpc(client,'rpc_retail_unified_decide',{p_actor:profile.id,p_proposal:input.proposal_id,p_approve:input.approve,p_reason:input.reason});
+export async function scheduleDirectRetailCleaning(client,profile,input={}){
+ const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+ if(!uuid(input.store_id)||!uuid(input.request_id)||!/^\d{4}-\d{2}-\d{2}$/.test(input.scheduled_date||'')||String(input.reason||'').length>2000)
+  throw Object.assign(Error('Select a valid store, schedule date and request ID (notes up to 2,000 characters).'),{statusCode:400});
+ return rpc(client,'rpc_retail_cleaning_schedule_direct',{
+  p_actor:profile.id,p_store:input.store_id,p_scheduled:input.scheduled_date,
+  p_request:input.request_id,p_reason:input.reason||null
+ });
+}
 export async function applyUnified(client,profile,input,environment=process.env){
  if(environment.RETAIL_STORE_IMPORT_WRITES_ENABLED!=='true')throw Object.assign(Error('Operational changes are awaiting separately authorized activation of the existing Store Master write gate.'),{statusCode:409});
  return rpc(client,'rpc_retail_unified_apply',{p_actor:profile.id,p_proposal:input.proposal_id});
