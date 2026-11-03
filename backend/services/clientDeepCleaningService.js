@@ -46,7 +46,7 @@ function normalizeKey(value) {
   return text(value).toUpperCase().replace(/[^A-Z0-9]+/g, '');
 }
 
-function retailStateKey(value) {
+export function retailStateKey(value) {
   const key = normalizedStateKey(value);
   if (['PY','PUDUCHERRY','PONDICHERRY'].includes(key)) return 'TN';
   if (key==='KN')return 'KA';
@@ -54,7 +54,7 @@ function retailStateKey(value) {
   return key;
 }
 
-function retailStateQueryValues(value) {
+export function retailStateQueryValues(value) {
   const key = retailStateKey(value);
   if(key==='TN')return ['TN','PY','Tamil Nadu','Puducherry','Pondicherry'];
   if(key==='KA')return ['KA','KN','Karnataka'];
@@ -178,7 +178,7 @@ function storeWithinZoneState(store, zones, profile) {
     && retailStateKey(store.state) === state);
 }
 
-async function loadAuthorizedRetailZones(client, profile) {
+export async function loadAuthorizedRetailZones(client, profile) {
   const state = retailStateKey(profile?.state);
   if (!state || state === 'ALL' || state === 'ALLSTATES') return [];
   const { data: assignments, error: assignmentError } = await client
