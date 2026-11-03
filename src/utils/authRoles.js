@@ -289,6 +289,8 @@ export function retailWebAccess(user) {
 
 export function canAccessRoute(user, pathname) {
   if (!user) return false;
+  // Navigation only. The dedicated viewer verifies every read with the API.
+  if (pathname === '/retail-cleaning-schedules') return true;
   const mis=retailMisRole(user.rawRole||user.role);
   if(mis)return pathname==='/profile'||Boolean(RETAIL_MIS_MODULES[mis].includes(retailMisRouteModule(pathname)));
   if(pathname==='/settings/retail-mis-access')return user.profileId===RETAIL_MIS_ASSIGNMENT_ADMIN.profile_id&&user.id===RETAIL_MIS_ASSIGNMENT_ADMIN.auth_user_id&&user.employeeCode===RETAIL_MIS_ASSIGNMENT_ADMIN.employee_code&&isPlatformAdmin(user);

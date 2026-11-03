@@ -1,3 +1,4 @@
+import { scopedLegacyCleaningRecords } from './services/retailCleaningLegacyReadService.js';
 import {prepareRetailMisUser,saveRetailMisUser} from './services/retailMisUserManagement.js';
 import {scopedFaultTrackerReport} from './services/faultTrackerStoreScope.js';
 import {updateRetailFault} from './services/retailFaultUpdateService.js';
@@ -10567,47 +10568,7 @@ app.get('/api/fo/operations/demo-date-range', requireSupabaseJwtOrDemoApiRead, r
 app.get('/api/deep-cleaning/records', requireSupabaseJwtOrDemoApiRead, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
-    const [submissionsRes, uploadsRes, storesRes, profilesRes, visitsRes] = await Promise.all([
-      client
-        .from('fo_activity_submissions')
-        .select('*')
-        .eq('activity_type', 'deep_cleaning')
-        .order('submitted_at', { ascending: false })
-        .limit(1000),
-      client
-        .from('fo_activity_uploads')
-        .select('*')
-        .or('activity_type.eq.deep_cleaning,upload_role.ilike.%deep_cleaning%')
-        .order('uploaded_at', { ascending: false })
-        .limit(1500),
-      client
-        .from('store_master')
-        .select('id,store_code,store_name,client_name,state,business,latitude,longitude,gps_accuracy,status,metadata')
-        .in('business', ['Reliance Retail', 'Reliance', 'IFMS'])
-        .limit(5000),
-      client
-        .from('profiles')
-        .select('employee_code,username,full_name,display_name,business,state,role,designation,department')
-        .in('business', ['Reliance Retail', 'Reliance', 'IFMS'])
-        .limit(5000),
-      client
-        .from('fo_site_visits')
-        .select('id,store_code,store_name,site_name,client_name,state,employee_code,fo_user_id,check_in_time,metadata')
-        .order('check_in_time', { ascending: false })
-        .limit(3000),
-    ]);
-    const errors = [submissionsRes, uploadsRes, storesRes, profilesRes, visitsRes].map((result) => result.error).filter(Boolean);
-    if (errors.length) throw errors[0];
-    const demo = isDemoUser(request.profile);
-    const sanitizeRows = (rows) => demo ? (rows || []).map((row) => sanitizeDemoRecord(row)) : rows || [];
-    response.json({
-      ok: true,
-      submissions: sanitizeRows(submissionsRes.data),
-      uploads: sanitizeRows(uploadsRes.data),
-      stores: demo ? (storesRes.data || []).map((row) => sanitizeDemoRecord(row, ['created_by_full_name'])) : storesRes.data || [],
-      profiles: sanitizeRows(profilesRes.data),
-      visits: sanitizeRows(visitsRes.data),
-    });
+    response.json(await scopedLegacyCleaningRecords(client, request.profile));
   } catch (error) {
     const status = Number(error?.statusCode || 500);
     response.status(status).json({

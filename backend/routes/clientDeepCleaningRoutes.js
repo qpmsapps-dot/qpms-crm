@@ -1,4 +1,5 @@
 import express from 'express';
+import { listDeliveredCleaningSchedules } from '../services/retailCleaningDeliveryService.js';
 import {
   completeClientDeepCleaningUpload,
   createClientDeepCleaningSubmission,
@@ -24,18 +25,23 @@ export function createClientDeepCleaningRouter({ requireAuth, getClient }) {
   const router = express.Router();
   router.use(requireAuth);
 
-  // Scheduled Deep Cleaning tasks: TN zone FO only; other states geographic FO scope.
+  // FO execution and explicitly granted IFMS viewing share one fail-closed contract.
   router.get('/schedules', async (request, response) => {
     try {
-      const indiaDay = () => new Date(Date.now()+330*60000).toISOString().slice(0,10);
-      const from = request.query?.from || indiaDay();
-      const to = request.query?.to || new Date(Date.now()+330*60000+30*86400000).toISOString().slice(0,10);
-      const {data,error}=await getClient().rpc('rpc_retail_cleaning_fo_schedules',{
-        p_actor:request.profile?.id,p_from:from,p_to:to
-      });
-      if(error)throw Object.assign(error,{statusCode:error.code==='42501'?403:error.code==='22023'?400:503});
-      response.json({ok:true,...data});
+      response.json({ok:true,...await listDeliveredCleaningSchedules(getClient(),request.profile,request.query)});
     }catch(error){safeClientDeepCleaningError(response,error);}
+  });
+
+  router.get('/schedules/export', async (request, response) => {
+    try {
+      response.json({ok:true,...await listDeliveredCleaningSchedules(getClient(),request.profile,request.query,{permission:'deep_cleaning.export'})});
+    } catch(error) { safeClientDeepCleaningError(response,error); }
+  });
+
+  router.get('/schedules/:id', async (request, response) => {
+    try {
+      response.json({ok:true,...await listDeliveredCleaningSchedules(getClient(),request.profile,request.query,{scheduleId:request.params.id})});
+    } catch(error) { safeClientDeepCleaningError(response,error); }
   });
 
   router.get('/stores', async (request, response) => {
@@ -167,6 +173,7 @@ export function createClientDeepCleaningRouter({ requireAuth, getClient }) {
         getClient(),
         request.profile,
         request.params.id,
+        request.body || {},
       );
       response.json({ ok: true, submission });
     } catch (error) {
