@@ -9,7 +9,7 @@ const attendance = (date, gps, approved, petrol, travel_mode = 'bike', id = date
   petrol_amount: String(petrol),
 });
 const leg = (day, travel_mode, payable_km, payable_amount, extra = {}) => ({
-  id: day + travel_mode + payable_km, employee_code: code,
+  id: day + travel_mode + payable_km, employee_code: code, attendance_id: day,
   started_at: day + 'T06:00:00+05:30', travel_mode,
   payable_km, payable_amount, superseded_at: null, ...extra,
 });
@@ -131,4 +131,30 @@ test('all KM-active roles are included: FO, KAM, Operations Manager, Branch Head
   const withAdminSiteVisit = buildOctoberKmAudit(attendanceRows, [], profileRows, new Set(['active-5']));
   assert.equal(withAdminSiteVisit.summary.roles.Admin, 1);
   assert.equal(withAdminSiteVisit.summary.employees, 6);
+});
+
+test('travel legs are attached to their exact attendance, not another session on the same date', () => {
+  const a = { ...attendance('2026-10-13', 20, 20, 80), id: 'attendance-A' };
+  const b = { ...attendance('2026-10-13', 20, 20, 80), id: 'attendance-B' };
+  const legs = [
+    { ...leg('2026-10-13', 'train', 0, 0), attendance_id: a.id },
+    { ...leg('2026-10-13', 'bike', 20, 80), attendance_id: b.id },
+  ];
+  const result = buildOctoberKmAudit([a, b], legs);
+  assert.equal(result.summary.bike_train_days, 0);
+  assert.equal(result.summary.bike_train_payable_cases, 0);
+  assert.equal(result.total_flagged_records, 0);
+});
+
+test('a final Train mode with saved payable KM is a review flag, never an automatic deduction', () => {
+  const row = attendance('2026-10-14', 60, 120, 480, 'train');
+  const result = buildOctoberKmAudit(
+    [row],
+    [{ ...leg('2026-10-14', 'bike', 120, 480), attendance_id: row.id }],
+  );
+  assert.equal(result.summary.nonpayable_attendance_with_payable_cases, 1);
+  assert.equal(result.cases.length, 1);
+  assert.ok(result.cases[0].flags.includes('NONPAYABLE_FINAL_MODE_WITH_PAYABLE_REVIEW'));
+  assert.equal(result.cases[0].disposition, 'EVIDENCE_REVIEW_REQUIRED');
+  assert.equal(result.summary.verified_deduction_rupees, null);
 });
