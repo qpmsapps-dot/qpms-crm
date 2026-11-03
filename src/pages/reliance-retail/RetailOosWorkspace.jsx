@@ -8,6 +8,7 @@ import RetailOos12Transition from './RetailOos12Transition.jsx';
 import {OOS12_FIELDS} from '../../../backend/shared/retailOos12Workflow.js';
 import {oosMoney} from '../../utils/oosDecimal.js';
 import {OosDrawer,OosFinancialSummary,OosAuditEvent,OosWorkflowBadge} from './RetailOosPresentation.jsx';
+import RetailExcelModuleRecords from '../../components/reliance-retail/RetailExcelModuleRecords.jsx';
 const api=async(path,config={})=>(await authenticatedApiRequest({url:'/api/reliance-retail/mis'+path,...config})).data.result;
 const message=e=>e.response?.data?.message||e.message;
 const money=oosMoney;
@@ -86,5 +87,6 @@ export default function RetailOosWorkspace(){
  {drawer!=='status'&&(history==='loading'?<p role="status">Loading immutable history...</p>:Array.isArray(history)&&<div aria-label="Quotation history"><h3>Immutable history</h3>{!history.length&&<p>No history events returned.</p>}{history.map(e=><OosAuditEvent key={e.id} event={e}>{e.evidence?.evidence_ids?.map(id=><button key={id} disabled={busy} onClick={()=>void run(async()=>{const link=await api('/oos/evidence/'+id);window.open(link.url,'_blank','noopener,noreferrer');})}>View supporting evidence {id.slice(0,8)}</button>)}{e.has_workbook&&<p>Original workbook retained in protected audit storage. Use Export Register (Excel) for reporting.</p>}</OosAuditEvent>)}</div>)}
  {confirm&&selected&&<div className="oos-overlay"><section className="oos-dialog" role="dialog" aria-modal="true" aria-labelledby="oos-confirm-title"><h2 id="oos-confirm-title">Confirm genuine status change</h2><p>{selected.reference}: {statusLabel(selected.status)} | {statusLabel(action)}</p><p>Revision {selected.revision}. This action will be saved to immutable history.</p><p>{Object.entries(fields).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' | ')}</p><button disabled={busy} onClick={()=>setConfirm(false)}>Cancel</button><button className="oos-primary" disabled={busy} onClick={()=>void commit()}>{busy?'Saving...':'Confirm and save'}</button></section></div>}
  </OosDrawer>}
+  <RetailExcelModuleRecords modules={['oos_historical']}/>
  </section>;
 }
