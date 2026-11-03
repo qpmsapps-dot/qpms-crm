@@ -38,6 +38,7 @@ import RetailScopedDeepCleaning from '../pages/reliance-retail/RetailScopedDeepC
 import RetailTraining from '../pages/reliance-retail/RetailTraining.jsx';
 import RetailAttendance from '../pages/reliance-retail/RetailAttendance.jsx';
 import RetailOperations from '../pages/reliance-retail/RetailOperations.jsx';
+import RetailManpowerHistory from '../pages/reliance-retail/RetailManpowerHistory.jsx';
 import FaultTracker from '../pages/FaultTracker.jsx';
 import DeepCleaning from '../pages/DeepCleaning.jsx';
 import UserManagement from '../pages/settings/UserManagement.jsx';
@@ -138,7 +139,7 @@ const productionRoutes = [
           { path: 'reliance-retail/oos', element: <RetailOperationalTrackers kind="OOS" /> },
           { path: 'reliance-retail/cmpm', element: <RetailOperations kind="maintenance" /> },
           { path: 'reliance-retail/thermography', element: <RetailOperations kind="thermography" /> },
-          { path: 'reliance-retail/manpower', element: <RetailComingSoon title="Manpower Vacancy" /> },
+          { path: 'reliance-retail/manpower', element: <RetailManpowerHistory /> },
           { path: 'assets', element: <AssetCenterPage /> },
           { path: 'tasks', element: <Tasks /> },
           {
