@@ -3,9 +3,24 @@ import { adminKmApprovalAuthorization } from '../services/foKmRecalculationAutho
 import { reconcileSupportedKm, sharedKmReconciliationEnabled, sharedKmPreviewEnabled } from '../services/foKmIncrementalReconciliationService.js';
 import { evidencePages, attendanceDayBounds, kmError } from '../services/foKmEvidenceService.js';
 import { runSupportedKmBatch } from '../services/foKmSupportedBatchService.js';
+import { loadOctoberKmAudit } from '../services/foOctoberKmAuditSummaryService.js';
 
 export function createKmReconciliationRouter({ requireAuth, getClient, reconcile = reconcileSupportedKm, environment = process.env }) {
   const router = express.Router();
+  // Read-only, October-only Admin evidence queue; never changes payable balances.
+  router.get('/october-audit-summary', requireAuth, async (req, res) => {
+    try {
+      adminKmApprovalAuthorization(req.profile, req.authUser, 'Read-only October KM audit');
+      const result = await loadOctoberKmAudit(getClient());
+      res.set('Cache-Control', 'no-store').json({ ok: true, ...result });
+    } catch (error) {
+      res.status(error.statusCode || 500).json({
+        ok: false,
+        code: error.code || 'KM_OCTOBER_AUDIT_FAILED',
+        message: error.statusCode ? error.message : 'October audit could not be loaded; no financial records were changed.',
+      });
+    }
+  });
   router.post('/reconcile-supported', requireAuth, async (req, res) => {
     try {
       const admin = adminKmApprovalAuthorization(req.profile, req.authUser, 'Explicit selected-period evidence reconciliation');

@@ -7,6 +7,8 @@ on:
   pull_request:
     paths:
       - 'backend/routes/foKmReconciliationRoutes.js'
+      - 'backend/services/foOctoberKmAuditSummaryService.js'
+      - 'backend/tests/foOctoberKmAuditSummaryService.test.js'
       - 'backend/services/foKmSupportedBatchService.js'
       - 'backend/tests/foKmSupportedBatchService.test.js'
       - 'src/pages/FOActivities.jsx'
