@@ -1,9 +1,9 @@
 import {unifiedSnapshot} from './retailUnifiedService.js';
-import {assertRetailAccess} from './relianceRetailManagementService.js';
+import {assertRetailAccess,retailAccess} from './relianceRetailManagementService.js';
 import {canonicalActivityStore,cleaningReport,completedTrainingReport} from '../shared/retailModuleReports.js';
 import {resolveTrainingReadScope,RELIANCE_TRAINING_CLIENT_ID} from './trainingAccessService.js';
 import {retailTrainingEnvelopeIds,applyRetailTrainingStoreScope} from './retailTrainingReadScopeService.js';
-import {indiaToday,validDate,stateLabel,summarizeAttendance} from '../shared/retailAttendance.js';
+import {indiaToday,validDate,stateLabel,reportingState,summarizeAttendance} from '../shared/retailAttendance.js';
 import {attendanceAccess} from './retailAttendanceService.js';
 import {CLIENT_DEEP_CLEANING_BUCKET,buildClientDeepCleaningStoragePath,verifyClientDeepCleaningStorageObject} from './clientDeepCleaningService.js';
 import {retailOperationsSource} from './retailOperationsService.js';
@@ -108,5 +108,24 @@ export async function retailModuleDashboard(client,profile,input={}) {
   modules.cm=maintenance.modules.cm;modules.pm=maintenance.modules.pm;
   modules.thermography={status:'ready',rows:thermography.states};
  }catch(e){for(const key of ['cm','pm','thermography'])modules[key]=unavailable(e.statusCode===503?e.message:'Operational data is unavailable in this authorized scope.');}
- return {...range,updated_at:new Date().toISOString(),stores:snapshot.stores.map(({id,store_code,store_name,state})=>({id,store_code,store_name,state})),modules};
+ // Workbook-reported state aggregates are historical, not canonical completion or OOS orders.
+ // State totals can exceed a single FO/store's authorization; expose to platform admin only.
+ let historical_ifms=null;
+ if(retailAccess({...profile,business:''}).allowed&&range.from==='2026-10-01'&&range.to>='2026-10-28'){
+  try{
+   const result=await client.from('retail_ifms_historical_summary')
+    .select('source_filename,source_sha256,snapshot_date,module,reporting_state,source_rows,distinct_store_codes,metrics,source_class')
+    .gte('snapshot_date',range.from).lte('snapshot_date',range.to)
+    .order('snapshot_date',{ascending:false}).limit(100);
+   if(result.error)throw result.error;
+   const authorizedStates=new Set(snapshot.stores.map(store=>reportingState(store.state)));
+   const rows=(result.data||[]).filter(record=>authorizedStates.has(reportingState(record.reporting_state)));
+   historical_ifms=rows.length?{status:'ready',snapshot_date:rows[0].snapshot_date,
+    source_filename:rows[0].source_filename,source_class:'EXCEL_REPORTED_HISTORICAL_UNVERIFIED',
+    rows:rows.map(record=>({...record,state:reportingState(record.reporting_state)}))}:null;
+  }catch{
+   historical_ifms={status:'unavailable',rows:[]};
+  }
+ }
+ return {...range,updated_at:new Date().toISOString(),stores:snapshot.stores.map(({id,store_code,store_name,state})=>({id,store_code,store_name,state})),modules,historical_ifms};
 }
