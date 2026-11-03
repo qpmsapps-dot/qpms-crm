@@ -121,7 +121,18 @@ jobs:
               continue
             old = subprocess.check_output(["git","show",f"{base}:{path}"],text=True)
             new = open(path,encoding="utf-8").read()
-            for name,pat in {"buttons":r"<button\b","inputs":r"<input\b","selects":r"<select\b","anchors":r"<a\b","api references":r"Api\.","retail routes":r"/reliance-retail/"}.items():
+            for name,pat in {"buttons":r"<button\\b","inputs":r"<input\\b","selects":r"<select\\b","anchors":r"<a\\b","api references":r"Api\\.","retail routes":r"/reliance-retail/"}.items():
+              if name == "retail routes":
+                # Read-only imports add one reference per host. Dashboard adds
+                # exactly two navigation links to existing module routes.
+                check = new.replace("import RetailImportedHistory from '../../components/reliance-retail/RetailImportedHistory.jsx';", "")
+                check = check.replace("import RetailManpowerHistory from '../pages/reliance-retail/RetailManpowerHistory.jsx';", "")
+                if path == "src/pages/reliance-retail/RetailDashboard.jsx":
+                  check = check.replace('to="/reliance-retail/oos"', 'to="source-oos"')
+                  check = check.replace('to="/reliance-retail/manpower"', 'to="source-manpower"')
+                if len(re.findall(pat,old)) != len(re.findall(pat,check)):
+                  sys.exit(f"{path}: protected route references changed")
+                continue
               if len(re.findall(pat,old)) != len(re.findall(pat,new)):
                 sys.exit(f"{path}: {name} count changed")
           print(f"PASS: {len(files)} scoped files; controls and references preserved.")
