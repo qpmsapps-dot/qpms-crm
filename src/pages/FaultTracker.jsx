@@ -510,7 +510,7 @@ function parseTicketRows(rows) {
       const ageingDays = numberValue(rawFirstValueFor(row, ['Ageing', 'Ageing Days', 'Aging', 'Aging Days']));
       const ageingBucket = normalizeAgeingBucket(rawFirstValueFor(row, ['Ageing(Days)', 'Ageing Bucket', 'Aging Bucket']), ageingDays);
       const state = firstValueFor(row, ['State', 'Branch State', 'Store State']);
-      const category = firstValueFor(row, ['Category', 'HK / PC', 'Ticket Category', 'Service Category']);
+      const category = firstValueFor(row, ['Call Category', 'Category', 'HK / PC', 'Ticket Category', 'Service Category']);
       const vendor = firstValueFor(row, ['Vendor', 'Actual Vendor', 'Service Vendor', 'Vendor Name']);
       const createdAt = rawFirstValueFor(row, ['Created At', 'Created Date', 'Created On', 'Ticket Created At']);
       const updatedAt = rawFirstValueFor(row, ['Updated At', 'Updated Date', 'Updated On']);
@@ -1308,7 +1308,7 @@ function FaultStoreReconciliation({summary}) {
   return <details className="mb-4 rounded-xl border border-slate-200 bg-white p-4 text-sm"><summary className="font-bold">Admin store-scope reconciliation</summary><p>Total imported tickets: {summary.imported_tickets.toLocaleString('en-IN')} · Matched in-scope tickets: {summary.matched_in_scope_tickets.toLocaleString('en-IN')} · Excluded out-of-scope tickets: {summary.excluded_tickets.toLocaleString('en-IN')}</p><p>Unmatched Store Codes ({summary.unmatched_store_codes.length}): {summary.unmatched_store_codes.join(', ')||'None'}</p><p className="text-xs text-slate-500">Source records are preserved. Operational dashboards, details and exports contain only eligible active Store Codes.</p></details>;
 }
 
-function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, canImport, onImport, isLoading, activeImportBatch }) {
+function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, canImport, onImport, isLoading, activeImportBatch, closedBetweenDumps }) {
   const [stageProgressState, setStageProgressState] = useState('');
   const monthOptions = useMemo(() => buildMonthOptions(tickets), [tickets]);
   const [performanceMonth, setPerformanceMonth] = useState('all');
@@ -1353,6 +1353,8 @@ function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, ca
           Loading saved Reliance Retail IFMS dump...
         </div>
       ) : null}
+      <FaultClosedBetweenDumps summary={closedBetweenDumps} />
+      <FaultCallCategories tickets={tickets} closedBetweenDumps={closedBetweenDumps} />
       {activeImportBatch && tickets.length ? (
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-500">
           Eligible tickets from saved dump: {activeImportBatch.original_file_name || 'Pending Tickets'} • {formatNumber(activeImportBatch.ticket_count || tickets.length)} tickets • {formatDateTime(activeImportBatch.imported_at)}
@@ -1397,6 +1399,46 @@ function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, ca
   );
 }
 
+function FaultCallCategories({tickets,closedBetweenDumps}){
+  const summary=new Map();
+  for(const ticket of tickets){
+    const key=String(ticket.category||ticket.rawRow?.Category||'Unspecified').trim()||'Unspecified';
+    const record=summary.get(key)||{category:key,open:0,closed:0};
+    record.open++;summary.set(key,record);
+  }
+  for(const item of closedBetweenDumps?.by_category||[]){
+    const key=String(item.category||'Unspecified').trim()||'Unspecified';
+    const record=summary.get(key)||{category:key,open:0,closed:0};
+    record.closed+=item.count;summary.set(key,record);
+  }
+  const rows=[...summary.values()].sort((a,b)=>b.open-a.open||a.category.localeCompare(b.category));
+  if(!rows.length)return null;
+  return <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm" aria-label="Fault call categories from uploaded dump">
+    <div className="border-b border-slate-100 px-5 py-4"><h2 className="text-sm font-black text-slate-900">Call category — from IFMS Excel</h2>
+    <p className="mt-1 text-xs text-slate-500">Category names come from the uploaded source, not guessed from ticket titles. Closed counts represent absent tickets in the latest comparable pending dump.</p></div>
+    <div className="max-h-72 overflow-auto"><table className="min-w-full text-left text-xs">
+      <thead className="sticky top-0 bg-slate-50 text-slate-600"><tr><th className="px-5 py-3">Call category</th><th className="px-3 py-3 text-right">Pending calls</th><th className="px-5 py-3 text-right">Newly missing</th></tr></thead>
+      <tbody>{rows.map(r=><tr key={r.category} className="border-t border-slate-100"><td className="px-5 py-2.5 font-semibold">{r.category}</td><td className="px-3 py-2.5 text-right">{formatNumber(r.open)}</td><td className="px-5 py-2.5 text-right">{closedBetweenDumps?formatNumber(r.closed):'—'}</td></tr>)}</tbody>
+    </table></div>
+  </section>;
+}
+
+function FaultClosedBetweenDumps({summary}) {
+  if(!summary)return null;
+  return <section className="rounded-2xl border border-emerald-200 bg-white px-5 py-4 shadow-sm" aria-label="Closed calls since previous IFMS dump">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div><h2 className="text-sm font-black text-slate-900">Calls closed since previous pending dump</h2>
+      <p className="mt-1 text-xs text-slate-500">Not present in the latest comparable pending report, matched by ticket number and store code. This is a snapshot comparison, not an independently verified closure date.</p></div>
+      <strong className="text-2xl font-black text-emerald-700">{formatNumber(summary.count)}</strong>
+    </div>
+    <details className="mt-3 text-xs text-slate-600">
+      <summary className="cursor-pointer font-bold">Call categories and compared files</summary>
+      <p className="mt-2">Previous: {summary.previous_file}</p><p>Latest: {summary.latest_file}</p>
+      <div className="mt-2 flex flex-wrap gap-2">{summary.by_category.map(item=><span className="rounded-full bg-slate-100 px-3 py-1" key={item.category}>{item.category}: {formatNumber(item.count)}</span>)}</div>
+    </details>
+  </section>;
+}
+
 export default function FaultTracker({ retailScope = false }) {
   usePageTitle('Fault Tracker');
   const { user } = useAuth();
@@ -1406,6 +1448,7 @@ export default function FaultTracker({ retailScope = false }) {
   const [isFaultTrackerLoading, setIsFaultTrackerLoading] = useState(false);
   const [activeImportBatch, setActiveImportBatch] = useState(null);
   const [reconciliation,setReconciliation]=useState(null);
+  const [closedBetweenDumps,setClosedBetweenDumps]=useState(null);
   const [filters, setFilters] = useState(emptyFilters);
   const [editingTicket, setEditingTicket] = useState(null);
   const [draftStage, setDraftStage] = useState('');
@@ -1468,6 +1511,7 @@ export default function FaultTracker({ retailScope = false }) {
       setTickets((result.tickets || []).map(ticketFromDatabaseRow));
       setActiveImportBatch(result.import_batch || null);
       setReconciliation(result.reconciliation||null);
+      setClosedBetweenDumps(result.closed_since_previous||null);
       setFilters(emptyFilters);
       setTicketPage(1);
       return true;
@@ -1475,6 +1519,7 @@ export default function FaultTracker({ retailScope = false }) {
       setTickets([]);
       setActiveImportBatch(null);
       setReconciliation(null);
+      setClosedBetweenDumps(null);
       setImportError(error?.message || 'Unable to load saved Fault Tracker tickets.');
       return false;
     } finally {
@@ -1506,6 +1551,8 @@ export default function FaultTracker({ retailScope = false }) {
         return;
       }
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256',buffer))]
+        .map(byte=>byte.toString(16).padStart(2,'0')).join('');
       const parsed = parseTicketRows(rows);
       const result = await faultTrackerApiRequest({
         method: 'POST',
@@ -1517,6 +1564,7 @@ export default function FaultTracker({ retailScope = false }) {
           metadata: {
             imported_from: 'web',
             source: 'FaultTracker.jsx',
+            file_sha256: digest,
           },
         },
       });
@@ -1565,6 +1613,7 @@ export default function FaultTracker({ retailScope = false }) {
         onImport={handleImport}
         isLoading={isFaultTrackerLoading}
         activeImportBatch={activeImportBatch}
+        closedBetweenDumps={closedBetweenDumps}
       /></>
     );
   }
@@ -1594,6 +1643,8 @@ export default function FaultTracker({ retailScope = false }) {
         </div>
       ) : null}
 
+      <FaultClosedBetweenDumps summary={closedBetweenDumps} />
+      <FaultCallCategories tickets={tickets} closedBetweenDumps={closedBetweenDumps} />
       {activeImportBatch && tickets.length ? (
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-500">
           Eligible tickets from saved dump: {activeImportBatch.original_file_name || 'Pending Tickets'} • {formatNumber(activeImportBatch.ticket_count || tickets.length)} tickets • {formatDateTime(activeImportBatch.imported_at)}

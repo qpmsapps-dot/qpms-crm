@@ -14,7 +14,7 @@ import {isPlatformAdmin} from '../../utils/authRoles.js';
 function VerifiedFoLink({scheduleId,onSaved}){
  const [source,setSource]=useState(''),[confirmed,setConfirmed]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
  async function save(e){e.preventDefault();if(!confirmed||busy)return;setBusy(true);setError('');try{await authenticatedApiRequest({method:'POST',url:`/api/reliance-retail/module-reports/deep-cleaning/${encodeURIComponent(scheduleId)}/link-fo`,data:{source_id:source}});onSaved();}catch(e){setError(e.response?.data?.message||e.message);}finally{setBusy(false);}}
- return <details><summary>Link verified FO completion</summary><form onSubmit={save}><label>Existing FO submission ID<input required aria-label="Existing FO cleaning submission ID" value={source} onChange={e=>setSource(e.target.value)}/></label><label><input required type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>I verified this submitted work against the approved schedule.</label><p>The server requires exact store/date, verified historical FO ownership and stored before/after evidence. Older submissions are not backfilled.</p>{error&&<p role="alert">{error}</p>}<button disabled={busy||!confirmed}>Confirm verified link</button></form></details>;
+ return <details><summary>Link verified FO completion</summary><form onSubmit={save}><label>Existing FO submission ID<input required aria-label="Existing FO cleaning submission ID" value={source} onChange={e=>setSource(e.target.value)}/></label><label><input required type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>I verified this submitted work against the recorded schedule.</label><p>The server requires exact store/date, verified historical FO ownership and stored before/after evidence. Older submissions are not backfilled.</p>{error&&<p role="alert">{error}</p>}<button disabled={busy||!confirmed}>Confirm verified link</button></form></details>;
 }
 
 export default function RetailScopedDeepCleaning() {
@@ -63,7 +63,7 @@ export default function RetailScopedDeepCleaning() {
    <button disabled={busy} onClick={()=>{resetView();setRefresh(value=>value+1);}}><RefreshCw size={15}/>Refresh</button>
    <button disabled={!report||busy||exporting} onClick={()=>void exportReport()}><Download size={15}/>{exporting?'Exporting…':'Export cleaning report'}</button>
   </ReportHeader>
-  {scheduling&&<RetailCleaningSchedule readOnly={isReadOnlyUser(user)} onClose={()=>setScheduling(false)}/>}
+  {scheduling&&<RetailCleaningSchedule readOnly={isReadOnlyUser(user)} onClose={()=>setScheduling(false)} onSaved={result=>{resetView();const day=result.schedule?.scheduled_date;if(day&&day>to)setTo(day);setRefresh(v=>v+1);}}/>}
   <ReportFilters>
    <label>From<input aria-label="Cleaning from" type="date" value={from} max={to} onChange={e=>{if(e.target.value){resetView();setFrom(e.target.value);}}}/></label>
    <label>To<input aria-label="Cleaning to" type="date" value={to} min={from} onChange={e=>{if(e.target.value){resetView();setTo(e.target.value);}}}/></label>
