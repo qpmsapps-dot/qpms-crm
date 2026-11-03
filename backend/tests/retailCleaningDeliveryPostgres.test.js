@@ -41,7 +41,7 @@ test('Deep Cleaning real PostgreSQL: geography, ownership, pending, completion, 
  try{
   await q(`create role anon;create role authenticated;create role service_role;create schema storage;
    create table profiles(id uuid primary key,auth_user_id uuid,employee_code text,role text,business text,state text,status text,is_active boolean);
-   create table reliance_retail_store_master(id uuid primary key,store_code text unique,store_name text,state text,status text,business text,client_name text,city text,zone_id uuid,assigned_fo_profile_id uuid,latitude numeric,longitude numeric);
+   create table reliance_retail_store_master(id uuid primary key,store_code text unique,store_name text,state text,status text,city text,zone_id uuid,assigned_fo_profile_id uuid,latitude numeric,longitude numeric);
    create table client_deep_cleaning_schedules(id uuid primary key default gen_random_uuid(),retail_store_id uuid,scheduled_date date,assigned_fo_profile_id uuid,status text default 'Planned' check(status in ('Planned','Scheduled','Completed','Not Done','Cancelled')),not_done_reason text,completed_at timestamptz,metadata jsonb default '{}',updated_at timestamptz default now());
    create table client_deep_cleaning_submissions(id uuid primary key default gen_random_uuid(),business text,retail_store_id uuid,store_code text,store_name text,client_name text,state text,city text,deep_cleaning_date date,performed_by_type text,submitted_by_user_id uuid,submitted_by_employee_code text,remarks text,status text,submitted_at timestamptz,metadata jsonb default '{}');
    create table client_deep_cleaning_uploads(id uuid primary key default gen_random_uuid(),submission_id uuid,upload_type text,storage_bucket text,storage_path text,original_filename text,mime_type text,file_size bigint,sequence_no int,uploaded_by_user_id uuid,upload_status text,metadata jsonb default '{}');
@@ -68,7 +68,7 @@ test('Deep Cleaning real PostgreSQL: geography, ownership, pending, completion, 
   await q("insert into profiles values($1,$2,'VIEWER','GM','IFMS','TN','Active',true)",[id(11),id(1011)]);
   for(let i=1;i<=11;i++){
    const state=i===11?'PY':geos[i-1],zone=i<=4?i:i===11?4:null;
-   await q("insert into reliance_retail_store_master(id,store_code,store_name,state,status,business,client_name,city,zone_id,assigned_fo_profile_id) values($1,$2,$2,$3,'Active','Reliance Retail','Reliance Retail','City',$4,$5)",[id(100+i),'S'+i,state,zone?id(200+zone):null,i>=5&&i<=9?id(i):null]);
+   await q("insert into reliance_retail_store_master(id,store_code,store_name,state,status,city,zone_id,assigned_fo_profile_id) values($1,$2,$2,$3,'Active','City',$4,$5)",[id(100+i),'S'+i,state,zone?id(200+zone):null,i>=5&&i<=9?id(i):null]);
    await q("insert into client_deep_cleaning_schedules(id,retail_store_id,scheduled_date,metadata) values($1,$2,current_date,'{\"notes\":\"Instructions\"}')",[id(300+i),id(100+i)]);
    if(zone)await q("update retail_unified_epoch set store_zones=store_zones||jsonb_build_object($1::text,jsonb_build_object('zone_id',$2::text))",[id(100+i),id(200+zone)]);
   }
@@ -79,7 +79,7 @@ test('Deep Cleaning real PostgreSQL: geography, ownership, pending, completion, 
   await t.test('existing CRM save creates unassigned Planned work immediately; replay and duplicates are safe',async()=>{
    await q("insert into profiles values($1,$2,'EDITOR','HK MIS','Reliance Retail','KL','Active',true)",[id(20),id(1020)]);
    await q("insert into retail_provisional_access values($1,'KL','editor')",[id(20)]);
-   await q("insert into reliance_retail_store_master(id,store_code,store_name,state,status,business,client_name) values($1,'KL-PENDING','Unmapped KL','KL','Active','Reliance Retail','Reliance Retail')",[id(112)]);
+   await q("insert into reliance_retail_store_master(id,store_code,store_name,state,status) values($1,'KL-PENDING','Unmapped KL','KL','Active')",[id(112)]);
    const save=async(actor,request)=>(await one("select rpc_retail_cleaning_schedule_direct($1,$2,retail_operations_today(),$3,'Instructions') result",[id(actor),id(112),id(request)])).result;
    const first=await save(20,800);assert.equal(first.schedule.status,'Planned');assert.equal(first.schedule.assigned_fo_profile_id,null);assert.equal(first.replayed,false);
    const replay=await save(20,800);assert.equal(replay.schedule.id,first.schedule.id);assert.equal(replay.replayed,true);
