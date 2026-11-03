@@ -60,7 +60,7 @@ export default function RetailTraining() {
  const select=(label,key,options)=><label key={key}>{label}<select aria-label={`Training ${label}`} value={filter[key]||''} onChange={e=>change(key,e.target.value)}><option value="">All</option>{options.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>;
  const hk=rows.filter(row=>row.training_class==='HK').length,mepc=rows.filter(row=>row.training_class==='MEPC').length;
  const trainedStores=new Set(rows.filter(row=>row.canonical_store_id).map(row=>row.canonical_store_id)).size;
- return <section className="retail-report">
+ return <section className="retail-report retail-training-report">
   <ReportHeader title="HK & MEPC Training" description="Review completed HK and MEPC sessions, attendees, topics and evidence.">
    <button disabled={busy} onClick={()=>{resetView();setRefresh(value=>value+1);}}><RefreshCw size={15}/>Refresh</button><button disabled={busy||!sessions.length||exporting} onClick={()=>void exportReport()}><Download size={15}/>{exporting?'Exporting…':'Export Training review'}</button>
   </ReportHeader>
