@@ -213,7 +213,7 @@ export async function loadRelianceRetailStore(client, profile, storeCode) {
   const {data,error}=await query;
   if(error)throw error;
   const candidate=(data||[]).filter(row=>retailStateKey(row.state)===state&&(!zoneScoped||storeWithinZoneState(row,zones,profile)));
-  if(candidate.length!==1)throw clientDeepCleaningError(400,'invalid_store','Store was not found, is ambiguous, inactive or outside your geographic authorization.');
+  if(candidate.length!==1)throw clientDeepCleaningError(400,'invalid_store','Store not found or is inactive, ambiguous, or outside your state/zone authorization.');
   const store=candidate[0],zone=zones.find(item=>item.id===store.zone_id);
   return {...store,zone_code:zone?.zone_code||store.zone_code||null,zone_name:zone?.zone_name||store.zone_name||null};
 }
