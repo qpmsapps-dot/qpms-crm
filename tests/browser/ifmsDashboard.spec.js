@@ -44,7 +44,7 @@ test('existing route, seven honest empty cards, filters and verified links', asy
 test('dashboard detail links respect existing role permissions', async ({page}) => {
   await openDashboard(page, false, 'Technical MIS');
   await expect(page.locator('.ifms-card-footer a')).toHaveCount(4);
-  await expect(page.locator('.ifms-card-footer a')).toHaveAttribute('href',/reliance-retail/);
+  await expect(page.locator('.ifms-card-footer a').first()).toHaveAttribute('href',/reliance-retail/);
   const links = await page.locator('.ifms-card-footer a').evaluateAll(nodes => nodes.map(node => node.getAttribute('href')));
   expect(links).toEqual(expect.arrayContaining(['/reliance-retail/attendance','/reliance-retail/cmpm','/reliance-retail/thermography']));
 });
