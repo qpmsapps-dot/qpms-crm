@@ -13,6 +13,8 @@ test('OOS register and dashboard: filters, complete export, matrix drilldown, ho
  const browser=await chromium.launch({headless:true}),context=await browser.newContext({viewport:{width:1440,height:1000}}),errors=[];
  await context.addInitScript(()=>{localStorage.setItem('qpms-crm-auth-user',JSON.stringify({id:'fixture-auth',profileId:'fixture-profile',employeeCode:'QPMSADMIN',name:'LOCAL SYNTHETIC QA',role:'Admin',rawRole:'Admin',status:'Active',isActive:true,webAccessEnabled:true,is_demo:true,isDemoReadOnly:true,read_only:false}));sessionStorage.setItem('qpms-crm-backend-token','synthetic-local-token');});
  const now='2026-10-01',rows=Array.from({length:31},(_,i)=>({id:'order-'+i,reference:'QA-LOCAL-'+String(i).padStart(3,'0'),workflow_version:1,status:i%2?'PO_RECORDED':'QUOTED',revision:2,rework_count:1,store_ids:['s'+i],mapped_stores:[{id:'s'+i,store_code:'00'+i,store_name:'Synthetic QA store '+i,state:i<20?'TN':'KA'}],original_items:[{total_amount:1500,quotation_header:{quotation_date:now,totals:{total_amount:1500,taxable_amount:'1200.00',total_gst:'216.00',management_fees:'84.00',source_row:99,raw:{secret:'not display'}}}}],original_po_date:i%2?'2026-10-03':null,original_po_number:i%2?'PO-00'+i:null,status_entered_at:'2026-10-04T18:31:00Z',created_at:'2026-10-01T00:00:00Z',updated_at:'2026-11-02T04:00:00Z',details:{items:[{store_id:'s'+i,description:'Synthetic line item',quantity:1,unit_rate:1500,total_amount:1500}]},history:[{id:'e'+i,action:'CREATE_OOS',actor_id:'synthetic-author',created_at:'2026-10-01T00:00:00Z',revision:1,has_workbook:true,evidence:{fields:{confirming_person_name:'QA Confirming Person',confirming_department:'Commercial',confirmation_reference:'OFFLINE-LOCAL'},confirmation_authenticity:'MIS_SUBMITTED_UNVERIFIED'}}]}));
+ // Mix legacy history with a genuine 12-stage row: the dashboard must show only V2.
+ rows[30]={...rows[30],workflow_version:2,stage:1,status:'OOS12_QUOTATION_SHARED'};
  let registerRequests=0,historyRequests=0,mutations=0,legacyEnabled=false;
  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/api/**',async route=>{const u=new URL(route.request().url());if(route.request().method()!=='GET')mutations++;let result;
@@ -55,12 +57,18 @@ test('OOS register and dashboard: filters, complete export, matrix drilldown, ho
   assert.equal(await page.getByLabel('Financial summary').count(),0);await page.getByRole('button',{name:'Close drawer'}).click();
   await page.getByRole('button',{name:'QA-LOCAL-000',exact:true}).click();
   await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>{const aside=document.querySelector('aside');return !aside||aside.getBoundingClientRect().right<=1;});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));assert.equal(await page.getByRole('dialog').evaluate(el=>Math.round(el.getBoundingClientRect().top)),0);await page.screenshot({path:path.join(shots,'detail-drawer-mobile.png')});await page.getByRole('button',{name:'Close drawer'}).click();await page.screenshot({path:path.join(shots,'register-mobile.png'),fullPage:true});await page.getByRole('button',{name:'QA-LOCAL-000',exact:true}).click();
-  await page.getByRole('button',{name:'Close drawer'}).click();await page.setViewportSize({width:1440,height:1000});await page.goto(base+'/reliance-retail');await page.getByRole('table',{name:'Legacy OOS state matrix'}).waitFor();
+  await page.getByRole('button',{name:'Close drawer'}).click();await page.setViewportSize({width:1440,height:1000});await page.goto(base+'/reliance-retail');await page.getByRole('table',{name:'Twelve-stage OOS state matrix'}).waitFor();
+  assert.equal(await page.getByRole('table',{name:'Legacy OOS state matrix'}).count(),0,'Legacy workflow must not appear');
+  assert.equal(await page.locator('.oos-board-hero,.oos-stage-board,.oos-overdue-grid').count(),0,'No large pipeline cards or legacy summary');
   assert.equal(await page.getByRole('table',{name:'Twelve-stage OOS state matrix'}).locator('tbody tr').count(),12);
   await page.getByRole('button',{name:'Ageing View',exact:true}).click();await mark();await page.getByLabel('State-wise OOS reporting').screenshot({path:path.join(shots,'matrix-desktop.png')});
-  const drill=page.getByRole('table',{name:'Legacy OOS state matrix'}).locator('tbody tr').first().getByRole('link').first();assert.ok((await drill.getAttribute('href')).includes('status=QUOTED'));
+  const drill=page.getByRole('table',{name:'Twelve-stage OOS state matrix'}).locator('tbody tr').first().getByRole('link').nth(1);
+  assert.ok((await drill.getAttribute('href')).includes('status=OOS12_QUOTATION_SHARED'));
+  assert.equal(await page.getByRole('table',{name:'Twelve-stage OOS state matrix'}).locator('tbody tr').first().locator('.oos-compact-total').textContent(),'1');
   await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>{const aside=document.querySelector('aside');return !aside||aside.getBoundingClientRect().right<=1;});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await page.getByLabel('State-wise OOS reporting').screenshot({path:path.join(shots,'matrix-mobile.png')});
-  await drill.click();await page.getByText('10 authorized quotations',{exact:true}).waitFor();assert.equal(await page.getByLabel('Status filter').inputValue(),'QUOTED');assert.equal(await page.getByLabel('Geographic state').inputValue(),'TN');
+  await drill.click();await page.getByText('1 authorized quotations',{exact:true}).waitFor();
+  assert.equal(await page.getByLabel('Status filter').inputValue(),'OOS12_QUOTATION_SHARED');
+  assert.equal(await page.getByLabel('Geographic state').inputValue(),'KA');
   assert.equal(mutations,0);
   legacyEnabled=true;await page.goto(base+'/reliance-retail/mis/oos');await page.getByText('31 authorized quotations',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Update Status',exact:true}).first().click();await page.getByRole('dialog',{name:'Update status',exact:true}).waitFor();
