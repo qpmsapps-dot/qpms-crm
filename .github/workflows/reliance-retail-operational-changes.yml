@@ -31,6 +31,8 @@ jobs:
           cache: npm
       - name: Install package dependencies
         run: npm ci --no-audit --no-fund
+      - name: Install backend dependencies
+        run: npm ci --prefix backend --no-audit --no-fund
       - name: Scoped Retail backend tests
         run: node --test backend/tests/retailOperations.test.js backend/tests/faultTrackerStoreScope.test.js backend/tests/clientDeepCleaningService.test.js backend/tests/retailOos12Routes.test.js
       - name: Scoped lint
