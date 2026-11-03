@@ -86,13 +86,17 @@ export async function scopedFaultTrackerReport(client,profile,input,authorizatio
  // A pending IFMS Excel is a snapshot. Only compare the latest to an older
  // same-family report; duplicate uploads must not reset the closure baseline.
  let closed_since_previous=null;
- if(batch && (!input.import_batch_id||input.latest==='true')){
+ if(batch){
+  // An explicitly opened old batch must not be treated as today's latest.
+  const newest=(!input.import_batch_id||input.latest==='true')?[{id:batch.id}]:await rows(client.from('fault_tracker_import_batches').select('id').order('imported_at',{ascending:false}).limit(1));
+  if(newest[0]?.id===batch.id){
   const family=name=>{const key=String(name||'').trim().toLowerCase();return key.startsWith('corrective')?'corrective':key.startsWith('overall')?'overall':'other';};
   const previous=await rows(client.from('fault_tracker_import_batches')
-   .select('id,original_file_name,imported_at,source_name').eq('source_name',batch.source_name)
+   .select('id,original_file_name,imported_at,source_name,ticket_count,metadata').eq('source_name',batch.source_name)
    .lt('imported_at',batch.imported_at).order('imported_at',{ascending:false}).limit(15));
   const prior=previous.find(b=>family(b.original_file_name)===family(batch.original_file_name)
-    && b.original_file_name!==batch.original_file_name);
+    && (b.original_file_name!==batch.original_file_name||b.ticket_count!==batch.ticket_count
+      ||(b.metadata?.file_sha256&&batch.metadata?.file_sha256&&b.metadata.file_sha256!==batch.metadata.file_sha256)));
   if(prior){
    const previousSource=await pages(()=>client.from('fault_tracker_tickets').select('*')
     .eq('import_batch_id',prior.id).order('created_at_source',{ascending:false,nullsFirst:false}).order('id'));
@@ -104,6 +108,7 @@ export async function scopedFaultTrackerReport(client,profile,input,authorizatio
    for(const t of missing){const category=String(t.category||'Unspecified').trim()||'Unspecified';categories.set(category,(categories.get(category)||0)+1);}
    closed_since_previous={count:missing.length,previous_file:prior.original_file_name,latest_file:batch.original_file_name,
     by_category:[...categories].map(([category,count])=>({category,count})).sort((a,b)=>b.count-a.count)};
+  }
   }
  }
  let tickets=filtered;
