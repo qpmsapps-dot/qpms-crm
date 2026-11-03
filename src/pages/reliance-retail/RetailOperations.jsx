@@ -62,7 +62,7 @@ export default function RetailOperations({kind='maintenance'}) {
   }catch(e){setError(e.message);}
  }
  const stats=maintenance?report?[{label:'Applicable stores',value:module.total.eligible},{label:`${callKind} completed`,value:module.total.completed},{label:`${callKind} pending`,value:module.total.remaining}]:[]:report?[{label:'Scheduled',value:report.total.scheduled},{label:'Completed awaiting approval',value:report.total.awaiting},{label:'Client Approved',value:report.total.approved},{label:'Approval overdue',value:report.total.overdue}]:[];
- return <section className="retail-report">
+ return <section className={`retail-report ${maintenance ? "retail-maintenance-report" : "retail-thermography-report"}`}>
   <ReportHeader title={title} description={maintenance?'Record completed CM and PM calls and review monthly progress.':'Schedule inspections, record completion and track client approval within 10 calendar days.'}>
    <button disabled={!report||busy||saving} onClick={openEntry}>{maintenance?'Record CM/PM Call':'Schedule Thermography'}</button>
    <button onClick={()=>setRefresh(v=>v+1)} disabled={busy||saving}>Refresh</button><button disabled={!report||busy} onClick={()=>void exportReport()}>Export Excel</button>
