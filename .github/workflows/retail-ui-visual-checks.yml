@@ -71,6 +71,7 @@ jobs:
             "src/pages/reliance-retail/RetailCleaningScheduleViewer.jsx": "f2b9588b3dc7cae448326bd05489ea9f342575ff",
             "src/routes/AppRoutes.jsx": "2c61768d06c0a27c6f2df6f7430e9427c737fe44",
             "src/utils/authRoles.js": "0179b498c1724aa6953605b2a1b4520ee24d0d80",
+            "supabase/migrations/20261103113050_retail_cleaning_delivery_v1_verified_20261103.sql": "97220c0590fa472e33b85c6460852e280b5f4328",
             "supabase/proposals/retail_cleaning_delivery_v1.sql": "d610048e7ab7a9e4e460a0d41a7ca30859d0165e",
             "supabase/verification/retail_cleaning_delivery_read_only.sql": "c0410e4294af3eae44d4e1ccde374e9f15104b37",
             "tests/retailCleaningConfiguration.test.js": "6221cb8258406f6560859ceb3e34d2fb6891ab73",
