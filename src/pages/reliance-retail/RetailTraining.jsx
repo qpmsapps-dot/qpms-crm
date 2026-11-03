@@ -10,10 +10,12 @@ import {usePageTitle} from '../../hooks/usePageTitle.js';
 import {authenticatedApiRequest} from '../../services/api.js';
 import {retailUnifiedApi} from '../../services/retailUnifiedApi.js';
 import {trainingReport} from '../../../backend/shared/retailTrainingReport.js';
-import {ReportHeader,ReportFilters,ReportStats,ReportNotice,ReportPager} from '../../components/reliance-retail/RetailReportUi.jsx';
+import {ReportHeader,ReportFilters,ReportNotice,ReportPager} from '../../components/reliance-retail/RetailReportUi.jsx';
 import {matchesReportQuery,reportPage} from '../../utils/retailReportView.js';
 import {useAuth} from '../../context/auth-context.js';
 import {isPlatformAdmin} from '../../utils/authRoles.js';
+import RetailStatePerformance from '../../components/reliance-retail/RetailStatePerformance.jsx';
+import {summarizeTrainingByClass} from '../../utils/retailStatePerformance.js';
 
 export default function RetailTraining() {
  const {user}=useAuth();
@@ -68,8 +70,11 @@ export default function RetailTraining() {
   }catch(e){setError(e.message);}finally{setExporting(false);}
  }
  const select=(label,key,options)=><label key={key}>{label}<select aria-label={`Training ${label}`} value={filter[key]||''} onChange={e=>change(key,e.target.value)}><option value="">All</option>{options.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>;
- const hk=liveRows.filter(row=>row.training_class==='HK').length,mepc=liveRows.filter(row=>row.training_class==='MEPC').length;
- const trainedStores=new Set(liveRows.filter(row=>row.canonical_store_id).map(row=>row.canonical_store_id)).size;
+ // October Excel rows are a reported source snapshot, not FO evidence.
+ // Show that source as the state report and keep verified sessions separate.
+ const trainingSource=reportedRows.length?reportedRows:liveRows;
+ const statePerformance=summarizeTrainingByClass(trainingSource);
+ const verifiedSessions=liveRows.filter(row=>String(row.status||'').toLowerCase()==='completed').length;
  return <section className="retail-report retail-training-report">
   <ReportHeader title="HK & MEPC Training" description="Review completed HK and MEPC sessions, attendees, topics and evidence.">
    <button disabled={busy} onClick={()=>{resetView();setRefresh(value=>value+1);}}><RefreshCw size={15}/>Refresh</button><button disabled={busy||!sessions.length||exporting} onClick={()=>void exportReport()}><Download size={15}/>{exporting?'Exporting…':'Export Training review'}</button>
@@ -81,14 +86,16 @@ export default function RetailTraining() {
    <label>Search<input aria-label="Search Training records" type="search" value={query} placeholder="Store code, name or trainer" onChange={e=>{resetView();setQuery(e.target.value);}}/></label>
   </ReportFilters>
   {busy&&<ReportNotice>Loading Training records…</ReportNotice>}{error&&<ReportNotice error>{error}</ReportNotice>}{ownershipError&&<ReportNotice>{ownershipError}</ReportNotice>}
-  {!busy&&!error&&<ReportStats items={[
-   {label:'HK FO-verified',value:hk},{label:'MEPC FO-verified',value:mepc},
-   {label:'Excel-reported entries',value:reportedRows.length},
-   {label:'Verified trained stores',value:snapshot?trainedStores:null,note:snapshot?'Distinct verified stores, not Excel-reported records':'Canonical store coverage unavailable'}]}/>}
+  {!busy&&!error&&<RetailStatePerformance title="Training — state-wise HK / MEPC performance"
+   summary={statePerformance} selectedState={filter.state||''}
+   onState={value=>change('state',value)}
+   columns={[{key:'hk_total',label:'HK entries'}, {key:'hk_completed',label:'HK completed'},
+    {key:'mepc_total',label:'MEPC entries'},{key:'mepc_completed',label:'MEPC completed'},
+    {key:'pending',label:'Pending'},{key:'percentage',label:'Completion %',rate:true}]}
+   note={`${reportedRows.length?'October Excel-reported training entries':'Recorded FO training sessions'}. Verified FO training sessions in these filters: ${verifiedSessions}. Source employee rows are not distinct verified sessions; no training evidence is inferred.`}/>}
   {(hkExcel.loading||mepcExcel.loading)&&<ReportNotice>Loading historical Excel training into the existing training records…</ReportNotice>}
   {(hkExcel.error||mepcExcel.error)&&<ReportNotice error>October Excel training unavailable: {hkExcel.error||mepcExcel.error}</ReportNotice>}
   {isPlatformAdmin(user)&&<details className="retail-report-panel"><summary className="retail-report-panel-heading">Admin: state coverage and ownership</summary><RetailStateCoverage snapshot={snapshot||undefined}/></details>}
-  {!!rows.length&&<div className="retail-report-filters" aria-label="State-wise completed trainings">{[...new Set(rows.map(row=>reportingState(row.state)))].sort().map(state=><p key={state}>{state}: HK {rows.filter(row=>reportingState(row.state)===state&&row.training_class==='HK').length} · MEPC {rows.filter(row=>reportingState(row.state)===state&&row.training_class==='MEPC').length}</p>)}</div>}
   <div className="retail-report-panel"><div className="retail-report-panel-heading"><h2>Training records</h2><span>{rows.length} matching records ({reportedRows.length} Excel-reported)</span></div>
    {!!reportedRows.length&&<p className="retail-report-description">Excel entries are shown in this register with their actual recorded dates, including earlier dates. Employee names are not assumed to be trainer names; no FO training evidence is fabricated.</p>}
    <div className="retail-report-table" role="region" aria-label="Completed training records" tabIndex={0}><table><thead><tr>{['Date / Class','Store','Trainer','Status','Historical Zone / FO','Attendees / Topics / Evidence','Details'].map(label=><th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{reportPage(rows,page,size).map(row=><tr key={row.id}>
