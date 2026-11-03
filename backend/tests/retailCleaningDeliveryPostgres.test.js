@@ -5,19 +5,24 @@ import path from 'node:path';
 import {pathToFileURL,fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {spawn,execFileSync} from 'node:child_process';
+import {createServer} from 'node:net';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const read=p=>fs.readFileSync(path.join(root,p),'utf8');
 test('Deep Cleaning real PostgreSQL: geography, ownership, pending, completion, replay and evidence isolation',{timeout:180000},async t=>{
  const toolDir=process.env.RETAIL_MIS_PG_TOOLS;if(!toolDir){t.skip('Set RETAIL_MIS_PG_TOOLS to disposable PostgreSQL tools');return;}
  const {default:EmbeddedPostgres}=await import(pathToFileURL(path.join(toolDir,'node_modules/embedded-postgres/dist/index.js')).href);
  const {default:pg}=await import(pathToFileURL(path.join(toolDir,'node_modules/pg/lib/index.js')).href);
- const port=58300+Math.floor(Math.random()*300),databaseDir=path.join(root,'tmp','cleaning-postgres-'+randomUUID());
+ // Ask the OS for an available port: hosted Windows runners reserve portions
+ // of the ephemeral range, so a guessed fixed range is not portable.
+ const reservation=createServer();await new Promise((resolve,reject)=>{reservation.once('error',reject);reservation.listen(0,'127.0.0.1',resolve);});const port=reservation.address().port;await new Promise(resolve=>reservation.close(resolve));
+ const databaseDir=path.join(root,'tmp','cleaning-postgres-'+randomUUID());
  const cluster=new EmbeddedPostgres({databaseDir,user:'postgres',password:'local-only',port,persistent:true,initdbFlags:['--encoding=UTF8'],onLog:()=>{},onError:()=>{}});
  await cluster.initialise();const bin=path.join(toolDir,'node_modules/@embedded-postgres/windows-x64/native/bin');
- const server=spawn(path.join(bin,'postgres.exe'),['-D',databaseDir,'-p',String(port),'-h','127.0.0.1'],{windowsHide:true,stdio:'ignore'});
- const config={host:'127.0.0.1',port,user:'postgres',password:'local-only',database:'postgres'};
- let db;for(let i=0;i<100;i++){const probe=new pg.Client(config);try{await probe.connect();db=probe;break;}catch{await probe.end();await new Promise(r=>setTimeout(r,100));}}
- assert.ok(db,'disposable PostgreSQL ready');const q=(s,a=[])=>db.query(s,a),one=async(s,a=[])=>(await q(s,a)).rows[0];
+ const server=spawn(path.join(bin,'postgres.exe'),['-D',databaseDir,'-p',String(port),'-h','127.0.0.1'],{windowsHide:true,stdio:['ignore','ignore','pipe']});let startupError='',probeError='';server.stderr.on('data',b=>{startupError+=b.toString();});server.on('error',e=>{startupError+=e.message;});
+ const config={host:'127.0.0.1',port,user:'postgres',password:'local-only',database:'postgres',connectionTimeoutMillis:500};
+ let db;for(let i=0;i<100;i++){const probe=new pg.Client(config);try{await probe.connect();db=probe;break;}catch(error){probeError=error.message;await probe.end();if(server.exitCode!==null)break;await new Promise(r=>setTimeout(r,100));}}
+ if(!db){if(server.exitCode===null){try{execFileSync(path.join(bin,'pg_ctl.exe'),['-D',databaseDir,'-m','fast','-w','stop'],{windowsHide:true,stdio:'pipe',timeout:15000});}catch{server.kill();}}throw Error('Disposable PostgreSQL startup failed: '+startupError.slice(-2000)+'; probe: '+probeError);}
+ const q=(s,a=[])=>db.query(s,a),one=async(s,a=[])=>(await q(s,a)).rows[0];
  const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
  const feed=async(actor,stores=null)=>(await one("select rpc_retail_cleaning_delivery_v1($1,$2,$3,current_date-30,current_date+30,null) result",[id(actor),id(actor+1000),stores])).result.rows;
  const command=async(actor,action,data)=>(await one('select rpc_retail_cleaning_submission_v1($1,$2,$3,$4) result',[id(actor),id(actor+1000),action,data])).result;
