@@ -77,3 +77,18 @@ export function excelTrainingRows(rows,trainingClass,filters={}){
   source_data:row.data||{},match_status:row.match_status
  }));
 }
+
+export function excelOosRows(rows,filters={}){
+ const {state='',store='',search=''}=filters;
+ return rows.filter(row=>(!state||row.reporting_state===state)&&(!store||row.retail_store_id===store)&&
+  (!search||[row.store_code,row.data?.quotation_no,row.data?.po_number].join(' ').toLowerCase().includes(search.toLowerCase())))
+ .map(row=>({
+  id:'ifms-excel-'+row.id,source_kind:'IFMS_EXCEL',
+  kind:'OOS',reference:row.data?.quotation_no||'Not provided',state:row.reporting_state,
+  status:'EXCEL_REPORTED',store_ids:row.retail_store_id?[row.retail_store_id]:[],
+  source_store_code:row.store_code,created_at:null,updated_at:null,
+  rework_count:0,details:{...row.data,source_row:row.source_row,match_status:row.match_status,
+   evidence_status:'Unverified source Excel record — NOT a live quotation'},
+  source_row:row.source_row,match_status:row.match_status
+ }));
+}
