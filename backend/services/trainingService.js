@@ -11,7 +11,7 @@ import {
   trainingError,
   translateTrainingDatabaseError,
 } from './trainingAccessService.js';
-import { isRelianceRetailStore, isRelianceRetailValue } from './clientDeepCleaningService.js';
+import { isRelianceRetailStore, isRelianceRetailValue,retailStateKey,retailStateQueryValues,loadAuthorizedRetailZones } from './clientDeepCleaningService.js';
 import { applyRetailTrainingStoreScope, narrowRetailTrainingScope, retailTrainingEnvelopeIds } from './retailTrainingReadScopeService.js';
 import { normalizedStateKey } from './workMappingScope.js';
 
@@ -368,38 +368,59 @@ function retailActor(profile) {
 
 export async function listTrainingZones(client, profile) {
   retailActor(profile);
-  return rows(client.from('reliance_retail_zones').select('id,zone_code,zone_name,state')
-    .eq('status', 'Active').ilike('state', cleanTrainingText(profile.state)).order('zone_name'));
+  const state=retailStateKey(profile.state);
+  if(state==='TN')return loadAuthorizedRetailZones(client,profile);
+  if(!retailStateQueryValues(profile.state).length)throw trainingError(403,'store_scope_forbidden','A verified exact state is required.');
+  // Keep the mobile zone picker compatible while exposing state-wide stores.
+  return [{id:'STATE_WIDE',zone_code:'ALL_STORES',zone_name:'All stores in state',state:profile.state}];
 }
 
 export async function searchTrainingRetailStores(client, profile, input = {}) {
   retailActor(profile);
-  const supervisorOnly = input.supervisor_only === 'true';
-  if (supervisorOnly && input.category_code !== 'technical_mep') throw trainingError(403, 'store_scope_forbidden', 'Supervisor-only stores are available for Technical Training.');
-  const limit = Math.min(50, Math.max(1, Number.parseInt(input.limit, 10) || 25));
-  const offset = Math.max(0, Number.parseInt(input.offset, 10) || 0);
-  let query = client.from('reliance_retail_store_master')
-    .select('id,store_name,store_code,state,zone_id,metadata').eq('status', 'Active')
-    .ilike('state', cleanTrainingText(profile.state));
-  if (supervisorOnly) query = query.is('zone_id', null).eq('metadata->>operational_model', 'SUPERVISOR_ONLY');
-  else {
-    const zones = await listTrainingZones(client, profile);
-    if (!zones.some(zone => zone.id === input.zone_id)) throw trainingError(403, 'store_scope_forbidden', 'Select an authorized zone.');
-    query = query.eq('zone_id', input.zone_id);
+  const state=retailStateKey(profile.state),states=retailStateQueryValues(profile.state);
+  if(!states.length)throw trainingError(403,'store_scope_forbidden','A verified exact state is required.');
+  const tnZoneScope=state==='TN';
+  const supervisorOnly=input.supervisor_only==='true';
+  if(supervisorOnly&&input.category_code!=='technical_mep')
+   throw trainingError(403,'store_scope_forbidden','Supervisor-only stores are available for Technical Training.');
+  const limit=Math.min(50,Math.max(1,Number.parseInt(input.limit,10)||25));
+  const offset=Math.max(0,Number.parseInt(input.offset,10)||0);
+  let query=client.from('reliance_retail_store_master')
+   .select('id,store_name,store_code,state,zone_id,metadata')
+   .eq('status','Active').in('state',states);
+  if(supervisorOnly)query=query.is('zone_id',null).eq('metadata->>operational_model','SUPERVISOR_ONLY');
+  else if(tnZoneScope){
+   const zones=await loadAuthorizedRetailZones(client,profile);
+   if(!zones.some(zone=>zone.id===input.zone_id))
+    throw trainingError(403,'store_scope_forbidden','Select one of your assigned TN zones.');
+   query=query.eq('zone_id',input.zone_id);
   }
-  const q = cleanTrainingText(input.q).replace(/[^\p{L}\p{N} -]/gu, ' ').slice(0,80).trim();
-  if (q) query = query.or(`store_code.ilike.%${q}%,store_name.ilike.%${q}%`);
-  const result = await rows(query.order('store_code').order('id').range(offset, offset + limit));
-  return { stores: result.slice(0,limit), has_more: result.length > limit, offset, limit };
+  // Outside TN, zone_id is deliberately not used for selecting eligible stores.
+  const q=cleanTrainingText(input.q).replace(/[^\p{L}\p{N} -]/gu,' ').slice(0,80).trim();
+  if(q)query=query.or(`store_code.ilike.%${q}%,store_name.ilike.%${q}%`);
+  const result=await rows(query.order('store_code').order('id').range(offset,offset+limit));
+  return {stores:result.filter(store=>retailStateKey(store.state)===state).slice(0,limit),
+   has_more:result.length>limit,offset,limit};
 }
 
 export async function loadTrainingRetailStore(client, profile, storeId, categoryCode) {
   retailActor(profile);
-  const { data: store, error } = await client.from('reliance_retail_store_master').select('*').eq('id', cleanTrainingText(storeId)).maybeSingle();
-  if (error) throw error;
-  if (!store || store.status !== 'Active' || normalizeTrainingKey(store.state) !== normalizeTrainingKey(profile.state)) throw trainingError(403, 'store_scope_forbidden', 'Select an active Training store in your state.');
-  if (!store.zone_id) {
-    if (categoryCode !== 'technical_mep' || store.metadata?.operational_model !== 'SUPERVISOR_ONLY') throw trainingError(403, 'store_scope_forbidden', 'This store is available only for Technical Training.');
-  } else if (!(await listTrainingZones(client, profile)).some(zone => zone.id === store.zone_id)) throw trainingError(403, 'store_scope_forbidden', 'Store zone is outside your authorized scope.');
+  const state=retailStateKey(profile.state),states=retailStateQueryValues(profile.state);
+  if(!states.length)throw trainingError(403,'store_scope_forbidden','A verified exact state is required.');
+  const {data:store,error}=await client.from('reliance_retail_store_master').select('*')
+    .eq('id',cleanTrainingText(storeId)).maybeSingle();
+  if(error)throw error;
+  if(!store||store.status!=='Active'||retailStateKey(store.state)!==state)
+   throw trainingError(403,'store_scope_forbidden','Select an active Training store in your authorized state.');
+  if(store.metadata?.operational_model==='SUPERVISOR_ONLY'&&categoryCode!=='technical_mep')
+   throw trainingError(403,'store_scope_forbidden','Supervisor-only stores support Technical Training only.');
+  if(state==='TN'){
+   if(store.zone_id){
+    const zones=await loadAuthorizedRetailZones(client,profile);
+    if(!zones.some(zone=>zone.id===store.zone_id))
+     throw trainingError(403,'store_scope_forbidden','Store zone is not assigned to this TN FO.');
+   }else if(store.metadata?.operational_model!=='SUPERVISOR_ONLY'||categoryCode!=='technical_mep')
+    throw trainingError(403,'store_scope_forbidden','TN Training requires your assigned zone.');
+  }
   return store;
 }
