@@ -6,6 +6,8 @@ on:
       - 'src/pages/reliance-retail/**'
       - 'src/components/reliance-retail/**'
       - '.github/workflows/retail-ui-visual-checks.yml'
+      - 'tests/browser/ifmsDashboard.spec.js'
+      - 'tests/browser/retailAttendance.spec.js'
   workflow_dispatch:
 
 permissions:
@@ -40,7 +42,9 @@ jobs:
             "src/pages/reliance-retail/RetailTraining.jsx",
             "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx",
             "src/pages/reliance-retail/RetailOperations.jsx",
-            ".github/workflows/retail-ui-visual-checks.yml"
+            ".github/workflows/retail-ui-visual-checks.yml",
+            "tests/browser/ifmsDashboard.spec.js",
+            "tests/browser/retailAttendance.spec.js"
           }
           unexpected = [p for p in files if p not in allowed]
           if unexpected: sys.exit("Unexpected/protected files changed: " + ", ".join(unexpected))
