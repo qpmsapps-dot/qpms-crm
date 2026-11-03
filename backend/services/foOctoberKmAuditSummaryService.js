@@ -7,9 +7,6 @@ const finite = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const round = value => Math.round(value * 100) / 100;
 const mode = value => String(value || '').trim().toLowerCase();
 
-function attendanceKey(employeeCode, date) {
-  return String(employeeCode || '') + '|' + String(date || '');
-}
 function localDay(timestamp) {
   const time = Date.parse(timestamp);
   return Number.isFinite(time) ? new Date(time + IST_MS).toISOString().slice(0, 10) : null;
@@ -20,8 +17,9 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
   for (const leg of travelLegs) {
     if (leg.superseded_at) continue;
     const day = localDay(leg.started_at);
-    if (!day || day < FROM || day > TO) continue;
-    const key = attendanceKey(leg.employee_code, day);
+    if (!day || day < FROM || day > TO || !leg.attendance_id) continue;
+    // Attendance ID is authoritative. Employee/day joins can mix independent sessions.
+    const key = String(leg.attendance_id);
     const current = legsByDay.get(key) || { train: 0, bike: 0, recordedLegs: 0, bikePaidKm: 0, bikeAmount: 0 };
     current.recordedLegs += 1;
     if (mode(leg.travel_mode) === 'train') current.train += 1;
@@ -45,6 +43,7 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
     bike_train_days: 0,
     bike_train_payable_cases: 0,
     bike_train_payable_rupees_at_issue: 0,
+    nonpayable_attendance_with_payable_cases: 0,
     insufficient_gps_cases: 0,
     verified_addition_rupees: null,
     verified_deduction_rupees: null,
@@ -58,7 +57,7 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
     const gps = finite(row.filtered_gps_km);
     const approved = finite(row.total_approved_km);
     const petrol = finite(row.petrol_amount);
-    const savedLegs = legsByDay.get(attendanceKey(row.employee_code, day)) || { train: 0, bike: 0, recordedLegs: 0, bikePaidKm: 0, bikeAmount: 0 };
+    const savedLegs = legsByDay.get(String(row.id || '')) || { train: 0, bike: 0, recordedLegs: 0, bikePaidKm: 0, bikeAmount: 0 };
     // Include ANY role with evidence of KM, actual travel, or a site visit.
     // A bare attendance row (regardless of role) is not an audit subject.
     const hasActivity = gps > 0 || approved > 0 || petrol > 0 ||
@@ -75,11 +74,15 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
     const possibleMissing = motor && gps > approved + 10;
     const possibleExcess = approved > gps + 10 && petrol > 0;
     const noGps = gps === 0 && approved > 0;
+    // Attendance mode may reflect the *last* selected mode; a mixed-mode day
+    // cannot be deducted without linking credit to a specific ineligible leg.
+    const nonpayableAttendanceCredit = ['train', 'bus', 'auto', 'other', 'others'].includes(mode(row.travel_mode)) && approved > 0;
     const mixed = savedLegs.train > 0 && savedLegs.bike > 0;
     const mixedPaid = mixed && savedLegs.bikePaidKm > 0;
     if (possibleMissing) { summary.possible_missing_cases += 1; summary.possible_missing_gps_gap_km += gps - approved; }
     if (possibleExcess) { summary.possible_excess_cases += 1; summary.possible_excess_gps_gap_km += approved - gps; }
     if (noGps) summary.insufficient_gps_cases += 1;
+    if (nonpayableAttendanceCredit) summary.nonpayable_attendance_with_payable_cases += 1;
     if (mixed) summary.bike_train_days += 1;
     if (mixedPaid) { summary.bike_train_payable_cases += 1; summary.bike_train_payable_rupees_at_issue += savedLegs.bikeAmount; }
     const flags = [
@@ -87,6 +90,7 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
       ...(possibleMissing ? ['GPS_ABOVE_PAYABLE_REVIEW'] : []),
       ...(possibleExcess ? ['PAYABLE_ABOVE_GPS_REVIEW'] : []),
       ...(noGps ? ['NO_FILTERED_GPS_EVIDENCE'] : []),
+      ...(nonpayableAttendanceCredit ? ['NONPAYABLE_FINAL_MODE_WITH_PAYABLE_REVIEW'] : []),
     ];
     if (!flags.length) continue;
     cases.push({
@@ -105,6 +109,7 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
       train_legs: savedLegs.train,
       bike_legs: savedLegs.bike,
       bike_leg_rupees_at_issue: round(savedLegs.bikeAmount),
+      nonpayable_final_mode_with_payable: nonpayableAttendanceCredit,
       flags,
       disposition: 'EVIDENCE_REVIEW_REQUIRED',
     });
@@ -156,7 +161,7 @@ export async function loadOctoberKmAudit(client) {
   const [attendances, travelLegs] = await Promise.all([
     loadPages(client, 'fo_attendance', 'id,employee_code,display_name,attendance_date,travel_mode,filtered_gps_km,total_approved_km,petrol_amount',
       q => q.gte('attendance_date', FROM).lte('attendance_date', TO).order('attendance_date').order('id')),
-    loadPages(client, 'fo_travel_legs', 'id,employee_code,started_at,travel_mode,payable_km,payable_amount,superseded_at',
+    loadPages(client, 'fo_travel_legs', 'id,attendance_id,employee_code,started_at,travel_mode,payable_km,payable_amount,superseded_at',
       q => q.gte('started_at', '2026-09-30T18:30:00Z').lt('started_at', '2026-10-31T18:30:00Z').is('superseded_at', null).order('started_at').order('id')),
   ]);
   const attendanceIdsWithVisits = await loadVisitAttendanceIds(client, attendances);
