@@ -7,11 +7,11 @@ import {parseQuotation} from '../services/retailQuotationImport.js';
 import {MIS_QUOTATION_COLUMNS} from '../shared/retailQuotationFormat.js';
 import {retailMisQuotation} from '../services/retailMisService.js';
 test('MIS import binds reviewed revisions and all-state authority without bypassing freeze or opt-in',async()=>{
- const calls=[],client={rpc:async(name,args)=>{calls.push({name,args});return {data:name==='rpc_retail_mis_oos_stores'?[store]:name==='rpc_retail_mis_report'?{rows:[{reference:'QPMSTN26270582',revision:4}]}:{saved:true}};}},access={role:'MIS_OOS',states:['TN'],active:true},profile={id:'fixture-actor'},environment={RETAIL_OOS_MUTATIONS_FROZEN:'false',RETAIL_MIS_OOS_WRITES_ENABLED:'true'};
+ const calls=[],client={rpc:async(name,args)=>{calls.push({name,args});return {data:name==='rpc_retail_oos12_stores'?[store]:name==='rpc_retail_oos_register'?{rows:[{reference:'QPMSTN26270582',revision:4}]}:{saved:true}};}},access={role:'MIS_OOS',states:['TN'],active:true},profile={id:'fixture-actor'},environment={RETAIL_OOS_MUTATIONS_FROZEN:'false',RETAIL_MIS_OOS_WRITES_ENABLED:'true'};
  const source=bytes(fixture()),preview=await retailMisQuotation(client,profile,access,source,'fixture.xlsx',false,environment);
  assert.equal(preview.plan[0].expected_revision,4);assert.equal(preview.original_base64,undefined);
  await assert.rejects(()=>retailMisQuotation(client,profile,access,source,'fixture.xlsx',true,environment),/Review the exact workbook/);
- await retailMisQuotation(client,profile,access,source,'fixture.xlsx',true,environment,preview.plan);assert.equal(calls.at(-1).name,'rpc_retail_mis_oos_import');assert.equal(calls.at(-1).args.p_groups[0].expected_revision,4);assert.equal(calls.at(-1).args.p_actor,'fixture-actor');
+ await retailMisQuotation(client,profile,access,source,'fixture.xlsx',true,environment,preview.plan);assert.equal(calls.at(-1).name,'rpc_retail_oos12_import');assert.equal(calls.at(-1).args.p_groups[0].expected_revision,4);assert.equal(calls.at(-1).args.p_actor,'fixture-actor');
  calls.length=0;await assert.rejects(()=>retailMisQuotation(client,profile,access,source,'fixture.xlsx',true,{...environment,RETAIL_OOS_MUTATIONS_FROZEN:'true'},preview.plan),/frozen/);assert.equal(calls.length,0);
  await assert.rejects(()=>retailMisQuotation(client,profile,access,source,'fixture.xlsx',true,{RETAIL_OOS_MUTATIONS_FROZEN:'false'},preview.plan),/separate activation/);assert.equal(calls.length,0);
  await assert.rejects(()=>retailMisQuotation(client,profile,{...access,states:['KL']},source,'fixture.xlsx',false,environment),/Outside assigned/);

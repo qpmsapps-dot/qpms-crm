@@ -1,3 +1,4 @@
+import {RETAIL_MIS_ROLES} from '../../../backend/shared/retailMisAccess.js';
 import { MoreVertical } from 'lucide-react';
 import { useState } from 'react';
 import UserStatusBadge from './UserStatusBadge.jsx';
@@ -57,10 +58,10 @@ export default function EmployeeCard({ employee, onOpen, onAction }) {
               ) : null}
             </div>
           </div>
-          <p className="mt-2 truncate text-xs font-bold text-slate-800">{employee.designation || 'No designation'}</p>
+          <p className="mt-2 truncate text-xs font-bold text-slate-800">{RETAIL_MIS_ROLES[employee.role]||employee.designation || 'No designation'}</p>
           <p className="truncate text-xs font-medium text-slate-500">{employee.department || 'No department'} · {employee.business || 'No business'}</p>
           <p className="truncate text-xs font-medium text-slate-500">{employee.email || employee.mobile || 'No contact details'}</p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
+          {employee.misStates&&<p>States: {employee.misStates.join(', ')}</p>}<div className="mt-2 flex flex-wrap gap-1.5">
             <UserStatusBadge status={employee.accountStatus} />
             <UserStatusBadge status={employee.loginLabel} />
             <UserStatusBadge status={employee.inviteLabel} />

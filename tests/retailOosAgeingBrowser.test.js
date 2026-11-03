@@ -1,0 +1,48 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {createServer} from 'vite';
+import {chromium} from '@playwright/test';
+const root=fileURLToPath(new URL('../',import.meta.url));
+test('OOS register and dashboard: filters, complete export, matrix drilldown, honest gaps and responsive screenshots',{timeout:120000},async()=>{
+ Object.assign(process.env,{VITE_ENABLE_DEMO_AUTH:'true',VITE_APP_MODE:'demo',VITE_SUPABASE_URL:'',VITE_SUPABASE_ANON_KEY:'',VITE_API_URL:'http://127.0.0.1:4999'});
+ const server=await createServer({cacheDir:path.join(os.tmpdir(),'qpms-oos-ageing-vite'),server:{host:'127.0.0.1',port:0},logLevel:'error'});await server.listen();
+ const browser=await chromium.launch({headless:true}),context=await browser.newContext({viewport:{width:1440,height:1000}}),errors=[];
+ await context.addInitScript(()=>{localStorage.setItem('qpms-crm-auth-user',JSON.stringify({id:'fixture-auth',profileId:'fixture-profile',employeeCode:'QPMSADMIN',name:'LOCAL SYNTHETIC QA',role:'Admin',rawRole:'Admin',status:'Active',isActive:true,webAccessEnabled:true,is_demo:true,isDemoReadOnly:true,read_only:false}));sessionStorage.setItem('qpms-crm-backend-token','synthetic-local-token');});
+ const now='2026-10-01',rows=Array.from({length:31},(_,i)=>({id:'order-'+i,reference:'QA-LOCAL-'+String(i).padStart(3,'0'),workflow_version:1,status:i%2?'PO_RECORDED':'QUOTED',revision:2,rework_count:1,store_ids:['s'+i],mapped_stores:[{id:'s'+i,store_code:'00'+i,store_name:'Synthetic QA store '+i,state:i<20?'TN':'KA'}],original_items:[{total_amount:1500,quotation_header:{quotation_date:now,totals:{total_amount:1500}}}],original_po_date:i%2?'2026-10-03':null,original_po_number:i%2?'PO-00'+i:null,status_entered_at:'2026-10-04T18:31:00Z',created_at:'2026-10-01T00:00:00Z',updated_at:'2026-11-02T04:00:00Z',details:{items:[{store_id:'s'+i,description:'Synthetic line item',quantity:1,unit_rate:1500,total_amount:1500}]},history:[{id:'e'+i,action:'CREATE_OOS',actor_id:'synthetic-author',created_at:'2026-10-01T00:00:00Z',revision:1,has_workbook:true}]}));
+ let registerRequests=0,historyRequests=0,mutations=0;
+ const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
+ await page.route('**/api/**',async route=>{const u=new URL(route.request().url());if(route.request().method()!=='GET')mutations++;let result;
+  if(u.pathname.endsWith('/mis/access'))result={active:true,role:'MIS_OOS',operator:true,states:['TN','KA']};
+  else if(u.pathname.endsWith('/oos/register')){registerRequests++;result={complete:true,states:['TN','KA'],rows,twelve_stage_enabled:false};}
+  else if(u.pathname.endsWith('/oos/capabilities'))result={writes_enabled:false,environment_writes_enabled:false,database_writes_enabled:false,actions:{}};
+  else if(u.pathname.includes('/oos/history/')){historyRequests++;result=rows.find(r=>u.pathname.endsWith(r.id)).history;}
+  else if(u.pathname.endsWith('/module-reports/dashboard'))return route.fulfill({json:{ok:true,report:{stores:[],modules:{},from:now,to:'2026-11-02'}}});
+  else return route.fulfill({status:403,json:{message:'Synthetic unassigned route'}});
+  return route.fulfill({json:{ok:true,result}});
+ });
+ const base='http://127.0.0.1:'+server.httpServer.address().port,shots=path.join(root,'docs/retail/screenshots/oos-ageing');fs.mkdirSync(shots,{recursive:true});
+ const mark=()=>page.evaluate(()=>{const b=document.createElement('p');b.textContent='LOCAL SYNTHETIC QA — NOT PRODUCTION DATA';b.style='background:#fff4d2;color:#744b00;padding:10px;font-weight:bold';document.querySelector('.oos-workspace')?.prepend(b);});
+ try{
+  await page.goto(base+'/reliance-retail/mis/oos');await page.getByText('31 authorized quotations',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('table',{name:'Quotation register'}).locator('tbody tr').count(),20);
+  await page.getByRole('button',{name:'Next',exact:true}).click();assert.equal(await page.getByRole('table',{name:'Quotation register'}).locator('tbody tr').count(),11);
+  await page.getByRole('button',{name:'Quotation Ageing',exact:false}).click();assert.equal(await page.getByRole('table',{name:'Quotation register'}).locator('th[aria-sort="ascending"]').count(),1);
+  const d=page.waitForEvent('download');await page.getByRole('button',{name:'Export Register (Excel)',exact:true}).click();const chunks=[];for await(const c of await(await d).createReadStream())chunks.push(c);const {default:ExcelJS}=await import('exceljs'),book=new ExcelJS.Workbook();await book.xlsx.load(Buffer.concat(chunks));assert.equal(book.getWorksheet('Quotation register').rowCount,32);assert.equal(historyRequests,0);
+  await page.getByLabel('Geographic state').selectOption('TN');await page.getByText('20 authorized quotations',{exact:true}).waitFor();assert.equal(registerRequests,1);
+  await page.getByLabel('Quotation month').fill('2026-11');await page.getByText('0 authorized quotations',{exact:true}).waitFor();await page.getByLabel('Quotation month').fill('2026-10');await page.getByText('20 authorized quotations',{exact:true}).waitFor();
+  await mark();await page.screenshot({path:path.join(shots,'register-desktop.png'),fullPage:true});
+  await page.getByRole('button',{name:'QA-LOCAL-000',exact:true}).click();await page.getByLabel('Quotation details').waitFor();assert.equal(await page.getByText('Original quotation amount',{exact:true}).count(),1);assert.equal(await page.getByText('Original workbook retained',{exact:false}).count(),1);
+  await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>{const aside=document.querySelector('aside');return !aside||aside.getBoundingClientRect().right<=1;});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await page.screenshot({path:path.join(shots,'register-mobile.png'),fullPage:true});
+  await page.setViewportSize({width:1440,height:1000});await page.goto(base+'/reliance-retail');await page.getByRole('table',{name:'Legacy OOS state matrix'}).waitFor();
+  assert.equal(await page.getByRole('table',{name:'Twelve-stage OOS state matrix'}).locator('tbody tr').count(),12);
+  await page.getByRole('button',{name:'Ageing View',exact:true}).click();await mark();await page.getByLabel('State-wise OOS reporting').screenshot({path:path.join(shots,'matrix-desktop.png')});
+  const drill=page.getByRole('table',{name:'Legacy OOS state matrix'}).locator('tbody tr').first().getByRole('link').first();assert.ok((await drill.getAttribute('href')).includes('status=QUOTED'));
+  await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>{const aside=document.querySelector('aside');return !aside||aside.getBoundingClientRect().right<=1;});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await page.getByLabel('State-wise OOS reporting').screenshot({path:path.join(shots,'matrix-mobile.png')});
+  await drill.click();await page.getByText('10 authorized quotations',{exact:true}).waitFor();assert.equal(await page.getByLabel('Status filter').inputValue(),'QUOTED');assert.equal(await page.getByLabel('Geographic state').inputValue(),'TN');
+  assert.equal(mutations,0);assert.deepEqual(errors,[]);
+ }finally{await context.close();await browser.close();await server.close();}
+});

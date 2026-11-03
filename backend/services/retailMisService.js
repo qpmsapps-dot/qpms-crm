@@ -1,8 +1,8 @@
-import {assertRetailMis,RETAIL_MIS_MODULES} from '../shared/retailMisAccess.js';
+import {assertRetailMis,RETAIL_MIS_MODULES,retailOosState} from '../shared/retailMisAccess.js';
 import {summarizeAttendance} from '../shared/retailAttendance.js';
 import {parseQuotation} from './retailQuotationImport.js';
 import {assertScopedQuotation} from '../shared/retailMisAccess.js';
-export async function misRpc(client,name,args){const {data,error}=await client.rpc(name,args);if(error){const statusCode=({'42501':403,'22023':400,'23505':409,'40001':409,P0001:409,PGRST202:503,'42883':503}[error.code])||503;throw Object.assign(Error(statusCode===503?'Retail MIS capability unavailable; no result can be confirmed.':error.message),{statusCode});}return data;}
+export async function misRpc(client,name,args){const {data,error}=await client.rpc(name,args);if(error){const statusCode=({'42501':403,'22023':400,'22007':400,'22008':400,'22P02':400,'22003':400,'23514':400,'23505':409,'40001':409,P0001:409,PGRST202:503,'42883':503}[error.code])||503;throw Object.assign(Error(statusCode===503?'Retail MIS capability unavailable; no result can be confirmed.':error.message),{statusCode});}return data;}
 export async function retailMisAccess(client,profile,authUser){
  if(!profile?.id||!authUser?.id||profile.auth_user_id!==authUser.id)throw Object.assign(Error('Verified account required.'),{statusCode:401});
  return misRpc(client,'rpc_retail_mis_access',{p_actor:profile.id,p_auth:authUser.id});
@@ -18,14 +18,14 @@ export async function retailMisQuotation(client,profile,access,bytes,name,save,e
  assertRetailMis(access,'oos');if(save&&environment.RETAIL_OOS_MUTATIONS_FROZEN!=='false')throw Object.assign(Error('OOS mutations are frozen or configuration is unverified.'),{statusCode:503});
  // New MIS OOS writes remain closed until separate production go-live approval.
  if(save&&environment.RETAIL_MIS_OOS_WRITES_ENABLED!=='true')throw Object.assign(Error('Retail MIS OOS writes await separate activation.'),{statusCode:503});
- const report=await misRpc(client,'rpc_retail_mis_oos_stores',{p_actor:profile.id});
+ const report=await misRpc(client,'rpc_retail_oos12_stores',{p_actor:profile.id});
  const parsed=parseQuotation(bytes,name,report);if(!parsed.can_save)throw Object.assign(Error('Quotation contains invalid or unauthorized Store Codes; entire file rejected.'),{statusCode:400});
  assertScopedQuotation(parsed.groups,report,access);
- const current=await misRpc(client,'rpc_retail_mis_report',{p_actor:profile.id,p_module:'oos',p_from:'2026-01-01',p_to:'2026-12-31',p_state:null});
- const plan=parsed.groups.map(g=>{const order=current.rows.find(o=>o.reference===g.quotation_number);return {reference:g.quotation_number,expected_revision:order?.revision||0,disposition:order?'REWORK_OR_REPLAY':'CREATE'};});
+ const current=await misRpc(client,'rpc_retail_oos_register',{p_actor:profile.id});
+ const plan=parsed.groups.map(g=>{const order=current.rows.find(o=>o.reference===g.quotation_number);return {reference:g.quotation_number,expected_revision:order?.revision||0,workflow_version:order?.workflow_version||(current.twelve_stage_enabled?2:1),disposition:order?'REWORK_OR_REPLAY':'CREATE'};});
  if(!save)return {...parsed,plan,original_base64:undefined};
  if(!Array.isArray(reviewed)||reviewed.length!==parsed.groups.length)throw Object.assign(Error('Review the exact workbook and quotation revisions before import.'),{statusCode:409});
- for(const group of parsed.groups){const matches=reviewed.filter(p=>p.reference===group.quotation_number);if(matches.length!==1||!Number.isInteger(matches[0].expected_revision)||matches[0].expected_revision<0)throw Object.assign(Error('Invalid reviewed quotation revision.'),{statusCode:409});group.expected_revision=matches[0].expected_revision;}
- return misRpc(client,'rpc_retail_mis_oos_import',{p_actor:profile.id,p_sha256:parsed.sha256,p_filename:name,p_original:parsed.original_base64,p_groups:parsed.groups});
+ for(const group of parsed.groups){const matches=reviewed.filter(p=>p.reference===group.quotation_number);if(matches.length!==1||!Number.isInteger(matches[0].expected_revision)||matches[0].expected_revision<0||![1,2].includes(matches[0].workflow_version??1))throw Object.assign(Error('Invalid reviewed quotation revision/version.'),{statusCode:409});group.expected_revision=matches[0].expected_revision;group.expected_workflow_version=matches[0].workflow_version??1;}
+ return misRpc(client,'rpc_retail_oos12_import',{p_actor:profile.id,p_sha256:parsed.sha256,p_filename:name,p_original:parsed.original_base64,p_groups:parsed.groups});
 }
-export function retailMisPermissions(access){return {...access,modules:RETAIL_MIS_MODULES[access?.role]||[],can_administer:false};}
+export function retailMisPermissions(access){return {...access,...(access?.role==='MIS_OOS'?{states:[...new Set((access.states||[]).map(retailOosState))]}:{}),modules:RETAIL_MIS_MODULES[access?.role]||[],can_administer:false};}

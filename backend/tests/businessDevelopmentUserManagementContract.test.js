@@ -16,7 +16,7 @@ test('Business Development Executive may optionally report to a compatible Busin
   assert.match(server, /\['BUSINESSDEVELOPMENTEXECUTIVE', 'BDEXECUTIVE'\]\.includes\(roleKey\)\s*&& reportingManagerCode/);
   assert.match(server, /Select a valid Business Development Head/);
   assert.match(server, /inheritExecutiveChain\(reportingManager\)/);
-  assert.match(server, /\['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD'\]\.includes\(roleKey\)/);
+  assert.match(server, /\['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD', 'TENDER'\]\.includes\(roleKey\)/);
   assert.doesNotMatch(server, /\['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD', 'BUSINESSDEVELOPMENTEXECUTIVE'/);
   assert.match(drawer, /businessDevelopmentHeads/);
   assert.match(drawer, /const reportingOptionalRoles = new Set\(\['Business Development Executive', 'BD Executive'\]\)/);

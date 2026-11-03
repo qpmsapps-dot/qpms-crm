@@ -14,7 +14,7 @@ test('OOS operator browser: access denial, reviewed upload, duplicate prevention
   const item={store_id:'store-1',store_code:'TEST1',description:'Synthetic line',quantity:2,unit_rate:50};
   await page.route('**/api/**',async route=>{const req=route.request(),u=new URL(req.url());let result={};
    if(u.pathname.endsWith('/mis/access')){if(!enabled)return route.fulfill({status:403,json:{message:'Active verified Retail MIS assignment required.'}});result={active:true,operator:true,role:'MIS_OOS',states:['TN']};}
-   else if(u.pathname.endsWith('/report/oos')){reports++;result={rows:saved?[{id:'order-1',reference:'TRAIN-1',state:'TN',store_codes:['TEST1'],store_codes_by_id:{'store-1':'TEST1'},status:'QUOTED',revision:1,details:{items:[item]}}]:[]};}
+   else if(u.pathname.endsWith('/oos/register')){reports++;result={complete:true,states:['TN'],twelve_stage_enabled:false,rows:saved?[{id:'order-1',reference:'TRAIN-1',state:'TN',workflow_version:1,store_ids:['store-1'],mapped_stores:[{id:'store-1',store_code:'TEST1',store_name:'Test store',state:'TN'}],store_codes:['TEST1'],store_codes_by_id:{'store-1':'TEST1'},status:'QUOTED',revision:1,details:{items:[item]}}]:[]};}
    else if(u.pathname.endsWith('/oos/capabilities'))result={writes_enabled:true,environment_writes_enabled:true,database_writes_enabled:true,actions:{'order-1':['PO_RECORDED','RETIRE']}};
    else if(u.pathname.endsWith('/quotation/preview'))result={source_rows:1,groups:[{quotation_number:'TRAIN-1',state:'TN',items:[item]}],plan:[{reference:'TRAIN-1',expected_revision:0,disposition:'CREATE'}]};
    else if(u.pathname.endsWith('/quotation/import')){imports++;assert.ok(req.headers()['x-quotation-review']);await new Promise(r=>setTimeout(r,250));saved=true;result={receipts:[{order_id:'order-1'}]};}
@@ -23,7 +23,7 @@ test('OOS operator browser: access denial, reviewed upload, duplicate prevention
    else return route.fulfill({status:403,json:{message:'Synthetic route denied'}});
    return route.fulfill({json:{ok:true,result}});
   });
-  const url='http://127.0.0.1:'+server.httpServer.address().port+'/reliance-retail/mis/oos';await page.goto(url);await page.getByRole('alert').waitFor();assert.equal(reports,0);assert.equal(await page.getByRole('button',{name:'Upload Quotation Excel'}).count(),0);
+  const url='http://127.0.0.1:'+server.httpServer.address().port+'/reliance-retail/mis/oos';await page.goto(url);await page.getByRole('alert').waitFor();assert.equal(reports,0);assert.equal(await page.getByRole('button',{name:'Upload Quotation'}).count(),0);
   enabled=true;await page.reload();await page.getByText('0 authorized quotations',{exact:true}).waitFor();
   await page.getByLabel('Quotation workbook').setInputFiles({name:'synthetic.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:Buffer.from('synthetic fixture')});await page.getByRole('button',{name:'Preview Quotation',exact:true}).click();await page.getByText('Synthetic line',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Save Quotation',exact:true}).isDisabled(),true);
   await page.getByRole('checkbox').check();await page.getByRole('button',{name:'Save Quotation',exact:true}).evaluate(b=>{b.click();b.click();});await page.getByText('1 authorized quotations',{exact:true}).waitFor();assert.equal(imports,1);await page.getByRole('status').filter({hasText:'Quotation saved'}).waitFor();

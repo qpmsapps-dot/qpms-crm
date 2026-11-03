@@ -1,3 +1,4 @@
+import {prepareRetailMisUser,saveRetailMisUser} from './services/retailMisUserManagement.js';
 import {scopedFaultTrackerReport} from './services/faultTrackerStoreScope.js';
 import {updateRetailFault} from './services/retailFaultUpdateService.js';
 import {requireInitialRetailAdmin} from './services/retailInitialAdminAccess.js';
@@ -3015,6 +3016,7 @@ async function ensureUniqueAuthEmail(client, email) {
 }
 
 const CREATE_USER_ROLE_OPTIONS = new Set([
+  'MISHK', 'MISMEPC', 'MISOOS',
   'MD',
   'COO',
   'EXECUTIVEASSISTANT',
@@ -4099,7 +4101,7 @@ function validateCreateUserBody(body) {
     return;
   }
   if (!CREATE_USER_ROLE_OPTIONS.has(roleKey)) {
-    throw userManagementHttpError(400, 'role must be one of MD, COO, Executive Assistant, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, Supervisor, Pre-Sales, Business Development Head, Business Development Executive, Tender, or Admin.');
+    throw userManagementHttpError(400, 'role must be one of MD, COO, Executive Assistant, GM, South Head, Business Head, Branch Head, Operations Manager, KAM, FO, Supervisor, Pre-Sales, Business Development Head, Business Development Executive, Tender, Admin, HK-MIS, MEPC-MIS, or OOS-MIS.');
   }
   if (body.create_profile_only === true && roleKey === 'MD') return;
   if (!textOrNull(body.mobile)) throw userManagementHttpError(400, 'mobile is required.');
@@ -7074,6 +7076,7 @@ app.post(
       const employeeCode = normalizeEmployeeCode(body.employee_code);
       const fullName = textOrNull(body.full_name);
       const email = normalizeEmail(body.email);
+      const retailMisPlan = await prepareRetailMisUser(client,request,body);
       assertInvitationOnlyPayload(body);
       if (!employeeCode) throw userManagementHttpError(400, 'employee_code is required.');
       if (!fullName) throw userManagementHttpError(400, 'full_name is required.');
@@ -7380,6 +7383,14 @@ app.post(
             compensation,
           },
         );
+      }
+
+      if (retailMisPlan) {
+        try { createdProfile = await saveRetailMisUser(client,request,createdProfile,retailMisPlan); }
+        catch (assignmentError) {
+          await writeUserManagementAudit(client,{action:'MIS_USER_ASSIGNMENT_FAILED',targetProfile:createdProfile,metadata:{profile_created:true,mis_assignment_confirmed:false,error:safeAuthError(assignmentError)},request});
+          throw userManagementHttpError(503,'Account invitation exists, but MIS assignment was not confirmed. No MIS access is granted without a valid assignment. Review this existing employee account before retrying.',{profile_id:createdProfile.id});
+        }
       }
 
       await writeUserManagementAudit(client, {
@@ -7740,6 +7751,7 @@ app.patch(
       if (hasOwn(body, 'email') && !normalizeEmail(body.email)) {
         throw userManagementHttpError(400, 'email cannot be empty.');
       }
+      const retailMisPlan = await prepareRetailMisUser(client,request,body,oldProfile);
       const profilePatch = profilePatchPayload(body);
       const hierarchySupplied = Boolean(
         hierarchyPayloadFromBody(body, oldProfile.employee_code),
@@ -7768,7 +7780,9 @@ app.patch(
       }
 
       let updatedProfile = oldProfile;
-      if (Object.keys(profilePatch).length) {
+      if (retailMisPlan) {
+        updatedProfile = await saveRetailMisUser(client,request,oldProfile,retailMisPlan,profilePatch);
+      } else if (Object.keys(profilePatch).length) {
         const { data, error } = await client
           .from('profiles')
           .update(profilePatch)

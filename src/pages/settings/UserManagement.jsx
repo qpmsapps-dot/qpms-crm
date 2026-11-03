@@ -1,3 +1,5 @@
+import {authenticatedApiRequest} from '../../services/api.js';
+import {retailMisRole,retailOosState,RETAIL_MIS_ROLES} from '../../../backend/shared/retailMisAccess.js';
 import { ChevronLeft, ChevronRight, LayoutGrid, List, UserPlus, Users, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import EmployeeCardGrid from '../../components/user-management/EmployeeCardGrid.jsx';
@@ -194,7 +196,9 @@ export default function UserManagement() {
         if (value !== '') params[key] = value;
       });
       const result = await getAdminUsers(params);
-      setUsers((result.users || []).map((profile) => mapProfile(profile)));
+      let misAssignments=[];
+      if((result.users||[]).some(p=>retailMisRole(p.role))){try{misAssignments=(await authenticatedApiRequest({url:'/api/reliance-retail/mis/assignments'})).data.result.assignments;}catch{/* Existing non-Super Admin user management remains available; no scope is inferred. */}}
+      setUsers((result.users || []).map(profile=>({...mapProfile(profile),...(retailMisRole(profile.role)?{misStates:misAssignments.find(a=>a.profile_id===profile.id)?.states.map(retailOosState)||['Assignments unavailable']}: {})})));
       setTotal(Number(result.total || 0));
       setTotalPages(Number(result.totalPages || 0));
     } catch (error) {
@@ -212,7 +216,7 @@ export default function UserManagement() {
 
   const filterOptions = useMemo(() => ({
     state: uniqueOptions(users, 'state'),
-    role: uniqueOptions(users, 'role'),
+    role: uniqueOptions(users, 'role').map(value=>({value,label:RETAIL_MIS_ROLES[value]||value})),
     designation: uniqueOptions(users, 'designation'),
     department: uniqueOptions(users, 'department'),
     business: uniqueOptions(users, 'business'),
@@ -277,7 +281,7 @@ export default function UserManagement() {
     setDetailLoading(true);
     try {
       const result = await getAdminUser(user.id);
-      setDrawerUser(mapProfile(result.profile, result.hierarchy, result.unifiedAccess, result.hospitalTicketingAccess));
+      setDrawerUser({...mapProfile(result.profile, result.hierarchy, result.unifiedAccess, result.hospitalTicketingAccess),misStates:user.misStates});
     } catch (error) {
       showMessage(apiErrorMessage(error));
     } finally {
