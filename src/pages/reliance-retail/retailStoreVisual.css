@@ -1,0 +1,48 @@
+/* Scope: Reliance Retail Store Master visual presentation only.
+   No form, event, API, or business state behaviour is changed. */
+.retail-store-workspace{min-width:0;color:#183153;gap:22px}
+.retail-store-heading{padding:20px 22px 18px;border:1px solid #dfe7f3;border-radius:16px;background:linear-gradient(125deg,#fff 0%,#f7faff 100%);box-shadow:0 6px 24px rgba(26,59,102,.035)}
+.retail-store-heading h1{font-size:clamp(24px,2.3vw,32px);line-height:1.2;letter-spacing:-.035em;margin:4px 0 6px}
+.retail-store-heading p:last-child{line-height:1.6}
+.retail-store-tabs{padding:8px;border:1px solid #dce6f3;border-radius:14px;background:#f5f8fd;gap:6px;align-items:center}
+.retail-store-tabs button{border-radius:10px;min-height:42px;padding:10px 15px;line-height:1.2;transition:box-shadow .16s ease,border-color .16s ease}
+.retail-store-tabs button:not([class*="bg-qpms-600"]){color:#405a7b;border:1px solid transparent}
+.retail-store-tabs button:not([class*="bg-qpms-600"]):hover{background:#fff;border-color:#bfd3ed}
+.retail-store-tabs button[class*="bg-qpms-600"]{box-shadow:0 5px 12px rgba(31,69,160,.18)}
+.retail-store-toolbar{flex-wrap:wrap;align-items:center;gap:10px}
+.retail-store-toolbar label{min-width:min(240px,100%);flex:1}
+.retail-store-toolbar input{min-height:44px;border-color:#d0deec;box-shadow:0 2px 7px rgba(15,39,72,.025)}
+.retail-store-toolbar button{min-height:44px;flex-shrink:0}
+.retail-store-table{border-color:#dce6f2;border-radius:14px;box-shadow:0 6px 24px rgba(18,49,92,.045);overscroll-behavior-inline:contain}
+.retail-store-table table{font-size:13px;font-variant-numeric:tabular-nums}
+.retail-store-table thead{background:#f5f8fd}
+.retail-store-table th{font-size:11px;text-transform:uppercase;letter-spacing:.035em;color:#516783;white-space:nowrap;font-weight:750;border-bottom:1px solid #dce6f2}
+.retail-store-table th,.retail-store-table td{padding:13px 15px;vertical-align:middle}
+.retail-store-table tbody tr:nth-child(even){background:#fbfdff}
+.retail-store-table tbody tr:hover{background:#eff6ff}
+.retail-store-table td:first-child{color:#1c4c91;font-weight:750;white-space:nowrap}
+.retail-store-table button{min-height:36px;border-radius:8px;padding:6px 10px}
+.retail-store-table button:hover{background:#eaf1ff}
+.retail-store-workspace :is(button,input,select):focus-visible{outline:3px solid #78a9e8;outline-offset:3px}
+.retail-store-workspace :is(input,select){accent-color:#254ba9}
+.retail-store-workspace :is(input,select):not([type="checkbox"]){border-color:#d1deec}
+.retail-store-workspace :is(input,select):not([type="checkbox"]):focus-visible{border-color:#5282d3}
+.retail-store-workspace :is(button,input,select):disabled{cursor:not-allowed;opacity:.55}
+.retail-store-workspace :is(.overflow-x-auto){overscroll-behavior-inline:contain}
+.retail-store-workspace :is(.overflow-x-auto) table{font-variant-numeric:tabular-nums}
+.retail-store-workspace :is(.overflow-x-auto) tbody tr:hover{background:#f2f7ff}
+.retail-store-workspace :is(.overflow-x-auto) thead{position:sticky;top:0;z-index:1}
+.retail-store-workspace :is(.fixed) form{max-height:min(90vh,900px);overflow-y:auto;box-shadow:0 25px 80px rgba(12,31,61,.20)}
+@media(max-width:700px){
+ .retail-store-workspace{gap:15px}
+ .retail-store-heading{padding:16px}
+ .retail-store-tabs{display:flex;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin}
+ .retail-store-tabs button{white-space:nowrap;min-height:44px;flex-shrink:0}
+ .retail-store-toolbar{align-items:stretch}
+ .retail-store-toolbar label{flex-basis:100%}
+ .retail-store-table th,.retail-store-table td{padding:12px}
+ .retail-store-workspace :is(.fixed) form{max-height:90dvh}
+}
+@media(prefers-reduced-motion:reduce){
+ .retail-store-tabs button{transition:none}
+}
