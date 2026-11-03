@@ -66,7 +66,7 @@ test('OOS register and dashboard: filters, complete export, matrix drilldown, ho
   assert.ok((await drill.getAttribute('href')).includes('status=OOS12_QUOTATION_SHARED'));
   assert.equal(await page.getByRole('table',{name:'Twelve-stage OOS state matrix'}).locator('tbody tr').first().locator('.oos-compact-total').textContent(),'1');
   await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>{const aside=document.querySelector('aside');return !aside||aside.getBoundingClientRect().right<=1;});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await page.getByLabel('State-wise OOS reporting').screenshot({path:path.join(shots,'matrix-mobile.png')});
-  await drill.click();await page.getByText('1 authorized quotations',{exact:true}).waitFor();
+  await page.setViewportSize({width:1440,height:1000});await drill.click();await page.getByText('1 authorized quotations',{exact:true}).waitFor();
   assert.equal(await page.getByLabel('Status filter').inputValue(),'OOS12_QUOTATION_SHARED');
   assert.equal(await page.getByLabel('Geographic state').inputValue(),'KA');
   assert.equal(mutations,0);
