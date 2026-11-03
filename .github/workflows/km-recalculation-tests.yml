@@ -1,0 +1,41 @@
+name: KM Recalculation PR Validation
+
+on:
+  push:
+    branches:
+      - fix/km-unified-recalculation-20261103
+  pull_request:
+    paths:
+      - 'backend/routes/foKmReconciliationRoutes.js'
+      - 'backend/services/foKmSupportedBatchService.js'
+      - 'backend/tests/foKmSupportedBatchService.test.js'
+      - 'src/pages/FOActivities.jsx'
+      - '.github/workflows/km-recalculation-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  km-recalculation-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci --ignore-scripts
+      - name: Run focused canonical KM regression tests
+        run: |
+          node --test backend/tests/foKmSupportedBatchService.test.js
+          node --test backend/tests/foKmRecordedWindow.test.js
+          node --test backend/tests/foKmCanonicalPolicy.test.js
+          node --test backend/tests/foKmRecalculationAuthorization.test.js
+          node --test backend/tests/foManualKmRefreshService.test.js
+      - name: Install frontend dependencies
+        run: npm ci --ignore-scripts
+      - name: Build frontend
+        run: npm run build
