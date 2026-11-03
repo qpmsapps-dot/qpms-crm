@@ -10,6 +10,7 @@ import RetailCleaningSchedule from '../../components/reliance-retail/RetailClean
 import {useAuth} from '../../context/auth-context.js';
 import {isReadOnlyUser} from '../../utils/demoAccess.js';
 import {isPlatformAdmin} from '../../utils/authRoles.js';
+import RetailExcelModuleRecords from '../../components/reliance-retail/RetailExcelModuleRecords.jsx';
 
 function VerifiedFoLink({scheduleId,onSaved}){
  const [source,setSource]=useState(''),[confirmed,setConfirmed]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
@@ -96,5 +97,6 @@ export default function RetailScopedDeepCleaning() {
   </>}
   {evidenceBusy&&<ReportNotice>Checking authorization and loading private evidence…</ReportNotice>}
   {evidence&&<section className="retail-report-evidence" aria-label="Authorized cleaning evidence"><header><h2>Authorized evidence</h2><button onClick={clearEvidence}>Close evidence</button></header>{!evidence.length&&<ReportNotice>No uploaded evidence recorded.</ReportNotice>}<div className="retail-report-images">{evidence.map(item=><a key={item.id} href={item.url} target="_blank" rel="noreferrer"><span>{item.type} · {item.name}</span>{item.mime_type.startsWith('image/')?<img src={item.url} alt={`${item.type} cleaning evidence`}/>:'Open document'}</a>)}</div></section>}
+  <RetailExcelModuleRecords modules={['deep_cleaning']}/>
  </section>;
 }
