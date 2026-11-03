@@ -125,12 +125,12 @@ jobs:
           # Reviewed one-time inline historical display. Every changed renderer
           # is content-pinned: modifications to actions or source handling fail closed.
           approved_inline_ui = {
-            "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "b5b4fefe5753b6c0cb7ef33b5f3462278bd136ca",
-            "src/pages/reliance-retail/RetailOperations.jsx": "3e3e2987113758dbc4686c04d053b078b327eb06",
+            "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "82fb2d25a99b3f9bd600ce832b4f353551298bdd",
+            "src/pages/reliance-retail/RetailOperations.jsx": "ba8cc5125768582779ce5a38d3830e83360e04bb",
             "src/pages/reliance-retail/RetailTraining.jsx": "9431f3bd817f0dfa5b77a19badffe7fad5c54786",
             "src/pages/reliance-retail/RetailOperationalTrackers.jsx": "24cfa9bda4e929259b55538b6078e9d77e4c9b85",
             "src/pages/reliance-retail/RetailServiceTrackers.jsx": "987e4f567923fc5bac3cb4aabbd11a39a9549b95",
-            "src/utils/useRetailExcelRows.js": "6c73d407469503710f4fd52aab570e21791d9210",
+            "src/utils/useRetailExcelRows.js": "bc3ea3e35d21967424033702939d9475227d8ed9",
             "src/utils/retailExcelInline.js": "57c03c9995a1e5ddc4c57388b1ea7e24bd80ee06",
             "tests/retailExcelInline.test.js": "a665e566891c0644e6ba431c5f33118e04583393",
             "tests/browser/retailExcelInline.spec.js": "a8845630f06c13141059f1becf7ee6de0e95ef65",
