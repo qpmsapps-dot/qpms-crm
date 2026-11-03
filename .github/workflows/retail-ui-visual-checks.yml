@@ -8,6 +8,7 @@ on:
       - '.github/workflows/retail-ui-visual-checks.yml'
       - 'tests/browser/ifmsDashboard.spec.js'
       - 'tests/browser/retailAttendance.spec.js'
+      - 'tests/browser/retailReportVisualSmoke.spec.js'
   workflow_dispatch:
 
 permissions:
@@ -44,7 +45,8 @@ jobs:
             "src/pages/reliance-retail/RetailOperations.jsx",
             ".github/workflows/retail-ui-visual-checks.yml",
             "tests/browser/ifmsDashboard.spec.js",
-            "tests/browser/retailAttendance.spec.js"
+            "tests/browser/retailAttendance.spec.js",
+            "tests/browser/retailReportVisualSmoke.spec.js"
           }
           unexpected = [p for p in files if p not in allowed]
           if unexpected: sys.exit("Unexpected/protected files changed: " + ", ".join(unexpected))
@@ -65,5 +67,13 @@ jobs:
         run: npm run build
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
-      - name: Dashboard and Attendance browser regressions
-        run: npx playwright test tests/browser/ifmsDashboard.spec.js tests/browser/retailAttendance.spec.js --reporter=line
+      - name: Retail report browser regressions and visual smoke
+        run: npx playwright test tests/browser/ifmsDashboard.spec.js tests/browser/retailAttendance.spec.js tests/browser/retailReportVisualSmoke.spec.js --reporter=line
+      - name: Upload synthetic visual acceptance screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retail-ui-synthetic-playwright-evidence
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
