@@ -13552,6 +13552,7 @@ export default function FOActivities() {
                 ["Possible missing KM", `${Number(octoberKmAudit.summary.possible_missing_gps_gap_km || 0).toFixed(2)} km · ${octoberKmAudit.summary.possible_missing_cases} cases`],
                 ["Possible excess KM", `${Number(octoberKmAudit.summary.possible_excess_gps_gap_km || 0).toFixed(2)} km · ${octoberKmAudit.summary.possible_excess_cases} cases`],
                 ["Bike / train days", `${octoberKmAudit.summary.bike_train_days} · ${octoberKmAudit.summary.bike_train_payable_cases} with Bike credits`],
+                ["Nonpayable final mode", `${octoberKmAudit.summary.nonpayable_attendance_with_payable_cases || 0} review cases`],
                 ["No filtered GPS", `${octoberKmAudit.summary.insufficient_gps_cases} records`],
                 ["Calculated petrol", `₹${Number(octoberKmAudit.summary.calculated_petrol_rupees || 0).toFixed(2)} (not confirmed paid)`],
                 ["Verified additions", "Not established"],
@@ -13590,6 +13591,7 @@ export default function FOActivities() {
                       GPS_ABOVE_PAYABLE_REVIEW: "GPS above payable",
                       PAYABLE_ABOVE_GPS_REVIEW: "Payable above GPS",
                       NO_FILTERED_GPS_EVIDENCE: "No filtered GPS",
+                      NONPAYABLE_FINAL_MODE_WITH_PAYABLE_REVIEW: "Train/Bus/Auto/Other final mode with payable KM; check each leg",
                     }[flag] || flag)).join("; ")}</td>
                   </tr>
                 ))}</tbody>
