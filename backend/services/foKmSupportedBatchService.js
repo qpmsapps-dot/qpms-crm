@@ -135,10 +135,19 @@ export async function runSupportedKmBatch(client, payload, {
         environment, persist: !selection.dryRun, adminAuthorization,
         trigger: 'admin_recalculation', maxGoogleDirectionsCalls: 6, deadlineAt: Date.now() + 20000,
       });
-      results.push({
-        ...result, attendance_id: attendance.id, employee_code: attendance.employee_code,
-        date: attendance.attendance_date,
-      });
+      if (result?.status === 'posted' && (!result.receipt_id || result.financial_posted !== true)) {
+        results.push({
+          attendance_id: attendance.id, employee_code: attendance.employee_code,
+          date: attendance.attendance_date, status: 'failed', financial_posted: false,
+          code: 'KM_POSTING_RECEIPT_MISSING',
+          message: 'Posting was not verified by an atomic receipt; review the ledger before retrying.',
+        });
+      } else {
+        results.push({
+          ...result, attendance_id: attendance.id, employee_code: attendance.employee_code,
+          date: attendance.attendance_date,
+        });
+      }
     } catch (error) {
       results.push({
         attendance_id: attendance.id, employee_code: attendance.employee_code,
