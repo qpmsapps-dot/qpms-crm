@@ -12,6 +12,7 @@ import {ReportHeader,ReportFilters,ReportStats,ReportNotice,ReportPager} from '.
 import {matchesReportQuery,reportPage} from '../../utils/retailReportView.js';
 import {useAuth} from '../../context/auth-context.js';
 import {isPlatformAdmin} from '../../utils/authRoles.js';
+import RetailExcelModuleRecords from '../../components/reliance-retail/RetailExcelModuleRecords.jsx';
 
 export default function RetailTraining() {
  const {user}=useAuth();
@@ -89,5 +90,6 @@ export default function RetailTraining() {
    <div>{!(detail.evidence||[]).length&&<p className="retail-report-description">No evidence recorded for this session.</p>}{(detail.evidence||[]).map(item=><p key={item.id||item.file_name}>{item.file_name} {evidenceLinks[item.id]?<a className="retail-report-button" href={evidenceLinks[item.id]} target="_blank" rel="noreferrer">Open authorized evidence</a>:<button onClick={()=>void viewEvidence(item)}>Get evidence link</button>}</p>)}</div>
    <div className="retail-report-detail-grid"><section><h3>Attendees</h3>{(detail.attendees||[]).map(item=><p key={item.id}>{item.employee_code} · {item.employee_name}</p>)}</section><section><h3>Topics</h3>{(detail.topics||[]).map(item=><p key={item.id}>{item.topic?.module_name||item.topic?.name||'Topic'} · {item.is_covered?'Covered':'Pending'}</p>)}</section><section><h3>History</h3>{(detail.events||[]).map(item=><p key={item.id}>{item.created_at} · {item.event_type}</p>)}</section></div>
   </section>}
+  <RetailExcelModuleRecords modules={['technical_training','soft_skill_training']}/>
  </section>;
 }
