@@ -57,7 +57,7 @@ export default function RetailScopedDeepCleaning() {
    await downloadUnified(book,'Retail_Deep_Cleaning.xlsx');
   }catch(e){setError(e.message);}finally{setExporting(false);}
  }
- return <section className="retail-report">
+ return <section className="retail-report retail-cleaning-report">
   <ReportHeader title="Reliance Retail Deep Cleaning" description="Plan cleaning visits, track completion and review before/after evidence.">
    <button onClick={()=>setScheduling(true)}>Schedule Deep Cleaning</button>
    <button disabled={busy} onClick={()=>{resetView();setRefresh(value=>value+1);}}><RefreshCw size={15}/>Refresh</button>

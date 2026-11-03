@@ -15,3 +15,244 @@
 .retail-report table.retail-attendance-summary{min-width:1100px;table-layout:auto}
 .retail-report details:not([open])>:not(summary){display:none}
 @media(prefers-reduced-motion:reduce){.retail-report *{transition:none!important}}
+
+/* Report presentation polish: no changes to upload, FO evidence, or reporting logic. */
+.retail-report {
+  gap: 22px;
+  border-color: #dce5f1;
+  box-shadow: 0 10px 32px rgba(20, 48, 86, .045);
+}
+.retail-report-header {
+  padding-bottom: 6px;
+}
+.retail-report-header h1 {
+  line-height: 1.2;
+}
+.retail-report-actions {
+  gap: 10px;
+}
+.retail-report-actions > button,
+.retail-report-actions > a {
+  min-height: 40px;
+  white-space: nowrap;
+}
+.retail-report button:not(:disabled) {
+  transition: background-color .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.retail-report button:not(:disabled):hover {
+  background-color: #f1f6ff;
+  border-color: #a7c0e4;
+}
+.retail-report-filters {
+  background: linear-gradient(180deg,#fbfdff 0%,#f5f8fd 100%);
+  border-color: #dce6f2;
+  border-radius: 14px;
+  gap: 14px;
+  padding: 16px;
+}
+.retail-report-filters :is(input,select) {
+  min-height: 42px;
+  border-radius: 9px;
+}
+.retail-report-filters :is(input,select):focus-visible {
+  border-color: #4678c8;
+  outline-offset: 1px;
+}
+.retail-report-stats {
+  gap: 14px;
+}
+.retail-report-stats article {
+  background: linear-gradient(150deg,#fff 0%,#f8fbff 100%);
+  border-color: #dce6f2;
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: 0 4px 15px rgba(27, 62, 107, .035);
+}
+.retail-report-stats strong {
+  color: #173a70;
+  font-variant-numeric: tabular-nums;
+}
+.retail-report-panel {
+  border-color: #dce5f1;
+  border-radius: 14px;
+  box-shadow: 0 5px 18px rgba(27, 62, 107, .025);
+}
+.retail-report-panel-heading {
+  background: linear-gradient(90deg,#f7faff 0%,#fff 100%);
+  padding: 17px 18px;
+}
+.retail-report-table {
+  overscroll-behavior-inline: contain;
+}
+.retail-report table {
+  font-variant-numeric: tabular-nums;
+}
+.retail-report th {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .035em;
+  background: #f5f8fd;
+  padding: 13px 14px;
+}
+.retail-report td {
+  padding: 14px;
+  border-top-color: #e9eef5;
+}
+.retail-report tbody tr {
+  transition: background-color .16s ease;
+}
+.retail-report tbody tr:nth-child(even) {
+  background: #fcfdff;
+}
+.retail-report tbody tr:hover {
+  background: #eef5ff;
+}
+.retail-report .retail-attendance-summary {
+  font-size: 13px;
+}
+.retail-report .retail-attendance-summary :is(th,td) {
+  padding-block: 12px;
+}
+.retail-report-status {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.retail-report-pager {
+  padding: 14px 18px;
+  background: #fbfdff;
+}
+.retail-report-evidence {
+  border-radius: 14px;
+  background: #f8fbff;
+}
+.retail-report-images a {
+  border-radius: 12px;
+  box-shadow: 0 3px 12px rgba(27, 62, 107, .05);
+}
+@media (max-width:700px) {
+  .retail-report { padding: 14px; gap: 18px; }
+  .retail-report-stats { gap: 10px; }
+  .retail-report-stats article { padding: 14px; }
+  .retail-report-actions > button,
+  .retail-report-actions > a { min-height: 44px; }
+  .retail-report th { padding: 11px 12px; }
+  .retail-report td { padding: 12px; }
+  .retail-report-panel-heading { padding: 14px; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .retail-report tbody tr,.retail-report button { transition:none; }
+}
+
+/* Second pass: focus attention on actual reports and existing FO evidence. */
+.retail-report-header h1{color:#142f58}
+.retail-report-header .retail-report-eyebrow{font-size:12px;color:#5373a4}
+.retail-report-actions button{font-weight:650}
+.retail-report-filters label{font-size:12px;line-height:1.3;color:#465f80}
+.retail-report-filters :is(input,select){font-size:13px;font-weight:550}
+.retail-report-stats article{position:relative;overflow:hidden}
+.retail-report-stats article::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:#3463ae;opacity:.7}
+.retail-report-stats strong{font-size:clamp(25px,2.2vw,32px);line-height:1.14}
+.retail-report-stats article>span{min-height:0;font-size:12px}
+.retail-report-table{scrollbar-width:thin;scrollbar-color:#bdcfe8 transparent}
+.retail-report th{position:relative;vertical-align:middle}
+.retail-report td{overflow-wrap:anywhere}
+.retail-report td:first-child{color:#1a3e70}
+.retail-report .retail-report-panel-heading h2{font-size:16px;color:#183d74}
+.retail-report .retail-report-panel-heading>span{font-variant-numeric:tabular-nums;color:#58708d;font-size:12px}
+.retail-report .retail-report-pager button{min-height:36px}
+.retail-report-evidence{box-shadow:0 8px 22px rgba(19,58,105,.045)}
+.retail-report-images{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr))}
+.retail-report-images a{max-width:none;min-width:0;display:block}
+.retail-report-images img{max-height:280px;width:100%;object-fit:contain;border-radius:8px;background:#f5f8fc}
+.retail-report-detail-grid section{border-radius:12px;padding:16px}
+.retail-report-detail-grid section p{font-size:13px;line-height:1.55}
+.retail-report .retail-report-status{font-weight:700;line-height:1.4}
+.retail-report details>summary{cursor:pointer}
+.retail-report details>summary:focus-visible{outline:3px solid #78a9e8;outline-offset:3px;border-radius:6px}
+.retail-report details[open]>summary{margin-bottom:8px}
+.retail-report :is(button,a.retail-report-button):active:not(:disabled){transform:translateY(1px)}
+/* Uploaded attendance report: compact enough for MIS, readable enough for review. */
+.retail-attendance-workspace{gap:20px}
+.retail-attendance-workspace>header{padding:2px 0 8px;border-bottom:1px solid #edf1f6}
+.retail-attendance-workspace>header h1{font-size:clamp(23px,2.1vw,30px);letter-spacing:-.035em}
+.retail-attendance-workspace>header button{min-height:42px}
+.retail-attendance-workspace>div[role="tablist"]{background:#f1f6ff}
+.retail-attendance-kpis{gap:14px}
+.retail-attendance-kpis article{min-width:0;min-height:136px;border:1px solid #dce6f1;border-radius:14px;padding:17px;box-shadow:0 5px 18px rgba(15,48,98,.045);background-image:linear-gradient(140deg,rgba(255,255,255,.68),rgba(255,255,255,0))}
+.retail-attendance-kpis article>svg{width:25px;height:25px;padding:5px;box-sizing:content-box;border-radius:11px;background:rgba(255,255,255,.72)}
+.retail-attendance-kpis article p:first-child{font-size:12px;font-weight:650;line-height:1.4}
+.retail-attendance-kpis article p:nth-child(2){font-size:clamp(24px,2.2vw,32px);letter-spacing:-.04em;font-variant-numeric:tabular-nums;line-height:1.15}
+.retail-attendance-kpis article p:nth-child(3){font-size:12px;line-height:1.5}
+.retail-attendance-analytics>section{border-radius:14px;border-color:#dce5f0;box-shadow:0 5px 18px rgba(15,48,98,.035);background:#fff}
+.retail-attendance-analytics>section h3{font-size:14px;line-height:1.4}
+.retail-attendance-workspace .retail-attendance-summary{font-size:13px}
+.retail-attendance-workspace .retail-attendance-summary thead th{background:#eef4fc;color:#244a7b;white-space:normal;min-width:60px}
+.retail-attendance-workspace .retail-attendance-summary tbody tr:last-child{background:#eaf2ff;font-weight:750}
+.retail-attendance-workspace .retail-attendance-summary tbody tr:hover{background:#e7f0ff}
+.retail-attendance-workspace .retail-attendance-summary button{font-size:13px}
+.retail-attendance-workspace .retail-attendance-summary td{font-variant-numeric:tabular-nums}
+.retail-attendance-workspace .retail-attendance-summary th:first-child,.retail-attendance-workspace .retail-attendance-summary td:first-child{position:sticky;left:0;z-index:1;background:inherit;box-shadow:1px 0 0 #e2e8f0}
+.retail-attendance-workspace .retail-attendance-summary thead th:first-child{z-index:2;background:#eef4fc}
+.retail-attendance-workspace .retail-attendance-summary tbody tr:last-child td:first-child{background:#eaf2ff}
+.retail-attendance-workspace input[type="date"],.retail-attendance-workspace select{min-height:42px}
+.retail-attendance-workspace .retail-report-panel{min-width:0}
+@media(max-width:1100px){
+ .retail-attendance-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media(max-width:700px){
+ .retail-report-header{align-items:stretch}
+ .retail-report-actions{justify-content:flex-start}
+ .retail-report-filters label{flex:1 1 min(160px,100%)}
+ .retail-report-stats strong{font-size:25px}
+ .retail-attendance-kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+ .retail-attendance-kpis article{min-height:128px;padding:12px;gap:9px}
+ .retail-attendance-kpis article>svg{width:19px;height:19px}
+ .retail-attendance-kpis article p:nth-child(2){font-size:24px}
+ .retail-attendance-analytics{grid-template-columns:minmax(0,1fr)}
+ .retail-report-images{grid-template-columns:repeat(auto-fit,minmax(min(170px,100%),1fr))}
+}
+@media(max-width:390px){
+ .retail-attendance-kpis article{flex-direction:column}
+ .retail-report-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(prefers-reduced-motion:reduce){
+ .retail-report :is(button,a.retail-report-button):active:not(:disabled){transform:none}
+}
+
+/* Specific report views: same FO and MIS records, clearer reading order. */
+.retail-training-report .retail-report-filters[aria-label="State-wise completed trainings"]{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(min(185px,100%),1fr));gap:10px;
+  background:transparent;border:0;padding:0;
+}
+.retail-training-report .retail-report-filters[aria-label="State-wise completed trainings"] p{
+  display:flex;align-items:center;min-height:56px;padding:12px 14px;margin:0;
+  background:#f5f9ff;border:1px solid #dae7f5;border-radius:11px;
+  color:#25486e;font-size:13px;font-weight:650;line-height:1.5;
+}
+.retail-training-report .retail-report-panel-heading h2{color:#153866}
+.retail-training-report .retail-report-table table{min-width:900px}
+.retail-training-report .retail-report-evidence header h2{font-size:18px}
+.retail-cleaning-report .retail-report-stats article:nth-child(2)::before{background:#16a875}
+.retail-cleaning-report .retail-report-stats article:nth-child(3)::before{background:#d28e24}
+.retail-cleaning-report .retail-report-panel-heading{align-items:center}
+.retail-cleaning-report .retail-report-images a:hover{border-color:#8db4e7;box-shadow:0 6px 18px rgba(21,63,116,.09)}
+.retail-cleaning-report .retail-report-evidence>header h2{font-size:18px}
+.retail-maintenance-report .retail-report-filters,
+.retail-thermography-report .retail-report-filters{gap:12px}
+.retail-maintenance-report .retail-report-panel,
+.retail-thermography-report .retail-report-panel{background:#fff}
+.retail-maintenance-report .retail-report-table table{min-width:780px}
+.retail-thermography-report .retail-report-table table{min-width:960px}
+.retail-thermography-report .retail-report-stats article:nth-child(2)::before{background:#d79b31}
+.retail-thermography-report .retail-report-stats article:nth-child(3)::before{background:#16a875}
+.retail-thermography-report .retail-report-stats article:nth-child(4)::before{background:#d06b47}
+.retail-report-table:focus-visible{outline:3px solid #78a9e8;outline-offset:1px}
+@media(max-width:700px){
+ .retail-training-report .retail-report-filters[aria-label="State-wise completed trainings"]{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .retail-training-report .retail-report-filters[aria-label="State-wise completed trainings"] p{font-size:12px;min-height:50px}
+}
+/* Ensure the existing primary attendance import button remains visually primary on hover. */
+.retail-attendance-workspace>header button[class*="bg-blue-600"]:not(:disabled):hover{
+ background-color:#1d4ed8;border-color:#1d4ed8;color:#fff;
+}

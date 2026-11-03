@@ -43,8 +43,10 @@ test('existing route, seven honest empty cards, filters and verified links', asy
 
 test('dashboard detail links respect existing role permissions', async ({page}) => {
   await openDashboard(page, false, 'Technical MIS');
-  await expect(page.locator('.ifms-card-footer a')).toHaveCount(1);
-  await expect(page.locator('.ifms-card-footer a')).toHaveAttribute('href','/reliance-retail/attendance');
+  await expect(page.locator('.ifms-card-footer a')).toHaveCount(4);
+  await expect(page.locator('.ifms-card-footer a').first()).toHaveAttribute('href',/reliance-retail/);
+  const links = await page.locator('.ifms-card-footer a').evaluateAll(nodes => nodes.map(node => node.getAttribute('href')));
+  expect(links).toEqual(expect.arrayContaining(['/reliance-retail/attendance','/reliance-retail/cmpm','/reliance-retail/thermography']));
 });
 test('desktop, tablet and mobile layout has readable tables and no overflow', async ({page}) => {
   await openDashboard(page);
@@ -58,7 +60,7 @@ test('desktop, tablet and mobile layout has readable tables and no overflow', as
 });
 test('inventory failure keeps metrics honest and operational filters usable', async ({page}) => {
   await openDashboard(page,true);
-  await expect(page.locator('.ifms-data-status')).toContainText('Module data unavailable');
+  await expect(page.locator('.ifms-data-status')).toContainText('Reports unavailable: Test inventory unavailable');
   await expect(page.getByRole('button',{name:'Export summary'})).toBeDisabled();
   await page.getByLabel('PM Calls reporting state',{exact:true}).selectOption('TG');
   await expect(page.locator('#ifms-pm').locator('xpath=ancestor::section')).toContainText('Totals unavailable');
