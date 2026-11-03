@@ -18,10 +18,22 @@ test('Deep Cleaning real PostgreSQL: geography, ownership, pending, completion, 
  const databaseDir=path.join(root,'tmp','cleaning-postgres-'+randomUUID());
  const cluster=new EmbeddedPostgres({databaseDir,user:'postgres',password:'local-only',port,persistent:true,initdbFlags:['--encoding=UTF8'],onLog:()=>{},onError:()=>{}});
  await cluster.initialise();const bin=path.join(toolDir,'node_modules/@embedded-postgres/windows-x64/native/bin');
- const server=spawn(path.join(bin,'postgres.exe'),['-D',databaseDir,'-p',String(port),'-h','127.0.0.1'],{windowsHide:true,stdio:['ignore','ignore','pipe']});let startupError='',probeError='';server.stderr.on('data',b=>{startupError+=b.toString();});server.on('error',e=>{startupError+=e.message;});
+ // pg_ctl uses PostgreSQL's restricted Windows token launcher. Direct
+ // postgres.exe is rejected when a hosted runner has administrator privileges.
+ const log=path.join(databaseDir,'startup.log'),control=path.join(bin,'pg_ctl.exe'),launcherLog=path.join(databaseDir,'launcher.log');
+ // A regular file avoids inherited-pipe hangs from the detached Windows child.
+ const launcherFd=fs.openSync(launcherLog,'w');
+ try{execFileSync(control,['-D',databaseDir,'-l',log,'-o',`-p ${port} -h 127.0.0.1`,'-w','-t','30','start'],{windowsHide:true,stdio:['ignore',launcherFd,launcherFd],timeout:40000});}catch(error){
+  const details=fs.readFileSync(launcherLog,'utf8');
+  if(/restricted token: error code 87/.test(details)){
+   // Nested local sandboxes already run with a restricted token and cannot
+   // restrict it again. PostgreSQL itself still rejects administrator tokens.
+   const fd=fs.openSync(log,'w');const direct=spawn(path.join(bin,'postgres.exe'),['-D',databaseDir,'-p',String(port),'-h','127.0.0.1'],{windowsHide:true,stdio:['ignore',fd,fd]});direct.on('error',e=>fs.appendFileSync(log,e.message));fs.closeSync(fd);
+  }else throw Error('Disposable PostgreSQL startup failed: '+(fs.existsSync(log)?fs.readFileSync(log,'utf8').slice(-2000):details||error.message));
+ }finally{fs.closeSync(launcherFd);}
  const config={host:'127.0.0.1',port,user:'postgres',password:'local-only',database:'postgres',connectionTimeoutMillis:500};
- let db;for(let i=0;i<100;i++){const probe=new pg.Client(config);try{await probe.connect();db=probe;break;}catch(error){probeError=error.message;await probe.end();if(server.exitCode!==null)break;await new Promise(r=>setTimeout(r,100));}}
- if(!db){if(server.exitCode===null){try{execFileSync(path.join(bin,'pg_ctl.exe'),['-D',databaseDir,'-m','fast','-w','stop'],{windowsHide:true,stdio:'pipe',timeout:15000});}catch{server.kill();}}throw Error('Disposable PostgreSQL startup failed: '+startupError.slice(-2000)+'; probe: '+probeError);}
+ let db,probeError='';for(let i=0;i<100;i++){const probe=new pg.Client(config);try{await probe.connect();db=probe;break;}catch(error){probeError=error.message;await probe.end();await new Promise(r=>setTimeout(r,100));}}
+ if(!db){execFileSync(control,['-D',databaseDir,'-m','fast','-w','stop'],{windowsHide:true,stdio:'pipe',timeout:15000});throw Error('Disposable PostgreSQL connection failed: '+probeError);}
  const q=(s,a=[])=>db.query(s,a),one=async(s,a=[])=>(await q(s,a)).rows[0];
  const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
  const feed=async(actor,stores=null)=>(await one("select rpc_retail_cleaning_delivery_v1($1,$2,$3,current_date-30,current_date+30,null) result",[id(actor),id(actor+1000),stores])).result.rows;
@@ -110,5 +122,5 @@ test('Deep Cleaning real PostgreSQL: geography, ownership, pending, completion, 
   });
   await t.test('RPC and helper are inaccessible to browser database roles',async()=>{for(const role of ['anon','authenticated']){assert.equal((await one("select has_function_privilege($1,'rpc_retail_cleaning_delivery_v1(uuid,uuid,uuid[],date,date,uuid)','execute') allowed",[role])).allowed,false);assert.equal((await one("select has_function_privilege($1,'retail_cleaning_executor_v1(uuid)','execute') allowed",[role])).allowed,false);}assert.equal((await one("select has_function_privilege('service_role','rpc_retail_cleaning_submission_v1(uuid,uuid,text,jsonb)','execute') allowed")).allowed,true);});
   await t.test('upload-intent RPC is private to the backend service role',async()=>{for(const role of ['anon','authenticated'])assert.equal((await one("select has_function_privilege($1,'rpc_client_cleaning_upload_intent_v1(uuid,uuid,uuid,uuid,jsonb)','execute') allowed",[role])).allowed,false);});
- }finally{await db.end();if(server.exitCode===null)execFileSync(path.join(bin,'pg_ctl.exe'),['-D',databaseDir,'-m','fast','-w','stop'],{windowsHide:true,stdio:'pipe',timeout:15000});}
+ }finally{await db.end();execFileSync(control,['-D',databaseDir,'-m','fast','-w','stop'],{windowsHide:true,stdio:'pipe',timeout:15000});}
 });
