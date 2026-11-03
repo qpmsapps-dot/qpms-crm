@@ -1,0 +1,39 @@
+name: Reliance Retail operational changes verification
+on:
+  pull_request:
+    paths:
+      - 'backend/shared/retailOperations.js'
+      - 'backend/services/faultTrackerStoreScope.js'
+      - 'backend/services/clientDeepCleaningService.js'
+      - 'backend/services/retailUnifiedService.js'
+      - 'backend/routes/retailUnifiedRoutes.js'
+      - 'backend/routes/retailMisRoutes.js'
+      - 'backend/routes/clientDeepCleaningRoutes.js'
+      - 'backend/shared/retailOos12Workflow.js'
+      - 'src/components/reliance-retail/RetailCleaningSchedule.jsx'
+      - 'src/pages/reliance-retail/**'
+      - 'src/pages/FaultTracker.jsx'
+      - 'backend/tests/**'
+      - 'supabase/proposals/retail_*_20261103.sql'
+      - '.github/workflows/reliance-retail-operational-changes.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  scoped-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install package dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Scoped Retail backend tests
+        run: node --test backend/tests/retailOperations.test.js backend/tests/faultTrackerStoreScope.test.js backend/tests/clientDeepCleaningService.test.js backend/tests/retailOos12Routes.test.js
+      - name: Scoped lint
+        run: npx eslint backend/shared/retailOperations.js backend/shared/retailOos12Workflow.js backend/services/faultTrackerStoreScope.js backend/services/clientDeepCleaningService.js backend/services/retailUnifiedService.js backend/routes/clientDeepCleaningRoutes.js backend/routes/retailMisRoutes.js backend/routes/retailUnifiedRoutes.js src/components/reliance-retail/RetailCleaningSchedule.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/FaultTracker.jsx
+      - name: Production frontend build
+        run: npm run build
