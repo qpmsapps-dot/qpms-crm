@@ -21,6 +21,7 @@ on:
       - 'src/pages/reliance-retail/**'
       - 'src/pages/FaultTracker.jsx'
       - 'backend/tests/**'
+      - 'tests/browser/ifmsOctoberModules.spec.js'
       - 'supabase/proposals/retail_*_20261103.sql'
       - '.github/workflows/reliance-retail-operational-changes.yml'
   workflow_dispatch:
@@ -49,7 +50,7 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: Retail report browser regressions
-        run: npx playwright test tests/browser/ifmsDashboard.spec.js tests/browser/retailAttendance.spec.js tests/browser/retailReportVisualSmoke.spec.js --reporter=line
+        run: npx playwright test tests/browser/ifmsDashboard.spec.js tests/browser/retailAttendance.spec.js tests/browser/retailReportVisualSmoke.spec.js tests/browser/ifmsOctoberModules.spec.js --reporter=line
       - name: OOS browser and presentation regressions
         run: node --test --test-concurrency=1 tests/retailOosAgeing.test.js tests/retailOosAgeingBrowser.test.js tests/retailOos12Browser.test.js tests/retailOosTrainingBrowser.test.js tests/retailOosUiPresentationBrowser.test.js
       - name: Upload UI regression screenshots
