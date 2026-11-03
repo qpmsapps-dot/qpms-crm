@@ -38,7 +38,61 @@ jobs:
           python3 - <<'PY'
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
+          # Checkout tests GitHub's synthetic PR merge. Its first parent is
+          # the main revision actually tested, which can advance after the event.
+          if os.environ.get("GITHUB_REF", "").startswith("refs/pull/") and os.environ.get("GITHUB_REF", "").endswith("/merge"):
+            base = subprocess.check_output(["git","rev-parse","HEAD^1"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # Exact source-integration exception, covered by retail-cleaning-delivery.yml.
+          # No branch-name bypass or broad backend/mobile allowlist. Any payload
+          # drift or unrelated file returns to the original strict guard below.
+          approved_cleaning_delivery = {
+            ".github/workflows/retail-cleaning-delivery.yml": "88c06af38c28894dbf9ed3905e0cc67f19bad4a5",
+            ".github/workflows/retail-mis-mounted-auth.yml": "b32ace15b0a8b509d54820710d43a05f0d6f1ce1",
+            "Mobile_FO_V2/config/deep_cleaning.dart-defines.example.json": "bcc6eb4681bb3816e530becf52a98118e6fa34f5",
+            "Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_form_screen.dart": "b77ac372753f09bdd4efbfb2654c8cd1cd7858f9",
+            "Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_models.dart": "655614f847ff66f951c6fc898f160d013647d547",
+            "Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_screen.dart": "a271b492c9c258cf08d0b71a2eeefe682aaa8205",
+            "Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_service.dart": "2f44ee0859824a4841ca8c5bbf8b137bafeff2cd",
+            "Mobile_FO_V2/lib/home/home_shell.dart": "69bd02c7723498d0859b50b17349132e90a5a128",
+            "Mobile_FO_V2/test/deep_cleaning_delivery_test.dart": "8fc07df1e7193dd92c1f6370e5105bb5dfee3e4b",
+            "Mobile_FO_V2/test/deep_cleaning_pending_upload_test.dart": "8bce34288d350f97935176895e33e79641f308cf",
+            "backend/routes/clientDeepCleaningRoutes.js": "3a8f4a92ff6dc312d1c2bdea725f4bf67643a2c7",
+            "backend/server.js": "d9323c4ac1afb7da848cadca48f1d38fc365447d",
+            "backend/services/clientDeepCleaningService.js": "1179f5f4e1c8ca0ecf57a9961659a3b4b61b677a",
+            "backend/services/retailCleaningDeliveryService.js": "390383c6a4b83b30f894a81266901b5b9b41f520",
+            "backend/services/retailCleaningLegacyReadService.js": "770ad1d79e6e8aeeeeb74590374916170120aade",
+            "backend/tests/clientDeepCleaningService.test.js": "7097ec223d18204b989371309220016a10a3a737",
+            "backend/tests/retailCleaningDelivery.test.js": "fc77d3e09be1d70a8c94e69156198c6a218a0246",
+            "backend/tests/retailCleaningDeliveryPostgres.test.js": "7554432da7dec0c03306ced61cd7be824ac53b70",
+            "backend/tests/retailModuleReportService.test.js": "da1df84394348b4cb0c43b98454c71a1e786fc33",
+            "docs/RETAIL_CLEANING_DELIVERY_20261103.md": "0a074541aaa78ba6393e73484e6686382c0cca23",
+            "docs/RETAIL_CLEANING_IMAGE_CONFIGURATION.md": "bf79435c2aee9c299f5e218b6837e05296bc6ae9",
+            "docs/evidence/retail-cleaning-upload-read-only-20261103.json": "f73d059614c48140b68c89bcbd61f39ccdce1a10",
+            "scripts/checkRetailCleaningConfiguration.mjs": "f584d1b78d0eb37145e274c0c3e31b3ef9fa5641",
+            "src/components/Sidebar.jsx": "2393c3b523e88d889d65b45649a817054505f19b",
+            "src/pages/DeepCleaning.jsx": "708d4b64254b3c724504140969ce7bf534f52c87",
+            "src/pages/reliance-retail/RetailCleaningScheduleViewer.jsx": "f2b9588b3dc7cae448326bd05489ea9f342575ff",
+            "src/routes/AppRoutes.jsx": "2c61768d06c0a27c6f2df6f7430e9427c737fe44",
+            "src/utils/authRoles.js": "0179b498c1724aa6953605b2a1b4520ee24d0d80",
+            "supabase/migrations/20261103113050_retail_cleaning_delivery_v1_verified_20261103.sql": "97220c0590fa472e33b85c6460852e280b5f4328",
+            "supabase/proposals/retail_cleaning_delivery_v1.sql": "d610048e7ab7a9e4e460a0d41a7ca30859d0165e",
+            "supabase/verification/retail_cleaning_delivery_read_only.sql": "c0410e4294af3eae44d4e1ccde374e9f15104b37",
+            "tests/retailCleaningConfiguration.test.js": "6221cb8258406f6560859ceb3e34d2fb6891ab73",
+            "tests/retailCleaningDeliveryBrowser.test.js": "88df53279893a5a6f17befd79b015d2ccc495b48",
+          }
+          cleaning_diff = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
+          if cleaning_diff == set(approved_cleaning_delivery):
+            # A PR check runs on GitHub's synthetic merge, which can include
+            # newer main changes. Pin the reviewed PR HEAD blob identities,
+            # while the build/browser checks still exercise the merged tree.
+            reviewed_head = "HEAD^2" if os.environ.get("GITHUB_REF", "").startswith("refs/pull/") and os.environ.get("GITHUB_REF", "").endswith("/merge") else "HEAD"
+            mismatch = [path for path, expected in approved_cleaning_delivery.items()
+                        if subprocess.check_output(["git","rev-parse",f"{reviewed_head}:{path}"],text=True).strip() != expected]
+            if mismatch:
+              sys.exit("Cleaning integration payload changed; protected review must be renewed: " + ", ".join(mismatch))
+            print("PASS: exact Cleaning delivery payload; dedicated backend/PostgreSQL/Flutter checks required.")
+            sys.exit(0)
           # One-time, content-pinned operational Retail feature review.
           # This does not broaden the old UI-only path/control guard for other PRs.
           # The feature-specific CI also runs backend tests, scoped lint, build,

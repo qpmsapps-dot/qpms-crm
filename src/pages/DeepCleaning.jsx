@@ -24,7 +24,7 @@ import { authenticatedApiRequest } from '../services/api.js';
 import { isDemoUser } from '../utils/demoAccess.js';
 
 const TARGET_BUSINESSES = ['Reliance Retail', 'IFMS'];
-const BUSINESS_QUERY_VALUES = ['Reliance Retail', 'Reliance', 'IFMS'];
+
 const BUSINESS_ALIASES = {
   RELIANCERETAIL: 'Reliance Retail',
   RELIANCE: 'Reliance Retail',
@@ -371,60 +371,8 @@ export default function DeepCleaning({ initialBusiness = 'All', lockBusiness = f
     setLoading(true);
     setError('');
     try {
-      if (useDemoBackendRead || lockBusiness) {
-        const response = await authenticatedApiRequest({
-          method: 'GET',
-          url: lockBusiness ? '/api/reliance-retail/deep-cleaning/records' : '/api/deep-cleaning/records',
-        });
-        setRecords(mergeDeepCleaningRecords({
-          submissions: response.data?.submissions || [],
-          uploads: response.data?.uploads || [],
-          stores: response.data?.stores || [],
-          profiles: response.data?.profiles || [],
-          visits: response.data?.visits || [],
-        }));
-        setVisibleCount(PAGE_SIZE);
-        return;
-      }
-      const [submissionsRes, uploadsRes, storesRes, profilesRes, visitsRes] = await Promise.all([
-        supabase
-          .from('fo_activity_submissions')
-          .select('*')
-          .eq('activity_type', 'deep_cleaning')
-          .order('submitted_at', { ascending: false })
-          .limit(1000),
-        supabase
-          .from('fo_activity_uploads')
-          .select('*')
-          .or('activity_type.eq.deep_cleaning,upload_role.ilike.%deep_cleaning%')
-          .order('uploaded_at', { ascending: false })
-          .limit(1500),
-        supabase
-          .from('store_master')
-          .select('id,store_code,store_name,client_name,state,business,latitude,longitude,gps_accuracy,status,metadata')
-          .in('business', BUSINESS_QUERY_VALUES)
-          .limit(5000),
-        supabase
-          .from('profiles')
-          .select('employee_code,username,full_name,display_name,business,state,role,designation,department')
-          .in('business', BUSINESS_QUERY_VALUES)
-          .limit(5000),
-        supabase
-          .from('fo_site_visits')
-          .select('id,store_code,store_name,site_name,client_name,state,employee_code,fo_user_id,check_in_time,metadata')
-          .order('check_in_time', { ascending: false })
-          .limit(3000),
-      ]);
-      for (const response of [submissionsRes, uploadsRes, storesRes, profilesRes, visitsRes]) {
-        if (response.error) throw response.error;
-      }
-      setRecords(mergeDeepCleaningRecords({
-        submissions: submissionsRes.data || [],
-        uploads: uploadsRes.data || [],
-        stores: storesRes.data || [],
-        profiles: profilesRes.data || [],
-        visits: visitsRes.data || [],
-      }));
+      const response = await authenticatedApiRequest({method:'GET',url:lockBusiness ? '/api/reliance-retail/deep-cleaning/records' : '/api/deep-cleaning/records'});
+      setRecords(mergeDeepCleaningRecords({submissions:response.data?.submissions||[], uploads:response.data?.uploads||[], stores:response.data?.stores||[],profiles:response.data?.profiles||[],visits:response.data?.visits||[]}));
       setVisibleCount(PAGE_SIZE);
     } catch (loadError) {
       console.warn('[myQPMS Deep Cleaning] load failed', loadError);
@@ -465,7 +413,7 @@ export default function DeepCleaning({ initialBusiness = 'All', lockBusiness = f
         record.remarks,
       ].join(' ').toLowerCase().includes(search);
     });
-  }, [filters, records]);
+  }, [filters, records, initialBusiness, lockBusiness]);
 
   const visibleRecords = useMemo(() => filteredRecords.slice(0, visibleCount), [filteredRecords, visibleCount]);
   const allVisibleUploads = useMemo(() => visibleRecords.flatMap((record) => record.uploads), [visibleRecords]);

@@ -1,3 +1,4 @@
+import RetailCleaningScheduleViewer from '../pages/reliance-retail/RetailCleaningScheduleViewer.jsx';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { lazy, Suspense } from 'react';
 import App from '../App.jsx';
@@ -131,6 +132,7 @@ const productionRoutes = [
           { path: 'reliance-retail/mis/:module', element: <RetailMisWorkspace /> },
           { path: 'settings/retail-mis-access', element: <RetailMisAssignments /> },
           { path: 'reliance-retail/store-master', element: <RetailStoreMaster /> },
+          { path: 'retail-cleaning-schedules', element: <RetailCleaningScheduleViewer /> },
           { path: 'reliance-retail/deep-cleaning', element: <RetailScopedDeepCleaning /> },
           { path: 'reliance-retail/fault-tracker', element: <Navigate to="/fault-tracker" replace /> },
           { path: 'reliance-retail/training', element: <RetailTraining /> },

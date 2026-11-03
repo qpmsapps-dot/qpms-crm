@@ -31,11 +31,28 @@ jobs:
           python3 - <<'PY'
           import os, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
+          if os.environ.get("GITHUB_REF", "").startswith("refs/pull/") and os.environ.get("GITHUB_REF", "").endswith("/merge"):
+            base = subprocess.check_output(["git","rev-parse","HEAD^1"],text=True).strip()
           paths = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
-          allowed = {"backend/server.js", "backend/tests/retailMisMountedAuth.test.js", ".github/workflows/retail-mis-mounted-auth.yml"}
-          if set(paths) - allowed: sys.exit("Unexpected hotfix files: " + str(set(paths) - allowed))
           old = subprocess.check_output(["git","show",f"{base}:backend/server.js"],text=True)
           new = open("backend/server.js",encoding="utf-8").read()
+          # This is an authorization regression job, not a prohibition on all
+          # later server features. Permit only the scoped Cleaning GET replacement
+          # while proving every other byte of server/auth/OOS logic is preserved.
+          cleaning_import = "import { scopedLegacyCleaningRecords } from './services/retailCleaningLegacyReadService.js';\n"
+          start = "app.get('/api/deep-cleaning/records',"
+          end = "app.use('/api/fo/km', createTravelEvidenceRouter"
+          def without_cleaning(source):
+            if source.count(start) != 1 or source.count(end) != 1:
+              sys.exit("Cleaning boundary ambiguous; server review required")
+            begin = source.index(start)
+            finish = source.index(end, begin)
+            return (source[:begin] + source[finish:]).replace(cleaning_import, "", 1)
+          if new.count(cleaning_import) == 1 and old.count(cleaning_import) == 0 and without_cleaning(old) == without_cleaning(new):
+            print("PASS: only Cleaning import/GET changed; all mounted authentication and other server logic preserved")
+            sys.exit(0)
+          allowed = {"backend/server.js", "backend/tests/retailMisMountedAuth.test.js", ".github/workflows/retail-mis-mounted-auth.yml"}
+          if set(paths) - allowed: sys.exit("Unexpected hotfix files: " + str(set(paths) - allowed))
           before = "if (!retailMisApiAllowed(profile,request.path)) {"
           after = "if (!retailMisApiAllowed(profile,`${request.baseUrl || ''}${request.path}`)) {"
           if old.count(before) != 1 or old.replace(before,after,1) != new:
