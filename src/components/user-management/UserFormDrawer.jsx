@@ -1,8 +1,11 @@
+import {RETAIL_MIS_ROLES,RETAIL_MIS_ASSIGNABLE_ROLES,RETAIL_OOS_STATES,retailOosState} from '../../../backend/shared/retailMisAccess.js';
+import {authenticatedApiRequest} from '../../services/api.js';
 import { X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { getAccessFoundation, getAccessScopeOptions, getHierarchyOptions, lookupAdminUserByEmail } from '../../services/api.js';
 
 const emptyForm = {
+  retail_mis_states: [], retail_mis_revision: 0, retail_mis_reason: '',
   user_type: 'internal',
   employee_code: '',
   full_name: '',
@@ -40,6 +43,7 @@ const emptyForm = {
 };
 
 const roleOptions = [
+  ...RETAIL_MIS_ASSIGNABLE_ROLES,
   'MD', 'COO', 'GM', 'South Head', 'Business Head', 'Branch Head', 'Operations Manager', 'KAM', 'FO', 'Pre-Sales', 'Business Development Head', 'Business Development Executive', 'Admin',
 ];
 const compatibilityRoleOptions = new Set(['Pre-Sales Executive', 'Pre-Sales Manager', 'BD Head', 'BD Executive']);
@@ -108,7 +112,7 @@ function normalizeInitial(initialUser) {
     mobile: initialUser.mobile || '',
     email: initialUser.email || '',
     state: initialUser.state || '',
-    role: initialUser.role || 'FO',
+    role: initialUser.raw?.role || initialUser.role || 'FO',
     designation: initialUser.designation || '',
     department: initialUser.department || '',
     business: initialUser.business || '',
@@ -259,8 +263,11 @@ export default function UserFormDrawer({
     const canonicalOptions = roleOptions.includes('Tender') ? roleOptions : [...roleOptions, 'Tender'];
     return compatibilityRoleOptions.has(existingRole) && !canonicalOptions.includes(existingRole)
       ? [...canonicalOptions, existingRole]
-      : canonicalOptions;
+      : canonicalOptions.map(value=>({value,label:RETAIL_MIS_ROLES[value]||value}));
   }, [initialUser?.role]);
+  const isMis=RETAIL_MIS_ASSIGNABLE_ROLES.includes(values.role);
+  const [misLoading,setMisLoading]=useState(false);
+  useEffect(()=>{if(!initialUser?.id)return;let live=true;queueMicrotask(()=>{if(live)setMisLoading(true);});authenticatedApiRequest({url:'/api/reliance-retail/mis/assignments'}).then(r=>{const a=r.data.result.assignments.find(a=>a.profile_id===initialUser.id);if(live&&a)setValues(v=>({...v,retail_mis_states:[...new Set(a.states.map(retailOosState))],retail_mis_revision:a.revision}));}).catch(()=>{if(live)setValues(v=>({...v,retail_mis_revision:null}));}).finally(()=>{if(live)setMisLoading(false);});return()=>{live=false;};},[initialUser?.id]);
   const [errors, setErrors] = useState({});
   const [hierarchyOptions, setHierarchyOptions] = useState({
     operationsManagers: [],
@@ -299,8 +306,7 @@ export default function UserFormDrawer({
   useEffect(() => {
     if (!open) return undefined;
     let active = true;
-    setFoundationLoading(true);
-    setFoundationError('');
+    queueMicrotask(()=>{if(active){setFoundationLoading(true);setFoundationError('');}});
     getAccessFoundation()
       .then((result) => {
         if (!active) return;
@@ -370,18 +376,15 @@ export default function UserFormDrawer({
 
   useEffect(() => {
     if (!open || mode !== 'add' || !values.access_scope_type) {
-      setScopeOptions([]);
-      setScopeOptionsError('');
+      queueMicrotask(()=>{setScopeOptions([]);setScopeOptionsError('');});
       return undefined;
     }
     if (['global', 'business_vertical', 'client', 'all_client', 'employee_self'].includes(values.access_scope_type)) {
-      setScopeOptions([]);
-      setScopeOptionsError('');
+      queueMicrotask(()=>{setScopeOptions([]);setScopeOptionsError('');});
       return undefined;
     }
     let active = true;
-    setScopeOptionsLoading(true);
-    setScopeOptionsError('');
+    queueMicrotask(()=>{if(active){setScopeOptionsLoading(true);setScopeOptionsError('');}});
     getAccessScopeOptions({
       scope_type: values.access_scope_type,
       client_id: values.access_client_id || undefined,
@@ -680,6 +683,9 @@ export default function UserFormDrawer({
   async function submit(event) {
     event.preventDefault();
     const nextErrors = {};
+    if(isMis&&(!values.retail_mis_states.length||values.retail_mis_states.some(s=>!RETAIL_OOS_STATES.includes(s))))nextErrors.retail_mis_states='Select one or more Retail states.';
+    if(isMis&&(misLoading||values.retail_mis_revision===null))nextErrors.retail_mis_states='Verified assignment revision unavailable; reopen after access is restored.';
+    if(isMis&&values.retail_mis_reason.trim().length<3)nextErrors.retail_mis_reason='Audit reason is required.';
     const fullName = values.full_name.trim();
     const email = values.email.trim().toLowerCase();
     const existingProfile = existingLookup?.profile || null;
@@ -699,8 +705,8 @@ export default function UserFormDrawer({
     if (!profileOnlyMd && values.user_type !== 'nims_contact' && !email) nextErrors.email = 'Email is required for Supabase Auth.';
     if (!profileOnlyMd && !values.mobile.trim()) nextErrors.mobile = 'Mobile number is required.';
     if (values.user_type !== 'nims_contact' && !values.role) nextErrors.role = 'Role is required.';
-    if (mode === 'add' && values.user_type !== 'nims_contact' && needsState(values.role) && !values.state) nextErrors.state = 'State is required.';
-    if (mode === 'add' && values.user_type !== 'nims_contact' && needsBusiness(values.role) && !values.business) nextErrors.business = 'Business is required.';
+    if (mode === 'add' && values.user_type !== 'nims_contact' && !isMis && needsState(values.role) && !values.state) nextErrors.state = 'State is required.';
+    if (mode === 'add' && values.user_type !== 'nims_contact' && !isMis && needsBusiness(values.role) && !values.business) nextErrors.business = 'Business is required.';
     if (mode === 'add' && values.user_type === 'internal' && values.hospital_access_enabled && !values.client_id) nextErrors.client_id = 'NIMS Hospital client is required.';
     if (mode === 'add' && values.user_type === 'internal' && values.hospital_access_enabled && !values.hospital_role_code) nextErrors.hospital_role_code = 'Hospital role is required.';
     if (mode === 'add' && values.user_type !== 'nims_contact' && !values.hospital_access_enabled && reportingRequiredRoles.has(values.role) && !values.manager_employee_code) {
@@ -759,8 +765,9 @@ export default function UserFormDrawer({
       display_name: values.display_name.trim() || fullName,
       mobile: values.mobile.trim() || null,
       email,
-      state: values.state.trim() || null,
+      state: isMis?values.retail_mis_states[0]:values.state.trim() || null,
       role: values.role,
+      ...(isMis?{retail_mis_states:values.retail_mis_states,retail_mis_revision:values.retail_mis_revision,retail_mis_reason:values.retail_mis_reason}:{}),
       designation: values.designation.trim() || null,
       department: values.department.trim() || null,
       business: values.business.trim() || null,
@@ -775,6 +782,7 @@ export default function UserFormDrawer({
       gm_employee_code: values.gm_employee_code.trim().toUpperCase() || null,
       coo_employee_code: values.coo_employee_code.trim().toUpperCase() || null,
     };
+    if(isMis){payload.business='Reliance Retail';if(mode==='add'){payload.mobile_access_enabled=false;payload.web_access_enabled=true;}}
     if (mode === 'add') {
       const selectedAccessRole = foundation.roles.find((role) => role.id === values.access_role_id);
       const selectedAccessModule = foundation.modules.find((module) => module.id === values.access_module_id);
@@ -790,7 +798,7 @@ export default function UserFormDrawer({
         payload.access_client_id = values.client_id;
         payload.hospital_role_code = values.hospital_role_code;
       }
-      payload.business = values.business.trim() || selectedAccessVertical?.name || null;
+      payload.business = isMis?'Reliance Retail':values.business.trim() || selectedAccessVertical?.name || null;
       payload.department = values.user_type === 'client' ? null : null;
       payload.designation = values.user_type === 'client' ? selectedAccessRole?.name || null : null;
       payload.reporting_manager_employee_code = values.user_type === 'client'
@@ -841,6 +849,7 @@ export default function UserFormDrawer({
         role_code: values.hospital_role_code,
       };
     }
+    if(isMis){delete payload.hospital_access;delete payload.access_assignment;delete payload.client_id;delete payload.existing_profile_id;for(const key of ['manager_employee_code','managers_manager_employee_code','business_head_employee_code','gm_employee_code','coo_employee_code'])delete payload[key];payload.business='Reliance Retail';}
     await onSave(payload);
   }
 
@@ -922,10 +931,11 @@ export default function UserFormDrawer({
               {values.user_type !== 'nims_contact' ? <section className="rounded-xl border border-slate-200 p-4">
                 <h3 className="text-sm font-bold text-slate-950">Work Mapping</h3>
                 <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                  <SelectField name="state" label="State" required={needsState(values.role)} value={values.state} options={resolvedStateOptions} error={errors.state} onChange={update} />
-                  <SelectField name="business" label="Business" required={needsBusiness(values.role)} value={values.business} options={resolvedBusinessOptions} error={errors.business} onChange={update} />
+                  {!isMis&&<SelectField name="state" label="State" required={needsState(values.role)} value={values.state} options={resolvedStateOptions} error={errors.state} onChange={update} />}
+                  <SelectField name="business" label="Business" disabled={isMis} required={!isMis&&needsBusiness(values.role)} value={isMis?'Reliance Retail':values.business} options={resolvedBusinessOptions} error={errors.business} onChange={update} />
                   <SelectField name="role" label="Base/Application Role" required value={values.role} options={selectableRoleOptions} error={errors.role} onChange={update} />
                 </div>
+
                 {values.role === 'MD' ? (
                   <label className="mt-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900">
                     <input
@@ -938,7 +948,7 @@ export default function UserFormDrawer({
                 ) : null}
               </section> : null}
 
-              {values.user_type === 'internal' ? (
+              {values.user_type === 'internal' && !isMis ? (
                 <section className="rounded-xl border border-slate-200 p-4">
                   <label className="flex items-center gap-2 text-sm font-bold text-slate-800">
                     <input
@@ -1120,14 +1130,16 @@ export default function UserFormDrawer({
                 </p>
                 <TextField name="email" label="Email" required type="email" value={values.email} error={errors.email} onChange={update} />
                 <TextField name="mobile" label="Mobile" required value={values.mobile} error={errors.mobile} onChange={update} />
-                <SelectField name="state" label="State" value={values.state} options={resolvedStateOptions} onChange={update} />
-                <SelectField name="business" label="Business" value={values.business} options={resolvedBusinessOptions} onChange={update} />
+                {!isMis&&<SelectField name="state" label="State" value={values.state} options={resolvedStateOptions} onChange={update} />}
+                <SelectField name="business" label="Business" disabled={isMis} value={isMis?'Reliance Retail':values.business} options={resolvedBusinessOptions} onChange={update} />
                 <SelectField name="role" label="Role" required value={values.role} options={selectableRoleOptions} error={errors.role} onChange={update} />
               </div>
             </section>
           )}
 
-          {mode === 'edit' ? (
+          {isMis&&<fieldset aria-label="MIS state assignments" className="mt-3 space-y-3"><legend>Assigned Retail states - TN includes PY</legend>{RETAIL_OOS_STATES.map(state=><label key={state} className="mr-3"><input type="checkbox" checked={values.retail_mis_states.includes(state)} onChange={event=>update('retail_mis_states',event.target.checked?[...values.retail_mis_states,state]:values.retail_mis_states.filter(s=>s!==state))}/>{state}</label>)}{errors.retail_mis_states&&<p role="alert">{errors.retail_mis_states}</p>}<TextField name="retail_mis_reason" label="MIS assignment audit reason" required value={values.retail_mis_reason} error={errors.retail_mis_reason} onChange={update}/><p>Only the selected MIS modules are granted. OOS offline confirmations remain MIS-submitted/unverified.</p></fieldset>}
+
+          {mode === 'edit' && !isMis ? (
             <section className="rounded-xl border border-slate-200 p-4">
               <label className="flex items-center gap-2 text-sm font-bold text-slate-800">
                 <input
@@ -1176,7 +1188,7 @@ export default function UserFormDrawer({
                 <div><dt className="text-[11px] font-bold uppercase text-slate-400">Type</dt><dd className="font-semibold text-slate-800">{values.user_type === 'nims_contact' ? 'NIMS Client Person' : 'QPMS Employee'}</dd></div>
                 <div><dt className="text-[11px] font-bold uppercase text-slate-400">Name</dt><dd className="font-semibold text-slate-800">{existingLookup?.profile?.full_name || values.full_name || 'Not set'}</dd></div>
                 <div><dt className="text-[11px] font-bold uppercase text-slate-400">Email</dt><dd className="font-semibold text-slate-800">{values.email || (values.user_type === 'nims_contact' ? 'Optional' : 'Not set')}</dd></div>
-                {values.user_type !== 'nims_contact' ? <div><dt className="text-[11px] font-bold uppercase text-slate-400">Primary Role</dt><dd className="font-semibold text-slate-800">{values.role || 'Not set'}</dd></div> : null}
+                {values.user_type !== 'nims_contact' ? <div><dt className="text-[11px] font-bold uppercase text-slate-400">Primary Role</dt><dd className="font-semibold text-slate-800">{RETAIL_MIS_ROLES[values.role]||values.role || 'Not set'}</dd></div> : null}
                 <div><dt className="text-[11px] font-bold uppercase text-slate-400">Client</dt><dd className="font-semibold text-slate-800">{values.user_type === 'nims_contact' ? 'NIMS Hyderabad' : selectedEmployeeClient?.name || selectedEmployeeClient?.code || 'Optional'}</dd></div>
                 <div><dt className="text-[11px] font-bold uppercase text-slate-400">{values.user_type === 'nims_contact' ? 'Designation' : 'Hospital Role'}</dt><dd className="font-semibold text-slate-800">{values.user_type === 'nims_contact' ? values.designation || 'Optional' : values.hospital_access_enabled ? optionLabel(nimsHospitalRoleOptions.find((option) => option.value === values.hospital_role_code)) : selectedAccessRole?.name || selectedAccessRole?.code || 'Optional'}</dd></div>
                 <div className="sm:col-span-2"><dt className="text-[11px] font-bold uppercase text-slate-400">Scope</dt><dd className="font-semibold text-slate-800">{values.hospital_access_enabled ? 'NIMS client-wide' : values.user_type === 'nims_contact' ? 'Registered mobile only' : values.access_scope_type ? scopeTypeLabel(values.access_scope_type) : 'Optional'}</dd></div>

@@ -1,3 +1,4 @@
+import {RETAIL_MIS_ROLES} from '../../../backend/shared/retailMisAccess.js';
 import { MoreVertical } from 'lucide-react';
 import UserStatusBadge from './UserStatusBadge.jsx';
 
@@ -44,9 +45,9 @@ export default function EmployeeTable({ employees, onOpen, onAction }) {
                   <p className="max-w-52 truncate">{employee.email || 'No email'}</p>
                   <p>{employee.mobile || 'No mobile'}</p>
                 </td>
-                <td className="px-4 py-3 text-xs font-semibold text-slate-600">{employee.role || '—'} / {employee.designation || '—'}</td>
+                <td className="px-4 py-3 text-xs font-semibold text-slate-600">{RETAIL_MIS_ROLES[employee.role]||employee.role || '—'} / {employee.designation || '—'}</td>
                 <td className="px-4 py-3 text-xs font-semibold text-slate-600">{employee.department || '—'} / {employee.business || '—'}</td>
-                <td className="px-4 py-3 text-sm font-semibold text-slate-600">{employee.state || '—'}</td>
+                <td className="px-4 py-3 text-sm font-semibold text-slate-600">{employee.misStates?.join(', ')||employee.state || '—'}</td>
                 <td className="px-4 py-3 text-xs font-semibold text-slate-600">
                   Web: {employee.webAccess ? 'On' : 'Off'}<br />Mobile: {employee.mobileAccess ? 'On' : 'Off'}
                 </td>

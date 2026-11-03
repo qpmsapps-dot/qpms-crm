@@ -1,3 +1,4 @@
+import {retailOosState} from '../shared/retailMisAccess.js';
 import XLSX from 'xlsx';
 import {createHash} from 'node:crypto';
 import {validateExcelContainer} from './retailAttendanceService.js';
@@ -25,8 +26,8 @@ function parseLegacyQuotation(bytes,filename,book,stores){
   if(candidates.length!==1)issue.push('One active verified canonical store required');
   if(raw.Quantity===''||raw['Unit Rate']===''||!Number.isFinite(quantity)||quantity<=0||!Number.isFinite(rate)||rate<0)issue.push('Valid quantity and unit rate required');
   if(issue.length){errors.push({...row,issues:issue});continue;}
-  const store=candidates[0],key=number;const group=groups.get(key)||{quotation_number:number,state:store.state,store_ids:[],items:[]};
-  if(group.state!==store.state){errors.push({...row,issues:['Cross-state quotation requires separate authorized review']});continue;}
+  const store=candidates[0],key=number;const group=groups.get(key)||{quotation_number:number,state:retailOosState(store.state),store_ids:[],items:[]};
+  if(group.state!==retailOosState(store.state)){errors.push({...row,issues:['Cross-state quotation requires separate authorized review']});continue;}
   group.store_ids=[...new Set([...group.store_ids,store.id])].sort();group.items.push({...row,store_id:store.id,store_code:code,description:String(raw.Description).trim(),quantity,unit_rate:rate});groups.set(key,group);
  }
  return {filename,sha256:createHash('sha256').update(bytes).digest('hex'),original_base64:bytes.toString('base64'),source_rows:[...groups.values()].reduce((n,g)=>n+g.items.length,0)+errors.length,groups:[...groups.values()],errors,can_save:errors.length===0&&groups.size>0};
@@ -118,6 +119,6 @@ function parseMisQuotation(bytes,filename,sheet,sheetName,stores){
  // Existing RPCs persist item JSON verbatim. Store the document header once on the
  // first line so current/revised headers and totals survive without changing SQL.
  if(items.length)items[0].quotation_header=header;
- const group={quotation_number:header.quotation_number,state:store?.state,store_ids:store?[store.id]:[],quotation_header:header,items};
+ const group={quotation_number:header.quotation_number,state:retailOosState(store?.state),store_ids:store?[store.id]:[],quotation_header:header,items};
  return {filename,source_format:'MIS_QUOTATION_V1',sha256:createHash('sha256').update(bytes).digest('hex'),original_base64:bytes.toString('base64'),source_rows:items.length,groups:[group],errors,warnings,can_save:errors.length===0&&items.length>0};
 }
