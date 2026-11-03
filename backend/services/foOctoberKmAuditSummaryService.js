@@ -1,0 +1,145 @@
+// Read-only October 2026 anomaly inventory. A GPS/accounting gap is NOT a payable adjustment.
+// Financial postings, rail-network matching and employee intent are deliberately outside this service.
+const FROM = '2026-10-01';
+const TO = '2026-10-31';
+const IST_MS = 5.5 * 60 * 60 * 1000;
+const finite = value => Number.isFinite(Number(value)) ? Number(value) : 0;
+const round = value => Math.round(value * 100) / 100;
+const mode = value => String(value || '').trim().toLowerCase();
+
+function attendanceKey(employeeCode, date) {
+  return String(employeeCode || '') + '|' + String(date || '');
+}
+function localDay(timestamp) {
+  const time = Date.parse(timestamp);
+  return Number.isFinite(time) ? new Date(time + IST_MS).toISOString().slice(0, 10) : null;
+}
+export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles = []) {
+  const byEmployee = new Map(profiles.map(p => [p.employee_code, p]));
+  const legsByDay = new Map();
+  for (const leg of travelLegs) {
+    if (leg.superseded_at) continue;
+    const day = localDay(leg.started_at);
+    if (!day || day < FROM || day > TO) continue;
+    const key = attendanceKey(leg.employee_code, day);
+    const current = legsByDay.get(key) || { train: 0, bike: 0, bikePaidKm: 0, bikeAmount: 0 };
+    if (mode(leg.travel_mode) === 'train') current.train += 1;
+    if (mode(leg.travel_mode) === 'bike') {
+      current.bike += 1;
+      current.bikePaidKm += finite(leg.payable_km);
+      current.bikeAmount += finite(leg.payable_amount);
+    }
+    legsByDay.set(key, current);
+  }
+
+  const summary = {
+    attendance_records: 0,
+    employees: 0,
+    calculated_petrol_rupees: 0,
+    possible_missing_cases: 0,
+    possible_missing_gps_gap_km: 0,
+    possible_excess_cases: 0,
+    possible_excess_gps_gap_km: 0,
+    bike_train_days: 0,
+    bike_train_payable_cases: 0,
+    bike_train_payable_rupees_at_issue: 0,
+    insufficient_gps_cases: 0,
+    verified_addition_rupees: null,
+    verified_deduction_rupees: null,
+  };
+  const cases = [];
+  const employees = new Set();
+  for (const row of attendances) {
+    const day = String(row.attendance_date || '');
+    if (day < FROM || day > TO || !row.employee_code) continue;
+    summary.attendance_records += 1;
+    employees.add(row.employee_code);
+    const gps = finite(row.filtered_gps_km);
+    const approved = finite(row.total_approved_km);
+    const petrol = finite(row.petrol_amount);
+    summary.calculated_petrol_rupees += petrol;
+    const motor = ['bike', 'car', 'own_vehicle'].includes(mode(row.travel_mode));
+    const possibleMissing = motor && gps > approved + 10;
+    const possibleExcess = approved > gps + 10 && petrol > 0;
+    const noGps = gps === 0 && approved > 0;
+    const savedLegs = legsByDay.get(attendanceKey(row.employee_code, day)) || { train: 0, bike: 0, bikePaidKm: 0, bikeAmount: 0 };
+    const mixed = savedLegs.train > 0 && savedLegs.bike > 0;
+    const mixedPaid = mixed && savedLegs.bikePaidKm > 0;
+    if (possibleMissing) { summary.possible_missing_cases += 1; summary.possible_missing_gps_gap_km += gps - approved; }
+    if (possibleExcess) { summary.possible_excess_cases += 1; summary.possible_excess_gps_gap_km += approved - gps; }
+    if (noGps) summary.insufficient_gps_cases += 1;
+    if (mixed) summary.bike_train_days += 1;
+    if (mixedPaid) { summary.bike_train_payable_cases += 1; summary.bike_train_payable_rupees_at_issue += savedLegs.bikeAmount; }
+    const flags = [
+      ...(mixedPaid ? ['BIKE_PAID_AND_TRAIN_RECORDED'] : mixed ? ['BIKE_TRAIN_MODE_SWITCH'] : []),
+      ...(possibleMissing ? ['GPS_ABOVE_PAYABLE_REVIEW'] : []),
+      ...(possibleExcess ? ['PAYABLE_ABOVE_GPS_REVIEW'] : []),
+      ...(noGps ? ['NO_FILTERED_GPS_EVIDENCE'] : []),
+    ];
+    if (!flags.length) continue;
+    const profile = byEmployee.get(row.employee_code) || {};
+    cases.push({
+      employee_code: row.employee_code,
+      employee_name: profile.full_name || row.display_name || row.employee_code,
+      state: profile.state || null,
+      business: profile.business || null,
+      date: day,
+      recorded_mode: mode(row.travel_mode),
+      gps_km: round(gps),
+      payable_km: round(approved),
+      petrol_rupees: round(petrol),
+      missing_gps_gap_km: possibleMissing ? round(gps - approved) : 0,
+      excess_gps_gap_km: possibleExcess ? round(approved - gps) : 0,
+      train_legs: savedLegs.train,
+      bike_legs: savedLegs.bike,
+      bike_leg_rupees_at_issue: round(savedLegs.bikeAmount),
+      flags,
+      disposition: 'EVIDENCE_REVIEW_REQUIRED',
+    });
+  }
+  summary.employees = employees.size;
+  for (const k of ['calculated_petrol_rupees', 'possible_missing_gps_gap_km', 'possible_excess_gps_gap_km', 'bike_train_payable_rupees_at_issue']) summary[k] = round(summary[k]);
+  cases.sort((a,b) =>
+    Number(b.flags.includes('BIKE_PAID_AND_TRAIN_RECORDED')) - Number(a.flags.includes('BIKE_PAID_AND_TRAIN_RECORDED'))
+    || Math.max(b.missing_gps_gap_km, b.excess_gps_gap_km) - Math.max(a.missing_gps_gap_km, a.excess_gps_gap_km)
+    || a.date.localeCompare(b.date));
+  return {
+    period: { from: FROM, to: TO, timezone: 'Asia/Kolkata' },
+    summary,
+    cases: cases.slice(0, 100),
+    total_flagged_records: cases.length,
+    truncated_cases: cases.length > 100,
+    processing_status: 'READ_ONLY_REVIEW',
+    explanation: 'GPS differences are candidate evidence, not approved deductions or credits. Bike plus Train on one day is a mode-switch flag, not proof of rail travel on the Bike leg. Track map-matching is not yet active.',
+  };
+}
+async function loadPages(client, table, fields, configure) {
+  const PAGE = 500;
+  const limit = 10000;
+  const results = [];
+  for (let offset = 0; offset < limit; offset += PAGE) {
+    let query = client.from(table).select(fields);
+    query = configure(query).range(offset, offset + PAGE - 1);
+    const { data, error } = await query;
+    if (error) throw error;
+    results.push(...(data || []));
+    if ((data || []).length < PAGE) return results;
+  }
+  throw Error('October audit exceeded the safe query limit; no partial report was returned.');
+}
+export async function loadOctoberKmAudit(client) {
+  const [attendances, travelLegs] = await Promise.all([
+    loadPages(client, 'fo_attendance', 'id,employee_code,display_name,attendance_date,travel_mode,filtered_gps_km,total_approved_km,petrol_amount',
+      q => q.gte('attendance_date', FROM).lte('attendance_date', TO).order('attendance_date').order('id')),
+    loadPages(client, 'fo_travel_legs', 'id,employee_code,started_at,travel_mode,payable_km,payable_amount,superseded_at',
+      q => q.gte('started_at', '2026-09-30T18:30:00Z').lt('started_at', '2026-10-31T18:30:00Z').is('superseded_at', null).order('started_at').order('id')),
+  ]);
+  const employees = [...new Set(attendances.map(a => a.employee_code).filter(Boolean))];
+  let profiles = [];
+  if (employees.length) {
+    const { data, error } = await client.from('profiles').select('employee_code,full_name,state,business').in('employee_code', employees);
+    if (error) throw error;
+    profiles = data || [];
+  }
+  return buildOctoberKmAudit(attendances, travelLegs, profiles);
+}
