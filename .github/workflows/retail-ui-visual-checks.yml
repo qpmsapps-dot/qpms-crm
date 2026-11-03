@@ -59,3 +59,7 @@ jobs:
         run: npx eslint src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx
       - name: Production frontend build
         run: npm run build
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Dashboard and Attendance browser regressions
+        run: npx playwright test tests/browser/ifmsDashboard.spec.js tests/browser/retailAttendance.spec.js --reporter=line
