@@ -53,3 +53,22 @@ export function summarizeTrainingEntries(rows){
    entries:row.source_kind==='IFMS_EXCEL'?1:0};
  },row=>row.reporting_state||row.state);
 }
+
+export function summarizeTrainingByClass(rows){
+ const base=summarizeTrainingEntries(rows);
+ const byState=new Map(base.rows.map(row=>[row.state,{hk_total:0,hk_completed:0,mepc_total:0,mepc_completed:0}]));
+ for(const row of rows||[]){
+  const state=retailReportState(row.reporting_state||row.state),target=byState.get(state);
+  if(!target)continue;
+  const type=String(row.training_class||'').trim().toUpperCase();
+  if(type!=='HK'&&type!=='MEPC')continue;
+  const key=type.toLowerCase();
+  const status=String(row.status||'').trim().toLowerCase();
+  target[`${key}_total`]++;
+  if(['completed','done','submitted','verified'].includes(status))target[`${key}_completed`]++;
+ }
+ const keys=['hk_total','hk_completed','mepc_total','mepc_completed'];
+ const results=base.rows.map(row=>({...row,...byState.get(row.state)}));
+ const total={...base.total,...Object.fromEntries(keys.map(key=>[key,results.reduce((n,r)=>n+r[key],0)]))};
+ return {rows:results,total};
+}
