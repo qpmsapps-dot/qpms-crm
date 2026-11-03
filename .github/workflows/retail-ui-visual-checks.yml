@@ -55,7 +55,7 @@ jobs:
             "backend/services/retailCleaningLegacyReadService.js": "770ad1d79e6e8aeeeeb74590374916170120aade",
             "backend/tests/clientDeepCleaningService.test.js": "69215f44b148a2081f6e22069661a62990c973a4",
             "backend/tests/retailCleaningDelivery.test.js": "1b7d0ff591cb3c101227d3ecaaf170ac6a1e588a",
-            "backend/tests/retailCleaningDeliveryPostgres.test.js": "4289ee342b6ff92e972d79f6c7225ae766ac22a4",
+            "backend/tests/retailCleaningDeliveryPostgres.test.js": "d553a1181d13eb736dd8c82653512ceddc5c422d",
             "docs/RETAIL_CLEANING_DELIVERY_20261103.md": "0a074541aaa78ba6393e73484e6686382c0cca23",
             "docs/RETAIL_CLEANING_IMAGE_CONFIGURATION.md": "6d10b63c95e1a1213cc1ee323cae6c4518235b13",
             "docs/evidence/retail-cleaning-upload-read-only-20261103.json": "f73d059614c48140b68c89bcbd61f39ccdce1a10",
