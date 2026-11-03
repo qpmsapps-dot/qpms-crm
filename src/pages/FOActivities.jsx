@@ -13542,7 +13542,7 @@ export default function FOActivities() {
             <div>
               <h3 className="text-sm font-black text-slate-900 dark:text-white">October 2026 · KM evidence review</h3>
               <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                Field officers with recorded KM, travel legs, or site visits · Read-only evidence, not approved additions or deductions.
+                All roles with recorded KM, travel legs, or site visits (FO, KAM, Operations Manager, Branch Head and others) · Read-only evidence, not approved additions or deductions.
                 Railway track verification and financial corrections are not active.
               </p>
             </div>
@@ -13565,18 +13565,20 @@ export default function FOActivities() {
             </div>
             <p className="text-xs text-slate-600 dark:text-slate-400">
               {octoberKmAudit.total_flagged_records} attendance records flagged. Showing {octoberKmAudit.cases.length} highest-priority records.
+              Role coverage: {Object.entries(octoberKmAudit.summary.roles || {}).map(([role, count]) => `${role}: ${count}`).join(", ") || "Unavailable"}.
               GPS gaps alone do not prove employee travel mode or reimbursement eligibility.
             </p>
             <div className="max-h-72 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
               <table className="w-full min-w-[840px] text-left text-xs">
                 <thead className="sticky top-0 bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-200">
-                  <tr>{["Date", "Employee", "State", "Mode", "GPS km", "Payable km", "Petrol ₹", "Evidence flags"].map(label =>
+                  <tr>{["Date", "Employee", "Role", "State", "Mode", "GPS km", "Payable km", "Petrol ₹", "Evidence flags"].map(label =>
                     <th key={label} scope="col" className="whitespace-nowrap p-2">{label}</th>)}</tr>
                 </thead>
                 <tbody>{octoberKmAudit.cases.map((entry, index) => (
                   <tr key={`${entry.employee_code}-${entry.date}-${index}`} className="border-t border-slate-100 dark:border-slate-800">
                     <td className="whitespace-nowrap p-2">{entry.date}</td>
                     <td className="p-2">{entry.employee_name}<span className="block text-[10px] text-slate-500">{entry.employee_code}</span></td>
+                    <td className="p-2">{entry.role || "Unmapped"}</td>
                     <td className="p-2">{entry.state || "—"}</td>
                     <td className="p-2">{entry.recorded_mode || "—"}</td>
                     <td className="p-2">{entry.gps_km.toFixed(2)}</td>
