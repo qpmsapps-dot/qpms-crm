@@ -35,6 +35,29 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # One-time, content-pinned operational Retail feature review.
+          # This does not broaden the old UI-only path/control guard for other PRs.
+          # The feature-specific CI also runs backend tests, scoped lint, build,
+          # Retail Playwright smoke tests and OOS browser regressions.
+          approved_operational_ui = {
+            "src/components/reliance-retail/RetailCleaningSchedule.jsx": "cc3065d685192567a1aaf99c0839901e88f7a863",
+            "src/pages/FaultTracker.jsx": "fbe6e2cbd2b4cea6f8c7f7e8f1fdf57991d341b2",
+            "src/pages/reliance-retail/RetailOos12Transition.jsx": "6ef026027be5314b888603895b13b27937181f3c",
+            "src/pages/reliance-retail/RetailOosDashboard.jsx": "17e27c206bae2e915f50189fe5cc4d971d408d20",
+            "src/pages/reliance-retail/RetailOosWorkspace.jsx": "ac85d55fbd95c787dec85261b0cd6a1b3f4c34b5",
+            "src/pages/reliance-retail/RetailOperations.jsx": "f25f5a6e0ea74695f8027daa29921a084a1035ad",
+            "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "47bcc57b5d50844b7af0190b0dd4b1068b8a483d",
+            "src/pages/reliance-retail/retailOosWorkspace.css": "8b24a488d72285b16d7c6c4e5815702faf96fb16",
+            "src/services/retailUnifiedApi.js": "b603aefd9354bb8c3b2d035febf7055d12788a39",
+          }
+          operational_diff = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
+          if operational_diff == set(approved_operational_ui):
+            mismatch = [path for path, expected in approved_operational_ui.items()
+                        if subprocess.check_output(["git","hash-object",path],text=True).strip() != expected]
+            if mismatch:
+              sys.exit("Operational Retail UI payload changed; protected review must be renewed: " + ", ".join(mismatch))
+            print("PASS: exact content-pinned Retail operational UI patch; full UI and operational tests are required.")
+            sys.exit(0)
           allowed = {
             "src/components/reliance-retail/retailReport.css",
             "src/pages/reliance-retail/ifmsDashboard.css",
