@@ -36,9 +36,13 @@ export function summarizeCleaningSchedules(schedules){
  });
 }
 export function summarizeReportedOperations(rows){
- return summarizeStateRows(rows,row=>({scheduled:1,completed:row.completed?1:0,
-  pending:row.completed?0:1,verified:row.source_kind==='IFMS_EXCEL'?0:(row.completed?1:0),
-  entries:row.source_kind==='IFMS_EXCEL'?1:0}));
+ return summarizeStateRows(rows,row=>{
+  const state=String(row.status||'').trim().toLowerCase();
+  const complete=row.completed===true||['submitted','completed','client approved','approved'].includes(state);
+  return {scheduled:1,completed:complete?1:0,pending:complete?0:1,
+   verified:row.source_kind==='IFMS_EXCEL'?0:(complete?1:0),
+   entries:row.source_kind==='IFMS_EXCEL'?1:0};
+ });
 }
 export function summarizeTrainingEntries(rows){
  return summarizeStateRows(rows,row=>{
