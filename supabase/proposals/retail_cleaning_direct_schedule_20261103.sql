@@ -93,7 +93,13 @@ begin
  and (case when geo='TN'
      then regexp_replace(upper(coalesce(s.state,'')),'[^A-Z0-9]','','g') in ('TN','PY','TAMILNADU','PUDUCHERRY')
        and nullif(public.retail_unified_owner(s.id,(c.scheduled_date::text||'T23:59:59+05:30')::timestamptz)->>'fo_profile_id','')::uuid=p_actor
-     else regexp_replace(upper(coalesce(s.state,'')),'[^A-Z0-9]','','g')=geo
+     else (case
+      when geo='KA' then regexp_replace(upper(coalesce(s.state,'')),'[^A-Z0-9]','','g') in ('KA','KN','KARNATAKA')
+      when geo='KL' then regexp_replace(upper(coalesce(s.state,'')),'[^A-Z0-9]','','g') in ('KL','KERALA')
+      when geo='TG' then regexp_replace(upper(coalesce(s.state,'')),'[^A-Z0-9]','','g') in ('TG','TELANGANA')
+      when geo='AP1' then regexp_replace(upper(coalesce(s.state,'')),'[^A-Z0-9]','','g') in ('AP1','ANDHRAPRADESH1')
+      when geo='AP2' then regexp_replace(upper(coalesce(s.state,'')),'[^A-Z0-9]','','g') in ('AP2','ANDHRAPRADESH2')
+      else false end)
    end);
  return jsonb_build_object('rows',result,'dispatch_scope',case when geo='TN' then 'ZONE' else 'STATE' end);
 end;
