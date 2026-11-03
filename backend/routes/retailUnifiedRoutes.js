@@ -2,10 +2,10 @@ import {directApproveSavedIdentities,savedReviewSource,proposeSavedIdentities,de
 import express from 'express';
 import {previewZoneWorkbook,parseZoneMappingWorkbook,submitZoneRecords} from '../services/retailZoneMappingService.js';
 import {previewZoneMappings} from '../shared/retailZoneMapping.js';
-import {unifiedSnapshot,previewUnified,stageUnified,createPendingStore,proposeUnified,decideUnified,applyUnified} from '../services/retailUnifiedService.js';
+import {unifiedSnapshot,previewUnified,stageUnified,createPendingStore,proposeUnified,decideUnified,applyUnified,scheduleDirectRetailCleaning} from '../services/retailUnifiedService.js';
 export function createRetailUnifiedRouter({getClient,environment=process.env}){
  const router=express.Router();
- const run=handler=>async(req,res)=>{try{res.json({ok:true,result:await handler(getClient(),req.profile,req.body,req)});}catch(e){const status=e.statusCode||({'42501':403,'40001':409,'23505':409,P0001:409,'22P02':400,'22007':400,PGRST202:503,'42P01':503}[e.code])||500;res.status(status).json({ok:false,...(e.validation_code?{code:e.validation_code,details:e.validation_details||[]}:{}),message:status===503?(req.path.startsWith('/zone-mapping')?'Provisional Zone draft storage awaits separate authorized setup. Do not rerun installed Unified migrations.':'Unified Store Master setup is awaiting authorized database installation.'):status>=500?'Unified Store Master is unavailable.':e.message});}};
+ const run=handler=>async(req,res)=>{try{res.json({ok:true,result:await handler(getClient(),req.profile,req.body,req)});}catch(e){const status=e.statusCode||({'42501':403,'40001':409,'23505':409,P0001:409,'22P02':400,'22007':400,'22023':400,PGRST202:503,'42P01':503}[e.code])||500;res.status(status).json({ok:false,...(e.validation_code?{code:e.validation_code,details:e.validation_details||[]}:{}),message:status===503?(req.path.startsWith('/zone-mapping')?'Provisional Zone draft storage awaits separate authorized setup. Do not rerun installed Unified migrations.':'Unified Store Master setup is awaiting authorized database installation.'):status>=500?'Unified Store Master is unavailable.':e.message});}};
  router.get('/saved-review',run((c,p,b,r)=>savedReviewSource(c,p,r.query,environment)));
  router.post('/saved-review/identity-propose',run(proposeSavedIdentities));
  router.post('/saved-review/super-admin-approve',run(directApproveSavedIdentities));
@@ -25,6 +25,7 @@ export function createRetailUnifiedRouter({getClient,environment=process.env}){
   let name;try{name=decodeURIComponent(r.get('x-file-name')||'');}catch{throw Object.assign(Error('Invalid filename.'),{statusCode:400});}
   return operation==='preview'?previewUnified(c,p,b,name):stageUnified(c,p,b,name,r.get('x-preview-stamp'));
  }));
+ router.post('/cleaning/schedule',express.json({limit:'6kb'}),run((c,p,b)=>scheduleDirectRetailCleaning(c,p,b)));
  router.post('/pending-store',run(createPendingStore));router.post('/propose',run(proposeUnified));router.post('/decide',run(decideUnified));router.post('/apply',run((c,p,b)=>applyUnified(c,p,b,environment)));
  router.use((e,req,res,next)=>{if(!e)return next();res.status(e.type==='entity.too.large'?413:400).json({ok:false,message:'Invalid request; Excel files must be .xlsx up to 10 MB.'});});
  return router;
