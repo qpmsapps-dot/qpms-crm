@@ -9,6 +9,8 @@ on:
       - 'tests/browser/ifmsDashboard.spec.js'
       - 'tests/browser/retailAttendance.spec.js'
       - 'tests/browser/retailReportVisualSmoke.spec.js'
+      - 'tests/browser/ifmsOctoberModules.spec.js'
+      - 'src/routes/AppRoutes.jsx'
       - 'tests/retailOos*.test.js'
   workflow_dispatch:
 
@@ -35,6 +37,30 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # One-time content-pinned IFMS October module-level UI feature release.
+          # No broad changes to the ordinary UI-only path/control-count guard below.
+          exact_october_module_ui = {
+            "src/components/reliance-retail/RetailExcelModuleRecords.jsx": "561fd60769234174ff1c1404da891b4938b28a6e",
+            "src/components/reliance-retail/retailExcelModuleRecords.css": "e6ee9786419a87755b2f4579a70ba2f0114f86a1",
+            "src/pages/reliance-retail/RetailOperations.jsx": "f43665e47b7e2627241b85e8993dd91188b72ebb",
+            "src/pages/reliance-retail/RetailTraining.jsx": "4cb54912e377e2e85432ef48a8f029d02c101b43",
+            "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "91fcc6e103ab68584ca32bbce6eb18db3eaee9f6",
+            "src/pages/reliance-retail/RetailOosWorkspace.jsx": "1a6fbc24dee31a6a6cdf3d142c180cc0365acf1d",
+            "src/pages/reliance-retail/RetailOperationalTrackers.jsx": "8d120e773fe8eeabeeb5967716dcb62ffe82493f",
+            "src/pages/reliance-retail/RetailManpower.jsx": "36be99ba7c6993499ed6d5a5b34112b88553000b",
+            "src/routes/AppRoutes.jsx": "08dd714f0d949d433eb96019c7b468d52ace6c9f",
+            "src/pages/reliance-retail/RetailDashboard.jsx": "f1d526f9a3d3419510e6e601372e4ccd12eb39ab",
+            "src/pages/reliance-retail/ifmsDashboard.css": "87789262ec3a9be53e24229780ff41d99ede5503",
+            "tests/browser/ifmsOctoberModules.spec.js": "d9007a4cc8bd2612d912ae0235291b871a1df1ac",
+          }
+          if set(files)-{".github/workflows/retail-ui-visual-checks.yml"} == set(exact_october_module_ui):
+            mismatched=[p for p,sha in exact_october_module_ui.items()
+              if subprocess.check_output(["git","hash-object",p],text=True).strip()!=sha]
+            if mismatched:
+              sys.exit("IFMS October module UI changed after review: "+", ".join(mismatched))
+            print("PASS: exact content-pinned IFMS October module UI; full CI including browser tests must pass.")
+            sys.exit(0)
+
           # One-time, content-pinned operational Retail feature review.
           # This does not broaden the old UI-only path/control guard for other PRs.
           # The feature-specific CI also runs backend tests, scoped lint, build,
@@ -114,13 +140,13 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
       - name: Lint affected UI pages
-        run: npx eslint src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
+        run: npx eslint src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailManpower.jsx src/components/reliance-retail/RetailExcelModuleRecords.jsx src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
       - name: Production frontend build
         run: npm run build
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: Retail report browser regressions and visual smoke
-        run: npx playwright test tests/browser/ifmsDashboard.spec.js tests/browser/retailAttendance.spec.js tests/browser/retailReportVisualSmoke.spec.js --reporter=line
+        run: npx playwright test tests/browser/ifmsDashboard.spec.js tests/browser/retailAttendance.spec.js tests/browser/retailReportVisualSmoke.spec.js tests/browser/ifmsOctoberModules.spec.js --reporter=line
       - name: OOS presentation and workflow regressions
         run: node --test --test-concurrency=1 tests/retailOosAgeing.test.js tests/retailOosAgeingBrowser.test.js tests/retailOos12Browser.test.js tests/retailOosTrainingBrowser.test.js tests/retailOosUiPresentationBrowser.test.js
       - name: Upload synthetic visual acceptance screenshots
