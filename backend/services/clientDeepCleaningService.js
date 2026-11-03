@@ -46,17 +46,21 @@ function normalizeKey(value) {
   return text(value).toUpperCase().replace(/[^A-Z0-9]+/g, '');
 }
 
-function retailStateKey(value) {
+export function retailStateKey(value) {
   const key = normalizedStateKey(value);
-  if (['PUDUCHERRY', 'PONDICHERRY'].includes(key)) return 'PY';
-  if (['AP', 'AP1', 'AP2', 'ANDHRAPRADESH'].includes(key)) return 'AP';
+  if (['PY','PUDUCHERRY','PONDICHERRY'].includes(key)) return 'TN';
+  if (key==='KN')return 'KA';
+  // AP-1 and AP-2 must never be merged for FO store selection.
   return key;
 }
 
-function retailStateQueryValues(value) {
+export function retailStateQueryValues(value) {
   const key = retailStateKey(value);
-  if (key === 'PY') return ['PY', 'Puducherry', 'Pondicherry'];
-  if (key === 'AP') return ['AP', 'AP-1', 'AP-2', 'Andhra Pradesh', 'Andhra Pradesh - 1', 'Andhra Pradesh - 2'];
+  if(key==='TN')return ['TN','PY','Tamil Nadu','Puducherry','Pondicherry'];
+  if(key==='KA')return ['KA','KN','Karnataka'];
+  if(key==='AP1')return ['AP-1','Andhra Pradesh - 1'];
+  if(key==='AP2')return ['AP-2','Andhra Pradesh - 2'];
+  if(key==='AP')return []; // Ambiguous AP without explicit AP-1 / AP-2 assignment.
   return stateScopeQueryValues(value);
 }
 
@@ -174,7 +178,7 @@ function storeWithinZoneState(store, zones, profile) {
     && retailStateKey(store.state) === state);
 }
 
-async function loadAuthorizedRetailZones(client, profile) {
+export async function loadAuthorizedRetailZones(client, profile) {
   const state = retailStateKey(profile?.state);
   if (!state || state === 'ALL' || state === 'ALLSTATES') return [];
   const { data: assignments, error: assignmentError } = await client
@@ -197,25 +201,21 @@ async function loadAuthorizedRetailZones(client, profile) {
 
 export async function loadRelianceRetailStore(client, profile, storeCode) {
   assertRelianceRetailFo(profile);
-  const code = nullableText(storeCode);
-  if (!code) {
-    throw clientDeepCleaningError(400, 'store_code_required', 'Store code is required.');
-  }
-  const zones = await loadAuthorizedRetailZones(client, profile);
-  if (!zones.length) throw clientDeepCleaningError(403, 'no_zone_assigned', 'No Zone assigned. Contact your administrator.');
-  const { data, error } = await client
-    .from('reliance_retail_store_operational_ownership')
-    .select(storeSelect())
-    .in('zone_id', zones.map((zone) => zone.id))
-    .eq('store_code', code)
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data || data.status !== 'Active' || !storeWithinZoneState(data, zones, profile)) {
-    throw clientDeepCleaningError(400, 'invalid_store', 'Store was not found or is inactive.');
-  }
-  const zone = zones.find((item) => item.id === data.zone_id);
-  return { ...data, zone_code: zone.zone_code, zone_name: zone.zone_name };
+  const code=nullableText(storeCode),state=retailStateKey(profile.state),states=retailStateQueryValues(profile.state);
+  if(!code)throw clientDeepCleaningError(400,'store_code_required','Store Code is required.');
+  if(!states.length)throw clientDeepCleaningError(403,'state_required','Verified geographic state is required.');
+  const zoneScoped=state==='TN';
+  const zones=zoneScoped?await loadAuthorizedRetailZones(client,profile):[];
+  if(zoneScoped&&!zones.length)throw clientDeepCleaningError(403,'no_zone_assigned','No TN Zone assigned. Contact your administrator.');
+  let query=client.from('reliance_retail_store_operational_ownership')
+    .select(storeSelect()).eq('store_code',code).in('state',states).eq('status','Active').limit(2);
+  if(zoneScoped)query=query.in('zone_id',zones.map(zone=>zone.id));
+  const {data,error}=await query;
+  if(error)throw error;
+  const candidate=(data||[]).filter(row=>retailStateKey(row.state)===state&&(!zoneScoped||storeWithinZoneState(row,zones,profile)));
+  if(candidate.length!==1)throw clientDeepCleaningError(400,'invalid_store','Store not found or is inactive, ambiguous, or outside your state/zone authorization.');
+  const store=candidate[0],zone=zones.find(item=>item.id===store.zone_id);
+  return {...store,zone_code:zone?.zone_code||store.zone_code||null,zone_name:zone?.zone_name||store.zone_name||null};
 }
 
 function storeSnapshot(store) {
@@ -269,37 +269,26 @@ function safeSearchTerm(value) {
 
 export async function searchRelianceRetailStores(client, profile, filters = {}) {
   assertRelianceRetailFo(profile);
-  const zones = await loadAuthorizedRetailZones(client, profile);
-  const limit = Math.max(1, Math.min(Number(filters.limit || 20), 50));
-  const page = Math.max(1, Number(filters.page || 1));
-  const from = (page - 1) * limit;
-  const to = from + limit - 1;
-  const q = safeSearchTerm(filters.q);
-  const requestedZone = nullableText(filters.zone_id);
-  if (requestedZone && !zones.some((zone) => zone.id === requestedZone)) {
-    throw clientDeepCleaningError(403, 'unauthorized_zone', 'The selected Zone is not assigned to this account.');
-  }
-  if (!zones.length) return { rows: [], zones: [], pagination: { page, limit, total: 0 } };
-  let query = client
-    .from('reliance_retail_store_operational_ownership')
-    .select(storeSelect(), { count: 'exact' })
-    .in('zone_id', requestedZone ? [requestedZone] : zones.map((zone) => zone.id))
-    .in('state', retailStateQueryValues(profile.state))
-    .eq('status', 'Active')
-    .order('store_code', { ascending: true })
-    .range(from, to);
-  if (q) {
-    query = query.or(`store_code.ilike.%${q}%,store_name.ilike.%${q}%`);
-  }
-  const { data, error, count } = await query;
-  if (error) throw error;
-  const rows = (data || [])
-    .filter((store) => storeWithinZoneState(store, zones, profile))
-    .map((store) => {
-      const zone = zones.find((item) => item.id === store.zone_id);
-      return serializeRelianceRetailStore({ ...store, zone_code: zone.zone_code, zone_name: zone.zone_name });
-    });
-  return { rows, zones, pagination: { page, limit, total: count ?? rows.length } };
+  const state=retailStateKey(profile.state),states=retailStateQueryValues(profile.state),zoneScoped=state==='TN';
+  const zones=zoneScoped?await loadAuthorizedRetailZones(client,profile):[];
+  const limit=Math.max(1,Math.min(Number(filters.limit||20),50)),page=Math.max(1,Number(filters.page||1));
+  const from=(page-1)*limit,to=from+limit-1,q=safeSearchTerm(filters.q);
+  const requestedZone=nullableText(filters.zone_id);
+  if(requestedZone&&(!zoneScoped||!zones.some(zone=>zone.id===requestedZone)))throw clientDeepCleaningError(403,'unauthorized_zone','Zone not assigned to this FO.');
+  if(!states.length||zoneScoped&&!zones.length)return {rows:[],zones,pagination:{page,limit,total:0}};
+  let query=client.from('reliance_retail_store_operational_ownership')
+    .select(storeSelect(),{count:'exact'}).in('state',states).eq('status','Active')
+    .order('store_code',{ascending:true}).range(from,to);
+  if(zoneScoped)query=query.in('zone_id',requestedZone?[requestedZone]:zones.map(zone=>zone.id));
+  if(q)query=query.or(`store_code.ilike.%${q}%,store_name.ilike.%${q}%`);
+  const {data,error,count}=await query;
+  if(error)throw error;
+  const rows=(data||[])
+    .filter(store=>retailStateKey(store.state)===state&&(!zoneScoped||storeWithinZoneState(store,zones,profile)))
+    .map(store=>{const zone=zones.find(z=>z.id===store.zone_id);
+      return serializeRelianceRetailStore({...store,zone_code:zone?.zone_code||store.zone_code,
+        zone_name:zone?.zone_name||store.zone_name});});
+  return {rows,zones:zoneScoped?zones:[],pagination:{page,limit,total:count??rows.length}};
 }
 
 export async function createClientDeepCleaningSubmission(client, profile, payload = {}) {

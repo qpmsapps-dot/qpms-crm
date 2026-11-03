@@ -23,12 +23,26 @@ test('actual store denominators, unique completions, state filters and TN/PY rep
  const data={...source,calls:[{id:'done',retail_store_id:store,kind:'CM',completed_on:'2026-10-10'}]};
  const report=maintenanceReport(data,'2026-10');
  assert.equal(report.modules.cm.rows.length,6);
- assert.deepEqual(report.modules.cm.total,{eligible:2,completed:1,remaining:1});
- assert.deepEqual(report.modules.pm.total,{eligible:2,completed:0,remaining:2});
+ assert.deepEqual(report.modules.cm.total,{eligible:2,completed:1,remaining:1,call_logs:1});
+ assert.deepEqual(report.modules.pm.total,{eligible:2,completed:0,remaining:2,call_logs:0});
  assert.equal(report.modules.cm.rows.find(r=>r.state==='TN').completed,1);
  assert.equal(report.modules.cm.rows.some(r=>r.state==='PY'),false);
  assert.equal(maintenanceReport(data,'2026-10',{state:'TN'}).modules.cm.stores.length,1);
  assert.equal(maintenanceReport({...source,stores:[]},'2026-10').modules.pm.total.eligible,0);
+});
+test('multiple CM logs for the same store retain all records but count a single completed store',()=>{
+  const logs=[
+    {id:'first',retail_store_id:store,kind:'CM',completed_on:'2026-10-03',completed_at:'2026-10-03T09:00:00Z'},
+    {id:'second',retail_store_id:store,kind:'CM',completed_on:'2026-10-12',completed_at:'2026-10-12T09:00:00Z'},
+    {id:'pm',retail_store_id:store,kind:'PM',completed_on:'2026-10-19',completed_at:'2026-10-19T09:00:00Z'}
+  ];
+  const result=maintenanceReport({...source,calls:logs},'2026-10');
+  assert.deepEqual(result.modules.cm.total,{eligible:2,completed:1,remaining:1,call_logs:2});
+  assert.deepEqual(result.modules.pm.total,{eligible:2,completed:1,remaining:1,call_logs:1});
+  const row=result.modules.cm.stores.find(s=>s.id===store);
+  assert.equal(row.call_count,2);
+  assert.equal(row.record_id,'second');
+  assert.deepEqual(row.call_logs.map(c=>c.id),['first','second']);
 });
 test('Thermography keeps three statuses, overdue subset and late approval history distinct',()=>{
  const data={...source,thermography:[{id:'1',retail_store_id:store,status:'Scheduled'},{id:'2',retail_store_id:store,status:'Completed',approval_due_on:'2026-10-31'},{id:'3',retail_store_id:store,status:'Completed',approval_due_on:'2026-10-30'},{id:'4',retail_store_id:store,status:'Client Approved',approved_late:true}]};

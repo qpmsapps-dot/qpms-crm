@@ -16,15 +16,22 @@ function selected(stores,{state='',store=''}={}) {
   return stores.filter(s=>(!state||reportingState(s.state)===reportingState(state))&&(!store||s.id===store));
 }
 export function maintenanceReport(source,month,filter={}) {
-  const stores=selected(source.stores,filter),calls=new Map(source.calls.map(c=>[`${c.retail_store_id}:${c.kind}`,c]));
+  const stores=selected(source.stores,filter),calls=new Map();
+  // Preserve every CM/PM call, rather than replacing earlier entries for a store.
+  for(const call of source.calls){
+    const key=`${call.retail_store_id}:${call.kind}`;
+    if(!calls.has(key))calls.set(key,[]);
+    calls.get(key).push(call);
+  }
+  for(const list of calls.values())list.sort((a,b)=>String(a.completed_at).localeCompare(String(b.completed_at)));
   const modules={};
   for(const kind of ['CM','PM']) {
     const rows=stores.filter(s=>s.status==='Active'||calls.has(`${s.id}:${kind}`)).map(s=>{
-      const call=calls.get(`${s.id}:${kind}`);
-      return {...s,reporting_state:reportingState(s.state),completed:Boolean(call),completed_on:call?.completed_on??null,completed_at:call?.completed_at??null,completed_by:call?.completed_by??null,record_id:call?.id??null};
+      const history=calls.get(`${s.id}:${kind}`)||[],call=history.at(-1);
+      return {...s,reporting_state:reportingState(s.state),completed:history.length>0,call_count:history.length,call_logs:history,completed_on:call?.completed_on??null,completed_at:call?.completed_at??null,completed_by:call?.completed_by??null,record_id:call?.id??null};
     });
     const states=STATE_OPTIONS.map(state=>{const group=rows.filter(s=>s.reporting_state===state),completed=group.filter(s=>s.completed).length;return {state,eligible:group.length,completed,remaining:group.length-completed};});
-    modules[kind.toLowerCase()]={status:'ready',rows:states.filter(s=>!filter.state||s.state===reportingState(filter.state)),stores:rows,window:maintenanceWindow(month,kind,source.today),total:{eligible:rows.length,completed:rows.filter(s=>s.completed).length,remaining:rows.filter(s=>!s.completed).length}};
+    modules[kind.toLowerCase()]={status:'ready',rows:states.filter(s=>!filter.state||s.state===reportingState(filter.state)),stores:rows,window:maintenanceWindow(month,kind,source.today),total:{eligible:rows.length,completed:rows.filter(s=>s.completed).length,remaining:rows.filter(s=>!s.completed).length,call_logs:rows.reduce((n,s)=>n+s.call_count,0)}};
   }
   return {month,today:source.today,stores,events:source.events.filter(e=>source.calls.some(c=>c.id===e.entity_id&&stores.some(s=>s.id===c.retail_store_id))),modules};
 }
