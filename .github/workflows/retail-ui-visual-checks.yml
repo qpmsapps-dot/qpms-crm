@@ -1,0 +1,61 @@
+name: Reliance Retail UI-only verification
+
+on:
+  pull_request:
+    paths:
+      - 'src/pages/reliance-retail/**'
+      - 'src/components/reliance-retail/**'
+      - '.github/workflows/retail-ui-visual-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Build, scoped lint, and protected-file guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Protect business logic and other modules
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess, sys
+          base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
+          files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          allowed = {
+            "src/components/reliance-retail/retailReport.css",
+            "src/pages/reliance-retail/ifmsDashboard.css",
+            "src/pages/reliance-retail/retailStoreVisual.css",
+            "src/pages/reliance-retail/RetailAttendance.jsx",
+            "src/pages/reliance-retail/RetailStoreMaster.jsx",
+            "src/pages/reliance-retail/RetailTraining.jsx",
+            "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx",
+            "src/pages/reliance-retail/RetailOperations.jsx",
+            ".github/workflows/retail-ui-visual-checks.yml"
+          }
+          unexpected = [p for p in files if p not in allowed]
+          if unexpected: sys.exit("Unexpected/protected files changed: " + ", ".join(unexpected))
+          jsx = [p for p in files if p.endswith(".jsx")]
+          for path in jsx:
+            old = subprocess.check_output(["git","show",f"{base}:{path}"],text=True)
+            new = open(path,encoding="utf-8").read()
+            for name,pat in {"buttons":r"<button\\b","inputs":r"<input\\b","selects":r"<select\\b","anchors":r"<a\\b","api references":r"Api\\.","retail routes":r"/reliance-retail/"}.items():
+              if len(re.findall(pat,old)) != len(re.findall(pat,new)):
+                sys.exit(f"{path}: {name} count changed")
+          print(f"PASS: {len(files)} scoped files; controls and references preserved.")
+          PY
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Lint affected UI pages
+        run: npx eslint src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx
+      - name: Production frontend build
+        run: npm run build
