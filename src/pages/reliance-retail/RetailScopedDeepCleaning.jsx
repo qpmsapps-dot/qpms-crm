@@ -50,14 +50,13 @@ export default function RetailScopedDeepCleaning() {
  const work=[...(report?.submissions||[]),...historical.submissions].filter(matches),totals=report?.totals;
  const reportedCompleted=historical.submissions.length;
  const reportedPending=historical.schedules.filter(row=>row.display_status==='Scheduled').length;
- const remaining=totals?Math.max(0,totals.scheduled-totals.completed):null;
  const completion=totals?.scheduled>0?`${Math.round(totals.completed/totals.scheduled*10000)/100}%`:'N/A';
  async function exportReport(){
   setExporting(true);setError('');
   try{
    const {default:ExcelJS}=await import('exceljs'),{downloadUnified}=await import('../../utils/retailUnifiedExport.js'),book=new ExcelJS.Workbook(),sheet=book.addWorksheet('Filtered schedules');
    sheet.addRow(['Store Code','Store Name','Geographic State','Reporting State','Scheduled Date','Status','Not Completed Reason','Overdue','Completion Submission IDs','Source','FO evidence verified']);
-   rows.forEach(row=>sheet.addRow([row.store.store_code,row.store.store_name,row.store.state,row.reporting_state,row.scheduled_date,row.display_status,row.not_done_reason,Boolean(row.overdue),(row.submission_ids||[]).join(', '),isExcelSource(row)?'October Excel (reported)':'Operational','No evidence verified in Excel'===row.not_done_reason?'No':isExcelSource(row)?'No':'See recorded submissions']));
+   rows.forEach(row=>sheet.addRow([row.store.store_code,row.store.store_name,row.store.state,row.reporting_state,row.scheduled_date,row.display_status,row.not_done_reason,Boolean(row.overdue),(row.submission_ids||[]).join(', '),isExcelSource(row)?'October Excel (reported)':'Operational',isExcelSource(row)?'No':'See recorded submissions']));
    const submitted=book.addWorksheet('Recorded work');submitted.addRow(['Store Code','Date','Recorded Status','Before Images','After Images','Source','Verified FO submission']);
    work.forEach(row=>submitted.addRow([row.store.store_code,row.deep_cleaning_date,row.status,row.before_count??'',row.after_count??'',isExcelSource(row)?'October Excel (reported)':'Operational',isExcelSource(row)?'No':'Yes']));
    await downloadUnified(book,'Retail_Deep_Cleaning.xlsx');
