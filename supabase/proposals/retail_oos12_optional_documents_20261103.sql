@@ -55,7 +55,21 @@ declare o public.retail_oos12_orders%rowtype;e public.retail_oos12_events%rowtyp
    if p_fields ? 'documents_ref' then
      if jsonb_typeof(p_fields->'documents_ref')<>'string' or length(btrim(p_fields->>'documents_ref')) not between 1 and 2000 then raise exception 'Valid document reference required';end if;
      v:=p_fields->>'submission_date';
-     if jsonb_typeof(p_fields->'submission_date')<>'string' or v!~'^\\d{4}-\\d{2}-\\d{2}$' or v::date>today or to_char(v::date,'YYYY-MM-DD')<>v then raise exception 'Valid document submission date required';end if;
+     if jsonb_typeof(p_fields->'submission_date')<>'string' or v!~'^[0-9]{4}-[0-9]{2}-[0-9]{2} or v::date>today or to_char(v::date,'YYYY-MM-DD')<>v then raise exception 'Valid document submission date required';end if;
+     if cardinality(coalesce(p_evidence,'{}'::uuid[]))=0 then raise exception 'Supporting evidence required when documents are marked submitted';end if;
+   end if;
+ end if;
+ if regexp_replace(upper(p_fields->>'confirming_department'),'[^A-Z0-9]','','g')<>regexp_replace(upper(spec->>'confirmation_department'),'[^A-Z0-9]','','g') then raise exception 'Confirmation department must be %',spec->>'confirmation_department';end if;
+ if cardinality(coalesce(p_evidence,'{}'::uuid[]))<(spec->>'minimum_evidence')::int or cardinality(coalesce(p_evidence,'{}'::uuid[]))>20 or array_position(p_evidence,null) is not null or cardinality(coalesce(p_evidence,'{}'::uuid[]))<>(select count(distinct x) from unnest(coalesce(p_evidence,'{}'::uuid[])) x) then raise exception 'Stage evidence requirements were not satisfied';end if;
+ if exists(select 1 from unnest(p_evidence) eid left join public.retail_oos12_evidence d on d.id=eid where d.id is null or d.actor_id<>p_actor or d.order_id<>o.id or d.stage<>o.stage+1 or d.revision<>o.revision or d.status<>'finalized'
+ or not exists(select 1 from storage.objects s where s.bucket_id='retail-oos12-evidence' and s.name=d.path and s.metadata->>'mimetype'=d.mime_type and (s.metadata->>'size')::bigint=d.file_size)) then raise exception 'Verified finalized current-stage evidence required';end if;
+ b:=to_jsonb(o);changed_at:=clock_timestamp();
+ update public.retail_oos12_orders set stage=stage+1,status=code,revision=revision+1,details=details||p_fields||(case when o.stage+1=9 then jsonb_build_object('documents_pending',not(p_fields ? 'documents_ref')) else '{}'::jsonb end),updated_at=changed_at,status_entered_at=changed_at where id=o.id returning * into o;
+ insert into public.retail_oos12_events(order_id,request_id,actor_id,action,before_value,after_value,evidence,created_at) values(o.id,p_request,p_actor,code,b,to_jsonb(o),payload,changed_at);
+ return jsonb_build_object('replayed',false,'order',public.retail_service_public_order(to_jsonb(o)));end;$function$
+;
+commit;
+ or v::date>today or to_char(v::date,'YYYY-MM-DD')<>v then raise exception 'Valid document submission date required';end if;
      if cardinality(coalesce(p_evidence,'{}'::uuid[]))=0 then raise exception 'Supporting evidence required when documents are marked submitted';end if;
    end if;
  end if;
