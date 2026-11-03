@@ -13542,7 +13542,7 @@ export default function FOActivities() {
             <div>
               <h3 className="text-sm font-black text-slate-900 dark:text-white">October 2026 · KM evidence review</h3>
               <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                All states and employees · Read-only GPS/payable comparison, not approved additions or deductions.
+                Field officers with recorded KM, travel legs, or site visits · Read-only evidence, not approved additions or deductions.
                 Railway track verification and financial corrections are not active.
               </p>
             </div>
