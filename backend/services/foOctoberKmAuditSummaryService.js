@@ -36,6 +36,7 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
   const summary = {
     attendance_records: 0,
     employees: 0,
+    roles: {},
     calculated_petrol_rupees: 0,
     possible_missing_cases: 0,
     possible_missing_gps_gap_km: 0,
@@ -50,6 +51,7 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
   };
   const cases = [];
   const employees = new Set();
+  const roleEmployees = new Map();
   for (const row of attendances) {
     const day = String(row.attendance_date || '');
     if (day < FROM || day > TO || !row.employee_code) continue;
@@ -57,13 +59,17 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
     const approved = finite(row.total_approved_km);
     const petrol = finite(row.petrol_amount);
     const savedLegs = legsByDay.get(attendanceKey(row.employee_code, day)) || { train: 0, bike: 0, recordedLegs: 0, bikePaidKm: 0, bikeAmount: 0 };
-    // Scope the FO report to evidence of KM, actual travel, or a site visit.
-    // A bare attendance row (including an Admin account) is not an audit subject.
+    // Include ANY role with evidence of KM, actual travel, or a site visit.
+    // A bare attendance row (regardless of role) is not an audit subject.
     const hasActivity = gps > 0 || approved > 0 || petrol > 0 ||
       savedLegs.recordedLegs > 0 || attendanceIdsWithVisits.has(row.id);
     if (!hasActivity) continue;
     summary.attendance_records += 1;
     employees.add(row.employee_code);
+    const profile = byEmployee.get(row.employee_code) || {};
+    const role = profile.role || 'Unmapped';
+    if (!roleEmployees.has(role)) roleEmployees.set(role, new Set());
+    roleEmployees.get(role).add(row.employee_code);
     summary.calculated_petrol_rupees += petrol;
     const motor = ['bike', 'car', 'own_vehicle'].includes(mode(row.travel_mode));
     const possibleMissing = motor && gps > approved + 10;
@@ -83,10 +89,10 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
       ...(noGps ? ['NO_FILTERED_GPS_EVIDENCE'] : []),
     ];
     if (!flags.length) continue;
-    const profile = byEmployee.get(row.employee_code) || {};
     cases.push({
       employee_code: row.employee_code,
       employee_name: profile.full_name || row.display_name || row.employee_code,
+      role,
       state: profile.state || null,
       business: profile.business || null,
       date: day,
@@ -104,6 +110,7 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
     });
   }
   summary.employees = employees.size;
+  summary.roles = Object.fromEntries([...roleEmployees.entries()].map(([role, codes]) => [role, codes.size]));
   for (const k of ['calculated_petrol_rupees', 'possible_missing_gps_gap_km', 'possible_excess_gps_gap_km', 'bike_train_payable_rupees_at_issue']) summary[k] = round(summary[k]);
   cases.sort((a,b) =>
     Number(b.flags.includes('BIKE_PAID_AND_TRAIN_RECORDED')) - Number(a.flags.includes('BIKE_PAID_AND_TRAIN_RECORDED'))
@@ -156,7 +163,7 @@ export async function loadOctoberKmAudit(client) {
   const employees = [...new Set(attendances.map(a => a.employee_code).filter(Boolean))];
   let profiles = [];
   if (employees.length) {
-    const { data, error } = await client.from('profiles').select('employee_code,full_name,state,business').in('employee_code', employees);
+    const { data, error } = await client.from('profiles').select('employee_code,full_name,role,state,business').in('employee_code', employees);
     if (error) throw error;
     profiles = data || [];
   }
