@@ -20,3 +20,98 @@
 
 @media(min-width:1201px) and (max-width:1500px){.ifms-thermography-content{grid-template-columns:minmax(132px,.65fr) minmax(0,1.35fr)}}
 .ifms-card-footer{margin-top:auto}.ifms-card-content{align-content:start}
+
+/* Reliance reporting presentation: retain current QPMS brand and original module behaviour. */
+.ifms-page-header {
+  margin-bottom: 22px;
+}
+.ifms-page-header h1 {
+  line-height: 1.24;
+}
+.ifms-toolbar {
+  border-radius: 14px;
+  padding: 16px 18px;
+  border-color: #dce5f0;
+  box-shadow: 0 6px 20px rgba(22, 56, 92, .035);
+}
+.ifms-dashboard select,
+.ifms-month,
+.ifms-toolbar button {
+  min-height: 42px;
+  border-radius: 9px;
+}
+.ifms-grid {
+  gap: 20px;
+}
+.ifms-card {
+  border-radius: 15px;
+  border-color: #dce5f0;
+  box-shadow: 0 7px 24px rgba(22, 56, 92, .055);
+}
+.ifms-card-header {
+  padding: 18px;
+  background: linear-gradient(110deg,#fff,#f9fbff);
+}
+.ifms-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+}
+.ifms-card h2 {
+  font-size: 16px;
+  line-height: 1.35;
+}
+.ifms-metrics {
+  padding: 20px 18px 14px;
+  gap: 13px;
+}
+.ifms-metric strong {
+  font-variant-numeric: tabular-nums;
+}
+.ifms-metric span,
+.ifms-card-heading p,
+.ifms-legend,
+.ifms-note {
+  font-size: 12px;
+}
+.ifms-card-content {
+  padding: 12px 18px 18px;
+}
+.ifms-table-wrap {
+  overflow-x: auto;
+}
+.ifms-table-wrap table {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ifms-table-wrap thead th {
+  font-size: 11px;
+  font-weight: 700;
+}
+.ifms-table-wrap :is(th,td) {
+  padding-block: 9px;
+}
+.ifms-card-footer {
+  padding: 14px 18px;
+  font-size: 12px;
+  background: #fbfdff;
+}
+.ifms-card-footer a {
+  font-size: 12px;
+}
+@media (max-width:1199px) {
+  .ifms-card-content {
+    grid-template-columns: minmax(0,1fr);
+  }
+}
+@media (max-width:700px) {
+  .ifms-grid { gap: 14px; }
+  .ifms-toolbar { padding: 13px; }
+  .ifms-card-header { padding: 14px; }
+  .ifms-icon { width: 36px; height: 36px; }
+  .ifms-metrics { padding: 15px 14px 12px; gap: 10px; }
+  .ifms-card-content { padding: 10px 14px 15px; }
+  .ifms-card-footer { padding: 13px 14px; }
+  .ifms-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .ifms-table-wrap table { font-size: 12px; }
+}
