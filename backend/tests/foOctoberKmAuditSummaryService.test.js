@@ -109,7 +109,7 @@ test('Read path pages 505 attendances and scopes site visits by attendance ID', 
 test('all KM-active roles are included: FO, KAM, Operations Manager, Branch Head and others', () => {
   const roles = ['FO', 'KAM', 'Operations Manager', 'Branch Head', 'Business Head', 'Admin'];
   const attendanceRows = roles.map((role, i) => ({
-    ...attendance('2026-10-16', i === 5 ? 0 : 15, i === 5 ? 0 : 12, i === 5 ? 0 : 48),
+    ...attendance('2026-10-16', i === 5 ? 0 : 25, i === 5 ? 0 : 12, i === 5 ? 0 : 48),
     id: 'active-' + i, employee_code: 'EMP-' + i,
   }));
   const profileRows = roles.map((role, i) => ({
