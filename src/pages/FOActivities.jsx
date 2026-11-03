@@ -11510,7 +11510,7 @@ export default function FOActivities() {
   const hasActiveSession = authStatus === "ready" && (Boolean(session?.access_token) || hasDemoBackendReadSession);
   const currentRole = normalizeRoleKey(generatedUserRole(user));
   const fullTechnicalAccess = hasTechnicalKmAccess(user);
-  const canViewKmAudit = !readOnlyDemo && currentRole === "admin";
+  const canViewKmAudit = !readOnlyDemo && ["admin", "qpmsadmin"].includes(currentRole);
   const canRunBatchKmRecalculation = !readOnlyDemo && ["admin", "developer", "qpmsadmin", "md", "coo"].includes(currentRole);
   const canUseLegacyDashboardExcelExport =
     !readOnlyDemo && (fullTechnicalAccess || currentRole === "coo");
@@ -11538,6 +11538,9 @@ export default function FOActivities() {
   const [kmAuditDataset, setKmAuditDataset] = useState(null);
   const [kmAuditBusy, setKmAuditBusy] = useState(false);
   const [kmAuditError, setKmAuditError] = useState("");
+  const [octoberKmAudit, setOctoberKmAudit] = useState(null);
+  const [octoberKmAuditBusy, setOctoberKmAuditBusy] = useState(false);
+  const [octoberKmAuditError, setOctoberKmAuditError] = useState("");
   const [mapRouteOfficerId, setMapRouteOfficerId] = useState(null);
   const [supportOfficerId, setSupportOfficerId] = useState(null);
   const [supportContext, setSupportContext] = useState({ attendanceRows: [], visitRows: [] });
@@ -11981,6 +11984,30 @@ export default function FOActivities() {
       window.alert("Unable to export Operations report for the selected date range. Please retry.");
     } finally {
       setDashboardExportBusy(false);
+    }
+  }
+
+  async function loadOctoberKmAuditReview() {
+    if (!canViewKmAudit || octoberKmAuditBusy) return;
+    if (octoberKmAudit) {
+      setOctoberKmAudit(null);
+      setOctoberKmAuditError("");
+      return;
+    }
+    setOctoberKmAuditBusy(true);
+    setOctoberKmAuditError("");
+    try {
+      await authSessionManager().requireSession();
+      const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/km/october-audit-summary`);
+      const payload = await response.json();
+      if (!response.ok || payload.ok !== true || payload.processing_status !== "READ_ONLY_REVIEW") {
+        throw new Error(payload.message || "October KM audit could not be loaded.");
+      }
+      setOctoberKmAudit(payload);
+    } catch (error) {
+      setOctoberKmAuditError(error.message || "October KM audit could not be loaded.");
+    } finally {
+      setOctoberKmAuditBusy(false);
     }
   }
 
@@ -13443,6 +13470,20 @@ export default function FOActivities() {
                 <div className="flex items-end">
                   <button
                     type="button"
+                    onClick={loadOctoberKmAuditReview}
+                    disabled={octoberKmAuditBusy}
+                    aria-expanded={Boolean(octoberKmAudit)}
+                    className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 text-sm font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    <ShieldAlert className="h-4 w-4" />
+                    {octoberKmAuditBusy ? "Loading October KM..." : octoberKmAudit ? "Hide October KM Review" : "October KM Review"}
+                  </button>
+                </div>
+              ) : null}
+              {canViewKmAudit ? (
+                <div className="flex items-end">
+                  <button
+                    type="button"
                     onClick={exportKmAuditExcel}
                     disabled={kmAuditBusy}
                     className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-blue-200 bg-blue-50 px-3 text-sm font-black text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
@@ -13492,6 +13533,67 @@ export default function FOActivities() {
           <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">
             {kmAuditError}
           </div>
+        ) : null}
+        {canViewKmAudit && octoberKmAuditError ? (
+          <p role="alert" className="mt-3 text-sm font-semibold text-rose-700">{octoberKmAuditError}</p>
+        ) : null}
+        {canViewKmAudit && octoberKmAudit?.summary ? (
+          <section aria-label="October 2026 KM evidence review" className="mt-3 space-y-3 rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+            <div>
+              <h3 className="text-sm font-black text-slate-900 dark:text-white">October 2026 · KM evidence review</h3>
+              <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                All states and employees · Read-only GPS/payable comparison, not approved additions or deductions.
+                Railway track verification and financial corrections are not active.
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                ["Employees / records", `${octoberKmAudit.summary.employees} / ${octoberKmAudit.summary.attendance_records}`],
+                ["Possible missing KM", `${Number(octoberKmAudit.summary.possible_missing_gps_gap_km || 0).toFixed(2)} km · ${octoberKmAudit.summary.possible_missing_cases} cases`],
+                ["Possible excess KM", `${Number(octoberKmAudit.summary.possible_excess_gps_gap_km || 0).toFixed(2)} km · ${octoberKmAudit.summary.possible_excess_cases} cases`],
+                ["Bike / train days", `${octoberKmAudit.summary.bike_train_days} · ${octoberKmAudit.summary.bike_train_payable_cases} with Bike credits`],
+                ["No filtered GPS", `${octoberKmAudit.summary.insufficient_gps_cases} records`],
+                ["Calculated petrol", `₹${Number(octoberKmAudit.summary.calculated_petrol_rupees || 0).toFixed(2)} (not confirmed paid)`],
+                ["Verified additions", "Not established"],
+                ["Verified deductions", "Not established"],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+                  <p className="text-[10px] font-semibold uppercase text-slate-500">{label}</p>
+                  <p className="mt-1 text-sm font-bold text-slate-900 dark:text-white">{value}</p>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-400">
+              {octoberKmAudit.total_flagged_records} attendance records flagged. Showing {octoberKmAudit.cases.length} highest-priority records.
+              GPS gaps alone do not prove employee travel mode or reimbursement eligibility.
+            </p>
+            <div className="max-h-72 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
+              <table className="w-full min-w-[840px] text-left text-xs">
+                <thead className="sticky top-0 bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-200">
+                  <tr>{["Date", "Employee", "State", "Mode", "GPS km", "Payable km", "Petrol ₹", "Evidence flags"].map(label =>
+                    <th key={label} scope="col" className="whitespace-nowrap p-2">{label}</th>)}</tr>
+                </thead>
+                <tbody>{octoberKmAudit.cases.map((entry, index) => (
+                  <tr key={`${entry.employee_code}-${entry.date}-${index}`} className="border-t border-slate-100 dark:border-slate-800">
+                    <td className="whitespace-nowrap p-2">{entry.date}</td>
+                    <td className="p-2">{entry.employee_name}<span className="block text-[10px] text-slate-500">{entry.employee_code}</span></td>
+                    <td className="p-2">{entry.state || "—"}</td>
+                    <td className="p-2">{entry.recorded_mode || "—"}</td>
+                    <td className="p-2">{entry.gps_km.toFixed(2)}</td>
+                    <td className="p-2">{entry.payable_km.toFixed(2)}</td>
+                    <td className="p-2">{entry.petrol_rupees.toFixed(2)}</td>
+                    <td className="p-2">{entry.flags.map(flag => ({
+                      BIKE_PAID_AND_TRAIN_RECORDED: "Bike credited + Train recorded",
+                      BIKE_TRAIN_MODE_SWITCH: "Bike / Train switch",
+                      GPS_ABOVE_PAYABLE_REVIEW: "GPS above payable",
+                      PAYABLE_ABOVE_GPS_REVIEW: "Payable above GPS",
+                      NO_FILTERED_GPS_EVIDENCE: "No filtered GPS",
+                    }[flag] || flag)).join("; ")}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          </section>
         ) : null}
         {canViewKmAudit && kmAuditDataset?.summary ? (
           <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
