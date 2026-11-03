@@ -31,7 +31,7 @@ export function useRetailExcelRows(module,enabled=true,month='2026-10'){
      if(all.length>=total)break;
      if(!result.rows.length||page>=10)throw Error('October Excel source pages were incomplete.');
      page++;
-    }while(true);
+    }while(page<=10);
     if(live)setValue({rows:all,loading:false,error:'',key});
    }catch(error){
     if(live)setValue({rows:[],loading:false,error:error.response?.data?.message||error.message,key});
