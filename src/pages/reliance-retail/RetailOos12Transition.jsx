@@ -24,9 +24,9 @@ export default function RetailOos12Transition({order,capabilities,onSaved}){
   const signature=JSON.stringify({action:next,data});if(request.current?.signature!==signature)request.current={signature,id:crypto.randomUUID()};
   await api('/command/oos',{method:'POST',data:{action:next,data:{...data,request_id:request.current.id}}});setConfirm(false);onSaved();
  });}
- return <section className="oos-status-form" aria-label="Twelve-stage status update"><h3>Update status</h3><p>Current status: {stageLabel(order.status)}</p>
- <p>Next status: <strong>{next?stageLabel(next):order.stage===12?'Complete — Invoice Raised':'Unavailable'}</strong></p>
- {next&&<p>Recorded by: OOS-MIS. Offline confirming department: {spec?.confirmation_department||'Unavailable'}. Offline confirmation is recorded by OOS-MIS as MIS-submitted/unverified, not independent system approval. Supporting evidence is mandatory.</p>}
+ return <section className="oos-status-form" aria-label="Twelve-stage status update" aria-busy={busy}><h3>Update status</h3><p>Current status: {stageLabel(order.status)}</p>
+ <p>Next status: <strong>{canSubmit&&next?stageLabel(next):order.stage===12?'Complete — Invoice Raised':'Unavailable'}</strong></p>
+ {canSubmit&&next&&<p>Recorded by: OOS-MIS. Offline confirming department: {spec?.confirmation_department||'Unavailable'}. Offline confirmation is recorded by OOS-MIS as MIS-submitted/unverified, not independent system approval. Supporting evidence is mandatory.</p>}
  {!enabled&&<p className="oos-warning">Twelve-stage writes are disabled by an operational control.</p>}
  {!canSubmit&&next&&<p>This account lacks OOS-MIS authority in this state.</p>}
  {error&&<p role="alert" className="oos-error">{error}</p>}

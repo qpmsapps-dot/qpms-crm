@@ -9,6 +9,7 @@ on:
       - 'tests/browser/ifmsDashboard.spec.js'
       - 'tests/browser/retailAttendance.spec.js'
       - 'tests/browser/retailReportVisualSmoke.spec.js'
+      - 'tests/retailOos*.test.js'
   workflow_dispatch:
 
 permissions:
@@ -48,9 +49,35 @@ jobs:
             "tests/browser/retailAttendance.spec.js",
             "tests/browser/retailReportVisualSmoke.spec.js"
           }
+          oos_ui = {
+            "src/pages/reliance-retail/RetailOosWorkspace.jsx",
+            "src/pages/reliance-retail/RetailOos12Transition.jsx",
+            "src/pages/reliance-retail/RetailOosPresentation.jsx",
+            "src/pages/reliance-retail/retailOosWorkspace.css"
+          }
+          allowed |= oos_ui | {
+            "tests/retailOosAgeingBrowser.test.js",
+            "tests/retailOos12Browser.test.js",
+            "tests/retailOosTrainingBrowser.test.js",
+            "tests/retailOosUiPresentationBrowser.test.js"
+          }
           unexpected = [p for p in files if p not in allowed]
           if unexpected: sys.exit("Unexpected/protected files changed: " + ", ".join(unexpected))
-          jsx = [p for p in files if p.endswith(".jsx")]
+          # The OOS drawer intentionally relocates controls; its behavior is
+          # covered by the OOS browser regressions below. Keep the existing
+          # control-count guard for the other reporting pages.
+          jsx = [p for p in files if p.endswith(".jsx") and p not in oos_ui]
+          for path, start, end in [
+              ("src/pages/reliance-retail/RetailOos12Transition.jsx", " const requirement=", " return <section"),
+              ("src/pages/reliance-retail/RetailOosWorkspace.jsx", " async function commit()", " if(accessError)"),
+              ("src/pages/reliance-retail/RetailOosWorkspace.jsx", " async function run(task)", " async function showHistory")
+          ]:
+            old = subprocess.check_output(["git","show",f"{base}:{path}"],text=True)
+            new = open(path,encoding="utf-8").read()
+            def protected_region(source):
+              return source.split(start,1)[1].split(end,1)[0]
+            if protected_region(old) != protected_region(new):
+              sys.exit(f"{path}: protected OOS action logic changed")
           for path in jsx:
             old = subprocess.check_output(["git","show",f"{base}:{path}"],text=True)
             new = open(path,encoding="utf-8").read()
@@ -62,18 +89,22 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
       - name: Lint affected UI pages
-        run: npx eslint src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx
+        run: npx eslint src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
       - name: Production frontend build
         run: npm run build
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: Retail report browser regressions and visual smoke
         run: npx playwright test tests/browser/ifmsDashboard.spec.js tests/browser/retailAttendance.spec.js tests/browser/retailReportVisualSmoke.spec.js --reporter=line
+      - name: OOS presentation and workflow regressions
+        run: node --test --test-concurrency=1 tests/retailOosAgeing.test.js tests/retailOosAgeingBrowser.test.js tests/retailOos12Browser.test.js tests/retailOosTrainingBrowser.test.js tests/retailOosUiPresentationBrowser.test.js
       - name: Upload synthetic visual acceptance screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: retail-ui-synthetic-playwright-evidence
-          path: test-results/
+          path: |
+            test-results/
+            tmp/oos-ui-release-screenshots/
           retention-days: 7
           if-no-files-found: ignore
