@@ -15,3 +15,48 @@
 @media(max-width:600px){.oos-drawer-header{padding:14px;flex-wrap:wrap}.oos-drawer-body{padding:16px}.oos-drawer .oos-detail-summary{grid-template-columns:1fr}.oos-stage-timeline{grid-template-columns:1fr}.oos-stage-timeline li:nth-last-child(2)::after{display:block}.oos-drawer-header .oos-actions{width:100%}}
 .oos-drawer-body h3{margin:24px 0 12px}.oos-drawer .oos-stage-timeline{grid-template-columns:1fr}.oos-drawer .oos-stage-timeline li{min-height:60px}.oos-drawer .oos-stage-timeline li:nth-last-child(2)::after{display:block}.oos-drawer .oos-stage-timeline li:last-child::after{display:none}
 .oos-workflow-badge{display:inline-block;width:fit-content;white-space:nowrap;border:1px solid;border-radius:999px;padding:3px 9px;font-size:11px;line-height:1.5;font-weight:700}.oos-workflow-legacy{background:#fff4d2;border-color:#e4ca7a;color:#795500}.oos-workflow-twelve{background:#e6f5ec;border-color:#a9d9bb;color:#16663b}.oos-workflow-unknown{background:#eef1f5;border-color:#cbd5e1;color:#526880}.oos-register-scroll td .oos-workflow-badge{display:block;margin-top:7px}.oos-quotation-heading{display:flex;flex-wrap:wrap;align-items:center;gap:10px}.oos-quotation-heading h2{margin:0}
+
+
+/* Operational dashboard refresh: reuse existing OOS color tokens, no branding changes. */
+.oos-workspace.oos-panel{padding:clamp(16px,2.2vw,30px);border-color:#d9e4ef;box-shadow:0 12px 36px #1734510b}
+.oos-workspace.oos-panel>header{padding-bottom:16px;border-bottom:1px solid #e2eaf2}
+.oos-workspace.oos-panel>header h2{letter-spacing:-.35px;font-size:clamp(20px,2vw,25px)}
+.oos-workspace.oos-panel>header p{font-size:13px;color:#5e7188;margin-top:5px}
+.oos-workspace .oos-actions{justify-content:flex-end}
+.oos-workspace .oos-actions button{transition:background .15s,border-color .15s,box-shadow .15s}
+.oos-workspace .oos-actions button:hover:not(:disabled){border-color:#1749b5;box-shadow:0 3px 10px #1749b51b}
+.oos-board-method{font-size:12px;color:#667b91;margin-top:12px}
+.oos-board-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,1fr);align-items:center;gap:22px;border:1px solid #dce6f3;border-radius:18px;background:linear-gradient(110deg,#f5f9ff,#fff);padding:clamp(16px,2vw,26px);margin:24px 0 20px}
+.oos-board-hero h3{font-size:clamp(19px,2vw,24px);line-height:1.2;letter-spacing:-.4px;margin:8px 0}
+.oos-board-hero p{max-width:45ch;font-size:13px;line-height:1.6;color:#576f86}
+.oos-board-eyebrow{color:#1749b5!important;font-weight:800;letter-spacing:.09em;font-size:10px!important}
+.oos-board-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.oos-board-stats>div{padding:14px;border:1px solid #dae5f3;border-radius:13px;background:#fff;box-shadow:0 6px 20px #12365808}
+.oos-board-stats span{display:block;font-size:11px;line-height:1.4;color:#5d7088;min-height:34px}
+.oos-board-stats strong{display:block;font-size:clamp(22px,2.8vw,32px);letter-spacing:-.05em;color:#163c67;font-variant-numeric:tabular-nums}
+.oos-stage-board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:16px 0 26px}
+.oos-stage-tile{display:flex;flex-direction:column;min-height:142px;gap:6px;padding:15px 16px;border-radius:14px;border:1px solid #dfe8f3;background:#fff;color:#1c3b5b;text-decoration:none;transition:transform .15s,border-color .15s,box-shadow .15s}
+.oos-stage-tile:hover,.oos-stage-tile:focus-visible{transform:translateY(-2px);border-color:#83ace6;box-shadow:0 8px 24px #16365816;outline:none}
+.oos-stage-step{font-size:10px;color:#57789f;font-weight:800;letter-spacing:.065em}
+.oos-stage-tile strong{font-size:26px;font-weight:800;line-height:1.1;color:#1749b5;font-variant-numeric:tabular-nums}
+.oos-stage-tile>span:nth-last-child(2){font-size:12px;font-weight:650;line-height:1.35;flex:1}
+.oos-stage-tile small{font-size:11px;color:#54749c;font-weight:700}
+.oos-matrix-heading{font-size:16px!important;margin-top:22px}
+.oos-workspace.oos-panel .oos-table-scroll{border:1px solid #dee7f1;border-radius:14px;box-shadow:0 5px 18px #1634510a}
+.oos-workspace.oos-panel .oos-table-scroll table{border-collapse:separate;border-spacing:0}
+.oos-workspace.oos-panel .oos-table-scroll thead th{position:sticky;top:0;background:#f0f5fc;color:#395775;font-size:12px;z-index:2;border-bottom:1px solid #dce6f1}
+.oos-workspace.oos-panel .oos-table-scroll tbody th{position:sticky;left:0;z-index:1;background:#fff;font-size:12px;font-weight:650;min-width:220px;max-width:260px;white-space:normal}
+.oos-workspace.oos-panel .oos-table-scroll tr:hover>td,.oos-workspace.oos-panel .oos-table-scroll tbody tr:hover>th{background:#f7faff}
+.oos-workspace.oos-panel .oos-matrix-cell{min-width:116px;font-variant-numeric:tabular-nums;font-size:19px;text-align:center}
+.oos-workspace.oos-panel .oos-matrix-cell small{font-size:10px;line-height:1.5;text-align:center}
+.oos-workspace.oos-panel .oos-overdue-grid{margin-top:26px}
+.oos-workspace.oos-panel .oos-overdue-grid article{border-color:#dce6f1;box-shadow:0 4px 16px #16345108}
+.oos-workspace.oos-panel .oos-overdue-grid article strong{font-variant-numeric:tabular-nums}
+@media(max-width:1100px){.oos-stage-board{grid-template-columns:repeat(3,minmax(0,1fr))}.oos-board-hero{grid-template-columns:1fr}}
+@media(max-width:700px){.oos-stage-board{grid-template-columns:repeat(2,minmax(0,1fr))}.oos-board-stats{grid-template-columns:repeat(3,minmax(0,1fr))}.oos-board-stats>div{padding:10px}.oos-board-stats span{font-size:10px}.oos-stage-tile{min-height:125px;padding:12px}.oos-workspace.oos-panel .oos-table-scroll tbody th{min-width:150px;max-width:170px}}
+@media(max-width:380px){.oos-board-stats{grid-template-columns:1fr}.oos-board-stats span{min-height:0}.oos-stage-board{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){.oos-stage-tile,.oos-workspace .oos-actions button{transition:none}.oos-stage-tile:hover{transform:none}}
+
+.oos-stage-tile.oos-stage-disabled{background:#f8fafc;color:#8594a6;opacity:.85;cursor:default}
+.oos-stage-tile.oos-stage-disabled:hover{transform:none;border-color:#dfe8f3;box-shadow:none}
+.oos-stage-tile.oos-stage-disabled strong{color:#91a3b7}
