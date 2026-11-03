@@ -28,7 +28,8 @@ export default function RetailOos12Transition({order,capabilities,onSaved}){
   const signature=JSON.stringify({action:next,data});if(request.current?.signature!==signature)request.current={signature,id:crypto.randomUUID()};
   await api('/command/oos',{method:'POST',data:{action:next,data:{...data,request_id:request.current.id}}});setConfirm(false);onSaved();
  });}
- return <section className="oos-status-form" aria-label="Twelve-stage status update" aria-busy={busy}><h3>Update status</h3><p>Current status: {stageLabel(order.status)}</p>
+ return <section className="oos-status-form" aria-label="Twelve-stage status update" aria-busy={busy}><h3>Update status</h3><p>Current status: {order.status==='OOS12_DOCUMENT_SUBMITTED'&&order.details?.documents_pending?'Documents Pending — Progress Recorded':stageLabel(order.status)}</p>
+ {order.details?.documents_pending===true&&<p className="oos-warning">This quotation has outstanding work documents. Continue only with genuine supporting references; do not claim that the documents were received.</p>}
  <p>Next status: <strong>{canSubmit&&next?stageLabel(next):order.stage===12?'Complete — Invoice Raised':'Unavailable'}</strong></p>
  {canSubmit&&next&&<p>Recorded by: OOS-MIS. Offline confirming department: {spec?.confirmation_department||'Unavailable'}. Offline confirmation is recorded by OOS-MIS as MIS-submitted/unverified, not independent system approval. {next==='OOS12_DOCUMENT_SUBMITTED'?'Supporting documents may remain pending while progressing. The system clearly records this as pending.':'Supporting evidence is mandatory.'}</p>}
  {!enabled&&<p className="oos-warning">Twelve-stage writes are disabled by an operational control.</p>}
