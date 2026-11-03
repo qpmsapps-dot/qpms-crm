@@ -9,6 +9,7 @@ on:
       - 'Mobile_FO_V2/lib/deep_cleaning/**'
       - 'Mobile_FO_V2/lib/home/home_shell.dart'
       - 'Mobile_FO_V2/test/deep_cleaning_delivery_test.dart'
+      - 'Mobile_FO_V2/test/deep_cleaning_pending_upload_test.dart'
       - 'Mobile_FO_V2/config/deep_cleaning.dart-defines.example.json'
       - 'scripts/checkRetailCleaningConfiguration.mjs'
       - 'tests/retailCleaningConfiguration.test.js'
@@ -66,8 +67,8 @@ jobs:
         working-directory: Mobile_FO_V2
         run: |
           flutter pub get
-          flutter analyze --no-pub lib/deep_cleaning lib/home/home_shell.dart test/deep_cleaning_delivery_test.dart
-          flutter test --no-pub test/deep_cleaning_delivery_test.dart test/mobile_roles_test.dart test/auth_session_recovery_test.dart test/checkout_auth_session_contract_test.dart test/split_auth_state_contract_test.dart
+          flutter analyze --no-pub lib/deep_cleaning lib/home/home_shell.dart test/deep_cleaning_delivery_test.dart test/deep_cleaning_pending_upload_test.dart
+          flutter test --no-pub test/deep_cleaning_delivery_test.dart test/deep_cleaning_pending_upload_test.dart test/mobile_roles_test.dart test/auth_session_recovery_test.dart test/checkout_auth_session_contract_test.dart test/split_auth_state_contract_test.dart
       - uses: actions/upload-artifact@v4
         if: always()
         with:
