@@ -1,3 +1,4 @@
+import RetailImportedHistory from '../../components/reliance-retail/RetailImportedHistory.jsx';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {Download,RefreshCw} from 'lucide-react';
 import {authenticatedApiRequest} from '../../services/api.js';
@@ -96,5 +97,6 @@ export default function RetailScopedDeepCleaning() {
   </>}
   {evidenceBusy&&<ReportNotice>Checking authorization and loading private evidence…</ReportNotice>}
   {evidence&&<section className="retail-report-evidence" aria-label="Authorized cleaning evidence"><header><h2>Authorized evidence</h2><button onClick={clearEvidence}>Close evidence</button></header>{!evidence.length&&<ReportNotice>No uploaded evidence recorded.</ReportNotice>}<div className="retail-report-images">{evidence.map(item=><a key={item.id} href={item.url} target="_blank" rel="noreferrer"><span>{item.type} · {item.name}</span>{item.mime_type.startsWith('image/')?<img src={item.url} alt={`${item.type} cleaning evidence`}/>:'Open document'}</a>)}</div></section>}
+  {from<='2026-10-31'&&to>='2026-10-01'&&<RetailImportedHistory module="deep_cleaning" title="Deep Cleaning" month="2026-10"/>}
  </section>;
 }
