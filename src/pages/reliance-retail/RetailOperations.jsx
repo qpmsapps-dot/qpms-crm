@@ -4,13 +4,15 @@ import {useEffect,useRef,useState} from 'react';
 import {authenticatedApiRequest} from '../../services/api.js';
 import {indiaToday,reportingState} from '../../../backend/shared/retailAttendance.js';
 import {REPORTING_STATES} from './ifmsDashboardModel.js';
-import {ReportHeader,ReportFilters,ReportStats,ReportNotice,ReportPager} from '../../components/reliance-retail/RetailReportUi.jsx';
+import {ReportHeader,ReportFilters,ReportNotice,ReportPager} from '../../components/reliance-retail/RetailReportUi.jsx';
 import {matchesReportQuery,reportPage} from '../../utils/retailReportView.js';
 import {downloadUnified} from '../../utils/retailUnifiedExport.js';
 import {usePageTitle} from '../../hooks/usePageTitle.js';
 import {useAuth} from '../../context/auth-context.js';
 import {isPlatformAdmin} from '../../utils/authRoles.js';
 import {isCompleteOperationsReport} from '../../utils/retailOperationsReport.js';
+import RetailStatePerformance from '../../components/reliance-retail/RetailStatePerformance.jsx';
+import {summarizeReportedOperations} from '../../utils/retailStatePerformance.js';
 
 const emptyForm=()=>({store_id:'',scheduled_date:indiaToday(),request_id:crypto.randomUUID()});
 export default function RetailOperations({kind='maintenance'}) {
@@ -66,7 +68,10 @@ export default function RetailOperations({kind='maintenance'}) {
    await downloadUnified(book,`Retail_${maintenance?'CM_PM':'Thermography'}_${month}.xlsx`);
   }catch(e){setError(e.message);}
  }
- const stats=maintenance?report?[{label:'Applicable stores',value:module.total.eligible},{label:`${callKind} completed (live)`,value:module.total.completed},{label:`${callKind} pending (live)`,value:module.total.remaining},{label:`${callKind} call logs (live)`,value:module.total.call_logs},{label:'Excel-reported rows',value:reported.length}]:[]:report?[{label:'Scheduled (live)',value:report.total.scheduled},{label:'Completed awaiting approval',value:report.total.awaiting},{label:'Client Approved',value:report.total.approved},{label:'Approval overdue',value:report.total.overdue},{label:'Excel-reported rows',value:reported.length}]:[];
+ // October Excel rows are source-reported, not canonical verified call logs.
+ const performanceSource=reported.length?reported:maintenance?(module?.stores||[]):(report?.rows||[]);
+ const statePerformance=summarizeReportedOperations(performanceSource);
+ const sourceLabel=reported.length?'October Excel-reported rows':'Recorded operational rows';
  return <section className={`retail-report ${maintenance ? "retail-maintenance-report" : "retail-thermography-report"}`}>
   <ReportHeader title={title} description={maintenance?'Record completed CM and PM calls and review monthly progress.':'Schedule inspections, record completion and track client approval within 10 calendar days.'}>
    <button disabled={!report||busy||saving} onClick={openEntry}>{maintenance?'Record CM/PM Call':'Schedule Thermography'}</button>
@@ -81,19 +86,25 @@ export default function RetailOperations({kind='maintenance'}) {
   </ReportFilters>
   {busy&&<ReportNotice>Loading authorized operational data…</ReportNotice>}{error&&<ReportNotice error>{error}</ReportNotice>}{notice&&<ReportNotice>{notice}</ReportNotice>}
   {report&&<>
-   <ReportStats items={stats}/>
+
    {excel.loading&&<ReportNotice>Loading October Excel records into the store details table…</ReportNotice>}
    {excel.error&&<ReportNotice error>October source records unavailable: {excel.error}</ReportNotice>}
    {!!reported.length&&<p className="retail-report-description">October Excel records appear within Store details as read-only reported entries. They do not create a verified call log, client approval or thermography evidence.</p>}
    <ReportNotice>{maintenance?`${callKind}: ${window.start} through ${window.end} · ${window.status}. Today (India): ${report.today}. Previous months are locked. Multiple call logs per store are allowed within the selected window. Existing logs cannot be edited or deleted.`:`Reports follow the scheduled month. Client approval is due 10 calendar days after completion; overdue starts the next day. Late approvals remain marked late.`}</ReportNotice>
+   <RetailStatePerformance title={maintenance?`${callKind} — state-wise performance`:'Thermography — state-wise performance'}
+    summary={statePerformance} selectedState={state}
+    onState={value=>resetFilters(()=>{setState(value);setStore('');})}
+    columns={[{key:'scheduled',label:maintenance?'Store / call rows':'Inspection rows'},
+     {key:'completed',label:maintenance?'Reported complete':'Reports submitted / completed'},
+     {key:'pending',label:'Pending'},
+     {key:'percentage',label:maintenance?'Completion %':'Submission %',rate:true}]}
+    note={`${sourceLabel}. ${maintenance?'CM and PM windows remain separate; repeated source rows are preserved.':'Excel report submission does not constitute client approval.'} ${reported.length?'Live records are not added twice to these source totals.':''} Existing verified audit remains authoritative.`}/>
    <form ref={entry} onSubmit={prepare} className="retail-report-filters" aria-label={`${title} entry`}>
     <label>Store Code<select required aria-label={`${title} entry Store Code`} value={form.store_id} onChange={e=>{setConfirmation(null);setForm({...emptyForm(),store_id:e.target.value});}}><option value="">Select authorized store</option>{report.stores.filter(s=>s.can_save&&s.status==='Active').map(s=><option key={s.id} value={s.id}>{s.store_code} · {s.store_name}</option>)}</select></label>
     {!maintenance&&<label>Scheduled Date<input required aria-label="Thermography Scheduled Date" type="date" value={form.scheduled_date} onChange={e=>setForm(f=>({...f,scheduled_date:e.target.value,request_id:crypto.randomUUID()}))}/></label>}
     <button disabled={saving||busy||!(maintenance?canComplete:canSchedule)}>{maintenance?`Record ${callKind} Call`:'Save scheduled inspection'}</button>
     {selected&&<p>{selected.store_code} · {selected.store_name} · {REPORTING_STATES.find(s=>s.code===reportingState(selected.state))?.label} · {selected.store_format||'Format unavailable'} · {selected.city||'City unavailable'}</p>}
    </form>
-   {maintenance&&<section className="retail-report-panel retail-report-table" aria-label="CM PM state summary"><table><thead><tr>{['State','CM completed','CM pending','PM completed','PM pending'].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{report.modules.cm.rows.map(cm=>{const pm=report.modules.pm.rows.find(r=>r.state===cm.state);return <tr key={cm.state}><td>{REPORTING_STATES.find(s=>s.code===cm.state)?.label}</td><td>{cm.completed}</td><td>{cm.remaining}</td><td>{pm?.completed}</td><td>{pm?.remaining}</td></tr>;})}</tbody></table></section>}
-   {!maintenance&&<section className="retail-report-panel retail-report-table" aria-label="Thermography state summary"><table><thead><tr>{['State','Scheduled','Awaiting approval','Client Approved','Approval overdue'].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{report.states.map(s=><tr key={s.state}><td>{REPORTING_STATES.find(r=>r.code===s.state)?.label}</td><td>{s.scheduled}</td><td>{s.awaiting}</td><td>{s.approved}</td><td>{s.overdue}</td></tr>)}</tbody></table></section>}
    <section className="retail-report-panel retail-report-table" aria-label={`${title} store details`}><table><thead><tr>{(maintenance?['Store Code','Store Name','State','Status','Call logs','Completed on','History']:['Store Code','Store Name','Scheduled','Status','Completed','Approval due','Approved','Overdue history','Actions']).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{visible.map(r=><tr key={r.id}>
     <td>{r.store_code||r.store?.store_code}</td><td>{r.store_name||r.store?.store_name}</td>
     {maintenance?<><td>{REPORTING_STATES.find(s=>s.code===r.reporting_state)?.label||r.reporting_state}</td>
