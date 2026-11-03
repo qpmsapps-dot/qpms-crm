@@ -15,3 +15,131 @@
 .retail-report table.retail-attendance-summary{min-width:1100px;table-layout:auto}
 .retail-report details:not([open])>:not(summary){display:none}
 @media(prefers-reduced-motion:reduce){.retail-report *{transition:none!important}}
+
+/* Report presentation polish: no changes to upload, FO evidence, or reporting logic. */
+.retail-report {
+  gap: 22px;
+  border-color: #dce5f1;
+  box-shadow: 0 10px 32px rgba(20, 48, 86, .045);
+}
+.retail-report-header {
+  padding-bottom: 6px;
+}
+.retail-report-header h1 {
+  line-height: 1.2;
+}
+.retail-report-actions {
+  gap: 10px;
+}
+.retail-report-actions > button,
+.retail-report-actions > a {
+  min-height: 40px;
+  white-space: nowrap;
+}
+.retail-report button:not(:disabled) {
+  transition: background-color .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.retail-report button:not(:disabled):hover {
+  background-color: #f1f6ff;
+  border-color: #a7c0e4;
+}
+.retail-report-filters {
+  background: linear-gradient(180deg,#fbfdff 0%,#f5f8fd 100%);
+  border-color: #dce6f2;
+  border-radius: 14px;
+  gap: 14px;
+  padding: 16px;
+}
+.retail-report-filters :is(input,select) {
+  min-height: 42px;
+  border-radius: 9px;
+}
+.retail-report-filters :is(input,select):focus-visible {
+  border-color: #4678c8;
+  outline-offset: 1px;
+}
+.retail-report-stats {
+  gap: 14px;
+}
+.retail-report-stats article {
+  background: linear-gradient(150deg,#fff 0%,#f8fbff 100%);
+  border-color: #dce6f2;
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: 0 4px 15px rgba(27, 62, 107, .035);
+}
+.retail-report-stats strong {
+  color: #173a70;
+  font-variant-numeric: tabular-nums;
+}
+.retail-report-panel {
+  border-color: #dce5f1;
+  border-radius: 14px;
+  box-shadow: 0 5px 18px rgba(27, 62, 107, .025);
+}
+.retail-report-panel-heading {
+  background: linear-gradient(90deg,#f7faff 0%,#fff 100%);
+  padding: 17px 18px;
+}
+.retail-report-table {
+  overscroll-behavior-inline: contain;
+}
+.retail-report table {
+  font-variant-numeric: tabular-nums;
+}
+.retail-report th {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .035em;
+  background: #f5f8fd;
+  padding: 13px 14px;
+}
+.retail-report td {
+  padding: 14px;
+  border-top-color: #e9eef5;
+}
+.retail-report tbody tr {
+  transition: background-color .16s ease;
+}
+.retail-report tbody tr:nth-child(even) {
+  background: #fcfdff;
+}
+.retail-report tbody tr:hover {
+  background: #eef5ff;
+}
+.retail-report .retail-attendance-summary {
+  font-size: 13px;
+}
+.retail-report .retail-attendance-summary :is(th,td) {
+  padding-block: 12px;
+}
+.retail-report-status {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.retail-report-pager {
+  padding: 14px 18px;
+  background: #fbfdff;
+}
+.retail-report-evidence {
+  border-radius: 14px;
+  background: #f8fbff;
+}
+.retail-report-images a {
+  border-radius: 12px;
+  box-shadow: 0 3px 12px rgba(27, 62, 107, .05);
+}
+@media (max-width:700px) {
+  .retail-report { padding: 14px; gap: 18px; }
+  .retail-report-stats { gap: 10px; }
+  .retail-report-stats article { padding: 14px; }
+  .retail-report-actions > button,
+  .retail-report-actions > a { min-height: 44px; }
+  .retail-report th { padding: 11px 12px; }
+  .retail-report td { padding: 12px; }
+  .retail-report-panel-heading { padding: 14px; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .retail-report tbody tr,.retail-report button { transition:none; }
+}
