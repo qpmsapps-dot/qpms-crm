@@ -1,5 +1,6 @@
 -- CONDITIONAL PROPOSAL ONLY. Not installed by the application or CI against production.
 -- Run verification/retail_cleaning_delivery_read_only.sql first; owner must compare
+-- against the live canonical Reliance Store Master (which has no business/client_name columns).
 -- installed definitions with PR #59. Never apply local 213/214 table foundations.
 begin;
 do $$ begin
@@ -35,7 +36,7 @@ begin
  end if;
  if c.status not in ('Planned','Scheduled') then return null; end if;
  select * into s from public.reliance_retail_store_master where id=c.retail_store_id;
- if upper(s.status) is distinct from 'ACTIVE' or upper(regexp_replace(coalesce(s.business,s.client_name,''),'[^a-zA-Z]','','g')) not in ('RELIANCE','RELIANCERETAIL') then return null; end if;
+ if upper(s.status) is distinct from 'ACTIVE' then return null; end if;
  geography:=case upper(s.state) when 'KN' then 'KA' else upper(s.state) end;
  if geography in ('TN','PY') then
   owner_info:=public.retail_unified_owner(s.id,now());
@@ -80,7 +81,6 @@ begin
   cross join lateral (select public.retail_cleaning_executor_v1(c.id) executor) x
   left join public.reliance_retail_zones z on z.id=case when s.state in ('TN','PY') then (public.retail_unified_owner(s.id,now())->>'zone_id')::uuid else s.zone_id end
   where (p_schedule is null and c.scheduled_date between p_from and p_to or c.id=p_schedule)
-   and upper(regexp_replace(coalesce(s.business,s.client_name,''),'[^a-zA-Z]','','g')) in ('RELIANCE','RELIANCERETAIL')
    and (case when is_fo then x.executor=p_actor else s.id=any(p_stores) end)
  ) rows;
  return jsonb_build_object('contract_version','retail-cleaning.v1','rows',result);
@@ -114,7 +114,7 @@ begin
  if p_action='begin' then
   if d.id is null then
    insert into public.client_deep_cleaning_submissions(business,retail_store_id,store_code,store_name,client_name,state,city,deep_cleaning_date,performed_by_type,submitted_by_user_id,submitted_by_employee_code,status,schedule_id,metadata)
-   values('Reliance Retail',s.id,s.store_code,s.store_name,s.client_name,s.state,to_jsonb(s)->>'city',c.scheduled_date,'vendor',p_auth,actor.employee_code,'draft',sid,jsonb_build_object('source','retail-cleaning.v1','executor_profile_id',p_actor,'schedule_id',sid,'evidence_format','paired_v1')) returning * into d;
+   values('Reliance Retail',s.id,s.store_code,s.store_name,'Reliance Retail',s.state,to_jsonb(s)->>'city',c.scheduled_date,'vendor',p_auth,actor.employee_code,'draft',sid,jsonb_build_object('source','retail-cleaning.v1','executor_profile_id',p_actor,'schedule_id',sid,'evidence_format','paired_v1')) returning * into d;
   end if;
  elsif p_action='validate' then
   if d.id is null then raise exception using errcode='22023',message='Draft required'; end if;
