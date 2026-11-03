@@ -71,6 +71,9 @@ export function canonicalProfileRole(value, fallback = null) {
   if (!text) return fallback;
   const normalized = normalizeRoleKey(text);
   const canonicalByNormalized = {
+    MISHK: 'MIS_HK', HKMIS: 'MIS_HK',
+    MISMEPC: 'MIS_MEPC', MEPCMIS: 'MIS_MEPC',
+    MISOOS: 'MIS_OOS', OOSMIS: 'MIS_OOS',
     ADMIN: 'Admin',
     QPMSADMIN: 'QPMS Admin',
     DEVELOPER: 'Developer',
@@ -124,6 +127,7 @@ export function canonicalProfileRole(value, fallback = null) {
 }
 
 export const CANONICAL_PROFILE_ROLES = Object.freeze([
+  'MIS_HK', 'MIS_MEPC', 'MIS_OOS',
   'Admin',
   'QPMS Admin',
   'Developer',

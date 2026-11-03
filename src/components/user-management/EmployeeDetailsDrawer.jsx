@@ -1,3 +1,4 @@
+import {RETAIL_MIS_ROLES} from '../../../backend/shared/retailMisAccess.js';
 import RetailResponsibilityPanel,{isRetailFoProfile} from '../reliance-retail/RetailResponsibilityPanel.jsx';
 import { AlertTriangle, KeyRound, ShieldOff, ShieldCheck, Trash2, Wrench, X } from 'lucide-react';
 import { useState } from 'react';
@@ -30,7 +31,7 @@ function initials(name = '') {
 function hierarchyPathLabel(employee, hierarchy = {}) {
   const role = String(employee.role || '').trim();
   const gmLevel = hierarchy.south_head_employee_code || hierarchy.gm_employee_code;
-  const path = [role || 'User'];
+  const path = [RETAIL_MIS_ROLES[role]||role || 'User'];
   if (role === 'MD') return 'MD';
   if (role === 'COO') return ['COO', hierarchy.md_employee_code].filter(Boolean).join(' -> ');
   if (role === 'FO') {
@@ -248,7 +249,7 @@ export default function EmployeeDetailsDrawer({
       ['Mobile number', employee.mobile],
       ['Designation', employee.designation],
       ['Department', employee.department],
-      ['State', employee.state],
+      ['State', employee.misStates?.join(', ')||employee.state],
       ['Business', employee.business],
     ]],
     ['Hierarchy', [
@@ -261,7 +262,7 @@ export default function EmployeeDetailsDrawer({
       ['COO', hierarchy.coo_employee_code],
     ]],
     ['Access and Provisioning', [
-      ['Role', employee.role],
+      ['Role', RETAIL_MIS_ROLES[employee.role]||employee.role],
       ['Profile status', employee.status],
       ['Provisioning', employee.provisioningStatus],
       ['Invite status', employee.inviteLabel],

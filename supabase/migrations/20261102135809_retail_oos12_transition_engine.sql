@@ -18,7 +18,7 @@ create trigger retail_oos_workflow_catalog_immutable before update or delete on 
 
 create table public.retail_oos12_orders(
  id uuid primary key default gen_random_uuid(),kind text not null default 'OOS' check(kind='OOS'),workflow_version integer not null default 2 check(workflow_version=2),
- reference text not null unique,state text not null check(state in ('TN','KA','KL','TG','AP-1','AP-2','PY')),store_ids uuid[] not null check(cardinality(store_ids)>0),
+ reference text not null unique,state text not null check(state in ('TN','KA','KL','TG','AP-1','AP-2')),store_ids uuid[] not null check(cardinality(store_ids)>0),
  stage integer not null default 1 check(stage between 1 and 12),status text not null,revision integer not null default 1,rework_count integer not null default 0,
  details jsonb not null,original_items jsonb not null,created_by uuid not null references public.profiles(id),created_at timestamptz not null default clock_timestamp(),updated_at timestamptz not null default clock_timestamp(),status_entered_at timestamptz not null default clock_timestamp(),
  check(status=(array['OOS12_QUOTATION_SHARED','OOS12_PO_PENDING_COMMERCIAL','OOS12_PO_RECEIVED','OOS12_FUND_RAISED','OOS12_FUND_DELIVERED','OOS12_FUND_RECEIVED','OOS12_WIP','OOS12_WORK_DONE','OOS12_DOCUMENT_SUBMITTED','OOS12_DOCUMENT_RECEIVED','OOS12_JMS_CREATED','OOS12_INVOICE_RAISED'])[stage])
@@ -54,21 +54,14 @@ create function public.retail_oos12_identity(p_actor uuid) returns boolean langu
  and exists(select 1 from auth.users u where u.id=p.auth_user_id) and (select count(*) from public.profiles d where d.auth_user_id=p.auth_user_id)=1);
 $$;
 create function public.retail_oos12_authority(p_actor uuid,p_state text,p_authority text) returns boolean language sql stable security definer set search_path=pg_catalog,public as $$
- select public.retail_oos12_identity(p_actor) and case when p_authority='mis' then public.retail_mis_allowed(p_actor,'oos',p_state,true) else exists(
- select 1 from public.profiles p where p.id=p_actor and regexp_replace(upper(coalesce(p.business,'')),'[^A-Z0-9]','','g') in ('RELIANCE','RELIANCERETAIL')
- and regexp_replace(upper(coalesce(p.role,'')),'[^A-Z0-9]','','g')=any(case p_authority
- when 'commercial' then array['COMMERCIAL','COMMERCIALTEAM','COMMERCIALREVIEWER']
- when 'finance' then array['FINANCE','FINANCETEAM','FINANCEREVIEWER','FINANCEGM','CFO']
- when 'branch' then array['BRANCHHEAD'] when 'operations' then array['OPERATIONS','OPERATIONSTEAM','OPERATIONSMANAGER'] else '{}'::text[] end)
- and exists(select 1 from public.retail_provisional_access a where a.actor_id=p.id and a.state=p_state and
- case when p_authority in ('commercial','finance') then a.permission='reviewer' else a.permission in ('editor','reviewer') end)) end;
+ select public.retail_oos12_identity(p_actor) and p_authority='mis' and public.retail_mis_allowed(p_actor,'oos',public.retail_oos_state(p_state),true);
 $$;
 create function public.retail_oos12_scope(p_actor uuid,p_state text) returns boolean language sql stable security definer set search_path=pg_catalog,public as $$
- select public.retail_oos12_authority(p_actor,p_state,'mis') or exists(select 1 from unnest(array['commercial','finance','branch','operations']) a where public.retail_oos12_authority(p_actor,p_state,a));
+ select public.retail_oos12_authority(p_actor,p_state,'mis');
 $$;
 create function public.retail_oos12_order_allowed(p_actor uuid,p_order uuid) returns boolean language sql stable security definer set search_path=pg_catalog,public as $$
  select exists(select 1 from public.retail_oos12_orders o where o.id=p_order and public.retail_oos12_scope(p_actor,o.state)
- and cardinality(o.store_ids)=(select count(*) from public.reliance_retail_store_master s where s.id=any(o.store_ids) and s.state=o.state and public.retail_mis_unique_store(s.id)));
+ and cardinality(o.store_ids)=(select count(*) from public.reliance_retail_store_master s where s.id=any(o.store_ids) and public.retail_oos_state(s.state)=o.state and public.retail_mis_unique_store(s.id)));
 $$;
 create function public.retail_oos12_enabled() returns boolean language sql stable security definer set search_path=pg_catalog,public as $$select coalesce((select enabled from public.retail_oos_workflow_catalog where version=2),false) and public.retail_mis_oos_enabled()$$;
 create function public.rpc_retail_oos12_activate(p_actor uuid,p_enabled boolean,p_reason text,p_expected integer) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
@@ -76,11 +69,8 @@ declare c public.retail_oos_workflow_catalog%rowtype;n public.retail_oos_workflo
  if not public.retail_oos12_identity(p_actor) or not public.retail_oos_operator_allowed(p_actor,null) or p_actor<>'d40c2b3f-87f1-4c34-8798-cf9b0d9ca784'::uuid then raise exception using errcode='42501',message='Exact existing operator required for audited activation';end if;
  if p_enabled is null or length(btrim(coalesce(p_reason,''))) not between 3 and 2000 then raise exception 'Activation reason required';end if;
  if p_enabled and not public.retail_mis_oos_enabled() then raise exception 'Existing database gate must already be enabled';end if;
- if p_enabled then
- for st in select s from unnest(array['TN','KA','KL','TG','AP-1','AP-2','PY']) s where public.retail_oos12_authority(p_actor,s,'mis') loop
- foreach authority in array array['commercial','finance','branch','operations'] loop
- if not exists(select 1 from public.profiles p where public.retail_oos12_authority(p.id,st,authority)) then raise exception 'Missing % authority for state %; activation blocked',authority,st;end if;
- end loop;end loop;end if;
+ -- Offline departments do not require specialist web grants.
+ if p_enabled and not public.retail_oos12_authority(p_actor,null,'mis') then raise exception 'Existing OOS MIS operator authority required';end if;
  select * into strict c from public.retail_oos_workflow_catalog where version=2 for update;
  if c.revision is distinct from p_expected or c.enabled=p_enabled then raise exception using errcode='40001',message='Activation revision/state changed';end if;
  n:=c;n.enabled:=p_enabled;n.revision:=c.revision+1;
@@ -89,27 +79,22 @@ declare c public.retail_oos_workflow_catalog%rowtype;n public.retail_oos_workflo
 end;$$;
 
 create function public.retail_oos12_spec(p_stage integer) returns jsonb language sql immutable set search_path=pg_catalog,public as $$
- select jsonb_build_object('authority',(array['mis','mis','commercial','mis','finance','branch','branch','operations','mis','commercial','commercial','commercial'])[p_stage],
+ select jsonb_build_object('authority','mis','confirmation_department',(array['OOS-MIS','Commercial','Commercial','OOS-MIS','Finance','Branch Head','Branch Head','Operations','OOS-MIS','Commercial','Commercial','Commercial'])[p_stage],
  'fields',case p_stage
- when 2 then '["po_number","po_date"]'::jsonb when 3 then '["confirmation_ref"]'::jsonb
+ when 2 then '["po_number","po_date","po_received_date"]'::jsonb when 3 then '["confirmation_ref"]'::jsonb
  when 4 then '["fund_request_ref","fund_request_date","fund_request_amount"]'::jsonb when 5 then '["payment_ref","payment_date","payment_amount"]'::jsonb
  when 6 then '["receipt_ref","receipt_date"]'::jsonb when 7 then '["handover_ref","handover_date"]'::jsonb
  when 8 then '["work_completion_ref","completion_date"]'::jsonb when 9 then '["documents_ref","submission_date"]'::jsonb
  when 10 then '["acknowledgement_ref","received_date"]'::jsonb when 11 then '["jms_number","jms_date"]'::jsonb
- when 12 then '["invoice_number","invoice_date","invoice_amount"]'::jsonb else '[]'::jsonb end,'minimum_evidence',case when p_stage between 2 and 12 then 1 else 0 end);
+ when 12 then '["invoice_number","invoice_date","invoice_amount"]'::jsonb else '[]'::jsonb end || case when p_stage between 2 and 12 then '["confirming_person_name","confirming_department","confirmation_date","confirmation_reference"]'::jsonb else '[]'::jsonb end,'minimum_evidence',case when p_stage between 2 and 12 then 1 else 0 end);
 $$;
 create function public.retail_oos12_can_advance(p_actor uuid,p_order uuid) returns boolean language sql stable security definer set search_path=pg_catalog,public as $$
- select exists(select 1 from public.retail_oos12_orders o where o.id=p_order and o.stage<12 and public.retail_oos12_order_allowed(p_actor,o.id)
- and public.retail_oos12_authority(p_actor,o.state,public.retail_oos12_spec(o.stage+1)->>'authority')
- and (o.stage+1<>3 or (o.created_by<>p_actor
- and p_actor is distinct from (select e.actor_id from public.retail_oos12_events e where e.order_id=o.id and e.action in ('CREATE_OOS','REWORK') order by e.created_at desc,e.id desc limit 1)
- and p_actor is distinct from (select e.actor_id from public.retail_oos12_events e where e.order_id=o.id and e.action='OOS12_PO_PENDING_COMMERCIAL' order by e.created_at desc,e.id desc limit 1)))
- and (o.stage+1<>5 or (o.created_by<>p_actor and p_actor is distinct from (select e.actor_id from public.retail_oos12_events e where e.order_id=o.id and e.action='OOS12_FUND_RAISED' order by e.created_at desc,e.id desc limit 1))));
+ select exists(select 1 from public.retail_oos12_orders o where o.id=p_order and o.stage<12 and public.retail_oos12_order_allowed(p_actor,o.id) and public.retail_oos12_authority(p_actor,o.state,'mis'));
 $$;
 create function public.rpc_retail_oos12_access(p_actor uuid,p_auth uuid) returns jsonb language sql stable security definer set search_path=pg_catalog,public as $$
  select case when public.retail_oos12_identity(p_actor) and exists(select 1 from public.profiles where id=p_actor and auth_user_id=p_auth)
- and exists(select 1 from unnest(array['TN','KA','KL','TG','AP-1','AP-2','PY']) s where public.retail_oos12_scope(p_actor,s))
- then jsonb_build_object('active',true,'role','MIS_OOS','specialist',true,'profile_id',p_actor,'states',(select jsonb_agg(s) from unnest(array['TN','KA','KL','TG','AP-1','AP-2','PY']) s where public.retail_oos12_scope(p_actor,s))) else '{}'::jsonb end;
+ and exists(select 1 from unnest(array['TN','KA','KL','TG','AP-1','AP-2']) s where public.retail_oos12_scope(p_actor,s))
+ then jsonb_build_object('active',true,'role','MIS_OOS','specialist',false,'profile_id',p_actor,'states',(select jsonb_agg(s) from unnest(array['TN','KA','KL','TG','AP-1','AP-2']) s where public.retail_oos12_scope(p_actor,s))) else '{}'::jsonb end;
 $$;
 
 insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types) values('retail-oos12-evidence','retail-oos12-evidence',false,15728640,array['application/pdf','image/jpeg','image/png','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.openxmlformats-officedocument.wordprocessingml.document']);
@@ -124,10 +109,20 @@ create function public.retail_oos12_storage_guard() returns trigger language plp
  and exists(select 1 from public.retail_oos12_orders o where o.id=e.order_id and o.revision=e.revision and o.stage+1=e.stage)) then raise exception using errcode='42501',message='Verified current OOS evidence intent required';end if;
  end if;return case when tg_op='DELETE' then old else new end;end;$$;
 create trigger retail_oos12_storage_guard before insert or update or delete on storage.objects for each row execute function public.retail_oos12_storage_guard();
-create policy retail_oos12_private_insert on storage.objects as restrictive for insert to authenticated with check(bucket_id<>'retail-oos12-evidence');
-create policy retail_oos12_private_read on storage.objects as restrictive for select to authenticated using(bucket_id<>'retail-oos12-evidence');
-create policy retail_oos12_private_update on storage.objects as restrictive for update to authenticated using(bucket_id<>'retail-oos12-evidence') with check(bucket_id<>'retail-oos12-evidence');
-create policy retail_oos12_private_delete on storage.objects as restrictive for delete to authenticated using(bucket_id<>'retail-oos12-evidence');
+-- The storage owner may preinstall these exact policies. Otherwise this connection must own storage.objects.
+do $storage_owner$ declare item record;existing record;begin
+ for item in select * from (values
+ ('retail_oos12_private_insert','INSERT',null,'(bucket_id <> ''retail-oos12-evidence''::text)','create policy retail_oos12_private_insert on storage.objects as restrictive for insert to anon,authenticated with check(bucket_id<>''retail-oos12-evidence'')'),
+ ('retail_oos12_private_read','SELECT','(bucket_id <> ''retail-oos12-evidence''::text)',null,'create policy retail_oos12_private_read on storage.objects as restrictive for select to anon,authenticated using(bucket_id<>''retail-oos12-evidence'')'),
+ ('retail_oos12_private_update','UPDATE','(bucket_id <> ''retail-oos12-evidence''::text)','(bucket_id <> ''retail-oos12-evidence''::text)','create policy retail_oos12_private_update on storage.objects as restrictive for update to anon,authenticated using(bucket_id<>''retail-oos12-evidence'') with check(bucket_id<>''retail-oos12-evidence'')'),
+ ('retail_oos12_private_delete','DELETE','(bucket_id <> ''retail-oos12-evidence''::text)',null,'create policy retail_oos12_private_delete on storage.objects as restrictive for delete to anon,authenticated using(bucket_id<>''retail-oos12-evidence'')')
+ ) x(name,command,using_expr,check_expr,ddl) loop
+ select * into existing from pg_policies where schemaname='storage' and tablename='objects' and policyname=item.name;
+ if found then
+ if existing.permissive<>'RESTRICTIVE' or existing.roles<>array['anon','authenticated']::name[] or existing.cmd<>item.command or existing.qual is distinct from item.using_expr or existing.with_check is distinct from item.check_expr then raise exception 'Preinstalled Storage policy differs: %',item.name;end if;
+ else execute item.ddl;end if;
+ end loop;
+end;$storage_owner$;
 
 create function public.rpc_retail_oos12_evidence_prepare(p_actor uuid,p_order uuid,p_revision integer,p_filename text,p_mime text,p_size bigint) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
 declare o public.retail_oos12_orders%rowtype;e public.retail_oos12_evidence%rowtype;eid uuid:=gen_random_uuid();begin
@@ -157,7 +152,7 @@ declare o public.retail_oos12_orders%rowtype;e public.retail_oos12_events%rowtyp
  if p_fields is null or jsonb_typeof(p_fields)<>'object' or length(btrim(coalesce(p_remarks,''))) not between 3 and 2000 or p_revision is null then raise exception 'Fields, revision and remarks required';end if;
  select * into strict o from public.retail_oos12_orders where id=p_order for update;
  perform pg_advisory_xact_lock(hashtextextended('oos12-request:'||p_request::text,0));
- payload:=jsonb_build_object('fields',p_fields,'evidence_ids',to_jsonb(p_evidence),'remarks',p_remarks,'expected_revision',p_revision);
+ payload:=jsonb_build_object('confirmation_authenticity','MIS_SUBMITTED_UNVERIFIED','system_actor_capacity','OOS-MIS','system_actor_role',(select case role when 'MIS_OOS' then 'OOS-MIS' else role end from public.profiles where id=p_actor),'system_actor_employee_code',(select employee_code from public.profiles where id=p_actor),'fields',p_fields,'evidence_ids',to_jsonb(p_evidence),'remarks',p_remarks,'expected_revision',p_revision);
  select * into e from public.retail_oos12_events where request_id=p_request;
  if found then
  if e.actor_id<>p_actor or e.order_id<>p_order or e.action<>p_action or e.evidence<>payload then raise exception 'Request ID reused with different command';end if;
@@ -167,7 +162,7 @@ declare o public.retail_oos12_orders%rowtype;e public.retail_oos12_events%rowtyp
  if o.revision is distinct from p_revision then raise exception using errcode='40001',message='Revision changed; refresh';end if;
  code:=(select stages->o.stage->>'code' from public.retail_oos_workflow_catalog where version=2);
  if o.stage>=12 or p_action is distinct from code then raise exception 'Only next forward workflow stage allowed; no backward/skipped transition';end if;
- if not public.retail_oos12_can_advance(p_actor,p_order) then raise exception using errcode='42501',message='Independent next-stage authority required';end if;
+ if not public.retail_oos12_can_advance(p_actor,p_order) then raise exception using errcode='42501',message='OOS-MIS next-stage authority required';end if;
  spec:=public.retail_oos12_spec(o.stage+1);
  if exists(select 1 from jsonb_object_keys(p_fields) key where not(spec->'fields' ? key)) then raise exception 'Unrelated update field';end if;
  for k in select jsonb_array_elements_text(spec->'fields') loop
@@ -176,6 +171,7 @@ declare o public.retail_oos12_orders%rowtype;e public.retail_oos12_events%rowtyp
  if v!~'^\d{4}-\d{2}-\d{2}$' or v::date>today or to_char(v::date,'YYYY-MM-DD')<>v then raise exception 'Valid non-future business date required: %',k;end if;
  elsif k like '%amount' and (v!~'^[0-9]{1,18}([.][0-9]{1,2})?$' or v::numeric<=0) then raise exception 'Positive exact decimal amount with at most 2 decimals required: %',k;end if;
  end loop;
+ if regexp_replace(upper(p_fields->>'confirming_department'),'[^A-Z0-9]','','g')<>regexp_replace(upper(spec->>'confirmation_department'),'[^A-Z0-9]','','g') then raise exception 'Confirmation department must be %',spec->>'confirmation_department';end if;
  if p_evidence is null or cardinality(p_evidence)<1 or cardinality(p_evidence)>20 or array_position(p_evidence,null) is not null or cardinality(p_evidence)<>(select count(distinct x) from unnest(p_evidence) x) then raise exception 'Unique mandatory evidence required';end if;
  if exists(select 1 from unnest(p_evidence) eid left join public.retail_oos12_evidence d on d.id=eid where d.id is null or d.actor_id<>p_actor or d.order_id<>o.id or d.stage<>o.stage+1 or d.revision<>o.revision or d.status<>'finalized'
  or not exists(select 1 from storage.objects s where s.bucket_id='retail-oos12-evidence' and s.name=d.path and s.metadata->>'mimetype'=d.mime_type and (s.metadata->>'size')::bigint=d.file_size)) then raise exception 'Verified finalized current-stage evidence required';end if;
@@ -187,7 +183,7 @@ declare o public.retail_oos12_orders%rowtype;e public.retail_oos12_events%rowtyp
 create function public.rpc_retail_oos12_import(p_actor uuid,p_sha256 text,p_filename text,p_original text,p_groups jsonb) returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $$
 declare g jsonb;o public.retail_oos12_orders%rowtype;b jsonb;ids uuid[];st text;receipt public.retail_oos12_import_receipts%rowtype;receipts jsonb:='[]';request uuid;existing boolean;stamp timestamptz;begin
  if not public.retail_mis_oos_enabled() then raise exception using errcode='42501',message='OOS writes unavailable';end if;
- if not public.retail_oos12_identity(p_actor) or not(public.retail_mis_allowed(p_actor,'oos',null,true) or exists(select 1 from unnest(array['TN','KA','KL','TG','AP-1','AP-2','PY']) s where public.retail_oos12_authority(p_actor,s,'commercial'))) then raise exception using errcode='42501',message='Assigned MIS or Commercial rework authority required';end if;
+ if not public.retail_oos12_identity(p_actor) or not public.retail_oos12_authority(p_actor,null,'mis') then raise exception using errcode='42501',message='Assigned OOS-MIS authority required';end if;
  if p_sha256 is null or p_sha256!~'^[a-f0-9]{64}$' or p_original is null or encode(sha256(decode(p_original,'base64')),'hex')<>p_sha256 or length(btrim(coalesce(p_filename,''))) not between 1 and 200 then raise exception 'Original workbook, filename and matching hash required';end if;
  if jsonb_typeof(p_groups) is distinct from 'array' or jsonb_array_length(p_groups) not between 1 and 100 then raise exception 'Reviewed quotation groups required';end if;
  -- Same lock as legacy create/import: no duplicate reference across versions.
@@ -203,9 +199,9 @@ declare g jsonb;o public.retail_oos12_orders%rowtype;b jsonb;ids uuid[];st text;
  receipts:=receipts||coalesce(public.rpc_retail_mis_oos_import(p_actor,p_sha256,p_filename,p_original,jsonb_build_array(g))->'receipts','[]'::jsonb);continue;end if;
  select array_agg(x::uuid order by x) into ids from jsonb_array_elements_text(g->'store_ids') x;
  if coalesce(cardinality(ids),0) not between 1 and 1000 or array_position(ids,null) is not null or cardinality(ids)<>(select count(distinct x) from unnest(ids) x) then raise exception 'Unique canonical stores required';end if;
- if exists(select 1 from unnest(ids) x left join public.reliance_retail_store_master s on s.id=x where s.id is null or s.status<>'Active' or not public.retail_mis_unique_store(s.id) or not(public.retail_oos12_authority(p_actor,s.state,'mis') or public.retail_oos12_authority(p_actor,s.state,'commercial'))) then raise exception using errcode='42501',message='Canonical active stores outside import scope';end if;
- select min(state) into st from public.reliance_retail_store_master where id=any(ids);
- if (select count(distinct state) from public.reliance_retail_store_master where id=any(ids))<>1 then raise exception 'Cross-state quotations not supported';end if;
+ if exists(select 1 from unnest(ids) x left join public.reliance_retail_store_master s on s.id=x where s.id is null or s.status<>'Active' or not public.retail_mis_unique_store(s.id) or not public.retail_oos12_authority(p_actor,s.state,'mis')) then raise exception using errcode='42501',message='Canonical active stores outside import scope';end if;
+ select min(public.retail_oos_state(state)) into st from public.reliance_retail_store_master where id=any(ids);
+ if (select count(distinct public.retail_oos_state(state)) from public.reliance_retail_store_master where id=any(ids))<>1 then raise exception 'Cross-state quotations not supported';end if;
  if jsonb_typeof(g->'items') is distinct from 'array' or jsonb_array_length(g->'items')=0 or exists(select 1 from jsonb_array_elements(g->'items') i where coalesce(i->>'store_id','')='' or not((i->>'store_id')::uuid=any(ids)) or length(btrim(coalesce(i->>'description','')))=0 or coalesce(i->>'quantity','')!~'^[0-9]+([.][0-9]+)?$' or coalesce(i->>'unit_rate','')!~'^[0-9]+([.][0-9]+)?$' or (i->>'quantity')::numeric<=0 or (i->>'unit_rate')::numeric<0) then raise exception 'Valid exact decimal items required';end if;
  select * into o from public.retail_oos12_orders where reference=g->>'quotation_number' for update;existing:=found;
  if existing and not public.retail_oos12_order_allowed(p_actor,o.id) then raise exception using errcode='42501',message='Existing order outside scope';end if;
@@ -218,7 +214,7 @@ declare g jsonb;o public.retail_oos12_orders%rowtype;b jsonb;ids uuid[];st text;
  if existing then
  if o.stage=1 and not public.retail_oos12_authority(p_actor,o.state,'mis') then raise exception using errcode='42501',message='MIS authority required before PO';end if;
  if ids<>o.store_ids then raise exception 'Rework cannot change canonical stores or state';end if;
- if o.stage>1 and (not public.retail_oos12_authority(p_actor,o.state,'commercial') or o.created_by=p_actor or p_actor=(select actor_id from public.retail_oos12_events where order_id=o.id and action in ('CREATE_OOS','REWORK') order by created_at desc,id desc limit 1)) then raise exception using errcode='42501',message='Independent Commercial reviewer required for progressed rework';end if;
+ if not public.retail_oos12_authority(p_actor,o.state,'mis') then raise exception using errcode='42501',message='OOS-MIS rework authority required';end if;
  b:=to_jsonb(o);update public.retail_oos12_orders set details=details||jsonb_build_object('items',g->'items','file_sha256',p_sha256,'filename',p_filename),revision=revision+1,rework_count=rework_count+1,updated_at=stamp where id=o.id returning * into o;
  else
  if not public.retail_oos12_authority(p_actor,st,'mis') then raise exception using errcode='42501',message='Only OOS MIS may create quotations';end if;
@@ -233,35 +229,35 @@ declare g jsonb;o public.retail_oos12_orders%rowtype;b jsonb;ids uuid[];st text;
 
 create function public.rpc_retail_oos12_stores(p_actor uuid) returns jsonb language plpgsql stable security definer set search_path=pg_catalog,public as $$begin
  if not public.retail_oos12_identity(p_actor) then raise exception using errcode='42501',message='Verified importer required';end if;
- return (select coalesce(jsonb_agg(jsonb_build_object('id',s.id,'store_code',s.store_code,'store_name',s.store_name,'state',s.state,'status',s.status)),'[]') from public.reliance_retail_store_master s where public.retail_mis_unique_store(s.id) and (public.retail_oos12_authority(p_actor,s.state,'mis') or public.retail_oos12_authority(p_actor,s.state,'commercial')));end;$$;
+ return (select coalesce(jsonb_agg(jsonb_build_object('id',s.id,'store_code',s.store_code,'store_name',s.store_name,'state',s.state,'status',s.status)),'[]') from public.reliance_retail_store_master s where public.retail_mis_unique_store(s.id) and public.retail_oos12_authority(p_actor,s.state,'mis'));end;$$;
 
 create function public.rpc_retail_oos12_capabilities(p_actor uuid) returns jsonb language plpgsql stable security definer set search_path=pg_catalog,public as $$
 declare result jsonb:='{}';actions jsonb:='{}';requirements jsonb:='{}';o record;st jsonb;begin
  if public.retail_mis_allowed(p_actor,'oos',null,false) then result:=public.rpc_retail_oos_capabilities(p_actor);actions:=coalesce(result->'actions','{}');end if;
- if not public.retail_oos12_identity(p_actor) or not exists(select 1 from unnest(array['TN','KA','KL','TG','AP-1','AP-2','PY']) s where public.retail_oos12_scope(p_actor,s)) then raise exception using errcode='42501',message='Assigned OOS scope required';end if;
+ if not public.retail_oos12_identity(p_actor) or not exists(select 1 from unnest(array['TN','KA','KL','TG','AP-1','AP-2']) s where public.retail_oos12_scope(p_actor,s)) then raise exception using errcode='42501',message='Assigned OOS scope required';end if;
  for o in select * from public.retail_oos12_orders x where public.retail_oos12_order_allowed(p_actor,x.id) loop
  st:=(select stages->o.stage from public.retail_oos_workflow_catalog where version=2);
  actions:=actions||jsonb_build_object(o.id::text,case when public.retail_oos12_can_advance(p_actor,o.id) then jsonb_build_array(st->>'code') else '[]'::jsonb end);
  requirements:=requirements||jsonb_build_object(o.id::text,jsonb_build_object('next',st,'spec',public.retail_oos12_spec(o.stage+1),'can_submit',public.retail_oos12_can_advance(p_actor,o.id),'current_stage',o.stage));
  end loop;
- return result||jsonb_build_object('actions',actions,'requirements',requirements,'database_writes_enabled',public.retail_mis_oos_enabled(),'twelve_stage_enabled',(select enabled from public.retail_oos_workflow_catalog where version=2),'can_import',public.retail_mis_allowed(p_actor,'oos',null,false) or exists(select 1 from unnest(array['TN','KA','KL','TG','AP-1','AP-2','PY']) s where public.retail_oos12_authority(p_actor,s,'commercial')));end;$$;
+ return result||jsonb_build_object('actions',actions,'requirements',requirements,'database_writes_enabled',public.retail_mis_oos_enabled(),'twelve_stage_enabled',(select enabled from public.retail_oos_workflow_catalog where version=2),'can_import',public.retail_mis_allowed(p_actor,'oos',null,false));end;$$;
 
 -- Keep the existing bulk legacy projection unchanged and private behind a union.
 alter function public.rpc_retail_oos_register(uuid) rename to retail_oos12_legacy_register;
 revoke all on function public.retail_oos12_legacy_register(uuid) from public,anon,authenticated,service_role;
 create function public.rpc_retail_oos_register(p_actor uuid) returns jsonb language plpgsql stable security definer set search_path=pg_catalog,public as $$
 declare result jsonb:='{"rows":[]}';rows jsonb;begin
- if not public.retail_oos12_identity(p_actor) or not exists(select 1 from unnest(array['TN','KA','KL','TG','AP-1','AP-2','PY']) s where public.retail_oos12_scope(p_actor,s)) then raise exception using errcode='42501',message='Assigned OOS scope required';end if;
+ if not public.retail_oos12_identity(p_actor) or not exists(select 1 from unnest(array['TN','KA','KL','TG','AP-1','AP-2']) s where public.retail_oos12_scope(p_actor,s)) then raise exception using errcode='42501',message='Assigned OOS scope required';end if;
  if public.retail_mis_allowed(p_actor,'oos',null,false) then result:=public.retail_oos12_legacy_register(p_actor);end if;
  select coalesce(jsonb_agg(public.retail_service_public_order(to_jsonb(o))||jsonb_build_object(
  'original_items',(select e.after_value->'original_items' from public.retail_oos12_events e where e.order_id=o.id and e.action='CREATE_OOS' order by e.created_at,e.id limit 1),
  'status_entered_at',(select e.created_at from public.retail_oos12_events e where e.order_id=o.id and e.after_value->>'status'=o.status and (e.action='CREATE_OOS' or e.before_value->>'status' is distinct from e.after_value->>'status') order by e.created_at desc,e.id desc limit 1),
- 'original_po_date',(select e.evidence->'fields'->>'po_date' from public.retail_oos12_events e where e.order_id=o.id and e.action='OOS12_PO_PENDING_COMMERCIAL' order by e.created_at,e.id limit 1),
+ 'original_po_date',(select e.evidence->'fields'->>'po_received_date' from public.retail_oos12_events e where e.order_id=o.id and e.action='OOS12_PO_PENDING_COMMERCIAL' order by e.created_at,e.id limit 1),
  'original_po_number',(select e.evidence->'fields'->>'po_number' from public.retail_oos12_events e where e.order_id=o.id and e.action='OOS12_PO_PENDING_COMMERCIAL' order by e.created_at,e.id limit 1),
  'mapped_stores',(select jsonb_agg(jsonb_build_object('id',s.id,'store_code',s.store_code,'store_name',s.store_name,'state',s.state) order by s.store_code) from public.reliance_retail_store_master s where s.id=any(o.store_ids)),
- 'history',(select coalesce(jsonb_agg(jsonb_build_object('id',e.id,'action',e.action,'actor_id',e.actor_id,'created_at',e.created_at,'from_status',e.before_value->>'status','to_status',e.after_value->>'status','revision',e.after_value->'revision','has_workbook',e.evidence ? 'original_base64','evidence_ids',e.evidence->'evidence_ids') order by e.created_at,e.id),'[]') from public.retail_oos12_events e where e.order_id=o.id)) order by o.created_at desc,o.id),'[]') into rows from public.retail_oos12_orders o where public.retail_oos12_order_allowed(p_actor,o.id);
+ 'history',(select coalesce(jsonb_agg(jsonb_build_object('id',e.id,'action',e.action,'actor_id',e.actor_id,'created_at',e.created_at,'from_status',e.before_value->>'status','to_status',e.after_value->>'status','revision',e.after_value->'revision','has_workbook',e.evidence ? 'original_base64','evidence_ids',e.evidence->'evidence_ids','offline_confirmation',e.evidence->'fields','confirmation_authenticity',e.evidence->'confirmation_authenticity','system_actor_employee_code',e.evidence->'system_actor_employee_code') order by e.created_at,e.id),'[]') from public.retail_oos12_events e where e.order_id=o.id)) order by o.created_at desc,o.id),'[]') into rows from public.retail_oos12_orders o where public.retail_oos12_order_allowed(p_actor,o.id);
  return result||jsonb_build_object('rows',coalesce(result->'rows','[]')||rows,'complete',true,'twelve_stage_available',true,'twelve_stage_enabled',(select enabled from public.retail_oos_workflow_catalog where version=2),
- 'states',(select jsonb_agg(s) from unnest(array['TN','KA','KL','TG','AP-1','AP-2','PY']) s where public.retail_oos12_scope(p_actor,s)),'as_of',statement_timestamp());end;$$;
+ 'states',(select jsonb_agg(s) from unnest(array['TN','KA','KL','TG','AP-1','AP-2']) s where public.retail_oos12_scope(p_actor,s)),'as_of',statement_timestamp());end;$$;
 
 create function public.rpc_retail_oos12_history(p_actor uuid,p_order uuid) returns jsonb language plpgsql stable security definer set search_path=pg_catalog,public as $$
 begin

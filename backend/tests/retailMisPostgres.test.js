@@ -95,7 +95,7 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
    const access=(await one('select rpc_retail_mis_access($1,$2) result',[admin,adminAuth])).result;assert.equal(access.operator,true);assert.equal(access.role,'MIS_OOS');assert.deepEqual(access.states,['TN']);
    assert.equal((await one("select retail_mis_allowed($1,'oos','TN') allowed",[admin])).allowed,true);
    for(const module of ['stores','attendance-hk','fault','dashboard'])assert.equal((await one('select retail_mis_allowed($1,$2,null) allowed',[admin,module])).allowed,false);
-   assert.equal((await one("select retail_mis_allowed($1,'oos','PY') allowed",[admin])).allowed,false);
+   assert.equal((await one("select retail_mis_allowed($1,'oos','PY') allowed",[admin])).allowed,process.env.RETAIL_OOS_REGISTER_TEST==='1');
    await q('insert into auth.users values($1,$2)',[id(999),'synthetic-generic-admin']);await q("insert into profiles(id,auth_user_id,employee_code,role,business) values($1,$1,'GENERIC_ADMIN','Admin','All Businesses')",[id(999)]);
    await denied("select rpc_retail_oos_operator_grant($1,true,array['TN'],'Generic Admin must fail',0)",[id(999)]);
    assert.deepEqual((await one('select rpc_retail_mis_access($1,$2) result',[admin,id(999)])).result,{});
@@ -104,6 +104,7 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
    assert.equal((await one('select count(*)::int n from retail_mis_assignments')).n,0);
    assert.equal((await one("select count(*)::int n from retail_mis_audit where action='OOS_OPERATOR_ACCESS'")).n,1);
    await q("insert into reliance_retail_store_master(id,store_code,store_name,state) values($1,'TRAIN_TN','Training TN','TN'),($2,'TRAIN_PY','Training PY','PY')",[id(20),id(21)]);
+   await q("insert into reliance_retail_store_master(id,store_code,store_name,state) values($1,'TRAIN_KL','Training KL','KL')",[id(22)]);
    await denied('select rpc_retail_mis_oos_import($1,$2,$3,$4,$5)',[admin,'0'.repeat(64),'fixture.xlsx','',JSON.stringify([])],/OOS writes unavailable/);
    await q('update retail_mis_controls set oos_writes_enabled=true'); // Isolated database only.
    const {createHash}=await import('node:crypto');
@@ -112,7 +113,7 @@ test('Retail MIS real PostgreSQL: identity, grants, module/state isolation, evid
    const order=await one("select * from retail_service_orders where reference='TRAINING_FIXTURE'");assert.equal(order.revision,2);assert.equal(order.rework_count,1);assert.equal(order.details.items.length,1);
    assert.equal((await report(admin,'oos')).rows.length,1);assert.equal((await report(admin,'oos')).rows[0].store_codes[0],'TRAIN_TN');
    const actions=(await one('select rpc_retail_oos_capabilities($1) result',[admin])).result.actions[order.id];assert.deepEqual(actions,['PO_RECORDED','RETIRE']);
-   await denied('select rpc_retail_mis_oos_history($1,$2)',[id(999),order.id]);await assert.rejects(upload('cross-state',0,id(21)),/scope|state|assignment/i);
+   await denied('select rpc_retail_mis_oos_history($1,$2)',[id(999),order.id]);await assert.rejects(upload('cross-state',0,id(22)),/scope|state|assignment/i);
    await command(admin,'oos','PO_RECORDED',{order_id:order.id,revision:2,request_id:id(410),fields:{po_number:'TRAIN_PO',po_date:'2026-11-02'}});
    assert.deepEqual((await one('select rpc_retail_oos_capabilities($1) result',[admin])).result.actions[order.id],[]);
    if(process.env.RETAIL_OOS_REGISTER_TEST==='1'){

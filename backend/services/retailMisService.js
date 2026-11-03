@@ -1,4 +1,4 @@
-import {assertRetailMis,RETAIL_MIS_MODULES} from '../shared/retailMisAccess.js';
+import {assertRetailMis,RETAIL_MIS_MODULES,retailOosState} from '../shared/retailMisAccess.js';
 import {summarizeAttendance} from '../shared/retailAttendance.js';
 import {parseQuotation} from './retailQuotationImport.js';
 import {assertScopedQuotation} from '../shared/retailMisAccess.js';
@@ -28,4 +28,4 @@ export async function retailMisQuotation(client,profile,access,bytes,name,save,e
  for(const group of parsed.groups){const matches=reviewed.filter(p=>p.reference===group.quotation_number);if(matches.length!==1||!Number.isInteger(matches[0].expected_revision)||matches[0].expected_revision<0||![1,2].includes(matches[0].workflow_version??1))throw Object.assign(Error('Invalid reviewed quotation revision/version.'),{statusCode:409});group.expected_revision=matches[0].expected_revision;group.expected_workflow_version=matches[0].workflow_version??1;}
  return misRpc(client,'rpc_retail_oos12_import',{p_actor:profile.id,p_sha256:parsed.sha256,p_filename:name,p_original:parsed.original_base64,p_groups:parsed.groups});
 }
-export function retailMisPermissions(access){return {...access,modules:RETAIL_MIS_MODULES[access?.role]||[],can_administer:false};}
+export function retailMisPermissions(access){return {...access,...(access?.role==='MIS_OOS'?{states:[...new Set((access.states||[]).map(retailOosState))]}:{}),modules:RETAIL_MIS_MODULES[access?.role]||[],can_administer:false};}

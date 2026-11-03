@@ -1,4 +1,5 @@
 // Read-only presentation model. Never infers workflow authority from labels.
+import {retailOosState} from '../../../backend/shared/retailMisAccess.js';
 import {sourceDecimal,sumDecimals} from '../../utils/oosDecimal.js';
 export const OOS12 = [
  ['OOS12_QUOTATION_SHARED','Quotation Shared – Waiting for PO'],
@@ -38,7 +39,7 @@ export function registerRows(report,today=indiaDate()) {
   const poDate=validDate(r.original_po_date);
   const statusDate=timestampDate(r.status_entered_at);
   const stores=r.mapped_stores||[];
-  const states=[...new Set(stores.map(s=>s.state).filter(Boolean))];
+  const states=[...new Set(stores.map(s=>retailOosState(s.state)).filter(Boolean))];
   // The live workflow forbids cross-state orders. Corrupt/multi-state records are explicit exceptions.
   const state=states.length===1&&stores.length===new Set(r.store_ids||stores.map(s=>s.id)).size?states[0]:null;
   return {...r,state,store_codes:[...new Set(stores.map(s=>s.store_code))],store_names:[...new Set(stores.map(s=>s.store_name).filter(Boolean))],
@@ -52,7 +53,7 @@ export function registerRows(report,today=indiaDate()) {
  });
 }
 export function filterRegister(rows,f={}) {
- return rows.filter(r=>(!f.state||r.state===f.state)&&(!f.status||(f.status==='RETIRED'?r.retired:!r.retired&&r.status===f.status))&&
+ return rows.filter(r=>(!f.state||r.state===retailOosState(f.state))&&(!f.status||(f.status==='RETIRED'?r.retired:!r.retired&&r.status===f.status))&&
   (!f.month||r.quotation_date?.slice(0,7)===f.month)&&(!f.from||r.quotation_date>=f.from)&&(!f.to||r.quotation_date&&r.quotation_date<=f.to)&&
   (!f.age||(f.age==='unknown'?r[f.ageField||'status_age']==null:ageBand(r[f.ageField||'status_age'])===f.age))&&
   (!f.search||[r.reference,r.po_number,...r.store_codes].join(' ').toLowerCase().includes(f.search.trim().toLowerCase())));

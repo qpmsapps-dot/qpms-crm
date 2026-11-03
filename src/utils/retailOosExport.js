@@ -1,8 +1,10 @@
+import {retailOosState} from '../../backend/shared/retailMisAccess.js';
 import {stageLabel,matrix,OOS12} from '../pages/reliance-retail/retailOosModel.js';
 export const REGISTER_HEADERS=['S.No','Quotation No','Quotation Date','State','Store Code(s)','Store Name','Quotation Amount','PO Number','Current Status','Quotation Ageing','PO Ageing','Status Ageing','Rework','Updated At','Warnings'];
 // Literal text cells only; prefix characters interpreted as formulas by spreadsheet apps.
 export const excelText=value=>{const s=String(value??'');return /^[\s]*[=+\-@]/.test(s)?"'"+s:s;};
 export async function buildOosExport(rows,filters,states,now=new Date()) {
+ states=[...new Set(states.map(retailOosState).filter(Boolean))];rows=rows.filter(r=>!r.state||states.includes(r.state));
  const {default:ExcelJS}=await import('exceljs'),book=new ExcelJS.Workbook();
  book.creator='myQPMS';book.created=now;
  const register=book.addWorksheet('Quotation register');register.addRow(REGISTER_HEADERS);

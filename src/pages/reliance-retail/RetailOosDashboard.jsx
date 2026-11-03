@@ -8,7 +8,7 @@ const drills=(state,status,month)=>'/reliance-retail/mis/oos?'+new URLSearchPara
 export function OosMatrix({report,month='',state=''}) {
  const [view,setView]=useState('count'),[today,setToday]=useState(indiaDate());
  useEffect(()=>{const timer=setInterval(()=>setToday(indiaDate()),60000);return()=>clearInterval(timer);},[]);
- const states=(report.states||[]).filter(s=>!state||s===state),all=registerRows(report,today),rows=filterRegister(all,{month,state});
+ const states=[...new Set((report.states||[]).map(s=>s==='PY'?'TN':s))].filter(s=>!state||s===state),all=registerRows(report,today),rows=filterRegister(all,{month,state});
  const available=report.twelve_stage_available??report.twelve_stage_enabled;
  const model=matrix(rows,states),legacy=rows.filter(r=>r.workflow_version!==2&&!r.retired);
  const legacyStages=Object.entries(LEGACY_LABELS),legacyMatrix=matrix(legacy,states,legacyStages);

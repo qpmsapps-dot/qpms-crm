@@ -26,16 +26,16 @@ export default function RetailOos12Transition({order,capabilities,onSaved}){
  });}
  return <section className="oos-status-form" aria-label="Twelve-stage status update"><h3>Update status</h3><p>Current status: {stageLabel(order.status)}</p>
  <p>Next status: <strong>{next?stageLabel(next):order.stage===12?'Complete — Invoice Raised':'Unavailable'}</strong></p>
- {next&&<p>Required authority: {spec?.authority||'Unavailable'}. Supporting evidence is mandatory; upload alone does not change status.</p>}
+ {next&&<p>Recorded by: OOS-MIS. Offline confirming department: {spec?.confirmation_department||'Unavailable'}. Offline confirmation is recorded by OOS-MIS as MIS-submitted/unverified, not independent system approval. Supporting evidence is mandatory.</p>}
  {!enabled&&<p className="oos-warning">Twelve-stage writes are disabled by an operational control.</p>}
- {!canSubmit&&next&&<p>This account lacks the required independent next-stage authority in this state.</p>}
+ {!canSubmit&&next&&<p>This account lacks OOS-MIS authority in this state.</p>}
  {error&&<p role="alert" className="oos-error">{error}</p>}
  {canSubmit&&schemaValid&&<form onSubmit={e=>{e.preventDefault();setConfirm(true);}}><fieldset disabled={busy||!enabled}>
  {required.map(key=><label key={key}>{label(key)}<input aria-label={label(key)} required type={key.endsWith('date')?'date':'text'} inputMode={key.endsWith('amount')?'decimal':undefined} pattern={key.endsWith('amount')?'[0-9]{1,18}(\\.[0-9]{1,2})?':undefined} maxLength={key.endsWith('amount')?21:2000} value={fields[key]||''} onChange={e=>{setFields(v=>({...v,[key]:e.target.value}));setConfirm(false);}}/></label>)}
  <label>Remarks<textarea aria-label="Transition remarks" required minLength={3} maxLength={2000} value={remarks} onChange={e=>{setRemarks(e.target.value);setConfirm(false);}}/></label>
  <label>Supporting documents<input ref={input} aria-label="Supporting documents" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.xlsx,.docx" onChange={e=>{setFiles([...e.target.files]);setConfirm(false);}}/></label>
  <button type="button" disabled={!files.length} onClick={()=>void upload()}>Upload supporting evidence</button>
- <ul aria-label="Verified supporting evidence">{evidence.map(e=><li key={e.id}>{e.name} — verified</li>)}</ul>
+ <ul aria-label="Uploaded supporting evidence">{evidence.map(e=><li key={e.id}>{e.name} - uploaded; authenticity unverified</li>)}</ul>
  <button disabled={evidence.length<(spec?.minimum_evidence||1)}>Review status change</button>
  </fieldset></form>}
  {confirm&&<div className="oos-overlay"><section className="oos-dialog" role="dialog" aria-modal="true" aria-label="Confirm twelve-stage transition"><h2>Confirm status change</h2><p>{order.reference}: {stageLabel(order.status)} → {stageLabel(next)}</p><p>Revision {order.revision}. Evidence files: {evidence.length}. This creates immutable history.</p>{Object.entries(fields).map(([key,value])=><p key={key}>{label(key)}: {value}</p>)}<p>{remarks}</p><button disabled={busy} onClick={()=>setConfirm(false)}>Cancel</button><button disabled={busy||!enabled} onClick={()=>void save()}>{busy?'Saving…':'Confirm and save'}</button></section></div>}

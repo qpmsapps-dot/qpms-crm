@@ -45,3 +45,9 @@ test('complete large register Excel preserves text, filters, unknown dates and n
  const sheet=roundtrip.getWorksheet('Quotation register');assert.equal(sheet.rowCount,2102);assert.equal(sheet.getCell('B2').type,3);assert.ok(sheet.getCell('B2').value.startsWith("'="));assert.equal(sheet.getCell('B3').value,'0001');assert.equal(sheet.getCell('H3').value,'000PO');assert.equal(sheet.getCell('K2').value,null);assert.ok(sheet.getCell('E2').value.startsWith("'"));
  assert.equal(roundtrip.getWorksheet('Line items').rowCount,2102);assert.ok(roundtrip.getWorksheet('Export information').getCell('B5').value.includes('2026-10'));assert.ok(roundtrip.getWorksheet('Status ageing summary'));
 });
+
+test('PY and mixed TN/PY map once to TN in filters, matrix and Excel without modifying stores',async()=>{
+ const py={...store,id:'py',state:'PY'},original=JSON.stringify(py),q=fixture({workflow_version:2,status:OOS12[0][0],store_ids:[store.id,py.id],mapped_stores:[store,py]});
+ const rows=registerRows({rows:[q,q]},'2026-11-03');assert.equal(rows.length,1);assert.equal(rows[0].state,'TN');assert.equal(filterRegister(rows,{state:'TN'}).length,1);assert.equal(matrix(rows,['TN']).cells[0].states.TN.count,1);assert.equal(JSON.stringify(py),original);
+ const book=await buildOosExport(rows,{},['TN']);assert.ok(book.worksheets[0].getSheetValues().flat().includes('TN'));
+});

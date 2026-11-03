@@ -19,13 +19,13 @@ test('MIS linked FO images verify private bucket, exact path and stored size bef
 const roles=Object.keys(RETAIL_MIS_ROLES),all=[...new Set(Object.values(RETAIL_MIS_MODULES).flat())];
 for(const role of roles)test(role+' has exact module/navigation matrix and explicit geographic grants',()=>{
  const access={role,states:['TN','AP-1'],active:true},user={role,rawRole:role,business:'Reliance Retail'};
- for(const module of all){const allowed=RETAIL_MIS_MODULES[role].includes(module);assert.equal(retailMisCan(access,module,'TN'),allowed);assert.equal(canAccessRoute(user,'/reliance-retail/mis/'+module),allowed);assert.equal(retailMisCan(access,module,'PY'),allowed&&role==='CENTRAL_MIS');assert.equal(retailMisCan(access,module,'AP-2'),allowed&&role==='CENTRAL_MIS');}
+ for(const module of all){const allowed=RETAIL_MIS_MODULES[role].includes(module);assert.equal(retailMisCan(access,module,'TN'),allowed);assert.equal(canAccessRoute(user,'/reliance-retail/mis/'+module),allowed);assert.equal(retailMisCan(access,module,'PY'),allowed&&(role==='CENTRAL_MIS'||module==='oos'));assert.equal(retailMisCan(access,module,'AP-2'),allowed&&role==='CENTRAL_MIS');}
  for(const path of ['/reliance-retail/store-master','/fault-tracker','/settings/retail-mis-access','/fo-activities','/approvals','/employees','/reliance-retail/oos'])assert.equal(canAccessRoute(user,path),false);
  for(const path of ['/api/fault-tracker/tickets','/api/fo/activities','/api/training/sessions','/api/admin/users','/api/reliance-retail/operations/maintenance','/api/reliance-retail/unified-master'])assert.equal(retailMisApiAllowed({role},path),false);
  for(const path of ['/api/reliance-retail/mis/access','/api/reliance-retail/mis/report/pest','/api/profile/me'])assert.equal(retailMisApiAllowed({role},path),true);
  assert.equal(retailMisCan({...access,active:false},RETAIL_MIS_MODULES[role][0],'TN'),false);
 });
-test('legacy MIS is never silently Central; AP is ambiguous; TN does not grant PY',()=>{
+test('legacy MIS is never silently Central; AP is ambiguous; OOS TN includes PY while other modules remain geographic',()=>{
  assert.equal(retailMisCan({role:'MIS',active:true,states:['TN']},'dashboard','TN'),false);
  assert.throws(()=>retailMisScopeStates(['AP']));assert.throws(()=>retailMisScopeStates(['All States']));assert.deepEqual(retailMisScopeStates(['TN','KL','TN','KN']),['KA','KL','TN']);
  assert.throws(()=>attendanceAccess({role:'MIS_HK',id:'x',is_active:true}),/Outside/);
@@ -37,7 +37,7 @@ test('Padma migration identity requires all identifiers and active account, neve
 test('quotations reject entire cross-state file, foreign store, duplicate code and item mismatch',()=>{
  const access={role:'MIS_OOS',active:true,states:['TN','KL']},stores=[{id:'a',store_code:'S1',state:'TN',status:'Active'},{id:'b',store_code:'S2',state:'KL',status:'Active'},{id:'c',store_code:'S3',state:'PY',status:'Active'}];
  const group=id=>({store_ids:[id],items:[{store_id:id}]});assert.equal(assertScopedQuotation([group('a')],stores,access),'TN');
- assert.throws(()=>assertScopedQuotation([group('a'),group('b')],stores,access),/Cross-state/);assert.throws(()=>assertScopedQuotation([group('c')],stores,access),/Outside/);assert.throws(()=>assertScopedQuotation([group('a')],[...stores,{...stores[0],id:'dup'}],access),/Ambiguous/);assert.throws(()=>assertScopedQuotation([{store_ids:['a'],items:[{store_id:'b'}]}],stores,access),/mismatch/);
+ assert.throws(()=>assertScopedQuotation([group('a'),group('b')],stores,access),/Cross-state/);assert.equal(assertScopedQuotation([group('c')],stores,access),'TN');assert.equal(assertScopedQuotation([group('a'),group('c')],stores,access),'TN');assert.throws(()=>assertScopedQuotation([group('a')],[...stores,{...stores[0],id:'dup'}],access),/Ambiguous/);assert.throws(()=>assertScopedQuotation([{store_ids:['a'],items:[{store_id:'b'}]}],stores,access),/mismatch/);
 });
 test('real HTTP router binds actors, denies self-assignment/admin escalation, keeps OOS closed and signs no denied evidence',async()=>{
  const calls=[],client={rpc:async(name,args)=>{calls.push({name,args});if(name==='rpc_retail_mis_access')return {data:{role:'MIS_HK',active:true,states:['TN']}};if(name==='rpc_retail_mis_report')return {data:{rows:[],stores:[]}};if(name==='rpc_retail_mis_evidence_object')return {error:{code:'42501',message:'Outside scope'}};return {data:[]};},storage:{from(){throw Error('Unauthorized evidence must not reach storage');}}};
