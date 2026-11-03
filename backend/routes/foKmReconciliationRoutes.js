@@ -11,7 +11,7 @@ export function createKmReconciliationRouter({ requireAuth, getClient, reconcile
   router.get('/october-audit-summary', requireAuth, async (req, res) => {
     try {
       adminKmApprovalAuthorization(req.profile, req.authUser, 'Read-only October KM audit');
-      const result = await loadOctoberKmAudit(getClient());
+      const result = await loadOctoberKmAudit(getClient(), { includeAllCases: req.query.full === '1' });
       res.set('Cache-Control', 'no-store').json({ ok: true, ...result });
     } catch (error) {
       res.status(error.statusCode || 500).json({
