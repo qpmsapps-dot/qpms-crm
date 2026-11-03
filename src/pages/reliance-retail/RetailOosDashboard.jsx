@@ -12,7 +12,7 @@ export function OosMatrix({report,month='',state=''}) {
  const available=report.twelve_stage_available??report.twelve_stage_enabled;
  const model=matrix(rows,states),legacy=rows.filter(r=>r.workflow_version!==2&&!r.retired);
  const active=rows.filter(r=>!r.retired),overdue=active.filter(r=>r.status_age!=null&&r.status_age>7).length;
- const stages=OOS12.map(([code,label],index)=>({code,label,step:index+1,count:active.filter(r=>r.workflow_version===2&&r.status===code).length}));
+ const stages=OOS12.map(([code,label],index)=>({code,label:code==='OOS12_DOCUMENT_SUBMITTED'?'Documents submitted / pending':label,step:index+1,count:active.filter(r=>r.workflow_version===2&&r.status===code).length}));
  const activeTwelve=stages.reduce((sum,stage)=>sum+stage.count,0);
  const legacyStages=Object.entries(LEGACY_LABELS),legacyMatrix=matrix(legacy,states,legacyStages);
  const summary=[['Waiting for PO',OOS12[0][0],'QUOTED'],['PO received, fund not raised',OOS12[2][0],'COMMERCIALLY_CONFIRMED'],['Work done, documents pending',OOS12[7][0]],['Documents received, JMS pending',OOS12[9][0]],['JMS created, invoice pending',OOS12[10][0]]];
