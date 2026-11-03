@@ -14,7 +14,7 @@ export default function RetailCleaningSchedule({onClose,onSaved=()=>{},readOnly=
  const [request,setRequest]=useState(()=>crypto.randomUUID());
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[receipt,setReceipt]=useState(null);
  useEffect(()=>{
-  let live=true;setError('');
+  let live=true;
   const loader=mis?authenticatedApiRequest({url:'/api/reliance-retail/mis/report/cleaning',params:{from:today,to:today}}).then(x=>({stores:x.data?.result?.stores||[],mis:true})):retailUnifiedApi.snapshot({from:today,to:today});
   loader.then(x=>{if(live)setSource(x);}).catch(e=>{if(live)setError(e.response?.data?.message||e.message);});
   return()=>{live=false;};
