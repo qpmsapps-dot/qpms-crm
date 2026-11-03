@@ -126,3 +126,15 @@ test('deferred and failed results are not counted as posted credits', async () =
   assert.equal(result.failed, 1);
   assert.equal(result.creditedKm, 0);
 });
+
+test('unverified posting response is never treated as financial success', async () => {
+  const f = fixture();
+  const result = await runSupportedKmBatch(f.client, { date: '2026-11-01', batchSize: 1 }, {
+    environment, adminAuthorization,
+    reconcile: async () => ({ status: 'posted', financial_posted: true, additionalKm: 100, additionalAmount: 400 }),
+  });
+  assert.equal(result.updated, 0);
+  assert.equal(result.failed, 1);
+  assert.equal(result.creditedKm, 0);
+  assert.equal(result.results[0].code, 'KM_POSTING_RECEIPT_MISSING');
+});
