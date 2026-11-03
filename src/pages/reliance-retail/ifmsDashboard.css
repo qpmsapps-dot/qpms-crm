@@ -115,3 +115,21 @@
   .ifms-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .ifms-table-wrap table { font-size: 12px; }
 }
+
+
+/* October imported source integrated in existing KPI cards; not a second dashboard. */
+.ifms-source-mode{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0;padding:10px 13px;border:1px solid #d7e3ef;border-radius:12px;background:#f7faff;color:#355676;font-size:12px}
+.ifms-source-mode>span{font-weight:750;margin-right:5px}
+.ifms-source-mode button{font-size:12px;border-radius:8px;border:1px solid #cbdcf2;padding:7px 11px;background:#fff;color:#2351a1;font-weight:650}
+.ifms-source-mode button[aria-pressed="true"]{background:#1f4ac0;color:#fff;border-color:#1f4ac0}
+.ifms-source-mode small{color:#6a7d95;font-size:11px;line-height:1.5;flex-basis:100%}
+.ifms-excel-extra{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:16px 0}
+.ifms-excel-extra-card{padding:16px;background:#fff;border:1px solid #dbe7f2;border-radius:13px;box-shadow:0 3px 14px #1839560b;color:#244666}
+.ifms-excel-extra-card h2{font-size:14px;font-weight:750;color:#15345a}
+.ifms-excel-extra-number{font-size:27px;line-height:1.6;font-variant-numeric:tabular-nums;font-weight:750;color:#1e4fbb}
+.ifms-excel-extra-number small{font-size:11px;font-weight:550;color:#697f94}
+.ifms-excel-extra-card p:not(.ifms-excel-extra-number){font-size:12px;margin-bottom:10px}
+.ifms-excel-extra-card a{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:#285aba;text-decoration:none}
+.ifms-excel-extra-card a:hover{text-decoration:underline}
+@media(max-width:900px){.ifms-excel-extra{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.ifms-excel-extra{grid-template-columns:1fr}}
