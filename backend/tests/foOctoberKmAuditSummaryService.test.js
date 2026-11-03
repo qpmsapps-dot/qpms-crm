@@ -36,10 +36,11 @@ test('October evidence review handles Bike/Train, missing KM and no-activity exc
   ];
   const before = JSON.stringify({ rows, legs });
   const result = buildOctoberKmAudit(rows, legs,
-    [{ employee_code: code, full_name: 'PRAKASAN', state: 'KL' }],
+    [{ employee_code: code, full_name: 'PRAKASAN', role: 'FO', state: 'KL' }],
     new Set(['2026-10-06']));
   assert.equal(result.summary.attendance_records, 6);
   assert.equal(result.summary.employees, 1);
+  assert.equal(result.summary.roles.FO, 1);
   assert.equal(result.summary.calculated_petrol_rupees, 1032.24);
   assert.equal(result.summary.possible_missing_cases, 1);
   assert.equal(result.summary.possible_missing_gps_gap_km, 50);
@@ -103,4 +104,31 @@ test('Read path pages 505 attendances and scopes site visits by attendance ID', 
   assert.ok(calls.some(c => c[0] === 'fo_attendance' && c[1] === 'range' && c[2] === 500));
   assert.ok(calls.some(c => c[0] === 'fo_site_visits' && c[1] === 'select'));
   assert.ok(calls.every(c => ['select', 'range'].includes(c[1])), 'read only: no inserts/updates/deletes');
+});
+
+test('all KM-active roles are included: FO, KAM, Operations Manager, Branch Head and others', () => {
+  const roles = ['FO', 'KAM', 'Operations Manager', 'Branch Head', 'Business Head', 'Admin'];
+  const attendanceRows = roles.map((role, i) => ({
+    ...attendance('2026-10-16', i === 5 ? 0 : 15, i === 5 ? 0 : 12, i === 5 ? 0 : 48),
+    id: 'active-' + i, employee_code: 'EMP-' + i,
+  }));
+  const profileRows = roles.map((role, i) => ({
+    employee_code: 'EMP-' + i, full_name: 'Employee ' + i, role, state: 'TN',
+  }));
+  const result = buildOctoberKmAudit(attendanceRows, [], profileRows);
+  assert.equal(result.summary.employees, 5);
+  assert.equal(result.summary.attendance_records, 5);
+  assert.equal(result.summary.roles.FO, 1);
+  assert.equal(result.summary.roles.KAM, 1);
+  assert.equal(result.summary.roles['Operations Manager'], 1);
+  assert.equal(result.summary.roles['Branch Head'], 1);
+  assert.equal(result.summary.roles['Business Head'], 1);
+  assert.equal(result.summary.roles.Admin, undefined);
+  assert.ok(result.cases.some(c => c.role === 'KAM'));
+  assert.ok(result.cases.some(c => c.role === 'Operations Manager'));
+  assert.ok(result.cases.some(c => c.role === 'Branch Head'));
+  assert.ok(result.cases.some(c => c.role === 'Business Head'));
+  const withAdminSiteVisit = buildOctoberKmAudit(attendanceRows, [], profileRows, new Set(['active-5']));
+  assert.equal(withAdminSiteVisit.summary.roles.Admin, 1);
+  assert.equal(withAdminSiteVisit.summary.employees, 6);
 });
