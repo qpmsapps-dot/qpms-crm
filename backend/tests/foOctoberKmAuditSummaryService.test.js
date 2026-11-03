@@ -158,3 +158,20 @@ test('a final Train mode with saved payable KM is a review flag, never an automa
   assert.equal(result.cases[0].disposition, 'EVIDENCE_REVIEW_REQUIRED');
   assert.equal(result.summary.verified_deduction_rupees, null);
 });
+
+test('full export includes every candidate, compact dashboard remains limited to 100', () => {
+  const rows = Array.from({ length: 105 }, (_, i) => ({
+    ...attendance('2026-10-12', 0, 20, 80, 'train'),
+    id: 'record-' + String(i).padStart(3, '0'),
+  }));
+  const compact = buildOctoberKmAudit(rows);
+  const all = buildOctoberKmAudit(rows, [], [], new Set(), { includeAllCases: true });
+  assert.equal(compact.total_flagged_records, 105);
+  assert.equal(compact.cases.length, 100);
+  assert.equal(compact.truncated_cases, true);
+  assert.equal(all.total_flagged_records, 105);
+  assert.equal(all.cases.length, 105);
+  assert.equal(all.truncated_cases, false);
+  assert.equal(all.summary.nonpayable_attendance_with_payable_cases, 105);
+  assert.ok(all.cases.every(c => c.disposition === 'EVIDENCE_REVIEW_REQUIRED'));
+});
