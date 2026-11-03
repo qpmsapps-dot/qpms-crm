@@ -14,9 +14,10 @@ export function OosMatrix({report,month='',state=''}) {
  const active=rows.filter(r=>!r.retired),overdue=active.filter(r=>r.status_age!=null&&r.status_age>7).length;
  const stages=OOS12.map(([code,label],index)=>({code,label:code==='OOS12_DOCUMENT_SUBMITTED'?'Documents submitted / pending':label,step:index+1,count:active.filter(r=>r.workflow_version===2&&r.status===code).length}));
  const activeTwelve=stages.reduce((sum,stage)=>sum+stage.count,0);
+ const pendingDocuments=active.filter(r=>r.workflow_version===2&&r.details?.documents_pending===true).length;
  const legacyStages=Object.entries(LEGACY_LABELS),legacyMatrix=matrix(legacy,states,legacyStages);
  const summary=[['Waiting for PO',OOS12[0][0],'QUOTED'],['PO received, fund not raised',OOS12[2][0],'COMMERCIALLY_CONFIRMED'],['Work done, documents pending',OOS12[7][0]],['Documents received, JMS pending',OOS12[9][0]],['JMS created, invoice pending',OOS12[10][0]]];
- function table(cells,label,unavailable=false){return <div className="oos-table-scroll"><table aria-label={label}><thead><tr><th>OOS Status</th>{states.map(s=><th key={s}>{s}</th>)}<th>Total</th></tr></thead><tbody>{cells.map(row=><tr key={row.code}><th>{row.label}</th>{states.map(s=>{const c=row.states[s];return <td key={s}><Link className={'oos-matrix-cell age-'+(view==='age'?ageBand(c.average):'plain')} to={drills(s,row.code,month)} title={`Count ${c.count}; average ${c.average??'unavailable'} days; maximum ${c.max??'unavailable'} days; over 7 days ${c.overdue}; missing dates ${c.unknown}`}>
+ function table(cells,label,unavailable=false){return <div className="oos-table-scroll"><table aria-label={label}><thead><tr><th>OOS Status</th>{states.map(s=><th key={s}>{s}</th>)}<th>Total</th></tr></thead><tbody>{cells.map(row=><tr key={row.code}><th>{row.code==='OOS12_DOCUMENT_SUBMITTED'?'Documents submitted / pending':row.label}</th>{states.map(s=>{const c=row.states[s];return <td key={s}><Link className={'oos-matrix-cell age-'+(view==='age'?ageBand(c.average):'plain')} to={drills(s,row.code,month)} title={`Count ${c.count}; average ${c.average??'unavailable'} days; maximum ${c.max??'unavailable'} days; over 7 days ${c.overdue}; missing dates ${c.unknown}`}>
  {unavailable?'—':view==='count'?c.count:c.average==null?'—':`${c.average}d`}{!unavailable&&<small>Max {c.max??'—'}d · Overdue {c.overdue} · Unknown {c.unknown}</small>}</Link></td>;})}<td>{unavailable?'—':states.reduce((n,s)=>n+row.states[s].count,0)}</td></tr>)}</tbody><tfoot><tr><th>State totals (quotations)</th>{states.map(s=><td key={s}>{unavailable?'—':cells.reduce((n,r)=>n+r.states[s].count,0)}</td>)}<td>{unavailable?'—':cells.reduce((n,r)=>n+states.reduce((v,s)=>v+r.states[s].count,0),0)}</td></tr></tfoot></table></div>;}
  return <section className="oos-workspace oos-panel" aria-label="OOS Status Dashboard"><header><div><h2>OOS Status Dashboard</h2><p>One quotation, one current status, one verified state.</p></div><div className="oos-actions"><button aria-pressed={view==='count'} onClick={()=>setView('count')}>Count View</button><button aria-pressed={view==='age'} onClick={()=>setView('age')}>Ageing View</button></div></header>
  <p className="oos-board-method">Month uses the original quotation date (India time). All-Time includes records with unknown dates; ageing is calculated as of {today}.</p>
@@ -27,15 +28,19 @@ export function OosMatrix({report,month='',state=''}) {
    <div><span>All current quotations</span><strong>{active.length}</strong></div>
    <div><span>12-stage quotations</span><strong>{available?activeTwelve:'—'}</strong></div>
    <div><span>Over 7 days in stage</span><strong>{overdue}</strong></div>
+   <div><span>Documents still pending</span><strong>{available?pendingDocuments:'—'}</strong></div>
   </div>
  </div>
- {available&&<section className="oos-stage-board" aria-label="Twelve-stage quotation pipeline">
-  {stages.map(item=><Link key={item.code} className="oos-stage-tile" to={drills(state,item.code,month)}>
+ <section className="oos-stage-board" aria-label="Twelve-stage quotation pipeline">
+  {stages.map(item=>available?<Link key={item.code} className="oos-stage-tile" to={drills(state,item.code,month)}>
    <span className="oos-stage-step">STAGE {String(item.step).padStart(2,'0')}</span>
    <strong>{item.count}</strong><span>{item.label}</span>
    <small>View quotations</small>
-  </Link>)}
- </section>}
+  </Link>:<div key={item.code} className="oos-stage-tile oos-stage-disabled" aria-disabled="true">
+   <span className="oos-stage-step">STAGE {String(item.step).padStart(2,'0')}</span>
+   <strong>—</strong><span>{item.label}</span><small>Activation pending</small>
+  </div>)}
+ </section>
  <h3 className="oos-matrix-heading">State-wise 12-stage status matrix</h3>
  {table(model.cells,'Twelve-stage OOS state matrix',!available)}
  {(legacy.length>0||!available)&&<><h3>Existing six-stage workflow</h3>{table(legacyMatrix.cells,'Legacy OOS state matrix')}</>}
