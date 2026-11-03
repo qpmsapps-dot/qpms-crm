@@ -714,6 +714,14 @@ test('Request IDs bind server-generated store paths and replay the same intent a
  await assert.rejects(createClientDeepCleaningUploadUrl(db,FO_PROFILE,draft.id,{...payload,request_id:'bad'}),e=>e.statusCode===400);
 });
 
+test('Concurrent upload confirmations replay the same single uploaded record',async()=>{
+ const db=client(),draft=await createClientDeepCleaningSubmission(db,FO_PROFILE,{store_code:'RR001'});
+ const issued=await createClientDeepCleaningUploadUrl(db,FO_PROFILE,draft.id,{upload_type:'before',filename:'before.jpg',mime_type:'image/jpeg',file_size:1000});
+ db.addStorageObject(issued.storage_bucket,issued.storage_path,1000);
+ const results=await Promise.all([1,2].map(()=>completeClientDeepCleaningUpload(db,FO_PROFILE,draft.id,{...issued,filename:'before.jpg',file_size:1000})));
+ assert.equal(results[0].id,results[1].id);assert.equal(results[0].upload_status,'uploaded');assert.equal(db.tables.client_deep_cleaning_uploads.length,1);
+});
+
 test('Upload complete verifies issued intent and physical storage object', async () => {
   const db = client();
   const draft = await createClientDeepCleaningSubmission(db, FO_PROFILE, { store_code: 'RR001' });

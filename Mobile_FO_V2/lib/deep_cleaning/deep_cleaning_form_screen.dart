@@ -63,6 +63,8 @@ class _DeepCleaningFormScreenState extends State<DeepCleaningFormScreen> {
       _localUploads.any((upload) => upload.isActive) || _loading || _submitting;
   bool get _hasBefore => _confirmedUploads(DeepCleaningUploadType.before) > 0;
   bool get _hasAfter => _confirmedUploads(DeepCleaningUploadType.after) > 0;
+  bool get _hasPendingRemoteUploads =>
+      _remoteUploads.any((upload) => !upload.isUploaded);
   int get _documentCount => _remoteUploads
       .where(
         (upload) =>
@@ -72,12 +74,16 @@ class _DeepCleaningFormScreenState extends State<DeepCleaningFormScreen> {
       )
       .length;
   bool get _canComplete =>
-      _hasBefore && _hasAfter && _documentCount == 1 && !_hasActiveUploads;
+      _hasBefore &&
+      _hasAfter &&
+      _documentCount == 1 &&
+      !_hasActiveUploads &&
+      !_hasPendingRemoteUploads;
   bool get _canSubmit => canSubmitDeepCleaningEvidence(
     hasConfirmedBefore: _hasBefore && _pairsComplete,
     hasConfirmedAfter: _hasAfter && _pairsComplete,
     hasSingleSupportingDocument: _documentCount == 1,
-    hasActiveUploads: _hasActiveUploads,
+    hasActiveUploads: _hasActiveUploads || _hasPendingRemoteUploads,
   );
   bool get _usesPairs =>
       _submission == null || _submission?.evidenceFormat == 'paired_v1';
@@ -1163,6 +1169,38 @@ class _DeepCleaningFormScreenState extends State<DeepCleaningFormScreen> {
             Text(_error!, style: const TextStyle(color: Color(0xFFE11D48))),
           ],
           const SizedBox(height: 16),
+          if (!readOnly && _hasPendingRemoteUploads) ...[
+            FoCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Incomplete uploads',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const Text(
+                    'Remove an incomplete upload before selecting its replacement and completing this report.',
+                  ),
+                  for (final upload in _remoteUploads.where(
+                    (item) => !item.isUploaded,
+                  ))
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        upload.originalFilename ?? upload.uploadType.label,
+                      ),
+                      trailing: TextButton(
+                        onPressed: _hasActiveUploads
+                            ? null
+                            : () => _deleteRemoteUpload(upload),
+                        child: const Text('Remove incomplete upload'),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           if (_isScheduled)
             _scheduledSummaryCard()
           else ...[
@@ -1673,8 +1711,7 @@ class _DeepCleaningFormScreenState extends State<DeepCleaningFormScreen> {
                 ),
               if (localUpload?.status == DeepCleaningLocalUploadStatus.failed)
                 TextButton(
-                  onPressed: () =>
-                      setState(() => _localUploads.remove(localUpload)),
+                  onPressed: () => _discardLocalUpload(localUpload!),
                   child: const Text('Remove'),
                 ),
             ],
@@ -1850,7 +1887,7 @@ class _DeepCleaningFormScreenState extends State<DeepCleaningFormScreen> {
                 ),
                 IconButton(
                   tooltip: 'Remove',
-                  onPressed: () => setState(() => _localUploads.remove(upload)),
+                  onPressed: () => _discardLocalUpload(upload),
                   icon: const Icon(Icons.delete_outline_rounded),
                 ),
               ],
@@ -1991,6 +2028,36 @@ class _DeepCleaningFormScreenState extends State<DeepCleaningFormScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _discardLocalUpload(DeepCleaningLocalUpload upload) async {
+    final submissionId = _submission?.id;
+    if (_hasActiveUploads || submissionId == null) return;
+    setState(() => _loading = true);
+    try {
+      final intentId = upload.intent?.uploadId;
+      if (intentId != null) {
+        await _service.deleteUpload(
+          submissionId: submissionId,
+          uploadId: intentId,
+        );
+        if (!mounted) return;
+        _remoteUploads = _remoteUploads
+            .where((item) => item.id != intentId)
+            .toList();
+      } else {
+        // A lost intent response has no local upload ID. Refresh first so the
+        // server's pending row stays visible for explicit removal.
+        final fresh = await _service.getSubmission(submissionId);
+        if (!mounted) return;
+        _applySubmission(fresh);
+      }
+      setState(() => _localUploads.remove(upload));
+    } catch (error) {
+      if (mounted) _snack(_message(error));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   Future<bool> _deleteRemoteUpload(DeepCleaningUpload upload) async {
