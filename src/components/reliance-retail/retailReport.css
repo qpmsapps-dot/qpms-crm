@@ -219,3 +219,40 @@
 @media(prefers-reduced-motion:reduce){
  .retail-report :is(button,a.retail-report-button):active:not(:disabled){transform:none}
 }
+
+/* Specific report views: same FO and MIS records, clearer reading order. */
+.retail-training-report .retail-report-filters[aria-label="State-wise completed trainings"]{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(min(185px,100%),1fr));gap:10px;
+  background:transparent;border:0;padding:0;
+}
+.retail-training-report .retail-report-filters[aria-label="State-wise completed trainings"] p{
+  display:flex;align-items:center;min-height:56px;padding:12px 14px;margin:0;
+  background:#f5f9ff;border:1px solid #dae7f5;border-radius:11px;
+  color:#25486e;font-size:13px;font-weight:650;line-height:1.5;
+}
+.retail-training-report .retail-report-panel-heading h2{color:#153866}
+.retail-training-report .retail-report-table table{min-width:900px}
+.retail-training-report .retail-report-evidence header h2{font-size:18px}
+.retail-cleaning-report .retail-report-stats article:nth-child(2)::before{background:#16a875}
+.retail-cleaning-report .retail-report-stats article:nth-child(3)::before{background:#d28e24}
+.retail-cleaning-report .retail-report-panel-heading{align-items:center}
+.retail-cleaning-report .retail-report-images a:hover{border-color:#8db4e7;box-shadow:0 6px 18px rgba(21,63,116,.09)}
+.retail-cleaning-report .retail-report-evidence>header h2{font-size:18px}
+.retail-maintenance-report .retail-report-filters,
+.retail-thermography-report .retail-report-filters{gap:12px}
+.retail-maintenance-report .retail-report-panel,
+.retail-thermography-report .retail-report-panel{background:#fff}
+.retail-maintenance-report .retail-report-table table{min-width:780px}
+.retail-thermography-report .retail-report-table table{min-width:960px}
+.retail-thermography-report .retail-report-stats article:nth-child(2)::before{background:#d79b31}
+.retail-thermography-report .retail-report-stats article:nth-child(3)::before{background:#16a875}
+.retail-thermography-report .retail-report-stats article:nth-child(4)::before{background:#d06b47}
+.retail-report-table:focus-visible{outline:3px solid #78a9e8;outline-offset:1px}
+@media(max-width:700px){
+ .retail-training-report .retail-report-filters[aria-label="State-wise completed trainings"]{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .retail-training-report .retail-report-filters[aria-label="State-wise completed trainings"] p{font-size:12px;min-height:50px}
+}
+/* Ensure the existing primary attendance import button remains visually primary on hover. */
+.retail-attendance-workspace>header button[class*="bg-blue-600"]:not(:disabled):hover{
+ background-color:#1d4ed8;border-color:#1d4ed8;color:#fff;
+}
