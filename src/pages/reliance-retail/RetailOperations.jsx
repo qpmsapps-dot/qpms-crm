@@ -9,6 +9,7 @@ import {usePageTitle} from '../../hooks/usePageTitle.js';
 import {useAuth} from '../../context/auth-context.js';
 import {isPlatformAdmin} from '../../utils/authRoles.js';
 import {isCompleteOperationsReport} from '../../utils/retailOperationsReport.js';
+import RetailExcelModuleRecords from '../../components/reliance-retail/RetailExcelModuleRecords.jsx';
 
 const emptyForm=()=>({store_id:'',scheduled_date:indiaToday(),request_id:crypto.randomUUID()});
 export default function RetailOperations({kind='maintenance'}) {
@@ -94,5 +95,6 @@ export default function RetailOperations({kind='maintenance'}) {
    {history&&<section aria-label="Operational audit history"><h2>Recorded history</h2>{report.events.filter(e=>Array.isArray(history)?history.includes(e.entity_id):e.entity_id===history).map(e=><p key={e.id}>{e.created_at} · {e.action}{isPlatformAdmin(user)&&<> · Actor {e.actor_profile_id}</>}</p>)}<button onClick={()=>setHistory(null)}>Close history</button></section>}
   </>}
   {confirmation&&<section role="dialog" aria-modal="false" aria-label="Confirm operational save" className="retail-report-notice"><p>{confirmation.label}</p><button disabled={saving} onClick={()=>void save()}>{saving?'Saving…':'Confirm save'}</button><button autoFocus disabled={saving} onClick={()=>setConfirmation(null)}>Cancel</button></section>}
+  <RetailExcelModuleRecords modules={[maintenance?'cmpm':'thermography']}/>
  </section>;
 }
