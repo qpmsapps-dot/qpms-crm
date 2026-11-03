@@ -7,7 +7,7 @@ const master=[{id:'a',store_code:'SL81',state:'TN',status:'Active'},{id:'b',stor
 const source=[['t1',' sl81 ','KN'],['t2','SL81','TN'],['t3','K001','KN'],['t4','IN0','TN'],['t5','UNKNOWN','TN'],['t6','','TN'],['t7','SL81','TN'],['t8','P001','PY']].map(([id,store_code,state_code],i)=>({id,store_code,state_code,store_name:'Same imported name',ticket_no:id==='t5'?'EXCLUDED-TICKET':id,is_active:id!=='t7',stage:i%2?'Completed':'Pending',ageing_days:i+1,supervisor_name:i%2?'Second':'First',created_at_source:`2026-10-${String(i+1).padStart(2,'0')}T00:00:00Z`,import_batch_id:'batch'}));
 const admin={id:'admin',role:'Admin',state:'TN',is_active:true,status:'Active'};
 const authorization={readAll:true,isAdmin:true,stateCode};
-function fixture(stores=master,tickets=source){const tables={reliance_retail_store_master:stores,fault_tracker_tickets:tickets,fault_tracker_import_batches:[{id:'batch',original_file_name:'Source.xlsx',imported_at:'2026-10-31',ticket_count:tickets.length,metadata:{excluded_private_detail:'must not leak'}}],access_modules:[]};return {from(table){let values=[...(tables[table]||[])],start=0,end=Infinity;const q={select(){return q;},eq(k,v){values=values.filter(r=>r[k]===v);return q;},order(){return q;},limit(n){end=n-1;return q;},range(a,b){start=a;end=b;return q;},maybeSingle(){return Promise.resolve({data:values[0]||null});},then(resolve,reject){return Promise.resolve({data:values.slice(start,end+1)}).then(resolve,reject);}};return q;}};}
+function fixture(stores=master,tickets=source,batches=null){const tables={reliance_retail_store_master:stores,fault_tracker_tickets:tickets,fault_tracker_import_batches:batches||[{id:'batch',original_file_name:'Source.xlsx',imported_at:'2026-10-31',ticket_count:tickets.length,metadata:{excluded_private_detail:'must not leak'}}],access_modules:[]};return {from(table){let values=[...(tables[table]||[])],start=0,end=Infinity;const q={select(){return q;},eq(k,v){values=values.filter(r=>r[k]===v);return q;},order(){return q;},limit(n){end=n-1;return q;},range(a,b){start=a;end=b;return q;},maybeSingle(){return Promise.resolve({data:values[0]||null});},then(resolve,reject){return Promise.resolve({data:values.slice(start,end+1)}).then(resolve,reject);}};return q;}};}
 test('strict normalized Store Code eligibility ignores names and imported states and preserves every source row',()=>{
  const before=JSON.stringify(source),result=scopeFaultTickets(source,master,authorization);
  assert.equal(normalizedFaultStoreCode(' sl81 '),'SL81');assert.notEqual(normalizedFaultStoreCode('0012'),normalizedFaultStoreCode('12'));
@@ -46,4 +46,38 @@ test('HTTP boundary requires an authenticated profile and excluded direct URLs/d
  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
  try{const base=`http://127.0.0.1:${server.address().port}`;assert.equal((await fetch(base+'/tickets')).status,401);assert.equal((await fetch(base+'/tickets?ticket_id=t5',{headers:{authorization:'Bearer local-fixture'}})).status,404);assert.equal((await fetch(base+'/tickets/t5',{headers:{authorization:'Bearer local-fixture'}})).status,404);const r=await(await fetch(base+'/tickets?search=EXCLUDED-TICKET',{headers:{authorization:'Bearer local-fixture'}})).json();assert.equal(r.total,0);assert.equal(Object.hasOwn(r,'reconciliation'),false);}
  finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
+});
+
+test('latest pending dump calculates closed count and call categories without leaking another state',async()=>{
+ const old={id:'previous',source_name:'Reliance Retail IFMS',original_file_name:'Corrective Pending Ticket Report 28 October 2026.xlsx',imported_at:'2026-10-28T12:00:00Z',ticket_count:3};
+ const current={id:'latest',source_name:'Reliance Retail IFMS',original_file_name:'Corrective Pending Ticket Report 02 November 2026.xlsx',imported_at:'2026-11-02T12:00:00Z',ticket_count:2};
+ const ticket=(batch,store,number,category)=>({
+  id:batch+number,store_code:store,ticket_no:number,category,
+  import_batch_id:batch,is_active:true,stage:'Pending'
+ });
+ const db=fixture(master,[
+  ticket('previous','SL81','T-1','HVAC'),
+  ticket('previous','SL81','T-2','Housekeeping'),
+  ticket('previous','K001','T-3','Pest Control'),
+  ticket('latest','SL81','T-2','Housekeeping'),
+  ticket('latest','K001','T-4','Lighting'),
+ ],[current,old]);
+ const all=await scopedFaultTrackerReport(db,admin,{},authorization);
+ assert.equal(all.closed_since_previous.count,2);
+ assert.deepEqual(all.closed_since_previous.by_category,[{category:'HVAC',count:1},{category:'Pest Control',count:1}]);
+ assert.equal(all.closed_since_previous.previous_file,old.original_file_name);
+ const tn=await scopedFaultTrackerReport(db,{...admin,role:'MIS'},{},{readAll:false,isAdmin:false,stateCode});
+ assert.equal(tn.closed_since_previous.count,1);
+ assert.deepEqual(tn.closed_since_previous.by_category,[{category:'HVAC',count:1}]);
+ assert.deepEqual(tn.tickets.map(row=>row.ticket_no),['T-2']);
+});
+test('cannot infer closures across different IFMS dump families',async()=>{
+ const current={id:'latest',source_name:'Reliance Retail IFMS',original_file_name:'Corrective Pending Ticket Report.xlsx',imported_at:'2026-11-02T12:00:00Z',ticket_count:1};
+ const other={id:'prior',source_name:'Reliance Retail IFMS',original_file_name:'Overall Pending Ticket Report.xlsx',imported_at:'2026-10-28T12:00:00Z',ticket_count:2};
+ const db=fixture(master,[
+  {...source[0],id:'before',ticket_no:'T1',import_batch_id:'prior'},
+  {...source[1],id:'after',ticket_no:'T2',import_batch_id:'latest'}
+ ],[current,other]);
+ const report=await scopedFaultTrackerReport(db,admin,{},authorization);
+ assert.equal(report.closed_since_previous,null);
 });
