@@ -14,7 +14,7 @@ function localDay(timestamp) {
   const time = Date.parse(timestamp);
   return Number.isFinite(time) ? new Date(time + IST_MS).toISOString().slice(0, 10) : null;
 }
-export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles = []) {
+export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles = [], attendanceIdsWithVisits = new Set()) {
   const byEmployee = new Map(profiles.map(p => [p.employee_code, p]));
   const legsByDay = new Map();
   for (const leg of travelLegs) {
@@ -22,7 +22,8 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
     const day = localDay(leg.started_at);
     if (!day || day < FROM || day > TO) continue;
     const key = attendanceKey(leg.employee_code, day);
-    const current = legsByDay.get(key) || { train: 0, bike: 0, bikePaidKm: 0, bikeAmount: 0 };
+    const current = legsByDay.get(key) || { train: 0, bike: 0, recordedLegs: 0, bikePaidKm: 0, bikeAmount: 0 };
+    current.recordedLegs += 1;
     if (mode(leg.travel_mode) === 'train') current.train += 1;
     if (mode(leg.travel_mode) === 'bike') {
       current.bike += 1;
@@ -52,17 +53,22 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
   for (const row of attendances) {
     const day = String(row.attendance_date || '');
     if (day < FROM || day > TO || !row.employee_code) continue;
-    summary.attendance_records += 1;
-    employees.add(row.employee_code);
     const gps = finite(row.filtered_gps_km);
     const approved = finite(row.total_approved_km);
     const petrol = finite(row.petrol_amount);
+    const savedLegs = legsByDay.get(attendanceKey(row.employee_code, day)) || { train: 0, bike: 0, recordedLegs: 0, bikePaidKm: 0, bikeAmount: 0 };
+    // Scope the FO report to evidence of KM, actual travel, or a site visit.
+    // A bare attendance row (including an Admin account) is not an audit subject.
+    const hasActivity = gps > 0 || approved > 0 || petrol > 0 ||
+      savedLegs.recordedLegs > 0 || attendanceIdsWithVisits.has(row.id);
+    if (!hasActivity) continue;
+    summary.attendance_records += 1;
+    employees.add(row.employee_code);
     summary.calculated_petrol_rupees += petrol;
     const motor = ['bike', 'car', 'own_vehicle'].includes(mode(row.travel_mode));
     const possibleMissing = motor && gps > approved + 10;
     const possibleExcess = approved > gps + 10 && petrol > 0;
     const noGps = gps === 0 && approved > 0;
-    const savedLegs = legsByDay.get(attendanceKey(row.employee_code, day)) || { train: 0, bike: 0, bikePaidKm: 0, bikeAmount: 0 };
     const mixed = savedLegs.train > 0 && savedLegs.bike > 0;
     const mixedPaid = mixed && savedLegs.bikePaidKm > 0;
     if (possibleMissing) { summary.possible_missing_cases += 1; summary.possible_missing_gps_gap_km += gps - approved; }
@@ -113,6 +119,18 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
     explanation: 'GPS differences are candidate evidence, not approved deductions or credits. Bike plus Train on one day is a mode-switch flag, not proof of rail travel on the Bike leg. Track map-matching is not yet active.',
   };
 }
+async function loadVisitAttendanceIds(client, attendances) {
+  // Query by authoritative attendance IDs, not check-in date, to include
+  // site visits recorded late or with missing check-in timestamps.
+  const ids = [...new Set(attendances.map(a => a.id).filter(Boolean))];
+  const withVisits = new Set();
+  for (let offset = 0; offset < ids.length; offset += 100) {
+    const page = await loadPages(client, 'fo_site_visits', 'id,attendance_id',
+      q => q.in('attendance_id', ids.slice(offset, offset + 100)).order('id'));
+    for (const visit of page) if (visit.attendance_id) withVisits.add(visit.attendance_id);
+  }
+  return withVisits;
+}
 async function loadPages(client, table, fields, configure) {
   const PAGE = 500;
   const limit = 10000;
@@ -134,6 +152,7 @@ export async function loadOctoberKmAudit(client) {
     loadPages(client, 'fo_travel_legs', 'id,employee_code,started_at,travel_mode,payable_km,payable_amount,superseded_at',
       q => q.gte('started_at', '2026-09-30T18:30:00Z').lt('started_at', '2026-10-31T18:30:00Z').is('superseded_at', null).order('started_at').order('id')),
   ]);
+  const attendanceIdsWithVisits = await loadVisitAttendanceIds(client, attendances);
   const employees = [...new Set(attendances.map(a => a.employee_code).filter(Boolean))];
   let profiles = [];
   if (employees.length) {
@@ -141,5 +160,5 @@ export async function loadOctoberKmAudit(client) {
     if (error) throw error;
     profiles = data || [];
   }
-  return buildOctoberKmAudit(attendances, travelLegs, profiles);
+  return buildOctoberKmAudit(attendances, travelLegs, profiles, attendanceIdsWithVisits);
 }
