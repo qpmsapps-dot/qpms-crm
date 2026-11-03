@@ -1,0 +1,31 @@
+.ifms-excel-module{margin:18px 0;padding:clamp(14px,2vw,22px);border:1px solid #d9e5f2;border-radius:14px;background:#fff;box-shadow:0 5px 18px #143b5b0a;color:#153553}
+.ifms-excel-header{display:flex;justify-content:space-between;align-items:start;gap:16px;margin-bottom:12px}
+.ifms-excel-header h2{margin:2px 0 4px;font-size:17px;font-weight:750;color:#183a62}
+.ifms-excel-header p{margin:0;color:#62768f;font-size:12px}
+.ifms-excel-header .ifms-excel-eyebrow{font-weight:750;letter-spacing:.075em;font-size:10px;text-transform:uppercase;color:#2b5ac0}
+.ifms-excel-tag{white-space:nowrap;background:#eff5ff;color:#1a4cb3;font-size:11px;border-radius:8px;padding:6px 9px;font-weight:650}
+.ifms-excel-warning{margin:0 0 14px;padding:9px 11px;background:#f7f9fd;border-left:3px solid #729bd7;border-radius:4px;font-size:11px;color:#455e7d}
+.ifms-excel-controls{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin:0 0 12px}
+.ifms-excel-controls label{display:flex;flex-direction:column;font-size:11px;color:#536e8b;gap:5px;font-weight:650}
+.ifms-excel-controls form{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+.ifms-excel-controls input,.ifms-excel-controls select{border:1px solid #cfddec;border-radius:8px;background:#fff;padding:7px 10px;min-height:34px;max-width:290px;min-width:150px;color:#173857;font-size:12px}
+.ifms-excel-controls button,.ifms-excel-pagination button{min-height:34px;border:1px solid #cad9eb;border-radius:8px;padding:7px 12px;background:#f5f9ff;color:#1e4e9c;font-size:12px;font-weight:650}
+.ifms-excel-controls button:disabled,.ifms-excel-pagination button:disabled{opacity:.45;cursor:not-allowed}
+.ifms-excel-controls button:hover:not(:disabled),.ifms-excel-pagination button:hover:not(:disabled){background:#e6efff}
+.ifms-excel-count{font-size:12px;margin-bottom:10px;color:#496582}
+.ifms-excel-scroll{overflow:auto;max-height:600px;border:1px solid #dce7f0;border-radius:9px;scrollbar-width:thin}
+.ifms-excel-scroll:focus-visible{outline:2px solid #82ace0;outline-offset:2px}
+.ifms-excel-scroll table{border-collapse:separate;border-spacing:0;width:100%;min-width:970px;table-layout:auto}
+.ifms-excel-scroll thead th{position:sticky;top:0;background:#edf3fa;color:#1e4267;z-index:2;font-size:11px;font-weight:750;padding:11px 10px;text-align:left;white-space:nowrap}
+.ifms-excel-scroll tbody td{font-size:11px;padding:10px;border-bottom:1px solid #ebf0f6;vertical-align:top;line-height:1.5;color:#294766;min-width:60px;max-width:250px;word-break:break-word}
+.ifms-excel-scroll tbody tr:hover td{background:#f8fbff}
+.ifms-excel-scroll tbody td:nth-child(3){font-weight:700;color:#1b4d97;white-space:nowrap}
+.ifms-excel-scroll details{min-width:95px}
+.ifms-excel-scroll summary{cursor:pointer;font-weight:650;color:#1854ad}
+.ifms-excel-scroll dl{display:grid;gap:7px;margin:9px 0 0;width:260px;max-width:100%}
+.ifms-excel-scroll dt{font-size:10px;color:#62758d;text-transform:capitalize;font-weight:700}
+.ifms-excel-scroll dd{margin:1px 0 0;font-size:11px;white-space:normal}
+.ifms-excel-pagination{display:flex;justify-content:flex-end;align-items:center;gap:8px;font-size:11px;color:#62778b;margin-top:11px}
+.ifms-excel-error{color:#a83237;padding:8px}
+.ifms-excel-empty{padding:15px;color:#65798a;font-size:12px}
+@media(max-width:650px){.ifms-excel-header{flex-wrap:wrap}.ifms-excel-controls{display:grid;grid-template-columns:1fr}.ifms-excel-controls form{align-items:end}.ifms-excel-controls input{max-width:none}}
