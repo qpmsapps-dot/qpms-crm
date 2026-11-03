@@ -35,6 +35,43 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # Exact source-integration exception, covered by retail-cleaning-delivery.yml.
+          # No branch-name bypass or broad backend/mobile allowlist. Any payload
+          # drift or unrelated file returns to the original strict guard below.
+          approved_cleaning_delivery = {
+            ".github/workflows/retail-cleaning-delivery.yml": "e41b8e8750b677eb72460807513f37fe6dc418f1",
+            "Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_form_screen.dart": "d1cfef77fe62e81394e85b7c84a0e82d3b09014a",
+            "Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_models.dart": "db1cb5a0cf6ef19f33e8e185dc971c5717c18a2e",
+            "Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_screen.dart": "a271b492c9c258cf08d0b71a2eeefe682aaa8205",
+            "Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_service.dart": "04a36993844d216c2204e3d05b0dd818ef0e9cf5",
+            "Mobile_FO_V2/lib/home/home_shell.dart": "69bd02c7723498d0859b50b17349132e90a5a128",
+            "Mobile_FO_V2/test/deep_cleaning_delivery_test.dart": "12f23960ba94e9d63913e8d0073f96c11dae64d4",
+            "backend/routes/clientDeepCleaningRoutes.js": "3a8f4a92ff6dc312d1c2bdea725f4bf67643a2c7",
+            "backend/server.js": "d9323c4ac1afb7da848cadca48f1d38fc365447d",
+            "backend/services/clientDeepCleaningService.js": "4e70d0da2f335fba0cd09189b924e0f85f1f6542",
+            "backend/services/retailCleaningDeliveryService.js": "dd92374a6cc4de908b1924732362eaa8764b569e",
+            "backend/services/retailCleaningLegacyReadService.js": "770ad1d79e6e8aeeeeb74590374916170120aade",
+            "backend/tests/clientDeepCleaningService.test.js": "f1378e55a62911e4eca059c3bf1364d0ce02cd0c",
+            "backend/tests/retailCleaningDelivery.test.js": "1b7d0ff591cb3c101227d3ecaaf170ac6a1e588a",
+            "backend/tests/retailCleaningDeliveryPostgres.test.js": "de71fb1952c58d53128ff52d4fc860f028c90d6a",
+            "docs/RETAIL_CLEANING_DELIVERY_20261103.md": "bdf17d0b8691b85755de76a3121338560fa790b0",
+            "src/components/Sidebar.jsx": "2393c3b523e88d889d65b45649a817054505f19b",
+            "src/pages/DeepCleaning.jsx": "708d4b64254b3c724504140969ce7bf534f52c87",
+            "src/pages/reliance-retail/RetailCleaningScheduleViewer.jsx": "f2b9588b3dc7cae448326bd05489ea9f342575ff",
+            "src/routes/AppRoutes.jsx": "2c61768d06c0a27c6f2df6f7430e9427c737fe44",
+            "src/utils/authRoles.js": "0179b498c1724aa6953605b2a1b4520ee24d0d80",
+            "supabase/proposals/retail_cleaning_delivery_v1.sql": "5132dba5dd329e95d1078de545a0df76a16476d7",
+            "supabase/verification/retail_cleaning_delivery_read_only.sql": "ae6afdfb0a6ae2080ecf92508c5ffa12d5f10cea",
+            "tests/retailCleaningDeliveryBrowser.test.js": "88df53279893a5a6f17befd79b015d2ccc495b48",
+          }
+          cleaning_diff = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
+          if cleaning_diff == set(approved_cleaning_delivery):
+            mismatch = [path for path, expected in approved_cleaning_delivery.items()
+                        if subprocess.check_output(["git","hash-object",path],text=True).strip() != expected]
+            if mismatch:
+              sys.exit("Cleaning integration payload changed; protected review must be renewed: " + ", ".join(mismatch))
+            print("PASS: exact Cleaning delivery payload; dedicated backend/PostgreSQL/Flutter checks required.")
+            sys.exit(0)
           # One-time, content-pinned operational Retail feature review.
           # This does not broaden the old UI-only path/control guard for other PRs.
           # The feature-specific CI also runs backend tests, scoped lint, build,

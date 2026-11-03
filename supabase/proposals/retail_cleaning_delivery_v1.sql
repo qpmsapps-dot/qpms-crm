@@ -62,6 +62,8 @@ begin
    'id',c.id,'schedule_id',c.id,'retail_store_id',s.id,'store_code',s.store_code,'store_name',s.store_name,
    'state',s.state,'geographic_state',case when s.state='KN' then 'KA' else s.state end,'reporting_state',case when s.state in ('TN','PY') then 'TN' when s.state='KN' then 'KA' else s.state end,
    'zone_id',case when s.state in ('TN','PY') then public.retail_unified_owner(s.id,now())->>'zone_id' else s.zone_id::text end,
+   'zone',case when z.id is null then null else jsonb_build_object('id',z.id,'code',z.zone_code,'name',z.zone_name) end,
+   'zone_code',z.zone_code,'zone_name',z.zone_name,
    'scheduled_date',c.scheduled_date,'status',c.status,'activity','Deep Cleaning','notes',c.metadata->>'notes',
    'city',to_jsonb(s)->>'city','latitude',to_jsonb(s)->>'latitude','longitude',to_jsonb(s)->>'longitude',
    'assigned_fo_profile_id',x.executor,'assignment_status',case when x.executor is null then 'Assignment Pending' else 'Assigned' end,
@@ -70,6 +72,7 @@ begin
   ) row_data
   from public.client_deep_cleaning_schedules c join public.reliance_retail_store_master s on s.id=c.retail_store_id
   cross join lateral (select public.retail_cleaning_executor_v1(c.id) executor) x
+  left join public.reliance_retail_zones z on z.id=case when s.state in ('TN','PY') then (public.retail_unified_owner(s.id,now())->>'zone_id')::uuid else s.zone_id end
   where (p_schedule is null and c.scheduled_date between p_from and p_to or c.id=p_schedule)
    and upper(regexp_replace(coalesce(s.business,s.client_name,''),'[^a-zA-Z]','','g')) in ('RELIANCE','RELIANCERETAIL')
    and (case when is_fo then x.executor=p_actor else s.id=any(p_stores) end)
