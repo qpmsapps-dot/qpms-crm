@@ -11540,6 +11540,7 @@ export default function FOActivities() {
   const [kmAuditError, setKmAuditError] = useState("");
   const [octoberKmAudit, setOctoberKmAudit] = useState(null);
   const [octoberKmAuditBusy, setOctoberKmAuditBusy] = useState(false);
+  const [octoberKmExportBusy, setOctoberKmExportBusy] = useState(false);
   const [octoberKmAuditError, setOctoberKmAuditError] = useState("");
   const [mapRouteOfficerId, setMapRouteOfficerId] = useState(null);
   const [supportOfficerId, setSupportOfficerId] = useState(null);
@@ -12008,6 +12009,60 @@ export default function FOActivities() {
       setOctoberKmAuditError(error.message || "October KM audit could not be loaded.");
     } finally {
       setOctoberKmAuditBusy(false);
+    }
+  }
+
+  async function exportOctoberKmExceptions() {
+    if (!canViewKmAudit || octoberKmExportBusy) return;
+    setOctoberKmExportBusy(true);
+    setOctoberKmAuditError("");
+    try {
+      await authSessionManager().requireSession();
+      const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/km/october-audit-summary?full=1`);
+      const payload = await response.json();
+      if (!response.ok || payload.ok !== true || payload.processing_status !== "READ_ONLY_REVIEW" ||
+          !Array.isArray(payload.cases) || payload.truncated_cases ||
+          payload.cases.length !== payload.total_flagged_records) {
+        throw new Error(payload.message || "Complete October exception data was not returned. No partial export created.");
+      }
+      const rows = payload.cases.map(entry => ({
+        "Date": entry.date,
+        "State": entry.state || "",
+        "Business": entry.business || "",
+        "Employee Code": entry.employee_code,
+        "Employee Name": entry.employee_name,
+        "Role": entry.role || "",
+        "Recorded Final Mode": entry.recorded_mode || "",
+        "Filtered GPS KM": entry.gps_km,
+        "Existing Payable KM": entry.payable_km,
+        "Existing Petrol INR": entry.petrol_rupees,
+        "Train Legs": entry.train_legs,
+        "Bike Legs": entry.bike_legs,
+        "Evidence Flags": (entry.flags || []).join("; "),
+        "Status": "EVIDENCE_REVIEW_REQUIRED",
+      }));
+      const book = XLSX.utils.book_new();
+      const headings = ["Date", "State", "Business", "Employee Code", "Employee Name", "Role",
+        "Recorded Final Mode", "Filtered GPS KM", "Existing Payable KM", "Existing Petrol INR",
+        "Train Legs", "Bike Legs", "Evidence Flags", "Status"];
+      const sheet = XLSX.utils.json_to_sheet(rows, { header: headings });
+      sheet["!cols"] = headings.map(label => ({ wch: ["Evidence Flags", "Employee Name"].includes(label) ? 42 : 21 }));
+      XLSX.utils.book_append_sheet(book, sheet, "October Exceptions");
+      const notes = XLSX.utils.aoa_to_sheet([
+        ["QPMS October 2026 — Read-only KM exceptions"],
+        ["Scope", "All employees with recorded travel or site visits, October 1–31"],
+        ["Cases", payload.total_flagged_records],
+        ["Warning", "GPS vs payable differences are not verified financial deltas."],
+        ["Warning", "Train/Bike flags do not establish train travel for any specific credited leg."],
+        ["Financial impact", "No additions or deductions are approved or posted by this export."],
+        ["Railway matching", "Not yet available; require independently verified rail geometry and trip alignment."],
+      ]);
+      XLSX.utils.book_append_sheet(book, notes, "Read Me");
+      XLSX.writeFile(book, "QPMS_October_2026_KM_Exceptions_ReadOnly.xlsx");
+    } catch (error) {
+      setOctoberKmAuditError(error.message || "Unable to export full October KM exceptions.");
+    } finally {
+      setOctoberKmExportBusy(false);
     }
   }
 
@@ -13540,7 +13595,14 @@ export default function FOActivities() {
         {canViewKmAudit && octoberKmAudit?.summary ? (
           <section aria-label="October 2026 KM evidence review" className="mt-3 space-y-3 rounded-xl border border-slate-200 p-3 dark:border-slate-700">
             <div>
-              <h3 className="text-sm font-black text-slate-900 dark:text-white">October 2026 · KM evidence review</h3>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-black text-slate-900 dark:text-white">October 2026 · KM evidence review</h3>
+                <button type="button" onClick={exportOctoberKmExceptions} disabled={octoberKmExportBusy}
+                  className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200">
+                  <Download className="h-3.5 w-3.5" />
+                  {octoberKmExportBusy ? "Exporting all cases..." : "Export all October cases"}
+                </button>
+              </div>
               <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
                 All roles with recorded KM, travel legs, or site visits (FO, KAM, Operations Manager, Branch Head and others) · Read-only evidence, not approved additions or deductions.
                 Railway track verification and financial corrections are not active.

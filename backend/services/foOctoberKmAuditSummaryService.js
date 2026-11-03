@@ -11,7 +11,7 @@ function localDay(timestamp) {
   const time = Date.parse(timestamp);
   return Number.isFinite(time) ? new Date(time + IST_MS).toISOString().slice(0, 10) : null;
 }
-export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles = [], attendanceIdsWithVisits = new Set()) {
+export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles = [], attendanceIdsWithVisits = new Set(), { includeAllCases = false } = {}) {
   const byEmployee = new Map(profiles.map(p => [p.employee_code, p]));
   const legsByDay = new Map();
   for (const leg of travelLegs) {
@@ -124,9 +124,9 @@ export function buildOctoberKmAudit(attendances = [], travelLegs = [], profiles 
   return {
     period: { from: FROM, to: TO, timezone: 'Asia/Kolkata' },
     summary,
-    cases: cases.slice(0, 100),
+    cases: includeAllCases ? cases : cases.slice(0, 100),
     total_flagged_records: cases.length,
-    truncated_cases: cases.length > 100,
+    truncated_cases: !includeAllCases && cases.length > 100,
     processing_status: 'READ_ONLY_REVIEW',
     explanation: 'GPS differences are candidate evidence, not approved deductions or credits. Bike plus Train on one day is a mode-switch flag, not proof of rail travel on the Bike leg. Track map-matching is not yet active.',
   };
@@ -157,7 +157,7 @@ async function loadPages(client, table, fields, configure) {
   }
   throw Error('October audit exceeded the safe query limit; no partial report was returned.');
 }
-export async function loadOctoberKmAudit(client) {
+export async function loadOctoberKmAudit(client, { includeAllCases = false } = {}) {
   const [attendances, travelLegs] = await Promise.all([
     loadPages(client, 'fo_attendance', 'id,employee_code,display_name,attendance_date,travel_mode,filtered_gps_km,total_approved_km,petrol_amount',
       q => q.gte('attendance_date', FROM).lte('attendance_date', TO).order('attendance_date').order('id')),
@@ -172,5 +172,5 @@ export async function loadOctoberKmAudit(client) {
     if (error) throw error;
     profiles = data || [];
   }
-  return buildOctoberKmAudit(attendances, travelLegs, profiles, attendanceIdsWithVisits);
+  return buildOctoberKmAudit(attendances, travelLegs, profiles, attendanceIdsWithVisits, { includeAllCases });
 }
