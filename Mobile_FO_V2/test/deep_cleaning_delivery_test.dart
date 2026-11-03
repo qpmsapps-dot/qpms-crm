@@ -247,6 +247,7 @@ void main() {
           fileSize: 3,
           pairId: 'pair1',
           pairOrder: 1,
+          requestId: '00000000-0000-4000-8000-000000000900',
         );
         final file = await File(
           '${directory.path}/photo.jpg',
@@ -261,9 +262,11 @@ void main() {
           pairId: 'pair1',
           pairOrder: 1,
           uploadId: first.uploadId,
+          requestId: '00000000-0000-4000-8000-000000000900',
         );
         expect(retry.uploadId, first.uploadId);
         expect(bodies.last['upload_id'], 'photo1');
+        expect(bodies.last['request_id'], bodies.first['request_id']);
         final photo = await service.completeUpload(
           submissionId: 'draft',
           intent: retry,

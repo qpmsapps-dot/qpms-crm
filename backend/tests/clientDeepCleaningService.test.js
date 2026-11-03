@@ -19,6 +19,7 @@ import {
   submitClientDeepCleaningSubmission,
   updateClientDeepCleaningDraft,
   validateUploadInput,
+  verifyClientDeepCleaningStorageObject,
 } from '../services/clientDeepCleaningService.js';
 
 const FO_PROFILE = {
@@ -682,6 +683,35 @@ test('Upload retry renews the same owned intent without duplicate evidence rows'
   assert.equal(db.tables.client_deep_cleaning_uploads.length,1);
   assert.equal(db.tables.client_deep_cleaning_uploads[0].metadata.pair_id,'pair-1');
   await assert.rejects(createClientDeepCleaningUploadUrl(db,FO_PROFILE,draft.id,{...payload,upload_id:first.upload_id,file_size:2000}),e=>e.statusCode===403);
+});
+
+test('Missing, zero, mismatched and oversized physical object sizes cannot confirm evidence',async()=>{
+ const db=client(),bucket='client-deep-cleaning-uploads',path='deep-cleaning/reliance-retail/RR001/draft/before/file.jpg';
+ for(const size of [0,-1,NaN,5242881,999]){
+  db.storageObjects.set(bucket,[{path,size,metadata:{}}]);
+  await assert.rejects(verifyClientDeepCleaningStorageObject(db,bucket,path,1000),e=>e.code==='storage_object_size_mismatch');
+ }
+ db.storageObjects.set(bucket,[{path,metadata:{}}]);
+ await assert.rejects(verifyClientDeepCleaningStorageObject(db,bucket,path,1000),e=>e.code==='storage_object_size_mismatch');
+ db.addStorageObject(bucket,path,1000);db.storageObjects.set(bucket,db.storageObjects.get(bucket).slice(-1));
+ assert.ok(await verifyClientDeepCleaningStorageObject(db,bucket,path,1000));
+ db.storageObjects.set(bucket,[{path,size:1000,metadata:{mimetype:'image/png'}}]);
+ await assert.rejects(verifyClientDeepCleaningStorageObject(db,bucket,path,1000,'image/jpeg'),e=>e.code==='storage_object_mime_mismatch');
+});
+
+test('Request IDs bind server-generated store paths and replay the same intent after a lost response',async()=>{
+ const db=client(),draft=await createClientDeepCleaningSubmission(db,FO_PROFILE,{store_code:'RR001'});
+ const seen=new Map();db.rpc=async(name,args)=>{
+  assert.equal(name,'rpc_client_cleaning_upload_intent_v1');assert.equal(args.p_auth,FO_PROFILE.auth_user_id);assert.equal(args.p_submission,draft.id);
+  assert.ok(args.p_upload.storage_path.startsWith(`deep-cleaning/reliance-retail/RR001/${draft.id}/`));
+  if(!seen.has(args.p_request))seen.set(args.p_request,{id:args.p_request,storage_bucket:'client-deep-cleaning-uploads',...args.p_upload});
+  return{data:seen.get(args.p_request)};
+ };
+ const payload={request_id:'00000000-0000-4000-8000-000000000900',upload_type:'before',filename:'before.jpg',mime_type:'image/jpeg',file_size:1000};
+ const first=await createClientDeepCleaningUploadUrl(db,FO_PROFILE,draft.id,payload);
+ const replay=await createClientDeepCleaningUploadUrl(db,FO_PROFILE,draft.id,payload);
+ assert.equal(first.upload_id,replay.upload_id);assert.equal(first.storage_path,replay.storage_path);assert.equal(seen.size,1);
+ await assert.rejects(createClientDeepCleaningUploadUrl(db,FO_PROFILE,draft.id,{...payload,request_id:'bad'}),e=>e.statusCode===400);
 });
 
 test('Upload complete verifies issued intent and physical storage object', async () => {

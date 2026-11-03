@@ -884,6 +884,7 @@ class _DeepCleaningFormScreenState extends State<DeepCleaningFormScreen> {
         pairId: upload.pairId,
         pairOrder: upload.pairOrder,
         uploadId: upload.intent?.uploadId,
+        requestId: upload.requestId,
       );
       upload.intent = intent;
       // A PUT or completion response may have been lost. Confirm the original

@@ -465,6 +465,8 @@ class DeepCleaningLocalUpload {
   final String mimeType;
   final int fileSize;
   final String originalFilename;
+  // Survives a lost upload-intent response and retries while this form is open.
+  final String requestId = newDeepCleaningPairId();
   DeepCleaningLocalUploadStatus status;
   String? uploadId;
   String? storagePath;

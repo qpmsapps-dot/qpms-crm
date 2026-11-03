@@ -14,9 +14,15 @@ end $$;
 alter table public.client_deep_cleaning_submissions add column if not exists schedule_id uuid references public.client_deep_cleaning_schedules(id);
 alter table public.client_deep_cleaning_submissions add column if not exists final_outcome text;
 alter table public.client_deep_cleaning_submissions add column if not exists not_done_reason text;
+do $$ begin
+ if exists(select 1 from pg_attribute where attrelid='public.client_deep_cleaning_submissions'::regclass and attname='schedule_id' and atttypid<>'uuid'::regtype and not attisdropped) then raise exception 'Installed schedule_id type differs; owner reconciliation required'; end if;
+ if exists(select 1 from pg_index i where i.indrelid='public.client_deep_cleaning_submissions'::regclass and i.indisunique and i.indnkeyatts=1 and pg_get_indexdef(i.indexrelid,1,true)='schedule_id' and coalesce(pg_get_expr(i.indpred,i.indrelid),'') not ilike '%status%') then raise exception 'Installed one-draft-per-schedule index conflicts with reassignment; review 214, do not drop blindly'; end if;
+ if not exists(select 1 from pg_constraint where conrelid='public.client_deep_cleaning_submissions'::regclass and contype='f' and conkey=array[(select attnum from pg_attribute where attrelid='public.client_deep_cleaning_submissions'::regclass and attname='schedule_id')]::smallint[] and confrelid='public.client_deep_cleaning_schedules'::regclass) then raise exception 'Installed schedule linkage FK missing or incompatible'; end if;
+end $$;
 -- Existing duplicate linked drafts must be reviewed, never deleted to force this index.
 create unique index if not exists client_cleaning_schedule_actor_v1 on public.client_deep_cleaning_submissions(schedule_id,submitted_by_user_id) where schedule_id is not null;
 create unique index if not exists client_cleaning_schedule_completed_v1 on public.client_deep_cleaning_submissions(schedule_id) where schedule_id is not null and status='submitted';
+create unique index if not exists client_cleaning_upload_request_v1 on public.client_deep_cleaning_uploads(submission_id,(metadata->>'upload_request_id')) where metadata->>'upload_request_id' is not null;
 
 create function public.retail_cleaning_executor_v1(p_schedule uuid) returns uuid
 language plpgsql stable security definer set search_path=pg_catalog,public as $$
@@ -82,7 +88,7 @@ end $$;
 
 create function public.rpc_retail_cleaning_submission_v1(p_actor uuid,p_auth uuid,p_action text,p_data jsonb) returns jsonb
 language plpgsql security definer set search_path=pg_catalog,public as $$
-declare actor public.profiles%rowtype; c public.client_deep_cleaning_schedules%rowtype; s public.reliance_retail_store_master%rowtype; d public.client_deep_cleaning_submissions%rowtype; sid uuid; outcome text; reason text; before_count int; after_count int;
+declare actor public.profiles%rowtype; c public.client_deep_cleaning_schedules%rowtype; s public.reliance_retail_store_master%rowtype; d public.client_deep_cleaning_submissions%rowtype; sid uuid; outcome text; reason text; evidence_prefix text; before_count int; after_count int;
 begin
  select * into actor from public.profiles where id=p_actor and auth_user_id=p_auth and upper(status)='ACTIVE';
  if not found or upper(regexp_replace(coalesce(actor.role,''),'[^a-zA-Z]','','g')) not in ('FO','FIELDOFFICER') or coalesce((to_jsonb(actor)->>'is_active')::boolean,false)=false then raise exception using errcode='42501',message='Executing FO identity required'; end if;
@@ -104,7 +110,7 @@ begin
  if public.retail_cleaning_executor_v1(sid) is distinct from p_actor or c.status not in ('Planned','Scheduled') or c.scheduled_date>(now() at time zone 'Asia/Kolkata')::date then raise exception using errcode='42501',message='Current actionable schedule ownership required'; end if;
  select * into s from public.reliance_retail_store_master where id=c.retail_store_id;
  if p_data ? 'store_code' and upper(trim(p_data->>'store_code'))<>upper(trim(s.store_code)) or p_data ? 'deep_cleaning_date' and (p_data->>'deep_cleaning_date')::date<>c.scheduled_date then raise exception using errcode='22023',message='Schedule store/date mismatch'; end if;
- if d.id is not null and (d.retail_store_id<>s.id or d.deep_cleaning_date<>c.scheduled_date) then raise exception using errcode='40001',message='Schedule changed after evidence draft'; end if;
+ if d.id is not null and (d.retail_store_id<>s.id or d.deep_cleaning_date<>c.scheduled_date or upper(btrim(d.store_code)) is distinct from upper(btrim(s.store_code))) then raise exception using errcode='40001',message='Schedule changed after evidence draft'; end if;
  if p_action='begin' then
   if d.id is null then
    insert into public.client_deep_cleaning_submissions(business,retail_store_id,store_code,store_name,client_name,state,city,deep_cleaning_date,performed_by_type,submitted_by_user_id,submitted_by_employee_code,status,schedule_id,metadata)
@@ -116,7 +122,9 @@ begin
   if d.id is null or d.status not in ('draft','uploading') or outcome not in ('Completed','Not Done') then raise exception using errcode='22023',message='Valid draft and outcome required'; end if;
   reason:=nullif(trim(p_data->>'not_done_reason'),'');
   if outcome='Not Done' and reason is null then raise exception using errcode='22023',message='Not Done reason required'; end if;
-  if exists(select 1 from public.client_deep_cleaning_uploads u where u.submission_id=d.id and u.upload_status='uploaded' and (u.uploaded_by_user_id<>p_auth or u.storage_bucket<>'client-deep-cleaning-uploads' or not exists(select 1 from storage.objects o where o.bucket_id=u.storage_bucket and o.name=u.storage_path and (o.metadata->>'size')::bigint=u.file_size))) then raise exception using errcode='22023',message='Evidence ownership or storage mismatch'; end if;
+  evidence_prefix:='deep-cleaning/reliance-retail/'||coalesce(nullif(left(regexp_replace(regexp_replace(btrim(d.store_code),'[^a-zA-Z0-9._-]+','-','g'),'^-+|-+$','','g'),120),''),'store')||'/'||d.id::text||'/';
+  if outcome='Completed' and exists(select 1 from public.client_deep_cleaning_uploads where submission_id=d.id and upload_status is distinct from 'uploaded') then raise exception using errcode='22023',message='Incomplete uploads must be completed or removed'; end if;
+  if exists(select 1 from public.client_deep_cleaning_uploads u where u.submission_id=d.id and u.upload_status='uploaded' and (u.uploaded_by_user_id is distinct from p_auth or u.storage_bucket is distinct from 'client-deep-cleaning-uploads' or left(u.storage_path,length(evidence_prefix)) is distinct from evidence_prefix or u.file_size is null or u.file_size<1 or u.file_size>5242880 or not exists(select 1 from storage.objects o where o.bucket_id=u.storage_bucket and o.name=u.storage_path and (o.metadata->>'size')::bigint=u.file_size))) then raise exception using errcode='22023',message='Evidence ownership or storage mismatch'; end if;
   select count(*) filter(where upload_type='before'),count(*) filter(where upload_type='after') into before_count,after_count from public.client_deep_cleaning_uploads where submission_id=d.id and upload_status='uploaded';
   if outcome='Completed' and (before_count<1 or after_count<1) then raise exception using errcode='22023',message='Before and after evidence required'; end if;
   if outcome='Completed' and exists(select 1 from public.client_deep_cleaning_uploads where submission_id=d.id and upload_status='uploaded' and upload_type in ('before','after') group by metadata->>'pair_id' having metadata->>'pair_id' is null or count(*) filter(where upload_type='before')<>1 or count(*) filter(where upload_type='after')<>1) then raise exception using errcode='22023',message='Complete before/after pairs required'; end if;
@@ -126,7 +134,34 @@ begin
  return to_jsonb(d);
 end $$;
 
-revoke all on function public.retail_cleaning_executor_v1(uuid),public.rpc_retail_cleaning_delivery_v1(uuid,uuid,uuid[],date,date,uuid),public.rpc_retail_cleaning_submission_v1(uuid,uuid,text,jsonb) from public,anon,authenticated;
-grant execute on function public.rpc_retail_cleaning_delivery_v1(uuid,uuid,uuid[],date,date,uuid),public.rpc_retail_cleaning_submission_v1(uuid,uuid,text,jsonb) to service_role;
+-- Atomic idempotency on existing upload rows; legacy requests without request_id
+-- retain their original API path. No new table or client-side database grant.
+create function public.rpc_client_cleaning_upload_intent_v1(p_actor uuid,p_auth uuid,p_submission uuid,p_request uuid,p_upload jsonb) returns jsonb
+language plpgsql security definer set search_path=pg_catalog,public as $$
+declare actor public.profiles%rowtype; d public.client_deep_cleaning_submissions%rowtype; u public.client_deep_cleaning_uploads%rowtype; size_bytes bigint; kind text; mime text; path text; prefix text;
+begin
+ select * into actor from public.profiles where id=p_actor and auth_user_id=p_auth and upper(status)='ACTIVE' and is_active=true;
+ if not found or upper(regexp_replace(coalesce(actor.role,''),'[^a-zA-Z]','','g')) not in ('FO','FIELDOFFICER') or upper(regexp_replace(coalesce(actor.business,''),'[^a-zA-Z]','','g')) not in ('RELIANCE','RELIANCERETAIL') then raise exception using errcode='42501',message='Verified Reliance FO required'; end if;
+ select * into d from public.client_deep_cleaning_submissions where id=p_submission and submitted_by_user_id=p_auth;
+ if not found then raise exception using errcode='42501',message='Owned draft required'; end if;
+ if d.schedule_id is not null then perform public.rpc_retail_cleaning_submission_v1(p_actor,p_auth,'validate',jsonb_build_object('submission_id',p_submission)); end if;
+ select * into d from public.client_deep_cleaning_submissions where id=p_submission for update;
+ if coalesce(d.status,'') not in ('draft','uploading') then raise exception using errcode='23505',message='Submitted evidence is immutable'; end if;
+ kind:=p_upload->>'upload_type'; mime:=p_upload->>'mime_type'; size_bytes:=(p_upload->>'file_size')::bigint; path:=p_upload->>'storage_path';
+ prefix:='deep-cleaning/reliance-retail/'||coalesce(nullif(left(regexp_replace(regexp_replace(btrim(d.store_code),'[^a-zA-Z0-9._-]+','-','g'),'^-+|-+$','','g'),120),''),'store')||'/'||p_submission::text||'/';
+ if p_request is null or kind is null or mime is null or size_bytes is null or size_bytes<1 or size_bytes>5242880 or kind not in ('before','after','document','checklist') or mime not in ('image/jpeg','image/png','image/webp','application/pdf') or kind in ('before','after') and mime='application/pdf' or path is null or left(path,length(prefix))<>prefix then raise exception using errcode='22023',message='Invalid upload intent'; end if;
+ select * into u from public.client_deep_cleaning_uploads where submission_id=p_submission and metadata->>'upload_request_id'=p_request::text;
+ if found then
+  if u.uploaded_by_user_id is distinct from p_auth or u.upload_type is distinct from kind or u.mime_type is distinct from mime or u.file_size is distinct from size_bytes or u.storage_path is distinct from path or u.original_filename is distinct from p_upload->>'original_filename' or u.metadata->>'pair_id' is distinct from p_upload->>'pair_id' then raise exception using errcode='23505',message='Upload request reused for another file'; end if;
+  return to_jsonb(u);
+ end if;
+ insert into public.client_deep_cleaning_uploads(submission_id,upload_type,storage_bucket,storage_path,original_filename,mime_type,file_size,sequence_no,uploaded_by_user_id,upload_status,metadata)
+ values(p_submission,kind,'client-deep-cleaning-uploads',path,p_upload->>'original_filename',mime,size_bytes,coalesce((select max(sequence_no)+1 from public.client_deep_cleaning_uploads where submission_id=p_submission),1),p_auth,'pending',jsonb_build_object('source','retail-cleaning.v1','upload_request_id',p_request,'pair_id',p_upload->>'pair_id','pair_order',p_upload->'pair_order')) returning * into u;
+ update public.client_deep_cleaning_submissions set status='uploading' where id=p_submission;
+ return to_jsonb(u);
+end $$;
+
+revoke all on function public.retail_cleaning_executor_v1(uuid),public.rpc_retail_cleaning_delivery_v1(uuid,uuid,uuid[],date,date,uuid),public.rpc_retail_cleaning_submission_v1(uuid,uuid,text,jsonb),public.rpc_client_cleaning_upload_intent_v1(uuid,uuid,uuid,uuid,jsonb) from public,anon,authenticated;
+grant execute on function public.rpc_retail_cleaning_delivery_v1(uuid,uuid,uuid[],date,date,uuid),public.rpc_retail_cleaning_submission_v1(uuid,uuid,text,jsonb),public.rpc_client_cleaning_upload_intent_v1(uuid,uuid,uuid,uuid,jsonb) to service_role;
 -- No direct table grants, client JWT execution, RLS changes, or user assignments.
 commit;

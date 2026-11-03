@@ -1,0 +1,5 @@
+{
+  "SUPABASE_URL": "https://ubawkjdbtickdlrgkulz.supabase.co",
+  "SUPABASE_ANON_KEY": "<public anon key from the same Supabase project>",
+  "BACKEND_API_URL": "https://myqpms-crm-back-end-production.up.railway.app"
+}
