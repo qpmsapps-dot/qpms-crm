@@ -24,7 +24,10 @@ export default function RetailOos12Transition({order,capabilities,onSaved}){
   await api('/oos/evidence/finalize',{method:'POST',data:{id:meta.id}});setEvidence(v=>[...v,{id:meta.id,name:file.name}]);
  }setFiles([]);if(input.current)input.current.value='';});}
  async function save(){await run(async()=>{
-  const data={order_id:order.id,revision:order.revision,fields,evidence_ids:evidence.map(e=>e.id),reason:remarks};
+  // Empty optional document inputs are not evidence of a submission.
+  const recordedFields=Object.fromEntries(Object.entries(fields)
+   .filter(([key,value])=>!optional.includes(key)||String(value??'').trim()!==''));
+  const data={order_id:order.id,revision:order.revision,fields:recordedFields,evidence_ids:evidence.map(e=>e.id),reason:remarks};
   const signature=JSON.stringify({action:next,data});if(request.current?.signature!==signature)request.current={signature,id:crypto.randomUUID()};
   await api('/command/oos',{method:'POST',data:{action:next,data:{...data,request_id:request.current.id}}});setConfirm(false);onSaved();
  });}
