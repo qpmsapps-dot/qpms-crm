@@ -57,9 +57,9 @@ async function resolveCleaningViewerScope(client, profile, { resolveAccess = res
   if (result.source !== 'unified' || !result.access_granted) throw cleaningError(403, 'cleaning_scope_denied', 'An explicit Reliance Retail Deep Cleaning grant is required.');
   const stores = [];
   for (let offset = 0; ; offset += 500) {
-    const { data, error } = await client.from('reliance_retail_store_master').select('id,store_code,state,business,client_name,status').range(offset, offset + 499);
+    const { data, error } = await client.from('reliance_retail_store_master').select('id,store_code,state,status').range(offset, offset + 499);
     if (error) throw error;
-    stores.push(...(data || []).filter(s => [s.business, s.client_name].some(v => ['RELIANCE', 'RELIANCERETAIL'].includes(String(v || '').toUpperCase().replace(/[^A-Z]/g, ''))) && (admin || result.assignments.some(a => assignmentAllowsStore(a, s, permission)))));
+    stores.push(...(data || []).filter(s => s.status === 'Active' && (admin || (result.assignments || []).some(a => assignmentAllowsStore(a, s, permission)))));
     if ((data || []).length < 500) break;
   }
   return {stores, exportAllowed:admin || result.assignments.some(a=>a.permissions.includes('deep_cleaning.export'))};
