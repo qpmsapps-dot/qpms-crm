@@ -51,6 +51,20 @@ test('dashboard uses scoped actual data and keeps absent CM/PM/Thermography sour
  for(const key of ['cm','pm','thermography']){assert.equal(r.modules[key].status,'unavailable');assert.equal(r.modules[key].rows,undefined);}
  assert.deepEqual(r.stores.map(s=>s.store_code),['T1']);
 });
+test('historical Excel snapshot stays admin-only and is filtered by authorized Store Master state',async()=>{
+ const {client,tables}=trainingFixture(0);
+ tables.retail_ifms_historical_summary=[
+  {snapshot_date:'2026-10-28',source_filename:'IFMS October.xlsx',module:'deep_cleaning',reporting_state:'TN',source_rows:10,metrics:{completed:6,pending:4}},
+  {snapshot_date:'2026-10-28',source_filename:'IFMS October.xlsx',module:'deep_cleaning',reporting_state:'KL',source_rows:30,metrics:{completed:29,pending:1}}
+ ];
+ const result=await retailModuleDashboard(client,{...admin,employee_code:'ADMIN'},range);
+ assert.equal(result.historical_ifms?.status,'ready');
+ assert.deepEqual(result.historical_ifms.rows.map(r=>r.state),['TN']);
+ assert.equal(result.historical_ifms.rows[0].source_rows,10);
+ assert.equal(result.modules.cleaning.status,'ready');
+ const restricted=await retailModuleDashboard(client,{...admin,role:'HK MIS',business:'Reliance Retail',employee_code:'HK1'},range);
+ assert.equal(restricted.historical_ifms,null,'State-level historical totals must not leak through limited store access');
+});
 test('new Retail report HTTP routes require authentication and capability before reading any source',async()=>{
  let reads=0;const app=express();app.use('/retail',createRelianceRetailManagementRouter({requireAuth(req,res,next){if(req.get('authorization')!=='Bearer local-fixture')return res.status(401).json({ok:false});req.authUser={id:'outside-auth'};req.profile={id:'outside',auth_user_id:'outside-auth',role:'HK MIS',business:'Other',is_active:true};next();},getClient:()=>({rpc(){reads++;throw Error('Must not query');},from(){reads++;throw Error('Must not query');}})}));
  const server=http.createServer(app);await new Promise(r=>server.listen(0,'127.0.0.1',r));
