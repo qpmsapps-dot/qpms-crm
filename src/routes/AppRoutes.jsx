@@ -33,7 +33,7 @@ import RetailOosWorkspace from '../pages/reliance-retail/RetailOosWorkspace.jsx'
 import RetailMisAssignments from '../pages/settings/RetailMisAssignments.jsx';
 import RetailStoreMaster from '../pages/reliance-retail/RetailStoreMaster.jsx';
 import RetailOperationalTrackers from '../pages/reliance-retail/RetailOperationalTrackers.jsx';
-import RetailComingSoon from '../pages/reliance-retail/RetailComingSoon.jsx';
+import RetailManpower from '../pages/reliance-retail/RetailManpower.jsx';
 import RetailScopedDeepCleaning from '../pages/reliance-retail/RetailScopedDeepCleaning.jsx';
 import RetailTraining from '../pages/reliance-retail/RetailTraining.jsx';
 import RetailAttendance from '../pages/reliance-retail/RetailAttendance.jsx';
@@ -138,7 +138,7 @@ const productionRoutes = [
           { path: 'reliance-retail/oos', element: <RetailOperationalTrackers kind="OOS" /> },
           { path: 'reliance-retail/cmpm', element: <RetailOperations kind="maintenance" /> },
           { path: 'reliance-retail/thermography', element: <RetailOperations kind="thermography" /> },
-          { path: 'reliance-retail/manpower', element: <RetailComingSoon title="Manpower Vacancy" /> },
+          { path: 'reliance-retail/manpower', element: <RetailManpower /> },
           { path: 'assets', element: <AssetCenterPage /> },
           { path: 'tasks', element: <Tasks /> },
           {
