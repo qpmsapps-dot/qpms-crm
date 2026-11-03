@@ -75,6 +75,9 @@ for (const report of reports) {
     for (const [name, width, height] of views) {
       await page.setViewportSize({ width, height });
       await expect(page.locator('section.retail-report')).toBeVisible();
+      if (width < 1024) {
+        await expect.poll(() => page.locator('aside').evaluate(el => el.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+      }
       const size = await page.evaluate(() => ({
         documentWidth: document.documentElement.scrollWidth,
         viewportWidth: window.innerWidth,
@@ -97,6 +100,9 @@ test('Store Master retains all seven tabs and core store controls across breakpo
   await expect(page.getByRole('button', { name: 'Add Store' })).toBeVisible();
   for (const [name, width, height] of views) {
     await page.setViewportSize({ width, height });
+    if (width < 1024) {
+      await expect.poll(() => page.locator('aside').evaluate(el => el.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+    }
     const size = await page.evaluate(() => ({
       documentWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
