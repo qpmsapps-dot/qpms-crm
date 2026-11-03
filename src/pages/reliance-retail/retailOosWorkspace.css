@@ -46,5 +46,5 @@
 .oos-compact .oos-compact-table tfoot th,.oos-compact .oos-compact-table tfoot td{background:#eaf0f8;color:#143554;font-weight:750;padding-top:10px;padding-bottom:10px}
 .oos-compact .oos-compact-table tfoot th{position:sticky;left:0;z-index:2}
 .oos-compact-note{margin:8px 2px 0;font-size:11px;color:#6c7c90}
-@media(max-width:750px){.oos-compact.oos-panel{padding:9px}.oos-compact .oos-compact-table{min-width:900px}.oos-compact .oos-compact-header h3 small{display:block;margin:0}.oos-compact .oos-compact-table tbody th{width:205px;min-width:205px}.oos-compact .oos-compact-table thead th:first-child,.oos-compact .oos-compact-table tfoot th{width:205px;min-width:205px}}
+@media(max-width:750px){.oos-compact.oos-panel{padding:9px}.oos-compact .oos-compact-table{min-width:900px}.oos-compact .oos-compact-header h3 small{display:block;margin:0}.oos-compact .oos-compact-table tbody th{width:205px;min-width:205px}.oos-compact .oos-compact-table thead th:first-child,.oos-compact .oos-compact-table tfoot th{width:205px;min-width:205px}.oos-compact .oos-compact-table tbody th,.oos-compact .oos-compact-table tfoot th{position:static}.oos-compact-cell{scroll-margin-block-start:110px}}
 @media(prefers-reduced-motion:reduce){.oos-compact-cell{transition:none}}
