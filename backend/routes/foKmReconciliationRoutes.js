@@ -2,6 +2,7 @@ import express from 'express';
 import { adminKmApprovalAuthorization } from '../services/foKmRecalculationAuthorizationService.js';
 import { reconcileSupportedKm, sharedKmReconciliationEnabled, sharedKmPreviewEnabled } from '../services/foKmIncrementalReconciliationService.js';
 import { evidencePages, attendanceDayBounds, kmError } from '../services/foKmEvidenceService.js';
+import { runSupportedKmBatch } from '../services/foKmSupportedBatchService.js';
 
 export function createKmReconciliationRouter({ requireAuth, getClient, reconcile = reconcileSupportedKm, environment = process.env }) {
   const router = express.Router();
@@ -32,6 +33,21 @@ export function createKmReconciliationRouter({ requireAuth, getClient, reconcile
       }
       res.json({ ok: !results.some(r => ['failed','deferred'].includes(r.status)), mode: dryRun ? 'calculation_only' : 'posting', selected_period: { from, to }, results });
     } catch (error) { res.status(error.statusCode || 500).json({ ok: false, code: error.code, message: error.statusCode ? error.message : 'Reconciliation failed; payable values were not assumed saved.' }); }
+  });
+  router.post('/reconcile-supported-batch', requireAuth, async (req, res) => {
+    try {
+      // Trusted JWT identity comes only from the authentication middleware.
+      const admin = adminKmApprovalAuthorization(req.profile, req.authUser, 'Explicit selected-period evidence reconciliation');
+      const result = await runSupportedKmBatch(getClient(), req.body || {}, {
+        environment, adminAuthorization: admin, reconcile,
+      });
+      res.json({ ok: true, ...result });
+    } catch (error) {
+      res.status(error.statusCode || 500).json({
+        ok: false, code: error.code || 'KM_BATCH_FAILED',
+        message: error.statusCode ? error.message : 'Bulk reconciliation failed; financial posting was not assumed.',
+      });
+    }
   });
   return router;
 }
