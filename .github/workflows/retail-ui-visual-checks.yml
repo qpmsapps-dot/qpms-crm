@@ -67,6 +67,7 @@ jobs:
             "src/pages/reliance-retail/RetailTraining.jsx",
             "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx",
             "src/pages/reliance-retail/RetailOperations.jsx",
+            "src/pages/reliance-retail/RetailOosDashboard.jsx",
             ".github/workflows/retail-ui-visual-checks.yml",
             "tests/browser/ifmsDashboard.spec.js",
             "tests/browser/retailAttendance.spec.js",
@@ -112,7 +113,7 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
       - name: Lint affected UI pages
-        run: npx eslint src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
+        run: npx eslint src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
       - name: Production frontend build
         run: npm run build
       - name: Install Playwright Chromium
