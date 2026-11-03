@@ -1722,7 +1722,7 @@ async function requireSupabaseJwt(request, response, next) {
     request.userRole = String(profile.role || '').trim();
     // Explicit MIS roles use the scoped API only. No legacy admin/designation
     // fallbacks, direct Training/FO API, imports, or unrestricted exports.
-    if (!retailMisApiAllowed(profile,request.path)) {
+    if (!retailMisApiAllowed(profile,`${request.baseUrl || ''}${request.path}`)) {
       response.status(403).json({ok:false,message:'Use the assigned Retail MIS workspace.'});
       return;
     }
