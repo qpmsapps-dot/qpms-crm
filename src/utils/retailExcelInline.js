@@ -69,7 +69,7 @@ export function excelTrainingRows(rows,trainingClass,filters={}){
   id:'ifms-excel-'+row.id,source_kind:'IFMS_EXCEL',
   training_date:row.data?.training_date||row.record_date,training_class:trainingClass,
   state:row.reporting_state,store:{id:row.retail_store_id||null,store_code:row.store_code,store_name:row.data?.store_name||null},
-  canonical_store_id:row.retail_store_id,trainer_name:row.data?.employee_name||null,
+  canonical_store_id:row.retail_store_id,trainer_name:null,
   employee_code:row.data?.employee_code,topics_text:row.data?.topics,
   status:row.status||row.data?.training_status||'Not recorded',
   attendee_count:null,topic_count:null,evidence_count:null,
