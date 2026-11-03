@@ -27,7 +27,7 @@ begin
  select * into s from public.reliance_retail_store_master where id=p_store;
  if not found or s.status<>'Active' then raise exception using errcode='22023',message='Select an active canonical Retail store';end if;
  if (select count(*) from public.reliance_retail_store_master where upper(btrim(store_code))=upper(btrim(s.store_code)))<>1 then raise exception using errcode='23505',message='Ambiguous Store Code; schedule not created';end if;
- if not public.retail_mis_cleaning_access(p_actor,s.state,'edit') then raise exception using errcode='42501',message='Store is outside assigned Cleaning editor scope';end if;
+ if not (public.retail_mis_cleaning_access(p_actor,s.state,'edit') or public.retail_unified_access(p_actor,s.state,'edit')) then raise exception using errcode='42501',message='Store is outside assigned Cleaning editor scope';end if;
  perform pg_advisory_xact_lock(hashtextextended('retail-direct-cleaning:'||p_request::text,0));
  select * into existing from public.client_deep_cleaning_schedules where source_reference=p_request::text;
  if found then
