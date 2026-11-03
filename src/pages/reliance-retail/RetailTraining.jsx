@@ -1,4 +1,5 @@
-import RetailImportedHistory from '../../components/reliance-retail/RetailImportedHistory.jsx';
+import {useRetailExcelRows} from '../../utils/useRetailExcelRows.js';
+import {excelTrainingRows,isExcelSource} from '../../utils/retailExcelInline.js';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {Download,RefreshCw} from 'lucide-react';
 import RetailStateCoverage from '../../components/reliance-retail/RetailStateCoverage.jsx';
@@ -35,7 +36,15 @@ export default function RetailTraining() {
   });
   return()=>{live=false;invalidateInspection();};
  },[from,to,refresh,invalidateInspection]);
- const rows=trainingReport(sessions,snapshot,filter).filter(row=>matchesReportQuery([row.store?.store_code,row.store?.store_name,row.trainer_name,row.training_date,row.training_class],query));
+ const liveRows=trainingReport(sessions,snapshot,filter).filter(row=>matchesReportQuery([row.store?.store_code,row.store?.store_name,row.trainer_name,row.training_date,row.training_class],query));
+ const hkExcel=useRetailExcelRows('soft_skill_training',true);
+ const mepcExcel=useRetailExcelRows('technical_training',true);
+ const excelFilter={from,to,state:filter.state||'',store:filter.store||'',query};
+ const reportedRows=(!filter.zone&&!filter.fo)?[
+  ...excelTrainingRows(hkExcel.rows,'HK',excelFilter),
+  ...excelTrainingRows(mepcExcel.rows,'MEPC',excelFilter)
+ ].filter(row=>!filter.class||row.training_class===filter.class):[];
+ const rows=[...liveRows,...reportedRows];
  const change=(key,value)=>{resetView();setFilter(previous=>({...previous,[key]:value}));};
  async function inspect(id){
   const request=++inspection.current;setError('');setDetail(null);setEvidenceLinks({});setDetailBusy(true);
@@ -53,14 +62,14 @@ export default function RetailTraining() {
   setExporting(true);setError('');
   try{
    const {default:ExcelJS}=await import('exceljs'),book=new ExcelJS.Workbook(),sheet=book.addWorksheet('Training');
-   sheet.addRow(['Date','Class','Source Store Code','Geographic State','Reporting State','Identity Status','Trainer','Status','Participants','Evidence Count','Historical Zone ID','Historical FO ID']);
-   rows.forEach(row=>sheet.addRow([row.training_date,row.training_class,row.store?.store_code,row.state,reportingState(row.state),row.canonical_store_id?'Verified':'Identity review required',row.trainer_name,row.status,row.attendee_count??null,row.evidence_count??null,row.ownership.zone_id,row.ownership.fo_profile_id]));
+   sheet.addRow(['Date','Class','Source Store Code','Geographic State','Reporting State','Identity Status','Trainer / Employee','Status','Participants','Evidence Count','Historical Zone ID','Historical FO ID','Source','FO evidence verified']);
+   rows.forEach(row=>sheet.addRow([row.training_date,row.training_class,row.store?.store_code,row.state,reportingState(row.state),isExcelSource(row)?row.match_status:row.canonical_store_id?'Verified':'Identity review required',isExcelSource(row)?row.source_data.employee_name:row.trainer_name,row.status,row.attendee_count??null,row.evidence_count??null,row.ownership.zone_id,row.ownership.fo_profile_id,isExcelSource(row)?'October Excel':'Operational',isExcelSource(row)?'No':'See audit']));
    await downloadUnified(book,'Retail_Training_Review.xlsx');
   }catch(e){setError(e.message);}finally{setExporting(false);}
  }
  const select=(label,key,options)=><label key={key}>{label}<select aria-label={`Training ${label}`} value={filter[key]||''} onChange={e=>change(key,e.target.value)}><option value="">All</option>{options.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>;
- const hk=rows.filter(row=>row.training_class==='HK').length,mepc=rows.filter(row=>row.training_class==='MEPC').length;
- const trainedStores=new Set(rows.filter(row=>row.canonical_store_id).map(row=>row.canonical_store_id)).size;
+ const hk=liveRows.filter(row=>row.training_class==='HK').length,mepc=liveRows.filter(row=>row.training_class==='MEPC').length;
+ const trainedStores=new Set(liveRows.filter(row=>row.canonical_store_id).map(row=>row.canonical_store_id)).size;
  return <section className="retail-report retail-training-report">
   <ReportHeader title="HK & MEPC Training" description="Review completed HK and MEPC sessions, attendees, topics and evidence.">
    <button disabled={busy} onClick={()=>{resetView();setRefresh(value=>value+1);}}><RefreshCw size={15}/>Refresh</button><button disabled={busy||!sessions.length||exporting} onClick={()=>void exportReport()}><Download size={15}/>{exporting?'Exporting…':'Export Training review'}</button>
@@ -72,14 +81,21 @@ export default function RetailTraining() {
    <label>Search<input aria-label="Search Training records" type="search" value={query} placeholder="Store code, name or trainer" onChange={e=>{resetView();setQuery(e.target.value);}}/></label>
   </ReportFilters>
   {busy&&<ReportNotice>Loading Training records…</ReportNotice>}{error&&<ReportNotice error>{error}</ReportNotice>}{ownershipError&&<ReportNotice>{ownershipError}</ReportNotice>}
-  {!busy&&!error&&<ReportStats items={[{label:'HK trainings completed',value:hk},{label:'MEPC trainings completed',value:mepc},{label:'Completed training records',value:rows.length},{label:'Verified trained stores',value:snapshot?trainedStores:null,note:snapshot?'Distinct stores, not training count':'Canonical store coverage unavailable'}]}/>}
+  {!busy&&!error&&<ReportStats items={[
+   {label:'HK FO-verified',value:hk},{label:'MEPC FO-verified',value:mepc},
+   {label:'Excel-reported entries',value:reportedRows.length},
+   {label:'Verified trained stores',value:snapshot?trainedStores:null,note:snapshot?'Distinct verified stores, not Excel-reported records':'Canonical store coverage unavailable'}]}/>}
+  {(hkExcel.loading||mepcExcel.loading)&&<ReportNotice>Loading historical Excel training into the existing training records…</ReportNotice>}
+  {(hkExcel.error||mepcExcel.error)&&<ReportNotice error>October Excel training unavailable: {hkExcel.error||mepcExcel.error}</ReportNotice>}
   {isPlatformAdmin(user)&&<details className="retail-report-panel"><summary className="retail-report-panel-heading">Admin: state coverage and ownership</summary><RetailStateCoverage snapshot={snapshot||undefined}/></details>}
   {!!rows.length&&<div className="retail-report-filters" aria-label="State-wise completed trainings">{[...new Set(rows.map(row=>reportingState(row.state)))].sort().map(state=><p key={state}>{state}: HK {rows.filter(row=>reportingState(row.state)===state&&row.training_class==='HK').length} · MEPC {rows.filter(row=>reportingState(row.state)===state&&row.training_class==='MEPC').length}</p>)}</div>}
-  <div className="retail-report-panel"><div className="retail-report-panel-heading"><h2>Completed training records</h2><span>{rows.length} matching records</span></div>
+  <div className="retail-report-panel"><div className="retail-report-panel-heading"><h2>Training records</h2><span>{rows.length} matching records ({reportedRows.length} Excel-reported)</span></div>
+   {!!reportedRows.length&&<p className="retail-report-description">Excel entries are shown in this register with their actual recorded dates, including earlier dates. Employee names are not assumed to be trainer names; no FO training evidence is fabricated.</p>}
    <div className="retail-report-table" role="region" aria-label="Completed training records" tabIndex={0}><table><thead><tr>{['Date / Class','Store','Trainer','Status','Historical Zone / FO','Attendees / Topics / Evidence','Details'].map(label=><th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{reportPage(rows,page,size).map(row=><tr key={row.id}>
-    <td>{row.training_date}<p>{row.training_class}</p></td><td>{row.store?.store_code}<p>{row.store?.store_name||'Store not recorded'}</p></td><td>{row.trainer_name||'Not recorded'}</td><td><span className="retail-report-status" data-status={row.status}>{row.status}</span></td>
-    <td>{row.ownership.known?(snapshot?.zones.find(item=>item.id===row.ownership.zone_id)?.zone_name||'Unassigned Zone'):'Historical ownership unknown'}<p>{row.ownership.known?(snapshot?.fos.find(item=>item.id===row.ownership.fo_profile_id)?.full_name||'Unassigned FO'):'Historical FO unknown'}</p></td>
-    <td>{row.attendee_count??'Unknown'} / {row.topic_count??'Unknown'} / {row.evidence_count??'Unknown'}</td><td><button disabled={detailBusy} onClick={()=>void inspect(row.id)}>View Training evidence</button></td>
+    <td>{row.training_date}<p>{row.training_class}</p></td><td>{row.store?.store_code||'Not recorded'}<p>{row.store?.store_name||'Store name not recorded'}</p></td><td>{isExcelSource(row)?<>{row.source_data.employee_name||'Name unavailable'}<p className="retail-report-description">Employee · {row.employee_code||'No code'}</p></>:row.trainer_name||'Not recorded'}</td><td><span className="retail-report-status" data-status={row.status}>{row.status}</span>{isExcelSource(row)&&<p className="retail-report-description">Excel reported · unverified</p>}</td>
+    <td>{row.ownership.known?(snapshot?.zones.find(item=>item.id===row.ownership.zone_id)?.zone_name||'Unassigned Zone'):isExcelSource(row)?'Not supplied in Excel':'Historical ownership unknown'}<p>{row.ownership.known?(snapshot?.fos.find(item=>item.id===row.ownership.fo_profile_id)?.full_name||'Unassigned FO'):isExcelSource(row)?'FO not verified':'Historical FO unknown'}</p></td>
+    <td>{isExcelSource(row)?<><span>Reported topics: {row.topics_text||'Not recorded'}</span><p>Evidence: Not provided</p></>:`${row.attendee_count??'Unknown'} / ${row.topic_count??'Unknown'} / ${row.evidence_count??'Unknown'}`}</td>
+    <td>{isExcelSource(row)?<details><summary>Excel source details</summary><p>Row {row.id.replace('ifms-excel-','')} · {row.match_status}</p></details>:<button disabled={detailBusy} onClick={()=>void inspect(row.id)}>View Training evidence</button>}</td>
    </tr>)}</tbody></table></div>
    {!busy&&!rows.length&&!error&&<p className="retail-report-empty">No authorized Training records match these filters.</p>}
    <ReportPager label="Training records" count={rows.length} page={page} size={size} onPage={setPage} onSize={setSize}/>
@@ -90,6 +106,5 @@ export default function RetailTraining() {
    <div>{!(detail.evidence||[]).length&&<p className="retail-report-description">No evidence recorded for this session.</p>}{(detail.evidence||[]).map(item=><p key={item.id||item.file_name}>{item.file_name} {evidenceLinks[item.id]?<a className="retail-report-button" href={evidenceLinks[item.id]} target="_blank" rel="noreferrer">Open authorized evidence</a>:<button onClick={()=>void viewEvidence(item)}>Get evidence link</button>}</p>)}</div>
    <div className="retail-report-detail-grid"><section><h3>Attendees</h3>{(detail.attendees||[]).map(item=><p key={item.id}>{item.employee_code} · {item.employee_name}</p>)}</section><section><h3>Topics</h3>{(detail.topics||[]).map(item=><p key={item.id}>{item.topic?.module_name||item.topic?.name||'Topic'} · {item.is_covered?'Covered':'Pending'}</p>)}</section><section><h3>History</h3>{(detail.events||[]).map(item=><p key={item.id}>{item.created_at} · {item.event_type}</p>)}</section></div>
   </section>}
-  {from<='2026-10-31'&&to>='2026-10-01'&&<><RetailImportedHistory module="soft_skill_training" title="HK Training" month="2026-10"/><RetailImportedHistory module="technical_training" title="MEPC Training" month="2026-10"/></>}
  </section>;
 }

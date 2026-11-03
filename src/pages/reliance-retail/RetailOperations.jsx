@@ -1,4 +1,5 @@
-import RetailImportedHistory from '../../components/reliance-retail/RetailImportedHistory.jsx';
+import {useRetailExcelRows} from '../../utils/useRetailExcelRows.js';
+import {excelOperationsRows,isExcelSource} from '../../utils/retailExcelInline.js';
 import {useEffect,useRef,useState} from 'react';
 import {authenticatedApiRequest} from '../../services/api.js';
 import {indiaToday,reportingState} from '../../../backend/shared/retailAttendance.js';
@@ -35,7 +36,10 @@ export default function RetailOperations({kind='maintenance'}) {
  function openEntry(){entry.current?.scrollIntoView({behavior:'smooth',block:'center'});entry.current?.querySelector('select')?.focus({preventScroll:true});}
  const selected=report?.stores.find(s=>s.id===form.store_id);
  const module=report?.modules?.[callKind.toLowerCase()];
- const rows=(maintenance?module?.stores||[]:report?.rows||[]).filter(r=>matchesReportQuery([r.store_code||r.store?.store_code,r.store_name||r.store?.store_name,r.status,r.reporting_state],query));
+ const excel=useRetailExcelRows(maintenance?'cmpm':'thermography',month==='2026-10',month);
+ const reported=excelOperationsRows(excel.rows,maintenance?callKind:'THERMOGRAPHY',{state,store,query});
+ const rows=[...(maintenance?module?.stores||[]:report?.rows||[]),...reported]
+  .filter(r=>matchesReportQuery([r.store_code||r.store?.store_code,r.store_name||r.store?.store_name,r.status,r.reporting_state],query));
  const visible=reportPage(rows,page,size);
  const window=module?.window;
  const canComplete=Boolean(selected?.can_save&&selected.status==='Active'&&window?.open);
@@ -56,13 +60,13 @@ export default function RetailOperations({kind='maintenance'}) {
    if(maintenance){states.addRow(['State','CM applicable','CM completed','CM pending','PM applicable','PM completed','PM pending']);for(const cm of report.modules.cm.rows){const pm=report.modules.pm.rows.find(r=>r.state===cm.state);states.addRow([cm.state,cm.eligible,cm.completed,cm.remaining,pm?.eligible,pm?.completed,pm?.remaining]);}}
    else{states.addRow(['State','Scheduled','Completed awaiting approval','Client Approved','Approval overdue','Approved late']);report.states.forEach(r=>states.addRow([r.state,r.scheduled,r.awaiting,r.approved,r.overdue,r.approved_late]));}
    const details=book.addWorksheet('Store details');
-   if(maintenance){details.addRow(['Kind','Store Code','Store Name','State','Status','Call count','Completed on','Completed at','Completed by']);for(const k of ['cm','pm'])report.modules[k].stores.filter(r=>matchesReportQuery([r.store_code,r.store_name,r.reporting_state],query)).forEach(r=>details.addRow([k.toUpperCase(),r.store_code,r.store_name,r.reporting_state,r.completed?'Completed':'Pending',r.call_count,r.completed_on,r.completed_at,r.completed_by]));}
-   else{details.addRow(['Reference','Store Code','Store Name','State','Scheduled date','Status','Completed on','Approval due','Approved on','Approval overdue','Approved late']);rows.forEach(r=>details.addRow([r.id,r.store.store_code,r.store.store_name,r.reporting_state,r.scheduled_date,r.status,r.completed_on,r.approval_due_on,r.approved_on,r.approval_overdue?'Yes':'No',r.approved_late?'Yes':'No']));}
+   if(maintenance){details.addRow(['Kind','Store Code','Store Name','State','Status','Call count','Completed on','Completed at','Completed by','Source','Evidence verified']);for(const k of ['cm','pm'])report.modules[k].stores.filter(r=>matchesReportQuery([r.store_code,r.store_name,r.reporting_state],query)).forEach(r=>details.addRow([k.toUpperCase(),r.store_code,r.store_name,r.reporting_state,r.completed?'Completed':'Pending',r.call_count,r.completed_on,r.completed_at,r.completed_by,'Operational','See audit']));}
+   else{details.addRow(['Reference','Store Code','Store Name','State','Scheduled date','Status','Completed on','Approval due','Approved on','Approval overdue','Approved late','Source','Evidence verified']);rows.forEach(r=>details.addRow([r.id,r.store.store_code,r.store.store_name,r.reporting_state,r.scheduled_date,r.status,r.completed_on,r.approval_due_on,r.approved_on,r.approval_overdue?'Yes':'No',r.approved_late?'Yes':'No',isExcelSource(r)?'October Excel':'Operational',isExcelSource(r)?'No':'See audit']));}
    const audit=book.addWorksheet('Audit history');audit.addRow(['At','Action','Record','Actor','Before','After']);report.events.forEach(e=>audit.addRow([e.created_at,e.action,e.entity_id,e.actor_profile_id,JSON.stringify(e.before_state),JSON.stringify(e.after_state)]));
    await downloadUnified(book,`Retail_${maintenance?'CM_PM':'Thermography'}_${month}.xlsx`);
   }catch(e){setError(e.message);}
  }
- const stats=maintenance?report?[{label:'Applicable stores',value:module.total.eligible},{label:`${callKind} completed`,value:module.total.completed},{label:`${callKind} pending`,value:module.total.remaining},{label:`${callKind} call logs`,value:module.total.call_logs}]:[]:report?[{label:'Scheduled',value:report.total.scheduled},{label:'Completed awaiting approval',value:report.total.awaiting},{label:'Client Approved',value:report.total.approved},{label:'Approval overdue',value:report.total.overdue}]:[];
+ const stats=maintenance?report?[{label:'Applicable stores',value:module.total.eligible},{label:`${callKind} completed (live)`,value:module.total.completed},{label:`${callKind} pending (live)`,value:module.total.remaining},{label:`${callKind} call logs (live)`,value:module.total.call_logs},{label:'Excel-reported rows',value:reported.length}]:[]:report?[{label:'Scheduled (live)',value:report.total.scheduled},{label:'Completed awaiting approval',value:report.total.awaiting},{label:'Client Approved',value:report.total.approved},{label:'Approval overdue',value:report.total.overdue},{label:'Excel-reported rows',value:reported.length}]:[];
  return <section className={`retail-report ${maintenance ? "retail-maintenance-report" : "retail-thermography-report"}`}>
   <ReportHeader title={title} description={maintenance?'Record completed CM and PM calls and review monthly progress.':'Schedule inspections, record completion and track client approval within 10 calendar days.'}>
    <button disabled={!report||busy||saving} onClick={openEntry}>{maintenance?'Record CM/PM Call':'Schedule Thermography'}</button>
@@ -78,6 +82,9 @@ export default function RetailOperations({kind='maintenance'}) {
   {busy&&<ReportNotice>Loading authorized operational data…</ReportNotice>}{error&&<ReportNotice error>{error}</ReportNotice>}{notice&&<ReportNotice>{notice}</ReportNotice>}
   {report&&<>
    <ReportStats items={stats}/>
+   {excel.loading&&<ReportNotice>Loading October Excel records into the store details table…</ReportNotice>}
+   {excel.error&&<ReportNotice error>October source records unavailable: {excel.error}</ReportNotice>}
+   {!!reported.length&&<p className="retail-report-description">October Excel records appear within Store details as read-only reported entries. They do not create a verified call log, client approval or thermography evidence.</p>}
    <ReportNotice>{maintenance?`${callKind}: ${window.start} through ${window.end} · ${window.status}. Today (India): ${report.today}. Previous months are locked. Multiple call logs per store are allowed within the selected window. Existing logs cannot be edited or deleted.`:`Reports follow the scheduled month. Client approval is due 10 calendar days after completion; overdue starts the next day. Late approvals remain marked late.`}</ReportNotice>
    <form ref={entry} onSubmit={prepare} className="retail-report-filters" aria-label={`${title} entry`}>
     <label>Store Code<select required aria-label={`${title} entry Store Code`} value={form.store_id} onChange={e=>{setConfirmation(null);setForm({...emptyForm(),store_id:e.target.value});}}><option value="">Select authorized store</option>{report.stores.filter(s=>s.can_save&&s.status==='Active').map(s=><option key={s.id} value={s.id}>{s.store_code} · {s.store_name}</option>)}</select></label>
@@ -89,12 +96,18 @@ export default function RetailOperations({kind='maintenance'}) {
    {!maintenance&&<section className="retail-report-panel retail-report-table" aria-label="Thermography state summary"><table><thead><tr>{['State','Scheduled','Awaiting approval','Client Approved','Approval overdue'].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{report.states.map(s=><tr key={s.state}><td>{REPORTING_STATES.find(r=>r.code===s.state)?.label}</td><td>{s.scheduled}</td><td>{s.awaiting}</td><td>{s.approved}</td><td>{s.overdue}</td></tr>)}</tbody></table></section>}
    <section className="retail-report-panel retail-report-table" aria-label={`${title} store details`}><table><thead><tr>{(maintenance?['Store Code','Store Name','State','Status','Call logs','Completed on','History']:['Store Code','Store Name','Scheduled','Status','Completed','Approval due','Approved','Overdue history','Actions']).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{visible.map(r=><tr key={r.id}>
     <td>{r.store_code||r.store?.store_code}</td><td>{r.store_name||r.store?.store_name}</td>
-    {maintenance?<><td>{REPORTING_STATES.find(s=>s.code===r.reporting_state)?.label}</td><td>{r.completed?'Completed':'Pending'}</td><td>{r.call_count||0}</td><td>{r.completed_on||'—'}</td><td>{r.call_logs?.length>0&&<button onClick={()=>setHistory(r.call_logs.map(c=>c.id))}>View {r.call_count} call log{r.call_count===1?'':'s'}</button>}</td></>:<><td>{r.scheduled_date}</td><td>{r.status}</td><td>{r.completed_on||'—'}</td><td>{r.approval_due_on||'—'}</td><td>{r.approved_on||'—'}</td><td>{r.approval_overdue?'Approval overdue':r.approved_late?'Approved late — retained':'—'}</td><td><button onClick={()=>setHistory(r.id)}>View history</button>{r.store.can_save&&r.status!=='Client Approved'&&<button disabled={saving||(r.status==='Scheduled'&&report.today<r.scheduled_date)} onClick={()=>setConfirmation({data:{id:r.id,status:r.status==='Scheduled'?'Completed':'Client Approved',revision:r.revision,request_id:crypto.randomUUID()},label:`Record ${r.status==='Scheduled'?'completion':'client approval'} for ${r.store.store_code}? The actual date is recorded by the server.`})}>{r.status==='Scheduled'?'Record completion':'Record client approval'}</button>}</td></>}
+    {maintenance?<><td>{REPORTING_STATES.find(s=>s.code===r.reporting_state)?.label||r.reporting_state}</td>
+    <td>{isExcelSource(r)?r.status:r.completed?'Completed':'Pending'}{isExcelSource(r)&&<p className="retail-report-description">October Excel · unverified</p>}</td>
+    <td>{isExcelSource(r)?'Not verified':r.call_count||0}</td><td>{r.completed_on||'—'}</td>
+    <td>{isExcelSource(r)?<span title="Source is not an immutable call log">Excel-reported only</span>:r.call_logs?.length>0&&<button onClick={()=>setHistory(r.call_logs.map(c=>c.id))}>View {r.call_count} call log{r.call_count===1?'':'s'}</button>}</td></>:
+    <><td>{r.scheduled_date}</td><td>{r.status}{isExcelSource(r)&&<p className="retail-report-description">October Excel · unverified</p>}</td>
+    <td>{r.completed_on||'—'}</td><td>{r.approval_due_on||'—'}</td><td>{r.approved_on||'—'}</td>
+    <td>{r.approval_overdue?'Approval overdue':r.approved_late?'Approved late — retained':'—'}</td>
+    <td>{isExcelSource(r)?'Excel-reported only · no approval action':<><button onClick={()=>setHistory(r.id)}>View history</button>{r.store.can_save&&r.status!=='Client Approved'&&<button disabled={saving||(r.status==='Scheduled'&&report.today<r.scheduled_date)} onClick={()=>setConfirmation({data:{id:r.id,status:r.status==='Scheduled'?'Completed':'Client Approved',revision:r.revision,request_id:crypto.randomUUID()},label:`Record ${r.status==='Scheduled'?'completion':'client approval'} for ${r.store.store_code}? The actual date is recorded by the server.`})}>{r.status==='Scheduled'?'Record completion':'Record client approval'}</button>}</>}</td></>}
    </tr>)}</tbody></table>{!rows.length&&<ReportNotice>No operational records match this authorized scope.</ReportNotice>}</section>
    <ReportPager label={title} count={rows.length} page={page} size={size} onPage={setPage} onSize={setSize}/>
    {history&&<section aria-label="Operational audit history"><h2>Recorded history</h2>{report.events.filter(e=>Array.isArray(history)?history.includes(e.entity_id):e.entity_id===history).map(e=><p key={e.id}>{e.created_at} · {e.action}{isPlatformAdmin(user)&&<> · Actor {e.actor_profile_id}</>}</p>)}<button onClick={()=>setHistory(null)}>Close history</button></section>}
   </>}
   {confirmation&&<section role="dialog" aria-modal="false" aria-label="Confirm operational save" className="retail-report-notice"><p>{confirmation.label}</p><button disabled={saving} onClick={()=>void save()}>{saving?'Saving…':'Confirm save'}</button><button autoFocus disabled={saving} onClick={()=>setConfirmation(null)}>Cancel</button></section>}
-  <RetailImportedHistory module={maintenance?'cmpm':'thermography'} title={title} month={month}/>
  </section>;
 }

@@ -9,6 +9,10 @@ on:
       - 'tests/browser/ifmsDashboard.spec.js'
       - 'tests/browser/retailAttendance.spec.js'
       - 'tests/browser/retailReportVisualSmoke.spec.js'
+      - 'tests/browser/retailExcelInline.spec.js'
+      - 'src/utils/retailExcelInline.js'
+      - 'src/utils/useRetailExcelRows.js'
+      - 'tests/retailExcelInline.test.js'
       - 'tests/retailOos*.test.js'
   workflow_dispatch:
 
@@ -72,11 +76,16 @@ jobs:
             "src/pages/reliance-retail/RetailTraining.jsx",
             "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx",
             "src/pages/reliance-retail/RetailOperations.jsx",
+            "src/pages/reliance-retail/RetailServiceTrackers.jsx",
             "src/pages/reliance-retail/RetailOosDashboard.jsx",
             ".github/workflows/retail-ui-visual-checks.yml",
             "tests/browser/ifmsDashboard.spec.js",
             "tests/browser/retailAttendance.spec.js",
-            "tests/browser/retailReportVisualSmoke.spec.js"
+            "tests/browser/retailReportVisualSmoke.spec.js",
+            "tests/browser/retailExcelInline.spec.js",
+            "tests/retailExcelInline.test.js",
+            "src/utils/useRetailExcelRows.js",
+            "src/utils/retailExcelInline.js"
           }
           oos_ui = {
             "src/pages/reliance-retail/RetailOosWorkspace.jsx",
@@ -113,7 +122,27 @@ jobs:
             "src/components/reliance-retail/RetailImportedHistory.jsx": "3e9b8d573f35217d3f2603a005ff25751bafe5ae",
             "src/pages/reliance-retail/RetailManpowerHistory.jsx": "69a280d28aff1830010184ecad02b8a9f5d68323",
           }
+          # Reviewed one-time inline historical display. Every changed renderer
+          # is content-pinned: modifications to actions or source handling fail closed.
+          approved_inline_ui = {
+            "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "82fb2d25a99b3f9bd600ce832b4f353551298bdd",
+            "src/pages/reliance-retail/RetailOperations.jsx": "ba8cc5125768582779ce5a38d3830e83360e04bb",
+            "src/pages/reliance-retail/RetailTraining.jsx": "9431f3bd817f0dfa5b77a19badffe7fad5c54786",
+            "src/pages/reliance-retail/RetailOperationalTrackers.jsx": "24cfa9bda4e929259b55538b6078e9d77e4c9b85",
+            "src/pages/reliance-retail/RetailServiceTrackers.jsx": "987e4f567923fc5bac3cb4aabbd11a39a9549b95",
+            "src/utils/useRetailExcelRows.js": "bc3ea3e35d21967424033702939d9475227d8ed9",
+            "src/utils/retailExcelInline.js": "57c03c9995a1e5ddc4c57388b1ea7e24bd80ee06",
+            "tests/retailExcelInline.test.js": "a665e566891c0644e6ba431c5f33118e04583393",
+            "tests/browser/retailExcelInline.spec.js": "a8845630f06c13141059f1becf7ee6de0e95ef65",
+          }
+          for path,expected in approved_inline_ui.items():
+            if path in files:
+              actual = subprocess.check_output(["git","hash-object",path],text=True).strip()
+              if actual != expected:
+                sys.exit(f"{path}: unreviewed inline source presentation change")
           for path in jsx:
+            if path in approved_inline_ui:
+              continue
             if path in new_source_modules:
               actual = subprocess.check_output(["git","hash-object",path],text=True).strip()
               if actual != new_source_modules[path]:
@@ -140,13 +169,15 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
       - name: Lint affected UI pages
-        run: npx eslint src/components/reliance-retail/RetailImportedHistory.jsx src/pages/reliance-retail/RetailManpowerHistory.jsx src/pages/reliance-retail/RetailOperationalTrackers.jsx src/routes/AppRoutes.jsx src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
+        run: npx eslint src/components/reliance-retail/RetailImportedHistory.jsx src/pages/reliance-retail/RetailManpowerHistory.jsx src/pages/reliance-retail/RetailOperationalTrackers.jsx src/pages/reliance-retail/RetailServiceTrackers.jsx src/utils/useRetailExcelRows.js src/utils/retailExcelInline.js src/routes/AppRoutes.jsx src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
+      - name: Inline Excel row mapping contract tests
+        run: node --test tests/retailExcelInline.test.js
       - name: Production frontend build
         run: npm run build
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: Retail report browser regressions and visual smoke
-        run: npx playwright test tests/browser/ifmsDashboard.spec.js tests/browser/retailAttendance.spec.js tests/browser/retailReportVisualSmoke.spec.js --reporter=line
+        run: npx playwright test tests/browser/ifmsDashboard.spec.js tests/browser/retailAttendance.spec.js tests/browser/retailReportVisualSmoke.spec.js tests/browser/retailExcelInline.spec.js --reporter=line
       - name: OOS presentation and workflow regressions
         run: node --test --test-concurrency=1 tests/retailOosAgeing.test.js tests/retailOosAgeingBrowser.test.js tests/retailOos12Browser.test.js tests/retailOosTrainingBrowser.test.js tests/retailOosUiPresentationBrowser.test.js
       - name: Upload synthetic visual acceptance screenshots
