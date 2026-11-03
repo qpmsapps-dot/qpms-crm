@@ -10565,7 +10565,7 @@ app.get('/api/fo/operations/demo-date-range', requireSupabaseJwtOrDemoApiRead, r
   }
 });
 
-app.get('/api/deep-cleaning/records', requireSupabaseJwtOrDemoApiRead, async (request, response) => {
+app.get('/api/deep-cleaning/records', requireSupabaseJwt, async (request, response) => {
   try {
     const client = requireServiceRoleSupabase();
     response.json(await scopedLegacyCleaningRecords(client, request.profile));

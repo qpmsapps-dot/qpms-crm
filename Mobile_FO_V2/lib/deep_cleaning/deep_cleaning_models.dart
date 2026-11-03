@@ -19,6 +19,9 @@ class DeepCleaningSchedule {
     this.geographicState,
     this.reportingState,
     this.zoneId,
+    this.zoneLabel,
+    this.latitude,
+    this.longitude,
     this.assignmentStatus = 'Assignment Pending',
     this.permittedActions = const [],
   });
@@ -34,7 +37,14 @@ class DeepCleaningSchedule {
       city,
       geographicState,
       reportingState,
-      zoneId;
+      zoneId,
+      zoneLabel;
+  final double? latitude, longitude;
+  String get locationLabel =>
+      city ??
+      (latitude != null && longitude != null
+          ? '$latitude, $longitude'
+          : 'Location unavailable');
   final DateTime? completedAt;
   final List<String> permittedActions;
   bool get canExecute => permittedActions.contains('execute');
@@ -53,6 +63,12 @@ class DeepCleaningSchedule {
         geographicState: _nullableText(json['geographic_state']),
         reportingState: _nullableText(json['reporting_state']),
         zoneId: _nullableText(json['zone_id']),
+        zoneLabel: _nullableText(
+          json['zone_code'] ??
+              (json['zone'] is Map ? json['zone']['code'] : null),
+        ),
+        latitude: double.tryParse('${json['latitude']}'),
+        longitude: double.tryParse('${json['longitude']}'),
         assignmentStatus: _text(json['assignment_status']),
         permittedActions: (json['permitted_actions'] as List? ?? [])
             .whereType<String>()

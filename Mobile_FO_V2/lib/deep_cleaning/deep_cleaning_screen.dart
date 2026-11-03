@@ -427,7 +427,8 @@ class _DeepCleaningScreenState extends State<DeepCleaningScreen> {
             ),
             Text(
               [
-                schedule.city,
+                schedule.locationLabel,
+                schedule.zoneLabel,
                 schedule.geographicState,
                 schedule.assignmentStatus,
                 schedule.notes,

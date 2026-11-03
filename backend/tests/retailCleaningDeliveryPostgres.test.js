@@ -31,9 +31,18 @@ test('Deep Cleaning real PostgreSQL: geography, ownership, pending, completion, 
    create table storage.objects(bucket_id text,name text,metadata jsonb,primary key(bucket_id,name));
    create table retail_unified_epoch(observed_at timestamptz,store_zones jsonb);
    create table reliance_retail_zone_fo_assignments(id uuid,zone_id uuid,fo_profile_id uuid,fo_employee_code text,effective_from timestamptz,effective_to timestamptz);
+   create table reliance_retail_zones(id uuid primary key,zone_code text,zone_name text,state text,status text);
    create table reliance_retail_store_zone_history(id uuid,retail_store_id uuid,new_zone_id uuid,changed_at timestamptz);
    insert into retail_unified_epoch values(now()-interval '1 year','{}');`);
+  await q(`alter table client_deep_cleaning_schedules add column source_type text,add column source_reference text,add column created_by_profile_id uuid,add unique(retail_store_id,scheduled_date);
+   create table retail_provisional_access(actor_id uuid,state text,permission text);
+   create table reliance_retail_management_audit(action text,entity_type text,entity_id uuid,actor_profile_id uuid,after_state jsonb);
+   create function retail_operations_today() returns date language sql stable as $$select (now() at time zone 'Asia/Kolkata')::date$$;
+   -- No legacy MIS grants in this fixture. Exercise the real existing Unified authorization below.
+   create function retail_mis_cleaning_access(uuid,text,text) returns boolean language sql stable as $$select false$$;`);
+  const unified=read('supabase/proposals/retail_unified_apply_and_record.sql').match(/create function public\.retail_unified_access\([\s\S]*?\$\$;/i)?.[0];assert.ok(unified);await q(unified);
   const owner=read('supabase/proposals/retail_unified_apply_and_record.sql').match(/create function public\.retail_unified_owner\([\s\S]*?\$\$;/i)?.[0];assert.ok(owner);await q(owner);
+  const direct=read('supabase/proposals/retail_cleaning_admin_scope_fix_20261103.sql').match(/CREATE OR REPLACE FUNCTION[\s\S]*?\$function\$\s*;/i)?.[0];assert.ok(direct);await q(direct);
   const proposal=read('supabase/proposals/retail_cleaning_delivery_v1.sql');await assert.rejects(q(proposal),/Owner review/);await q('rollback');
   await q("set qpms.cleaning_delivery_reviewed='yes'");await q(proposal);
   // Synthetic fixtures; the ownership resolver itself is the existing implementation.
@@ -46,8 +55,21 @@ test('Deep Cleaning real PostgreSQL: geography, ownership, pending, completion, 
    await q("insert into client_deep_cleaning_schedules(id,retail_store_id,scheduled_date,metadata) values($1,$2,current_date,'{\"notes\":\"Instructions\"}')",[id(300+i),id(100+i)]);
    if(zone)await q("update retail_unified_epoch set store_zones=store_zones||jsonb_build_object($1::text,jsonb_build_object('zone_id',$2::text))",[id(100+i),id(200+zone)]);
   }
-  for(let i=1;i<=4;i++)await q("insert into reliance_retail_zone_fo_assignments values($1,$2,$3,$4,now()-interval '1 day',null)",[id(400+i),id(200+i),id(i),'FO'+i]);
-  await t.test('each TN zone is isolated; Zone4 includes geographic PY under reporting TN',async()=>{for(let i=1;i<=4;i++){const rows=await feed(i);assert.equal(rows.length,i===4?2:1);assert.ok(rows.every(r=>r.assigned_fo_profile_id===id(i)));assert.ok(rows.every(r=>r.permitted_actions.includes('execute')));}const py=(await feed(4)).find(r=>r.geographic_state==='PY');assert.equal(py.reporting_state,'TN');assert.equal(py.zone_id,id(204));});
+  for(let i=1;i<=4;i++){
+   await q("insert into reliance_retail_zone_fo_assignments values($1,$2,$3,$4,now()-interval '1 day',null)",[id(400+i),id(200+i),id(i),'FO'+i]);
+   await q("insert into reliance_retail_zones values($1,$2,$2,'TN','Active')",[id(200+i),'ZONE-'+i]);
+  }
+  await t.test('existing CRM save creates unassigned Planned work immediately; replay and duplicates are safe',async()=>{
+   await q("insert into profiles values($1,$2,'EDITOR','HK MIS','Reliance Retail','KL','Active',true)",[id(20),id(1020)]);
+   await q("insert into retail_provisional_access values($1,'KL','editor')",[id(20)]);
+   await q("insert into reliance_retail_store_master(id,store_code,store_name,state,status,business,client_name) values($1,'KL-PENDING','Unmapped KL','KL','Active','Reliance Retail','Reliance Retail')",[id(112)]);
+   const save=async(actor,request)=>(await one("select rpc_retail_cleaning_schedule_direct($1,$2,retail_operations_today(),$3,'Instructions') result",[id(actor),id(112),id(request)])).result;
+   const first=await save(20,800);assert.equal(first.schedule.status,'Planned');assert.equal(first.schedule.assigned_fo_profile_id,null);assert.equal(first.replayed,false);
+   const replay=await save(20,800);assert.equal(replay.schedule.id,first.schedule.id);assert.equal(replay.replayed,true);
+   await assert.rejects(save(20,801),/already exists/);await assert.rejects(save(11,802),/editor scope/);await assert.rejects(save(6,803),/editor scope/);
+   const viewed=(await feed(11,[id(112)]))[0];assert.equal(viewed.assignment_status,'Assignment Pending');assert.equal(viewed.status,'Planned');assert.equal((await feed(6)).some(r=>r.retail_store_id===id(112)),false);
+  });
+  await t.test('each TN zone is isolated; Zone4 includes geographic PY under reporting TN',async()=>{for(let i=1;i<=4;i++){const rows=await feed(i);assert.equal(rows.length,i===4?2:1);assert.ok(rows.every(r=>r.assigned_fo_profile_id===id(i)));assert.ok(rows.every(r=>r.permitted_actions.includes('execute')));}const py=(await feed(4)).find(r=>r.geographic_state==='PY');assert.equal(py.reporting_state,'TN');assert.equal(py.zone_id,id(204));assert.equal(py.zone.code,'ZONE-4');});
   await t.test('KA KL TG AP1 AP2 explicit assignment and cross-state denial',async()=>{for(let i=5;i<=9;i++){const rows=await feed(i);assert.equal(rows.length,1);assert.equal(rows[0].geographic_state,geos[i-1]);}assert.equal((await feed(10)).length,0);await q('update reliance_retail_store_master set assigned_fo_profile_id=$1 where id=$2',[id(5),id(106)]);assert.equal((await feed(5)).length,1);assert.equal((await feed(6)).length,0);await q('update reliance_retail_store_master set assigned_fo_profile_id=$1 where id=$2',[id(6),id(106)]);});
   await t.test('pending remains Planned; explicit viewers see unassigned; future effective assignment is excluded',async()=>{await q('update reliance_retail_store_master set assigned_fo_profile_id=null where id=$1',[id(105)]);assert.equal((await feed(5)).length,0);const row=(await feed(11,[id(105)]))[0];assert.equal(row.status,'Planned');assert.equal(row.assignment_status,'Assignment Pending');assert.deepEqual(row.permitted_actions,['view']);await q('update reliance_retail_store_master set assigned_fo_profile_id=$1 where id=$2',[id(5),id(105)]);assert.equal((await feed(5)).length,1);await q("update reliance_retail_zone_fo_assignments set effective_from=now()+interval '1 day' where zone_id=$1",[id(201)]);assert.equal((await feed(1)).length,0);await q("update reliance_retail_zone_fo_assignments set effective_from=now()-interval '1 day' where zone_id=$1",[id(201)]);});
   await t.test('view-only cannot begin, foreign identity/store/date denied, future/cancelled work not executable',async()=>{await assert.rejects(command(11,'begin',{schedule_id:id(301)}),/FO identity/);await assert.rejects(command(2,'begin',{schedule_id:id(301)}),/ownership/);await assert.rejects(command(1,'begin',{schedule_id:id(301),store_code:'FOREIGN'}),/mismatch/);await assert.rejects(q('select rpc_retail_cleaning_delivery_v1($1,$2,null,current_date,current_date,null)',[id(1),id(1002)]),/identity/);await q("update client_deep_cleaning_schedules set status='Cancelled' where id=$1",[id(302)]);assert.equal((await feed(2)).length,0);await assert.rejects(command(2,'begin',{schedule_id:id(302)}),/ownership/);await q("update client_deep_cleaning_schedules set status='Planned',scheduled_date=current_date+1 where id=$1",[id(302)]);assert.deepEqual((await feed(2))[0].permitted_actions,['view']);});

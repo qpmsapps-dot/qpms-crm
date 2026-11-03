@@ -1370,7 +1370,8 @@ class _DeepCleaningFormScreenState extends State<DeepCleaningFormScreen> {
           if (schedule != null)
             Text(
               [
-                schedule.city,
+                schedule.locationLabel,
+                schedule.zoneLabel,
                 schedule.geographicState,
                 schedule.assignmentStatus,
                 schedule.notes,

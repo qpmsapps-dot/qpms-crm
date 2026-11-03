@@ -8,7 +8,7 @@ Implemented in `feat/retail-cleaning-delivery-20261103`, isolated from the dirty
 
 ## Contract
 
-`GET /api/client-deep-cleaning/schedules` and `/schedules/:id` use `contract_version: retail-cleaning.v1`. The existing list URL is retained; there is no alternate schedule table/feed. Rows contain both `id` and `schedule_id`, `retail_store_id`, canonical `store_code`, `store_name`, geographic `state`/`geographic_state`, `reporting_state`, `zone_id`, `scheduled_date`, actual `status`, `activity`, `notes`, optional `city`/`latitude`/`longitude`, `assigned_fo_profile_id`, `assignment_status`, `completed_at`, `not_done_reason`, historical `executor_profile_id`, and server `permitted_actions`.
+`GET /api/client-deep-cleaning/schedules` and `/schedules/:id` use `contract_version: retail-cleaning.v1`. The existing list URL is retained; there is no alternate schedule table/feed. Rows contain both `id` and `schedule_id`, `retail_store_id`, canonical `store_code`, `store_name`, geographic `state`/`geographic_state`, `reporting_state`, `zone_id` and `zone: {id,code,name}`, `scheduled_date`, actual `status`, `activity`, `notes`, optional `city`/`latitude`/`longitude`, `assigned_fo_profile_id`, `assignment_status`, `completed_at`, `not_done_reason`, historical `executor_profile_id`, and server `permitted_actions`.
 
 List filters: either `month=YYYY-MM` or `from/to=YYYY-MM-DD`, inclusive, maximum 93 days. Default today through 30 days ahead in IST. `status` supports Planned, legacy Scheduled (matches Planned/Scheduled), Completed, Not Done (also accepts NotDone input), Cancelled. Pagination is one-based `page`, `limit` 1–100, with `pagination.total`. Detail is identity/scope bound and not restricted to the default date window. Invalid filters return 400, denied identities 403, hidden details 404, stale/duplicate conflicting completion 409, absent/incompatible database RPC 503. No fallback to the old state-wide RPC.
 
@@ -53,3 +53,37 @@ Local verification: focused backend/access/security tests, real disposable Postg
 6. Require CI and staging acceptance before any production release request. No merge/deploy authorization is implied by this source implementation.
 
 GO for source review and isolated test provisioning. NO-GO for connected staging acceptance/backend production deployment/APK distribution until installed database review, explicit test grants and authenticated/device acceptance are complete. Missing other-state FO mappings are not a deployment prerequisite: those schedules remain safely Assignment Pending and viewer-visible.
+
+## Final local results and changed files
+
+75 backend/access tests PASS; 12 disposable PostgreSQL tests PASS; 41 Flutter tests PASS; scoped Flutter analysis and ESLint PASS; production Vite build PASS (existing bundle-size/dynamic-import warnings). Synthetic browser coverage checks desktop/mobile, refresh, view-only controls, export authorization/download and revoked access. This is source/synthetic evidence, not authenticated staging or physical-device acceptance.
+
+The inherited UI-only CI guard now has an exact content-pinned exception for this integration, matching the existing PR #61 review mechanism. Unknown files, changed payload hashes and OOS additions are rejected. It has no branch-name bypass or general backend/mobile allowlist. The dedicated workflow covers backend, real PostgreSQL, web and Flutter. Remote CI for this unpublished implementation branch has not run.
+
+Files changed relative to main:
+
+* `.github/workflows/retail-cleaning-delivery.yml`
+* `.github/workflows/retail-ui-visual-checks.yml` (exact payload exception only)
+* `Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_form_screen.dart`
+* `Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_models.dart`
+* `Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_screen.dart`
+* `Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_service.dart`
+* `Mobile_FO_V2/lib/home/home_shell.dart` (launcher only)
+* `Mobile_FO_V2/test/deep_cleaning_delivery_test.dart`
+* `backend/routes/clientDeepCleaningRoutes.js`
+* `backend/server.js` (legacy Cleaning GET only)
+* `backend/services/clientDeepCleaningService.js`
+* `backend/services/retailCleaningDeliveryService.js`
+* `backend/services/retailCleaningLegacyReadService.js`
+* `backend/tests/clientDeepCleaningService.test.js`
+* `backend/tests/retailCleaningDelivery.test.js`
+* `backend/tests/retailCleaningDeliveryPostgres.test.js`
+* `src/components/Sidebar.jsx` (verified Cleaning link only)
+* `src/pages/DeepCleaning.jsx`
+* `src/pages/reliance-retail/RetailCleaningScheduleViewer.jsx`
+* `src/routes/AppRoutes.jsx`
+* `src/utils/authRoles.js` (dedicated viewer navigation only; server authorizes reads)
+* `supabase/proposals/retail_cleaning_delivery_v1.sql`
+* `supabase/verification/retail_cleaning_delivery_read_only.sql`
+* `tests/retailCleaningDeliveryBrowser.test.js`
+* This document.
