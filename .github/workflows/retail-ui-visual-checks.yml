@@ -34,13 +34,17 @@ jobs:
           python3 - <<'PY'
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
+          # Checkout tests GitHub's synthetic PR merge. Its first parent is
+          # the main revision actually tested, which can advance after the event.
+          if os.environ.get("GITHUB_REF", "").startswith("refs/pull/") and os.environ.get("GITHUB_REF", "").endswith("/merge"):
+            base = subprocess.check_output(["git","rev-parse","HEAD^1"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
           # Exact source-integration exception, covered by retail-cleaning-delivery.yml.
           # No branch-name bypass or broad backend/mobile allowlist. Any payload
           # drift or unrelated file returns to the original strict guard below.
           approved_cleaning_delivery = {
-            ".github/workflows/retail-cleaning-delivery.yml": "281782116f11f97c2624b6492af1af142540205d",
-            ".github/workflows/retail-mis-mounted-auth.yml": "851294e644c02ebf9e4e98ab2b8337130889e04d",
+            ".github/workflows/retail-cleaning-delivery.yml": "88c06af38c28894dbf9ed3905e0cc67f19bad4a5",
+            ".github/workflows/retail-mis-mounted-auth.yml": "b32ace15b0a8b509d54820710d43a05f0d6f1ce1",
             "Mobile_FO_V2/config/deep_cleaning.dart-defines.example.json": "bcc6eb4681bb3816e530becf52a98118e6fa34f5",
             "Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_form_screen.dart": "b77ac372753f09bdd4efbfb2654c8cd1cd7858f9",
             "Mobile_FO_V2/lib/deep_cleaning/deep_cleaning_models.dart": "655614f847ff66f951c6fc898f160d013647d547",
@@ -57,6 +61,7 @@ jobs:
             "backend/tests/clientDeepCleaningService.test.js": "7097ec223d18204b989371309220016a10a3a737",
             "backend/tests/retailCleaningDelivery.test.js": "1b7d0ff591cb3c101227d3ecaaf170ac6a1e588a",
             "backend/tests/retailCleaningDeliveryPostgres.test.js": "d553a1181d13eb736dd8c82653512ceddc5c422d",
+            "backend/tests/retailModuleReportService.test.js": "da1df84394348b4cb0c43b98454c71a1e786fc33",
             "docs/RETAIL_CLEANING_DELIVERY_20261103.md": "0a074541aaa78ba6393e73484e6686382c0cca23",
             "docs/RETAIL_CLEANING_IMAGE_CONFIGURATION.md": "bf79435c2aee9c299f5e218b6837e05296bc6ae9",
             "docs/evidence/retail-cleaning-upload-read-only-20261103.json": "f73d059614c48140b68c89bcbd61f39ccdce1a10",

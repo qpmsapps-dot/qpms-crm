@@ -31,6 +31,8 @@ jobs:
           python3 - <<'PY'
           import os, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
+          if os.environ.get("GITHUB_REF", "").startswith("refs/pull/") and os.environ.get("GITHUB_REF", "").endswith("/merge"):
+            base = subprocess.check_output(["git","rev-parse","HEAD^1"],text=True).strip()
           paths = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
           old = subprocess.check_output(["git","show",f"{base}:backend/server.js"],text=True)
           new = open("backend/server.js",encoding="utf-8").read()

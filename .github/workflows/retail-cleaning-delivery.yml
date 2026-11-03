@@ -40,7 +40,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm ci --prefix backend --no-audit --no-fund
       - name: Scoped backend and access regressions
-        run: node --test backend/tests/retailCleaningDelivery.test.js backend/tests/clientDeepCleaningService.test.js backend/tests/accessControlService.test.js backend/tests/retailMisAccess.test.js backend/tests/retailOperations.test.js
+        run: node --test backend/tests/retailCleaningDelivery.test.js backend/tests/clientDeepCleaningService.test.js backend/tests/accessControlService.test.js backend/tests/retailMisAccess.test.js backend/tests/retailOperations.test.js backend/tests/retailModuleReportService.test.js
       - name: Client configuration secret boundaries (no build)
         run: node --test tests/retailCleaningConfiguration.test.js
       - name: Disposable PostgreSQL tools
