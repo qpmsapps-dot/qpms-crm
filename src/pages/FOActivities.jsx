@@ -12089,7 +12089,9 @@ export default function FOActivities() {
       : null;
     const confirmed = window.confirm(resumable
       ? `Resume Recalculate All KM after ${resumable.totals.processed} processed attendances?`
-      : "This will recalculate payable KM from eligible GPS travel windows for completed attendances in the selected date range. Continue?");
+      : supportedKmDryRun(import.meta.env)
+        ? "This will PREVIEW supported missing KM for completed attendances; no petrol will be credited. Continue?"
+        : "This will credit ONLY verified outstanding KM for completed attendances in the selected period. Existing credits will not be replaced. Continue?");
     if (!confirmed) return;
 
     setBatchKmRecalcBusy(true);
@@ -12104,6 +12106,10 @@ export default function FOActivities() {
           updated: 0,
           skipped: 0,
           failed: 0,
+          deferred: 0,
+          previewed: 0,
+          creditedKm: 0,
+          creditedAmount: 0,
           counters: {},
           results: [],
         };
@@ -12122,7 +12128,7 @@ export default function FOActivities() {
         let pageError = null;
         for (let attempt = 1; attempt <= 3 && !page; attempt += 1) {
           try {
-            const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/km/recalculate-batch`, {
+            const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/km/reconcile-supported-batch`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -12133,9 +12139,9 @@ export default function FOActivities() {
                 state: stateFilter,
                 business: businessFilter,
                 status: statusFilter,
-                batchSize: 50,
+                batchSize: 10,
                 cursor,
-                dryRun: false,
+                dryRun: supportedKmDryRun(import.meta.env),
               }),
             });
             const responseBody = await response.json();
@@ -12158,6 +12164,10 @@ export default function FOActivities() {
         totals.updated += Number(page.updated || 0);
         totals.skipped += Number(page.skipped || 0);
         totals.failed += Number(page.failed || 0);
+        totals.deferred += Number(page.deferred || 0);
+        totals.previewed += Number(page.previewed || 0);
+        totals.creditedKm = Math.round((totals.creditedKm + Number(page.creditedKm || 0)) * 100) / 100;
+        totals.creditedAmount = Math.round((totals.creditedAmount + Number(page.creditedAmount || 0)) * 100) / 100;
         totals.results.push(...(page.results || []));
         Object.entries(page.counters || {}).forEach(([key, value]) => {
           totals.counters[key] = Number(totals.counters[key] || 0) + Number(value || 0);
@@ -12187,14 +12197,18 @@ export default function FOActivities() {
       completed = true;
       window.alert(
         [
-          "Recalculate All KM completed.",
+          "Recalculate All KM batch processed.",
           `Processed: ${totals.processed}`,
           `Updated: ${totals.updated}`,
           `Skipped: ${totals.skipped}`,
+          `Deferred: ${totals.deferred}`,
+          `Previewed (not credited): ${totals.previewed}`,
           `Failed: ${totals.failed}`,
+          `Credited KM: ${totals.creditedKm.toFixed(2)}`,
+          `Credited petrol: ₹${totals.creditedAmount.toFixed(2)}`,
         ].join("\n"),
       );
-      setKmRecalcResult(totals);
+      setKmRecalcResult({ ...totals, mode: supportedKmDryRun(import.meta.env) ? 'preview' : 'posting' });
       setRefreshToken((value) => value + 1);
       setSummaryRefreshToken((value) => value + 1);
     } catch (error) {
@@ -12216,7 +12230,11 @@ export default function FOActivities() {
           `Processed: ${totals.processed}`,
           `Updated: ${totals.updated}`,
           `Skipped: ${totals.skipped}`,
+          `Deferred: ${totals.deferred}`,
+          `Previewed (not credited): ${totals.previewed}`,
           `Failed: ${totals.failed}`,
+          `Credited KM: ${totals.creditedKm.toFixed(2)}`,
+          `Credited petrol: ₹${totals.creditedAmount.toFixed(2)}`,
         ].join("\n"),
       );
     } finally {
