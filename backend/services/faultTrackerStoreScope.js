@@ -91,9 +91,11 @@ export async function scopedFaultTrackerReport(client,profile,input,authorizatio
   const newest=(!input.import_batch_id||input.latest==='true')?[{id:batch.id}]:await rows(client.from('fault_tracker_import_batches').select('id').order('imported_at',{ascending:false}).limit(1));
   if(newest[0]?.id===batch.id){
   const family=name=>{const key=String(name||'').trim().toLowerCase();return key.startsWith('corrective')?'corrective':key.startsWith('overall')?'overall':'other';};
-  const previous=await rows(client.from('fault_tracker_import_batches')
-   .select('id,original_file_name,imported_at,source_name,ticket_count,metadata').eq('source_name',batch.source_name)
-   .lt('imported_at',batch.imported_at).order('imported_at',{ascending:false}).limit(15));
+  const candidateBatches=await rows(client.from('fault_tracker_import_batches')
+   .select('id,original_file_name,imported_at,source_name,ticket_count,metadata')
+   .order('imported_at',{ascending:false}).limit(50));
+  const previous=candidateBatches.filter(item=>item.source_name===batch.source_name
+   && String(item.imported_at)<String(batch.imported_at));
   const prior=previous.find(b=>family(b.original_file_name)===family(batch.original_file_name)
     && (b.original_file_name!==batch.original_file_name||b.ticket_count!==batch.ticket_count
       ||(b.metadata?.file_sha256&&batch.metadata?.file_sha256&&b.metadata.file_sha256!==batch.metadata.file_sha256)));
