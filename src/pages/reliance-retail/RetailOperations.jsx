@@ -84,7 +84,7 @@ export default function RetailOperations({kind='maintenance'}) {
    <ReportStats items={stats}/>
    {excel.loading&&<ReportNotice>Loading October Excel records into the store details table…</ReportNotice>}
    {excel.error&&<ReportNotice error>October source records unavailable: {excel.error}</ReportNotice>}
-   {!!reported.length&&<p className="retail-report-description">October Excel records appear within Store details as read-only reported entries. They do not create a verified call log, client approval or thermography evidence.</p>
+   {!!reported.length&&<p className="retail-report-description">October Excel records appear within Store details as read-only reported entries. They do not create a verified call log, client approval or thermography evidence.</p>}
    <ReportNotice>{maintenance?`${callKind}: ${window.start} through ${window.end} · ${window.status}. Today (India): ${report.today}. Previous months are locked. Multiple call logs per store are allowed within the selected window. Existing logs cannot be edited or deleted.`:`Reports follow the scheduled month. Client approval is due 10 calendar days after completion; overdue starts the next day. Late approvals remain marked late.`}</ReportNotice>
    <form ref={entry} onSubmit={prepare} className="retail-report-filters" aria-label={`${title} entry`}>
     <label>Store Code<select required aria-label={`${title} entry Store Code`} value={form.store_id} onChange={e=>{setConfirmation(null);setForm({...emptyForm(),store_id:e.target.value});}}><option value="">Select authorized store</option>{report.stores.filter(s=>s.can_save&&s.status==='Active').map(s=><option key={s.id} value={s.id}>{s.store_code} · {s.store_name}</option>)}</select></label>
