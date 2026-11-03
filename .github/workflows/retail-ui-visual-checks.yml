@@ -48,7 +48,7 @@ jobs:
           for path in jsx:
             old = subprocess.check_output(["git","show",f"{base}:{path}"],text=True)
             new = open(path,encoding="utf-8").read()
-            for name,pat in {"buttons":r"<button\\b","inputs":r"<input\\b","selects":r"<select\\b","anchors":r"<a\\b","api references":r"Api\\.","retail routes":r"/reliance-retail/"}.items():
+            for name,pat in {"buttons":r"<button\b","inputs":r"<input\b","selects":r"<select\b","anchors":r"<a\b","api references":r"Api\.","retail routes":r"/reliance-retail/"}.items():
               if len(re.findall(pat,old)) != len(re.findall(pat,new)):
                 sys.exit(f"{path}: {name} count changed")
           print(f"PASS: {len(files)} scoped files; controls and references preserved.")
