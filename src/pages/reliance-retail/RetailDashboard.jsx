@@ -55,48 +55,41 @@ function ModuleBody({ id, rows, stores, storeStatus, source }) {
     <p className="ifms-note">{cleaning?`Recorded Not Completed: ${total('not_completed')}; Scheduled and pending: ${total('pending')}.`: 'Actual recorded operational results.'}</p>
   </>;
 }
-const historicalModules=[
- ['cmpm','CM / PM',m=>`CM ${m.cm_completed??0} · PM ${m.pm_completed??0}`],
- ['thermography','Thermography',m=>`Submitted ${m.report_submitted??0} · Pending ${m.report_pending??0}`],
- ['deep_cleaning','Deep Cleaning',m=>`Done ${m.completed??0} · Pending ${m.pending??0}`],
- ['technical_training','MEPC Training',m=>`Done ${m.completed??0} · Pending ${m.pending??0}`],
- ['soft_skill_training','HK Training',m=>`Done ${m.completed??0} · Pending ${m.pending??0}`],
- ['shortage','Manpower Shortage',m=>`Reported shortage ${m.reported_shortage_total??0}`],
- ['manpower_vacancy','Manpower Vacancy',m=>`Vacancies ${m.vacancies_reported??0}`],
- ['oos_historical','OOS Excel Tracker',m=>`PO references ${m.po_referenced??0}`],
+const EXCEL_MODULE_IDS={thermography:'thermography',cm:'cmpm',pm:'cmpm',cleaning:'deep_cleaning',technical:'technical_training',soft:'soft_skill_training'};
+function ExcelModuleBody({id,rows}){
+ if(!rows.length)return <p className="ifms-note">No reported Excel rows for the selected state. This does not indicate verified absence.</p>;
+ const sourceRows=rows.reduce((s,r)=>s+Number(r.source_rows||0),0);
+ const total=field=>rows.reduce((s,r)=>s+Number(r.metrics?.[field]||0),0);
+ let fields=[];
+ if(id==='cm')fields=[['cm_completed','CM completed'],['cm_pending','Pending'],['cm_unreported','No status']];
+ else if(id==='pm')fields=[['pm_completed','PM completed'],['pm_pending','Pending'],['pm_unreported','No status']];
+ else if(id==='thermography')fields=[['report_submitted','Submitted'],['report_pending','Pending'],['report_not_submitted','Not submitted']];
+ else if(id==='cleaning')fields=[['completed','Completed'],['pending','Pending'],['cancelled_or_closed','Cancelled / closed']];
+ else fields=[['completed','Completed'],['pending','Pending'],['not_attended','Not attended']];
+ const stateRows=rows.map(r=>({state:r.state,excel_rows:r.source_rows,...r.metrics}));
+ return <>
+  <div className="ifms-metrics"><Metric label="Excel source rows" value={sourceRows}/>{fields.slice(0,3).map(([key,label])=><Metric key={key} label={label} value={total(key)}/>)}</div>
+  <div className="ifms-card-content"><StateTable rows={stateRows} columns={[{key:'excel_rows',label:'Source rows'},...fields.map(([key,label])=>({key,label}))]}/></div>
+  <p className="ifms-note">Excel reported on 28 Oct 2026; source rows can repeat and do not certify work or evidence. Open View Details for every imported row.</p>
+ </>;
+}
+const EXTRA_EXCEL=[
+ {module:'shortage',title:'Manpower Shortage',route:'/reliance-retail/manpower',metric:'reported_shortage_total',metricTitle:'Reported shortage'},
+ {module:'manpower_vacancy',title:'Manpower Vacancy',route:'/reliance-retail/manpower',metric:'vacancies_reported',metricTitle:'Vacancies'},
+ {module:'oos_historical',title:'OOS Excel Tracker',route:'/reliance-retail/mis/oos',metric:'po_referenced',metricTitle:'PO references'},
 ];
-function HistoricalIfmsSummary({snapshot,globalState}){
- if(snapshot?.status!=='ready'||!Array.isArray(snapshot.rows)||!snapshot.rows.length)return null;
- const states=REPORTING_STATES.filter(s=>!globalState||s.code===globalState);
- const rows=snapshot.rows;
- const format=n=>Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2});
- return <section aria-label="Historical October Excel report" className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm md:p-4">
-  <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
-   <div><h2 className="text-base font-bold text-blue-950">October 2026 — Historical IFMS Excel report</h2>
-    <p className="text-xs text-slate-600">Source snapshot: 28 October 2026. Excel-reported figures only; not verified mobile submissions or live workflow status.</p></div>
-   <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">Historical · read-only</span>
-  </div>
-  <div className="overflow-x-auto rounded-lg border border-slate-200">
-   <table className="w-full min-w-[790px] text-left text-xs">
-    <thead className="bg-slate-100 text-slate-700"><tr><th scope="col" className="sticky left-0 min-w-[150px] bg-slate-100 p-2.5">Excel module</th>
-     {states.map(state=><th key={state.code} scope="col" className="min-w-[105px] p-2.5">{state.code}</th>)}
-     <th scope="col" className="p-2.5 text-right">Reported rows</th></tr></thead>
-    <tbody>{historicalModules.map(([key,title,render])=>{
-     const found=rows.filter(r=>r.module===key);
-     return <tr key={key} className="border-t border-slate-200">
-      <th scope="row" className="sticky left-0 bg-white p-2.5 font-semibold text-slate-800">{title}</th>
-      {states.map(state=>{
-       const record=found.find(r=>r.state===state.code);
-       return <td key={state.code} className="p-2.5 align-top">{record?<div><strong className="font-semibold text-blue-900">{format(record.source_rows)} rows</strong>
-        <div className="mt-0.5 text-[10px] leading-4 text-slate-500">{render(record.metrics||{})}</div></div>:<span className="text-slate-400">—</span>}</td>;
-      })}
-      <td className="p-2.5 text-right font-semibold text-blue-950">{format(found.filter(r=>!globalState||r.state===globalState).reduce((a,r)=>a+r.source_rows,0))}</td>
-     </tr>;
-    })}</tbody>
-   </table>
-  </div>
-  <p className="mt-2 text-[11px] leading-5 text-slate-600">Store rows may repeat, especially CM/PM and OOS. OOS amounts and stages are historical source figures only and do not create active quotations, payments or approvals. This report does not change the live KPI cards above.</p>
- </section>;
+function ExtraExcelCards({rows,global}){
+ return <div className="ifms-excel-extra" aria-label="October Excel manpower and OOS module summaries">
+  {EXTRA_EXCEL.map(info=>{
+   const matching=rows.filter(row=>row.module===info.module&&(!global||row.state===global));
+   const n=field=>matching.reduce((sum,r)=>sum+Number(field==='source_rows'?r.source_rows:r.metrics?.[field]||0),0);
+   return <section className="ifms-excel-extra-card" key={info.module}>
+    <h2>{info.title}</h2><p className="ifms-excel-extra-number">{n('source_rows').toLocaleString('en-IN')} <small>Excel rows</small></p>
+    <p>{info.metricTitle}: <strong>{n(info.metric).toLocaleString('en-IN',{maximumFractionDigits:2})}</strong></p>
+    <Link to={info.route}>View imported source records <ArrowUpRight size={13}/></Link>
+   </section>;
+  })}
+ </div>;
 }
 
 export default function RetailDashboard() {
@@ -108,7 +101,11 @@ export default function RetailDashboard() {
   const [local, setLocal] = useState({});
   const [inventory, setInventory] = useState({ status: 'loading', rows: [], error: '' });
   const [data,setData]=useState(null);
+  const [sourceMode,setSourceMode]=useState('excel');
   const period = reportingPeriod(month, today);
+  const excelReady=month==='2026-10'&&isPlatformAdmin(user)&&data?.historical_ifms?.status==='ready';
+  const excelMode=Boolean(excelReady&&sourceMode==='excel');
+  const historicalRows=data?.historical_ifms?.rows||[];
   useEffect(() => {
     let live = true;
     queueMicrotask(()=>{if(live){setData(null);setInventory({status:'loading',rows:[],error:''});}});
@@ -123,26 +120,45 @@ export default function RetailDashboard() {
     }).catch(error => { if (live) setInventory({ status: 'unavailable', rows: [], error: error.response?.data?.message || error.message }); });
     return () => { live = false; };
   }, [month]);
-  async function exportSummary(){try{const {default:ExcelJS}=await import('exceljs'),{downloadUnified}=await import('../../utils/retailUnifiedExport.js'),book=new ExcelJS.Workbook(),sheet=book.addWorksheet('Module summary');sheet.addRow(['Module','State','From','To','Availability','HK Credits','MEPC Credits','Attendance Target','Completed','Scheduled','Not Completed','Pending','Note']);for(const module of modules){const source=data.modules[module.id],rows=selectRows(source?.rows||[],global,local[module.id]||'');if(source?.status!=='ready'){sheet.addRow([module.title,global||local[module.id]||'',data.from,data.to,'Unavailable',null,null,null,null,null,null,null,source?.reason]);continue;}for(const r of rows)sheet.addRow([module.title,r.state,data.from,data.to,'Available',r.hk_actual??null,r.mepc_actual??null,r.complete?r.total_target:null,r.completed??null,r.scheduled??null,r.not_completed??null,r.pending??null]);}await downloadUnified(book,'Retail_Operations_Summary.xlsx');}catch(e){setInventory(v=>({...v,error:e.message}));}}
+  async function exportSummary(){try{
+ const {default:ExcelJS}=await import('exceljs'),{downloadUnified}=await import('../../utils/retailUnifiedExport.js'),book=new ExcelJS.Workbook();
+ if(excelMode){
+  const sheet=book.addWorksheet('October Excel reported');
+  sheet.addRow(['Module','State','Snapshot date','Source rows','Distinct Store Codes','Source type','Metrics JSON']);
+  for(const r of historicalRows.filter(row=>!global||row.state===global))sheet.addRow([r.module,r.state,r.snapshot_date,r.source_rows,r.distinct_store_codes,'Excel-reported / unverified',JSON.stringify(r.metrics)]);
+  await downloadUnified(book,'Retail_October_2026_Excel_Source_Summary.xlsx');
+ }else{
+  const sheet=book.addWorksheet('Verified module summary');
+  sheet.addRow(['Module','State','From','To','Availability','HK Credits','MEPC Credits','Attendance Target','Completed','Scheduled','Not Completed','Pending','Note']);
+  for(const module of modules){const source=data.modules[module.id],rows=selectRows(source?.rows||[],global,local[module.id]||'');if(source?.status!=='ready'){sheet.addRow([module.title,global||local[module.id]||'',data.from,data.to,'Unavailable',null,null,null,null,null,null,null,source?.reason]);continue;}for(const r of rows)sheet.addRow([module.title,r.state,data.from,data.to,'Available',r.hk_actual??null,r.mepc_actual??null,r.complete?r.total_target:null,r.completed??null,r.scheduled??null,r.not_completed??null,r.pending??null]);}
+  await downloadUnified(book,'Retail_Operations_Summary.xlsx');
+ }
+ }catch(e){setInventory(v=>({...v,error:e.message}));}}
   return <div className="ifms-dashboard">
     <header className="ifms-page-header"><div><p className="ifms-eyebrow">Reliance Retail / Dashboard</p><h1>South Zone – IFMS Operations Summary</h1><p>This Month Till Today</p>{isPlatformAdmin(user)&&<Link to="/reliance-retail/store-master">Admin: Store Management</Link>}</div><div className="ifms-updated"><span className="ifms-status-dot"/>Last Updated: {data?.updated_at?new Date(data.updated_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'awaiting data'}</div></header>
     <div className="ifms-toolbar"><div className="ifms-toolbar-filters"><StateFilter label="Global reporting state" value={global} onChange={value => { setGlobal(value); setLocal({}); }}/><label className="ifms-month"><CalendarDays size={16}/><span className="sr-only">Reporting month</span><input aria-label="Reporting month" type="month" min="2000-01" max="9999-12" value={month} onChange={e => { if (/^\d{4}-\d{2}$/.test(e.target.value)) setMonth(e.target.value); }}/></label><span className="ifms-date-range">{period.label}</span></div><button disabled={!data} onClick={()=>void exportSummary()}><Download size={15}/> Export summary</button></div>
     <p className="ifms-data-status" role="status">{inventory.status === 'loading' ? 'Loading reports…' : inventory.status === 'unavailable' ? `Reports unavailable: ${inventory.error}` : 'Showing available reports for the selected period.'}</p>
     {inventory.status==='ready'&&inventory.error&&<p role="alert" className="ifms-note">{inventory.error}</p>}
-    <RetailOosDashboard globalState={global}/>
-    {data?.historical_ifms?.status==='ready'&&<HistoricalIfmsSummary snapshot={data.historical_ifms} globalState={global}/>}
+    {excelReady&&<div className="ifms-source-mode" role="group" aria-label="October reporting source">
+      <span>October reporting:</span>
+      <button aria-pressed={excelMode} onClick={()=>setSourceMode('excel')}>Imported October Excel</button>
+      <button aria-pressed={!excelMode} onClick={()=>setSourceMode('verified')}>Verified App Records</button>
+      <small>{excelMode?'Excel reported as of 28 October; inspect imported rows under each module.':'Only verified operational submissions and app records.'}</small>
+    </div>}
+    {!excelMode&&<RetailOosDashboard globalState={global}/>}
     <div className="ifms-grid">{modules.map(({ id, title, icon: Icon, color, route }, index) => {
       const source=data?.modules[id];
       const rows = selectRows(source?.rows||[], global, local[id] || '');
       const stores = selectRows(inventory.rows, global, local[id] || '');
       const window = id === 'cm' || id === 'pm' ? callWindow(month, id, today) : null;
       return <section key={id} className={`ifms-card ${index < 4 ? 'ifms-wide' : 'ifms-third'}`} style={{ '--module-color': color }} aria-labelledby={`ifms-${id}`}>
-        <div className="ifms-card-header"><div className="ifms-card-heading"><span className="ifms-icon">{createElement(Icon, { size: 21 })}</span><div><h2 id={`ifms-${id}`}>{title}</h2><p>{window ? window.label : 'This Month Till Today'}</p></div></div><StateFilter label={`${title} reporting state`} value={local[id] || ''} global={global} onChange={value => setLocal(previous => ({ ...previous, [id]: value }))}/></div>
-        {window && <p className="ifms-window">{window.status} · All applicable stores due by {window.endLabel}</p>}
-        <ModuleBody id={id} rows={rows} stores={stores} storeStatus={inventory.status} source={source}/>
-        {!!source?.identity_exceptions&&<p className="ifms-note">{source.identity_exceptions} source records excluded from totals for unresolved store identity or category.</p>}
+        <div className="ifms-card-header"><div className="ifms-card-heading"><span className="ifms-icon">{createElement(Icon, { size: 21 })}</span><div><h2 id={`ifms-${id}`}>{title}</h2><p>{excelMode&&id!=='attendance'?'Imported October 28 Excel':window?window.label:'This Month Till Today'}</p></div></div><StateFilter label={`${title} reporting state`} value={local[id] || ''} global={global} onChange={value => setLocal(previous => ({ ...previous, [id]: value }))}/></div>
+        {!excelMode&&window&&<p className="ifms-window">{window.status} · All applicable stores due by {window.endLabel}</p>}
+        {excelMode&&id!=='attendance'?<ExcelModuleBody id={id} rows={selectRows(historicalRows.filter(r=>r.module===EXCEL_MODULE_IDS[id]),global,local[id]||'')}/>:<ModuleBody id={id} rows={rows} stores={stores} storeStatus={inventory.status} source={source}/>}
+        {!excelMode&&!!source?.identity_exceptions&&<p className="ifms-note">{source.identity_exceptions} source records excluded from totals for unresolved store identity or category.</p>}
         <footer className="ifms-card-footer"><span>{global || local[id] ? REPORTING_STATES.find(state => state.code === (global || local[id]))?.label : 'All six reporting states'}</span>{route && canAccessRoute(user, route) && <Link to={route}>View Details <ArrowUpRight size={13}/></Link>}</footer>
       </section>;
     })}</div>
+    {excelMode&&<ExtraExcelCards rows={historicalRows} global={global}/>}
   </div>;
 }
