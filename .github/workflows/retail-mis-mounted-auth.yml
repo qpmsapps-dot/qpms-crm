@@ -1,0 +1,51 @@
+name: Retail MIS mounted-route authorization
+
+on:
+  pull_request:
+    paths:
+      - 'backend/server.js'
+      - 'backend/tests/retailMisMountedAuth.test.js'
+      - '.github/workflows/retail-mis-mounted-auth.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Enforce exact hotfix scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python3 - <<'PY'
+          import os, subprocess, sys
+          base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
+          paths = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          allowed = {"backend/server.js", "backend/tests/retailMisMountedAuth.test.js", ".github/workflows/retail-mis-mounted-auth.yml"}
+          if set(paths) - allowed: sys.exit("Unexpected hotfix files: " + str(set(paths) - allowed))
+          old = subprocess.check_output(["git","show",f"{base}:backend/server.js"],text=True)
+          new = open("backend/server.js",encoding="utf-8").read()
+          before = "if (!retailMisApiAllowed(profile,request.path)) {"
+          after = "if (!retailMisApiAllowed(profile,`${request.baseUrl || ''}${request.path}`)) {"
+          if old.count(before) != 1 or old.replace(before,after,1) != new:
+            sys.exit("server.js differs beyond the approved mounted-path correction")
+          print("PASS: exact mounted-path correction; other server logic unchanged")
+          PY
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Server syntax and mounted authorization regressions
+        run: |
+          node --check backend/server.js
+          node --test backend/tests/retailMisMountedAuth.test.js backend/tests/retailMisAccess.test.js backend/tests/retailOos12Routes.test.js backend/tests/retailMisUserManagement.test.js
