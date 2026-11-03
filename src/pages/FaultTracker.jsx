@@ -510,7 +510,7 @@ function parseTicketRows(rows) {
       const ageingDays = numberValue(rawFirstValueFor(row, ['Ageing', 'Ageing Days', 'Aging', 'Aging Days']));
       const ageingBucket = normalizeAgeingBucket(rawFirstValueFor(row, ['Ageing(Days)', 'Ageing Bucket', 'Aging Bucket']), ageingDays);
       const state = firstValueFor(row, ['State', 'Branch State', 'Store State']);
-      const category = firstValueFor(row, ['Category', 'HK / PC', 'Ticket Category', 'Service Category']);
+      const category = firstValueFor(row, ['Call Category', 'Category', 'HK / PC', 'Ticket Category', 'Service Category']);
       const vendor = firstValueFor(row, ['Vendor', 'Actual Vendor', 'Service Vendor', 'Vendor Name']);
       const createdAt = rawFirstValueFor(row, ['Created At', 'Created Date', 'Created On', 'Ticket Created At']);
       const updatedAt = rawFirstValueFor(row, ['Updated At', 'Updated Date', 'Updated On']);
@@ -1354,6 +1354,7 @@ function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, ca
         </div>
       ) : null}
       <FaultClosedBetweenDumps summary={closedBetweenDumps} />
+      <FaultCallCategories tickets={tickets} closedBetweenDumps={closedBetweenDumps} />
       {activeImportBatch && tickets.length ? (
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-500">
           Eligible tickets from saved dump: {activeImportBatch.original_file_name || 'Pending Tickets'} • {formatNumber(activeImportBatch.ticket_count || tickets.length)} tickets • {formatDateTime(activeImportBatch.imported_at)}
@@ -1396,6 +1397,30 @@ function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, ca
       ) : null}
     </div>
   );
+}
+
+function FaultCallCategories({tickets,closedBetweenDumps}){
+  const summary=new Map();
+  for(const ticket of tickets){
+    const key=String(ticket.category||ticket.rawRow?.Category||'Unspecified').trim()||'Unspecified';
+    const record=summary.get(key)||{category:key,open:0,closed:0};
+    record.open++;summary.set(key,record);
+  }
+  for(const item of closedBetweenDumps?.by_category||[]){
+    const key=String(item.category||'Unspecified').trim()||'Unspecified';
+    const record=summary.get(key)||{category:key,open:0,closed:0};
+    record.closed+=item.count;summary.set(key,record);
+  }
+  const rows=[...summary.values()].sort((a,b)=>b.open-a.open||a.category.localeCompare(b.category));
+  if(!rows.length)return null;
+  return <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm" aria-label="Fault call categories from uploaded dump">
+    <div className="border-b border-slate-100 px-5 py-4"><h2 className="text-sm font-black text-slate-900">Call category — from IFMS Excel</h2>
+    <p className="mt-1 text-xs text-slate-500">Category names come from the uploaded source, not guessed from ticket titles. Closed counts represent absent tickets in the latest comparable pending dump.</p></div>
+    <div className="max-h-72 overflow-auto"><table className="min-w-full text-left text-xs">
+      <thead className="sticky top-0 bg-slate-50 text-slate-600"><tr><th className="px-5 py-3">Call category</th><th className="px-3 py-3 text-right">Pending calls</th><th className="px-5 py-3 text-right">Newly missing</th></tr></thead>
+      <tbody>{rows.map(r=><tr key={r.category} className="border-t border-slate-100"><td className="px-5 py-2.5 font-semibold">{r.category}</td><td className="px-3 py-2.5 text-right">{formatNumber(r.open)}</td><td className="px-5 py-2.5 text-right">{closedBetweenDumps?formatNumber(r.closed):'—'}</td></tr>)}</tbody>
+    </table></div>
+  </section>;
 }
 
 function FaultClosedBetweenDumps({summary}) {
@@ -1526,6 +1551,8 @@ export default function FaultTracker({ retailScope = false }) {
         return;
       }
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256',buffer))]
+        .map(byte=>byte.toString(16).padStart(2,'0')).join('');
       const parsed = parseTicketRows(rows);
       const result = await faultTrackerApiRequest({
         method: 'POST',
@@ -1537,6 +1564,7 @@ export default function FaultTracker({ retailScope = false }) {
           metadata: {
             imported_from: 'web',
             source: 'FaultTracker.jsx',
+            file_sha256: digest,
           },
         },
       });
@@ -1616,6 +1644,7 @@ export default function FaultTracker({ retailScope = false }) {
       ) : null}
 
       <FaultClosedBetweenDumps summary={closedBetweenDumps} />
+      <FaultCallCategories tickets={tickets} closedBetweenDumps={closedBetweenDumps} />
       {activeImportBatch && tickets.length ? (
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-500">
           Eligible tickets from saved dump: {activeImportBatch.original_file_name || 'Pending Tickets'} • {formatNumber(activeImportBatch.ticket_count || tickets.length)} tickets • {formatDateTime(activeImportBatch.imported_at)}
