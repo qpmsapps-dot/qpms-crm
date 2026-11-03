@@ -1,3 +1,4 @@
+import RetailImportedHistory from '../../components/reliance-retail/RetailImportedHistory.jsx';
 import {useEffect,useRef,useState} from 'react';
 import {authenticatedApiRequest} from '../../services/api.js';
 import {indiaToday,reportingState} from '../../../backend/shared/retailAttendance.js';
@@ -94,5 +95,6 @@ export default function RetailOperations({kind='maintenance'}) {
    {history&&<section aria-label="Operational audit history"><h2>Recorded history</h2>{report.events.filter(e=>Array.isArray(history)?history.includes(e.entity_id):e.entity_id===history).map(e=><p key={e.id}>{e.created_at} · {e.action}{isPlatformAdmin(user)&&<> · Actor {e.actor_profile_id}</>}</p>)}<button onClick={()=>setHistory(null)}>Close history</button></section>}
   </>}
   {confirmation&&<section role="dialog" aria-modal="false" aria-label="Confirm operational save" className="retail-report-notice"><p>{confirmation.label}</p><button disabled={saving} onClick={()=>void save()}>{saving?'Saving…':'Confirm save'}</button><button autoFocus disabled={saving} onClick={()=>setConfirmation(null)}>Cancel</button></section>}
+  <RetailImportedHistory module={maintenance?'cmpm':'thermography'} title={title} month={month}/>
  </section>;
 }

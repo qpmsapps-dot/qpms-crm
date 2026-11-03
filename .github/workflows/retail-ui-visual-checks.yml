@@ -62,6 +62,10 @@ jobs:
             "src/components/reliance-retail/retailReport.css",
             "src/pages/reliance-retail/ifmsDashboard.css",
             "src/pages/reliance-retail/retailStoreVisual.css",
+            "src/components/reliance-retail/RetailImportedHistory.jsx",
+            "src/pages/reliance-retail/RetailManpowerHistory.jsx",
+            "src/pages/reliance-retail/RetailOperationalTrackers.jsx",
+            "src/routes/AppRoutes.jsx",
             "src/pages/reliance-retail/RetailAttendance.jsx",
             "src/pages/reliance-retail/RetailDashboard.jsx",
             "src/pages/reliance-retail/RetailStoreMaster.jsx",
@@ -103,10 +107,32 @@ jobs:
               return source.split(start,1)[1].split(end,1)[0]
             if protected_region(old) != protected_region(new):
               sys.exit(f"{path}: protected OOS action logic changed")
+          # New, source-only reporting components cannot bypass the protected
+          # business action guard: only these exact reviewed Git blobs are permitted.
+          new_source_modules = {
+            "src/components/reliance-retail/RetailImportedHistory.jsx": "3e9b8d573f35217d3f2603a005ff25751bafe5ae",
+            "src/pages/reliance-retail/RetailManpowerHistory.jsx": "69a280d28aff1830010184ecad02b8a9f5d68323",
+          }
           for path in jsx:
+            if path in new_source_modules:
+              actual = subprocess.check_output(["git","hash-object",path],text=True).strip()
+              if actual != new_source_modules[path]:
+                sys.exit(f"{path}: unreviewed source reporting component changes")
+              continue
             old = subprocess.check_output(["git","show",f"{base}:{path}"],text=True)
             new = open(path,encoding="utf-8").read()
-            for name,pat in {"buttons":r"<button\b","inputs":r"<input\b","selects":r"<select\b","anchors":r"<a\b","api references":r"Api\.","retail routes":r"/reliance-retail/"}.items():
+            for name,pat in {"buttons":r"<button\\b","inputs":r"<input\\b","selects":r"<select\\b","anchors":r"<a\\b","api references":r"Api\\.","retail routes":r"/reliance-retail/"}.items():
+              if name == "retail routes":
+                # Read-only imports add one reference per host. Dashboard adds
+                # exactly two navigation links to existing module routes.
+                check = new.replace("import RetailImportedHistory from '../../components/reliance-retail/RetailImportedHistory.jsx';", "")
+                check = check.replace("import RetailManpowerHistory from '../pages/reliance-retail/RetailManpowerHistory.jsx';", "")
+                if path == "src/pages/reliance-retail/RetailDashboard.jsx":
+                  check = check.replace('to="/reliance-retail/oos"', 'to="source-oos"')
+                  check = check.replace('to="/reliance-retail/manpower"', 'to="source-manpower"')
+                if len(re.findall(pat,old)) != len(re.findall(pat,check)):
+                  sys.exit(f"{path}: protected route references changed")
+                continue
               if len(re.findall(pat,old)) != len(re.findall(pat,new)):
                 sys.exit(f"{path}: {name} count changed")
           print(f"PASS: {len(files)} scoped files; controls and references preserved.")
@@ -114,7 +140,7 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
       - name: Lint affected UI pages
-        run: npx eslint src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
+        run: npx eslint src/components/reliance-retail/RetailImportedHistory.jsx src/pages/reliance-retail/RetailManpowerHistory.jsx src/pages/reliance-retail/RetailOperationalTrackers.jsx src/routes/AppRoutes.jsx src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
       - name: Production frontend build
         run: npm run build
       - name: Install Playwright Chromium

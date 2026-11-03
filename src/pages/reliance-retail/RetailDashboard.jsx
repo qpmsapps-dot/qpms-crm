@@ -55,49 +55,19 @@ function ModuleBody({ id, rows, stores, storeStatus, source }) {
     <p className="ifms-note">{cleaning?`Recorded Not Completed: ${total('not_completed')}; Scheduled and pending: ${total('pending')}.`: 'Actual recorded operational results.'}</p>
   </>;
 }
-const historicalModules=[
- ['cmpm','CM / PM',m=>`CM ${m.cm_completed??0} · PM ${m.pm_completed??0}`],
- ['thermography','Thermography',m=>`Submitted ${m.report_submitted??0} · Pending ${m.report_pending??0}`],
- ['deep_cleaning','Deep Cleaning',m=>`Done ${m.completed??0} · Pending ${m.pending??0}`],
- ['technical_training','MEPC Training',m=>`Done ${m.completed??0} · Pending ${m.pending??0}`],
- ['soft_skill_training','HK Training',m=>`Done ${m.completed??0} · Pending ${m.pending??0}`],
- ['shortage','Manpower Shortage',m=>`Reported shortage ${m.reported_shortage_total??0}`],
- ['manpower_vacancy','Manpower Vacancy',m=>`Vacancies ${m.vacancies_reported??0}`],
- ['oos_historical','OOS Excel Tracker',m=>`PO references ${m.po_referenced??0}`],
-];
-function HistoricalIfmsSummary({snapshot,globalState}){
- if(snapshot?.status!=='ready'||!Array.isArray(snapshot.rows)||!snapshot.rows.length)return null;
- const states=REPORTING_STATES.filter(s=>!globalState||s.code===globalState);
- const rows=snapshot.rows;
- const format=n=>Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2});
- return <section aria-label="Historical October Excel report" className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm md:p-4">
-  <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
-   <div><h2 className="text-base font-bold text-blue-950">October 2026 — Historical IFMS Excel report</h2>
-    <p className="text-xs text-slate-600">Source snapshot: 28 October 2026. Excel-reported figures only; not verified mobile submissions or live workflow status.</p></div>
-   <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">Historical · read-only</span>
-  </div>
-  <div className="overflow-x-auto rounded-lg border border-slate-200">
-   <table className="w-full min-w-[790px] text-left text-xs">
-    <thead className="bg-slate-100 text-slate-700"><tr><th scope="col" className="sticky left-0 min-w-[150px] bg-slate-100 p-2.5">Excel module</th>
-     {states.map(state=><th key={state.code} scope="col" className="min-w-[105px] p-2.5">{state.code}</th>)}
-     <th scope="col" className="p-2.5 text-right">Reported rows</th></tr></thead>
-    <tbody>{historicalModules.map(([key,title,render])=>{
-     const found=rows.filter(r=>r.module===key);
-     return <tr key={key} className="border-t border-slate-200">
-      <th scope="row" className="sticky left-0 bg-white p-2.5 font-semibold text-slate-800">{title}</th>
-      {states.map(state=>{
-       const record=found.find(r=>r.state===state.code);
-       return <td key={state.code} className="p-2.5 align-top">{record?<div><strong className="font-semibold text-blue-900">{format(record.source_rows)} rows</strong>
-        <div className="mt-0.5 text-[10px] leading-4 text-slate-500">{render(record.metrics||{})}</div></div>:<span className="text-slate-400">—</span>}</td>;
-      })}
-      <td className="p-2.5 text-right font-semibold text-blue-950">{format(found.filter(r=>!globalState||r.state===globalState).reduce((a,r)=>a+r.source_rows,0))}</td>
-     </tr>;
-    })}</tbody>
-   </table>
-  </div>
-  <p className="mt-2 text-[11px] leading-5 text-slate-600">Store rows may repeat, especially CM/PM and OOS. OOS amounts and stages are historical source figures only and do not create active quotations, payments or approvals. This report does not change the live KPI cards above.</p>
- </section>;
-}
+// Excel-reported source activity is shown within its module card and never
+// replaces verified on-site activity KPIs or starts the 12-stage OOS workflow.
+const historyForCard=(snapshot,id,requestedState)=>{
+ const module=({cm:'cmpm',pm:'cmpm',cleaning:'deep_cleaning',technical:'technical_training',soft:'soft_skill_training',thermography:'thermography'})[id];
+ if(!module||snapshot?.status!=='ready')return null;
+ const rows=(snapshot.rows||[]).filter(r=>r.module===module&&(!requestedState||r.state===requestedState));
+ if(!rows.length)return null;
+ const total=key=>rows.reduce((n,r)=>n+Number(r.metrics?.[key]||0),0);
+ const sourceRows=rows.reduce((n,r)=>n+r.source_rows,0);
+ const completed=id==='cm'?total('cm_completed'):id==='pm'?total('pm_completed'):id==='thermography'?total('report_submitted'):total('completed');
+ const pending=id==='cm'?total('cm_unreported'):id==='pm'?total('pm_pending'):id==='thermography'?total('report_pending'):total('pending');
+ return {completed,pending,sourceRows,module};
+};
 
 export default function RetailDashboard() {
   usePageTitle('South Zone – IFMS Operations Summary');
@@ -130,7 +100,16 @@ export default function RetailDashboard() {
     <p className="ifms-data-status" role="status">{inventory.status === 'loading' ? 'Loading reports…' : inventory.status === 'unavailable' ? `Reports unavailable: ${inventory.error}` : 'Showing available reports for the selected period.'}</p>
     {inventory.status==='ready'&&inventory.error&&<p role="alert" className="ifms-note">{inventory.error}</p>}
     <RetailOosDashboard globalState={global}/>
-    {data?.historical_ifms?.status==='ready'&&<HistoricalIfmsSummary snapshot={data.historical_ifms} globalState={global}/>}
+    {month==='2026-10'&&data?.historical_ifms?.status==='ready'&&(()=>{
+      const relevant=(data.historical_ifms.rows||[]).filter(r=>!global||r.state===global);
+      const sourceCount=module=>relevant.filter(r=>r.module===module).reduce((n,r)=>n+r.source_rows,0);
+      return <p className="ifms-note" aria-label="October Excel source navigation">
+       Historical Excel records in their own modules: {' '}
+       <Link to="/reliance-retail/oos">OOS Tracker ({sourceCount('oos_historical').toLocaleString('en-IN')} source rows)</Link>
+       {' · '}<Link to="/reliance-retail/manpower">Manpower Shortage ({sourceCount('shortage').toLocaleString('en-IN')}) / Vacancy ({sourceCount('manpower_vacancy').toLocaleString('en-IN')})</Link>.
+       Reported source activity does not replace verified live KPIs.
+      </p>;
+    })()}
     <div className="ifms-grid">{modules.map(({ id, title, icon: Icon, color, route }, index) => {
       const source=data?.modules[id];
       const rows = selectRows(source?.rows||[], global, local[id] || '');
@@ -140,6 +119,14 @@ export default function RetailDashboard() {
         <div className="ifms-card-header"><div className="ifms-card-heading"><span className="ifms-icon">{createElement(Icon, { size: 21 })}</span><div><h2 id={`ifms-${id}`}>{title}</h2><p>{window ? window.label : 'This Month Till Today'}</p></div></div><StateFilter label={`${title} reporting state`} value={local[id] || ''} global={global} onChange={value => setLocal(previous => ({ ...previous, [id]: value }))}/></div>
         {window && <p className="ifms-window">{window.status} · All applicable stores due by {window.endLabel}</p>}
         <ModuleBody id={id} rows={rows} stores={stores} storeStatus={inventory.status} source={source}/>
+        {month==='2026-10'&&(()=>{
+          const historical=historyForCard(data?.historical_ifms,id,global||local[id]||'');
+          return historical?<p className="ifms-note" aria-label={`${title} October imported source`}>
+            <strong>October Excel reported:</strong> {historical.completed.toLocaleString('en-IN')} completed/submitted,
+            {' '}{historical.pending.toLocaleString('en-IN')} pending; {' '}{historical.sourceRows.toLocaleString('en-IN')} source rows.
+            {' '}<Link to={route}>View October records</Link>
+          </p>:null;
+        })()}
         {!!source?.identity_exceptions&&<p className="ifms-note">{source.identity_exceptions} source records excluded from totals for unresolved store identity or category.</p>}
         <footer className="ifms-card-footer"><span>{global || local[id] ? REPORTING_STATES.find(state => state.code === (global || local[id]))?.label : 'All six reporting states'}</span>{route && canAccessRoute(user, route) && <Link to={route}>View Details <ArrowUpRight size={13}/></Link>}</footer>
       </section>;
