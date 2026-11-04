@@ -256,3 +256,36 @@
 .retail-attendance-workspace>header button[class*="bg-blue-600"]:not(:disabled):hover{
  background-color:#1d4ed8;border-color:#1d4ed8;color:#fff;
 }
+
+/* Retail state-first MIS summary: compact, responsive and reusable in module pages
+   and the main October dashboard. Operational actions and data remain unchanged. */
+.retail-state-performance{min-width:0;overflow:hidden;box-shadow:0 3px 12px rgba(15,45,89,.035)}
+.retail-state-performance .retail-report-panel-heading{padding:13px 16px;background:#f6f9fd}
+.retail-state-performance .retail-report-table{overflow-x:auto;scrollbar-width:thin}
+.retail-state-performance table{border-collapse:collapse;width:100%;min-width:460px;table-layout:auto;font-size:12px;font-variant-numeric:tabular-nums}
+.retail-state-performance th,.retail-state-performance td{padding:10px 12px;text-align:left;border-bottom:1px solid #e9eef5;white-space:nowrap}
+.retail-state-performance th{font-size:11px;letter-spacing:.025em;font-weight:700;background:#f4f7fb;color:#3d5576}
+.retail-state-performance td{color:#19406e;font-weight:600}
+.retail-state-performance tbody th{background:#fff}
+.retail-state-performance tbody tr:hover th,.retail-state-performance tbody tr:hover td{background:#f3f7ff}
+.retail-state-performance tr.retail-state-selected th,.retail-state-performance tr.retail-state-selected td{background:#e9f1ff}
+.retail-state-performance tfoot th,.retail-state-performance tfoot td{background:#e9f0fb;color:#153a68;font-weight:800}
+.retail-state-performance tfoot th{font-size:12px}
+.retail-state-performance .retail-report-link{border:0;background:none;padding:0;color:#204b86;text-decoration:underline;text-underline-offset:3px;font-weight:700;cursor:pointer}
+.retail-state-rate{display:flex;align-items:center;gap:7px;min-width:76px}
+.retail-state-rate strong{min-width:41px;display:inline-block}
+.retail-state-track{height:6px;min-width:42px;max-width:86px;flex:1;background:#e0e9f5;border-radius:8px;overflow:hidden}
+.retail-state-track span{display:block;height:100%;background:#3476c7;border-radius:8px}
+.retail-state-muted{color:#7a8ba0}
+.retail-state-footnote{font-size:11px;line-height:1.5;color:#61738a;padding:10px 13px 12px;margin:0;background:#fbfdff}
+.retail-schedule-admin summary{cursor:pointer;color:#476583;font-size:12px;font-weight:700;list-style:disclosure-closed}
+.retail-schedule-admin[open] summary{list-style:disclosure-open}
+.retail-schedule-admin .retail-report-panel{margin:0;border:0;border-radius:0;box-shadow:none}
+.ifms-card>.retail-state-performance{margin:10px 12px 12px;border:1px solid #e4eaf3;border-radius:10px;flex:1}
+.ifms-card .retail-state-performance .retail-report-panel-heading{padding:9px 10px}
+.ifms-card .retail-state-performance .retail-report-panel-heading h2{font-size:12px}
+.ifms-card .retail-state-performance .retail-report-panel-heading>span{font-size:10px}
+.ifms-card .retail-state-performance table{font-size:11px;min-width:370px}
+.ifms-card .retail-state-performance th,.ifms-card .retail-state-performance td{padding:7px 8px;font-size:11px}
+.ifms-card .retail-state-performance .retail-state-footnote{padding:9px 10px;font-size:10px}
+@media(max-width:700px){.retail-state-performance th,.retail-state-performance td{padding:9px 10px}.retail-state-performance .retail-report-panel-heading>span{font-size:10px}}
