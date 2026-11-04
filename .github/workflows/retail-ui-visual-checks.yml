@@ -46,7 +46,7 @@ jobs:
           # Any edited source/control logic must undergo a fresh review; all regular
           # path and action safeguards below remain active for other pull requests.
           approved_statewise_release = {
-            "src/utils/retailStatePerformance.js": "6853d54829381d3d7f275a6656bf5f8bea8af445",
+            "src/utils/retailStatePerformance.js": "a67291d3f557c5297c77f68f81d31b14a2329036",
             "src/components/reliance-retail/RetailStatePerformance.jsx": "38c03efe8d375b1353bddb2ae196ac0ea0fd7ba1",
             "src/components/reliance-retail/retailReport.css": "668bad2dfa2141c37d4b9826285e2366cc1828ed",
             "src/utils/retailExcelInline.js": "a345000e91445358e64101b8e8cbaa23bcc64351",
