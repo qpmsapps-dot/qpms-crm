@@ -13640,6 +13640,13 @@ export default function FOActivities() {
             <div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="text-sm font-black text-slate-900 dark:text-white">October 2026 · KM evidence review</h3>
+                {canExportOctober ? (
+                  <button type="button" onClick={exportOctoberClaimsPdf} disabled={octoberExportBusy}
+                    className="focus-ring inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 disabled:opacity-60">
+                    <Download className="h-3.5 w-3.5" />
+                    {octoberExportBusy ? "Preparing..." : "October Claims PDF"}
+                  </button>
+                ) : null}
                 <button type="button" onClick={exportOctoberKmExceptions} disabled={octoberKmExportBusy}
                   className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200">
                   <Download className="h-3.5 w-3.5" />
