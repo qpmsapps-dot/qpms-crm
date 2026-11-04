@@ -70,7 +70,7 @@ test('MTD, Daily, historical month, state filter and export use the same selecte
   await page.screenshot({path:testInfo.outputPath('monthly.png'),fullPage:true});
   await page.getByRole('tab',{name:'Daily View'}).click();
   await expect(page.getByText('Actual Man-days',{exact:true})).toBeVisible();
-  await expect(page.getByText('Configured AOP Count',{exact:true})).toBeVisible();
+  await expect(page.getByText('Configured AOP',{exact:true})).toBeVisible();
   await page.screenshot({path:testInfo.outputPath('daily.png'),fullPage:true});
   await page.getByLabel('State filter').selectOption('TN');
   await expect(page.getByRole('button',{name:'TN',exact:true})).toBeVisible();
@@ -98,13 +98,13 @@ test('loading, empty and error states are readable; invalid preview cannot be co
 test('server failure does not show fabricated KPIs',async({page})=>{
   await seed(page,{fail:true});
   await expect(page.getByRole('alert').filter({hasText:'Synthetic service unavailable'})).toBeVisible();
-  await expect(page.getByText('Configured AOP Count',{exact:true})).toHaveCount(0);
+  await expect(page.getByText('Configured AOP',{exact:true})).toHaveCount(0);
   await expect(page.getByRole('button',{name:'Retry',exact:true})).toBeVisible();
 });
 test('responsive layout keeps KPIs readable and wide tables inside their panels',async({page},testInfo)=>{
   await page.setViewportSize({width:390,height:844});
   await seed(page);
-  await expect(page.getByText('Configured AOP Count',{exact:true})).toBeVisible();
+  await expect(page.getByText('Configured AOP',{exact:true})).toBeVisible();
   await expect(page.locator('.rr-attendance-kpi')).toHaveCount(5);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('mobile.png'),fullPage:true});
