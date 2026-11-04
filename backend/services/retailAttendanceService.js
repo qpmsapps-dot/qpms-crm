@@ -5,6 +5,7 @@ import { acquireAttendancePreviewSlot, parseAttendanceWorkbookStreaming } from '
 import {compactPreviewSummary,encodeAttendanceSource,decodeAttendanceSource,previewDatabase} from './retailAttendancePreviewAudit.js';
 import { retailAccess, assertRetailAccess } from './relianceRetailManagementService.js';
 import { ATTENDANCE_MAX_FILE_BYTES, attendanceClass, attendanceCredit, validDate, stateLabel, reportingState, STATE_OPTIONS, storeKey, summarizeAttendance, indiaToday } from '../shared/retailAttendance.js';
+import {retailAttendanceTrend} from '../shared/retailAttendanceTrend.js';
 import {retailMisRole,assertRetailMis} from '../shared/retailMisAccess.js';
 
 export const ATTENDANCE_COLUMNS = Object.freeze({ employee_code: 'EP No', employee_name: 'EP Name', store_code: 'Site Code', attendance_date: 'Att. Date', original_status: 'Att. Status', class: 'Class' });
@@ -218,9 +219,19 @@ export async function retailAttendanceReport(client, profile, input = {}) {
   }
   const from = input.view === 'daily' ? cutoff : `${cutoff.slice(0, 7)}-01`;
   const source = await data(client.rpc('rpc_retail_attendance_report_source', { p_store_ids: selected.map(s => s.id), p_from: from, p_to: cutoff }));
-  const summary = summarizeAttendance({ stores: selected.filter(s => s.status === 'Active' || source.attendance.some(r => r.retail_store_id === s.id) || source.aop.some(r => r.retail_store_id === s.id)),
+  const visibleStores=selected.filter(s => s.status === 'Active' || source.attendance.some(r => r.retail_store_id === s.id) || source.aop.some(r => r.retail_store_id === s.id));
+  const summary = summarizeAttendance({ stores: visibleStores,
     attendance: source.attendance, aop: source.aop, cutoff, view: input.view || 'mtd' });
-  return { ...summary, employee_counts: source.employee_counts || null, available_states: states, latest_imported_date: source.latest_date, can_upload: scope.admin,
+  // Daily summary retains its original one-day employee-count scope. A separate
+  // authorized month read supplies the trend without changing that daily contract.
+  const trendSource=input.view==='daily'
+    ? await data(client.rpc('rpc_retail_attendance_report_source', {
+      p_store_ids: selected.map(s=>s.id),p_from:`${cutoff.slice(0,7)}-01`,p_to:cutoff
+     }))
+    : source;
+  const trend=retailAttendanceTrend({stores:visibleStores,attendance:trendSource.attendance,aop:trendSource.aop,cutoff});
+  return { ...summary, trend,trend_latest_imported_date:trendSource.latest_date,
+    employee_counts: source.employee_counts || null, available_states: states, latest_imported_date: source.latest_date, can_upload: scope.admin,
     aop_mapping_blocked: 'Budget workbook has conflicting proposed/current/WO and regional sources. Approved sheet, component totals and effective dates must be confirmed before AOP import.' };
 }
 
