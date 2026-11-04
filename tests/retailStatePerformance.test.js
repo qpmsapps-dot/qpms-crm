@@ -61,3 +61,13 @@ test('Karnataka October Excel records match KN filter and remain scoped by store
  assert.equal(excelCleaningRows(source,{from:'2026-10-01',to:'2026-10-31',state:'KL'}).schedules.length,0);
  assert.equal(excelOperationsRows(source,'CM',{state:'KN',store:'store-1'}).length,1);
 });
+
+test('Excel Completed without completion date stays in detail, but date remains unknown',()=>{
+ const row={id:'x',source_row:51,reporting_state:'TN',store_code:'T001',
+  record_date:'2026-10-15',status:'Completed',data:{scheduled_date:'2026-10-15',cleaning_status:'Completed'}};
+ const source=excelCleaningRows([row],{from:'2026-10-01',to:'2026-10-31'});
+ assert.equal(source.schedules.length,1);
+ assert.equal(source.submissions.length,1);
+ assert.equal(source.submissions[0].deep_cleaning_date,null);
+ assert.equal(source.submissions[0].source_kind,'IFMS_EXCEL');
+});
