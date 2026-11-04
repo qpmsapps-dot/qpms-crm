@@ -1,0 +1,13 @@
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {MemoryRouter} from 'react-router-dom';
+import {AuthContext} from '../../../src/context/auth-context.js';
+import {configureAuthSession} from '../../../src/services/authSession.js';
+import FOActivities from '../../../src/pages/FOActivities.jsx';
+import '../../../src/index.css';
+const role=new URLSearchParams(location.search).get('role')||'QPMSADMIN';
+const session={access_token:'synthetic-local-only-token',expires_at:Math.floor(Date.now()/1000)+3600,user:{id:'synthetic-user'}};
+configureAuthSession({}).setSession(session);
+sessionStorage.setItem('qpms-crm-backend-token',session.access_token);
+const user={id:'synthetic-user',role,rawRole:role,name:'Controlled test actor',is_active:true,status:'Active',webAccessEnabled:true};
+createRoot(document.getElementById('root')).render(<MemoryRouter><AuthContext.Provider value={{user,session,authStatus:'ready',authError:''}}><FOActivities/></AuthContext.Provider></MemoryRouter>);

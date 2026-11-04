@@ -24,23 +24,25 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: backend/package-lock.json
-      - name: Enforce exact hotfix scope
+      - name: Preserve mounted Retail JWT authorization
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           python3 - <<'PY'
-          import os, subprocess, sys
-          base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
-          paths = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
-          allowed = {"backend/server.js", "backend/tests/retailMisMountedAuth.test.js", ".github/workflows/retail-mis-mounted-auth.yml"}
-          if set(paths) - allowed: sys.exit("Unexpected hotfix files: " + str(set(paths) - allowed))
-          old = subprocess.check_output(["git","show",f"{base}:backend/server.js"],text=True)
-          new = open("backend/server.js",encoding="utf-8").read()
-          before = "if (!retailMisApiAllowed(profile,request.path)) {"
-          after = "if (!retailMisApiAllowed(profile,`${request.baseUrl || ''}${request.path}`)) {"
-          if old.count(before) != 1 or old.replace(before,after,1) != new:
-            sys.exit("server.js differs beyond the approved mounted-path correction")
-          print("PASS: exact mounted-path correction; other server logic unchanged")
+          import os, re, subprocess, sys
+          base = os.environ.get("BASE_SHA") or subprocess.check_output(["git", "merge-base", "HEAD", "origin/main"], text=True).strip()
+          old = subprocess.check_output(["git", "show", f"{base}:backend/server.js"], text=True)
+          new = open("backend/server.js", encoding="utf-8").read()
+          # The one-time mounted-path hotfix is already in main. Subsequent
+          # server releases must preserve that middleware, not replay the hotfix.
+          def jwt(source):
+            found = re.search(r"^async function requireSupabaseJwt\([^)]*\)\s*\{.*?^\}", source, re.M | re.S)
+            if not found: sys.exit("JWT middleware boundary missing")
+            return found.group(0)
+          if jwt(old) != jwt(new): sys.exit("Retail JWT middleware changed; explicit security review required")
+          required = "if (!retailMisApiAllowed(profile,`${request.baseUrl || ''}${request.path}`)) {"
+          if new.count(required) != 1: sys.exit("Mounted Retail scope gate missing or ambiguous")
+          print("PASS: unchanged JWT middleware and mounted Retail scope gate")
           PY
       - name: Install backend dependencies
         working-directory: backend
