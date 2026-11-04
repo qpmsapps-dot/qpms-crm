@@ -1,0 +1,73 @@
+/* Reliance Retail Attendance only. Existing QPMS shell/sidebar/branding untouched. */
+.retail-attendance-workspace.rr-attendance-page{padding:16px 18px;gap:13px;background:#fff;border-color:#e4eaf5}
+.rr-attendance-page :is(button,select,input):focus-visible{outline:3px solid #94bafd;outline-offset:2px}
+.rr-attendance-page-header{display:flex;justify-content:space-between;gap:15px;flex-wrap:wrap;align-items:center}
+.rr-attendance-page-title h1{font-size:22px;font-weight:780;color:#102c59;letter-spacing:-.025em;line-height:1.25}
+.rr-attendance-page-title p{font-size:12px;color:#61738e;margin:4px 0 0}
+.rr-attendance-page-controls{display:flex;align-items:center;flex-wrap:wrap;gap:9px}
+.rr-attendance-page-controls .rr-attendance-control{display:inline-flex;align-items:center;gap:8px;min-height:37px;background:#fff;border:1px solid #d5e1f2;padding:7px 10px;border-radius:9px;color:#173766;font-size:12px;font-weight:650}
+.rr-attendance-page-controls .rr-attendance-control :is(select,input){border:0;background:transparent;color:inherit;font-weight:650;padding:0;max-width:155px;min-width:0}
+.rr-attendance-page-controls .rr-attendance-upload{background:#1558bf;color:#fff;border:1px solid #1558bf}
+.rr-attendance-page-controls .rr-attendance-upload:hover{background:#104996}
+.rr-attendance-page-controls .rr-attendance-filter-title{font-size:10px;color:#667e9d;text-transform:uppercase;letter-spacing:.03em}
+.rr-attendance-trend,.rr-attendance-state{border:1px solid #dbe5f3;border-radius:13px;min-width:0;overflow:hidden;background:#fff;box-shadow:0 3px 13px rgba(17,47,86,.04)}
+.rr-attendance-section-header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;border-bottom:1px solid #e5ecf7;min-height:48px;flex-wrap:wrap}
+.rr-attendance-trend>.rr-attendance-section-header{background:linear-gradient(112deg,#124b9a,#3478d2);color:#fff;border-bottom:0}
+.rr-attendance-heading{display:flex;align-items:center;gap:9px;min-width:0}
+.rr-attendance-heading h2{font-size:14px;font-weight:750;letter-spacing:-.005em;line-height:1.35;margin:0}
+.rr-attendance-heading-suffix{font-size:11px;color:#dce8ff}
+.rr-attendance-segments{display:flex;align-items:center;gap:2px;border:1px solid #cbd9ef;padding:2px;border-radius:8px;background:#f6f9ff;flex:none}
+.rr-attendance-trend .rr-attendance-segments{background:rgba(255,255,255,.18);border-color:rgba(255,255,255,.38)}
+.rr-attendance-segments button{font-size:11px!important;font-weight:650!important;padding:6px 10px!important;min-height:0!important;color:#42638c!important;background:transparent!important;border:0!important;border-radius:6px!important}
+.rr-attendance-trend .rr-attendance-segments button{color:#eaf2ff!important}
+.rr-attendance-segments button[aria-pressed=true]{color:#1552ac!important;background:#fff!important;box-shadow:0 1px 5px #14376025}
+.rr-attendance-chart-scroll{width:100%;overflow-x:auto;padding:13px 10px 0;scrollbar-width:thin}
+.rr-attendance-chart-area{min-width:610px;height:245px;width:100%}
+.rr-attendance-trend-footer{padding:7px 15px 9px;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;border-top:1px solid #edf2fa;font-size:10px;color:#70829d}
+.rr-attendance-trend-last{font-size:10px;padding:4px 8px;border-radius:6px;background:#edf3fc;color:#37527c}
+.rr-attendance-chart-note{font-size:10.5px;color:#7b6b48;padding:0 14px 10px;line-height:1.45}
+.rr-attendance-empty{display:grid;place-items:center;height:100%;color:#6882a7;font-size:12px}
+.rr-attendance-kpi-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;min-width:0}
+.rr-attendance-kpi{border:1px solid #dce7f5;border-radius:11px;min-width:0;padding:12px 13px 11px;background:#f6faff;display:flex;flex-direction:column;gap:3px}
+.rr-attendance-kpi-aop{background:#f3f8fe}.rr-attendance-kpi-actual{background:#f1fbf7;border-color:#d7eee5}.rr-attendance-kpi-rate{background:#fffbf2;border-color:#f5ead2}.rr-attendance-kpi-hk{background:#f4f8ff}.rr-attendance-kpi-mepc{background:#f8f5ff}
+.rr-attendance-kpi-label{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:650;color:#345175;min-height:26px}
+.rr-attendance-kpi-icon{display:grid;place-items:center;width:25px;height:25px;color:#1a61c6;background:#e5efff;border-radius:7px;flex:none}
+.rr-attendance-kpi>strong{font-size:clamp(19px,2vw,28px);font-weight:790;letter-spacing:-.035em;line-height:1.12;color:#123361;font-variant-numeric:tabular-nums;margin:3px 0 1px}
+.rr-attendance-kpi small{font-size:10.5px;line-height:1.35;color:#6981a1;overflow-wrap:anywhere}
+.rr-attendance-state>.rr-attendance-section-header{background:#f9fbfe}
+.rr-attendance-table-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rr-attendance-export{display:inline-flex;align-items:center;gap:5px;border:1px solid #d5e2f4;border-radius:7px;background:#fff;padding:7px 10px;font-size:11px;color:#254777;font-weight:650}
+.rr-attendance-table-scroll{overflow-x:auto;max-width:100%;scrollbar-width:thin}
+.rr-attendance-state-table{width:100%;border-collapse:collapse;table-layout:auto;font-size:12px;min-width:590px;font-variant-numeric:tabular-nums}
+.rr-attendance-state-table thead th{background:#eaf2fe;color:#284772;font-size:10px;text-transform:uppercase;letter-spacing:.025em;font-weight:750;line-height:1.35;padding:10px 11px;text-align:right;white-space:nowrap;border-bottom:1px solid #d9e5f6}
+.rr-attendance-state-table th:first-child{text-align:left;min-width:90px}
+.rr-attendance-state-table tbody td{padding:7px 11px;border-bottom:1px solid #e9eef7;text-align:right;color:#233e67;font-size:11.5px;white-space:nowrap}
+.rr-attendance-state-table tbody tr:hover:not(.rr-attendance-total){background:#f5f9ff}
+.rr-attendance-state-table tbody tr.rr-attendance-total{background:#eaf2fd}
+.rr-attendance-state-table tbody tr.rr-attendance-total td{font-weight:800;color:#132e59;border-bottom:0}
+.rr-attendance-state-table .rr-attendance-state-col{text-align:left;font-weight:720}
+.rr-attendance-state-link{color:#1954a7!important;padding:3px 8px!important;border-radius:6px!important;border:1px solid #d4e2f6!important;background:#f3f8ff!important;text-decoration:none!important;font-size:11px!important;font-weight:750!important;min-width:47px}
+.rr-attendance-state-link:hover{background:#e5effe!important}
+.rr-attendance-badge{display:inline-flex;align-items:center;justify-content:center;padding:5px 9px;border-radius:7px;min-width:68px;font-size:11px;font-weight:750}
+.rr-attendance-page .tone-good{background:#dcfce7;color:#127a40!important}
+.rr-attendance-page .tone-watch{background:#fff0c3;color:#995f00!important}
+.rr-attendance-page .tone-critical{background:#ffe0e0;color:#be2930!important}
+.rr-attendance-page .tone-unavailable{background:#eff3f8;color:#7488a5!important}
+.rr-attendance-table-footnote{padding:9px 12px;font-size:10.5px;color:#7186a0;background:#fcfdff;margin:0}
+.rr-attendance-caution{border:1px solid #f2ddb5;background:#fffbf3;color:#8b632a;border-radius:9px;font-size:11px;padding:9px 12px}
+.rr-attendance-caution>summary{cursor:pointer;font-weight:700}
+.rr-attendance-caution p{margin:7px 0 0;line-height:1.6}
+.rr-attendance-technical{border:1px solid #e4eaf4;border-radius:10px;background:#fafcff;padding:9px 12px;color:#627895;font-size:11px}
+.rr-attendance-technical summary{cursor:pointer;font-weight:650}
+@media(max-width:1150px){.rr-attendance-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:760px){.retail-attendance-workspace.rr-attendance-page{padding:12px}
+ .rr-attendance-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .rr-attendance-page-title h1{font-size:18px}
+ .rr-attendance-page-controls{gap:7px}
+ .rr-attendance-section-header{padding:9px 10px}
+ .rr-attendance-chart-area{min-width:580px}
+ .rr-attendance-kpi{padding:10px}
+ .rr-attendance-kpi>strong{font-size:21px}
+}
+@media(max-width:420px){.rr-attendance-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(prefers-reduced-motion:reduce){.rr-attendance-page *{scroll-behavior:auto!important}}

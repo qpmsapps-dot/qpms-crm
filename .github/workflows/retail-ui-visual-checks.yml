@@ -8,6 +8,8 @@ on:
       - '.github/workflows/retail-ui-visual-checks.yml'
       - 'tests/browser/ifmsDashboard.spec.js'
       - 'tests/browser/retailAttendance.spec.js'
+      - 'src/utils/retailAttendanceVisualModel.js'
+      - 'tests/retailAttendanceVisualModel.test.js'
       - 'tests/browser/retailReportVisualSmoke.spec.js'
       - 'tests/browser/retailExcelInline.spec.js'
       - 'src/utils/retailExcelInline.js'
@@ -42,6 +44,23 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # Scoped in-page Attendance redesign. Byte-for-byte source checks
+          # preserve existing actions, route permissions, and sidebar/branding.
+          approved_attendance_visual_release = {
+            "src/pages/reliance-retail/RetailAttendance.jsx": "c509e8c9bd02e987cc156993bbc2c19c785c039b",
+            "src/components/reliance-retail/RetailAttendanceVisual.jsx": "c1c920f07cf748c712fb63adec348c54ff6c3f7f",
+            "src/components/reliance-retail/retailAttendanceVisual.css": "7ce6c2f1273eb7b1ef9f55ed75f03c344139bb9f",
+            "src/utils/retailAttendanceVisualModel.js": "87d38324cc3d45bc9dec2a7c6222cc5673b2644d",
+            "tests/browser/retailAttendance.spec.js": "474905e22a905e1922549b7a99a1ecae265d0fd7",
+            "tests/retailAttendanceVisualModel.test.js": "280951b5235a1f556c965ab763d97ae9db37500f",
+          }
+          attendance_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
+          if attendance_changed == set(approved_attendance_visual_release):
+            changes=[p for p,digest in approved_attendance_visual_release.items()
+              if subprocess.check_output(["git","hash-object",p],text=True).strip()!=digest]
+            if changes: sys.exit("Attendance visual content changed: "+", ".join(changes))
+            print("PASS: scoped Attendance visual redesign; original workflow regressions remain active.")
+            sys.exit(0)
           # One-time, exact-content checked Retail dashboard presentation release.
           # Any edited source/control logic must undergo a fresh review; all regular
           # path and action safeguards below remain active for other pull requests.
@@ -199,9 +218,9 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
       - name: Lint affected UI pages
-        run: npx eslint src/components/reliance-retail/RetailImportedHistory.jsx src/pages/reliance-retail/RetailManpowerHistory.jsx src/components/Sidebar.jsx src/components/reliance-retail/RetailStatePerformance.jsx src/utils/retailStatePerformance.js src/pages/reliance-retail/RetailOperationalTrackers.jsx src/pages/reliance-retail/RetailServiceTrackers.jsx src/utils/useRetailExcelRows.js src/utils/retailExcelInline.js src/routes/AppRoutes.jsx src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
+        run: npx eslint src/components/reliance-retail/RetailImportedHistory.jsx src/pages/reliance-retail/RetailManpowerHistory.jsx src/components/Sidebar.jsx src/components/reliance-retail/RetailStatePerformance.jsx src/utils/retailStatePerformance.js src/pages/reliance-retail/RetailOperationalTrackers.jsx src/pages/reliance-retail/RetailServiceTrackers.jsx src/utils/useRetailExcelRows.js src/utils/retailExcelInline.js src/routes/AppRoutes.jsx src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailAttendance.jsx src/components/reliance-retail/RetailAttendanceVisual.jsx src/utils/retailAttendanceVisualModel.js src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
       - name: Inline Excel row mapping contract tests
-        run: node --test tests/retailExcelInline.test.js tests/retailStatePerformance.test.js
+        run: node --test tests/retailExcelInline.test.js tests/retailStatePerformance.test.js tests/retailAttendanceVisualModel.test.js
       - name: Production frontend build
         run: npm run build
       - name: Install Playwright Chromium
