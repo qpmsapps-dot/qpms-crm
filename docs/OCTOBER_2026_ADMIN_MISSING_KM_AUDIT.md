@@ -1,31 +1,35 @@
-# October 2026 KM Admin Approval — GitHub + Production DB Audit
-Date: 2026-11-04
-Scope: PR #78, Operations Command Center, production Supabase.
+# October 2026 Admin decisions and claims PDF release
 
-## Confirmed production database
-- public.fo_missing_km_reviews: 73 October attendance-linked reviews; 63 clarification_required, 10 pending, **0 approved**.
-- Two approved reviews (36.00 KM) exist across the full table but belong to August and September, **not October**.
-- public.fo_missing_km_admin_decisions exists, RLS enabled, 0 decisions. Service role permissions reduced to SELECT + INSERT; no direct authenticated/anon privileges.
-- public.fo_oct2026_claim_adjustments exists and remains a separate provisional reporting mechanism.
-- public.fo_october_km_recoveries, public.fo_october_km_recovery_events, rpc_submit_fo_october_recovery_v1 and rpc_decide_fo_october_recovery_v1 exist.
-- No payable KM or petrol records were updated during this work.
+## Scope and behavior
 
-## GitHub changes in PR #78
-- backend/routes/foMissingKmAdminReviewRoutes.js: authenticated Admin-only review list and insert-only decisions.
-- backend/server.js: route mounted at /api/fo/km.
-- src/pages/FOActivities.jsx: Admin Missing KM Approvals panel within October KM evidence review.
-- backend/sql/20261104_october_missing_km_admin_decisions.sql: idempotent table setup and privilege migration.
-- backend/routes/foOctoberClaimsExportRoutes.js: provisional October PDF export (not yet linked to approval decisions).
+This release adds an active, authenticated Admin-only October missing-KM review screen and October claims PDF to FO Activities. It records reconciliation decisions only. It never posts approved additional KM to payable KM, petrol, travel legs, GPS logs, settlement receipts, or claims.
 
-## Important unresolved items / release blockers
-1. Dashboard October KM evidence review flags 906 attendances; fo_missing_km_reviews covers only 73 October cases. These are different datasets. Never label 906 as approved or assume 5,564.19 KM is payable.
-2. Admin decisions are **for reconciliation** only. They are not posted to canonical payable KM, do not change petrol, and are not included in the PDF claim export yet.
-3. To post approved KM, implement a dedicated idempotent, atomic DB RPC with row locks, saved-travel-leg overlap detection, mode/rate verification, financial gate checks, immutable audit event and re-export reconciliation. Do not globally disable financial safeguards.
-4. Verify proposed approved KM does not overlap ordinary eligible_km, prior increments, final-leg recovery or other Admin decisions.
-5. Test authenticated Admin vs non-Admin (403), duplicate decision (409), malformed payload, zero/negative KM, prior-month records, 73-case pagination, modal rendering and PDF totals.
-6. Run frontend build, backend syntax checks and scoped CI; current PR has a failing Retail MIS exact-scope workflow and must not be merged without resolution or documented workflow scoping.
-7. Confirm the October evidence review and approval queue can be reconciled using attendance_id; do not auto-create review rows from GPS gaps.
-8. Verify business/profile joins and monthly export against the original QPMS report template. The PDF is provisional, not an approved reimbursement statement.
+The Admin dialog is owned by FOActivities rather than the child officer-details component. It shows employee/date, existing payable KM, suggested KM, original review status, GPS/route/checkout evidence and any recorded decision. Blank included-distance input is rejected; successful decisions refresh the list and explicitly report that payable KM and petrol are unchanged. Duplicate decisions return a conflict.
 
-## Current status
-DB ledger and UI/API changes are staged in PR #78. No PR merge, no production backend deployment, no automatic payable KM updates.
+GET `/api/fo/km/october-missing-km/reviews` reads the complete fixed October period using stable bounded pagination. POST `/api/fo/km/october-missing-km/reviews/:id/decision` uses the existing verified JWT/profile authorization. UUIDs, decimal precision, bounds, evidence and justification are validated, terminal original reviews are blocked, and the actor comes only from authenticated request context.
+
+GET `/api/fo/km/october-2026.pdf` independently reconciles each attendance ID against the installed one-row-per-attendance reporting view. Aggregation uses exact hundredths, deterministic pages and explicit failure at the safety limit. Ambiguous profile/adjustment mappings and duplicated attendance identities fail closed. TN business groups remain separate. Rejected adjustments are excluded; provisional proposals and Admin-approved-but-unposted KM are separate from existing payable/petrol. Decision appendices show verified actor IDs, dates, evidence and justification. Header/landscape report branding is retained.
+
+## Database release
+
+The original ledger and reporting view are already installed. Do not rerun their installation scripts. The additive `backend/sql/20261104_october_missing_km_release_hardening.sql` grants missing report SELECT permission to service_role and installs an idempotent ledger validation trigger/index. It checks October/source consistency, current review status and evidence bounds. RLS and append-only ledger privileges remain enabled. It contains no financial DML.
+
+Apply only after the disposable PostgreSQL gate passes. Compare the installed definitions/ACLs and before/after October financial row fingerprint during release. Never create a real production decision just for acceptance testing.
+
+## Validation evidence and known baseline failures
+
+- Dedicated October HTTP/data/PDF tests exercise authentication, authorization, validation, duplicate prevention, deterministic full pagination, money reconciliation, no financial posting and opening a multi-page PDF.
+- Disposable PostgreSQL tests exercise actual grants/RLS, database validation, idempotent installation, concurrent duplicate decisions and preservation of source attendance values.
+- Four controlled browser tests mount the actual FOActivities component: dialog/evidence rendering, blank input, successful decision/refresh, duplicate errors and non-Admin controls.
+- Production frontend build and scoped new-backend lint are required. The existing FOActivities file has four inherited unused-declaration lint errors; comparison against unchanged main verifies no new lint findings.
+- The earlier CI job reported 31 broad backend failures despite a green conclusion because continue-on-error was enabled. That setting is removed. Original PR and unchanged main each reproduced 19 identical failures locally; environment-dependent/fixture failures differ on Linux CI. No unrelated module was changed to conceal those failures.
+- The full-suite comparison job runs complete unchanged-base and candidate suites in the same environment, publishes both TAP files, reports inherited failures explicitly, and fails on new failures. A passing comparison is not a full backend regression pass.
+- The Retail MIS one-time exact-hotfix check expected a patch already installed in main. It is replaced with an unchanged-JWT-middleware and mounted-path gate check, while all mounted Retail authorization tests remain mandatory. No Retail application functionality was changed.
+
+## Release and live verification
+
+Merge only after mandatory targeted, PostgreSQL, build, browser, KM and authorization checks pass and the baseline comparison adds no failures. Both production Railway services must report the merged commit; backend readiness, public frontend assets, protected route denials and deployment logs must be checked. Financial row fingerprint and decision count must match preflight unless an independently explained external change occurs.
+
+Authenticated Super Admin browser acceptance is PENDING when no approved session is available. The business approver explicitly authorized proceeding with merge/deployment in that situation. Do not bypass authentication or equate controlled browser fixtures with live authenticated acceptance.
+
+Owner acceptance: sign in at the production URL, open Operations > FO Activities, click October KM Review, then verify Admin Missing KM Approvals and October Claims PDF. The PDF is also reachable through October Export. Open the approval list and inspect evidence without recording a real decision just for testing. Export TN / Reliance Retail and TN / Standalone separately; verify period, original payable/petrol and clearly unposted proposals. Actual production URLs, merged/deployed SHAs, CI results and financial reconciliation are reported in the final handoff after deployment.

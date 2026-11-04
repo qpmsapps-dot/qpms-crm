@@ -8810,49 +8810,6 @@ function FieldOfficerDetailsView({
           </div>
         </div>
       ) : null}
-      {missingKmAdminOpen && canExportOctober ? (
-        <div className="fixed inset-0 z-[1500] grid place-items-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-label="October missing KM Admin approvals">
-          <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-xl bg-white p-5 shadow-xl">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-lg font-bold">October Missing KM — Admin Review</h3>
-              <button type="button" onClick={() => {setMissingKmAdminOpen(false);setMissingKmAdminSelected(null);}} className="rounded border px-3 py-1">Close</button>
-            </div>
-            <p className="my-2 text-sm text-slate-600">Decisions are recorded for reconciliation only. They do not change payable KM or petrol.</p>
-            {missingKmAdminError ? <p role="alert" className="my-2 text-sm text-red-700">{missingKmAdminError}</p> : null}
-            {missingKmAdminBusy ? <p className="text-sm">Loading / saving...</p> : null}
-            {missingKmAdminSelected ? (
-              <div className="space-y-3 rounded-lg border p-4">
-                <h4 className="font-bold">{missingKmAdminSelected.employee_code} — {missingKmAdminSelected.attendance?.attendance_date}</h4>
-                <p className="text-sm">Suggested: {missingKmAdminSelected.suggested_missing_km ?? "Unknown"} KM; existing payable: {missingKmAdminSelected.attendance?.eligible_km ?? "Unknown"} KM. Verify the included distance before approval.</p>
-                <label className="block text-sm">Decision
-                  <select className="block w-full rounded border p-2" value={missingKmAdminForm.decision} onChange={e=>setMissingKmAdminForm(v=>({...v,decision:e.target.value}))}>
-                    <option value="approved_for_reconciliation">Approve for reconciliation</option><option value="rejected">Reject</option>
-                  </select>
-                </label>
-                {missingKmAdminForm.decision==="approved_for_reconciliation" ? (
-                  <>
-                    <label className="block text-sm">Additional unpaid KM <input type="number" min="0.01" step="0.01" className="block w-full rounded border p-2" value={missingKmAdminForm.approved_additional_km} onChange={e=>setMissingKmAdminForm(v=>({...v,approved_additional_km:e.target.value}))}/></label>
-                    <label className="block text-sm">KM already included in existing payable <input type="number" min="0" step="0.01" className="block w-full rounded border p-2" value={missingKmAdminForm.verified_already_included_km} onChange={e=>setMissingKmAdminForm(v=>({...v,verified_already_included_km:e.target.value}))}/></label>
-                  </>
-                ) : null}
-                <label className="block text-sm">Evidence reference <input className="block w-full rounded border p-2" value={missingKmAdminForm.evidence_reference} onChange={e=>setMissingKmAdminForm(v=>({...v,evidence_reference:e.target.value}))}/></label>
-                <label className="block text-sm">Justification (at least 20 characters) <textarea className="block w-full rounded border p-2" rows={3} value={missingKmAdminForm.justification} onChange={e=>setMissingKmAdminForm(v=>({...v,justification:e.target.value}))}/></label>
-                <div className="flex gap-2"><button type="button" disabled={missingKmAdminBusy} onClick={submitMissingKmAdminDecision} className="rounded bg-blue-800 px-4 py-2 font-bold text-white">Record decision</button><button type="button" onClick={()=>setMissingKmAdminSelected(null)} className="rounded border px-4 py-2">Back</button></div>
-              </div>
-            ) : (
-              <div className="max-h-[55vh] overflow-auto">
-                <table className="w-full text-left text-xs"><thead><tr><th>Employee</th><th>Date</th><th>Status</th><th>Suggested KM</th><th>Decision</th></tr></thead>
-                  <tbody>{missingKmAdminRows.map(r=><tr key={r.id} className="border-t">
-                    <td className="p-2">{r.employee_code}</td><td>{r.attendance?.attendance_date}</td><td>{r.status}</td><td>{r.suggested_missing_km ?? "—"}</td>
-                    <td>{r.admin_decision ? <span>{r.admin_decision.decision}</span> : <button type="button" onClick={()=>{setMissingKmAdminSelected(r);setMissingKmAdminForm({decision:"approved_for_reconciliation",approved_additional_km:"",verified_already_included_km:"",justification:"",evidence_reference:""});}} className="rounded border border-blue-300 px-2 py-1 text-blue-800">Review</button>}</td>
-                  </tr>)}</tbody>
-                </table>
-                {!missingKmAdminRows.length && !missingKmAdminBusy ? <p className="p-3">No October missing KM review records.</p> : null}
-              </div>
-            )}
-          </div>
-        </div>
-      ) : null}
       {manualMissingKmReview ? (
         <div className="fixed inset-0 z-[1300] grid place-items-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="manual-missing-km-title">
           <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white shadow-2xl">
@@ -11558,10 +11515,11 @@ export default function FOActivities() {
   const [missingKmAdminRows, setMissingKmAdminRows] = useState([]);
   const [missingKmAdminBusy, setMissingKmAdminBusy] = useState(false);
   const [missingKmAdminError, setMissingKmAdminError] = useState("");
+  const [missingKmAdminSuccess, setMissingKmAdminSuccess] = useState("");
   const [missingKmAdminSelected, setMissingKmAdminSelected] = useState(null);
   const [missingKmAdminForm, setMissingKmAdminForm] = useState({ decision:"approved_for_reconciliation", approved_additional_km:"", verified_already_included_km:"", justification:"", evidence_reference:"" });
   async function openMissingKmAdminReview() {
-    setMissingKmAdminOpen(true); setMissingKmAdminBusy(true); setMissingKmAdminError("");
+    setMissingKmAdminOpen(true); setMissingKmAdminBusy(true); setMissingKmAdminError(""); setMissingKmAdminRows([]);
     try {
       const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/km/october-missing-km/reviews`);
       const data = await response.json();
@@ -11572,8 +11530,12 @@ export default function FOActivities() {
   }
   async function submitMissingKmAdminDecision() {
     if (!missingKmAdminSelected || missingKmAdminBusy) return;
-    setMissingKmAdminBusy(true); setMissingKmAdminError("");
+    setMissingKmAdminBusy(true); setMissingKmAdminError(""); setMissingKmAdminSuccess("");
     try {
+      if (missingKmAdminForm.decision === "approved_for_reconciliation" &&
+          (!missingKmAdminForm.approved_additional_km.trim() || !missingKmAdminForm.verified_already_included_km.trim())) {
+        throw new Error("Enter additional unpaid KM and explicitly verified included KM (enter 0 when none).");
+      }
       const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/km/october-missing-km/reviews/${missingKmAdminSelected.id}/decision`, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
@@ -11585,6 +11547,7 @@ export default function FOActivities() {
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.message || "Decision could not be recorded");
       setMissingKmAdminSelected(null);
+      setMissingKmAdminSuccess("Decision recorded for reconciliation. Payable KM and petrol were not changed.");
       await openMissingKmAdminReview();
     } catch (error) { setMissingKmAdminError(error.message); setMissingKmAdminBusy(false); }
   }
@@ -11616,7 +11579,7 @@ export default function FOActivities() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `QPMS_Oct2026_${selectedState || "All_States"}_${business?.trim().replace(/\\s+/g,"_") || "All_Businesses"}.pdf`;
+      link.download = `QPMS_Oct2026_${selectedState || "All_States"}_${business?.trim().replace(/\s+/g,"_") || "All_Businesses"}.pdf`;
       document.body.appendChild(link); link.click(); link.remove();
       URL.revokeObjectURL(url);
     } catch (error) { window.alert(error.message || "October export failed"); }
@@ -13502,6 +13465,50 @@ export default function FOActivities() {
             ) : null}
         </div>
       </div>
+      {missingKmAdminOpen && canExportOctober ? (
+        <div className="fixed inset-0 z-[1500] grid place-items-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-label="October missing KM Admin approvals">
+          <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-xl bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-lg font-bold">October Missing KM — Admin Review</h3>
+              <button type="button" onClick={() => {setMissingKmAdminOpen(false);setMissingKmAdminSelected(null);}} className="rounded border px-3 py-1">Close</button>
+            </div>
+            <p className="my-2 text-sm text-slate-600">Decisions are recorded for reconciliation only. They do not change payable KM or petrol.</p>
+            {missingKmAdminSuccess ? <p role="status" className="my-2 text-sm text-emerald-700">{missingKmAdminSuccess}</p> : null}
+            {missingKmAdminError ? <p role="alert" className="my-2 text-sm text-red-700">{missingKmAdminError}</p> : null}
+            {missingKmAdminBusy ? <p className="text-sm">Loading / saving...</p> : null}
+            {missingKmAdminSelected ? (
+              <div className="space-y-3 rounded-lg border p-4">
+                <h4 className="font-bold">{missingKmAdminSelected.employee_code} — {missingKmAdminSelected.attendance?.attendance_date}</h4>
+                <p className="text-sm">Suggested: {missingKmAdminSelected.suggested_missing_km ?? "Unknown"} KM; existing payable: {missingKmAdminSelected.attendance?.eligible_km ?? "Unknown"} KM. Verify the included distance before approval.</p>
+                <label className="block text-sm">Decision
+                  <select className="block w-full rounded border p-2" value={missingKmAdminForm.decision} onChange={e=>setMissingKmAdminForm(v=>({...v,decision:e.target.value}))}>
+                    <option value="approved_for_reconciliation">Approve for reconciliation</option><option value="rejected">Reject</option>
+                  </select>
+                </label>
+                {missingKmAdminForm.decision==="approved_for_reconciliation" ? (
+                  <>
+                    <label className="block text-sm">Additional unpaid KM <input type="number" min="0.01" step="0.01" className="block w-full rounded border p-2" value={missingKmAdminForm.approved_additional_km} onChange={e=>setMissingKmAdminForm(v=>({...v,approved_additional_km:e.target.value}))}/></label>
+                    <label className="block text-sm">KM already included in existing payable <input type="number" min="0" step="0.01" className="block w-full rounded border p-2" value={missingKmAdminForm.verified_already_included_km} onChange={e=>setMissingKmAdminForm(v=>({...v,verified_already_included_km:e.target.value}))}/></label>
+                  </>
+                ) : null}
+                <label className="block text-sm">Evidence reference <input className="block w-full rounded border p-2" value={missingKmAdminForm.evidence_reference} onChange={e=>setMissingKmAdminForm(v=>({...v,evidence_reference:e.target.value}))}/></label>
+                <label className="block text-sm">Justification (at least 20 characters) <textarea className="block w-full rounded border p-2" rows={3} value={missingKmAdminForm.justification} onChange={e=>setMissingKmAdminForm(v=>({...v,justification:e.target.value}))}/></label>
+                <div className="flex gap-2"><button type="button" disabled={missingKmAdminBusy} onClick={submitMissingKmAdminDecision} className="rounded bg-blue-800 px-4 py-2 font-bold text-white">Record decision</button><button type="button" onClick={()=>setMissingKmAdminSelected(null)} className="rounded border px-4 py-2">Back</button></div>
+              </div>
+            ) : (
+              <div className="max-h-[55vh] overflow-auto">
+                <table className="w-full text-left text-xs"><thead><tr><th>Employee</th><th>Date</th><th>Review status</th><th>Payable KM</th><th>Suggested KM</th><th>GPS evidence</th><th>Decision</th></tr></thead>
+                  <tbody>{missingKmAdminRows.map(r=><tr key={r.id} className="border-t">
+                    <td className="p-2">{r.employee_code}</td><td>{r.attendance?.attendance_date}</td><td>{r.status}</td><td>{r.attendance?.eligible_km ?? "Unknown"}</td><td>{r.suggested_missing_km ?? "Unknown"}</td><td>Filtered {r.filtered_gps_km ?? "Unknown"} KM; route {r.google_route_km ?? "Unknown"} KM; checkout {r.checkout_distance_meters ?? "Unknown"} m<br/>{r.reason_code || r.requested_clarification || ""}</td>
+                    <td>{r.admin_decision ? <span>{r.admin_decision.decision}</span> : <button type="button" disabled={!["pending","clarification_required"].includes(r.status)} onClick={()=>{setMissingKmAdminSuccess("");setMissingKmAdminSelected(r);setMissingKmAdminForm({decision:"approved_for_reconciliation",approved_additional_km:"",verified_already_included_km:"",justification:"",evidence_reference:""});}} className="rounded border border-blue-300 px-2 py-1 text-blue-800">Review</button>}</td>
+                  </tr>)}</tbody>
+                </table>
+                {!missingKmAdminRows.length && !missingKmAdminBusy ? <p className="p-3">No October missing KM review records.</p> : null}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
       {hasDemoBackendReadSession ? (
         <div className="rounded-xl border border-qpms-100 bg-qpms-50 px-4 py-3 text-sm font-bold text-qpms-800">
           Sample Demo Data

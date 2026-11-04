@@ -1,34 +1,86 @@
-name: October KM Admin Approval E2E Gate
+name: October KM Admin Approval release gates
 on:
   pull_request:
     paths:
       - 'backend/routes/foMissingKmAdminReviewRoutes.js'
       - 'backend/routes/foOctoberClaimsExportRoutes.js'
+      - 'backend/services/foOctoberClaimsService.js'
+      - 'backend/tests/foOctoberAdminClaims*'
       - 'backend/server.js'
       - 'src/pages/FOActivities.jsx'
       - 'backend/sql/20261104_october_missing_km_*.sql'
+      - 'tests/browser/october*'
+      - 'tests/browser/serveOctoberAdmin.mjs'
+      - 'tests/browser/fixtures/october-admin.*'
+      - 'scripts/compareOctoberBackendRegression.mjs'
       - '.github/workflows/october-km-admin-approval.yml'
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   validate:
+    name: October targeted tests, PostgreSQL safeguards, build and controlled UI
     runs-on: ubuntu-latest
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - name: Install backend
-        run: npm ci --prefix backend
-      - name: Backend syntax checks
+      - name: Install locked dependencies
+        run: |
+          npm ci --no-audit --no-fund
+          npm ci --prefix backend --no-audit --no-fund
+      - name: Backend syntax and dedicated October endpoint tests
         run: |
           node --check backend/server.js
-          node --check backend/routes/foMissingKmAdminReviewRoutes.js
-          node --check backend/routes/foOctoberClaimsExportRoutes.js
-      - name: Backend regression suite (report failures without skipping frontend)
-        continue-on-error: true
-        run: node --test backend/tests/*.test.js
-      - name: Install frontend
-        run: npm ci
+          node --test backend/tests/foOctoberAdminClaims.test.js
+      - name: Real PostgreSQL permissions, duplicate races and financial preservation
+        env:
+          OCTOBER_CLAIMS_POSTGRES: '1'
+        run: node --test backend/tests/foOctoberAdminClaimsPostgres.test.js
+      - name: Scoped backend lint
+        run: npx eslint backend/services/foOctoberClaimsService.js backend/routes/foMissingKmAdminReviewRoutes.js backend/routes/foOctoberClaimsExportRoutes.js backend/tests/foOctoberAdminClaims.test.js backend/tests/foOctoberAdminClaimsPostgres.test.js
       - name: Frontend production build
         run: npm run build
+      - name: Install browser test runtime
+        run: npx playwright install --with-deps chromium
+      - name: Controlled actual FO Activities browser regression
+        run: npx playwright test --config tests/browser/october-admin.config.js
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: october-controlled-browser-evidence
+          path: test-results/
+          if-no-files-found: ignore
+  baseline-comparison:
+    name: Full backend baseline comparison (reports inherited failures)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Prepare unchanged base checkout
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add --detach ../october-unchanged-base "${BASE_SHA:-$(git merge-base HEAD origin/main)}"
+          npm ci --no-audit --no-fund
+          npm ci --prefix backend --no-audit --no-fund
+          npm ci --prefix ../october-unchanged-base --no-audit --no-fund
+          npm ci --prefix ../october-unchanged-base/backend --no-audit --no-fund
+      - name: Complete suites - fail on new failures; disclose inherited failures
+        run: node scripts/compareOctoberBackendRegression.mjs ../october-unchanged-base . tmp/october-regression
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: october-full-backend-baseline-and-candidate-results
+          path: tmp/october-regression/
