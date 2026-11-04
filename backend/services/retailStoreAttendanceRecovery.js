@@ -100,14 +100,27 @@ async function canonicalRecoveryAnalysis(client,profile,input){
    }
  }
  const dayKey=row=>String(row.employee_code).trim().toUpperCase()+':'+row.attendance_date;
- const conflictDays=new Set(conflicts.map(dayKey));
+ // Employee/day is not a duplicate key: a person may serve several stores.
+ // Classify the existing assignment by its store identity, not merely its date.
+ const conflictStores=new Map();
+ for(const existing of conflicts){
+   const key=dayKey(existing);
+   if(!conflictStores.has(key))conflictStores.set(key,new Set());
+   conflictStores.get(key).add(String(existing.retail_store_id));
+ }
+ const conflictKind=row=>{
+   const existing=conflictStores.get(dayKey(row));
+   if(!existing)return null;
+   return existing.has(String(row.retail_store_id))?'SAME_STORE_DUPLICATE':'DIFFERENT_STORE_SAME_DAY';
+ };
+ const conflictDays=new Set(conflictStores.keys());
  const states=new Map();
  for(const row of candidates){
    const code=String(unknownRows.get(row.source_row).store_code||'').trim().toUpperCase();
    const state=canonical.get(code)?.state||'UNMATCHED';
-   const totals=states.get(state)||{state,source_rows:0,matched_rows:0,validation_rejected_rows:0,conflicting_rows:0,eligible_rows:0,eligible_credits:0};
+   const totals=states.get(state)||{state,source_rows:0,matched_rows:0,validation_rejected_rows:0,conflicting_rows:0,same_store_duplicate_rows:0,different_store_same_day_rows:0,eligible_rows:0,eligible_credits:0};
    totals.source_rows++;
-   if(canonical.has(code)){totals.matched_rows++;if(invalid.has(row.source_row))totals.validation_rejected_rows++;else if(conflictDays.has(dayKey(row)))totals.conflicting_rows++;else {totals.eligible_rows++;totals.eligible_credits+=validByRow.get(row.source_row)?.credit||0;}}
+   if(canonical.has(code)){totals.matched_rows++;if(invalid.has(row.source_row))totals.validation_rejected_rows++;else if(conflictKind(row)){totals.conflicting_rows++;if(conflictKind(row)==='SAME_STORE_DUPLICATE')totals.same_store_duplicate_rows++;else totals.different_store_same_day_rows++;}else {totals.eligible_rows++;totals.eligible_credits+=validByRow.get(row.source_row)?.credit||0;}}
    states.set(state,totals);
  }
  const start=page*limit;
@@ -118,7 +131,7 @@ async function canonicalRecoveryAnalysis(client,profile,input){
    return {source_row:row.source_row,store_code:rejected.store_code,
      attendance_date:rejected.attendance_date,employee_code:rejected.employee_code,
      original_status:rejected.original_status,
-     validation_reasons:invalid.get(row.source_row)||[],employee_day_conflict:conflictDays.has(dayKey(row)),
+     validation_reasons:invalid.get(row.source_row)||[],employee_day_conflict:conflictDays.has(dayKey(row)),conflict_kind:validByRow.has(row.source_row)?conflictKind(validByRow.get(row.source_row)):null,
      result:store?'STORE_MATCHED_REQUIRES_ATTENDANCE_VALIDATION':'STORE_UNMATCHED',
      retail_store_id:store?.id||null,state:store?.state||null};
  });
@@ -127,7 +140,7 @@ async function canonicalRecoveryAnalysis(client,profile,input){
    total_source_rows:source.rows.length,total_rejected_rows:source.rejected.length,
    total_originally_unknown:candidates.length,matched_store_rows:matched,unmatched_store_rows:candidates.length-matched,page,page_size:limit,
    has_more:start+limit<candidates.length,rows:sample,
-   note:'Read-only full-source attendance validation and existing employee-day conflict audit. Candidate totals do not imply AOP coverage or commit eligibility.'}};
+   note:'Read-only full-source validation. Same-employee same-day different-store assignments are distinguished from same-store duplicates, but remain review-only pending employee-day allocation policy validation. Candidate totals do not imply AOP coverage or commit eligibility.'}};
 }
 
 /**
