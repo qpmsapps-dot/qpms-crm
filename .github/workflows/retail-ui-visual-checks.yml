@@ -48,7 +48,7 @@ jobs:
           # preserve existing actions, route permissions, and sidebar/branding.
           approved_attendance_visual_release = {
             "src/pages/reliance-retail/RetailAttendance.jsx": "c509e8c9bd02e987cc156993bbc2c19c785c039b",
-            "src/components/reliance-retail/RetailAttendanceVisual.jsx": "f92e97653cf1432415c9b602ba9074a10d9f1784",
+            "src/components/reliance-retail/RetailAttendanceVisual.jsx": "c1c920f07cf748c712fb63adec348c54ff6c3f7f",
             "src/components/reliance-retail/retailAttendanceVisual.css": "7ce6c2f1273eb7b1ef9f55ed75f03c344139bb9f",
             "src/utils/retailAttendanceVisualModel.js": "87d38324cc3d45bc9dec2a7c6222cc5673b2644d",
             "tests/browser/retailAttendance.spec.js": "c2aa6dfebfeba0e068908881067e0ecff2bb3667",
