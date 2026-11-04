@@ -18,7 +18,7 @@ test('verified day trend uses the existing daily target and arithmetic, missing 
  assert.equal(result[1].overall_pct,null,'missing upload does not become 0%');
  assert.equal(result[1].total_actual,null);
  assert.equal(result[1].has_attendance_upload,false);
- assert.equal(result[2].overall_pct,66.67);
+ assert.ok(Math.abs(result[2].overall_pct-(2/3*100))<0.000001);
  assert.equal(result[3].complete,false);
 });
 test('partial store attendance and missing AOP never report a fake verified percentage',()=>{
