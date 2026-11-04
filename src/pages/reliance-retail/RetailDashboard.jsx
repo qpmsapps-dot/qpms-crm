@@ -109,9 +109,40 @@ export default function RetailDashboard() {
     }).catch(error => { if (live) setInventory({ status: 'unavailable', rows: [], error: error.response?.data?.message || error.message }); });
     return () => { live = false; };
   }, [month]);
-  async function exportSummary(){try{const {default:ExcelJS}=await import('exceljs'),{downloadUnified}=await import('../../utils/retailUnifiedExport.js'),book=new ExcelJS.Workbook(),sheet=book.addWorksheet('Module summary');sheet.addRow(['Module','State','From','To','Availability','HK Credits','MEPC Credits','Attendance Target','Completed','Scheduled','Not Completed','Pending','Note']);for(const module of modules){const source=data.modules[module.id],rows=selectRows(source?.rows||[],global,local[module.id]||'');if(source?.status!=='ready'){sheet.addRow([module.title,global||local[module.id]||'',data.from,data.to,'Unavailable',null,null,null,null,null,null,null,source?.reason]);continue;}for(const r of rows)sheet.addRow([module.title,r.state,data.from,data.to,'Available',r.hk_actual??null,r.mepc_actual??null,r.complete?r.total_target:null,r.completed??null,r.scheduled??null,r.not_completed??null,r.pending??null]);}await downloadUnified(book,'Retail_Operations_Summary.xlsx');}catch(e){setInventory(v=>({...v,error:e.message}));}}
+  async function exportSummary(){
+    try{
+      const {default:ExcelJS}=await import('exceljs');
+      const {downloadUnified}=await import('../../utils/retailUnifiedExport.js');
+      const book=new ExcelJS.Workbook(),sheet=book.addWorksheet('State summary');
+      sheet.addRow(['Module','State','From','To','Source','HK credits','MEPC credits','Attendance target',
+       'Completed / submitted','Scheduled / source rows','Pending / other','Completion %','Reported shortage','Vacancies','Note']);
+      for(const module of modules){
+        const historical=month==='2026-10'?historyForCard(data?.historical_ifms,module.id,global||local[module.id]||''):null;
+        if(historical){
+          for(const row of historical.summary.rows.filter(r=>(!global||r.state===global)&&(!local[module.id]||r.state===local[module.id])))
+            sheet.addRow([module.title,row.label,'2026-10-01','2026-10-31','Excel reported',null,null,null,
+             historical.isManpower?null:row.completed,historical.isManpower?null:row.scheduled,
+             historical.isManpower?null:row.pending,historical.isManpower?null:row.percentage,
+             historical.isManpower?row.shortage:null,historical.isManpower?row.vacancies:null,
+             'October 28 source snapshot; not FO-verified']);
+          continue;
+        }
+        const source=data?.modules?.[module.id],rows=selectRows(source?.rows||[],global,local[module.id]||'');
+        if(source?.status!=='ready'){
+          sheet.addRow([module.title,global||local[module.id]||'',data?.from,data?.to,'Unavailable',
+            null,null,null,null,null,null,null,null,null,source?.reason||'No source connected']);
+          continue;
+        }
+        for(const row of rows)sheet.addRow([module.title,row.state,data.from,data.to,'Operational',
+         row.hk_actual??null,row.mepc_actual??null,row.complete?row.total_target:null,
+         row.completed??null,row.scheduled??null,row.pending??null,null,null,null,
+         row.complete===false?'Incomplete approved coverage':null]);
+      }
+      await downloadUnified(book,'Retail_Operations_Summary.xlsx');
+    }catch(error){setInventory(v=>({...v,error:error.message}));}
+  }
   return <div className="ifms-dashboard">
-    <header className="ifms-page-header"><div><p className="ifms-eyebrow">Reliance Retail / Dashboard</p><h1>South Zone – IFMS Operations Summary</h1><p>This Month Till Today</p>{isPlatformAdmin(user)&&<Link to="/reliance-retail/store-master">Admin: Store Management</Link>}</div><div className="ifms-updated"><span className="ifms-status-dot"/>Last Updated: {data?.updated_at?new Date(data.updated_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'awaiting data'}</div></header>
+    <header className="ifms-page-header"><div><p className="ifms-eyebrow">Reliance Retail / Dashboard</p><h1>South Zone – IFMS Operations Summary</h1><p>{month===today.slice(0,7)?'This Month Till Today':`Reporting period · ${period.label}`}</p>{isPlatformAdmin(user)&&<Link to="/reliance-retail/store-master">Admin: Store Management</Link>}</div><div className="ifms-updated"><span className="ifms-status-dot"/>Last Updated: {data?.updated_at?new Date(data.updated_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'awaiting data'}</div></header>
     <div className="ifms-toolbar"><div className="ifms-toolbar-filters"><StateFilter label="Global reporting state" value={global} onChange={value => { setGlobal(value); setLocal({}); }}/><label className="ifms-month"><CalendarDays size={16}/><span className="sr-only">Reporting month</span><input aria-label="Reporting month" type="month" min="2000-01" max="9999-12" value={month} onChange={e => { if (/^\d{4}-\d{2}$/.test(e.target.value)) setMonth(e.target.value); }}/></label><span className="ifms-date-range">{period.label}</span></div><button disabled={!data} onClick={()=>void exportSummary()}><Download size={15}/> Export summary</button></div>
     <p className="ifms-data-status" role="status">{inventory.status === 'loading' ? 'Loading reports…' : inventory.status === 'unavailable' ? `Reports unavailable: ${inventory.error}` : 'Showing available reports for the selected period.'}</p>
     {inventory.status==='ready'&&inventory.error&&<p role="alert" className="ifms-note">{inventory.error}</p>}
@@ -122,7 +153,7 @@ export default function RetailDashboard() {
       const stores = selectRows(inventory.rows, global, local[id] || '');
       const window = id === 'cm' || id === 'pm' ? callWindow(month, id, today) : null;
       const historical=month==='2026-10'?historyForCard(data?.historical_ifms,id,global||local[id]||''):null;
-      return <section key={id} className={`ifms-card ${index < 4 ? 'ifms-wide' : 'ifms-third'}`} style={{ '--module-color': color }} aria-labelledby={`ifms-${id}`}>
+      return <section key={id} className={`ifms-card ${index < 4 || month==='2026-10' ? 'ifms-wide' : 'ifms-third'}`} style={{ '--module-color': color }} aria-labelledby={`ifms-${id}`}>
         <div className="ifms-card-header"><div className="ifms-card-heading"><span className="ifms-icon">{createElement(Icon, { size: 21 })}</span><div><h2 id={`ifms-${id}`}>{title}</h2><p>{window ? window.label : 'This Month Till Today'}</p></div></div><StateFilter label={`${title} reporting state`} value={local[id] || ''} global={global} onChange={value => setLocal(previous => ({ ...previous, [id]: value }))}/></div>
         {window && <p className="ifms-window">{window.status} · All applicable stores due by {window.endLabel}</p>}
         {historical?<RetailStatePerformance title={`${title} — October state performance`}
