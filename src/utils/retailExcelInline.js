@@ -32,8 +32,10 @@ export function excelCleaningRows(rows,filters={}){
    overdue:false,submission_ids:[],source_data:d
   };
   if(matches({...base,store_code:code,store_name:name}))schedules.push(base);
-  if(excelCleaningStatus(row)==='Completed'&&actual&&actual>=from&&actual<=to){
-   const work={...base,deep_cleaning_date:actual,status:'Completed (Excel reported)',
+  // A valid source-completed status is still a reported completion even if
+  // the Excel omits its actual date. Never invent that date or FO evidence.
+  if(excelCleaningStatus(row)==='Completed'){
+   const work={...base,deep_cleaning_date:actual||null,status:'Completed (Excel reported)',
     before_count:null,after_count:null};
    if(matches({...work,store_code:code,store_name:name}))submissions.push(work);
   }
