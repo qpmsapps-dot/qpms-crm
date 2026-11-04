@@ -38,7 +38,7 @@ test('Deep Cleaning shows state summary and submitted work first; schedules only
  await expect(page.getByRole('heading',{name:'Reliance Retail Deep Cleaning'})).toBeVisible();
  await page.getByLabel('Cleaning from').fill('2026-10-01');
  await page.getByLabel('Cleaning to').fill('2026-10-31');
- const summary=page.getByRole('region',{name:'Deep Cleaning — state-wise performance'});
+ const summary=page.getByRole('region',{name:'Deep Cleaning — state-wise performance',exact:true});
  const work=page.getByRole('region',{name:'Submitted cleaning work'});
  await expect(summary).toBeVisible();
  const stateRow=summary.getByRole('row').filter({has:page.getByRole('button',{name:'AP-1'})});
