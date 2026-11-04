@@ -120,7 +120,7 @@ async function canonicalRecoveryAnalysis(client,profile,input){
    const state=canonical.get(code)?.state||'UNMATCHED';
    const totals=states.get(state)||{state,source_rows:0,matched_rows:0,validation_rejected_rows:0,conflicting_rows:0,same_store_duplicate_rows:0,different_store_same_day_rows:0,eligible_rows:0,eligible_credits:0};
    totals.source_rows++;
-   if(canonical.has(code)){totals.matched_rows++;if(invalid.has(row.source_row))totals.validation_rejected_rows++;else if(conflictKind(row)){totals.conflicting_rows++;if(conflictKind(row)==='SAME_STORE_DUPLICATE')totals.same_store_duplicate_rows++;else totals.different_store_same_day_rows++;}else {totals.eligible_rows++;totals.eligible_credits+=validByRow.get(row.source_row)?.credit||0;}}
+   if(canonical.has(code)){totals.matched_rows++;if(invalid.has(row.source_row))totals.validation_rejected_rows++;else if(conflictKind(validByRow.get(row.source_row))){totals.conflicting_rows++;if(conflictKind(validByRow.get(row.source_row))==='SAME_STORE_DUPLICATE')totals.same_store_duplicate_rows++;else totals.different_store_same_day_rows++;}else {totals.eligible_rows++;totals.eligible_credits+=validByRow.get(row.source_row)?.credit||0;}}
    states.set(state,totals);
  }
  const start=page*limit;
