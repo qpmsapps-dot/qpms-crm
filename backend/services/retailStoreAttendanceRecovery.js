@@ -33,3 +33,49 @@ export async function confirmStoreAttendanceRecovery(client,profile,input,enviro
  if(b.filename!=='store-matched-attendance-recovery.xlsx'||b.expected_ids?.length)throw attendanceError(409,'Recovery cannot replace existing employee-days.');
  return commitRetailAttendance(client,profile,{id:input.id,preview_key:input.preview_key,replace:false,reason:''});
 }
+
+/**
+ * Read-only candidate discovery for historical imports made before Store Master
+ * activation. This does not create a preview batch or write attendance.
+ * The returned source rows are bounded; callers must page until has_more=false.
+ */
+export async function auditCanonicalAttendanceRecovery(client,profile,input){
+ storeImportAdmin(profile);
+ const original=await retailAttendanceHistory(client,profile,{id:input.attendance_batch_id});
+ if(original.status!=='committed')throw attendanceError(409,'Committed original attendance import required.');
+ const source=original.raw_source;
+ if(!Array.isArray(source?.rows)||!Array.isArray(source?.rejected))
+   throw attendanceError(409,'Retained attendance audit is incomplete.');
+ const page=Number(input.page??0);
+ if(!Number.isSafeInteger(page)||page<0||page>100000)
+   throw attendanceError(400,'Invalid recovery audit page.');
+ const limit=500;
+ const storeRows=await result(client.from('reliance_retail_store_master').select('store_code,id,state').range(0,9999));
+ const canonical=new Map();
+ for(const store of storeRows){
+   const code=String(store.store_code||'').trim().toUpperCase();
+   if(code){
+     if(canonical.has(code))throw attendanceError(409,'Ambiguous canonical Store Code.');
+     canonical.set(code,store);
+   }
+ }
+ const unknownRows=new Map(source.rejected
+   .filter(r=>r.reasons?.includes('Unknown Reliance Retail Store Code'))
+   .map(r=>[r.source_row,r]));
+ const candidates=source.rows.filter(r=>unknownRows.has(r.source_row));
+ const start=page*limit;
+ const sample=candidates.slice(start,start+limit).map(row=>{
+   const rejected=unknownRows.get(row.source_row);
+   const code=String(rejected.store_code||'').trim().toUpperCase();
+   const store=canonical.get(code);
+   return {source_row:row.source_row,store_code:rejected.store_code,
+     attendance_date:rejected.attendance_date,employee_code:rejected.employee_code,
+     original_status:rejected.original_status,
+     result:store?'STORE_MATCHED_REQUIRES_ATTENDANCE_VALIDATION':'STORE_UNMATCHED',
+     retail_store_id:store?.id||null,state:store?.state||null};
+ });
+ return {attendance_batch_id:original.id,source_checksum:original.checksum,
+   total_originally_unknown:candidates.length,page,page_size:limit,
+   has_more:start+limit<candidates.length,rows:sample,
+   note:'Read-only matching only. No employee-day conflict, AOP, status, or commit eligibility is implied.'};
+}
