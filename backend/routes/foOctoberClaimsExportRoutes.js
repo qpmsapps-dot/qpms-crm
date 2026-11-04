@@ -104,7 +104,7 @@ export function createOctoberClaimsExportRouter({ requireAuth, getClient }) {
       let first = true;
       for (const [group, records] of [...groups.entries()].sort((a,b)=>a[0].localeCompare(b[0]))) {
         records.sort((a,b)=>a.employee_code.localeCompare(b.employee_code));
-        const pages = chunks(records, 23);
+        const pages = chunks(records, 17);
         for (let i=0;i<pages.length;i++) {
           if (!first) doc.addPage();
           first=false;
@@ -125,17 +125,17 @@ export function createOctoberClaimsExportRouter({ requireAuth, getClient }) {
               approved:n.approved+r.review.approved,
               approvedKm:n.approvedKm+r.review.approvedKm,
             }),{reviews:0,pending:0,clarification:0,approved:0,approvedKm:0});
+            const totalsY = y + 10;
+            doc.font('Helvetica-Bold').fontSize(10).text(
+              'Group totals: Original ' + money(records.reduce((n,r)=>n+r.original,0)) +
+              ' KM  |  Proposed ' + money(records.reduce((n,r)=>n+r.proposed,0)) +
+              ' KM  |  Original Petrol INR ' + money(records.reduce((n,r)=>n+r.petrol,0)),35,totalsY,{width:770});
             doc.font('Helvetica').fontSize(9).text(
               'Missing KM review cases: ' + reviewTotals.reviews +
               ' | Pending: ' + reviewTotals.pending +
               ' | Clarification: ' + reviewTotals.clarification +
               ' | Admin approved: ' + reviewTotals.approved +
-              ' (' + money(reviewTotals.approvedKm) + ' KM, not posted)',35,y+30);
-
-            doc.font('Helvetica-Bold').fontSize(10).text(
-              'Group totals: Original ' + money(records.reduce((n,r)=>n+r.original,0)) +
-              ' KM  |  Proposed ' + money(records.reduce((n,r)=>n+r.proposed,0)) +
-              ' KM  |  Original Petrol INR ' + money(records.reduce((n,r)=>n+r.petrol,0)),35,y+10);
+              ' (' + money(reviewTotals.approvedKm) + ' KM, not posted)',35,totalsY+20,{width:770});
           }
         }
       }
