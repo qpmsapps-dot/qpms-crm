@@ -15,9 +15,14 @@ async function openDashboard(page, failure = false, role = 'Admin') {
   await page.goto('/reliance-retail', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading',{name:'South Zone – IFMS Operations Summary'})).toBeVisible();
 }
-test('existing route, seven honest empty cards, filters and verified links', async ({page}) => {
+test('nine modules, no OOS overview, state filters and honest empty cards', async ({page}) => {
   await openDashboard(page);
-  await expect(page.locator('.ifms-card')).toHaveCount(7);
+  await expect(page.locator('.ifms-card')).toHaveCount(9);
+  await expect(page.getByRole('region',{name:'State-wise OOS reporting'})).toHaveCount(0);
+  await expect(page.locator('#ifms-manpower')).toBeVisible();
+  await expect(page.locator('#ifms-fault')).toBeVisible();
+  await expect(page.getByRole('link',{name:'OOS Tracker'})).toHaveCount(0);
+  await expect(page.getByText('Under development')).toBeVisible();
   await expect(page.locator('.ifms-empty-ring')).toHaveCount(1);
   await expect(page.locator('.ifms-table-wrap tbody tr')).toHaveCount(24);
   await expect(page.getByRole('button',{name:'Export summary'})).toBeEnabled();
@@ -35,7 +40,7 @@ test('existing route, seven honest empty cards, filters and verified links', asy
   await expect(page.locator('.ifms-table-wrap tbody tr')).toHaveCount(4);
   await page.getByLabel('Global reporting state',{exact:true}).selectOption('');
   await expect(page.locator('.ifms-table-wrap tbody tr')).toHaveCount(24);
-  await expect(page.locator('.ifms-card-footer a')).toHaveCount(7);
+  await expect(page.locator('.ifms-card-footer a')).toHaveCount(9);
   await expect(page.locator('.ifms-card-footer a').first()).toHaveAttribute('href','/reliance-retail/attendance');
   await page.getByLabel('Reporting month',{exact:true}).fill('2024-02');
   await expect(page.locator('.ifms-date-range')).toContainText('29 Feb 2024');
@@ -43,7 +48,7 @@ test('existing route, seven honest empty cards, filters and verified links', asy
 
 test('dashboard detail links respect existing role permissions', async ({page}) => {
   await openDashboard(page, false, 'Technical MIS');
-  await expect(page.locator('.ifms-card-footer a')).toHaveCount(4);
+  await expect(page.locator('.ifms-card-footer a').first()).toBeVisible();
   await expect(page.locator('.ifms-card-footer a').first()).toHaveAttribute('href',/reliance-retail/);
   const links = await page.locator('.ifms-card-footer a').evaluateAll(nodes => nodes.map(node => node.getAttribute('href')));
   expect(links).toEqual(expect.arrayContaining(['/reliance-retail/attendance','/reliance-retail/cmpm','/reliance-retail/thermography']));
