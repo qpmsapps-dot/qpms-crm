@@ -32,19 +32,24 @@ async function setup(page){
   return route.fulfill({json:{stores:[],zones:[],fos:[],snapshot:{stores:[],zones:[],fos:[]}}});
  });
 }
-test('October Excel cleaning rows occupy existing schedule/work tables without unverified FO evidence',async({page})=>{
+test('Deep Cleaning shows state summary and submitted work first; schedules only in collapsed admin maintenance',async({page})=>{
  await setup(page);
  await page.goto('/reliance-retail/deep-cleaning');
  await expect(page.getByRole('heading',{name:'Reliance Retail Deep Cleaning'})).toBeVisible();
  await page.getByLabel('Cleaning from').fill('2026-10-01');
  await page.getByLabel('Cleaning to').fill('2026-10-31');
- const schedules=page.getByRole('region',{name:'Cleaning schedules'});
+ const summary=page.getByRole('region',{name:'Deep Cleaning — state-wise performance',exact:true});
  const work=page.getByRole('region',{name:'Submitted cleaning work'});
- await expect(schedules.getByText('6228')).toBeVisible();
- await expect(schedules.getByText('T2LJ')).toBeVisible();
+ await expect(summary).toBeVisible();
+ const stateRow=summary.getByRole('row').filter({has:page.getByRole('button',{name:'AP-1'})});
+ await expect(stateRow.getByText('50%')).toBeVisible();
+ await expect(page.getByRole('heading',{name:'Store-wise submitted work'})).toBeVisible();
+ // Admin maintenance survives but no longer occupies the primary report.
+ await expect(page.getByRole('region',{name:'Cleaning schedules'})).toBeHidden();
  await expect(work.getByText('Completed (Excel reported)')).toBeVisible();
  await expect(work.getByText('No FO photo evidence in Excel')).toBeVisible();
  await expect(page.getByText('Deep Cleaning — imported October records')).toHaveCount(0);
  await expect(work.getByRole('button',{name:'View evidence'})).toHaveCount(0);
- await expect(schedules.getByText('Excel reported · not FO verified')).toHaveCount(2);
+ await expect(summary.getByRole('row')).toHaveCount(8); // Header + six states + total
+ await expect(page.getByText('Advanced · Schedule administration and verified FO linking')).toBeVisible();
 });

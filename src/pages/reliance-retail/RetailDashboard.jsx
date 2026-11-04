@@ -1,6 +1,6 @@
 import { createElement, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CalendarDays, ClipboardCheck, ScanLine, Phone, Sparkles, GraduationCap, Users, Download, ArrowUpRight } from 'lucide-react';
+import { CalendarDays, ClipboardCheck, ClipboardList, ScanLine, Phone, Sparkles, GraduationCap, Users, Download, ArrowUpRight } from 'lucide-react';
 import { usePageTitle } from '../../hooks/usePageTitle.js';
 import { useAuth } from '../../context/auth-context.js';
 import { canAccessRoute,isPlatformAdmin } from '../../utils/authRoles.js';
@@ -9,7 +9,8 @@ import { indiaToday } from '../../../backend/shared/retailAttendance.js';
 import { REPORTING_STATES, reportingRows, reportingPeriod, callWindow, selectRows, sum, percent } from './ifmsDashboardModel.js';
 import { Metric, StateTable, OperationsRing } from './IfmsDashboardParts.jsx';
 import './ifmsDashboard.css';
-import RetailOosDashboard from './RetailOosDashboard.jsx';
+import RetailStatePerformance from '../../components/reliance-retail/RetailStatePerformance.jsx';
+import {summarizeStateRows} from '../../utils/retailStatePerformance.js';
 
 const modules = [
   { id: 'attendance', title: 'Attendance', icon: ClipboardCheck, color: '#16a875', route: '/reliance-retail/attendance' },
@@ -19,6 +20,8 @@ const modules = [
   { id: 'cleaning', title: 'Deep Cleaning', icon: Sparkles, color: '#16a875', route: '/reliance-retail/deep-cleaning' },
   { id: 'technical', title: 'MEPC Training', icon: GraduationCap, color: '#1677ff', route: '/reliance-retail/training' },
   { id: 'soft', title: 'HK Training', icon: Users, color: '#ed3d82', route: '/reliance-retail/training' },
+  { id: 'manpower', title: 'Manpower', icon: Users, color: '#176e94', route: '/reliance-retail/manpower' },
+  { id: 'fault', title: 'Fault Tracker', icon: ClipboardList, color: '#5b647e', route: '/fault-tracker' },
 ];
 function StateFilter({ label, value, onChange, global = '' }) {
   return <label className="ifms-filter"><span className="sr-only">{label}</span><select aria-label={label} value={value} onChange={e => onChange(e.target.value)}><option value="">All States</option>{REPORTING_STATES.map(state => <option key={state.code} value={state.code} disabled={Boolean(global && global !== state.code)}>{state.label}</option>)}</select></label>;
@@ -55,20 +58,33 @@ function ModuleBody({ id, rows, stores, storeStatus, source }) {
     <p className="ifms-note">{cleaning?`Recorded Not Completed: ${total('not_completed')}; Scheduled and pending: ${total('pending')}.`: 'Actual recorded operational results.'}</p>
   </>;
 }
-// Excel-reported source activity is shown within its module card and never
-// replaces verified on-site activity KPIs or starts the 12-stage OOS workflow.
+// October dashboard cards use the real Excel source counts state by state.
+// Canonical operational widgets are still available for other periods; the
+// values are never combined blindly with unverified Excel submissions.
 const historyForCard=(snapshot,id,requestedState)=>{
- const module=({cm:'cmpm',pm:'cmpm',cleaning:'deep_cleaning',technical:'technical_training',soft:'soft_skill_training',thermography:'thermography'})[id];
- if(!module||snapshot?.status!=='ready')return null;
- const rows=(snapshot.rows||[]).filter(r=>r.module===module&&(!requestedState||r.state===requestedState));
- if(!rows.length)return null;
- const total=key=>rows.reduce((n,r)=>n+Number(r.metrics?.[key]||0),0);
- const sourceRows=rows.reduce((n,r)=>n+r.source_rows,0);
- const completed=id==='cm'?total('cm_completed'):id==='pm'?total('pm_completed'):id==='thermography'?total('report_submitted'):total('completed');
- const pending=id==='cm'?total('cm_unreported'):id==='pm'?total('pm_pending'):id==='thermography'?total('report_pending'):total('pending');
- return {completed,pending,sourceRows,module};
+ if(snapshot?.status!=='ready')return null;
+ const module=({cm:'cmpm',pm:'cmpm',cleaning:'deep_cleaning',technical:'technical_training',
+  soft:'soft_skill_training',thermography:'thermography'})[id];
+ const raw=(snapshot.rows||[]).filter(row=>(id==='manpower'?
+  ['shortage','manpower_vacancy'].includes(row.module):row.module===module)&&
+  (!requestedState||row.state===requestedState));
+ if(!raw.length)return null;
+ if(id==='manpower'){
+  return {summary:summarizeStateRows(raw,row=>({
+   shortage:row.module==='shortage'?Number(row.metrics?.reported_shortage_total||0):0,
+   vacancies:row.module==='manpower_vacancy'?Number(row.metrics?.vacancies_reported||0):0,
+   entries:Number(row.source_rows||0)
+  }),row=>row.state),isManpower:true};
+ }
+ const summary=summarizeStateRows(raw,row=>{
+  const m=row.metrics||{},scheduled=Number(row.source_rows||0);
+  const completed=Number(id==='cm'?m.cm_completed||0:
+   id==='pm'?m.pm_completed||0:id==='thermography'?m.report_submitted||0:m.completed||0);
+  return {scheduled,completed,pending:Math.max(0,scheduled-completed),
+   entries:scheduled};
+ },row=>row.state);
+ return {summary};
 };
-
 export default function RetailDashboard() {
   usePageTitle('South Zone – IFMS Operations Summary');
   const { user } = useAuth();
@@ -93,40 +109,67 @@ export default function RetailDashboard() {
     }).catch(error => { if (live) setInventory({ status: 'unavailable', rows: [], error: error.response?.data?.message || error.message }); });
     return () => { live = false; };
   }, [month]);
-  async function exportSummary(){try{const {default:ExcelJS}=await import('exceljs'),{downloadUnified}=await import('../../utils/retailUnifiedExport.js'),book=new ExcelJS.Workbook(),sheet=book.addWorksheet('Module summary');sheet.addRow(['Module','State','From','To','Availability','HK Credits','MEPC Credits','Attendance Target','Completed','Scheduled','Not Completed','Pending','Note']);for(const module of modules){const source=data.modules[module.id],rows=selectRows(source?.rows||[],global,local[module.id]||'');if(source?.status!=='ready'){sheet.addRow([module.title,global||local[module.id]||'',data.from,data.to,'Unavailable',null,null,null,null,null,null,null,source?.reason]);continue;}for(const r of rows)sheet.addRow([module.title,r.state,data.from,data.to,'Available',r.hk_actual??null,r.mepc_actual??null,r.complete?r.total_target:null,r.completed??null,r.scheduled??null,r.not_completed??null,r.pending??null]);}await downloadUnified(book,'Retail_Operations_Summary.xlsx');}catch(e){setInventory(v=>({...v,error:e.message}));}}
+  async function exportSummary(){
+    try{
+      const {default:ExcelJS}=await import('exceljs');
+      const {downloadUnified}=await import('../../utils/retailUnifiedExport.js');
+      const book=new ExcelJS.Workbook(),sheet=book.addWorksheet('State summary');
+      sheet.addRow(['Module','State','From','To','Source','HK credits','MEPC credits','Attendance target',
+       'Completed / submitted','Scheduled / source rows','Pending / other','Completion %','Reported shortage','Vacancies','Note']);
+      for(const module of modules){
+        const historical=month==='2026-10'?historyForCard(data?.historical_ifms,module.id,global||local[module.id]||''):null;
+        if(historical){
+          for(const row of historical.summary.rows.filter(r=>(!global||r.state===global)&&(!local[module.id]||r.state===local[module.id])))
+            sheet.addRow([module.title,row.label,'2026-10-01','2026-10-31','Excel reported',null,null,null,
+             historical.isManpower?null:row.completed,historical.isManpower?null:row.scheduled,
+             historical.isManpower?null:row.pending,historical.isManpower?null:row.percentage,
+             historical.isManpower?row.shortage:null,historical.isManpower?row.vacancies:null,
+             'October 28 source snapshot; not FO-verified']);
+          continue;
+        }
+        const source=data?.modules?.[module.id],rows=selectRows(source?.rows||[],global,local[module.id]||'');
+        if(source?.status!=='ready'){
+          sheet.addRow([module.title,global||local[module.id]||'',data?.from,data?.to,'Unavailable',
+            null,null,null,null,null,null,null,null,null,source?.reason||'No source connected']);
+          continue;
+        }
+        for(const row of rows)sheet.addRow([module.title,row.state,data.from,data.to,'Operational',
+         row.hk_actual??null,row.mepc_actual??null,row.complete?row.total_target:null,
+         row.completed??null,row.scheduled??null,row.pending??null,null,null,null,
+         row.complete===false?'Incomplete approved coverage':null]);
+      }
+      await downloadUnified(book,'Retail_Operations_Summary.xlsx');
+    }catch(error){setInventory(v=>({...v,error:error.message}));}
+  }
   return <div className="ifms-dashboard">
-    <header className="ifms-page-header"><div><p className="ifms-eyebrow">Reliance Retail / Dashboard</p><h1>South Zone – IFMS Operations Summary</h1><p>This Month Till Today</p>{isPlatformAdmin(user)&&<Link to="/reliance-retail/store-master">Admin: Store Management</Link>}</div><div className="ifms-updated"><span className="ifms-status-dot"/>Last Updated: {data?.updated_at?new Date(data.updated_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'awaiting data'}</div></header>
+    <header className="ifms-page-header"><div><p className="ifms-eyebrow">Reliance Retail / Dashboard</p><h1>South Zone – IFMS Operations Summary</h1><p>{month===today.slice(0,7)?'This Month Till Today':`Reporting period · ${period.label}`}</p>{isPlatformAdmin(user)&&<Link to="/reliance-retail/store-master">Admin: Store Management</Link>}</div><div className="ifms-updated"><span className="ifms-status-dot"/>Last Updated: {data?.updated_at?new Date(data.updated_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'awaiting data'}</div></header>
     <div className="ifms-toolbar"><div className="ifms-toolbar-filters"><StateFilter label="Global reporting state" value={global} onChange={value => { setGlobal(value); setLocal({}); }}/><label className="ifms-month"><CalendarDays size={16}/><span className="sr-only">Reporting month</span><input aria-label="Reporting month" type="month" min="2000-01" max="9999-12" value={month} onChange={e => { if (/^\d{4}-\d{2}$/.test(e.target.value)) setMonth(e.target.value); }}/></label><span className="ifms-date-range">{period.label}</span></div><button disabled={!data} onClick={()=>void exportSummary()}><Download size={15}/> Export summary</button></div>
     <p className="ifms-data-status" role="status">{inventory.status === 'loading' ? 'Loading reports…' : inventory.status === 'unavailable' ? `Reports unavailable: ${inventory.error}` : 'Showing available reports for the selected period.'}</p>
     {inventory.status==='ready'&&inventory.error&&<p role="alert" className="ifms-note">{inventory.error}</p>}
-    <RetailOosDashboard globalState={global}/>
-    {month==='2026-10'&&data?.historical_ifms?.status==='ready'&&(()=>{
-      const relevant=(data.historical_ifms.rows||[]).filter(r=>!global||r.state===global);
-      const sourceCount=module=>relevant.filter(r=>r.module===module).reduce((n,r)=>n+r.source_rows,0);
-      return <p className="ifms-note" aria-label="October Excel source navigation">
-       Historical Excel records in their own modules: {' '}
-       <Link to="/reliance-retail/oos">OOS Tracker ({sourceCount('oos_historical').toLocaleString('en-IN')} source rows)</Link>
-       {' · '}<Link to="/reliance-retail/manpower">Manpower Shortage ({sourceCount('shortage').toLocaleString('en-IN')}) / Vacancy ({sourceCount('manpower_vacancy').toLocaleString('en-IN')})</Link>.
-       Reported source activity does not replace verified live KPIs.
-      </p>;
-    })()}
+
     <div className="ifms-grid">{modules.map(({ id, title, icon: Icon, color, route }, index) => {
       const source=data?.modules[id];
       const rows = selectRows(source?.rows||[], global, local[id] || '');
       const stores = selectRows(inventory.rows, global, local[id] || '');
       const window = id === 'cm' || id === 'pm' ? callWindow(month, id, today) : null;
-      return <section key={id} className={`ifms-card ${index < 4 ? 'ifms-wide' : 'ifms-third'}`} style={{ '--module-color': color }} aria-labelledby={`ifms-${id}`}>
+      const historical=month==='2026-10'?historyForCard(data?.historical_ifms,id,global||local[id]||''):null;
+      return <section key={id} className={`ifms-card ${index < 4 || month==='2026-10' ? 'ifms-wide' : 'ifms-third'}`} style={{ '--module-color': color }} aria-labelledby={`ifms-${id}`}>
         <div className="ifms-card-header"><div className="ifms-card-heading"><span className="ifms-icon">{createElement(Icon, { size: 21 })}</span><div><h2 id={`ifms-${id}`}>{title}</h2><p>{window ? window.label : 'This Month Till Today'}</p></div></div><StateFilter label={`${title} reporting state`} value={local[id] || ''} global={global} onChange={value => setLocal(previous => ({ ...previous, [id]: value }))}/></div>
         {window && <p className="ifms-window">{window.status} · All applicable stores due by {window.endLabel}</p>}
-        <ModuleBody id={id} rows={rows} stores={stores} storeStatus={inventory.status} source={source}/>
-        {month==='2026-10'&&(()=>{
-          const historical=historyForCard(data?.historical_ifms,id,global||local[id]||'');
-          return historical?<p className="ifms-note" aria-label={`${title} October imported source`}>
-            <strong>October Excel reported:</strong> {historical.completed.toLocaleString('en-IN')} completed/submitted,
-            {' '}{historical.pending.toLocaleString('en-IN')} pending; {' '}{historical.sourceRows.toLocaleString('en-IN')} source rows.
-            {' '}<Link to={route}>View October records</Link>
-          </p>:null;
-        })()}
+        {historical?<RetailStatePerformance title={`${title} — October state performance`}
+         summary={historical.summary} selectedState={global||local[id]||''}
+         onState={global?undefined:value=>setLocal(old=>({...old,[id]:value}))}
+         columns={historical.isManpower?
+          [{key:'shortage',label:'Reported shortage'},{key:'vacancies',label:'Vacancies'},{key:'entries',label:'Source rows'}]:
+          [{key:'scheduled',label:id==='cleaning'?'Scheduled':'Source rows'},
+           {key:'completed',label:id==='thermography'?'Reports submitted':'Completed'},
+           {key:'pending',label:'Pending / other'},
+           {key:'percentage',label:id==='thermography'?'Submission %':'Completion %',rate:true}]}
+         note="October 28 Excel snapshot · source-reported, not FO-verified or financially approved. Select View Details for the underlying store records."/>:
+         id==='manpower'||id==='fault'?
+         <p className="ifms-note">{id==='fault'?'View the Fault Tracker for authorized live call counts and closed-ticket reconciliation.':'Select October 2026 to view reported manpower vacancies and shortages.'}</p>:
+         <ModuleBody id={id} rows={rows} stores={stores} storeStatus={inventory.status} source={source}/>}
+
         {!!source?.identity_exceptions&&<p className="ifms-note">{source.identity_exceptions} source records excluded from totals for unresolved store identity or category.</p>}
         <footer className="ifms-card-footer"><span>{global || local[id] ? REPORTING_STATES.find(state => state.code === (global || local[id]))?.label : 'All six reporting states'}</span>{route && canAccessRoute(user, route) && <Link to={route}>View Details <ArrowUpRight size={13}/></Link>}</footer>
       </section>;

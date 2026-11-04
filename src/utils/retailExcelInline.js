@@ -1,3 +1,4 @@
+import {retailReportState} from './retailStatePerformance.js';
 // Historical Excel reference records are displayed beside live records but
 // are never transformed into verified FO submissions or financial events.
 export const isExcelSource = row => row?.source_kind==='IFMS_EXCEL';
@@ -19,20 +20,22 @@ export function excelCleaningRows(rows,filters={}){
   const d=row.data||{},day=d.scheduled_date||row.record_date||row.snapshot_date||'';
   const actual=d.completed_date||null,sourceDate=row.record_date||day;
   if(![day,actual,sourceDate].some(date=>date&&date>=from&&date<=to))continue;
-  if(state&&row.reporting_state!==state)continue;
+  if(state&&retailReportState(row.reporting_state)!==retailReportState(state))continue;
   if(store&&row.retail_store_id!==store)continue;
   const code=row.store_code||d.store_code||'Unrecorded', name=d.store_name||'Store name unavailable';
   const base={
    id:'ifms-excel-'+row.id,source_kind:'IFMS_EXCEL',source_row:row.source_row,
    store:{id:row.retail_store_id||null,store_code:code,store_name:name,state:row.reporting_state},
-   reporting_state:row.reporting_state,match_status:row.match_status,
+   reporting_state:retailReportState(row.reporting_state),match_status:row.match_status,
    scheduled_date:day,display_status:excelCleaningStatus(row),
    status:row.status,not_done_reason:'Excel-reported only · FO evidence not verified',
    overdue:false,submission_ids:[],source_data:d
   };
   if(matches({...base,store_code:code,store_name:name}))schedules.push(base);
-  if(excelCleaningStatus(row)==='Completed'&&actual&&actual>=from&&actual<=to){
-   const work={...base,deep_cleaning_date:actual,status:'Completed (Excel reported)',
+  // A valid source-completed status is still a reported completion even if
+  // the Excel omits its actual date. Never invent that date or FO evidence.
+  if(excelCleaningStatus(row)==='Completed'){
+   const work={...base,deep_cleaning_date:actual||null,status:'Completed (Excel reported)',
     before_count:null,after_count:null};
    if(matches({...work,store_code:code,store_name:name}))submissions.push(work);
   }
@@ -41,14 +44,14 @@ export function excelCleaningRows(rows,filters={}){
 }
 export function excelOperationsRows(rows,kind,filters={}){
  const {state='',store='',query=''}=filters;
- return rows.filter(row=>(!state||row.reporting_state===state)&&(!store||row.retail_store_id===store))
+ return rows.filter(row=>(!state||retailReportState(row.reporting_state)===retailReportState(state))&&(!store||row.retail_store_id===store))
  .map(row=>{
   const d=row.data||{},raw=kind==='CM'?d.cm_status:kind==='PM'?d.pm_status:d.report_submission_status||row.status;
   const completed=['completed','submitted'].includes(norm(raw));
   return {
    id:'ifms-excel-'+row.id,source_kind:'IFMS_EXCEL',source_row:row.source_row,
    store_code:row.store_code||'Not recorded',store_name:d.store_name||'Not recorded',
-   reporting_state:row.reporting_state,match_status:row.match_status,
+   reporting_state:retailReportState(row.reporting_state),match_status:row.match_status,
    status:raw||'Not recorded',completed,
    call_count:null,completed_on:null,call_logs:[],
    store:{id:row.retail_store_id||null,store_code:row.store_code||'Not recorded',store_name:d.store_name||'Not recorded',can_save:false},
@@ -62,13 +65,13 @@ export function excelTrainingRows(rows,trainingClass,filters={}){
  const {from='2026-10-01',to='2026-10-31',state='',store='',query=''}=filters;
  return rows.filter(row=>{
   const day=row.data?.training_date||row.record_date||'';
-  return day>=from&&day<=to&&(!state||row.reporting_state===state)&&
+  return day>=from&&day<=to&&(!state||retailReportState(row.reporting_state)===retailReportState(state))&&
    (!store||row.retail_store_id===store)&&
    (!query||[row.store_code,row.data?.employee_code,row.data?.employee_name,row.data?.topics].join(' ').toLowerCase().includes(query.toLowerCase()));
  }).map(row=>({
   id:'ifms-excel-'+row.id,source_kind:'IFMS_EXCEL',
   training_date:row.data?.training_date||row.record_date,training_class:trainingClass,
-  state:row.reporting_state,store:{id:row.retail_store_id||null,store_code:row.store_code,store_name:row.data?.store_name||null},
+  state:retailReportState(row.reporting_state),store:{id:row.retail_store_id||null,store_code:row.store_code,store_name:row.data?.store_name||null},
   canonical_store_id:row.retail_store_id,trainer_name:null,
   employee_code:row.data?.employee_code,topics_text:row.data?.topics,
   status:row.status||row.data?.training_status||'Not recorded',
@@ -80,11 +83,11 @@ export function excelTrainingRows(rows,trainingClass,filters={}){
 
 export function excelOosRows(rows,filters={}){
  const {state='',store='',search=''}=filters;
- return rows.filter(row=>(!state||row.reporting_state===state)&&(!store||row.retail_store_id===store)&&
+ return rows.filter(row=>(!state||retailReportState(row.reporting_state)===retailReportState(state))&&(!store||row.retail_store_id===store)&&
   (!search||[row.store_code,row.data?.quotation_no,row.data?.po_number].join(' ').toLowerCase().includes(search.toLowerCase())))
  .map(row=>({
   id:'ifms-excel-'+row.id,source_kind:'IFMS_EXCEL',
-  kind:'OOS',reference:row.data?.quotation_no||'Not provided',state:row.reporting_state,
+  kind:'OOS',reference:row.data?.quotation_no||'Not provided',state:retailReportState(row.reporting_state),
   status:'EXCEL_REPORTED',store_ids:row.retail_store_id?[row.retail_store_id]:[],
   source_store_code:row.store_code,created_at:null,updated_at:null,
   rework_count:0,details:{...row.data,source_row:row.source_row,match_status:row.match_status,

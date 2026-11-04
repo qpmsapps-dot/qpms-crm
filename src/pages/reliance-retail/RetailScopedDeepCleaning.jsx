@@ -6,9 +6,11 @@ import {authenticatedApiRequest} from '../../services/api.js';
 import {indiaToday} from '../../../backend/shared/retailAttendance.js';
 import {REPORTING_STATES} from './ifmsDashboardModel.js';
 import {usePageTitle} from '../../hooks/usePageTitle.js';
-import {ReportHeader,ReportFilters,ReportStats,ReportNotice,ReportPager} from '../../components/reliance-retail/RetailReportUi.jsx';
+import {ReportHeader,ReportFilters,ReportNotice,ReportPager} from '../../components/reliance-retail/RetailReportUi.jsx';
 import {matchesReportQuery,reportPage} from '../../utils/retailReportView.js';
 import RetailCleaningSchedule from '../../components/reliance-retail/RetailCleaningSchedule.jsx';
+import RetailStatePerformance from '../../components/reliance-retail/RetailStatePerformance.jsx';
+import {summarizeCleaningSchedules} from '../../utils/retailStatePerformance.js';
 import {useAuth} from '../../context/auth-context.js';
 import {isReadOnlyUser} from '../../utils/demoAccess.js';
 import {isPlatformAdmin} from '../../utils/authRoles.js';
@@ -48,9 +50,9 @@ export default function RetailScopedDeepCleaning() {
  const matches=row=>matchesReportQuery([row.store?.store_code,row.store?.store_name,row.not_done_reason,row.display_status,row.status],query);
  const rows=[...(report?.schedules||[]),...historical.schedules].filter(row=>(!status||row.display_status===status)&&matches(row));
  const work=[...(report?.submissions||[]),...historical.submissions].filter(matches),totals=report?.totals;
+ const allSchedules=[...(report?.schedules||[]),...historical.schedules];
+ const summary=summarizeCleaningSchedules(allSchedules);
  const reportedCompleted=historical.submissions.length;
- const reportedPending=historical.schedules.filter(row=>row.display_status==='Scheduled').length;
- const completion=totals?.scheduled>0?`${Math.round(totals.completed/totals.scheduled*10000)/100}%`:'N/A';
  async function exportReport(){
   setExporting(true);setError('');
   try{
@@ -58,7 +60,7 @@ export default function RetailScopedDeepCleaning() {
    sheet.addRow(['Store Code','Store Name','Geographic State','Reporting State','Scheduled Date','Status','Not Completed Reason','Overdue','Completion Submission IDs','Source','FO evidence verified']);
    rows.forEach(row=>sheet.addRow([row.store.store_code,row.store.store_name,row.store.state,row.reporting_state,row.scheduled_date,row.display_status,row.not_done_reason,Boolean(row.overdue),(row.submission_ids||[]).join(', '),isExcelSource(row)?'October Excel (reported)':'Operational',isExcelSource(row)?'No':'See recorded submissions']));
    const submitted=book.addWorksheet('Recorded work');submitted.addRow(['Store Code','Date','Recorded Status','Before Images','After Images','Source','Verified FO submission']);
-   work.forEach(row=>submitted.addRow([row.store.store_code,row.deep_cleaning_date,row.status,row.before_count??'',row.after_count??'',isExcelSource(row)?'October Excel (reported)':'Operational',isExcelSource(row)?'No':'Yes']));
+   work.forEach(row=>submitted.addRow([row.store.store_code,row.deep_cleaning_date||'Not recorded in source',row.status,row.before_count??'',row.after_count??'',isExcelSource(row)?'October Excel (reported)':'Operational',isExcelSource(row)?'No':'Yes']));
    await downloadUnified(book,'Retail_Deep_Cleaning.xlsx');
   }catch(e){setError(e.message);}finally{setExporting(false);}
  }
@@ -80,20 +82,23 @@ export default function RetailScopedDeepCleaning() {
   {busy&&<ReportNotice>Loading cleaning tracker…</ReportNotice>}
   {error&&<ReportNotice error>{error}</ReportNotice>}
   {report&&<>
-   <ReportStats items={[
-    {label:'Schedules (live + Excel)',value:(totals?.scheduled??0)+historical.schedules.length},
-    {label:'Reported completed (live + Excel)',value:(totals?.completed??0)+reportedCompleted},
-    {label:'Excel pending',value:reportedPending},
-    {label:'FO-verified completed',value:totals?.completed},
-    {label:'Verified completion',value:completion}
-   ]}/>
+   <RetailStatePerformance title="Deep Cleaning — state-wise performance" summary={summary}
+    selectedState={state} onState={value=>{resetView();setState(value);setStore('');}}
+    note="Scheduled counts include October Excel and live schedules; Completed reflects reported status. Percentage = Completed ÷ Scheduled. Excel completions are unverified; FO photo evidence remains separately controlled."/>
    {excel.loading&&<ReportNotice>Loading October Excel schedules into the tables…</ReportNotice>}
    {excel.error&&<ReportNotice error>October Excel records could not be loaded: {excel.error}</ReportNotice>}
-   {historical.schedules.length>0&&<p className="retail-report-description">October Excel: {historical.schedules.length} source schedule rows, {reportedCompleted} source-reported completions. Excel rows are read-only and lack FO-verified before/after evidence. Live FO completion counts remain separate.</p>}
-   <p className="retail-report-description">Period/state/store totals. Recorded Not Completed: {totals?.not_completed??'N/A'} · Scheduled and pending: {totals?.pending??'N/A'}. Remaining includes all non-completed, non-cancelled schedules. An overdue schedule is not automatically a recorded failure.</p>
+   {historical.schedules.length>0&&<p className="retail-report-description">October Excel: {historical.schedules.length} source schedule rows, {reportedCompleted} source-reported completions. Excel rows are read-only, may lack actual completion dates, and lack FO-verified before/after evidence. Live FO completion counts remain separate.</p>}
+   <p className="retail-report-description">Detailed work below contains actual FO submissions and Excel-reported completions, each identified by source. The stage totals above include pending and cancelled work; an overdue schedule is not automatically a recorded failure.</p>
    {!totals&&<ReportNotice>Schedule storage is unavailable. Completion submissions remain visible; scheduled totals are unavailable.</ReportNotice>}
    {!!report.exceptions.length&&<ReportNotice>{report.exceptions.length} records excluded from totals because canonical store identity is unresolved.</ReportNotice>}
-   <div className="retail-report-panel"><div className="retail-report-panel-heading"><h2>Store-wise cleaning schedules</h2><span>{rows.length} matching schedules</span></div>
+   <div className="retail-report-panel"><div className="retail-report-panel-heading"><h2>Store-wise submitted work</h2><span>{work.length} matching submissions</span></div>
+    <div className="retail-report-table" role="region" aria-label="Submitted cleaning work" tabIndex={0}><table><thead><tr>{['Store Code','Date','Recorded status','Before / After','Evidence'].map(label=><th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{reportPage(work,workPage,size).map(row=><tr key={row.id}><td>{row.store.store_code}<p>{row.store.store_name}</p></td><td>{row.deep_cleaning_date||'Not recorded in Excel'}</td><td>{row.status}{isExcelSource(row)&&<p className="retail-report-description">Source: October Excel · unverified</p>}</td><td>{isExcelSource(row)?'Not supplied':`${row.before_count} / ${row.after_count}`}</td><td>{isExcelSource(row)?'No FO photo evidence in Excel':<button disabled={evidenceBusy} onClick={()=>void inspect(row.id)}>View evidence</button>}</td></tr>)}</tbody></table></div>
+    {!work.length&&<p className="retail-report-empty">No authorized submissions match this period, scope and search.</p>}
+    <ReportPager label="Cleaning work" count={work.length} page={workPage} size={size} onPage={setWorkPage} onSize={setSize}/>
+   </div>
+   {isPlatformAdmin(user)&&<details className="retail-report-panel retail-schedule-admin">
+    <summary className="retail-report-panel-heading">Advanced · Schedule administration and verified FO linking</summary>
+    <div className="retail-report-panel"><div className="retail-report-panel-heading"><h2>Store-wise cleaning schedules</h2><span>{rows.length} matching schedules</span></div>
     <div className="retail-report-table" role="region" aria-label="Cleaning schedules" tabIndex={0}><table><thead><tr>{['Store Code / Name','State','Scheduled date','Status','Reason / Evidence'].map(label=><th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{reportPage(rows,page,size).map(row=><tr key={row.id}>
      <td>{row.store.id?<button className="retail-report-link" onClick={()=>{resetView();setStore(row.store.id);}}>{row.store.store_code}</button>:<strong>{row.store.store_code}</strong>}<p>{row.store.store_name||'Store name unavailable'}</p>{isExcelSource(row)&&<small>Excel reported · {row.match_status==='MATCHED'?'Store matched':'Store identity unresolved'}</small>}</td><td>{REPORTING_STATES.find(item=>item.code===row.reporting_state)?.label||row.reporting_state}</td><td>{row.scheduled_date}</td>
      <td><span className="retail-report-status" data-status={row.display_status}>{row.display_status}</span>{isExcelSource(row)&&<p className="retail-report-description">Excel reported · not FO verified</p>}{row.overdue&&<span className="retail-report-overdue">Overdue · completion not recorded</span>}</td>
@@ -101,11 +106,7 @@ export default function RetailScopedDeepCleaning() {
     </tr>)}</tbody></table></div>{!rows.length&&<p className="retail-report-empty">No matching recorded schedules.</p>}
     <ReportPager label="Cleaning schedules" count={rows.length} page={page} size={size} onPage={setPage} onSize={setSize}/>
    </div>
-   <div className="retail-report-panel"><div className="retail-report-panel-heading"><h2>Store-wise submitted work</h2><span>{work.length} matching submissions</span></div>
-    <div className="retail-report-table" role="region" aria-label="Submitted cleaning work" tabIndex={0}><table><thead><tr>{['Store Code','Date','Recorded status','Before / After','Evidence'].map(label=><th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{reportPage(work,workPage,size).map(row=><tr key={row.id}><td>{row.store.store_code}<p>{row.store.store_name}</p></td><td>{row.deep_cleaning_date}</td><td>{row.status}{isExcelSource(row)&&<p className="retail-report-description">Source: October Excel · unverified</p>}</td><td>{isExcelSource(row)?'Not supplied':`${row.before_count} / ${row.after_count}`}</td><td>{isExcelSource(row)?'No FO photo evidence in Excel':<button disabled={evidenceBusy} onClick={()=>void inspect(row.id)}>View evidence</button>}</td></tr>)}</tbody></table></div>
-    {!work.length&&<p className="retail-report-empty">No authorized submissions match this period, scope and search.</p>}
-    <ReportPager label="Cleaning work" count={work.length} page={workPage} size={size} onPage={setWorkPage} onSize={setSize}/>
-   </div>
+   </details>}
    <p className="retail-report-description">Export includes matching recorded and Excel-reported records. Only operational FO submissions have verified before/after evidence; Excel-reported completions cannot be used as verified work or linked automatically.</p>
   </>}
   {evidenceBusy&&<ReportNotice>Checking authorization and loading private evidence…</ReportNotice>}

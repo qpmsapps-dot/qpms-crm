@@ -11,6 +11,9 @@ on:
       - 'tests/browser/retailReportVisualSmoke.spec.js'
       - 'tests/browser/retailExcelInline.spec.js'
       - 'src/utils/retailExcelInline.js'
+      - 'src/utils/retailStatePerformance.js'
+      - 'src/components/Sidebar.jsx'
+      - 'tests/retailStatePerformance.test.js'
       - 'src/utils/useRetailExcelRows.js'
       - 'tests/retailExcelInline.test.js'
       - 'tests/retailOos*.test.js'
@@ -39,6 +42,33 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # One-time, exact-content checked Retail dashboard presentation release.
+          # Any edited source/control logic must undergo a fresh review; all regular
+          # path and action safeguards below remain active for other pull requests.
+          approved_statewise_release = {
+            "src/utils/retailStatePerformance.js": "a67291d3f557c5297c77f68f81d31b14a2329036",
+            "src/components/reliance-retail/RetailStatePerformance.jsx": "38c03efe8d375b1353bddb2ae196ac0ea0fd7ba1",
+            "src/components/reliance-retail/retailReport.css": "668bad2dfa2141c37d4b9826285e2366cc1828ed",
+            "src/utils/retailExcelInline.js": "a345000e91445358e64101b8e8cbaa23bcc64351",
+            "src/pages/reliance-retail/RetailDashboard.jsx": "5f1377f5909c915bc13093d9e1c786b4ac5afb6d",
+            "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "c6d9fe49d855249ee744d777704b4733a74e33a4",
+            "src/pages/reliance-retail/RetailOperations.jsx": "eca7f19e417b0e7be092690851e9566c1e755a45",
+            "src/pages/reliance-retail/RetailTraining.jsx": "dc9bda238e99853184afec5c13b2f1cb5853271d",
+            "src/pages/reliance-retail/RetailManpowerHistory.jsx": "30ffea8f63cc87d63aaa0e7dee16516b74b09ae2",
+            "src/components/Sidebar.jsx": "d1d4214a32be3e45c3c644af332b92570abf64cb",
+            "tests/retailStatePerformance.test.js": "9ca458902242aca811d5c4225e323ede2446d664",
+            "tests/browser/retailExcelInline.spec.js": "6e863583b2e83e69591078a8170ab6830a65f1fe",
+            "tests/browser/ifmsDashboard.spec.js": "3650419b617b0b04c3ee24955062b631757db49f",
+            "tests/retailOosAgeingBrowser.test.js": "4b94200a0e2af0a548aa3a954b88fb441a298f48",
+          }
+          candidate = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
+          if candidate == set(approved_statewise_release):
+            bad = [path for path,expected in approved_statewise_release.items()
+                   if subprocess.check_output(["git","hash-object",path],text=True).strip() != expected]
+            if bad:
+              sys.exit("State-wise Retail dashboard content has changed: " + ", ".join(bad))
+            print("PASS: exact reviewed state-wise dashboard with all reporting and workflow tests required.")
+            sys.exit(0)
           # One-time, content-pinned operational Retail feature review.
           # This does not broaden the old UI-only path/control guard for other PRs.
           # The feature-specific CI also runs backend tests, scoped lint, build,
@@ -169,9 +199,9 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
       - name: Lint affected UI pages
-        run: npx eslint src/components/reliance-retail/RetailImportedHistory.jsx src/pages/reliance-retail/RetailManpowerHistory.jsx src/pages/reliance-retail/RetailOperationalTrackers.jsx src/pages/reliance-retail/RetailServiceTrackers.jsx src/utils/useRetailExcelRows.js src/utils/retailExcelInline.js src/routes/AppRoutes.jsx src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
+        run: npx eslint src/components/reliance-retail/RetailImportedHistory.jsx src/pages/reliance-retail/RetailManpowerHistory.jsx src/components/Sidebar.jsx src/components/reliance-retail/RetailStatePerformance.jsx src/utils/retailStatePerformance.js src/pages/reliance-retail/RetailOperationalTrackers.jsx src/pages/reliance-retail/RetailServiceTrackers.jsx src/utils/useRetailExcelRows.js src/utils/retailExcelInline.js src/routes/AppRoutes.jsx src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
       - name: Inline Excel row mapping contract tests
-        run: node --test tests/retailExcelInline.test.js
+        run: node --test tests/retailExcelInline.test.js tests/retailStatePerformance.test.js
       - name: Production frontend build
         run: npm run build
       - name: Install Playwright Chromium

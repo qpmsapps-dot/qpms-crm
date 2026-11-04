@@ -374,6 +374,15 @@ export default function Sidebar({ isOpen, onClose }) {
             <div key={group.title} className="space-y-1">
               <p className="px-3 pb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400 dark:text-slate-500">{group.title}</p>
               {group.items.map((item) => {
+                // Preserve OOS routes and code, but do not navigate into the
+                // incomplete tracker from the Retail sidebar.
+                if (item.to==='/reliance-retail/oos'||item.to==='/reliance-retail/mis/oos') {
+                  return <div key={item.to} aria-disabled="true" title="OOS Tracker — Under development"
+                    className="flex cursor-default items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-400 dark:text-slate-600">
+                    <item.icon className="h-5 w-5 shrink-0" strokeWidth={2.2}/>
+                    <span>OOS Tracker <small className="block text-[11px] font-medium">Under development</small></span>
+                  </div>;
+                }
                 const active = item.matchPrefix
                   ? location.pathname === item.to
                     || location.pathname.startsWith(`${item.to}/`)

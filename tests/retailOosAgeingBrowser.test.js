@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {createServer} from 'vite';
 import {chromium} from '@playwright/test';
 const root=fileURLToPath(new URL('../',import.meta.url));
-test('OOS register and dashboard: filters, complete export, matrix drilldown, honest gaps and responsive screenshots',{timeout:120000},async()=>{
+test('OOS register retained with workflow actions; main dashboard hides OOS during development',{timeout:120000},async()=>{
  Object.assign(process.env,{VITE_ENABLE_DEMO_AUTH:'true',VITE_APP_MODE:'demo',VITE_SUPABASE_URL:'',VITE_SUPABASE_ANON_KEY:'',VITE_API_URL:'http://127.0.0.1:4999'});
  const server=await createServer({cacheDir:path.join(os.tmpdir(),'qpms-oos-ageing-vite'),server:{host:'127.0.0.1',port:0,watch:{ignored:[path.resolve('tmp').split(path.sep).join('/')+'/**',path.resolve('dist').split(path.sep).join('/')+'/**']}},logLevel:'error'});await server.listen();
  const browser=await chromium.launch({headless:true}),context=await browser.newContext({viewport:{width:1440,height:1000}}),errors=[];
@@ -57,18 +57,19 @@ test('OOS register and dashboard: filters, complete export, matrix drilldown, ho
   assert.equal(await page.getByLabel('Financial summary').count(),0);await page.getByRole('button',{name:'Close drawer'}).click();
   await page.getByRole('button',{name:'QA-LOCAL-000',exact:true}).click();
   await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>{const aside=document.querySelector('aside');return !aside||aside.getBoundingClientRect().right<=1;});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));assert.equal(await page.getByRole('dialog').evaluate(el=>Math.round(el.getBoundingClientRect().top)),0);await page.screenshot({path:path.join(shots,'detail-drawer-mobile.png')});await page.getByRole('button',{name:'Close drawer'}).click();await page.screenshot({path:path.join(shots,'register-mobile.png'),fullPage:true});await page.getByRole('button',{name:'QA-LOCAL-000',exact:true}).click();
-  await page.getByRole('button',{name:'Close drawer'}).click();await page.setViewportSize({width:1440,height:1000});await page.goto(base+'/reliance-retail');await page.getByRole('table',{name:'Twelve-stage OOS state matrix'}).waitFor();
-  assert.equal(await page.getByRole('table',{name:'Legacy OOS state matrix'}).count(),0,'Legacy workflow must not appear');
-  assert.equal(await page.locator('.oos-board-hero,.oos-stage-board,.oos-overdue-grid').count(),0,'No large pipeline cards or legacy summary');
-  assert.equal(await page.getByRole('table',{name:'Twelve-stage OOS state matrix'}).locator('tbody tr').count(),12);
-  await page.getByRole('button',{name:'Ageing View',exact:true}).click();await mark();await page.getByLabel('State-wise OOS reporting').screenshot({path:path.join(shots,'matrix-desktop.png')});
-  const drill=page.getByRole('table',{name:'Twelve-stage OOS state matrix'}).locator('tbody tr').first().getByRole('link').nth(1);
-  assert.ok((await drill.getAttribute('href')).includes('status=OOS12_QUOTATION_SHARED'));
-  assert.equal(await page.getByRole('table',{name:'Twelve-stage OOS state matrix'}).locator('tbody tr').first().locator('.oos-compact-total').textContent(),'1');
-  await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>{const aside=document.querySelector('aside');return !aside||aside.getBoundingClientRect().right<=1;});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await page.getByLabel('State-wise OOS reporting').screenshot({path:path.join(shots,'matrix-mobile.png')});
-  await page.setViewportSize({width:1440,height:1000});await drill.click();await page.getByText('1 authorized quotations',{exact:true}).waitFor();
-  assert.equal(await page.getByLabel('Status filter').inputValue(),'OOS12_QUOTATION_SHARED');
-  assert.equal(await page.getByLabel('Geographic state').inputValue(),'KA');
+  await page.getByRole('button',{name:'Close drawer'}).click();
+  await page.setViewportSize({width:1440,height:1000});
+  await page.goto(base+'/reliance-retail');
+  await page.getByRole('heading',{name:'South Zone – IFMS Operations Summary'}).waitFor();
+  assert.equal(await page.getByRole('table',{name:'Twelve-stage OOS state matrix'}).count(),0,
+   'OOS must not appear on the main dashboard while under development');
+  assert.equal(await page.getByRole('link',{name:'OOS Tracker'}).count(),0,
+   'OOS sidebar must not be clickable');
+  await page.getByText('Under development',{exact:true}).waitFor();
+  assert.equal(await page.locator('.ifms-card').count(),9);
+  await page.screenshot({path:path.join(shots,'main-dashboard-no-oos.png'),fullPage:true});
+  await page.goto(base+'/reliance-retail/mis/oos');
+  await page.getByText('31 authorized quotations',{exact:true}).waitFor();
   assert.equal(mutations,0);
   legacyEnabled=true;await page.goto(base+'/reliance-retail/mis/oos');await page.getByText('31 authorized quotations',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Update Status',exact:true}).first().click();await page.getByRole('dialog',{name:'Update status',exact:true}).waitFor();
