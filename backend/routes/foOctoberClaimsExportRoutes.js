@@ -53,6 +53,21 @@ export function createOctoberClaimsExportRouter({ requireAuth, getClient }) {
         row.km += Number(a.eligible_km || 0);
         row.petrol += Number(a.petrol_amount || 0);
       }
+      // Read-only joined attendance/review/decision view: one row per attendance.
+      // Do not add unposted Admin decisions to official or proposed claim KM.
+      const reportRows = await allRows(client, 'fo_oct2026_missing_km_report',
+        'attendance_id,employee_code,review_cases,pending_cases,clarification_cases,admin_approved_cases,admin_approved_km');
+      const reviewByEmployee = new Map();
+      for (const rr of reportRows) {
+        const key = normalize(rr.employee_code);
+        const item = reviewByEmployee.get(key) || { reviews:0, pending:0, clarification:0, approved:0, approvedKm:0 };
+        item.reviews += Number(rr.review_cases||0);
+        item.pending += Number(rr.pending_cases||0);
+        item.clarification += Number(rr.clarification_cases||0);
+        item.approved += Number(rr.admin_approved_cases||0);
+        item.approvedKm += Number(rr.admin_approved_km||0);
+        reviewByEmployee.set(key,item);
+      }
       const groups = new Map();
       for (const row of byEmployee.values()) {
         const p = profileByCode.get(row.key) || {};
@@ -67,7 +82,7 @@ export function createOctoberClaimsExportRouter({ requireAuth, getClient }) {
           : a?.adjustment_type === 'ADD_KM' ? original + Number(a.requested_km) : original;
         const groupKey = st === 'TN' ? st + ' / ' + bs : st;
         if (!groups.has(groupKey)) groups.set(groupKey, []);
-        groups.get(groupKey).push({ ...row, name: p.full_name || '', original, proposed, status: a?.status || 'NO ADJUSTMENT' });
+        groups.get(groupKey).push({ ...row, name: p.full_name || '', original, proposed, status: a?.status || 'NO ADJUSTMENT', review: reviewByEmployee.get(row.key) || { reviews:0,pending:0,clarification:0,approved:0,approvedKm:0 } });
       }
       const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 35, bufferPages: true });
       res.type('application/pdf');
@@ -103,6 +118,20 @@ export function createOctoberClaimsExportRouter({ requireAuth, getClient }) {
             doc.moveTo(35,y-6).lineTo(807,y-6).strokeColor('#e5e7eb').stroke();
           }
           if (i===pages.length-1) {
+            const reviewTotals = records.reduce((n,r)=>({
+              reviews:n.reviews+r.review.reviews,
+              pending:n.pending+r.review.pending,
+              clarification:n.clarification+r.review.clarification,
+              approved:n.approved+r.review.approved,
+              approvedKm:n.approvedKm+r.review.approvedKm,
+            }),{reviews:0,pending:0,clarification:0,approved:0,approvedKm:0});
+            doc.font('Helvetica').fontSize(9).text(
+              'Missing KM review cases: ' + reviewTotals.reviews +
+              ' | Pending: ' + reviewTotals.pending +
+              ' | Clarification: ' + reviewTotals.clarification +
+              ' | Admin approved: ' + reviewTotals.approved +
+              ' (' + money(reviewTotals.approvedKm) + ' KM, not posted)',35,y+30);
+
             doc.font('Helvetica-Bold').fontSize(10).text(
               'Group totals: Original ' + money(records.reduce((n,r)=>n+r.original,0)) +
               ' KM  |  Proposed ' + money(records.reduce((n,r)=>n+r.proposed,0)) +
