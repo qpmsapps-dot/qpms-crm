@@ -11511,6 +11511,41 @@ export default function FOActivities() {
   const currentRole = normalizeRoleKey(generatedUserRole(user));
   const fullTechnicalAccess = hasTechnicalKmAccess(user);
   const canViewKmAudit = !readOnlyDemo && ["admin", "qpmsadmin"].includes(currentRole);
+  const [octoberExportBusy, setOctoberExportBusy] = useState(false);
+  const canExportOctober = !readOnlyDemo && ["admin", "qpmsadmin"].includes(currentRole) && Boolean(session?.access_token);
+  async function exportOctoberClaimsPdf() {
+    if (!canExportOctober || octoberExportBusy) return;
+    const state = window.prompt("October 2026 export: State (AP, KA, KL, TN, TG), or leave blank for all:", "TN");
+    if (state === null) return;
+    const selectedState = state.trim().toUpperCase();
+    if (selectedState && !["AP","KA","KL","TN","TG"].includes(selectedState)) {
+      window.alert("Select AP, KA, KL, TN or TG."); return;
+    }
+    const business = selectedState === "TN"
+      ? window.prompt("TN business: Reliance Retail, Standalone or DME. Leave blank for all:", "")
+      : "";
+    if (business === null) return;
+    if (business && !["Reliance Retail","Standalone","DME"].includes(business.trim())) {
+      window.alert("Select Reliance Retail, Standalone or DME."); return;
+    }
+    setOctoberExportBusy(true);
+    try {
+      const params = new URLSearchParams();
+      if (selectedState) params.set("state", selectedState);
+      if (business?.trim()) params.set("business", business.trim());
+      const response = await authenticatedFetch(`${API_BASE_URL}/api/fo/km/october-2026.pdf?${params}`);
+      if (!response.ok) throw new Error(response.status === 403 ? "Admin access required" : "October export unavailable");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `QPMS_Oct2026_${selectedState || "All_States"}_${business?.trim().replace(/\\s+/g,"_") || "All_Businesses"}.pdf`;
+      document.body.appendChild(link); link.click(); link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) { window.alert(error.message || "October export failed"); }
+    finally { setOctoberExportBusy(false); }
+  }
+
   const canRunBatchKmRecalculation = !readOnlyDemo && ["admin", "developer", "qpmsadmin", "md", "coo"].includes(currentRole);
   const canUseLegacyDashboardExcelExport =
     !readOnlyDemo && (fullTechnicalAccess || currentRole === "coo");
@@ -13499,6 +13534,14 @@ export default function FOActivities() {
           </div>
           {!readOnlyDemo ? (
             <>
+              {canExportOctober ? (
+                <div className="flex items-end">
+                  <button type="button" onClick={exportOctoberClaimsPdf} disabled={octoberExportBusy}
+                    className="focus-ring inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-indigo-200 bg-indigo-50 px-3 text-sm font-black text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">
+                    <Download className="h-4 w-4" /> {octoberExportBusy ? "Preparing..." : "October Export"}
+                  </button>
+                </div>
+              ) : null}
               {canUseLegacyDashboardExcelExport ? (
                 <div className="flex items-end">
                 <button
