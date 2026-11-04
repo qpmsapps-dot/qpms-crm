@@ -7,8 +7,8 @@ const MONTH_END = '2026-10-31';
 const STATES = new Set(['AP', 'KA', 'KL', 'TN', 'TG']);
 const TN_BUSINESSES = new Set(['Reliance Retail', 'Standalone', 'DME']);
 const money = n => Number(n || 0).toFixed(2);
-const normalize = s => String(s || '').replace(/\\s+/g, '').toUpperCase();
-const safe = s => String(s ?? '').replace(/[\\r\\n]/g, ' ').slice(0, 110);
+const normalize = s => String(s || '').split(/\s+/).join('').toUpperCase();
+const safe = s => String(s ?? '').split(String.fromCharCode(13)).join(' ').split(String.fromCharCode(10)).join(' ').slice(0, 110);
 const chunks = (a, n) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i*n,(i+1)*n));
 
 async function allRows(client, table, columns, apply = q => q) {
