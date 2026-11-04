@@ -82,3 +82,33 @@ export async function auditCanonicalAttendanceRecovery(client,profile,input){
    has_more:start+limit<candidates.length,rows:sample,
    note:'Read-only matching only. No employee-day conflict, AOP, status, or commit eligibility is implied.'};
 }
+
+/**
+ * Preview a bounded page of historical unknown-code records now matched by the
+ * canonical Store Master. No attendance is committed by this operation.
+ * Any existing employee-day conflict makes the preview ineligible for recovery.
+ */
+export async function previewCanonicalAttendanceRecoveryPage(client,profile,input){
+ storeImportAdmin(profile);
+ const audit=await auditCanonicalAttendanceRecovery(client,profile,input);
+ const original=await retailAttendanceHistory(client,profile,{id:input.attendance_batch_id});
+ const headers=original.raw_source?.headers;
+ if(!Array.isArray(headers)||headers.length===0||headers.length>98)
+   throw attendanceError(409,'Original attendance headers require manual review.');
+ const sourceRows=new Map(original.raw_source.rows.map(r=>[r.source_row,r]));
+ const matched=audit.rows.filter(r=>r.result==='STORE_MATCHED_REQUIRES_ATTENDANCE_VALIDATION');
+ if(!matched.length)return {...audit,preview:null,can_commit:false};
+ const workbook=XLSX.utils.book_new();
+ const grid=[headers,...matched.map(r=>{
+   const source=sourceRows.get(r.source_row);
+   if(!Array.isArray(source?.raw_cells))throw attendanceError(409,'Original source row missing raw cell evidence.');
+   return Array.from({length:headers.length},(_,i)=>source.raw_cells[i]??'');
+ })];
+ XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet(grid),'Recovery review');
+ const bytes=XLSX.write(workbook,{type:'buffer',bookType:'xlsx'});
+ const preview=await previewRetailAttendance(client,profile,bytes,'canonical-store-attendance-recovery-review.xlsx');
+ const conflicts=(preview.affected_records||[]).length;
+ return {...audit,preview,can_commit:false,
+   blocked_reason:conflicts?'Existing employee-day conflicts require manual reconciliation.':'Review-only preview; canonical recovery commit is not enabled.',
+   original_source_rows:matched.map(r=>r.source_row)};
+}
