@@ -1,4 +1,4 @@
-import {reportingState} from '../../../backend/shared/retailAttendance.js';
+import {reportingState} from '../../backend/shared/retailAttendance.js';
 
 // One reporting geography per state; KA and KN are the same reporting bucket,
 // while AP-1 and AP-2 remain distinct. PY reports under TN.
