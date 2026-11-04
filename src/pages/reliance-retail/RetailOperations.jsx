@@ -40,6 +40,7 @@ export default function RetailOperations({kind='maintenance'}) {
  const module=report?.modules?.[callKind.toLowerCase()];
  const excel=useRetailExcelRows(maintenance?'cmpm':'thermography',month==='2026-10',month);
  const reported=excelOperationsRows(excel.rows,maintenance?callKind:'THERMOGRAPHY',{state,store,query});
+ const unsearchedExcel=excelOperationsRows(excel.rows,maintenance?callKind:'THERMOGRAPHY',{state,store});
  const rows=[...(maintenance?module?.stores||[]:report?.rows||[]),...reported]
   .filter(r=>matchesReportQuery([r.store_code||r.store?.store_code,r.store_name||r.store?.store_name,r.status,r.reporting_state],query));
  const visible=reportPage(rows,page,size);
@@ -69,9 +70,9 @@ export default function RetailOperations({kind='maintenance'}) {
   }catch(e){setError(e.message);}
  }
  // October Excel rows are source-reported, not canonical verified call logs.
- const performanceSource=reported.length?reported:maintenance?(module?.stores||[]):(report?.rows||[]);
+ const performanceSource=unsearchedExcel.length?unsearchedExcel:maintenance?(module?.stores||[]):(report?.rows||[]);
  const statePerformance=summarizeReportedOperations(performanceSource);
- const sourceLabel=reported.length?'October Excel-reported rows':'Recorded operational rows';
+ const sourceLabel=unsearchedExcel.length?'October Excel-reported rows':'Recorded operational rows';
  return <section className={`retail-report ${maintenance ? "retail-maintenance-report" : "retail-thermography-report"}`}>
   <ReportHeader title={title} description={maintenance?'Record completed CM and PM calls and review monthly progress.':'Schedule inspections, record completion and track client approval within 10 calendar days.'}>
    <button disabled={!report||busy||saving} onClick={openEntry}>{maintenance?'Record CM/PM Call':'Schedule Thermography'}</button>
@@ -98,7 +99,7 @@ export default function RetailOperations({kind='maintenance'}) {
      {key:'completed',label:maintenance?'Reported complete':'Reports submitted / completed'},
      {key:'pending',label:'Pending'},
      {key:'percentage',label:maintenance?'Completion %':'Submission %',rate:true}]}
-    note={`${sourceLabel}. ${maintenance?'CM and PM windows remain separate; repeated source rows are preserved.':'Excel report submission does not constitute client approval.'} ${reported.length?'Live records are not added twice to these source totals.':''} Existing verified audit remains authoritative.`}/>
+    note={`${sourceLabel}. ${maintenance?'CM and PM windows remain separate; repeated source rows are preserved.':'Excel report submission does not constitute client approval.'} ${unsearchedExcel.length?'Live records are not added twice to these source totals.':''} Existing verified audit remains authoritative.`}/>
    <form ref={entry} onSubmit={prepare} className="retail-report-filters" aria-label={`${title} entry`}>
     <label>Store Code<select required aria-label={`${title} entry Store Code`} value={form.store_id} onChange={e=>{setConfirmation(null);setForm({...emptyForm(),store_id:e.target.value});}}><option value="">Select authorized store</option>{report.stores.filter(s=>s.can_save&&s.status==='Active').map(s=><option key={s.id} value={s.id}>{s.store_code} · {s.store_name}</option>)}</select></label>
     {!maintenance&&<label>Scheduled Date<input required aria-label="Thermography Scheduled Date" type="date" value={form.scheduled_date} onChange={e=>setForm(f=>({...f,scheduled_date:e.target.value,request_id:crypto.randomUUID()}))}/></label>}
