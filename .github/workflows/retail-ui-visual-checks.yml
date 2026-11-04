@@ -59,6 +59,7 @@ jobs:
             "tests/retailStatePerformance.test.js": "9ca458902242aca811d5c4225e323ede2446d664",
             "tests/browser/retailExcelInline.spec.js": "6e863583b2e83e69591078a8170ab6830a65f1fe",
             "tests/browser/ifmsDashboard.spec.js": "3650419b617b0b04c3ee24955062b631757db49f",
+            "tests/retailOosAgeingBrowser.test.js": "4b94200a0e2af0a548aa3a954b88fb441a298f48",
           }
           candidate = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
           if candidate == set(approved_statewise_release):
