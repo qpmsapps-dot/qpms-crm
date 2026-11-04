@@ -26,7 +26,7 @@ jobs:
           node --check backend/routes/foMissingKmAdminReviewRoutes.js
           node --check backend/routes/foOctoberClaimsExportRoutes.js
       - name: Backend unit tests
-        run: npm test --prefix backend
+        run: node --test backend/tests/*.test.js
       - name: Install frontend
         run: npm ci
       - name: Frontend production build
