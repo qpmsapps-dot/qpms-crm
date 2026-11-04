@@ -47,6 +47,10 @@ export default function RetailTraining() {
   ...excelTrainingRows(mepcExcel.rows,'MEPC',excelFilter)
  ].filter(row=>!filter.class||row.training_class===filter.class):[];
  const rows=[...liveRows,...reportedRows];
+ const reportedSummary=(!filter.zone&&!filter.fo)?[
+  ...excelTrainingRows(hkExcel.rows,'HK',{...excelFilter,query:''}),
+  ...excelTrainingRows(mepcExcel.rows,'MEPC',{...excelFilter,query:''})
+ ].filter(row=>!filter.class||row.training_class===filter.class):[];
  const change=(key,value)=>{resetView();setFilter(previous=>({...previous,[key]:value}));};
  async function inspect(id){
   const request=++inspection.current;setError('');setDetail(null);setEvidenceLinks({});setDetailBusy(true);
@@ -72,7 +76,7 @@ export default function RetailTraining() {
  const select=(label,key,options)=><label key={key}>{label}<select aria-label={`Training ${label}`} value={filter[key]||''} onChange={e=>change(key,e.target.value)}><option value="">All</option>{options.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>;
  // October Excel rows are a reported source snapshot, not FO evidence.
  // Show that source as the state report and keep verified sessions separate.
- const trainingSource=reportedRows.length?reportedRows:liveRows;
+ const trainingSource=reportedSummary.length?reportedSummary:liveRows;
  const statePerformance=summarizeTrainingByClass(trainingSource);
  const verifiedSessions=liveRows.filter(row=>String(row.status||'').toLowerCase()==='completed').length;
  return <section className="retail-report retail-training-report">
@@ -92,7 +96,7 @@ export default function RetailTraining() {
    columns={[{key:'hk_total',label:'HK entries'}, {key:'hk_completed',label:'HK completed'},
     {key:'mepc_total',label:'MEPC entries'},{key:'mepc_completed',label:'MEPC completed'},
     {key:'pending',label:'Pending'},{key:'percentage',label:'Completion %',rate:true}]}
-   note={`${reportedRows.length?'October Excel-reported training entries':'Recorded FO training sessions'}. Verified FO training sessions in these filters: ${verifiedSessions}. Source employee rows are not distinct verified sessions; no training evidence is inferred.`}/>}
+   note={`${reportedSummary.length?'October Excel-reported training entries':'Recorded FO training sessions'}. Verified FO training sessions in these filters: ${verifiedSessions}. Source employee rows are not distinct verified sessions; no training evidence is inferred.`}/>}
   {(hkExcel.loading||mepcExcel.loading)&&<ReportNotice>Loading historical Excel training into the existing training records…</ReportNotice>}
   {(hkExcel.error||mepcExcel.error)&&<ReportNotice error>October Excel training unavailable: {hkExcel.error||mepcExcel.error}</ReportNotice>}
   {isPlatformAdmin(user)&&<details className="retail-report-panel"><summary className="retail-report-panel-heading">Admin: state coverage and ownership</summary><RetailStateCoverage snapshot={snapshot||undefined}/></details>}
