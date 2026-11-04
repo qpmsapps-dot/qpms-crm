@@ -2,11 +2,12 @@ import {useState} from 'react';
 import {Bar,ComposedChart,Line,CartesianGrid,XAxis,YAxis,Tooltip,ResponsiveContainer,Legend} from 'recharts';
 import {Activity,ClipboardCheck,Download,Users,Wrench,Target,AlertCircle} from 'lucide-react';
 import {STATE_OPTIONS} from '../../../backend/shared/retailAttendance.js';
+import {attendanceTone,attendanceTrendMonthLabel} from '../../utils/retailAttendanceVisualModel.js';
 import {attendanceAopCoverage,attendanceAopValue} from '../../utils/retailAttendanceExport.js';
 import './retailAttendanceVisual.css';
 
 const format=n=>n==null||!Number.isFinite(Number(n))?'N/A':Number(n).toLocaleString('en-IN',{maximumFractionDigits:2});
-export const attendanceTone=n=>n==null||!Number.isFinite(Number(n))?'unavailable':Number(n)>=90?'good':Number(n)>=85?'watch':'critical';
+
 const asPercent=n=>n==null?'N/A':`${format(n)}%`;
 const num=(n)=>n==null?'N/A':format(n);
 
@@ -22,7 +23,7 @@ export function RetailAttendanceTrend({report}){
  return <section className="rr-attendance-trend" aria-label="Daily Attendance Trend">
   <div className="rr-attendance-section-header">
    <div className="rr-attendance-heading"><Activity size={18} aria-hidden="true"/><h2>Daily Attendance Trend</h2>
-    <span className="rr-attendance-heading-suffix">{report?.cutoff?.slice(0,7)||''}</span></div>
+    <span className="rr-attendance-heading-suffix">{attendanceTrendMonthLabel(report?.cutoff)}</span></div>
    <div className="rr-attendance-segments" role="group" aria-label="Trend metric">
     {options.map(([key,label])=><button key={key} type="button" aria-pressed={metric===key}
      onClick={()=>setMetric(key)}>{label}</button>)}
@@ -43,7 +44,7 @@ export function RetailAttendanceTrend({report}){
       <Tooltip formatter={(value,name)=>{
        if(name==='Reported man-days')return [format(value),name];
        return [asPercent(value),name];
-      }} labelFormatter={label=>`October ${String(label).padStart(2,'0')}, 2026`}/>
+      }} labelFormatter={label=>`${attendanceTrendMonthLabel(report.cutoff)} · day ${String(label).padStart(2,'0')}`}/>
       <Legend verticalAlign="bottom" height={28} iconType="circle" wrapperStyle={{fontSize:11}}/>
       <Bar isAnimationActive={false} name="Reported man-days" yAxisId="actual" dataKey={actualKey}
        fill="#7bb7f6" radius={[3,3,0,0]} maxBarSize={24}/>
