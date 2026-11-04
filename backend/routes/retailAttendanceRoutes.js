@@ -3,6 +3,7 @@ import { ATTENDANCE_MAX_FILE_BYTES } from '../shared/retailAttendance.js';
 import { XLSX_ERROR_CODES } from '../services/retailAttendanceXlsx.js';
 import {PREVIEW_ERROR_CODES} from '../services/retailAttendancePreviewAudit.js';
 import {randomUUID} from 'node:crypto';
+import { auditCanonicalAttendanceRecovery, previewCanonicalAttendanceRecoveryPage } from '../services/retailStoreAttendanceRecovery.js';
 import { attendanceAccess, previewRetailAttendance, commitRetailAttendance, retailAttendanceReport, retailAttendanceEmployees, retailAttendanceHistory } from '../services/retailAttendanceService.js';
 
 export function createRetailAttendanceRouter({ getClient, environment = process.env }) {
@@ -22,6 +23,10 @@ export function createRetailAttendanceRouter({ getClient, environment = process.
   };
   router.get('/summary', run(async req => ({ report: await retailAttendanceReport(getClient(), req.profile, req.query) })));
   router.get('/history', run(async req => ({ history: await retailAttendanceHistory(getClient(), req.profile, req.query) })));
+  // Super Admin only; recovery audit never posts attendance.
+  router.get('/recovery/canonical/audit', run(async req => ({ audit: await auditCanonicalAttendanceRecovery(getClient(),req.profile,req.query) })));
+  // Generates an ordinary attendance preview audit, but never commits recovered records.
+  router.post('/recovery/canonical/preview', run(async req => ({ recovery: await previewCanonicalAttendanceRecoveryPage(getClient(),req.profile,req.body||{}) })));
   router.get('/employees', run(async req => ({ rows: await retailAttendanceEmployees(getClient(), req.profile, req.query) })));
   router.post('/preview', (req, res, next) => {
     const controller=new AbortController(),start=performance.now();
