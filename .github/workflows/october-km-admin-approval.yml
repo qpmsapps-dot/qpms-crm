@@ -5,6 +5,8 @@ on:
       - 'backend/routes/foMissingKmAdminReviewRoutes.js'
       - 'backend/routes/foOctoberClaimsExportRoutes.js'
       - 'backend/services/foOctoberClaimsService.js'
+      - 'backend/services/foOctoberPaymentClaimsService.js'
+      - 'backend/tests/foOctoberPaymentClaims.test.js'
       - 'backend/tests/foOctoberAdminClaims*'
       - 'backend/server.js'
       - 'src/pages/FOActivities.jsx'
@@ -37,13 +39,13 @@ jobs:
       - name: Backend syntax and dedicated October endpoint tests
         run: |
           node --check backend/server.js
-          node --test backend/tests/foOctoberAdminClaims.test.js
+          node --test backend/tests/foOctoberAdminClaims.test.js backend/tests/foOctoberPaymentClaims.test.js
       - name: Real PostgreSQL permissions, duplicate races and financial preservation
         env:
           OCTOBER_CLAIMS_POSTGRES: '1'
         run: node --test backend/tests/foOctoberAdminClaimsPostgres.test.js
       - name: Scoped backend lint
-        run: npx eslint backend/services/foOctoberClaimsService.js backend/routes/foMissingKmAdminReviewRoutes.js backend/routes/foOctoberClaimsExportRoutes.js backend/tests/foOctoberAdminClaims.test.js backend/tests/foOctoberAdminClaimsPostgres.test.js
+        run: npx eslint backend/services/foOctoberPaymentClaimsService.js backend/tests/foOctoberPaymentClaims.test.js backend/services/foOctoberClaimsService.js backend/routes/foMissingKmAdminReviewRoutes.js backend/routes/foOctoberClaimsExportRoutes.js backend/tests/foOctoberAdminClaims.test.js backend/tests/foOctoberAdminClaimsPostgres.test.js
       - name: Frontend production build
         run: npm run build
       - name: Install browser test runtime

@@ -1,49 +1,41 @@
 import express from 'express';
 import PDFDocument from 'pdfkit';
 import {adminKmApprovalAuthorization} from '../services/foKmRecalculationAuthorizationService.js';
-import {employeeKey,octoberClaimData,octoberError} from '../services/foOctoberClaimsService.js';
+import {employeeKey,octoberError} from '../services/foOctoberClaimsService.js';
+import {octoberPaymentClaimData} from '../services/foOctoberPaymentClaimsService.js';
 const STATES=new Set(['AP','KA','KL','TN','TG']);
 const BUSINESSES=new Set(['Reliance Retail','Standalone','DME']);
 const text=value=>String(value??'').replace(/[\r\n\t]/g,' ');
 const amount=cents=>(cents/100).toFixed(2);
 export function renderOctoberClaimsPdf(data){
  const doc=new PDFDocument({size:'A4',layout:'landscape',margin:35,bufferPages:true});
- const header=(group,details=false)=>{
-  doc.font('Helvetica-Bold').fontSize(16).text('QPMS | CONSOLIDATED TRAVEL CLAIMS',35,28);
-  doc.font('Helvetica').fontSize(10).text(`October 01-31, 2026 | ${text(group)}`,35,52,{width:770});
-  doc.fontSize(9).text('Provisional report. Proposed and Admin-approved additional KM are NOT financially posted.',35,69,{width:770});
-  doc.moveTo(35,88).lineTo(807,88).strokeColor('#999').stroke();
-  if(details){doc.font('Helvetica-Bold').fontSize(10).text('Admin decisions - reconciliation only',35,98);return;}
-  doc.font('Helvetica-Bold').fontSize(8);
-  for(const[x,label,width]of [[35,'Employee Code',100],[140,'Employee Name',165],[310,'Payable KM',75],[390,'Proposed KM',75],[470,'Difference KM',65],[540,'Petrol INR',80],[625,'Approved KM (unposted)',95],[725,'Adjustment status',80]])doc.text(label,x,98,{width});
- };
+ const columns=[[35,'Employee Code',100],[140,'Employee Name',175],[320,'Payable KM',80],[405,'Petrol Amount (INR)',90],[500,'Other Travel Claims (INR)',100],[605,'Parking/Ticket Claims (INR)',100],[710,'Total Amount (INR)',95]];
  let first=true;
- const page=(group,details=false)=>{if(!first)doc.addPage();first=false;header(group,details)};
- if(!data.groups.length){page('No matching records');doc.font('Helvetica').fontSize(10).text('No October attendance records match the selected filters.',35,135)}
+ const page=group=>{if(!first)doc.addPage();first=false;
+  doc.font('Helvetica-Bold').fontSize(16).fillColor('#111').text('QPMS | CONSOLIDATED TRAVEL CLAIMS',35,28);
+  doc.font('Helvetica').fontSize(10).text('October 01-31, 2026 | '+text(group),35,52,{width:770});
+  doc.fontSize(8).text('Payment evidence: stored petrol + verified expenses only. INR = Indian rupees. N/A = no verified expense evidence.',35,69,{width:770});
+  doc.font('Helvetica-Bold').fontSize(8);for(const[x,label,width]of columns)doc.text(label,x,96,{width});
+ };
+ if(!data.groups.length){page('No matching records');doc.font('Helvetica').fontSize(10).text('No employees with nonzero report payable KM match the filters.',35,140)}
  for(const group of data.groups){
-  for(let start=0;start<group.rows.length;start+=17){
-   page(group.name);let y=126;doc.font('Helvetica').fontSize(8);
-   for(const r of group.rows.slice(start,start+17)){
-    for(const[x,value,width]of [[35,r.employee_code,100],[140,r.name,165],[310,amount(r.original),75],[390,amount(r.proposed),75],[470,amount(r.proposed-r.original),65],[540,amount(r.petrol),80],[625,amount(r.approvedKm),95],[725,r.status,80]])doc.text(text(value),x,y,{width,ellipsis:true,lineBreak:false});
-    y+=21;doc.moveTo(35,y-6).lineTo(807,y-6).strokeColor('#e5e7eb').stroke();
+  for(let start=0;start<group.rows.length;start+=14){page(group.name);let y=135;doc.font('Helvetica').fontSize(8);
+   for(const r of group.rows.slice(start,start+14)){
+    const values=[r.employee_code,r.name,amount(r.reportKm)+(r.reportOnlyKm?'*':''),amount(r.petrol),r.otherVerified?amount(r.other):'N/A',r.parkingTicketVerified?amount(r.parkingTicket):'N/A',amount(r.total)+(!r.otherVerified||!r.parkingTicketVerified||r.pendingExpenses?'*':'')];
+    columns.forEach(([x,,width],i)=>doc.text(text(values[i]),x,y,{width,ellipsis:true,lineBreak:false}));y+=21;
+    doc.moveTo(35,y-6).lineTo(807,y-6).strokeColor('#e5e7eb').stroke();
    }
-   if(start+17>=group.rows.length){
-    const sum=key=>group.rows.reduce((n,r)=>n+r[key],0);
-    doc.font('Helvetica-Bold').fontSize(10).text(`Group totals: Payable ${amount(sum('original'))} KM | Proposed ${amount(sum('proposed'))} KM | Petrol INR ${amount(sum('petrol'))}`,35,y+8,{width:770});
-    doc.font('Helvetica').fontSize(9).text(`Original review cases: ${sum('reviews')} | Pending: ${sum('pending')} | Clarification: ${sum('clarification')} | Admin approved: ${sum('approved')} (${amount(sum('approvedKm'))} KM, not posted)`,35,y+27,{width:770});
+   if(start+14>=group.rows.length){
+    const sum=k=>group.rows.reduce((n,r)=>n+r[k],0),values=['GROUP TOTAL','',amount(sum('reportKm')),amount(sum('petrol')),amount(sum('other')),amount(sum('parkingTicket')),amount(sum('total'))+'*'];
+    doc.font('Helvetica-Bold').fontSize(8);columns.forEach(([x,,width],i)=>doc.text(values[i],x,y+5,{width,lineBreak:false}));
    }
-  }
-  const decisions=group.rows.flatMap(r=>r.decisions);
-  if(decisions.length){
-   page(group.name,true);let y=125;
-   for(const d of decisions){
-    const lines=[`${text(d.employee_code)} | ${d.attendance_date} | ${text(d.decision)} | Additional KM (NOT POSTED): ${Number(d.approved_additional_km).toFixed(2)}`,`Admin Auth ID: ${d.approved_by} | Decided: ${d.decided_at}`,`Evidence: ${text(d.evidence_reference)}`,`Justification: ${text(d.justification)}`];
-    for(const line of lines){doc.font('Helvetica').fontSize(9);const height=doc.heightOfString(line,{width:770});if(y+height>530){page(group.name,true);y=125;doc.font('Helvetica').fontSize(9)}doc.text(line,35,y,{width:770});y+=height+4}y+=10;
-   }
+   doc.font('Helvetica').fontSize(8).text('* Amount totals are verified subtotals, not final settlement approval. N/A and unapproved expenses are excluded.',35,467,{width:770});
+   doc.text('Other travel: approved auto/other fares. Parking/ticket: approved parking, bus/train tickets and explicit ticket/fare claims; each counted once.',35,481,{width:770});
+   const pending=group.rows.reduce((n,r)=>n+r.pendingExpenses,0);doc.text('Expense records pending verification (excluded): '+pending+'. Group expense totals sum verified records only; 0.00 does not approve absent evidence.',35,500,{width:770});
+   const extras=group.rows.filter(r=>r.reportOnlyKm);if(extras.length)doc.text(extras.map(r=>r.employee_code+': '+amount(r.original)+' posted + '+amount(r.reportOnlyKm)+' report-only KM; Branch Head-approved, Super Admin-confirmed, pending formal audit verification. No additional petrol posted.').join(' '),35,520,{width:770});
   }
  }
- // Every page receives global pagination; footers never trigger another page.
- const range=doc.bufferedPageRange();for(let i=range.start;i<range.start+range.count;i++){doc.switchToPage(i);doc.font('Helvetica').fontSize(8).fillColor('#555').text(`Page ${i+1} of ${range.count} | Existing payable and petrol only are financially posted.`,35,548,{width:770,lineBreak:false})}
+ const range=doc.bufferedPageRange();for(let i=range.start;i<range.start+range.count;i++){doc.switchToPage(i);doc.font('Helvetica').fontSize(8).fillColor('#555').text('Page '+(i+1)+' of '+range.count+' | Existing financial records unchanged.',35,548,{width:770,lineBreak:false})}
  return doc;
 }
 export function createOctoberClaimsExportRouter({requireAuth,getClient}){
@@ -55,12 +47,12 @@ export function createOctoberClaimsExportRouter({requireAuth,getClient}){
    for(const key of ['state','business','employee'])if(req.query[key]!=null&&typeof req.query[key]!=='string')throw octoberError('Invalid report filter.',400);
    const state=String(req.query.state||'').trim().toUpperCase(),business=String(req.query.business||'').trim(),employee=employeeKey(req.query.employee||'');
    if(state&&!STATES.has(state)||business&&!BUSINESSES.has(business)||employee.length>80)throw octoberError('Invalid report filter.',400);
-   const data=await octoberClaimData(getClient(),{state,business,employee});
+   const data=await octoberPaymentClaimData(getClient(),{state,business,employee});
    const doc=renderOctoberClaimsPdf(data);
    doc.on('error',error=>res.destroy(error));
    res.type('application/pdf');res.setHeader('Content-Disposition','attachment; filename="QPMS_Oct2026_Consolidated_Claims.pdf"');
    res.setHeader('X-October-Attendance-Rows',String(data.totals.attendance_rows));
-   res.setHeader('X-October-Payable-Km',amount(data.totals.original));res.setHeader('X-October-Petrol',amount(data.totals.petrol));
+   res.setHeader('X-October-Payable-Km',amount(data.totals.reportKm));res.setHeader('X-October-Petrol',amount(data.totals.petrol));
    res.setHeader('Cache-Control','private, no-store');doc.pipe(res);doc.end();
   }catch(error){if(res.headersSent)return res.destroy(error);res.status(error.statusCode||(error.code==='42501'?403:503)).json({ok:false,message:error.statusCode?error.message:error.code==='42501'?'Report database permission unavailable.':'October PDF export unavailable; no financial data was changed.'})}
  });
