@@ -11,7 +11,7 @@ test('Retail role access separates HK, technical and KAM and denies other busine
  const hk={role:'MIS',designation:'HK MIS',business:'Reliance Retail'},technical={role:'MIS',designation:'Technical MIS',business:'Reliance Retail'},kam={role:'KAM',business:'Reliance Retail'};
  for(const p of [hk,technical,kam])assert.equal(retailWebAccess(p).dashboard,true);
  assert.equal(canAccessRoute(hk,'/reliance-retail/store-master'),true);
- assert.equal(canAccessRoute(hk,'/reliance-retail/fault-tracker'),false);
+ assert.equal(canAccessRoute(hk,'/reliance-retail/fault-tracker'),true);
  assert.equal(canAccessRoute(technical,'/reliance-retail/fault-tracker'),true);
  // Unified master navigation is shared; database state grants still gate all data/actions.
  assert.equal(canAccessRoute(technical,'/reliance-retail/store-master'),true);
@@ -20,8 +20,10 @@ test('Retail role access separates HK, technical and KAM and denies other busine
  assert.equal(canAccessRoute({role:'DEMO_VIEWER'},'/reliance-retail'),false);
 });
 test('Retail routes resolve real pages and explicit unfinished pages while preserving KM',()=>{
- const s=read('src/routes/AppRoutes.jsx');for(const name of ['RetailDashboard','RetailAttendance','RetailTraining','RetailStoreMaster','RetailScopedFaultTracker','RetailScopedDeepCleaning'])assert.match(s,new RegExp('element: <'+name));
- for(const name of ['CMPM','Thermography'])assert.match(s,new RegExp('RetailComingSoon title="'+name+'"'));
+ const s=read('src/routes/AppRoutes.jsx');for(const name of ['RetailDashboard','RetailAttendance','RetailTraining','RetailStoreMaster','RetailOperations','RetailScopedDeepCleaning'])assert.match(s,new RegExp('element: <'+name));
+ assert.match(s,/reliance-retail\/fault-tracker.*Navigate to="\/fault-tracker"/);
+ assert.match(s,/RetailOperations kind="maintenance"/);
+ assert.match(s,/RetailOperations kind="thermography"/);
  assert.match(s,/m-here-attendance.*Navigate to="\/reliance-retail\/attendance"/);
  assert.match(s,/path: 'fo-activities'/);
  assert.match(read('src/pages/reliance-retail/RetailComingSoon.jsx'),/Under Development/);

@@ -141,6 +141,13 @@ export default function RetailAttendance() {
     {report&&<>
       <RetailAttendanceTrend report={report}/>
       <RetailAttendanceKpis report={report}/>
+      {total.coverage&&<section className="rounded-xl border p-4 text-sm" aria-label="Covered attendance percentages">
+        <h3 className="font-semibold">Attendance within verified coverage</h3>
+        <p>{period}: HK {pct(total.coverage.hk.percentage)}; MEPC {pct(total.coverage.mepc.percentage)}; combined {pct(total.coverage.overall.percentage)}.</p>
+        <p>HK: {number(total.coverage.hk.actual)} / {number(total.coverage.hk.target)} across {number(total.coverage.hk.covered_store_days)} store-days.
+          MEPC: {number(total.coverage.mepc.actual)} / {number(total.coverage.mepc.target)} across {number(total.coverage.mepc.covered_store_days)} store-days.</p>
+        <p>These percentages cover only store, class and date combinations with uploaded attendance and approved AOP in the selected period. Missing uploads are excluded. Full-scope percentages below require complete coverage.</p>
+      </section>}
       <RetailAttendanceSummary report={report} onState={setDrill} onExport={exportReport}/>
       {!total.complete&&<details className="rr-attendance-caution" role="status">
         <summary><AlertTriangle size={14} className="inline mr-1"/>Incomplete attendance or AOP coverage — verified percentages are N/A</summary>

@@ -155,3 +155,14 @@ test('partial import confirmation, retained history and downloadable source exce
   expect(book.getWorksheet('Source rows').getRow(5).getCell(4).value).toBe('Goods Receiving');
   expect(book.getWorksheet('Exceptions').rowCount).toBe(3);
 });
+
+
+test('covered percentages disclose their matched period and remain separate from full-scope coverage',async({page})=>{
+ await seed(page,{partial:true});
+ const section=page.getByRole('region',{name:'Covered attendance percentages'});
+ await expect(section).toBeVisible();
+ await expect(section).toContainText('Attendance within verified coverage');
+ await expect(section).toContainText('Missing uploads are excluded');
+ await expect(section).toContainText('HK:');
+ await expect(page.getByText('Incomplete attendance or AOP coverage', {exact:false})).toBeVisible();
+});

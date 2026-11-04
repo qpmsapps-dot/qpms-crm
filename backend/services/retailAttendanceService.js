@@ -162,7 +162,7 @@ export async function previewRetailAttendance(client, profile, bytes, filename, 
   const checksum = createHash('sha256').update(bytes).digest('hex');
   const existing = await step('lookup',()=>previewDatabase(client.from('retail_attendance_uploads').select('id,status,uploaded_by,validation_summary').eq('kind', 'attendance').eq('checksum', checksum).maybeSingle(),'lookup',context.signal));
   if(retailMisRole(profile?.role)&&existing&&existing.uploaded_by!==profile.id)throw attendanceError(409,'This workbook already belongs to another uploader. Its audit and ownership were not changed.');
-  if (existing?.status === 'committed') return { ...compactPreviewSummary(existing.validation_summary), id: existing.id, idempotent: true, committed: true };
+  if (!context.reviewOnly && existing?.status === 'committed') return { ...compactPreviewSummary(existing.validation_summary), id: existing.id, idempotent: true, committed: true };
   const conflicts = await step('conflicts',()=>previewDatabase(client.rpc('rpc_retail_attendance_conflicts', { p_rows: result.valid }),'conflicts',context.signal));
   if(retailMisRole(profile?.role)&&conflicts.some(r=>!stores.some(s=>s.id===r.retail_store_id)||(profile._retailMisModule!=='imports'&&r.class!==(profile._retailMisModule==='attendance-hk'?'HK':'MEPC'))))throw attendanceError(403,'Employee/day conflicts extend outside this assigned scope; independent reconciliation required.');
   const dates = [...new Set(result.valid.map(r => r.attendance_date))].sort();
@@ -173,6 +173,8 @@ export async function previewRetailAttendance(client, profile, bytes, filename, 
     excluded_rows: result.excluded.length, excluded: result.excluded, date_counts: counts('attendance_date'), class_counts: counts('class'), status_counts: counts('original_status'), affected_records: conflicts, dates, sheet: parsed.sheet, preview: result.valid.slice(0, 100), can_commit: result.valid.length > 0,
     note: 'Only validated rows are imported. Rejected/conflicting and excluded rows remain in source history and receive no attendance credit.' });
   timings.summary=Math.round(performance.now()-countStart);
+  // Recovery review never persists a batch or creates an import capability.
+  if (context.reviewOnly) return {...summary, can_commit:false, review_only:true};
   const previewKey = randomUUID();
   const rawSource=await step('audit_encode',()=>encodeAttendanceSource({sheet:parsed.sheet,headers:parsed.headers,rows:parsed.rows,excluded:result.excluded,rejected:result.rejected}));
   Object.assign(countsLog,{source_audit_json_bytes:rawSource.uncompressed_bytes,compressed_source_base64_bytes:rawSource.data.length});
@@ -250,7 +252,7 @@ export async function retailAttendanceEmployees(client, profile, input) {
 export async function retailAttendanceHistory(client, profile, input = {}) {
   attendanceAccess(profile, true);
   if (input.id) {
-    const batch=await data(client.from('retail_attendance_uploads').select('id,filename,checksum,status,uploaded_at,committed_at,correction_reason,raw_source,validation_summary').eq('id', input.id).single());
+    const batch=await data(client.from('retail_attendance_uploads').select('id,kind,filename,checksum,status,uploaded_at,committed_at,correction_reason,raw_source,validation_summary').eq('id', input.id).single());
     return {...batch,raw_source:await decodeAttendanceSource(batch.raw_source)};
   }
   const page = Math.max(0, Number.parseInt(input.page,10) || 0);
