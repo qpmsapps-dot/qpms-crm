@@ -1,4 +1,4 @@
-import {useState} from 'react';
+import {useState,createElement} from 'react';
 import {Bar,ComposedChart,Line,CartesianGrid,XAxis,YAxis,Tooltip,ResponsiveContainer,Legend} from 'recharts';
 import {Activity,ClipboardCheck,Download,Users,Wrench,Target,AlertCircle} from 'lucide-react';
 import {STATE_OPTIONS} from '../../../backend/shared/retailAttendance.js';
@@ -82,7 +82,7 @@ export function RetailAttendanceKpis({report}){
   {cards.map(({title,value,icon:Icon,hint,kind})=>{
    const rate=kind==='rate'?total.overall_pct:kind==='hk'?total.hk_pct:kind==='mepc'?total.mepc_pct:null;
    return <article className={`rr-attendance-kpi rr-attendance-kpi-${kind}`} key={title}>
-    <div className="rr-attendance-kpi-label"><span className="rr-attendance-kpi-icon"><Icon size={18}/></span><span>{title}</span></div>
+    <div className="rr-attendance-kpi-label"><span className="rr-attendance-kpi-icon">{createElement(Icon,{size:18})}</span><span>{title}</span></div>
     <strong className={rate!=null?`tone-${attendanceTone(rate)}`:''}>{value}</strong>
     <small>{hint}</small>
    </article>;
