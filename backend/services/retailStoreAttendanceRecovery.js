@@ -60,9 +60,12 @@ export async function auditCanonicalAttendanceRecovery(client,profile,input){
    }
  }
  const unknownRows=new Map(source.rejected
-   .filter(r=>r.reasons?.includes('Unknown Reliance Retail Store Code'))
+   .filter(r=>Array.isArray(r.reasons)&&r.reasons.length===1&&r.reasons[0]==='Unknown Reliance Retail Store Code')
    .map(r=>[r.source_row,r]));
  const candidates=source.rows.filter(r=>unknownRows.has(r.source_row));
+ if(new Set(candidates.map(r=>r.source_row)).size!==candidates.length)
+   throw attendanceError(409,'Duplicate original source row identifiers; manual review required.');
+ const matched=candidates.reduce((n,r)=>n+(canonical.has(String(unknownRows.get(r.source_row).store_code||'').trim().toUpperCase())?1:0),0);
  const start=page*limit;
  const sample=candidates.slice(start,start+limit).map(row=>{
    const rejected=unknownRows.get(row.source_row);
@@ -75,7 +78,7 @@ export async function auditCanonicalAttendanceRecovery(client,profile,input){
      retail_store_id:store?.id||null,state:store?.state||null};
  });
  return {attendance_batch_id:original.id,source_checksum:original.checksum,
-   total_originally_unknown:candidates.length,page,page_size:limit,
+   total_originally_unknown:candidates.length,matched_store_rows:matched,unmatched_store_rows:candidates.length-matched,page,page_size:limit,
    has_more:start+limit<candidates.length,rows:sample,
    note:'Read-only matching only. No employee-day conflict, AOP, status, or commit eligibility is implied.'};
 }
