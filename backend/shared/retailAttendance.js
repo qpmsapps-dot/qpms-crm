@@ -49,6 +49,13 @@ export function dailyTarget(aop, date, kind, cycleAnchor = date.slice(0,7) + '-0
 export function percentage(actual, target) { return target === 0 ? null : actual / target * 100; }
 const rounded = value => Math.round((value + Number.EPSILON) * 1e8) / 1e8;
 function finalize(row) {
+  for(const kind of ['hk','mepc']){
+    const covered=row.coverage[kind];
+    covered.actual=rounded(covered.actual);covered.target=rounded(covered.target);
+    covered.percentage=percentage(covered.actual,covered.target);
+  }
+  row.coverage.overall={actual:rounded(row.coverage.hk.actual+row.coverage.mepc.actual),target:rounded(row.coverage.hk.target+row.coverage.mepc.target)};
+  row.coverage.overall.percentage=percentage(row.coverage.overall.actual,row.coverage.overall.target);
   for (const field of ['hk_aop', 'mepc_aop', 'hk_actual', 'mepc_actual', 'hk_target', 'mepc_target']) row[field] = rounded(row[field]);
   row.total_aop = rounded(row.hk_aop + row.mepc_aop);
   row.total_actual = rounded(row.hk_actual + row.mepc_actual);
@@ -61,7 +68,7 @@ function finalize(row) {
   row.over_target = row.missing_aop.length === 0 && row.total_actual > row.total_target;
   return row;
 }
-const empty = extra => ({ hk_aop: 0, mepc_aop: 0, hk_actual: 0, mepc_actual: 0, hk_target: 0, mepc_target: 0, missing_dates: [], missing_aop: [], ...extra });
+const empty = extra => ({ hk_aop: 0, mepc_aop: 0, hk_actual: 0, mepc_actual: 0, hk_target: 0, mepc_target: 0, missing_dates: [], missing_aop: [], coverage:{hk:{actual:0,target:0,covered_store_days:0},mepc:{actual:0,target:0,covered_store_days:0}}, ...extra });
 export function summarizeAttendance({ stores, attendance, aop, cutoff, view = 'mtd', state = '' }) {
   const dates = view === 'daily' ? [validDate(cutoff)] : monthDates(cutoff);
   const visible = stores.filter(s => !state || reportingState(s.state) === reportingState(state));
@@ -90,6 +97,15 @@ export function summarizeAttendance({ stores, attendance, aop, cutoff, view = 'm
       if (mepc.length === 1) { mepcTarget = dailyTarget(mepc[0].mepc_count,date,'MEPC',mepc[0].mepc_cycle_anchor || date.slice(0,7)+'-01'); result.mepc_target += mepcTarget; if(date===cutoff) result.mepc_aop=Number(mepc[0].mepc_count); }
       const actual = byStore.get(`${store.id}:${date}`);
       if ((hkTarget > 0 && !actual?.classes.has('HK')) || (mepcTarget > 0 && !actual?.classes.has('MEPC')) || (!actual && (hk.length !== 1 || mepc.length !== 1))) result.missing_dates.push(date);
+      // Compare each covered class only against its approved target on that same date.
+      // Missing class uploads contribute neither a zero actual nor a target to this subset.
+      for(const [kind,target,configs] of [['hk',hkTarget,hk],['mepc',mepcTarget,mepc]]){
+        if(configs.length===1 && actual?.classes.has(kind.toUpperCase())){
+          result.coverage[kind].actual+=actual[kind.toUpperCase()];
+          result.coverage[kind].target+=target;
+          result.coverage[kind].covered_store_days++;
+        }
+      }
       if (actual) { result.hk_actual += actual.HK; result.mepc_actual += actual.MEPC; }
     }
     return finalize(result);
@@ -100,6 +116,7 @@ export function summarizeAttendance({ stores, attendance, aop, cutoff, view = 'm
     const group = states.get(row.state) || empty({ state: row.state });
     for (const target of [group, total]) {
       for (const key of ['hk_aop', 'mepc_aop', 'hk_actual', 'mepc_actual', 'hk_target', 'mepc_target']) target[key] += row[key];
+      for(const kind of ['hk','mepc'])for(const key of ['actual','target','covered_store_days'])target.coverage[kind][key]+=row.coverage[kind][key];
       target.missing_dates = [...new Set([...target.missing_dates, ...row.missing_dates])].sort();
       target.missing_aop = [...new Set([...target.missing_aop, ...row.missing_aop])].sort();
     }

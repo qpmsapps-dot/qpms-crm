@@ -1,6 +1,6 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync,existsSync} from 'node:fs';
 import {execFileSync, spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import XLSX from 'xlsx';
@@ -59,7 +59,7 @@ test('Phase 1 real isolated PostgreSQL: upload, preview, import, report, correct
   const client={from:table=>new Query(table),rpc:async(name,args)=>{try{const pairs=Object.entries(args).map(([k,v])=>k+'=>'+(Array.isArray(v)?k==='p_store_ids'?"array["+v.map(quote).join(',')+"]::uuid[]":quote(JSON.stringify(v))+'::jsonb':typeof v==='boolean'?String(v):quote(v)));const call='public.'+name+'('+pairs.join(',')+')';const output=sql(name==='rpc_retail_attendance_conflicts'?"select coalesce(jsonb_agg(to_jsonb(r)),'[]'::jsonb) from "+call+' r;':'select to_jsonb('+call+');','service_role');return{data:JSON.parse(output)};}catch(error){return{error};}}};
   docker(['run','--detach','--name',name,'--network','none','--tmpfs','/var/lib/postgresql/data','-e','POSTGRES_HOST_AUTH_METHOD=trust','postgres:17']);
   try{
-    let ready=false;for(let n=0;n<60;n++){try{docker(['exec',name,'pg_isready','-U','postgres']);ready=true;break;}catch{await new Promise(r=>setTimeout(r,250));}}assert.ok(ready);
+    let ready=false;for(let n=0;n<60;n++){try{docker(['exec',name,'pg_isready','-h','127.0.0.1','-U','postgres']);ready=true;break;}catch{await new Promise(r=>setTimeout(r,250));}}assert.ok(ready);
     sql(`create role anon;create role authenticated;create role service_role bypassrls;create table public.profiles(id uuid primary key,role text,designation text,department text,is_active boolean);create table public.reliance_retail_store_master(id uuid primary key,store_code text,store_name text,state text,status text);grant select on public.profiles,public.reliance_retail_store_master to service_role;insert into public.profiles values('${admin.id}','ADMIN',null,null,true);`);
     for(const s of stores)sql(`insert into public.reliance_retail_store_master values(${Object.values(s).map(quote).join(',')});`);
     sql(readFileSync(new URL('../../supabase/migrations_2_0/232_reliance_retail_uploaded_attendance.sql',import.meta.url),'utf8'));
@@ -105,7 +105,7 @@ test('Phase 1 real isolated PostgreSQL: upload, preview, import, report, correct
       const results=await Promise.allSettled([a,b]);assert.equal(results.filter(r=>r.status==='fulfilled').length,1);assert.match(results.find(r=>r.status==='rejected').reason.message,/cannot exceed 1/);
       assert.ok(Number(records("select sum(credit) as n from public.retail_employee_daily_attendance where employee_code='RACE' and superseded_at is null")[0].n)<=1);
     });
-    await t.test('October reference workbook imports every supported date with unmatched and excluded source rows retained',async()=>{
+    await t.test('October reference workbook imports every supported date with unmatched and excluded source rows retained',{skip:!existsSync(new URL('../../artifacts/retail-attendance-aop-review-20261022/read-only-source.json',import.meta.url))||!existsSync(new URL('../../artifacts/reliance-attendance-reference/attendance-sample.xlsx',import.meta.url))},async()=>{
       const archived=JSON.parse(readFileSync(new URL('../../artifacts/retail-attendance-aop-review-20261022/read-only-source.json',import.meta.url),'utf8')).reliance_retail_store_master;
       sql('insert into public.reliance_retail_store_master(id,store_code,store_name,state,status) values '+archived.map(s=>'('+[s.id,s.store_code,s.store_name,s.state,s.status].map(quote).join(',')+')').join(',')+';');
       const bytes=readFileSync(new URL('../../artifacts/reliance-attendance-reference/attendance-sample.xlsx',import.meta.url));
