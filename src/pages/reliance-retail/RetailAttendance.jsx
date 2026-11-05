@@ -1,8 +1,9 @@
 import RetailResponsibilityPanel from '../../components/reliance-retail/RetailResponsibilityPanel.jsx';
 import '../../components/reliance-retail/retailReport.css';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { CalendarDays, Upload, AlertTriangle, X } from 'lucide-react';
+import { useModalFocus } from '../../hooks/useModalFocus.js';
 import { usePageTitle } from '../../hooks/usePageTitle.js';
 import { retailAttendanceApi } from '../../services/retailAttendanceApi.js';
 import { attendanceColumns, attendanceAopCoverage, attendanceAopValue, exportRetailAttendance, exportRetailAttendanceSource } from '../../utils/retailAttendanceExport.js';
@@ -18,15 +19,15 @@ const button = 'inline-flex items-center justify-center gap-2 rounded-lg border 
 const errorText = error => error.response?.data?.message || error.message;
 
 function SummaryTable({ rows, total, onState, report }) {
-  return <div className="overflow-x-auto"><table className="retail-attendance-summary w-full text-right text-sm"><thead className="bg-blue-50 text-blue-950"><tr>{attendanceColumns.map(([key, label]) => <th key={key} className={`px-1 py-3 ${key === 'state' ? 'text-left' : ''}`}>{label}</th>)}</tr></thead>
+  return <div role="region" aria-label="Store attendance summary, scroll horizontally for all columns" tabIndex={0} className="overflow-x-auto"><table className="retail-attendance-summary w-full text-right text-sm" style={{minWidth:1580,fontSize:14}}><caption className="sr-only">Store attendance: all manpower, actual, target and percentage columns</caption><thead className="bg-blue-50 text-blue-950"><tr>{attendanceColumns.map(([key, label]) => <th key={key} scope="col" className={`px-3 py-3 ${key === 'state' ? 'text-left' : ''}`}>{label}</th>)}</tr></thead>
     <tbody>{[...rows, total].map((row, index) => <tr key={row.state} className={`border-t border-slate-100 ${index === rows.length ? 'bg-blue-50 font-bold' : ''}`}>
-      {attendanceColumns.map(([key]) => <td key={key} className={`whitespace-nowrap px-1 py-3 ${key.endsWith('_pct') ? color(row[key]) : ''} ${key === 'state' ? 'text-left font-semibold' : ''}`}>
+      {attendanceColumns.map(([key]) => <td key={key} style={key === 'state' ? {backgroundColor:index === rows.length ? '#eaf2ff' : '#fff'} : undefined} className={`whitespace-nowrap px-3 py-3 ${key.endsWith('_pct') ? color(row[key]) : ''} ${key === 'state' ? 'text-left font-semibold' : ''}`}>
         {key === 'state' ? onState && index !== rows.length ? <button className="text-blue-700 underline" onClick={() => onState(row.state)}>{row.state}</button> : row.state : key.endsWith('_pct') ? pct(row[key]) : key.includes('aop') ? number(attendanceAopValue(report, row, key)) : row.missing_aop.length && key.includes('target') ? 'N/A' : number(row[key])}
       </td>)}
     </tr>)}</tbody></table></div>;
 }
 
-function UploadDialog({ onClose, onImported }) {
+function UploadDialog({ onClose, onImported, fallbackFocusRef }) {
   const [file, setFile] = useState(null); const [preview, setPreview] = useState(null); const [busy, setBusy] = useState(false);
   const [error, setError] = useState(''); const [replace, setReplace] = useState(false); const [reason, setReason] = useState('');
   function select(value) {
@@ -45,10 +46,11 @@ function UploadDialog({ onClose, onImported }) {
     try { await retailAttendanceApi.commit({ id: preview.id, preview_key: preview.preview_key, replace, reason }); await onImported(); onClose(); }
     catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }
+  const dialogRef = useModalFocus({ onClose, canDismiss: !busy, fallbackFocusRef });
   const corrections = preview?.affected_records?.length || 0;
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"><section role="dialog" aria-modal="true" aria-label="Upload Day Attendance" className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
-    <div className="flex items-center justify-between"><h2 className="text-lg font-bold text-blue-950">Upload Day Attendance</h2><button aria-label="Close upload" disabled={busy} onClick={onClose}><X size={20}/></button></div>
-    <p className="my-3 text-sm text-slate-600">Preview the M-here workbook before import. Store and state are resolved from the Reliance Retail Store Master.</p>
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"><section ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="attendance-upload-title" aria-describedby="attendance-upload-description" aria-busy={busy} className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+    <div className="flex items-center justify-between"><h2 id="attendance-upload-title" className="text-lg font-bold text-blue-950">Upload Day Attendance</h2><button aria-label="Close upload" disabled={busy} onClick={onClose}><X size={20}/></button></div>
+    <p id="attendance-upload-description" className="my-3 text-sm text-slate-600">Preview the M-here workbook before import. Store and state are resolved from the Reliance Retail Store Master.</p>
     <label onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (!busy) select(event.dataTransfer.files[0]); }} className="block rounded-xl border-2 border-dashed border-blue-200 bg-blue-50/40 p-6 text-center text-sm">
       Select or drop an .xlsx file (maximum 15 MB)<input aria-label="Attendance Excel file" disabled={busy} type="file" accept=".xlsx" onChange={e => select(e.target.files[0])} className="mx-auto mt-3 block max-w-full"/>
     </label>
@@ -76,6 +78,14 @@ function UploadDialog({ onClose, onImported }) {
 
 export default function RetailAttendance() {
   usePageTitle('Reliance Retail Attendance');
+  const headingRef = useRef(null);
+  const uploadButtonRef = useRef(null);
+  const setUploadButtonRef = useCallback(node => {
+    const previous = uploadButtonRef.current;
+    uploadButtonRef.current = node;
+    // Refresh can remove the launcher just after the dialog restores focus to it.
+    if (!node && previous === document.activeElement) headingRef.current?.focus();
+  }, []);
   const {user}=useAuth();
   const today = indiaToday();
   const [cutoff, setCutoff] = useState(''); const [view, setView] = useState('mtd'); const [state, setState] = useState('');
@@ -107,19 +117,19 @@ export default function RetailAttendance() {
   const period = view === 'daily' ? cutoff : `${cutoff.slice(0,7)}-01 to ${cutoff}`;
   return <div className="retail-report retail-attendance-workspace rr-attendance-page text-slate-800">
     <header className="rr-attendance-page-header">
-      <div className="rr-attendance-page-title"><h1>Reliance Retail Attendance</h1>
+      <div className="rr-attendance-page-title"><h1 ref={headingRef} tabIndex={-1}>Reliance Retail Attendance</h1>
         <p>HK &amp; MEPC · Digital attendance and AOP performance</p></div>
       <div className="rr-attendance-page-controls">
         <label className="rr-attendance-control"><CalendarDays size={15}/><input aria-label="Month and year"
          type="month" max={today.slice(0,7)} value={cutoff.slice(0,7)} onChange={e=>selectMonth(e.target.value)}/></label>
-        {report?.can_upload&&<button type="button" className="rr-attendance-control rr-attendance-upload"
+        {report?.can_upload&&<button ref={setUploadButtonRef} type="button" className="rr-attendance-control rr-attendance-upload"
          onClick={()=>setUpload(true)}><Upload size={15}/>Upload Day Attendance</button>}
       </div>
     </header>
     <div className="rr-attendance-page-controls" aria-label="Attendance filters">
       <div role="tablist" aria-label="Attendance view" className="rr-attendance-segments">
        {[['mtd','Month-to-Date'],['daily','Daily View']].map(([value,label])=>
-        <button key={value} role="tab" aria-selected={view===value} aria-pressed={view===value}
+        <button key={value} id={`attendance-tab-${value}`} role="tab" aria-controls="attendance-report-panel" tabIndex={view===value ? 0 : -1} aria-selected={view===value} onKeyDown={event => { if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return; event.preventDefault(); const next = event.key === 'Home' ? 'mtd' : event.key === 'End' ? 'daily' : value === 'mtd' ? 'daily' : 'mtd'; setView(next); document.getElementById(`attendance-tab-${next}`)?.focus(); }}
           onClick={()=>setView(value)}>{label}</button>)}
       </div>
       <label className="rr-attendance-control"><span className="rr-attendance-filter-title">Cutoff</span>
@@ -135,6 +145,7 @@ export default function RetailAttendance() {
         {states[0]||'Authorized state scope'}</span>}
       <button type="button" className="rr-attendance-control" onClick={()=>setRefresh(n=>n+1)}>Refresh</button>
     </div>
+    <div id="attendance-report-panel" className="grid min-w-0 grid-cols-1 gap-3" role="tabpanel" aria-labelledby={`attendance-tab-${view}`} tabIndex={0}>
     {busy&&<p role="status" className="rounded-lg bg-blue-50 p-5 text-sm">Loading attendance…</p>}
     {error&&<div role="alert" className="rounded-lg bg-red-50 p-4 text-sm text-red-800">
       {error}<button className={`${button} ml-3`} onClick={()=>setRefresh(n=>n+1)}>Retry</button></div>}
@@ -166,8 +177,9 @@ export default function RetailAttendance() {
       </section>}
     </>}
 
+    </div>
     {report?.can_upload && <ImportHistory refresh={refresh}/>}
-    {upload && <UploadDialog onClose={()=>setUpload(false)} onImported={async()=>{setCutoff('');setRefresh(n=>n+1);}}/>}
+    {upload && <UploadDialog fallbackFocusRef={headingRef} onClose={()=>setUpload(false)} onImported={async()=>{setCutoff('');setRefresh(n=>n+1);}}/>}
   </div>;
 }
 
