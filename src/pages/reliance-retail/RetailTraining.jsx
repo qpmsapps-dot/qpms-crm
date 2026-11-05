@@ -20,7 +20,7 @@ import {summarizeTrainingByClass} from '../../utils/retailStatePerformance.js';
 export default function RetailTraining() {
  const {user}=useAuth();
  usePageTitle('Reliance Retail HK & MEPC Training');
- const [sessions,setSessions]=useState([]),[snapshot,setSnapshot]=useState(null),[error,setError]=useState(''),[ownershipError,setOwnershipError]=useState(''),[busy,setBusy]=useState(false),[detail,setDetail]=useState(null),[evidenceLinks,setEvidenceLinks]=useState({});
+ const [sessions,setSessions]=useState([]),[snapshot,setSnapshot]=useState(null),[error,setError]=useState(''),[ownershipError,setOwnershipError]=useState(''),[busy,setBusy]=useState(true),[detail,setDetail]=useState(null),[evidenceLinks,setEvidenceLinks]=useState({});
  const [from,setFrom]=useState(indiaToday().slice(0,7)+'-01'),[to,setTo]=useState(indiaToday()),[filter,setFilter]=useState({}),[query,setQuery]=useState('');
  const [page,setPage]=useState(0),[size,setSize]=useState(25),[refresh,setRefresh]=useState(0),[detailBusy,setDetailBusy]=useState(false),[exporting,setExporting]=useState(false);
  const inspection=useRef(0);
@@ -89,7 +89,7 @@ export default function RetailTraining() {
    {select('Zone','zone',(snapshot?.zones||[]).map(item=>[item.id,item.zone_name]))}{select('FO','fo',(snapshot?.fos||[]).map(item=>[item.id,item.full_name||item.employee_code]))}{select('Store','store',(snapshot?.stores||[]).map(item=>[item.id,`${item.store_code} · ${item.store_name}`]))}
    <label>Search<input aria-label="Search Training records" type="search" value={query} placeholder="Store code, name or trainer" onChange={e=>{resetView();setQuery(e.target.value);}}/></label>
   </ReportFilters>
-  {busy&&<ReportNotice>Loading Training records…</ReportNotice>}{error&&<ReportNotice error>{error}</ReportNotice>}{ownershipError&&<ReportNotice>{ownershipError}</ReportNotice>}
+  {busy&&<ReportNotice>Loading Training records…</ReportNotice>}{error&&<ReportNotice error>{error}<button type="button" className="retail-report-button" disabled={busy} onClick={()=>{resetView();setRefresh(value=>value+1);}}>Retry Training records</button></ReportNotice>}{ownershipError&&<ReportNotice>{ownershipError}</ReportNotice>}
   {!busy&&!error&&<RetailStatePerformance title="Training — state-wise HK / MEPC performance"
    summary={statePerformance} selectedState={filter.state||''}
    onState={value=>change('state',value)}
@@ -108,7 +108,7 @@ export default function RetailTraining() {
     <td>{isExcelSource(row)?<><span>Reported topics: {row.topics_text||'Not recorded'}</span><p>Evidence: Not provided</p></>:`${row.attendee_count??'Unknown'} / ${row.topic_count??'Unknown'} / ${row.evidence_count??'Unknown'}`}</td>
     <td>{isExcelSource(row)?<details><summary>Excel source details</summary><p>Row {row.id.replace('ifms-excel-','')} · {row.match_status}</p></details>:<button disabled={detailBusy} onClick={()=>void inspect(row.id)}>View Training evidence</button>}</td>
    </tr>)}</tbody></table></div>
-   {!busy&&!rows.length&&!error&&<p className="retail-report-empty">No authorized Training records match these filters.</p>}
+   {!busy&&!hkExcel.loading&&!mepcExcel.loading&&!rows.length&&!error&&<p className="retail-report-empty">No authorized Training records match these filters.</p>}
    <ReportPager label="Training records" count={rows.length} page={page} size={size} onPage={setPage} onSize={setSize}/>
   </div>
   <p className="retail-report-description">Export includes every matching record. Unknown historical ownership is shown as unavailable.</p>

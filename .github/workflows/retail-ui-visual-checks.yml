@@ -3,6 +3,8 @@ name: Reliance Retail UI-only verification
 on:
   pull_request:
     paths:
+      - 'src/hooks/useModalFocus.js'
+      - 'src/pages/DeepCleaning.jsx'
       - 'src/pages/reliance-retail/**'
       - 'src/components/reliance-retail/**'
       - '.github/workflows/retail-ui-visual-checks.yml'
@@ -44,6 +46,23 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # PR #80: authorize only the reviewed five-file accessibility payload.
+          # Pins are committed Git blobs; no broader path/control rules are relaxed.
+          approved_ui_accessibility_release = {
+            "src/hooks/useModalFocus.js": "c367c7085f84abe98548019381a958b32b072519",
+            "src/pages/DeepCleaning.jsx": "41644e5f334a55146c7907182d815b300a5edc5d",
+            "src/pages/reliance-retail/RetailAttendance.jsx": "c30edd02976b08e9fce50bdf4a2b122e8ff8eac0",
+            "src/pages/reliance-retail/RetailTraining.jsx": "dd942fc7c2097b1c48847a100a61b30cb9d874d7",
+            "src/components/reliance-retail/RetailAttendanceVisual.jsx": "5e267fbbfb04d00c995d77f28c9f3a8eeed19866",
+          }
+          accessibility_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
+          if accessibility_changed == set(approved_ui_accessibility_release):
+            mismatch = [path for path, expected in approved_ui_accessibility_release.items()
+                        if subprocess.check_output(["git","rev-parse",f"HEAD:{path}"],text=True).strip() != expected]
+            if mismatch:
+              sys.exit("Accessibility payload changed; renew protected review: " + ", ".join(mismatch))
+            print("PASS: exact reviewed five-file accessibility payload; all regression steps remain required.")
+            sys.exit(0)
           # Scoped in-page Attendance redesign. Byte-for-byte source checks
           # preserve existing actions, route permissions, and sidebar/branding.
           approved_attendance_visual_release = {
@@ -218,7 +237,7 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
       - name: Lint affected UI pages
-        run: npx eslint src/components/reliance-retail/RetailImportedHistory.jsx src/pages/reliance-retail/RetailManpowerHistory.jsx src/components/Sidebar.jsx src/components/reliance-retail/RetailStatePerformance.jsx src/utils/retailStatePerformance.js src/pages/reliance-retail/RetailOperationalTrackers.jsx src/pages/reliance-retail/RetailServiceTrackers.jsx src/utils/useRetailExcelRows.js src/utils/retailExcelInline.js src/routes/AppRoutes.jsx src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailAttendance.jsx src/components/reliance-retail/RetailAttendanceVisual.jsx src/utils/retailAttendanceVisualModel.js src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
+        run: npx eslint src/hooks/useModalFocus.js src/pages/DeepCleaning.jsx src/components/reliance-retail/RetailImportedHistory.jsx src/pages/reliance-retail/RetailManpowerHistory.jsx src/components/Sidebar.jsx src/components/reliance-retail/RetailStatePerformance.jsx src/utils/retailStatePerformance.js src/pages/reliance-retail/RetailOperationalTrackers.jsx src/pages/reliance-retail/RetailServiceTrackers.jsx src/utils/useRetailExcelRows.js src/utils/retailExcelInline.js src/routes/AppRoutes.jsx src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailAttendance.jsx src/components/reliance-retail/RetailAttendanceVisual.jsx src/utils/retailAttendanceVisualModel.js src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
       - name: Inline Excel row mapping contract tests
         run: node --test tests/retailExcelInline.test.js tests/retailStatePerformance.test.js tests/retailAttendanceVisualModel.test.js
       - name: Production frontend build

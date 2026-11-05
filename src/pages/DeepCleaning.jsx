@@ -17,6 +17,7 @@ import {
   User,
   X,
 } from 'lucide-react';
+import { useModalFocus } from '../hooks/useModalFocus.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { useAuth } from '../context/auth-context.js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
@@ -225,12 +226,12 @@ function mergeDeepCleaningRecords({ submissions, uploads, stores, profiles, visi
 function SummaryCard({ label, value, icon }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[11px] font-black uppercase tracking-wide text-slate-400">{label}</p>
-          <p className="mt-2 text-2xl font-black text-slate-950">{value}</p>
+      <div className="flex min-w-0 items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="break-words text-xs font-bold uppercase tracking-wide text-slate-600">{label}</p>
+          <p className="mt-2 break-words text-2xl font-black text-slate-950">{value}</p>
         </div>
-        <span className="grid h-11 w-11 place-items-center rounded-xl bg-qpms-50 text-qpms-700">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-qpms-50 text-qpms-700">
           {createElement(icon, { className: 'h-5 w-5' })}
         </span>
       </div>
@@ -238,9 +239,9 @@ function SummaryCard({ label, value, icon }) {
   );
 }
 
-function FilterField({ label, children }) {
+function FilterField({ label, children, className = '' }) {
   return (
-    <label className="text-xs font-black uppercase tracking-wide text-slate-400">
+    <label className={`min-w-0 text-xs font-bold uppercase tracking-wide text-slate-600 ${className}`}>
       {label}
       {children}
     </label>
@@ -306,13 +307,14 @@ function DocumentList({ uploads, signedUrls }) {
 }
 
 function Lightbox({ file, url, onClose, onPrevious, onNext, hasMultiple }) {
+  const dialogRef = useModalFocus({ open: Boolean(file), onClose });
   if (!file) return null;
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/80 p-4">
-      <div className="relative w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="cleaning-preview-title" tabIndex={-1} className="relative max-h-[92dvh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
           <div className="min-w-0">
-            <p className="truncate text-sm font-black text-slate-950">{file.displayName}</p>
+            <p id="cleaning-preview-title" aria-live="polite" className="break-words text-sm font-black text-slate-950">{file.displayName}</p>
             <p className="text-xs font-semibold text-slate-500">{file.stage || 'image'} - {formatDate(file.uploaded_at || file.created_at)}</p>
           </div>
           <button type="button" onClick={onClose} className="focus-ring grid h-9 w-9 place-items-center rounded-xl text-slate-500 hover:bg-slate-100" aria-label="Close preview">
@@ -321,16 +323,16 @@ function Lightbox({ file, url, onClose, onPrevious, onNext, hasMultiple }) {
         </div>
         <div className="relative grid min-h-[60vh] place-items-center bg-slate-950">
           {url ? (
-            <img src={url} alt={file.displayName} className="max-h-[74vh] w-auto max-w-full object-contain" />
+            <img src={url} alt={file.displayName} className="max-h-[70dvh] w-auto max-w-full object-contain" />
           ) : (
             <div className="p-10 text-center text-sm font-semibold text-white">Preview URL is unavailable.</div>
           )}
           {hasMultiple ? (
             <>
-              <button type="button" onClick={onPrevious} className="focus-ring absolute left-4 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/90 text-slate-900">
+              <button type="button" aria-label="Previous image" onClick={onPrevious} className="focus-ring absolute left-4 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/90 text-slate-900">
                 <ChevronLeft className="h-6 w-6" />
               </button>
-              <button type="button" onClick={onNext} className="focus-ring absolute right-4 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/90 text-slate-900">
+              <button type="button" aria-label="Next image" onClick={onNext} className="focus-ring absolute right-4 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/90 text-slate-900">
                 <ChevronRight className="h-6 w-6" />
               </button>
             </>
@@ -546,7 +548,7 @@ export default function DeepCleaning({ initialBusiness = 'All', lockBusiness = f
         </button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-5">
         <SummaryCard label="Total Sites" value={summary.totalSites} icon={Store} />
         <SummaryCard label="Records" value={summary.totalRecords} icon={Sparkles} />
         <SummaryCard label="Images" value={summary.totalImages} icon={Images} />
@@ -555,38 +557,38 @@ export default function DeepCleaning({ initialBusiness = 'All', lockBusiness = f
       </div>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid gap-3 lg:grid-cols-7">
-          <FilterField label="Business">
-            <select disabled={lockBusiness} value={filters.business} onChange={(event) => setFilter('business', event.target.value)} className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400 disabled:bg-slate-100">
+        <div className="grid gap-3 min-[360px]:grid-cols-2 md:grid-cols-3 2xl:grid-cols-4">
+          <FilterField label="Business" className="min-[360px]:col-span-2 md:col-span-1">
+            <select disabled={lockBusiness} value={filters.business} onChange={(event) => setFilter('business', event.target.value)} className="mt-1 h-10 min-w-0 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400 disabled:bg-slate-100">
               <option value="All">Reliance Retail + IFMS</option>
               {TARGET_BUSINESSES.map((business) => <option key={business}>{business}</option>)}
             </select>
           </FilterField>
           <FilterField label="State">
-            <select value={filters.state} onChange={(event) => setFilter('state', event.target.value)} className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400">
+            <select value={filters.state} onChange={(event) => setFilter('state', event.target.value)} className="mt-1 h-10 min-w-0 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400">
               <option>All</option>
               {options.states.map((state) => <option key={state}>{state}</option>)}
             </select>
           </FilterField>
           <FilterField label="City">
-            <select value={filters.city} onChange={(event) => setFilter('city', event.target.value)} className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400">
+            <select value={filters.city} onChange={(event) => setFilter('city', event.target.value)} className="mt-1 h-10 min-w-0 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400">
               <option>All</option>
               {options.cities.map((city) => <option key={city}>{city}</option>)}
             </select>
           </FilterField>
           <FilterField label="Status">
-            <select value={filters.status} onChange={(event) => setFilter('status', event.target.value)} className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400">
+            <select value={filters.status} onChange={(event) => setFilter('status', event.target.value)} className="mt-1 h-10 min-w-0 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400">
               <option>All</option>
               {options.statuses.map((status) => <option key={status}>{status}</option>)}
             </select>
           </FilterField>
           <FilterField label="From">
-            <input type="date" value={filters.fromDate} onChange={(event) => setFilter('fromDate', event.target.value)} className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400" />
+            <input type="date" value={filters.fromDate} onChange={(event) => setFilter('fromDate', event.target.value)} className="mt-1 h-10 min-w-0 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400" />
           </FilterField>
           <FilterField label="To">
-            <input type="date" value={filters.toDate} onChange={(event) => setFilter('toDate', event.target.value)} className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400" />
+            <input type="date" value={filters.toDate} onChange={(event) => setFilter('toDate', event.target.value)} className="mt-1 h-10 min-w-0 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400" />
           </FilterField>
-          <FilterField label="Site Search">
+          <FilterField label="Site Search" className="min-[360px]:col-span-2">
             <div className="relative mt-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input type="search" value={filters.search} onChange={(event) => setFilter('search', event.target.value)} placeholder="Code, name, person" className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm font-bold text-slate-700 outline-none focus:border-qpms-400" />
@@ -623,7 +625,7 @@ export default function DeepCleaning({ initialBusiness = 'All', lockBusiness = f
                       <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-black text-emerald-700">{record.business}</span>
                       <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black text-slate-600">{record.status || 'submitted'}</span>
                     </div>
-                    <h2 className="mt-2 truncate text-lg font-black text-slate-950">{record.storeName || record.storeCode || 'Deep Cleaning record'}</h2>
+                    <h2 className="mt-2 break-words text-lg font-black text-slate-950">{record.storeName || record.storeCode || 'Deep Cleaning record'}</h2>
                     <p className="mt-1 text-xs font-semibold text-slate-500">{record.storeCode || '--'} - {record.clientName || '--'}</p>
                   </div>
                   <div className="inline-flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-xs font-black text-slate-600">

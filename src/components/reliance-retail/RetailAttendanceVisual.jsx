@@ -120,7 +120,7 @@ export function RetailAttendanceSummary({report,onState,onExport}){
     <button type="button" onClick={()=>onExport('states')} className="rr-attendance-export"><Download size={14}/>Export</button>
    </div>
   </div>
-  <div className="rr-attendance-table-scroll">
+  <div className="rr-attendance-table-scroll" role="region" aria-label="State attendance summary, scroll horizontally for all columns" tabIndex={0}>
    <table className="rr-attendance-state-table">
     <thead><tr>{col.map(([key,label])=><th key={key} scope="col">{label}</th>)}</tr></thead>
     <tbody>{[...rows,total].map((row,index)=><tr key={row.state||index} className={index===rows.length?'rr-attendance-total':''}>
