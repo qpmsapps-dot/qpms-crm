@@ -313,8 +313,14 @@ test('GPS worker is optional, bounded, evidence-only and single-flight', async (
   let tick;
   let release;
   let calls = 0;
+  const ownership = [];
   const pending = new Promise((resolve) => { release = resolve; });
   startFoGpsEvidenceSummaryWorker({ rpc: async (name, args) => {
+    if (name === 'rpc_worker_claim_v1' || name === 'rpc_worker_release_v1') {
+      assert.equal(args.p_job, 'gps_summary');
+      ownership.push({ name, args });
+      return { data: true };
+    }
     assert.equal(name, 'rpc_refresh_fo_gps_evidence_summaries_v1');
     assert.equal(args.p_limit, 5);
     calls += 1; await pending; return { data: { failed: 0 }, error: null };
@@ -323,6 +329,13 @@ test('GPS worker is optional, bounded, evidence-only and single-flight', async (
   });
   const first = tick(); await tick(); assert.equal(calls, 1);
   release(); await first; await tick(); assert.equal(calls, 2);
+  assert.deepEqual(ownership.map(call => call.name), [
+    'rpc_worker_claim_v1', 'rpc_worker_release_v1', 'rpc_worker_claim_v1', 'rpc_worker_release_v1',
+  ]);
+  for (let index = 0; index < ownership.length; index += 2) {
+    assert.equal(ownership[index].args.p_owner, ownership[index + 1].args.p_owner);
+    assert.equal(ownership[index].args.p_token, ownership[index + 1].args.p_token);
+  }
   const sql = readFileSync(new URL('../../supabase/migrations_2_0/229_fo_coalesced_gps_evidence_summary.sql', import.meta.url), 'utf8');
   assert.match(sql, /for each statement/);
   assert.match(sql, /skip locked/);

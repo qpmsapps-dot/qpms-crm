@@ -37,3 +37,17 @@ Six background job classes use durable per-job PostgreSQL ownership claims with 
 Stop for source/hash drift, unhealthy unaffected routes, unknown old writers, unresolved side effects, missing RPCs, duplicate jobs or uncertain claims. Before feature DDL, failed warmup leaves the incumbent serving and new ownership in standby. If bridge rollback is needed, close cooperative ownership and prove zero active claims/side effects before using a separately reviewed admission-preserving fallback. Never overlap uncoordinated fallback workers with active coordinated workers. Do not drop audit/claim tables or restore the database as a shortcut. Database recovery cannot restore deleted Storage bytes and may lose unrelated newer employee writes.
 
 Live Railway settings, release identity approval, old-writer retirement evidence, recovery verification and production acceptance remain deployment prerequisites. This PR does not claim zero downtime or production readiness.
+
+## PR #81 CI correction — 2026-11-07
+
+Run 42349081143, job 128333143321, step "Complete suites - fail on new failures; disclose inherited failures" exited 1. The actual base b47480e had 1398 passed / 28 failed / 26 skipped; candidate 203bfed had 1413 passed / 41 failed / 26 skipped. Fourteen new failures were stale compatibility expectations (one inherited failure disappeared). The separate October targeted tests/PostgreSQL safeguards/build/browser job passed.
+
+Only three tests were corrected: GPS summary mocks now implement and verify claim/release identity while preserving refresh limits and single-flight/financial SQL checks; Training mutations assert authenticated maintenance with no business/Storage calls while reads retain success checks; Retail manager tests preserve identity binding and non-cleaning behavior while checking maintenance and the added server-side proposal classification reads. Runtime source, SQL, KM calculations and approval rules are unchanged. Background scheduling remains deliberately subject to ownership/legacy_handoff, so asynchronous processing can pause during handoff.
+
+Focused command: `node --test --test-name-pattern="GPS worker is optional|real Retail router applies|Cleaning apply uses|registered and protected" backend/tests/foKmAuthorizedActions.test.js backend/tests/retailInitialAdminAccess.test.js backend/tests/trainingRoutes.test.js` — 21 passed, 0 failed. ESLint on these three files and git diff --check passed. Full suites were not rerun locally; GitHub's unchanged comparison gate will rerun after push and must continue reporting inherited failures rather than claiming a fully green backend suite.
+
+The original release-manifest.json remains historical evidence for the pre-correction artifact, not the revised test snapshot. Runtime and SQL entries remain unchanged. Revised test working-tree SHA-256 values:
+
+- backend/tests/foKmAuthorizedActions.test.js: cacfb0ff2bcd7d97e61858284ff7fb12a001b5f651f0936978c2137042ba37b8
+- backend/tests/retailInitialAdminAccess.test.js: 6412c0ca96d8ebb22c5f5ec050bbf308c10628b8c2acefd4fae06c6c9cca97b2
+- backend/tests/trainingRoutes.test.js: a26e069a3a07b889cd22bce0c65b0ee5cb7550baa51ad86c4ffb8c30ec110e82
