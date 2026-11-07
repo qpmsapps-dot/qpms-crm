@@ -1,3 +1,4 @@
+import {runOwnedBackgroundJob} from './backgroundJobOwnership.js';
 export function startFoGpsEvidenceSummaryWorker(client, environment = process.env, {
   schedule = setInterval, logger = console,
 } = {}) {
@@ -11,9 +12,11 @@ export function startFoGpsEvidenceSummaryWorker(client, environment = process.en
     if (running) return;
     running = true;
     try {
+      await runOwnedBackgroundJob(client,'gps_summary',async()=>{
       const { error, data } = await client.rpc('rpc_refresh_fo_gps_evidence_summaries_v1', { p_limit: 5 });
       if (error || data?.failed) logger.warn('[GPS evidence summaries] refresh incomplete', {
         code: error?.code || 'GPS_EVIDENCE_RETRY_QUEUED',
+      });
       });
     } catch {
       logger.warn('[GPS evidence summaries] unavailable; durable queue retained');

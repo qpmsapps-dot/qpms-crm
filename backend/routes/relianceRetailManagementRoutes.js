@@ -2,6 +2,7 @@ import {createRetailFoSelfRouter} from './retailFoSelfRoutes.js';
 import {createRetailMisRouter} from './retailMisRoutes.js';
 import {retailMisRole} from '../shared/retailMisAccess.js';
 import express from 'express';
+import {closeEvidenceMutationRoutes} from '../services/compatibilityAdmission.js';
 import {createRetailOperationsRouter} from './retailOperationsRoutes.js';
 import {retailCleaningReport,retailCleaningEvidence,retailCompletedTraining,retailModuleDashboard} from '../services/retailModuleReportService.js';
 import {retailIfmsHistoryRows} from '../services/retailIfmsHistoryService.js';
@@ -37,6 +38,7 @@ function sendError(response, error) {
 
 export function createRelianceRetailManagementRouter({ requireAuth, getClient }) {
   const router = express.Router();
+  closeEvidenceMutationRoutes(router,{matches:path=>/^\/deep-cleaning(?:\/|$)|^\/module-reports\/deep-cleaning\//.test(path)});
   router.use(requireAuth);
   router.use('/mis',createRetailMisRouter({getClient}));
   router.use((req,res,next)=>retailMisRole(req.profile?.role)&&req.path!=='/access'?res.status(403).json({ok:false,message:'Use the state-scoped Retail MIS API.'}):next());

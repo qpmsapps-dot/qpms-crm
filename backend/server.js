@@ -132,6 +132,7 @@ import {
 import { createCorsOptions, resolveAllowedOrigins } from './services/corsPolicyService.js';
 import { createServiceRoleAuthAdminCapabilityValidator } from './services/serviceRoleAuthAdminCapability.js';
 import { startAutomaticBackgroundWorkers } from './services/readOnlyUatMode.js';
+import {runOwnedBackgroundJob,ownedJobValue,startOwnedOnce,drainBackgroundJobs} from './services/backgroundJobOwnership.js';
 import {
   businessScopeAllows,
   isAllBusinessesScope,
@@ -429,9 +430,9 @@ app.post(
       }
       response.json({
         ok: true,
-        result: await runHospitalSlaWorker(serviceRoleSupabase, {
+        result: await ownedJobValue(serviceRoleSupabase,'hospital_sla',()=>runHospitalSlaWorker(serviceRoleSupabase, {
           now: requestedTime,
-        }),
+        })),
       });
     } catch {
       response.status(500).json({
@@ -4953,6 +4954,7 @@ app.get('/', (request, response) => {
 
 const httpLifecycle = createHttpLifecycle({
   isReady: () => supabaseConfigStatus.configured && Boolean(serviceRoleSupabase),
+  drainWorkers: drainBackgroundJobs,
 });
 app.get('/ready', httpLifecycle.readiness);
 
@@ -11003,12 +11005,12 @@ app.post('/api/cron/daily-operations-report', async (request, response) => {
     }
     const client = requireServiceRoleSupabase();
     const reportDate = request.body?.date || previousReportDate();
-    const result = await sendDailyOperationsReports({
+    const result = await ownedJobValue(client,'daily_operations_report',()=>sendDailyOperationsReports({
       client,
       date: reportDate,
       mode: 'master',
       preventDuplicate: true,
-    });
+    }));
     response.json(result);
   } catch (error) {
     response.status(error.statusCode || 500).json({
@@ -11065,7 +11067,7 @@ app.post(
   requireApiAuth,
   requireRoles(['Admin', 'MD', 'COO', 'GM / Top Management', 'Existing Business Operations Team']),
   async (request, response) => {
-    const result = await runFoStaleSessionCleanup('manual_endpoint');
+    const result = await ownedJobValue(serviceRoleSupabase,'fo_stale_cleanup',()=>runFoStaleSessionCleanup('manual_endpoint'));
     response.status(result.ok === false && !result.skipped ? 500 : 200).json(result);
   },
 );
@@ -11166,8 +11168,9 @@ function startDailyOperationsReportScheduler() {
 
     const minuteKey = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${currentConfig.timezone}`;
     if (minuteKey === lastDailyReportSchedulerMinuteKey) return;
-    lastDailyReportSchedulerMinuteKey = minuteKey;
-    runScheduledDailyOperationsReport('scheduled_time');
+    void runOwnedBackgroundJob(serviceRoleSupabase,'daily_operations_report',()=>runScheduledDailyOperationsReport('scheduled_time'),{slot:minuteKey})
+      .then(result=>{if(result.ran)lastDailyReportSchedulerMinuteKey=minuteKey;})
+      .catch(error=>console.warn('[Daily report ownership]',{code:error.code}));
   };
 
   tick();
@@ -11286,17 +11289,17 @@ function startEndDayKmAutoRecalcScheduler() {
     limit: END_DAY_KM_AUTO_RECALC_LIMIT,
   });
   if (!enabled) return;
-  runEndDayKmAutoRecalc('startup');
+  void runOwnedBackgroundJob(serviceRoleSupabase,'end_day_km',()=>runEndDayKmAutoRecalc('startup')).catch(error=>console.warn('[KM worker ownership]',{code:error.code}));
   setInterval(() => {
-    runEndDayKmAutoRecalc('interval');
+    void runOwnedBackgroundJob(serviceRoleSupabase,'end_day_km',()=>runEndDayKmAutoRecalc('interval')).catch(error=>console.warn('[KM worker ownership]',{code:error.code}));
   }, END_DAY_KM_AUTO_RECALC_INTERVAL_MS).unref?.();
 }
 
 function startFoStaleSessionCleanupScheduler() {
-  runFoStaleSessionCleanup('startup');
+  void runOwnedBackgroundJob(serviceRoleSupabase,'fo_stale_cleanup',()=>runFoStaleSessionCleanup('startup')).catch(error=>console.warn('[FO cleanup ownership]',{code:error.code}));
   if (Number.isFinite(FO_STALE_CLEANUP_INTERVAL_MS) && FO_STALE_CLEANUP_INTERVAL_MS > 0) {
     setInterval(() => {
-      runFoStaleSessionCleanup('interval');
+      void runOwnedBackgroundJob(serviceRoleSupabase,'fo_stale_cleanup',()=>runFoStaleSessionCleanup('interval')).catch(error=>console.warn('[FO cleanup ownership]',{code:error.code}));
     }, FO_STALE_CLEANUP_INTERVAL_MS).unref?.();
   }
 }
@@ -11317,7 +11320,7 @@ const httpServer = app.listen(port, () => {
     logger: console,
     workers: {
       hospital_ticket_sla_scheduler: () => startHospitalSlaScheduler(serviceRoleSupabase, process.env),
-      smtp_transport_verification: verifyMailTransporter,
+      smtp_transport_verification: () => startOwnedOnce(serviceRoleSupabase,'smtp_verification',verifyMailTransporter),
       daily_operations_report_scheduler: startDailyOperationsReportScheduler,
       end_day_km_auto_recalculation: () => {
         startEndDayKmAutoRecalcScheduler();

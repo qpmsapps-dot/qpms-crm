@@ -224,9 +224,9 @@ test('server registers all autonomous side effects through the centralized worke
   const startup = source.slice(source.indexOf('app.listen(port'));
 
   assert.match(startup, /hospital_ticket_sla_scheduler: \(\) => startHospitalSlaScheduler/);
-  assert.match(startup, /smtp_transport_verification: verifyMailTransporter/);
+  assert.match(startup, /smtp_transport_verification: \(\) => startOwnedOnce\(serviceRoleSupabase,'smtp_verification',verifyMailTransporter\)/);
   assert.match(startup, /daily_operations_report_scheduler: startDailyOperationsReportScheduler/);
-  assert.match(startup, /end_day_km_auto_recalculation: startEndDayKmAutoRecalcScheduler/);
+  assert.match(startup, /end_day_km_auto_recalculation: \(\) => \{\s*startEndDayKmAutoRecalcScheduler\(\);\s*startFoGpsEvidenceSummaryWorker\(serviceRoleSupabase, process.env\)/);
   assert.match(startup, /fo_stale_session_cleanup: startFoStaleSessionCleanupScheduler/);
   assert.equal((source.match(/runFoStaleSessionCleanup\('startup'\)/g) || []).length, 1);
 });
