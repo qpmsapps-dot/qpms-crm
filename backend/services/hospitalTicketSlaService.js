@@ -1,4 +1,5 @@
 import { slaMinutes } from './hospitalTicketWorkflowService.js';
+import {runOwnedBackgroundJob} from './backgroundJobOwnership.js';
 import { dispatchHospitalNotificationPushes } from './hospitalTicketPushService.js';
 
 export async function runHospitalSlaWorker(client, { now = new Date() } = {}) {
@@ -13,7 +14,7 @@ export async function runHospitalSlaWorker(client, { now = new Date() } = {}) {
 export function startHospitalSlaScheduler(client, environment = process.env) {
   if (!client || String(environment.HOSPITAL_SLA_WORKER_ENABLED || 'true').toLowerCase() !== 'true') return null;
   const intervalMs = Math.max(60000, Number(environment.HOSPITAL_SLA_POLL_MS || 60000));
-  const timer = setInterval(async () => {
+  const timer = setInterval(() => { void runOwnedBackgroundJob(client,'hospital_sla',async () => {
     try {
       const result = await runHospitalSlaWorker(client);
       if (
@@ -29,7 +30,7 @@ export function startHospitalSlaScheduler(client, environment = process.env) {
     } catch (error) {
       console.warn('[Hospital Ticketing SLA] worker failed', { code: error?.code || null, message: error?.message || 'unknown' });
     }
-  }, intervalMs);
+  }).catch(error=>console.warn('[Hospital SLA ownership]',{code:error.code})); }, intervalMs);
   timer.unref?.();
   return timer;
 }

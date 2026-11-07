@@ -1,4 +1,5 @@
 import express from 'express';
+import {closeEvidenceMutationRoutes} from '../services/compatibilityAdmission.js';
 import {
   completeClientDeepCleaningUpload,
   createClientDeepCleaningSubmission,
@@ -22,6 +23,7 @@ export function createClientDeepCleaningRouter({ requireAuth, getClient }) {
   }
 
   const router = express.Router();
+  closeEvidenceMutationRoutes(router);
   router.use(requireAuth);
 
   // Scheduled Deep Cleaning tasks: TN zone FO only; other states geographic FO scope.

@@ -1,0 +1,1827 @@
+{
+  "format": "myqpms-compatibility-phase1-v1",
+  "preparedOn": "2026-11-07",
+  "source": "D:/QPMS_CRM/.worktrees/compatibility-first-20261107",
+  "baseGitSha": "b47480e075cf1143e585c053bb7f61902fbceb4e",
+  "deployableGitSha": null,
+  "reviewStatus": "PENDING",
+  "compatibilityReleaseRequired": true,
+  "notes": "Independent bridge: evidence writes permanently closed; normal HTTP stays enabled; new workers start in database legacy_handoff standby. No feature migration prerequisite.",
+  "migrationOrder": [
+    "supabase/pending_review/20261107_worker_ownership_compat.sql"
+  ],
+  "backendContentSha256": "ab138f03fa7ca65c5bcfa2de3c424e3b64f72d94c94c782b3a71d83b57f672ae",
+  "releaseTreeSha256": "b9b3636326475bccc2979f9671592abcb482a80ff379b8cce5b89f20f4ece163",
+  "files": [
+    {
+      "path": "backend/.env.example",
+      "sha256": "b7a9d819f676721eee31e0407cfbf4ef4bbc8d3835ff6f64e23207cc854909de",
+      "bytes": 2199
+    },
+    {
+      "path": "backend/assets/fonts/NotoSans-Regular.ttf",
+      "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5",
+      "bytes": 569208
+    },
+    {
+      "path": "backend/assets/qpms-logo.png",
+      "sha256": "b9b1e4213c32c48be0f2acd6bfacb7739187de8b073e9b843060482f72b98edf",
+      "bytes": 13001
+    },
+    {
+      "path": "backend/foKmRecalculationService.js",
+      "sha256": "2bf5b996744be305d61af94be55194a4eb9dbb6d9e57d67908d09d6c272acbbb",
+      "bytes": 232004
+    },
+    {
+      "path": "backend/foStaleSessionCleanupService.js",
+      "sha256": "69ec2277ec7038ce055a8f8614c04915d7e91b5e166d96dfec493a8270e052ca",
+      "bytes": 23561
+    },
+    {
+      "path": "backend/jobs/sendDailyOperationsReport.js",
+      "sha256": "b52eec138ccc3657712c61681454514feddc26d2b26c79bfc7dabcb8456e75b1",
+      "bytes": 1941
+    },
+    {
+      "path": "backend/package-lock.json",
+      "sha256": "9989e1df9629a91418b7ae31925492a276710eda352d8497d44b023b5ce34065",
+      "bytes": 183323
+    },
+    {
+      "path": "backend/package.json",
+      "sha256": "7da9bdb50d2627764e907363ac42b7c4020b20bfd7a25e99d969de8a8abf3360",
+      "bytes": 996
+    },
+    {
+      "path": "backend/routes/clientDeepCleaningRoutes.js",
+      "sha256": "ea3cd5685a02cff87faaca11240a7a4f29d0b3b072b4945c2a45aed57c8e41fa",
+      "bytes": 5736
+    },
+    {
+      "path": "backend/routes/clientTicketingManagementRoutes.js",
+      "sha256": "11faa779264a1f89e37b7c60470a9e92f8755b87882702264dffed24cb23736f",
+      "bytes": 1569
+    },
+    {
+      "path": "backend/routes/foKmReconciliationRoutes.js",
+      "sha256": "40a875ccf8c5bc6bf711d41a57c3b31d1e2cef214d6637095b6e51819f190d63",
+      "bytes": 5510
+    },
+    {
+      "path": "backend/routes/foMissingKmAdminReviewRoutes.js",
+      "sha256": "9f49d5359d0297b91f99d7360214bdcda3ea04ebc1efcce0ffe32478e1cf22d8",
+      "bytes": 4045
+    },
+    {
+      "path": "backend/routes/foOctoberClaimsExportRoutes.js",
+      "sha256": "04977308481910879db7352309eafccd5dec837dd7f02fb89690e92f9495aad6",
+      "bytes": 5758
+    },
+    {
+      "path": "backend/routes/foOctoberRecoveryRoutes.js",
+      "sha256": "f1200b217b42eeaa97249f9ae3cb94d2bd6b86dec67b596e23a2c255139f5b01",
+      "bytes": 3558
+    },
+    {
+      "path": "backend/routes/foTravelEvidenceRoutes.js",
+      "sha256": "28c9ba7afb74ea9cd98f49f81198f98c78e7483d360c175389069bd26424e088",
+      "bytes": 1107
+    },
+    {
+      "path": "backend/routes/hospitalFeedbackQrRoutes.js",
+      "sha256": "fc4d5abd24209a12bf2462cfdf399398264d782513b1d8c0d5c120502fffdcb4",
+      "bytes": 9888
+    },
+    {
+      "path": "backend/routes/hospitalTicketRoutes.js",
+      "sha256": "af61a05ef5541219877e2ee2cedbaa232269a430ba9f787d43dcc69e233c2dde",
+      "bytes": 10757
+    },
+    {
+      "path": "backend/routes/momRoutes.js",
+      "sha256": "969253986d6e20c238372821505d321b71d5ec0fcc2bb90fda619ff3de297ad4",
+      "bytes": 2423
+    },
+    {
+      "path": "backend/routes/preSalesRoutes.js",
+      "sha256": "f64e46830b053915dd0039d8a7cde131dfe1a642808d1f907b7a08b8a214c8c6",
+      "bytes": 11213
+    },
+    {
+      "path": "backend/routes/relianceRetailManagementRoutes.js",
+      "sha256": "39b5009725df64b27230ed216f2076c31bd193c46bf132c2c7b2c5e1bf4406fb",
+      "bytes": 10097
+    },
+    {
+      "path": "backend/routes/retailAttendanceRoutes.js",
+      "sha256": "38c2f0ef1f7271089ce5af88bee8793ba7a5384ec5061d8fd637b89080f15c94",
+      "bytes": 3613
+    },
+    {
+      "path": "backend/routes/retailFoSelfRoutes.js",
+      "sha256": "6a4a8270d22a70cfc2c2631dd485d5ac967d2fe3a324c2eedd165b251b914743",
+      "bytes": 2656
+    },
+    {
+      "path": "backend/routes/retailMisRoutes.js",
+      "sha256": "e0e9c2524f6b8c5e6ab675d077783ded5dbe9556872e906eb7195b64cd677c6a",
+      "bytes": 10903
+    },
+    {
+      "path": "backend/routes/retailOperationsRoutes.js",
+      "sha256": "7c55f3391988d400589caa21202f80b5e70fde02f161a296a1d91cfa2dd7394b",
+      "bytes": 1222
+    },
+    {
+      "path": "backend/routes/retailProvisionalRoutes.js",
+      "sha256": "37db6e13bf0830a14986ec154f9a33874857d860475ac90b4d9f29b461c3ce64",
+      "bytes": 1673
+    },
+    {
+      "path": "backend/routes/retailServiceTrackerRoutes.js",
+      "sha256": "02c0096aa2a3a449f65f2837a57deb82af33d27a31a15a75fd26d910d23f96c4",
+      "bytes": 6016
+    },
+    {
+      "path": "backend/routes/retailStoreImportRoutes.js",
+      "sha256": "8f940fc1ec41802b1fda848e7d2f26125d0126d91935b71ece46e91841fe3c76",
+      "bytes": 2966
+    },
+    {
+      "path": "backend/routes/retailUnifiedRoutes.js",
+      "sha256": "c3fe16dcb04b60c6e5b11437ca4b917f866bc5a7565063e77afa47942f3768de",
+      "bytes": 4877
+    },
+    {
+      "path": "backend/routes/tenderRoutes.js",
+      "sha256": "2840ec931674a8b554261665a10136fdd6c602102b8bd0918f831675bcdda6a9",
+      "bytes": 2551
+    },
+    {
+      "path": "backend/routes/trainingRoutes.js",
+      "sha256": "070e5e2ca3a148c9827e036431970c560aec5593c237e99538bbfd287d8ca304",
+      "bytes": 6739
+    },
+    {
+      "path": "backend/scripts/applySeptemberMixedModeTravelCorrections.js",
+      "sha256": "c3610ad16f1eb072a862b044a8a69e02bb2fba34c00dea81458779537c558e29",
+      "bytes": 9252
+    },
+    {
+      "path": "backend/scripts/auditRetailStoreReview.mjs",
+      "sha256": "a363a485a659605bc6761c6e055f04b975d4cf50a123b40e33cbb6438d4d4181",
+      "bytes": 2787
+    },
+    {
+      "path": "backend/scripts/buildRetailActivationPackage.mjs",
+      "sha256": "55874928e8a28477e0e742a043df36492b36c091a717e28b09836cd18fbbce32",
+      "bytes": 15161
+    },
+    {
+      "path": "backend/scripts/create-nims-escalation-test-users.js",
+      "sha256": "133f0106c361400cd8fd1ebe9ffa2b3b9ecca2cce561eeaed65ce1f7948154bb",
+      "bytes": 11030
+    },
+    {
+      "path": "backend/scripts/importNimsLocationMaster.js",
+      "sha256": "cd42560f286ba93d61d03c312ab2f5a43d2bf9ad46cd577f3f34a2495db7fee2",
+      "bytes": 60259
+    },
+    {
+      "path": "backend/scripts/importNimsSupervisorRoster.js",
+      "sha256": "add09fb4062cc76ab9982862303358e4abfd2f9080f7ebd617c1e218abc98bca",
+      "bytes": 7062
+    },
+    {
+      "path": "backend/scripts/provisionHospitalUatUsers.js",
+      "sha256": "13445759054e252d48eef3067550badeb54616e9e966b36891bd1bb00933334d",
+      "bytes": 7701
+    },
+    {
+      "path": "backend/scripts/provisionTenderDemoUser.js",
+      "sha256": "c095e98490bff724dbf783660b909c9f2fb0855a6e44222722b27a516910f54c",
+      "bytes": 5398
+    },
+    {
+      "path": "backend/scripts/reconcileFinalTravelLegs.js",
+      "sha256": "40bd7de4575587c3fa15594c1acf531af66bfe39577b5f96baa83fe69429037b",
+      "bytes": 4904
+    },
+    {
+      "path": "backend/scripts/seedHospitalPilotTickets.js",
+      "sha256": "0944ffc63b9a490ddec35d909f722a51e21887d088c7f5086f63a9e7ec45ae90",
+      "bytes": 2791
+    },
+    {
+      "path": "backend/scripts/test-hospital-escalation.js",
+      "sha256": "ce99f4f8a33a7a457c8563613532733fcebd307e717ff27aa90817051773f9c0",
+      "bytes": 28879
+    },
+    {
+      "path": "backend/server.js",
+      "sha256": "0e0a1818e7cd5394eb6e3adbd4e8a2487fef7d8ea0cbcfa819d8dd9b570be45b",
+      "bytes": 438230
+    },
+    {
+      "path": "backend/services/accessControlService.js",
+      "sha256": "557021dd80c2b72b79dbe3111e9ee6b22efedd86a800a8a636c4657fc940066c",
+      "bytes": 23737
+    },
+    {
+      "path": "backend/services/backgroundJobOwnership.js",
+      "sha256": "69a6c59d61d8f521e7aa4a000f524ca323276118b3820603f9fc8a11f0b3f6ab",
+      "bytes": 2403
+    },
+    {
+      "path": "backend/services/clientDeepCleaningService.js",
+      "sha256": "fcf5283395ca8e84bd9a01a4891196e838d60d065ff5ef430886095ce71a9fce",
+      "bytes": 30124
+    },
+    {
+      "path": "backend/services/clientTicketingManagementService.js",
+      "sha256": "30e28ec12e6eac65a668b50a92a8e8d5856b6a4fc53e840c9e79d8de26f020bc",
+      "bytes": 9828
+    },
+    {
+      "path": "backend/services/compatibilityAdmission.js",
+      "sha256": "d54c17c4b18e1ee61b158498a89012c9aa4c362c970524a39287134e8857dbac",
+      "bytes": 964
+    },
+    {
+      "path": "backend/services/consolidatedTravelClaimPdfService.js",
+      "sha256": "73394bcfb5e6a26aa2ad1f3fe6e1836ecd96786c5fed7face1c7287ff5c58803",
+      "bytes": 15763
+    },
+    {
+      "path": "backend/services/corsPolicyService.js",
+      "sha256": "ccbcaaeab58c078cca3e6659ac353bc78f726a06dbb22cf8668f51dd773f6442",
+      "bytes": 843
+    },
+    {
+      "path": "backend/services/dailyOperationsReportService.js",
+      "sha256": "99a8ef4167be5571fb79d4152ec404f42698f3ab076d7444e302276af42d59e5",
+      "bytes": 33064
+    },
+    {
+      "path": "backend/services/demoAccessService.js",
+      "sha256": "59b9163d2687fdcb6a1360e873ed80dfd79fb23b79dff029d3d3eac59744ab38",
+      "bytes": 5624
+    },
+    {
+      "path": "backend/services/emailService.js",
+      "sha256": "09b6da4c3f1fe359155ea8df9cf53ba5b3d77110cd54a916bb8aa3f3822d5fb8",
+      "bytes": 2464
+    },
+    {
+      "path": "backend/services/employeeRangeReportService.js",
+      "sha256": "d46756a2ec838aa59fad8c4cd44e8d57ce243e295ad6fc83ae8905272af82223",
+      "bytes": 45815
+    },
+    {
+      "path": "backend/services/faultTrackerStoreScope.js",
+      "sha256": "85a2f83c5c2b1072dd4c386c0b3e787c836ae628fd96d387fec43fea8c712c65",
+      "bytes": 10886
+    },
+    {
+      "path": "backend/services/firebaseAdminService.js",
+      "sha256": "8101a178d55af524f1d7dacd24ccbb7542f156aea84f963421ecfa219fddbb38",
+      "bytes": 3628
+    },
+    {
+      "path": "backend/services/foCanonicalKmEngineV2.js",
+      "sha256": "678579e9a802ec58144d24ac9262478e2e9ac3a158e11bbd06a407de38f7d621",
+      "bytes": 41084
+    },
+    {
+      "path": "backend/services/foCheckInLocationPolicyService.js",
+      "sha256": "6269a1d7d7c80bf7db30a03c977d7f9b0f434f9ea6e7cce8798c2670fd5edee9",
+      "bytes": 4914
+    },
+    {
+      "path": "backend/services/foEmployeeRangeRecalculationLockService.js",
+      "sha256": "ee671391b891b3457ba189f465cbb0f8425fd5c510da51266cf7715c924b476c",
+      "bytes": 1026
+    },
+    {
+      "path": "backend/services/foEndDayKmRecoveryService.js",
+      "sha256": "5cee808a36f27475c8b4937b9cf5d394bc515069de93434785389e0cee6d3ef2",
+      "bytes": 2044
+    },
+    {
+      "path": "backend/services/foFinalLegEndpointService.js",
+      "sha256": "2310d96dbb9a027fb67deed3f65955c070221902faebe15313ac33d4475f1618",
+      "bytes": 1271
+    },
+    {
+      "path": "backend/services/foForwardFinalLegPersistenceService.js",
+      "sha256": "ea7811b3c2220b3bdf1247812c58f402d31033fede65fe33020255d755ebff91",
+      "bytes": 3044
+    },
+    {
+      "path": "backend/services/foGpsEvidenceSummaryService.js",
+      "sha256": "75e647fd8b7ecaefe339d32b27f5ee023270dc0019d29a8514dc6de6069f17b4",
+      "bytes": 1141
+    },
+    {
+      "path": "backend/services/foKmEvidenceService.js",
+      "sha256": "4d5d85a78cafb0559e2f59ac7c8bfafe8fab19be880dd531084ae7bafc2ffdf3",
+      "bytes": 9570
+    },
+    {
+      "path": "backend/services/foKmIncrementalReconciliationService.js",
+      "sha256": "6a7e10cdd2d7540489c667854edd200784e476c794f14e4b076007050e9b5758",
+      "bytes": 16526
+    },
+    {
+      "path": "backend/services/foKmRecalculationAuthorizationService.js",
+      "sha256": "8e2db57ccf8c44a9e069325dfeef87c64016d5807cb41c398839234bdfd45765",
+      "bytes": 3914
+    },
+    {
+      "path": "backend/services/foKmReconciliationWorker.js",
+      "sha256": "d2236140ea3c2384cc25bf3baf5e978c71efd3b10289751ce260aea67033e759",
+      "bytes": 5078
+    },
+    {
+      "path": "backend/services/foKmReportEvidenceService.js",
+      "sha256": "8a83dd21b8fce9b61291be4adf28406a45ecae7fff536d10da95d3b97b4e96bf",
+      "bytes": 1680
+    },
+    {
+      "path": "backend/services/foKmSupportedBatchService.js",
+      "sha256": "4c70ac9cd47f7e52d893ac23e2d10045c32524bb93ecc32fa4c9d5fe41b845dd",
+      "bytes": 9364
+    },
+    {
+      "path": "backend/services/foKmV2PersistenceService.js",
+      "sha256": "89b44e19b7ec01e15f58af1074e7a1415dc67a5a21ebe70cccbf35031518caaf",
+      "bytes": 6241
+    },
+    {
+      "path": "backend/services/foManualKmRangeRefreshService.js",
+      "sha256": "96b3589feb19bd7481dd3be65447491639c91db4695e217f3b60927085968a9b",
+      "bytes": 9378
+    },
+    {
+      "path": "backend/services/foManualKmRefreshService.js",
+      "sha256": "4c4bbacc84642f3f44f2ad149eac37dd1b492a106b2d688a9adbbb4392998e36",
+      "bytes": 13747
+    },
+    {
+      "path": "backend/services/foOctoberClaimsService.js",
+      "sha256": "c0af43d30626acb08c7009793e70e0a1886c529e28f7b893fe28f705d1858f5d",
+      "bytes": 7552
+    },
+    {
+      "path": "backend/services/foOctoberKmAuditSummaryService.js",
+      "sha256": "1ac6aaeaab98a4ce52fc993a21e7b29e51366382c461bdb65485d1b309356693",
+      "bytes": 9528
+    },
+    {
+      "path": "backend/services/foOctoberPaymentClaimsService.js",
+      "sha256": "219f5de3099b21dfafc7f4df3343c6757265b50cf623660584ed86c7a701b6cf",
+      "bytes": 5783
+    },
+    {
+      "path": "backend/services/foOctoberRecoveryClaimRows.js",
+      "sha256": "ee962a816558cee4a57487f7c105a904c22bd644d0315290acf938ea7185e110",
+      "bytes": 2426
+    },
+    {
+      "path": "backend/services/foOctoberRecoveryEvidenceService.js",
+      "sha256": "a57eaa0319f83b301daed390e656b98c4abf7f680b9be45ee9abde0fc10ad7d4",
+      "bytes": 8249
+    },
+    {
+      "path": "backend/services/foOctoberRecoveryReportingService.js",
+      "sha256": "48b914002c9aae3e9f8ec35cdff359aedd52ff202619b2f1f32f3b6dc4e162c1",
+      "bytes": 6081
+    },
+    {
+      "path": "backend/services/foOctoberRecoveryService.js",
+      "sha256": "9930d3ca915818414265ac952a162906939819d17086a1aa686ca979093085ec",
+      "bytes": 12952
+    },
+    {
+      "path": "backend/services/foOperationalAccessService.js",
+      "sha256": "fdaf36d95bfcddc4f9ab08b3a1faea9fc2841dc593539d9cebaa7712a9293762",
+      "bytes": 34503
+    },
+    {
+      "path": "backend/services/foOwnedEndDayKmService.js",
+      "sha256": "a12e489c8ce9fcc7be9da1eefccd838ee8e7bde05b5e1af1cb2970d64d4c2b2f",
+      "bytes": 4266
+    },
+    {
+      "path": "backend/services/foTravelEvidenceService.js",
+      "sha256": "c3149fd04fb631775dadca09071b1da4a17a294eef8b134a492bf44ff4a4dcf6",
+      "bytes": 8337
+    },
+    {
+      "path": "backend/services/hospitalFeedbackQrService.js",
+      "sha256": "def2c81c0cd6f9fbc8255df88c495b993b9113ea64ee7d100b14527768631056",
+      "bytes": 68471
+    },
+    {
+      "path": "backend/services/hospitalTicketAuthService.js",
+      "sha256": "d09a2fc7662cb5dac0908a4a5d9d82956a52912590c51560d4f721fe7dabfc9f",
+      "bytes": 15691
+    },
+    {
+      "path": "backend/services/hospitalTicketPushService.js",
+      "sha256": "eaed0c95b9ab41d58fc1d61b61c3de9ba7dee4168861d93ca25172e0c91745d0",
+      "bytes": 32044
+    },
+    {
+      "path": "backend/services/hospitalTicketRoutingService.js",
+      "sha256": "1f2ace9a23927a30a57a910a31d20f3fecf2f742d98759bd10f7569f896720e0",
+      "bytes": 10418
+    },
+    {
+      "path": "backend/services/hospitalTicketService.js",
+      "sha256": "0b074133af9e57d8d0ff96bdd7416ef8eb6701aaf422ceb3f35a21419e34fcea",
+      "bytes": 94036
+    },
+    {
+      "path": "backend/services/hospitalTicketSlaService.js",
+      "sha256": "9ab97aca0e90c75043524ccba7282e15306149f1e30b3670d5efad96c1f266bf",
+      "bytes": 1702
+    },
+    {
+      "path": "backend/services/hospitalTicketWebDashboardService.js",
+      "sha256": "53b1da5a7e426d894072ff28dd39707649485ab02c09bf018a2c05c93f46c6fd",
+      "bytes": 39085
+    },
+    {
+      "path": "backend/services/hospitalTicketWorkflowService.js",
+      "sha256": "be7c9ff313fcd86aa2ede836645b499e2bb4310d4a904507e6c7a22ac7c18ab3",
+      "bytes": 10434
+    },
+    {
+      "path": "backend/services/httpLifecycle.js",
+      "sha256": "dec21c9d19add90fdb11c371737182c9aad9c1e6e3afec98619c36224539a3b2",
+      "bytes": 1449
+    },
+    {
+      "path": "backend/services/kmFinancialWriteMaintenanceService.js",
+      "sha256": "4f3b61325b0fd5c81ab7b8366e5b0041fa05a17cd150e692a6dfb0e7efabe781",
+      "bytes": 1348
+    },
+    {
+      "path": "backend/services/leadManagementService.js",
+      "sha256": "2b490a463f6eddd38d5ab31f352d1392cd1ae7c9784c0689c0a45bdc9f7dc55f",
+      "bytes": 20484
+    },
+    {
+      "path": "backend/services/momAccessService.js",
+      "sha256": "6335ce2843f0b85ab3c798a945c0089338ed7079f7d3536e871fa125c47a0ba2",
+      "bytes": 9462
+    },
+    {
+      "path": "backend/services/momService.js",
+      "sha256": "5d2939d735a5628962c4cbad2dc3f42791622832963af0dc4b1610e8c2bf20fa",
+      "bytes": 9040
+    },
+    {
+      "path": "backend/services/nimsLocationNormalizer.js",
+      "sha256": "0795b6ec1664870bc0387dd17fbc80640602e9bb69678c471ea0ab3f55b0aaf7",
+      "bytes": 4474
+    },
+    {
+      "path": "backend/services/operationsSummaryService.js",
+      "sha256": "3e76da5844f027add7de49b5c88c9dede91271f68abe23f0819c2859bf25b7fc",
+      "bytes": 32218
+    },
+    {
+      "path": "backend/services/opportunityWorkflowService.js",
+      "sha256": "530668e217ba421405f7f2cb5c4e1dcac01079f81f08d8ef8183348f2dbf45d4",
+      "bytes": 30176
+    },
+    {
+      "path": "backend/services/postmanTestResetService.js",
+      "sha256": "7915f2f2901a005af3bca0026911d7f7186edfb05e84926212c6b23a44c572e9",
+      "bytes": 3995
+    },
+    {
+      "path": "backend/services/preSalesOpportunityProgressService.js",
+      "sha256": "359255392bc887ce3f4469af7f83444b0ed92a9f4ae692520b40839a733be842",
+      "bytes": 16538
+    },
+    {
+      "path": "backend/services/preSalesService.js",
+      "sha256": "3297cd276b8aaaa860a4f7325db1ba45829c887c79b48a7a50d661313bfe979c",
+      "bytes": 38409
+    },
+    {
+      "path": "backend/services/readOnlyUatMode.js",
+      "sha256": "f540ae5a52166a15e9f240f2ec83543abeecb9a5c3227fa72d4db5e908417e98",
+      "bytes": 1853
+    },
+    {
+      "path": "backend/services/relianceRetailManagementService.js",
+      "sha256": "c74bd7301bc7169e88b3af15780636c78ea9ec35bd7331d3981366a915d7f331",
+      "bytes": 32503
+    },
+    {
+      "path": "backend/services/retailAttendancePreviewAudit.js",
+      "sha256": "b027f0c161505ba7022777fbac06261e13af712f8dc7b41bd0e95a0fd54e6f71",
+      "bytes": 5442
+    },
+    {
+      "path": "backend/services/retailAttendanceService.js",
+      "sha256": "521bfe7f8684af4b6a473bbf600b1d34c23a602d1afd5927f2ef2af40c4005d7",
+      "bytes": 23032
+    },
+    {
+      "path": "backend/services/retailAttendanceXlsx.js",
+      "sha256": "c07a32d9d604a260a231fe56adf237925f4a55ca831f219dadb7a8732f628bf0",
+      "bytes": 20700
+    },
+    {
+      "path": "backend/services/retailBulkIdentityService.js",
+      "sha256": "00e587f6685efe343b53e1a1e2cbf615561eb12c4194ee33e1043b54037e76cc",
+      "bytes": 5597
+    },
+    {
+      "path": "backend/services/retailCleaningFoLinkService.js",
+      "sha256": "546691f15a375808cefbd67071cc956a4536ef8783111df33a7a687ed4df0707",
+      "bytes": 3527
+    },
+    {
+      "path": "backend/services/retailFaultUpdateService.js",
+      "sha256": "80db8553a88a640e4716ca513277bcfc467d81600b00347fae733fab247c0c6c",
+      "bytes": 1508
+    },
+    {
+      "path": "backend/services/retailIfmsHistoryService.js",
+      "sha256": "e0f3989c36daf371b8b50ad8b4cc0bc591557851b4e5072a4c2467b653264a74",
+      "bytes": 3152
+    },
+    {
+      "path": "backend/services/retailInitialAdminAccess.js",
+      "sha256": "d86e79412c5b606b5a71dd79d9cad94824b7c338d5a182964617c0f53338bf33",
+      "bytes": 3553
+    },
+    {
+      "path": "backend/services/retailMisService.js",
+      "sha256": "a4ba26a851d64aebf23ab3784b9f3c9b0c0e165adf26a748cf18be78c365ffcc",
+      "bytes": 4296
+    },
+    {
+      "path": "backend/services/retailMisUserManagement.js",
+      "sha256": "7735674bd7a59d141d8ee36750fd03a243db2d6839f013ad41d5027afc0ed2d0",
+      "bytes": 2061
+    },
+    {
+      "path": "backend/services/retailModuleReportService.js",
+      "sha256": "83e4328c7c2d080e23620faf1b45291060b56f09f303dfd7d3ec1aa1ea410886",
+      "bytes": 11667
+    },
+    {
+      "path": "backend/services/retailOperationsService.js",
+      "sha256": "9676d43482d3ef24dc8a592cde022040203422cef9bc3b558190920ddfbacd54",
+      "bytes": 3491
+    },
+    {
+      "path": "backend/services/retailProvisionalService.js",
+      "sha256": "f58eb2da681a1cbb8273fcd2632b2de637da660f2820a8494ae75f3941ed0a1e",
+      "bytes": 1596
+    },
+    {
+      "path": "backend/services/retailQuotationImport.js",
+      "sha256": "ac398ce11c72952f742e4f31b7a0182648db931f7f1653ea6a8744562fe5c579",
+      "bytes": 11789
+    },
+    {
+      "path": "backend/services/retailSavedReviewService.js",
+      "sha256": "32f9e59beb0dc05b353fe338eb402eedbebbd888af14ee7c6331eb9e2a845dc6",
+      "bytes": 18782
+    },
+    {
+      "path": "backend/services/retailStoreAttendanceRecovery.js",
+      "sha256": "aaa0c6f9080a979c826407ec4aa29bdd850b773b5af7c8a80c0dab94e8bab89f",
+      "bytes": 3403
+    },
+    {
+      "path": "backend/services/retailStoreImportService.js",
+      "sha256": "71b6bb522e73908706b3826955585d04f400a5431dc89cb985e304c346b3231e",
+      "bytes": 4508
+    },
+    {
+      "path": "backend/services/retailStoreImportValidation.js",
+      "sha256": "69baacc8e46d86850cda733a63ce212cb29beb108e6b0920bad57383d427ca07",
+      "bytes": 10569
+    },
+    {
+      "path": "backend/services/retailTrainingReadScopeService.js",
+      "sha256": "122ca04ca11fe9840689278f8d75183807702c3fe5a2ba8e017b8553981da6ea",
+      "bytes": 6168
+    },
+    {
+      "path": "backend/services/retailUnifiedImport.js",
+      "sha256": "c38504aebaf0662bb0c4d4f30bae16053c3418164f8089d231ffee79b71f8cc2",
+      "bytes": 10318
+    },
+    {
+      "path": "backend/services/retailUnifiedService.js",
+      "sha256": "33eafb81d1f7b0126ec52def767fa807bd072d8c9509dc2cbfbaa788ec0dd386",
+      "bytes": 6462
+    },
+    {
+      "path": "backend/services/retailZoneMappingService.js",
+      "sha256": "a034bfa17070c8740e169fb18b48076ca0635dd75b81810b9686e99e1c8ab045",
+      "bytes": 3723
+    },
+    {
+      "path": "backend/services/roleNormalizationService.js",
+      "sha256": "d6cfb558930c65bf2dafc17292e6a5fa3b17cc447c60bee18936bf5af1162287",
+      "bytes": 222
+    },
+    {
+      "path": "backend/services/serviceRoleAuthAdminCapability.js",
+      "sha256": "72f8150fa219144fffcbf41149ea7fa0598419ec41cc06cbc7d9e2df727e0f91",
+      "bytes": 1574
+    },
+    {
+      "path": "backend/services/siteVisitFeatureFlag.js",
+      "sha256": "caf06ba0a672551ebe7e5647b8f551d38d1d01cbe74673137f9b60e27f0a49a3",
+      "bytes": 157
+    },
+    {
+      "path": "backend/services/siteVisitWorkflowService.js",
+      "sha256": "56a9de9e243ae4160b10993afa68ecff63d852ee2374e905ee71970618d8a6b9",
+      "bytes": 5766
+    },
+    {
+      "path": "backend/services/tenderWorkflowService.js",
+      "sha256": "44d3af15f02069b88fac26d6159d193eae1df92aa7e0dc6c8cbaec2dac06b4e1",
+      "bytes": 9691
+    },
+    {
+      "path": "backend/services/trainingAccessService.js",
+      "sha256": "91d769a32e48ab89cf96368d849c5a541bc51674a9c20063c17e02e189f1cd77",
+      "bytes": 13861
+    },
+    {
+      "path": "backend/services/trainingEvidenceService.js",
+      "sha256": "3708bcea5b7a92271b18ffdc4a43aaa0109ac4109fddaaeb601bb4b5a42c1314",
+      "bytes": 10799
+    },
+    {
+      "path": "backend/services/trainingService.js",
+      "sha256": "5fc0bb81fea5864b7d3794accd4f7da1c2d664b719252bdf149c2a43353afa13",
+      "bytes": 23226
+    },
+    {
+      "path": "backend/services/webRoleAccessService.js",
+      "sha256": "85525847a56a0ff924be3348f06ee70594366135e820cb9b60e259d39318591e",
+      "bytes": 730
+    },
+    {
+      "path": "backend/services/workMappingScope.js",
+      "sha256": "859b71a34f4322557851e22deb3f911c8563c384023b1ead2de51a30a9c0f972",
+      "bytes": 2984
+    },
+    {
+      "path": "backend/shared/businessDevelopmentRoles.js",
+      "sha256": "e7a58db7dc54882a19604f264b1ffe3e463ef5041c27c875a428f8e04203062e",
+      "bytes": 1266
+    },
+    {
+      "path": "backend/shared/platformAdmin.js",
+      "sha256": "3b6c6e3e7f3ea770ec4ae4baaed1143b4b86d4fa64e85db05ec215c1dcc3f413",
+      "bytes": 898
+    },
+    {
+      "path": "backend/shared/preSalesConstants.js",
+      "sha256": "f1a7a54d04b673199a2e4a1fe5f7e0601cac11d74e23406ff4005e694ff25903",
+      "bytes": 2035
+    },
+    {
+      "path": "backend/shared/retailAttendance.js",
+      "sha256": "707bbf1dec9ba7618ba527ade2023643802538658313d55a45565aa70e284fc2",
+      "bytes": 7568
+    },
+    {
+      "path": "backend/shared/retailAttendanceTrend.js",
+      "sha256": "80425424a4bf9c12cfbd53b439dedf442c53258508c3caa18a300b07bc4e6dab",
+      "bytes": 1565
+    },
+    {
+      "path": "backend/shared/retailDirectApproval.js",
+      "sha256": "ac2ed1b8aa3770f6b5794a341e4fdd299e2e42eb3611c8f913cb651305e4ad4d",
+      "bytes": 600
+    },
+    {
+      "path": "backend/shared/retailFaultWorkflow.js",
+      "sha256": "e75ccdc367c724924536d8b9de8e74592f82b3315a03c416b02c70d2a931509e",
+      "bytes": 1039
+    },
+    {
+      "path": "backend/shared/retailIdentityBatchPlan.js",
+      "sha256": "f76fc01a30c997047d0dc2eddee4610837ffb84a2261ac54c4e4e6e07e71bc64",
+      "bytes": 1625
+    },
+    {
+      "path": "backend/shared/retailIdentityReadiness.js",
+      "sha256": "00d60a49b59d38ce9a73947c4086b34a954d39a9b77475a21ff7d14d936891d4",
+      "bytes": 2450
+    },
+    {
+      "path": "backend/shared/retailIdentitySubmission.js",
+      "sha256": "a73e73a526bdca545958e653478fa9b343d72f050de8768f88b28be4041ba2af",
+      "bytes": 2279
+    },
+    {
+      "path": "backend/shared/retailMisAccess.js",
+      "sha256": "29d53ec5d7781ce69cf64aef800e19429fcfc138e31eac8695e7ab7ffffe9886",
+      "bytes": 4481
+    },
+    {
+      "path": "backend/shared/retailModuleReports.js",
+      "sha256": "a019bc53e20b02149f6b2780118cb2171f1bb3bb4bf89e076c11635ab0af8233",
+      "bytes": 4636
+    },
+    {
+      "path": "backend/shared/retailOos12Workflow.js",
+      "sha256": "a2575907c69eb6e30b990d29aa6525ec38807c0dfa4458d4ae155e22d179c5c1",
+      "bytes": 1491
+    },
+    {
+      "path": "backend/shared/retailOosAccess.js",
+      "sha256": "3ca54bd930f81d0c19a11b6cff1b44d9bbd819cc45700f0730236988d49f4c8b",
+      "bytes": 547
+    },
+    {
+      "path": "backend/shared/retailOperations.js",
+      "sha256": "6878d26c6cba4fcf976eafce4e57e2ed151077400893b4e1383495aa8506b575",
+      "bytes": 3716
+    },
+    {
+      "path": "backend/shared/retailQuotationFormat.js",
+      "sha256": "73070e3d95f1f3359bbf4e1bc36a11502fbaee0584627d8fdbb62c916047eda4",
+      "bytes": 1036
+    },
+    {
+      "path": "backend/shared/retailReadinessReport.js",
+      "sha256": "3d4256fe88caf5bcbb6d4dfb0aff8e472af22db1052ae15a707d0bc3c90166f3",
+      "bytes": 6078
+    },
+    {
+      "path": "backend/shared/retailSavedReview.js",
+      "sha256": "52ee8b31c4a79816c1401772c64941562534ebe8512e4920458f59c7b92acaf2",
+      "bytes": 4255
+    },
+    {
+      "path": "backend/shared/retailServiceOwnership.js",
+      "sha256": "eca3b256fefa473bcf6ba16d95c786b222a21482aabe85f15891c9c5c8272935",
+      "bytes": 361
+    },
+    {
+      "path": "backend/shared/retailServiceWorkflow.js",
+      "sha256": "2ab43374f314f61689545c271b89705ace009e5eaf254415af0d05d3fe31a26a",
+      "bytes": 1613
+    },
+    {
+      "path": "backend/shared/retailStoreReviewEvidence.js",
+      "sha256": "d832a75c6effac908e3d043b45b241100ec7631252c375a32c8f9654a3576ff4",
+      "bytes": 1021
+    },
+    {
+      "path": "backend/shared/retailTrainingReport.js",
+      "sha256": "423f9f57d5cc59350efe423ef764229f693d38d9cb58ac9b3a24cb500ff0a7d6",
+      "bytes": 1167
+    },
+    {
+      "path": "backend/shared/retailUnifiedClassification.js",
+      "sha256": "5ba14a798dfda4661265000d69214f8ab64d43f9a5ae27082171c5f1d94b6b5d",
+      "bytes": 3812
+    },
+    {
+      "path": "backend/shared/retailUnifiedColumns.js",
+      "sha256": "2f25f047c0762dd3bfcb1d0174d3919595accf8d28ee8ac0c3ae776a763df38a",
+      "bytes": 932
+    },
+    {
+      "path": "backend/shared/retailUnifiedModel.js",
+      "sha256": "fc0c7fb2b02fe79cebb245e8f4ccc998b6a772f60e2271f632318a5460f3fec8",
+      "bytes": 6317
+    },
+    {
+      "path": "backend/shared/retailZoneMapping.js",
+      "sha256": "5bf3861e3748df558685e306a38b49e928af02cbc8c9737edbb5d203e51dab1b",
+      "bytes": 8613
+    },
+    {
+      "path": "backend/shared/siteSurveyTat.js",
+      "sha256": "483818a755a9eb2f99a767c3c780b9f67cb63de9a3b78d80b06f02fac74ea2ff",
+      "bytes": 1447
+    },
+    {
+      "path": "backend/sql/20261104_october_missing_km_admin_decisions.sql",
+      "sha256": "210dc8a34774fd5431290c667c6271f19c299275e6515f87af51b0129f07b6d6",
+      "bytes": 1543
+    },
+    {
+      "path": "backend/sql/20261104_october_missing_km_join_report.sql",
+      "sha256": "e8f512f0f3c1ebb2751dc2b3da0c17de2d0d582b7c9bac97dca941178b28f8f0",
+      "bytes": 1889
+    },
+    {
+      "path": "backend/sql/20261104_october_missing_km_release_hardening.sql",
+      "sha256": "87d19ebb33a6a2fbe48f555b2132114f3c0ff4f94c66d65534bc4d36cfe28deb",
+      "bytes": 2457
+    },
+    {
+      "path": "backend/tests/accessControlBootstrapContract.test.js",
+      "sha256": "27d175ffaf57d6739a4b7da7782a5806f1c3ab8aa7d843197adca312bf603378",
+      "bytes": 2726
+    },
+    {
+      "path": "backend/tests/accessControlMigrationContract.test.js",
+      "sha256": "c3b12e769c64998ef6bb23caee5fad7a005858903bbc9df24f7576b158fddbd3",
+      "bytes": 4122
+    },
+    {
+      "path": "backend/tests/accessControlService.test.js",
+      "sha256": "f0040922404cce369a9511e9ac42896850408c3197970b14a31b951b21cd03a5",
+      "bytes": 15585
+    },
+    {
+      "path": "backend/tests/accessControlServiceRoleGrantMigration.test.js",
+      "sha256": "14d3d642447661989bc6f837ebe7e46d4d12f036148eb783b16a063e3659ad80",
+      "bytes": 1511
+    },
+    {
+      "path": "backend/tests/attendanceEventMigrationContract.test.js",
+      "sha256": "0183fe532e845148de06d6574ca8748994a3aa1f7140fd5f292ad47d43c66c4a",
+      "bytes": 2207
+    },
+    {
+      "path": "backend/tests/businessDevelopmentRoles.test.js",
+      "sha256": "7239f4100d906339cbfeb353e2c1566bbc5b3382c0c344254583040bcc872e4d",
+      "bytes": 6554
+    },
+    {
+      "path": "backend/tests/businessDevelopmentUserManagementContract.test.js",
+      "sha256": "711ee61b78dcc30510f6f34525cd1e9845af1d46a2999844a45e62c54ad31b47",
+      "bytes": 2074
+    },
+    {
+      "path": "backend/tests/clientDeepCleaningService.test.js",
+      "sha256": "b627927c5c27796596d4f939cf7c01721b12d51426cd07c6cf408b17ad986b0d",
+      "bytes": 39418
+    },
+    {
+      "path": "backend/tests/clientTicketingManagement.test.js",
+      "sha256": "24d0f9ad00464237fb68189f87d893b872def5b1d8dfdd23f5990878c8f3c3af",
+      "bytes": 11340
+    },
+    {
+      "path": "backend/tests/compatibilityPhase1.test.js",
+      "sha256": "ecf68e63502a5a00a10bc6948d208f7f517f790faba78fa56266239ea71abd83",
+      "bytes": 8814
+    },
+    {
+      "path": "backend/tests/compatibilityStartup.test.js",
+      "sha256": "62b0bed48a1031d1b9ef8ae024e525a15cd1d742f6db8476f0800b32765fc144",
+      "bytes": 3240
+    },
+    {
+      "path": "backend/tests/consolidatedTravelClaimReportService.test.js",
+      "sha256": "42f59dd0046461cba5dd40fdb5229219d817cf814008818192c5d5b339a8044f",
+      "bytes": 33601
+    },
+    {
+      "path": "backend/tests/corsPolicyService.test.js",
+      "sha256": "d8197b1e33c3050c33a60ad51dcfc2b81568dfaf6abfb75cda6822969d986dfd",
+      "bytes": 2500
+    },
+    {
+      "path": "backend/tests/demoAccessService.test.js",
+      "sha256": "858b54724a3e9709d86087b688c495ff690ea4ae682830a3061ee5d66996da75",
+      "bytes": 1991
+    },
+    {
+      "path": "backend/tests/demoViewerReadOnlyAccess.test.js",
+      "sha256": "74ac79e3753164211aa9e73330e56075903bb90b16e4cedac4f7e468ecfa9d68",
+      "bytes": 3346
+    },
+    {
+      "path": "backend/tests/employeeRangeClaimGrant.test.js",
+      "sha256": "2e85b6a45c6dcede8f1b2f4e0949c3bb18b4587088d6e50eec57f3ad9110ef27",
+      "bytes": 618
+    },
+    {
+      "path": "backend/tests/employeeRangeReportService.test.js",
+      "sha256": "3242f8fc960512684d1fbfd5b3f169b8e10e42bedd59aea4b2d5e49208c1e9d6",
+      "bytes": 26903
+    },
+    {
+      "path": "backend/tests/executiveAssistantWebAccess.test.js",
+      "sha256": "ef3943d5026e37ce1a91516fd48e0f62333fb00c2e7c948694ad2bc1d87722e2",
+      "bytes": 7380
+    },
+    {
+      "path": "backend/tests/faultTrackerStoreScope.test.js",
+      "sha256": "3c37bff4080c7c2e4c51d1c182494644143c8807c72f84c19db69347458a97a5",
+      "bytes": 9282
+    },
+    {
+      "path": "backend/tests/finalLegOnlyScriptContract.test.js",
+      "sha256": "fcef09873c2ab97757b0d662b34ccd3e3440729ada062b951a3bdc6bef440519",
+      "bytes": 521
+    },
+    {
+      "path": "backend/tests/fixtures/retailMisBaseline.sql",
+      "sha256": "37a47c47f16b07c9d684edb411e5de2d96f12a75b29ce750ad0baf56b2233d0f",
+      "bytes": 7021
+    },
+    {
+      "path": "backend/tests/fixtures/retailStoreImportBaseline.sql",
+      "sha256": "deb0d5247475ecd9731049c540a0df4bc91ba12227d9983a8a2c7c4335fc4c76",
+      "bytes": 2471
+    },
+    {
+      "path": "backend/tests/foCanonicalKmEngineV2.test.js",
+      "sha256": "1a6c744fc6a1c9296db084820826f0687da9e8fda8fe1dc3db92f218cf3f068d",
+      "bytes": 23952
+    },
+    {
+      "path": "backend/tests/foCanonicalKmV2Migration.test.js",
+      "sha256": "742695cf11cb07df9c6d51dfa04af68da23621a2a1389c3bcff6d07b0f06524a",
+      "bytes": 4365
+    },
+    {
+      "path": "backend/tests/foCanonicalKmV2Recovery.test.js",
+      "sha256": "efaa0ff88a86232ddf37ef09bda89be5c05cff5896b226208e508a494e26bb02",
+      "bytes": 1403
+    },
+    {
+      "path": "backend/tests/foCheckInLocationPolicyService.test.js",
+      "sha256": "aa387b32e6d5b6108b76b66ab92ceb9441df8efdb78888691eaf5b2dff8bc34a",
+      "bytes": 4496
+    },
+    {
+      "path": "backend/tests/foCommandCenterActorAccess.test.js",
+      "sha256": "68445c70631b7715f286f2f4d17f1771242a95a0848d845cf52bf11963d6933d",
+      "bytes": 3665
+    },
+    {
+      "path": "backend/tests/foConfiguredHierarchyScope.test.js",
+      "sha256": "56ee1469b42f6d48092265544364a9a408002e60277d59fc5a97566aa4310753",
+      "bytes": 4462
+    },
+    {
+      "path": "backend/tests/foDirectReadShadowEndpoint.test.js",
+      "sha256": "7121bb8dade74a7bd85dfd8300156e9ba5294059e94c4a2e93a60cdc9bb8f3c2",
+      "bytes": 10138
+    },
+    {
+      "path": "backend/tests/foEmployeeRangeRecalculationLockService.test.js",
+      "sha256": "2969158d5574bfc4463702ac8c334b3e6383fd1fe4496612ec0fb9153c61a081",
+      "bytes": 2414
+    },
+    {
+      "path": "backend/tests/foEndDayKmRecoveryService.test.js",
+      "sha256": "c098f810ee6dbc5fb98f8613e61fe0274e1e78cde2ff989b34f6bbbae9ba74fb",
+      "bytes": 2245
+    },
+    {
+      "path": "backend/tests/foFinalLegEndpoint.test.js",
+      "sha256": "8bd2ee42bf6d9c87fb4b758f809345d8c2ffa9a702bd09408eb77b8e7c301db4",
+      "bytes": 2059
+    },
+    {
+      "path": "backend/tests/foFinalLegReconciliationGrant.test.js",
+      "sha256": "02a8a1e0a0b564c1427c782ff693e857e2263bba33f9d88af1f3950ac1e087d8",
+      "bytes": 722
+    },
+    {
+      "path": "backend/tests/foForwardFinalLegPersistenceService.test.js",
+      "sha256": "b24a7a05062f69199ff0ea2147907d70ba8c73e326c089fe458e55385a3d8a15",
+      "bytes": 2593
+    },
+    {
+      "path": "backend/tests/foKmAttendancePolicyPostgres.test.js",
+      "sha256": "07217d8a2f4280d9a9a60eca8fa7fd8972260ae9768afae2021b6921aedfde58",
+      "bytes": 25190
+    },
+    {
+      "path": "backend/tests/foKmAuthorizedActions.test.js",
+      "sha256": "396fba0c9593ce14c83db7a126ac5e830fd24a6b432f5fa2471a86b58f0babfa",
+      "bytes": 18796
+    },
+    {
+      "path": "backend/tests/foKmAutomaticAuthorization.test.js",
+      "sha256": "4c6db11905c0c83204e8a35db15f50cb0e49e8c12c16bfcbf47318888e34f3d7",
+      "bytes": 7609
+    },
+    {
+      "path": "backend/tests/foKmAutomaticPostgres.test.js",
+      "sha256": "de76fe0ded932bae6be094813fe22c35c76117c98040920351c96df6fc4fdd61",
+      "bytes": 12411
+    },
+    {
+      "path": "backend/tests/foKmBatchContract.test.js",
+      "sha256": "cee44eed87b4772811285ce3316d4a3e2957bede2a9850f6a0f8412835dc6d11",
+      "bytes": 3216
+    },
+    {
+      "path": "backend/tests/foKmCanonicalPolicy.test.js",
+      "sha256": "0405120879232cfcb6110c968591706fcd4c9dff0be8115f656d115725c59c88",
+      "bytes": 5481
+    },
+    {
+      "path": "backend/tests/foKmCanonicalPolicyPostgres.test.js",
+      "sha256": "b5623469d7db564cbca85fe94ca2570686a4fda7d6f0a19efc211fcb45f04d62",
+      "bytes": 27036
+    },
+    {
+      "path": "backend/tests/foKmFinalLegRegression.test.js",
+      "sha256": "a374cb43bf2892802a044eb9b5a4510012f3123ab77b094759cfd84d0cf42c0f",
+      "bytes": 5674
+    },
+    {
+      "path": "backend/tests/foKmIncrementalAccuracy.test.js",
+      "sha256": "bb3278721f1653918c4acb786157b34a9fddbac55c6123b7cd808a835927b560",
+      "bytes": 7599
+    },
+    {
+      "path": "backend/tests/foKmIntegrityMigration.test.js",
+      "sha256": "5217b0939b1171f10ee8bf7f4d985d1ef13328d070dd9b6c94183d39edfac530",
+      "bytes": 4441
+    },
+    {
+      "path": "backend/tests/foKmLegacyIdentity.test.js",
+      "sha256": "db266fe2124f73c6947ca4f66ffe0a67b4cffe3449854fd34301aaa8e285363b",
+      "bytes": 684
+    },
+    {
+      "path": "backend/tests/foKmLiveJourneysPostgres.test.js",
+      "sha256": "d1e925860cb9acc61871f94fe7f7eedee9a6eb11eedf6fd4414d80ea4adf8a2b",
+      "bytes": 28039
+    },
+    {
+      "path": "backend/tests/foKmPreviewButton.test.js",
+      "sha256": "a63f713cfa0e59db4687e735c3abea5c927e29d7620816550971ea364aa6ea7d",
+      "bytes": 4117
+    },
+    {
+      "path": "backend/tests/foKmRecalculationAuthorization.test.js",
+      "sha256": "9025d67dbad8e6b6f32e18d97ecf8499d5ae54d46c7c171f44b59603f7050cbd",
+      "bytes": 4726
+    },
+    {
+      "path": "backend/tests/foKmRecordedWindow.test.js",
+      "sha256": "71e20e8e489a4f04b0f42f704cec581e5524e9e6917fbde5c95d7234b9b6957a",
+      "bytes": 7494
+    },
+    {
+      "path": "backend/tests/foKmReleaseIntegration.test.js",
+      "sha256": "7bf05d1c643fdd7b2ecad8b3c9debdf1b005a17443a4a0eb2b1adb8e49571d28",
+      "bytes": 9412
+    },
+    {
+      "path": "backend/tests/foKmRoutePayable.test.js",
+      "sha256": "f7cae74c6543eff410a3458fbe279eeb4284cc7c34f5ddddd8c8292e4f5b8c19",
+      "bytes": 44598
+    },
+    {
+      "path": "backend/tests/foKmScopedAuthorization.test.js",
+      "sha256": "1e94ceee06b1e078def530efe2dc96124dfc9132b6f6595af067a270f1c7c700",
+      "bytes": 3958
+    },
+    {
+      "path": "backend/tests/foKmScopedAuthorizationPostgres.test.js",
+      "sha256": "5751fc3a3768c387aed73cf81402c729a74f3d13529296f0d4712e3cd348e653",
+      "bytes": 17625
+    },
+    {
+      "path": "backend/tests/foKmSupportedBatchService.test.js",
+      "sha256": "f32f90f8f1d1a2729a65eeef8bf6088269a1a58bbe037c9283a98b0364c5ed81",
+      "bytes": 8424
+    },
+    {
+      "path": "backend/tests/foKmV2PersistenceService.test.js",
+      "sha256": "31d9613846eba0b4849aa8d40dcbb939f30cf262665d9e4c51fc540d4c8fdb43",
+      "bytes": 3224
+    },
+    {
+      "path": "backend/tests/foManualKmRangeRefreshService.test.js",
+      "sha256": "9f4356c93f2ed46fdbc943efbf4030448c40013f4667ce9382bb9fd8cc2c8d99",
+      "bytes": 12139
+    },
+    {
+      "path": "backend/tests/foManualKmRefreshService.test.js",
+      "sha256": "7692b39850186fb7c1cd786b0a4c5f60243d0864bc3d3a4317f3f03fd4c579cd",
+      "bytes": 17357
+    },
+    {
+      "path": "backend/tests/foMissingKmApprovalPostgres.test.js",
+      "sha256": "ff4261621807cd1d97db394c97aaa6b082002f006295916b0763d0b8cc0e041b",
+      "bytes": 14777
+    },
+    {
+      "path": "backend/tests/foMissingKmIncremental.test.js",
+      "sha256": "61e851126066f5f1931cb6644d1c1d18584821c0d758f8b8a4ade7e1bc804b9a",
+      "bytes": 3623
+    },
+    {
+      "path": "backend/tests/foMissingKmReviewMigration.test.js",
+      "sha256": "c14fbd838c53eaa10f5485d6253b6c18f0715cc82e90a616f6b94ed126fb646e",
+      "bytes": 1785
+    },
+    {
+      "path": "backend/tests/foMissingKmReviewWorkflowContract.test.js",
+      "sha256": "cf7df4dd411daa2d6032871365313c87abd67bc08f5812edd1fa29060499dd2d",
+      "bytes": 5579
+    },
+    {
+      "path": "backend/tests/foMissingKmSelfApproval.test.js",
+      "sha256": "e68a4edcf9e3cd5f035e4119762ad6d0bfe0da896fe2a3f97606112fce575edc",
+      "bytes": 4096
+    },
+    {
+      "path": "backend/tests/foMixedModeReporting.test.js",
+      "sha256": "9c0bfcc04d44ed26348076ac0dda69a3aee3fd143762152db60573d33a0d6dce",
+      "bytes": 4289
+    },
+    {
+      "path": "backend/tests/foMixedModeTravelCorrectionMigration.test.js",
+      "sha256": "5084ae7c8619d95449eb6baa7fe028ccb1ae7db9f08925012763f4ad371904e2",
+      "bytes": 2582
+    },
+    {
+      "path": "backend/tests/foMixedModeTravelCorrectionScript.test.js",
+      "sha256": "d490eb87179649b71b0938ef44da34b2b79b7170eb8350b1dbc69b5ef4029fc6",
+      "bytes": 2799
+    },
+    {
+      "path": "backend/tests/foMobileKmV2Contract.test.js",
+      "sha256": "8dbd3a159f4673f519167be5580d53218446072c4ad6452e6108104439ad2bcb",
+      "bytes": 2613
+    },
+    {
+      "path": "backend/tests/foOctoberAdminClaims.test.js",
+      "sha256": "2a452ec25953fdcd9ba8167fabbf7a153784aa61caa92a7132d71a4760fe0d05",
+      "bytes": 11469
+    },
+    {
+      "path": "backend/tests/foOctoberAdminClaimsPostgres.test.js",
+      "sha256": "ea7004a8c664bb0c8988d5d614d71751e66ac9fef15b42c17c9e1362701332d5",
+      "bytes": 5215
+    },
+    {
+      "path": "backend/tests/foOctoberKmAuditSummaryService.test.js",
+      "sha256": "23b9c90f8814c76e69bba380f497375522bdceb69b280a9b8de377a584a773ff",
+      "bytes": 9824
+    },
+    {
+      "path": "backend/tests/foOctoberPaymentClaims.test.js",
+      "sha256": "3c99917ff6311a0be1925c4f2d17ab3b496fc214621fce0352b13d32b06615fe",
+      "bytes": 5690
+    },
+    {
+      "path": "backend/tests/foOctoberRecovery.test.js",
+      "sha256": "fcc6e2fa4ce966535ac493a01ac5483be6e1c43652a4fd35e2c72bd37c283a9e",
+      "bytes": 13982
+    },
+    {
+      "path": "backend/tests/foOctoberRecoverySql.test.js",
+      "sha256": "aa0d92a7d62d1c77c436e0b91f22d99efdbba9828a08580b176514ffc2aac30f",
+      "bytes": 9750
+    },
+    {
+      "path": "backend/tests/foOperationalAccessService.test.js",
+      "sha256": "b83ea1593a6da512114aa4965830b36cfeed07d164b4e0d6a24afd297128ef14",
+      "bytes": 16577
+    },
+    {
+      "path": "backend/tests/foOwnedEndDayKmService.test.js",
+      "sha256": "976e98c22ad7c53767ffe7d993337742dec05112e5149b7116beea20e4e07e52",
+      "bytes": 4596
+    },
+    {
+      "path": "backend/tests/foSharedKmReconciliation.test.js",
+      "sha256": "42b22056a5970d5c3c7adb4e41b82ceb1c7e0fd62047e08a57c03637b5a17268",
+      "bytes": 19693
+    },
+    {
+      "path": "backend/tests/foSharedKmRoutes.test.js",
+      "sha256": "21350093d222b834dc50351c8cf8861280447255a29cd8b83fb5036b2e490162",
+      "bytes": 8104
+    },
+    {
+      "path": "backend/tests/foSiteVisitsJsonFallback.test.js",
+      "sha256": "886c355b0d80d776b2e9c28e482d9c164ba8e4be183f5379dd4469d8195b1135",
+      "bytes": 753
+    },
+    {
+      "path": "backend/tests/foTravelEvidenceService.test.js",
+      "sha256": "20383cc5335825c36d402f307d0bd6d913afb91bf82dd1fe07109f8324a2d456",
+      "bytes": 15811
+    },
+    {
+      "path": "backend/tests/foTravelLegCalculationGrant.test.js",
+      "sha256": "c09d65c3134d77cdd0a7db68982d6b76742b9e5095a0c66926795e5f6034211a",
+      "bytes": 639
+    },
+    {
+      "path": "backend/tests/helpers/isolatedKmPostgres.js",
+      "sha256": "0ad31e2e0e9fbd8ca81486b29bff72d3d2e23f7b239b8c1e832aafff21b858d6",
+      "bytes": 3716
+    },
+    {
+      "path": "backend/tests/helpers/retailOos12Checks.js",
+      "sha256": "f5ba996ee383c1c943581d44d22ee8b4da76a4d6eb5feb1491412adfa2286ec1",
+      "bytes": 22603
+    },
+    {
+      "path": "backend/tests/hospitalCleanlinessWorkflowMigration.test.js",
+      "sha256": "4d21111c12bd27c6c678ef7c9f03fd9f18b6a2c926c4c5a86804d7ab371cc20f",
+      "bytes": 5334
+    },
+    {
+      "path": "backend/tests/hospitalContactFeedbackRoute.test.js",
+      "sha256": "4c67364def985cf9b7033581f81c95a1aa8839a7a6202169eb5a95a9fd5e1405",
+      "bytes": 3050
+    },
+    {
+      "path": "backend/tests/hospitalContactOnDutyRoutingMigration.test.js",
+      "sha256": "ff1b37e8dd4b765b563ace681d9283a5af0263cc253a168e21d1890036eb0aa5",
+      "bytes": 2887
+    },
+    {
+      "path": "backend/tests/hospitalContactResolveMigration.test.js",
+      "sha256": "6e32f2cdcada0589a993212a2be010a7f5e8b85caa26b6edc4dfbd5ef09ba47f",
+      "bytes": 2057
+    },
+    {
+      "path": "backend/tests/hospitalContactSupervisorBroadcastMigration.test.js",
+      "sha256": "e030790d7f941696175df8d24c5cef190fcca160d205658c860c36543b79d808",
+      "bytes": 3564
+    },
+    {
+      "path": "backend/tests/hospitalContactTicketRpcMigration.test.js",
+      "sha256": "88b4ecec8819a60d64f9e6612c89956c23be2ef048d3a47877a9242da6033f7a",
+      "bytes": 3192
+    },
+    {
+      "path": "backend/tests/hospitalEscalationManualHarness.test.js",
+      "sha256": "1495436932e433e0dac1455c196c0423c798b669bc7870a79edc4efa3b16fb97",
+      "bytes": 6405
+    },
+    {
+      "path": "backend/tests/hospitalFeedbackQrService.test.js",
+      "sha256": "437f22d810e955afeeec11d09c8cffe12c60501cdd4c05a92ac6ac92582950ad",
+      "bytes": 66062
+    },
+    {
+      "path": "backend/tests/hospitalMobileCompletionUx.test.js",
+      "sha256": "003993efd01e79caa88c4c6209f54af84653b3182852e22abf11bda3ed01d0dd",
+      "bytes": 1836
+    },
+    {
+      "path": "backend/tests/hospitalNoSupervisorImmediateEscalationMigration.test.js",
+      "sha256": "da38084c3a06c25fad227eb3271c3b0fdd905351574e0ad8309a82daae6d0338",
+      "bytes": 1971
+    },
+    {
+      "path": "backend/tests/hospitalOperationalAcceptanceFix.test.js",
+      "sha256": "7e4a99f94fb2befbbb6c14c34305255d25cd12a581de0a39a68e526da4e19393",
+      "bytes": 4128
+    },
+    {
+      "path": "backend/tests/hospitalSlaEscalationMatrixAudit.test.js",
+      "sha256": "0c64ca17e17be85d1daaf86d8b2be2f0df090a6f251309d8cd7243aeeff935fe",
+      "bytes": 26129
+    },
+    {
+      "path": "backend/tests/hospitalSupervisorAcceptanceWindowMigration.test.js",
+      "sha256": "da40460d368b87145de2db65fc1424afe54c81908aba5257cde7784ed820a9e7",
+      "bytes": 4512
+    },
+    {
+      "path": "backend/tests/hospitalSupervisorAvailability.test.js",
+      "sha256": "87880e69bf9e7e932031a8df7b5497fcdb1aff95cdf19d1ee676fd4112df5231",
+      "bytes": 4944
+    },
+    {
+      "path": "backend/tests/hospitalTicketAtomicCancellationMigration.test.js",
+      "sha256": "1297c20c82588d91f94c55e5ea0537605c5e812e8d315e62bf7f5b084669535d",
+      "bytes": 2944
+    },
+    {
+      "path": "backend/tests/hospitalTicketClientContactsRoute.test.js",
+      "sha256": "a04154afce92162f7a1a6321e8334c85475282cafe39ec3399455df109c1f1f9",
+      "bytes": 768
+    },
+    {
+      "path": "backend/tests/hospitalTicketLandmarkPathDedupeMigration.test.js",
+      "sha256": "dbc89fa76e2323f48173040a19d22390c7f5d3501a9a4563625e4f30c8addff5",
+      "bytes": 981
+    },
+    {
+      "path": "backend/tests/hospitalTicketMigrationContract.test.js",
+      "sha256": "553917add469bc0147cab57fbcd79187a4a2660c4bcaee8ccebed94d28725293",
+      "bytes": 2385
+    },
+    {
+      "path": "backend/tests/hospitalTicketOptionalLocationMigration.test.js",
+      "sha256": "f8f885a042073d03fa8893c5357d8e71a1cb91338befe59f26d9d5663deeeda0",
+      "bytes": 2215
+    },
+    {
+      "path": "backend/tests/hospitalTicketPhase1MigrationContract.test.js",
+      "sha256": "cae65cfde161a9857b90b17104cb8cbdf18222a7217d3c50297b81b59dd36792",
+      "bytes": 2039
+    },
+    {
+      "path": "backend/tests/hospitalTicketPriorityEscalationMigration.test.js",
+      "sha256": "975e7877e7dcbad7cef645b8a3d0a26680721f2fa2cbb3f15179ca7251abf94d",
+      "bytes": 3065
+    },
+    {
+      "path": "backend/tests/hospitalTicketPushMigration.test.js",
+      "sha256": "04c48d0f5e29b7bea44d175e238037e0095189fc36d39dc54a22a62c92aebdff",
+      "bytes": 2920
+    },
+    {
+      "path": "backend/tests/hospitalTicketPushService.test.js",
+      "sha256": "2bd3540bbe160f29ecf0f8ca58be7bdfc01023ab96f99eaa56efedce82f74b28",
+      "bytes": 41237
+    },
+    {
+      "path": "backend/tests/hospitalTicketRoutingMigrationContract.test.js",
+      "sha256": "262aac8fc51dab5a234d0c2f1ef9f48eedc952ed1d02b9198ce47cf8aaf9ccf4",
+      "bytes": 3888
+    },
+    {
+      "path": "backend/tests/hospitalTicketRoutingRecoveryMigration.test.js",
+      "sha256": "5dbb11a0f1a8ebee6a733ecc9d0ec48f7457f83e433f47365b90dc138498f7f8",
+      "bytes": 5300
+    },
+    {
+      "path": "backend/tests/hospitalTicketRoutingService.test.js",
+      "sha256": "e39f56c7ce603b1396a80875baf58f5b23e7f56ae1448e5811e434b6cd6032b9",
+      "bytes": 6197
+    },
+    {
+      "path": "backend/tests/hospitalTicketService.test.js",
+      "sha256": "b4703ae5c0d93c6f3858100d48a27fd158093dab13316d756296a1a77a0d8a57",
+      "bytes": 67871
+    },
+    {
+      "path": "backend/tests/hospitalTicketSupervisorSelfAssignmentMigration.test.js",
+      "sha256": "564b55a16f64b1c5206c07717826b202ff842c1e8fefc44a7084e1cd222e7d29",
+      "bytes": 3707
+    },
+    {
+      "path": "backend/tests/hospitalTicketWebDashboardService.test.js",
+      "sha256": "9ba8ea7df31d733a644ac9f9c58139ae12c30ba968a390f3c83401fa19187822",
+      "bytes": 32929
+    },
+    {
+      "path": "backend/tests/httpLifecycle.test.js",
+      "sha256": "85bba69f0ae185abd72ffcec0f6320574612aa0f54f47f2b4ed1271837fb7e92",
+      "bytes": 3486
+    },
+    {
+      "path": "backend/tests/invitationOnlyProvisioning.test.js",
+      "sha256": "ccadf158fa466efbab0cc4bab6693d8f19efa38b0dd3fd470f2bc05540d53ac0",
+      "bytes": 6911
+    },
+    {
+      "path": "backend/tests/kmFinancialWriteMaintenance.test.js",
+      "sha256": "814bfc036681a376a6f5471e1cc044ad2e6cceb7291b7bc6f73abf20e891dd99",
+      "bytes": 2382
+    },
+    {
+      "path": "backend/tests/leadContactApiContract.test.js",
+      "sha256": "dc538150be98dbf20b9295e111fef66f00916bbac7969cd8a460af2a63f44f41",
+      "bytes": 557
+    },
+    {
+      "path": "backend/tests/leadManagementService.test.js",
+      "sha256": "ebf29741408eb6af028d77b8eb3b3f62b8f62e8dfa22d09181fb7c57168f2a04",
+      "bytes": 16486
+    },
+    {
+      "path": "backend/tests/leadMigrationContract.test.js",
+      "sha256": "0bca0797ee2afb90a58a4e2eaedc02805e507147006b44af0f6b2b2e8b027f58",
+      "bytes": 3460
+    },
+    {
+      "path": "backend/tests/momAccessService.test.js",
+      "sha256": "8a22fa6c28e275a1889f81ebc5ce7bd7f0dca4515e21cc2e9511c31da0a88b70",
+      "bytes": 5635
+    },
+    {
+      "path": "backend/tests/momMigrationContract.test.js",
+      "sha256": "68f8e0d17cc5ca76ced4f81aa106cef19c8b24e27eca6dca6fa967e4e30f829c",
+      "bytes": 3241
+    },
+    {
+      "path": "backend/tests/momRoutes.test.js",
+      "sha256": "9175b7a1331d1b415dafa2cd9009077f669631351e8d5273ce6f38fb7ea8d670",
+      "bytes": 2800
+    },
+    {
+      "path": "backend/tests/momService.test.js",
+      "sha256": "0923f84d243a0e582628c57b98ffd6c21c999136328a133b900e7d87adcebd65",
+      "bytes": 3353
+    },
+    {
+      "path": "backend/tests/monthlyTravelSettlementMigration.test.js",
+      "sha256": "0563b7eba8f2fd91a56fb942aa64b497c3bece5ca9c40571592a98ac9ed259e3",
+      "bytes": 2249
+    },
+    {
+      "path": "backend/tests/newBusinessBranchHeadStateScopeMigration.test.js",
+      "sha256": "1f289a40f330b115db35942130845ba1ece21ca9f45be16145c3ba5f0ec66899",
+      "bytes": 6566
+    },
+    {
+      "path": "backend/tests/newBusinessOperationsManagerStateScopeMigration.test.js",
+      "sha256": "490a65f85919c07d1736de6b079ca1b9fa2e97497fc2713daeadab6b3abcdb98",
+      "bytes": 7033
+    },
+    {
+      "path": "backend/tests/nimsEscalationTestUsersSupport.test.js",
+      "sha256": "88d6241b8ba211103af07f7574872ae616f5da1edc2d9f0bf40a53d08013a616",
+      "bytes": 7558
+    },
+    {
+      "path": "backend/tests/nimsLocationFoundation.test.js",
+      "sha256": "17a97e4119e4cfe1c3871ee085cb90a552bb6fc08b090c0192fb44800bab0042",
+      "bytes": 7062
+    },
+    {
+      "path": "backend/tests/nimsOfficialV2LocationImport.test.js",
+      "sha256": "7ad733f34eb9a9fbbfc6cf30d40d2bed93129a6fb49645259e431a8f6d28284a",
+      "bytes": 3106
+    },
+    {
+      "path": "backend/tests/nimsTicketVisibilityOperationalAcceptance.test.js",
+      "sha256": "951bfaac23d5adb1d28aad5db9b81a5e8354af026fcdcde2914f45081f8fb7b7",
+      "bytes": 7241
+    },
+    {
+      "path": "backend/tests/nimsVerifiedEscalationRoutingMigration.test.js",
+      "sha256": "9b2b85a0c9755d4e3bb0ff9e4fe0430b39394887b42d5b80474ad3ad861f642d",
+      "bytes": 4124
+    },
+    {
+      "path": "backend/tests/operationsSummaryService.test.js",
+      "sha256": "48171d7ba10f3b496c7c13a04cf93638dac35b3d9124b902d2cc12bdb33b9748",
+      "bytes": 18706
+    },
+    {
+      "path": "backend/tests/opportunityWorkflowBridgeMigration.test.js",
+      "sha256": "f0e77135dec03e0ba2c6de5897990493ac5a8297b46ac80e9c842c8a2b58d3f1",
+      "bytes": 6096
+    },
+    {
+      "path": "backend/tests/opportunityWorkflowFrontendContract.test.js",
+      "sha256": "84ea2eb31771244904fbd3929c60f01146cc2479728d225c349777690301bd86",
+      "bytes": 5264
+    },
+    {
+      "path": "backend/tests/opportunityWorkflowService.test.js",
+      "sha256": "09ca4a5059c0cc1cbf9fc070b43722a48f78c12ebc5a0235b22e9ccc05ff695e",
+      "bytes": 11706
+    },
+    {
+      "path": "backend/tests/platformAdminAuthorization.test.js",
+      "sha256": "12f604b5cfbe665ab1709a98390b22c8846aa216198d78d3fc6eae6445ccaf20",
+      "bytes": 3527
+    },
+    {
+      "path": "backend/tests/platformAdminMigrationContract.test.js",
+      "sha256": "b3ecdbd2ea5c5cc17b1f605e31d3916d51bb5438be02039fcb4f120acffc427a",
+      "bytes": 3378
+    },
+    {
+      "path": "backend/tests/postmanTestResetService.test.js",
+      "sha256": "3c89d94399b2cdb59874024621d278586550306eb29573694c922b57cd575bef",
+      "bytes": 8865
+    },
+    {
+      "path": "backend/tests/preSalesApiContract.test.js",
+      "sha256": "7e26418d81f6baf4808b70e8b9fa1cf44c3a8204bfaf807445989f388b70ed4f",
+      "bytes": 4702
+    },
+    {
+      "path": "backend/tests/preSalesBusinessRole.test.js",
+      "sha256": "7f8f09b24abb0744542057e1080dbecd0d425f6c5c6a86233b08ecb70d45b2a1",
+      "bytes": 10124
+    },
+    {
+      "path": "backend/tests/preSalesHandoffMigrationContract.test.js",
+      "sha256": "eceb82b3a822122bb326199bc7492d59d8cda737d92f07c4bdadc8c4e15f70ca",
+      "bytes": 1170
+    },
+    {
+      "path": "backend/tests/preSalesService.test.js",
+      "sha256": "3c7b6ccdb38f68fe25199077eb4f1f625dc6fd0a4d7fb13389106db678807fcd",
+      "bytes": 5213
+    },
+    {
+      "path": "backend/tests/readOnlyUatMode.test.js",
+      "sha256": "85a93bf9e24e6640a3dbc9e42796c0cded0ef68225f7b9e9719c377651b790e1",
+      "bytes": 9619
+    },
+    {
+      "path": "backend/tests/readOnlyUatServerIntegration.test.js",
+      "sha256": "bc7606630cf6197b1d5f9050b984e773083cb01edd746b5139a708fa73162b2f",
+      "bytes": 3315
+    },
+    {
+      "path": "backend/tests/retailAttendancePostgres.test.js",
+      "sha256": "fc64eb25ef896f40c6d4b61ee73106a53e11fa8eda82759d41ee62d6585df008",
+      "bytes": 22614
+    },
+    {
+      "path": "backend/tests/retailAttendancePreviewAudit.test.js",
+      "sha256": "063c7940b4c021d5a000f8dd30cf0d6567eb8e50a0e8d2ff6d7d941b1ab6ee71",
+      "bytes": 6085
+    },
+    {
+      "path": "backend/tests/retailAttendanceReportScope.test.js",
+      "sha256": "2cde68fe54e6f2d2481826a794bdb3bbf804f4c00a45e2c0b7ec877e431ab2c6",
+      "bytes": 2839
+    },
+    {
+      "path": "backend/tests/retailAttendanceTrend.test.js",
+      "sha256": "916fd46bbb564dc5b0f9def0ca58187a521b3d5af1b1f44c25a9892ba3733b9d",
+      "bytes": 2323
+    },
+    {
+      "path": "backend/tests/retailAttendanceUploadSize.test.js",
+      "sha256": "d44efb76e46d434163a4a9b40d5be3737f8d73f831f0ee90bc378ce343dd48a2",
+      "bytes": 6602
+    },
+    {
+      "path": "backend/tests/retailAttendanceXlsx.test.js",
+      "sha256": "4af6b6f73257acc6227d014c8dfc214e27fa897e41e2836233530608d70984b4",
+      "bytes": 10091
+    },
+    {
+      "path": "backend/tests/retailBulkIdentity.test.js",
+      "sha256": "5f0a6e788c71876330a18d3cf2b776a6c44b29f48da0f45c089974283fe9377b",
+      "bytes": 2667
+    },
+    {
+      "path": "backend/tests/retailDashboardTrainingCount.test.js",
+      "sha256": "c148ce6dc575a2eae6d00eea8b6692f952dd4f42d707392cb579352940a012fb",
+      "bytes": 4958
+    },
+    {
+      "path": "backend/tests/retailDirectApproval.test.js",
+      "sha256": "6ebca134426be3fda21a690c36c30dd80975852156908cacf54b2994c9c023cb",
+      "bytes": 3720
+    },
+    {
+      "path": "backend/tests/retailDirectApprovalDatabase.test.js",
+      "sha256": "4a097431a3d7a388ea811a16f98664f2d972b29461cf0d889f76c43a7ca9f4d5",
+      "bytes": 22535
+    },
+    {
+      "path": "backend/tests/retailFoSelfRead.test.js",
+      "sha256": "7e6bf1b26c21888e0cf55165844d38c049310dd2bac052676d79b5eee1b2676d",
+      "bytes": 15390
+    },
+    {
+      "path": "backend/tests/retailGoLive.test.js",
+      "sha256": "deccfd4dec224d8ff49a117ba5392d06ab0784a4dea75a5ded346d864d5e3183",
+      "bytes": 23450
+    },
+    {
+      "path": "backend/tests/retailHkTrainingReadScope.test.js",
+      "sha256": "efdcd73940881690938ff7c68907d1cb8946d59918376b93d74af53449781776",
+      "bytes": 12369
+    },
+    {
+      "path": "backend/tests/retailIdentityBatchPlan.test.js",
+      "sha256": "ee72c6d0b6e7f8c983a22742dd858ea0fd73b04220461931ee097e6b4b931886",
+      "bytes": 9303
+    },
+    {
+      "path": "backend/tests/retailIdentityBulkEdit.test.js",
+      "sha256": "e2fe337b9c8f7db2341b8f44e04c718fd0defc057230dbc082edf1ce64c02e7c",
+      "bytes": 1982
+    },
+    {
+      "path": "backend/tests/retailIfmsHistoryService.test.js",
+      "sha256": "19387cb6460bcaf3331ca6561fa92c3461caa1c8dd1cd85becd11895144e5bdf",
+      "bytes": 3963
+    },
+    {
+      "path": "backend/tests/retailInitialAdminAccess.test.js",
+      "sha256": "6366156d74ef5bdff72056c003ced6f1a0b35cc83662f0cba79ed4c0c84d7d26",
+      "bytes": 8018
+    },
+    {
+      "path": "backend/tests/retailMisAccess.test.js",
+      "sha256": "2c264b923f8a2ab85d327a5f4c4168ab8544d9f1ddfc3b5c10ffa1bceb6cafdd",
+      "bytes": 9084
+    },
+    {
+      "path": "backend/tests/retailMisGenerator.test.js",
+      "sha256": "2835a00c264cf36503bb3f2b01536e31f2fb83242e57b00b19c9f8bad973f232",
+      "bytes": 1811
+    },
+    {
+      "path": "backend/tests/retailMisMountedAuth.test.js",
+      "sha256": "22061fb4a101d040b0c0182139a636fe7c862c1285639e611d4edbdf6bfc90c9",
+      "bytes": 5543
+    },
+    {
+      "path": "backend/tests/retailMisPostgres.test.js",
+      "sha256": "11667e9bcec2d8326474e8c31d1b346ba2618b6cd14e88d65b185808b8de421c",
+      "bytes": 45135
+    },
+    {
+      "path": "backend/tests/retailMisQuotationFormat.test.js",
+      "sha256": "0b5aecbbcc83dfde1dca0ae83cd58f6390dfede1bb8d9ed488c8c334fea1b9db",
+      "bytes": 9296
+    },
+    {
+      "path": "backend/tests/retailMisUserManagement.test.js",
+      "sha256": "dc949c9cb053d147faf0a82c0ca42bace2264aa4f91bd7153b08e4d0126d5aab",
+      "bytes": 2992
+    },
+    {
+      "path": "backend/tests/retailModuleReportService.test.js",
+      "sha256": "88d7edc747be2d192cf68d45301469c2bd2d428400ec8c19ead6ad624468ef07",
+      "bytes": 9114
+    },
+    {
+      "path": "backend/tests/retailModulesB.test.js",
+      "sha256": "246a36e6409bcca9769b60afcc65766247b490e071795c4bcfa890667a3b3f6d",
+      "bytes": 5115
+    },
+    {
+      "path": "backend/tests/retailOos12Routes.test.js",
+      "sha256": "46e21ba8f4bebd3c93e533794ead70fa7e5786c53586f171c7fcc7810f4085ae",
+      "bytes": 3020
+    },
+    {
+      "path": "backend/tests/retailOosFreezeRelease.test.js",
+      "sha256": "b616d4a5b2d6919202fe839ef26960853eabb3eca1948d6756a8844e4275680a",
+      "bytes": 5012
+    },
+    {
+      "path": "backend/tests/retailOosV2.test.js",
+      "sha256": "b5d796dc09806001be49d749778516210afb1aa054bc5d606e93e0cd8f6079e2",
+      "bytes": 2897
+    },
+    {
+      "path": "backend/tests/retailOperations.test.js",
+      "sha256": "3fc479cc635eecaa1c3cd9123b7b37593a4cf1822b7457aaa40da77ae52e6ba8",
+      "bytes": 7767
+    },
+    {
+      "path": "backend/tests/retailOperationsPostgres.test.js",
+      "sha256": "ea0983edbf678e2298ae5bdb62fd953325ee848815aaf27adcb1c9a6c19fc453",
+      "bytes": 10303
+    },
+    {
+      "path": "backend/tests/retailProductionSecurity.test.js",
+      "sha256": "032df65bea0ff88654aff0d2b3fcb629c32975dc03a67f0119198e2c9c328774",
+      "bytes": 26413
+    },
+    {
+      "path": "backend/tests/retailProvisionalPostgres.test.js",
+      "sha256": "440286193e00ad782054603ac6f0b6be7ab4ebb5fd4840f8d9de552ea1b5190d",
+      "bytes": 17142
+    },
+    {
+      "path": "backend/tests/retailReadinessReport.test.js",
+      "sha256": "49072e2ec7d77e95f514abb32abd65346fee7cac94784b6cf58f4cbb767f0732",
+      "bytes": 4514
+    },
+    {
+      "path": "backend/tests/retailSavedReview.test.js",
+      "sha256": "93a1ceb74a7484c3325b8367069a889d29907cb8b9d207f973b33d26f0a75166",
+      "bytes": 13995
+    },
+    {
+      "path": "backend/tests/retailStoreImportPostgres.test.js",
+      "sha256": "48fcfc25e5998ade7399b8809ac51aa9ed7759d6880e6ed05ccf647b32d5347f",
+      "bytes": 20855
+    },
+    {
+      "path": "backend/tests/retailStoreImportValidation.test.js",
+      "sha256": "acaa8f079bab6bf46200461f40d71cb05582058adc2bfd47ff7e770e0ebcaf35",
+      "bytes": 5742
+    },
+    {
+      "path": "backend/tests/retailUnified.test.js",
+      "sha256": "3a1eb7882de3270782144c5deef0caa9cca4757d871332e8d63b2b0f33eadbbb",
+      "bytes": 52634
+    },
+    {
+      "path": "backend/tests/retailUnifiedClassification.test.js",
+      "sha256": "51a9eed7a7a4a4fb33644b61bb20462f7a03bd76c2d5b6cb7d54a455133e6ed5",
+      "bytes": 10856
+    },
+    {
+      "path": "backend/tests/retailWorkflowGaps.test.js",
+      "sha256": "7a43a5a49e0c88d11ba154767e5d04b3fdd699373fdffbdea3dada43486eeb49",
+      "bytes": 21257
+    },
+    {
+      "path": "backend/tests/retailZoneMapping.test.js",
+      "sha256": "47ce92ae83796fd34fd5af035222e71037864306dff6147e2dfe7080ec665d9c",
+      "bytes": 9665
+    },
+    {
+      "path": "backend/tests/serviceRoleAuthAdminCapability.test.js",
+      "sha256": "0ef127640d1c89ac1168e7fe2818d8e4a00c4ba2110dd5d2f253ba31d2b090dc",
+      "bytes": 4053
+    },
+    {
+      "path": "backend/tests/siteSurveyAssignmentActions.test.js",
+      "sha256": "b13ee6e77e561f4abe0546cb34249f372acab830e8464cd546a363f3ed4f1803",
+      "bytes": 4336
+    },
+    {
+      "path": "backend/tests/tenderDemoReadOnlyMigration.test.js",
+      "sha256": "07e9797dfa1446d237490f4e7e6966f7a09c1aedb2da88e26b6902fb2b10bebe",
+      "bytes": 1699
+    },
+    {
+      "path": "backend/tests/tenderWorkflowMigration.test.js",
+      "sha256": "0c5ee5fa086751e36221ee10c1277ae39b4bd70c9394dda37792b11cef0ad27e",
+      "bytes": 3590
+    },
+    {
+      "path": "backend/tests/tenderWorkflowService.test.js",
+      "sha256": "9d8456cf06823d51688bc283d4a00b2a076c581818a3c56d2e074c1c6ed52783",
+      "bytes": 2270
+    },
+    {
+      "path": "backend/tests/trainingBackendRpcMigration.test.js",
+      "sha256": "7f915a6db92695eb2b92209930b81d29e8d572c868cbdff5a5f96486ae85ce3f",
+      "bytes": 6427
+    },
+    {
+      "path": "backend/tests/trainingLegacyCompatibility.test.js",
+      "sha256": "c56e53616f1efbaae4f718206e86a748af5e5a62fa5c5a693093fc5546fc97d7",
+      "bytes": 2069
+    },
+    {
+      "path": "backend/tests/trainingMigrationContract.test.js",
+      "sha256": "dedcec5feb94ab9736e23f8adac9c2460f9694ae13afdd0d521b31039aa3dea6",
+      "bytes": 5740
+    },
+    {
+      "path": "backend/tests/trainingReleaseCompatibility.test.js",
+      "sha256": "d97997c0f9bdbf5f84ef9e299aa4bd66e703b706ddac001c01d1ec672d2069cd",
+      "bytes": 6967
+    },
+    {
+      "path": "backend/tests/trainingRoutes.test.js",
+      "sha256": "85fa23276ec3b686f73a682498fc99f475cb48a008f150a57a3e396aa6dcb17f",
+      "bytes": 5542
+    },
+    {
+      "path": "backend/tests/trainingService.test.js",
+      "sha256": "808dd92d419a3b965aff3001aa2e027ced51dc41c31640572cc1c60b4411354a",
+      "bytes": 8101
+    },
+    {
+      "path": "backend/tests/unifiedAccessUserManagementPhase3.test.js",
+      "sha256": "fec5fed37b8918d0909b58349cc0106783bc9a7cf3f7ab231b1a8cdbecd93737",
+      "bytes": 3583
+    },
+    {
+      "path": "backend/tests/userManagementHospitalProvisioning.test.js",
+      "sha256": "adea90094ab968b19ad455e2881c3f5674b34fa472658dce433bc1aa0c9f698a",
+      "bytes": 5875
+    },
+    {
+      "path": "backend/tests/userProvisioningPhase1.test.js",
+      "sha256": "a5689a4383a6285fa5e8d2b781e03a61278334aef8f387fc5db510174bc56177",
+      "bytes": 2851
+    },
+    {
+      "path": "backend/tests/workMappingScope.test.js",
+      "sha256": "6780b3eae369569646e00f7e7d4627621d669691bed4428d475a18f3934bb66f",
+      "bytes": 5151
+    },
+    {
+      "path": "backend/userManagementService.js",
+      "sha256": "11d4955dee167dd3bd005766e960ba74739f6c4a5c741d1fe3a1702ef656e906",
+      "bytes": 38941
+    },
+    {
+      "path": "supabase/pending_review/20261107_worker_ownership_compat.sql",
+      "sha256": "88892dd59f66c6fa89c028a003df2310ad10adbe2efdf817a4e096d8fd8dd99d",
+      "bytes": 7044
+    }
+  ]
+}
