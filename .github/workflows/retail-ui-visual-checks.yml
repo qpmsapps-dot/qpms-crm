@@ -17,12 +17,31 @@ on:
       - 'src/utils/retailExcelInline.js'
       - 'src/utils/retailStatePerformance.js'
       - 'src/utils/deepCleaningView.js'
+      - 'src/utils/trainingView.js'
+      - 'tests/trainingView.test.js'
+      - 'tests/browser/trainingV2.spec.js'
       - 'tests/deepCleaningView.test.js'
       - 'src/components/Sidebar.jsx'
       - 'tests/retailStatePerformance.test.js'
       - 'src/utils/useRetailExcelRows.js'
       - 'tests/retailExcelInline.test.js'
       - 'tests/retailOos*.test.js'
+      - '.github/retailCombinedGuard.mjs'
+      - '.github/retail-combined-ui-pins.json'
+      - 'src/utils/retailNavigation.js'
+      - 'src/utils/retailExecutiveReport.js'
+      - 'tests/retailNavigation.test.js'
+      - 'tests/retailExecutiveReport.test.js'
+      - 'tests/retailCombinedGuard.test.js'
+      - 'tests/browser/retailCombined.spec.js'
+      - 'tests/browser/fixtures/retailCombinedFixture.js'
+      - 'tests/browser/fixtures/retailExecutiveFixture.js'
+      - 'src/assets/retail-kpi/attendance-wave.webp'
+      - 'src/assets/retail-kpi/thermography-wave.webp'
+      - 'src/assets/retail-kpi/cm-wave.webp'
+      - 'src/assets/retail-kpi/pm-wave.webp'
+      - 'src/assets/retail-kpi/deep-cleaning-wave.webp'
+      - 'src/assets/retail-kpi/training-wave.webp'
   workflow_dispatch:
 
 permissions:
@@ -48,6 +67,35 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # Combined Executive V3 + Training V2: exact reviewed payload only.
+          import json
+          combined_manifest = ".github/retail-combined-ui-pins.json"
+          if combined_manifest in files:
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{combined_manifest}"],text=True).strip() != "7e282fdb8189aa764cda8c3d69d431abb8b18d00":
+              sys.exit("Combined manifest changed; renew protected review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/retailCombinedGuard.mjs"],text=True).strip() != "81154680b9529640bcc607571571973c0418a54b":
+              sys.exit("Combined guard changed; renew protected review")
+            subprocess.run(["node",".github/retailCombinedGuard.mjs",base],check=True)
+            print("PASS: exact combined frontend/test/asset payload; all later checks mandatory")
+            sys.exit(0)
+          # Training V2: reviewed exact frontend/test payload; no sensitive path broadening.
+          approved_training_v2 = {
+            "src/pages/reliance-retail/RetailTraining.jsx": "5b2cca44b656f779baba3128274af648a5b3d4ad",
+            "src/components/reliance-retail/TrainingV2Overview.jsx": "4b0244e5e720dc01d45dede359e1a242ed81c735",
+            "src/components/reliance-retail/TrainingV2Drawer.jsx": "583f5b85c1422153cb48e0ea33d3bb92c2456cd3",
+            "src/components/reliance-retail/trainingV2.css": "6bb2ade266149d7f96417dfe90d3bc3c42c7fa8a",
+            "src/utils/trainingView.js": "fb549d0c29eb62d4efe2dd535c707d359db6617c",
+            "tests/trainingView.test.js": "0a13518bc7cca5bd11613d027cb8b0e82362052f",
+            "tests/browser/trainingV2.spec.js": "fb8e270d62ab4eacd3b06e96e876743e73f16d10",
+          }
+          training_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
+          if training_changed == set(approved_training_v2):
+            mismatch = [path for path, expected in approved_training_v2.items()
+                        if subprocess.check_output(["git", "rev-parse", f"HEAD:{path}"], text=True).strip() != expected]
+            if mismatch:
+              sys.exit("Training V2 content changed; renew protected review: " + ", ".join(mismatch))
+            print("PASS: exact Training V2 frontend/test payload; all following CI steps remain mandatory.")
+            sys.exit(0)
           # PR #82: exact Phase 6 frontend + Deep Cleaning V2 payload only.
           # No wildcard paths; all subsequent lint/test/build steps remain mandatory.
           approved_phase6_ui = {
@@ -291,14 +339,22 @@ jobs:
         run: npx eslint src/hooks/useModalFocus.js src/pages/DeepCleaning.jsx src/components/reliance-retail/RetailImportedHistory.jsx src/pages/reliance-retail/RetailManpowerHistory.jsx src/components/Sidebar.jsx src/components/reliance-retail/RetailStatePerformance.jsx src/utils/retailStatePerformance.js src/pages/reliance-retail/RetailOperationalTrackers.jsx src/pages/reliance-retail/RetailServiceTrackers.jsx src/utils/useRetailExcelRows.js src/utils/retailExcelInline.js src/routes/AppRoutes.jsx src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailAttendance.jsx src/components/reliance-retail/RetailAttendanceVisual.jsx src/utils/retailAttendanceVisualModel.js src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
       - name: Lint reviewed Phase 6 UI helpers
         run: npx eslint src/components/reliance-retail/DeepCleaningEvidenceDrawer.jsx src/components/reliance-retail/DeepCleaningOverview.jsx src/components/reliance-retail/RetailCleaningMonthlyPlan.jsx src/utils/deepCleaningView.js
+      - name: Lint Training V2 UI
+        run: npx eslint src/components/reliance-retail/TrainingV2Overview.jsx src/components/reliance-retail/TrainingV2Drawer.jsx src/utils/trainingView.js
+      - name: Training V2 frontend regression tests
+        run: node --test tests/trainingView.test.js
       - name: Inline Excel row mapping contract tests
         run: node --test tests/retailExcelInline.test.js tests/retailStatePerformance.test.js tests/retailAttendanceVisualModel.test.js tests/deepCleaningView.test.js tests/retailReportView.test.js
+      - name: Combined reporting and guard tests
+        run: node --test tests/retailCombinedGuard.test.js tests/retailExecutiveReport.test.js tests/retailNavigation.test.js tests/trainingView.test.js
+      - name: Combined UI scoped lint
+        run: npx eslint src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailAttendance.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/components/reliance-retail/Executive*.jsx src/components/reliance-retail/TrainingV2*.jsx src/components/reliance-retail/useTrainingDrawerModal.js src/utils/retailExecutiveReport.js src/utils/retailNavigation.js src/utils/trainingView.js
       - name: Production frontend build
         run: npm run build
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: Retail report browser regressions and visual smoke
-        run: npx playwright test tests/browser/ifmsDashboard.spec.js tests/browser/retailAttendance.spec.js tests/browser/retailReportVisualSmoke.spec.js tests/browser/retailExcelInline.spec.js --reporter=line
+        run: npx playwright test tests/browser/ifmsDashboard.spec.js tests/browser/retailAttendance.spec.js tests/browser/retailReportVisualSmoke.spec.js tests/browser/retailExcelInline.spec.js tests/browser/trainingV2.spec.js tests/browser/retailCombined.spec.js --reporter=line
       - name: OOS presentation and workflow regressions
         run: node --test --test-concurrency=1 tests/retailOosAgeing.test.js tests/retailOosAgeingBrowser.test.js tests/retailOos12Browser.test.js tests/retailOosTrainingBrowser.test.js tests/retailOosUiPresentationBrowser.test.js
       - name: Upload synthetic visual acceptance screenshots
