@@ -1,3 +1,5 @@
+import { useLocation } from 'react-router-dom';
+import { readRetailNavigation } from '../../utils/retailNavigation.js';
 import DeepCleaningOverview from '../../components/reliance-retail/DeepCleaningOverview.jsx';
 import DeepCleaningEvidenceDrawer from '../../components/reliance-retail/DeepCleaningEvidenceDrawer.jsx';
 import RetailCleaningMonthlyPlan from '../../components/reliance-retail/RetailCleaningMonthlyPlan.jsx';
@@ -58,10 +60,12 @@ export default function RetailScopedDeepCleaning() {
     [monthlyAllowed, setMonthlyAllowed] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const today = indiaToday();
-  const [from, setFrom] = useState(today.slice(0, 7) + '-01'),
-    [to, setTo] = useState(today),
-    [state, setState] = useState(''),
-    [store, setStore] = useState(''),
+  const location = useLocation();
+  const [entryScope] = useState(() => readRetailNavigation(location.state, 'cleaning', today));
+  const [from, setFrom] = useState(entryScope?.from || today.slice(0, 7) + '-01'),
+    [to, setTo] = useState(entryScope?.to || today),
+    [state, setState] = useState(entryScope?.state || ''),
+    [store, setStore] = useState(entryScope?.store || ''),
     [status, setStatus] = useState('');
   const [query, setQuery] = useState(''),
     [page, setPage] = useState(0),

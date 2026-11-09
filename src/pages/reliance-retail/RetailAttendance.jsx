@@ -1,3 +1,5 @@
+import { useLocation } from 'react-router-dom';
+import { readRetailNavigation } from '../../utils/retailNavigation.js';
 import RetailResponsibilityPanel from '../../components/reliance-retail/RetailResponsibilityPanel.jsx';
 import '../../components/reliance-retail/retailReport.css';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -88,7 +90,9 @@ export default function RetailAttendance() {
   }, []);
   const {user}=useAuth();
   const today = indiaToday();
-  const [cutoff, setCutoff] = useState(''); const [view, setView] = useState('mtd'); const [state, setState] = useState('');
+  const location = useLocation();
+  const [entryScope] = useState(() => readRetailNavigation(location.state, 'attendance', today));
+  const [cutoff, setCutoff] = useState(entryScope?.to || ''); const [view, setView] = useState('mtd'); const [state, setState] = useState(entryScope?.state || '');
   const [report, setReport] = useState(null); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [refresh, setRefresh] = useState(0);
   const [upload, setUpload] = useState(false); const [drill, setDrill] = useState(null); const [employeeStore, setEmployeeStore] = useState(null); const [employees, setEmployees] = useState([]); const [employeeDate, setEmployeeDate] = useState(today); const [employeePage, setEmployeePage] = useState(0); const [employeeBusy, setEmployeeBusy] = useState(false); const [employeeError, setEmployeeError] = useState('');
   useEffect(() => {
@@ -115,7 +119,7 @@ export default function RetailAttendance() {
   const aop = attendanceAopCoverage(report);
   const states = report?.available_states?.length ? report.available_states : isPlatformAdmin(user)?STATE_OPTIONS:[];
   const period = view === 'daily' ? cutoff : `${cutoff.slice(0,7)}-01 to ${cutoff}`;
-  return <div className="retail-report retail-attendance-workspace rr-attendance-page text-slate-800">
+  return <div className="retail-report retail-attendance-workspace rr-attendance-page text-slate-800">{entryScope?.store&&<p role="status">Dashboard period and state applied. This Attendance endpoint does not support a store filter; use the store summary for drill-down.</p>}
     <header className="rr-attendance-page-header">
       <div className="rr-attendance-page-title"><h1 ref={headingRef} tabIndex={-1}>Reliance Retail Attendance</h1>
         <p>HK &amp; MEPC · Digital attendance and AOP performance</p></div>

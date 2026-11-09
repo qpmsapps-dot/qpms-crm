@@ -1,3 +1,5 @@
+import { useLocation } from 'react-router-dom';
+import { readRetailNavigation } from '../../utils/retailNavigation.js';
 import {useRetailExcelRows} from '../../utils/useRetailExcelRows.js';
 import {excelOperationsRows,isExcelSource} from '../../utils/retailExcelInline.js';
 import {useEffect,useRef,useState} from 'react';
@@ -20,9 +22,11 @@ export default function RetailOperations({kind='maintenance'}) {
  const entry=useRef(null);
  const maintenance=kind==='maintenance',title=maintenance?'CM / PM Calls':'Thermography';
  usePageTitle(`Reliance Retail ${title}`);
- const [month,setMonth]=useState(indiaToday().slice(0,7)),[state,setState]=useState(''),[store,setStore]=useState(''),[query,setQuery]=useState('');
+ const location=useLocation();
+ const [entryScope]=useState(()=>readRetailNavigation(location.state,kind,indiaToday()));
+ const [month,setMonth]=useState(entryScope?.month||indiaToday().slice(0,7)),[state,setState]=useState(entryScope?.state||''),[store,setStore]=useState(entryScope?.store||''),[query,setQuery]=useState('');
  const [loadedReport,setReport]=useState(null),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[saving,setSaving]=useState(false),[refresh,setRefresh]=useState(0);
- const [form,setForm]=useState(emptyForm),[confirmation,setConfirmation]=useState(null),[history,setHistory]=useState(null),[callKind,setCallKind]=useState('CM'),[page,setPage]=useState(0),[size,setSize]=useState(25);
+ const [form,setForm]=useState(emptyForm),[confirmation,setConfirmation]=useState(null),[history,setHistory]=useState(null),[callKind,setCallKind]=useState(entryScope?.kind||'CM'),[page,setPage]=useState(0),[size,setSize]=useState(25);
  const endpoint=`/api/reliance-retail/operations/${kind}`;
  const reportKey=JSON.stringify([kind,month,state,store]);
  const report=loadedReport?.key===reportKey&&isCompleteOperationsReport(loadedReport.data,kind)?loadedReport.data:null;
@@ -33,8 +37,9 @@ export default function RetailOperations({kind='maintenance'}) {
   return()=>{live=false;};
  },[endpoint,kind,month,state,store,refresh,reportKey]);
  useEffect(()=>{
+  if(entryScope?.kind&&month===entryScope.month)return;
   if(maintenance&&report?.today&&month===report.today.slice(0,7))queueMicrotask(()=>setCallKind(Number(report.today.slice(8,10))<=15?'CM':'PM'));
- },[maintenance,report?.today,month]);
+ },[maintenance,report?.today,month,entryScope]);
  function openEntry(){entry.current?.scrollIntoView({behavior:'smooth',block:'center'});entry.current?.querySelector('select')?.focus({preventScroll:true});}
  const selected=report?.stores.find(s=>s.id===form.store_id);
  const module=report?.modules?.[callKind.toLowerCase()];
@@ -85,12 +90,16 @@ export default function RetailOperations({kind='maintenance'}) {
    <label>Search<input aria-label={`${title} search`} value={query} onChange={e=>{setQuery(e.target.value);setPage(0);}} placeholder="Store Code, name or status"/></label>
    {maintenance&&<label>Call<select aria-label="Maintenance kind" value={callKind} onChange={e=>{setCallKind(e.target.value);setPage(0);setConfirmation(null);}}><option>CM</option><option>PM</option></select></label>}
   </ReportFilters>
+  {entryScope&&<ReportNotice>Dashboard period through {entryScope.to}. This report retains its existing full-month cohort and maintenance window rules.</ReportNotice>}
+  {!maintenance&&<ReportNotice>Current recorded status for the selected schedule month. Historical point-in-time approval status is not reconstructed.</ReportNotice>}
   {busy&&<ReportNotice>Loading authorized operational data…</ReportNotice>}{error&&<ReportNotice error>{error}</ReportNotice>}{notice&&<ReportNotice>{notice}</ReportNotice>}
   {report&&<>
 
    {excel.loading&&<ReportNotice>Loading October Excel records into the store details table…</ReportNotice>}
    {excel.error&&<ReportNotice error>October source records unavailable: {excel.error}</ReportNotice>}
    {!!reported.length&&<p className="retail-report-description">October Excel records appear within Store details as read-only reported entries. They do not create a verified call log, client approval or thermography evidence.</p>}
+   {entryScope&&<ReportNotice>Opened from Dashboard through {entryScope.to}. This module retains its existing full-month schedule cohort and CM/PM window rules.</ReportNotice>}
+   {!maintenance&&<ReportNotice>Current recorded statuses for the selected schedule month, not reconstructed historical status at a cutoff.</ReportNotice>}
    <ReportNotice>{maintenance?`${callKind}: ${window.start} through ${window.end} · ${window.status}. Today (India): ${report.today}. Previous months are locked. Multiple call logs per store are allowed within the selected window. Existing logs cannot be edited or deleted.`:`Reports follow the scheduled month. Client approval is due 10 calendar days after completion; overdue starts the next day. Late approvals remain marked late.`}</ReportNotice>
    <RetailStatePerformance title={maintenance?`${callKind} — state-wise performance`:'Thermography — state-wise performance'}
     summary={statePerformance} selectedState={state}

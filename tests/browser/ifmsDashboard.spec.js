@@ -1,95 +1,126 @@
 import { test, expect } from '@playwright/test';
+import { seed, revealAll } from './fixtures/retailExecutiveFixture.js';
 
-async function openDashboard(page, failure = false, role = 'Admin') {
-  await page.addInitScript(role => {
-    localStorage.setItem('qpms-crm-auth-user', JSON.stringify({id:'synthetic-admin',profileId:'synthetic-profile',name:'Local Test Admin',role,rawRole:role,business:'Reliance Retail',status:'Active',isActive:true,webAccessEnabled:true,authProvider:'demo-fixture',is_demo:true,isDemoReadOnly:true,read_only:false}));
-    sessionStorage.setItem('qpms-crm-backend-token','synthetic-local-test-token');
-  }, role);
-  await page.route('**/api/**', route => {
-    if (new URL(route.request().url()).pathname.endsWith('/module-reports/dashboard')) {
-      const rows=['TN','KN','KL','AP-1','AP-2','TG'].map(state=>({state,hk_actual:0,mepc_actual:0,total_actual:0,total_target:0,complete:false,overall_pct:null,completed:0,scheduled:0,remaining:0,pending:0,not_completed:0}));
-      return route.fulfill(failure ? {status:503,json:{message:'Test inventory unavailable'}} : {json:{report:{stores:[],modules:Object.fromEntries(['attendance','technical','soft','cleaning'].map(key=>[key,{status:'ready',rows}]).concat(['cm','pm','thermography'].map(key=>[key,{status:'unavailable',reason:'Operational source not configured.'}])))}}});
-    }
-    return route.fulfill({json:{}});
-  });
-  await page.goto('/reliance-retail', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('heading',{name:'South Zone – IFMS Operations Summary'})).toBeVisible();
-}
-test('nine modules, no OOS overview, state filters and honest empty cards', async ({page}) => {
-  await openDashboard(page);
-  await expect(page.locator('.ifms-card')).toHaveCount(9);
-  await expect(page.getByRole('region',{name:'State-wise OOS reporting'})).toHaveCount(0);
-  await expect(page.locator('#ifms-manpower')).toBeVisible();
-  await expect(page.locator('#ifms-fault')).toBeVisible();
-  await expect(page.getByRole('link',{name:'OOS Tracker'})).toHaveCount(0);
-  await expect(page.getByText('Under development')).toBeVisible();
-  await expect(page.locator('.ifms-empty-ring')).toHaveCount(1);
-  await expect(page.locator('.ifms-table-wrap tbody tr')).toHaveCount(24);
-  await expect(page.getByRole('button',{name:'Export summary'})).toBeEnabled();
-  await expect(page.locator('.ifms-dashboard')).not.toContainText(/NaN|Infinity|100%|Puducherry|Incl\. PY/);
-  await expect(page.locator('#ifms-attendance').locator('xpath=ancestor::section')).toContainText('N/A');
-  for (const id of ['technical','soft']) {
-    const card = page.locator(`#ifms-${id}`).locator('xpath=ancestor::section');
-    await expect(card.locator('.ifms-ring')).toHaveCount(0);
-    await expect(card).not.toContainText(/Pending|Scheduled|Not Started|Completion/);
-  }
-  await page.getByLabel('Attendance reporting state',{exact:true}).selectOption('TN');
-  await expect(page.locator('#ifms-attendance').locator('xpath=ancestor::section').locator('tbody tr')).toHaveCount(1);
-  await expect(page.locator('#ifms-thermography').locator('xpath=ancestor::section')).toContainText('Totals unavailable');
-  await page.getByLabel('Global reporting state',{exact:true}).selectOption('KN');
-  await expect(page.locator('.ifms-table-wrap tbody tr')).toHaveCount(4);
-  await page.getByLabel('Global reporting state',{exact:true}).selectOption('');
-  await expect(page.locator('.ifms-table-wrap tbody tr')).toHaveCount(24);
-  await expect(page.locator('.ifms-card-footer a')).toHaveCount(9);
-  await expect(page.locator('.ifms-card-footer a').first()).toHaveAttribute('href','/reliance-retail/attendance');
-  await page.getByLabel('Reporting month',{exact:true}).fill('2024-02');
-  await expect(page.locator('.ifms-date-range')).toContainText('29 Feb 2024');
-});
-
-test('dashboard detail links respect existing role permissions', async ({page}) => {
-  await openDashboard(page, false, 'Technical MIS');
-  await expect(page.locator('.ifms-card-footer a').first()).toBeVisible();
-  await expect(page.locator('.ifms-card-footer a').first()).toHaveAttribute('href',/reliance-retail/);
-  const links = await page.locator('.ifms-card-footer a').evaluateAll(nodes => nodes.map(node => node.getAttribute('href')));
-  expect(links).toEqual(expect.arrayContaining(['/reliance-retail/attendance','/reliance-retail/cmpm','/reliance-retail/thermography']));
-});
-test('desktop, tablet and mobile layout has readable tables and no overflow', async ({page}) => {
-  await openDashboard(page);
-  for (const [name,width,height] of [['desktop',1920,1200],['tablet',1024,1000],['mobile',390,844]]) {
-    await page.setViewportSize({width,height});
-    await expect(page.locator('.ifms-card').first()).toBeVisible();
-    if (width < 1024) await expect.poll(() => page.locator('aside').evaluate(el => el.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
-    const fits = await page.locator('.ifms-dashboard').evaluate(root => [...root.querySelectorAll('.ifms-card,.ifms-table-wrap,.ifms-card-header')].every(el => el.scrollWidth <= el.clientWidth + 1));
-    expect(fits, `${name} content fits`).toBe(true);
+const title = 'Reliance Retail — Executive Operations Report';
+test('executive report is complete, bounded, filtered and keeps the shell intact', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const requests = await seed(page);
+  await page.goto('/reliance-retail');
+  await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+  await expect(page.locator('.er-kpi-training strong')).toHaveAttribute('aria-label', '18');
+  const sidebar = await page.locator('aside:has(nav)').innerHTML();
+  await expect(page.locator('.er-kpis a')).toHaveCount(6);
+  await expect(page.locator('.er-kpi-training')).not.toContainText('%');
+  const calls = requests.filter(r => r.path.endsWith('/dashboard')).length;
+  await page.getByLabel('Global reporting state').selectOption('TN');
+  await expect(page.locator('.er-kpi-training strong')).toHaveAttribute('aria-label', '3');
+  expect(requests.filter(r => r.path.endsWith('/dashboard')).length).toBe(calls);
+  await expect(page.getByLabel('Reporting zone')).toBeDisabled();
+  await page.getByLabel('Reporting store').selectOption('s0-0');
+  await expect(page.locator('.er-kpi-training strong')).toHaveAttribute('aria-label', 'N/A');
+  await page.getByLabel('Reporting store').selectOption('');
+  await revealAll(page);
+  await expect(page.locator('.er-card')).toHaveCount(15);
+  expect(await page.locator('.retail-executive').evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThan(3000);
+  expect(requests.filter(r => r.path === '/api/training/sessions').every(r => r.params.limit === '6')).toBe(true);
+  expect(await page.locator('aside:has(nav)').innerHTML()).toBe(sidebar);
+  const revealed = await page.locator('.er-visible').count();
+  await page.screenshot({ path: info.outputPath('executive-desktop-full.png'), fullPage: true });
+  await page.evaluate(() => scrollTo(0, 0));
+  expect(await page.locator('.er-visible').count()).toBe(revealed);
+  await page.screenshot({ path: info.outputPath('executive-desktop-top.png') });
+  const hrefs = await page.locator('.er-kpis a').evaluateAll(nodes => nodes.map(n => n.getAttribute('href')));
+  expect(hrefs).toEqual(['/reliance-retail/attendance', '/reliance-retail/thermography', '/reliance-retail/cmpm', '/reliance-retail/cmpm', '/reliance-retail/deep-cleaning', '/reliance-retail/training']);
+  for (const [i, id] of ['attendance','thermography','cm','pm','cleaning','training'].entries()) {
+    await page.locator('.er-kpi-' + id + ' a').click();
+    await expect(page).toHaveURL(new RegExp(hrefs[i] + '$'));
+    await page.goBack();
+    await expect(page.getByLabel('Global reporting state')).toHaveValue('TN');
   }
 });
-test('inventory failure keeps metrics honest and operational filters usable', async ({page}) => {
-  await openDashboard(page,true);
-  await expect(page.locator('.ifms-data-status')).toContainText('Reports unavailable: Test inventory unavailable');
-  await expect(page.getByRole('button',{name:'Export summary'})).toBeDisabled();
-  await page.getByLabel('PM Calls reporting state',{exact:true}).selectOption('TG');
-  await expect(page.locator('#ifms-pm').locator('xpath=ancestor::section')).toContainText('Totals unavailable');
+test('responsive layout and reduced motion work without viewport overflow', async ({ page }, info) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await seed(page); await page.goto('/reliance-retail');
+  await expect(page.locator('.er-kpi-training strong')).toHaveAttribute('aria-label', '18');
+  for (const [width, height] of [[1440, 1000], [1127, 701], [768, 1024], [390, 844]]) {
+    await page.setViewportSize({ width, height });
+    await revealAll(page);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 2);
+    await expect(page.locator('.retail-executive')).toHaveAttribute('data-motion', 'reduced');
+    expect(await page.locator('.er-reveal').first().evaluate(e => getComputedStyle(e).opacity)).toBe('1');
+    await page.screenshot({ path: info.outputPath(`executive-${width}.png`), fullPage: true });
+  }
 });
-
-test('Retail dashboard requires a signed-in user', async ({page}) => {
-  await page.route('**/api/**', route => route.fulfill({json:{}}));
-  await page.goto('/reliance-retail', {waitUntil:'domcontentloaded'});
-  await expect(page).toHaveURL(/\/login$/);
-  await expect(page.locator('.ifms-dashboard')).toHaveCount(0);
+test('partial coverage, empty reports and failure never manufacture percentages', async ({ page }) => {
+  await seed(page, { partial: true }); await page.goto('/reliance-retail');
+  await expect(page.locator('.er-kpi-attendance strong')).toHaveAttribute('aria-label', 'N/A');
+  await expect(page.locator('.er-kpi-training strong')).toHaveAttribute('aria-label', '18');
+  await expect(page.locator('.retail-executive')).not.toContainText(/NaN|Infinity|96\.2%/);
 });
-
-test('Retail dashboard denies a signed-in role from another business', async ({page}) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('qpms-crm-auth-user',JSON.stringify({id:'synthetic-other',role:'Technical MIS',rawRole:'Technical MIS',business:'Other',status:'Active',isActive:true,webAccessEnabled:true,isDemoReadOnly:true,is_demo:true,read_only:false}));
-    sessionStorage.setItem('qpms-crm-backend-token','synthetic-local-test-token');
+test('source failure remains explicit and disables export', async ({ page }) => {
+  await seed(page, { failure: true }); await page.goto('/reliance-retail');
+  await expect(page.getByRole('alert')).toContainText('Synthetic source unavailable');
+  await expect(page.getByRole('button', { name: 'Export report', exact: true })).toBeDisabled();
+  await expect(page.locator('.er-kpi-cleaning strong')).toHaveAttribute('aria-label', 'N/A');
+});
+test('empty sources show confirmed zero counts but no invented rates', async ({ page }) => {
+  await seed(page, { empty: true }); await page.goto('/reliance-retail');
+  await expect(page.locator('.er-kpi-training strong')).toHaveAttribute('aria-label', '0');
+  await expect(page.locator('.er-kpi-attendance strong')).toHaveAttribute('aria-label', 'N/A');
+  await expect(page.locator('.er-kpi-cleaning strong')).toHaveAttribute('aria-label', 'N/A');
+});
+test('daily Attendance selector preserves source gaps without new requests', async ({ page }) => {
+  const requests = await seed(page); await page.goto('/reliance-retail');
+  await expect(page.locator('.er-line-chart')).toHaveAttribute('aria-label', /2026-11-03: N\/A/);
+  const reads = requests.filter(r => r.path.endsWith('/attendance/summary')).length;
+  await page.getByLabel('Attendance class').selectOption('hk');
+  await expect(page.locator('.er-line-chart')).toHaveAttribute('aria-label', /2026-11-01: 70%/);
+  expect(requests.filter(r => r.path.endsWith('/attendance/summary')).length).toBe(reads);
+});
+test('rapid period changes cannot restore a stale report', async ({ page }) => {
+  await seed(page);
+  await page.route('**/module-reports/dashboard*', async route => {
+    if (new URL(route.request().url()).searchParams.get('from') === '2026-10-01') await new Promise(resolve => setTimeout(resolve, 300));
+    await route.fallback();
   });
-  let dashboardRequested=false;
-  await page.route('**/api/**', route => {
-    if(new URL(route.request().url()).pathname.endsWith('/module-reports/dashboard'))dashboardRequested=true;
-    return route.fulfill({json:{}});
-  });
-  await page.goto('/reliance-retail', {waitUntil:'domcontentloaded'});
-  await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(page.locator('.ifms-dashboard')).toHaveCount(0);
-  expect(dashboardRequested).toBe(false);
+  await page.goto('/reliance-retail');
+  await expect(page.locator('.er-kpi-training strong')).toHaveAttribute('aria-label', '18');
+  await page.getByLabel('Reporting month').fill('2026-10');
+  await page.getByLabel('Reporting month').fill('2026-09');
+  await expect(page.getByLabel('Reporting to')).toHaveValue('2026-09-30');
+  await expect(page.locator('.er-kpi-training strong')).toHaveAttribute('aria-label', '12');
+  await page.waitForTimeout(400);
+  await expect(page.locator('.er-scope-note')).toContainText('2026-09-01 to 2026-09-30');
+  await expect(page.locator('.er-kpi-training strong')).toHaveAttribute('aria-label', '12');
+});
+test('bounded private evidence is authorized on action and denial reveals no image', async ({ page }) => {
+  const requests = await seed(page, { denyPhoto: true }); await page.goto('/reliance-retail');
+  await expect(page.locator('.er-kpi-training strong')).toHaveAttribute('aria-label', '18');
+  await revealAll(page);
+  await page.getByRole('button', { name: 'View evidence for session' }).click();
+  await expect(page.getByRole('alert')).toContainText('Synthetic evidence denied');
+  await expect(page.locator('.er-evidence-grid img')).toHaveCount(0);
+  expect(requests.filter(r => r.path.includes('/view-url'))).toHaveLength(1);
+});
+test('private photo preview closes with Escape and export retains source separation', async ({ page }) => {
+  await seed(page); await page.goto('/reliance-retail');
+  await expect(page.locator('.er-kpi-training strong')).toHaveAttribute('aria-label', '18');
+  const promise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export report', exact: true }).click();
+  const download = await promise; expect(download.suggestedFilename()).toBe('Retail_Executive_Operations.xlsx');
+  const { default: ExcelJS } = await import('exceljs'); const book = new ExcelJS.Workbook(); await book.xlsx.readFile(await download.path());
+  expect(book.getWorksheet('State summary').getRow(1).getCell(5).value).toBe('Source');
+  expect(book.getWorksheet('Historical Excel separate')).toBeTruthy();
+  await revealAll(page); await page.getByRole('button', { name: 'View evidence for session' }).click();
+  await page.getByRole('button', { name: 'Synthetic training photo', exact: true }).click();
+  await expect(page.getByRole('dialog')).toBeVisible(); await page.keyboard.press('Escape'); await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+test('signed-out and other-business users cannot access the dashboard', async ({ page }) => {
+  await page.route('**/api/**', route => route.fulfill({ json: {} })); await page.goto('/reliance-retail');
+  await expect(page).toHaveURL(/\/login$/); await expect(page.locator('.retail-executive')).toHaveCount(0);
+});
+test('other business scope is rejected before dashboard API reads', async ({ page }) => {
+  const requests = await seed(page, { role: 'Technical MIS', business: 'Other' }); await page.goto('/reliance-retail');
+  await expect(page.locator('.retail-executive')).toHaveCount(0);
+  expect(requests.some(r => r.path.endsWith('/module-reports/dashboard'))).toBe(false);
 });
