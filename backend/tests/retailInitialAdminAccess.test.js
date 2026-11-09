@@ -42,9 +42,7 @@ test('real Retail router applies the identity gate before RPC, keeps actor bindi
   const payload={status:'Scheduled',store_id:store,scheduled_date:'2026-10-31',request_id:randomUUID(),source_id:source,p_actor:other.id};
   for(const route of ['/operations/thermography','/module-reports/deep-cleaning/plan/link-fo']){
    assert.equal((await fetch(base+'/retail'+route,{method:'POST',headers:{authorization:'Bearer fixture-other','content-type':'application/json'},body:JSON.stringify(payload)})).status,403);assert.equal(calls.length,0);
-   const response=await fetch(base+'/retail'+route,{method:'POST',headers:{authorization:'Bearer fixture-qpms','content-type':'application/json'},body:JSON.stringify(payload)});
-   if(route.includes('/deep-cleaning/')){assert.equal(response.status,503);assert.equal((await response.json()).code,'evidence_compatibility_maintenance');assert.equal(calls.length,0);}
-   else{assert.equal(response.status,200);assert.equal(calls.at(-1).args.p_actor,qpms.id);}calls.length=0;
+   assert.equal((await fetch(base+'/retail'+route,{method:'POST',headers:{authorization:'Bearer fixture-qpms','content-type':'application/json'},body:JSON.stringify(payload)})).status,200);assert.equal(calls.at(-1).args.p_actor,qpms.id);calls.length=0;
   }
   for(const [token,expected] of [['fixture-qpms',true],['fixture-other',false]]){const r=await fetch(base+'/retail/access',{headers:{authorization:'Bearer '+token}});assert.equal(r.status,200);assert.equal((await r.json()).initial_admin_writes,expected);}
  });
@@ -59,13 +57,7 @@ test('Cleaning apply uses the stored proposal kind; unknown classification fails
   kind=null;assert.equal((await request('apply')).status,503);assert.equal(calls.some(c=>c.name==='rpc_retail_unified_apply'),false);calls.length=0;
   kind='HK';process.env.RETAIL_STORE_IMPORT_WRITES_ENABLED='false';assert.equal((await request('apply')).status,409);assert.equal(calls.some(c=>c.name==='rpc_retail_unified_apply'),false);calls.length=0;
   // Isolated fixture switch only: no real write gate/configuration is changed.
-  process.env.RETAIL_STORE_IMPORT_WRITES_ENABLED='true';assert.equal((await request('apply')).status,200);assert.deepEqual(calls.map(c=>c.name),['rpc_retail_unified_snapshot','rpc_retail_unified_snapshot','rpc_retail_unified_apply']);assert.ok(calls.every(call=>call.args.p_actor===other.id));calls.length=0;
-  assert.equal((await request('decide')).status,200);assert.deepEqual(calls.map(c=>c.name),['rpc_retail_unified_snapshot','rpc_retail_unified_decide']);assert.ok(calls.every(call=>call.args.p_actor===other.id));calls.length=0;
-  // The compatibility boundary blocks even the initial admin for Cleaning.
-  kind='DC_SCHEDULE';for(const path of ['apply','decide']){
-   const response=await fetch(base+'/retail/unified-master/'+path,{method:'POST',headers:{authorization:'Bearer fixture-qpms','content-type':'application/json'},body:JSON.stringify({proposal_id:'plan',kind:'HK',approve:true})});
-   assert.equal(response.status,503);assert.equal((await response.json()).code,'evidence_compatibility_maintenance');
-   assert.deepEqual(calls.map(call=>call.name),['rpc_retail_unified_snapshot']);assert.equal(calls[0].args.p_actor,qpms.id);calls.length=0;
-  }
+  process.env.RETAIL_STORE_IMPORT_WRITES_ENABLED='true';assert.equal((await request('apply')).status,200);assert.deepEqual(calls.map(c=>c.name),['rpc_retail_unified_snapshot','rpc_retail_unified_snapshot','rpc_retail_unified_apply']);assert.equal(calls[2].args.p_actor,other.id);calls.length=0;
+  assert.equal((await request('decide')).status,200);assert.deepEqual(calls.map(c=>c.name),['rpc_retail_unified_snapshot','rpc_retail_unified_decide']);assert.equal(calls[1].args.p_actor,other.id);
  });}finally{if(previousGate===undefined)delete process.env.RETAIL_STORE_IMPORT_WRITES_ENABLED;else process.env.RETAIL_STORE_IMPORT_WRITES_ENABLED=previousGate;}
 });

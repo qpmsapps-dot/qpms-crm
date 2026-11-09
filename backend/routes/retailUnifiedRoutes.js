@@ -1,19 +1,18 @@
 import {directApproveSavedIdentities,savedReviewSource,proposeSavedIdentities,decideSavedReviews,activateSavedIdentities,proposeSavedAop,applySavedAop} from '../services/retailSavedReviewService.js';
 import express from 'express';
-import {closeEvidenceMutationRoutes} from '../services/compatibilityAdmission.js';
+import {gateCombinedMutationRoutes} from '../services/combinedReleaseGate.js';
 import {indiaToday} from '../shared/retailAttendance.js';
 import {previewZoneWorkbook,parseZoneMappingWorkbook,submitZoneRecords} from '../services/retailZoneMappingService.js';
 import {previewZoneMappings} from '../shared/retailZoneMapping.js';
 import {unifiedSnapshot,previewUnified,stageUnified,createPendingStore,proposeUnified,decideUnified,applyUnified,scheduleDirectRetailCleaning} from '../services/retailUnifiedService.js';
 export function createRetailUnifiedRouter({getClient,environment=process.env}){
  const router=express.Router();
- closeEvidenceMutationRoutes(router,{matches:path=>['/cleaning/schedule','/propose','/decide','/apply'].includes(path),shouldClose:async req=>{
-  const path=req.path.toLowerCase().replace(/\/+$/,'');
-  if(path==='/cleaning/schedule')return true;
-  if(path==='/propose')return req.body?.kind==='DC_SCHEDULE';
+ gateCombinedMutationRoutes(router,{getClient,matches:path=>['/cleaning/schedule','/propose','/decide','/apply'].includes(path),shouldGate:async req=>{
+  if(req.path==='/cleaning/schedule')return true;
+  if(req.path==='/propose')return req.body?.kind==='DC_SCHEDULE';
   const today=indiaToday(),snapshot=await getClient().rpc('rpc_retail_unified_snapshot',{p_actor:req.profile.id,p_from:today,p_to:today});
   const proposal=snapshot.data?.proposals?.find(p=>p.id===req.body?.proposal_id);
-  if(snapshot.error||!proposal)throw Error('Proposal scope unknown');
+  if(snapshot.error||!proposal)throw Error('Proposal kind could not be verified.');
   return proposal.kind==='DC_SCHEDULE';
  }});
  const run=handler=>async(req,res)=>{try{res.json({ok:true,result:await handler(getClient(),req.profile,req.body,req)});}catch(e){const status=e.statusCode||({'42501':403,'40001':409,'23505':409,P0001:409,'22P02':400,'22007':400,'22023':400,PGRST202:503,'42P01':503}[e.code])||500;res.status(status).json({ok:false,...(e.validation_code?{code:e.validation_code,details:e.validation_details||[]}:{}),message:status===503?(req.path.startsWith('/zone-mapping')?'Provisional Zone draft storage awaits separate authorized setup. Do not rerun installed Unified migrations.':'Unified Store Master setup is awaiting authorized database installation.'):status>=500?'Unified Store Master is unavailable.':e.message});}};

@@ -1,0 +1,16 @@
+﻿import test from 'node:test';import assert from 'node:assert/strict';import express from 'express';
+import {createRetailMisRouter} from '../routes/retailMisRoutes.js';
+async function fixture(work,{frozen=true,module='training-hk',unknown=false}={}){
+ const calls=[];let grants=0;const client={rpc:async(name)=>{calls.push(name);if(name==='rpc_retail_mis_access')return {data:{active:true,role:'CENTRAL_MIS',states:[]}};if(name==='rpc_combined_release_begin')return frozen?{error:{code:'55000'}}:{data:null};if(name==='rpc_combined_release_end')return {data:null};if(name==='rpc_retail_mis_evidence_module_v1')return unknown?{error:{code:'42501'}}:{data:module};if(name==='rpc_retail_mis_evidence_prepare')return {data:{id:'e',bucket:'retail-mis-evidence',path:'p'}};if(name==='rpc_retail_mis_evidence_object')return {data:{bucket:'retail-mis-evidence',path:'p/file',file_size:1,mime_type:'image/png'}};return {data:{rows:[]}};},storage:{from:()=>({createSignedUploadUrl:async()=>{grants++;return {data:{signedUrl:'https://synthetic.invalid'}};},list:async()=>({data:[{name:'file',metadata:{size:1,mimetype:'image/png'}}]})})}};
+ const app=express();app.use((r,s,n)=>{r.profile={id:'actor',auth_user_id:'auth'};r.authUser={id:'auth'};n();});app.use(createRetailMisRouter({getClient:()=>client}));const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+ const request=(path,body={},method='POST')=>fetch('http://127.0.0.1:'+server.address().port+path,{method,headers:{'content-type':'application/json'},...(method==='GET'?{}:{body:JSON.stringify(body)})});
+ try{await work({request,calls,grants:()=>grants});}finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
+}
+for(const module of ['cleaning','training-hk','training-mepc'])test('Frozen legacy '+module+' command/intent/confirmation/retirement cannot mutate or issue grant',()=>fixture(async({request,calls,grants})=>{
+ for(const [p,b,m]of [['/command/'+module,{action:'CREATE'}],['/evidence/prepare',{module,record_id:'r'}],['/evidence/finalize',{id:'e'}],['/evidence/e',{reason:'test'},'DELETE']])assert.equal((await request(p,b,m)).status,503);
+ assert.equal(grants(),0);assert.ok(!calls.some(n=>['rpc_retail_mis_command','rpc_retail_mis_evidence_prepare','rpc_retail_mis_evidence_finalize','rpc_retail_mis_evidence_retire'].includes(n)));
+},{module}));
+test('Unknown evidence parent fails closed before Storage/confirmation',()=>fixture(async({request,grants})=>{assert.equal((await request('/evidence/finalize',{id:'foreign'})).status,503);assert.equal(grants(),0);},{unknown:true}));
+test('Open admission permits authorized legacy request and stable gate completion',()=>fixture(async({request,calls,grants})=>{assert.equal((await request('/evidence/prepare',{module:'training-hk',record_id:'r'})).status,200);assert.equal(grants(),1);assert.ok(calls.includes('rpc_combined_release_end'));},{frozen:false}));
+test('Unrelated pest writes and authorized reads remain available while frozen',()=>fixture(async({request,calls})=>{assert.equal((await request('/command/pest',{action:'CREATE'})).status,200);assert.equal((await request('/access',{},'GET')).status,200);assert.ok(!calls.includes('rpc_combined_release_begin'));},{module:'pest'}));
+

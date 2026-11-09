@@ -6,7 +6,6 @@ import express from 'express';
 import { createClientDeepCleaningRouter } from '../routes/clientDeepCleaningRoutes.js';
 import {
   CLIENT_DEEP_CLEANING_BUSINESS,
-  buildClientDeepCleaningStoragePath,
   completeClientDeepCleaningUpload,
   createClientDeepCleaningSubmission,
   createClientDeepCleaningUploadUrl,
@@ -224,9 +223,14 @@ class Query {
         : { data: changed, error: null, count: null };
     }
     if (this._operation === 'delete') {
-      const toDelete = new Set(matches().map((row) => row.id));
+      const deletedRows = matches().map(clone);
+      const toDelete = new Set(deletedRows.map((row) => row.id));
+      if (this.table === 'client_deep_cleaning_uploads') {
+        this.db.tables.evidence_storage_retirements ||= [];
+        for (const row of deletedRows) this.db.tables.evidence_storage_retirements.push({bucket:row.storage_bucket,path:row.storage_path,evidence_id:row.id,parent_id:row.submission_id,owner_id:row.uploaded_by_user_id});
+      }
       this.db.tables[this.table] = rows.filter((row) => !toDelete.has(row.id));
-      return { data: null, error: null, count: toDelete.size };
+      return { data: this._single || this._maybeSingle ? deletedRows[0] || null : deletedRows, error: null, count: toDelete.size };
     }
     let selected = matches().map(clone);
     const count = selected.length;
@@ -240,6 +244,10 @@ class Query {
 }
 
 class FakeSupabase {
+  async rpc(name) {
+    if(name==='rpc_combined_release_begin'||name==='rpc_combined_release_end')return {data:null};
+    throw Error('Unexpected RPC '+name);
+  }
   constructor(seed = {}) {
     this.tables = Object.fromEntries(TABLES.map((table) => [table, clone(seed[table] || [])]));
     this.idCounters = {};
@@ -382,6 +390,7 @@ async function createReadySubmission(db, profile = FO_PROFILE, storeCode = 'RR00
   });
   await issueAndCompleteUpload(db, draft, 'before', profile);
   await issueAndCompleteUpload(db, draft, 'after', profile);
+  await issueAndCompleteUpload(db, draft, 'document', profile);
   return draft;
 }
 
@@ -736,7 +745,7 @@ test('Before, after, and duplicate upload completion are handled safely', async 
   assert.equal(after.upload_type, 'after');
 });
 
-test('Submit requires before and after evidence, succeeds with minimum uploads, and repeat submit is idempotent', async () => {
+test('Submit requires before, after and one separate document, succeeds with minimum uploads, and repeat submit is idempotent', async () => {
   const db = client();
   const draft = await createClientDeepCleaningSubmission(db, FO_PROFILE, {
     store_code: 'RR001',
@@ -747,6 +756,8 @@ test('Submit requires before and after evidence, succeeds with minimum uploads, 
   await issueAndCompleteUpload(db, draft, 'before');
   await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id), /after image/);
   await issueAndCompleteUpload(db, draft, 'after');
+  await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id), e => e.code === 'single_supporting_document_required');
+  await issueAndCompleteUpload(db, draft, 'document');
   const submitted = await submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id);
   assert.equal(submitted.status, 'submitted');
   assert.ok(submitted.submitted_at);
@@ -755,7 +766,7 @@ test('Submit requires before and after evidence, succeeds with minimum uploads, 
   assert.equal(db.tables.client_deep_cleaning_submissions.length, 1);
 });
 
-test('Vendor name is optional and submit still succeeds with valid before and after evidence', async () => {
+test('Vendor name is optional and submit still succeeds with all required evidence', async () => {
   const db = client();
   const draft = await createReadySubmission(db);
   const submitted = await submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id);

@@ -13,9 +13,9 @@ function client(overrides = {}) {
   };
   return { from(table) { let rows = tables[table] || []; const q = { select() { return q; }, eq(key, value) { rows = rows.filter(r => r[key] === value); return q; }, async maybeSingle() { return { data: rows[0] || null, error: null }; } }; return q; } };
 }
-test('existing Training mutations remain FO-only; reporting roles gain no mutation authority', () => {
+test('Training mutation entry permits Retail trainers while reporting-only roles remain denied', () => {
   assert.equal(assertTrainingActor(fo, { mutation: true }), fo);
-  for (const role of ['Admin', 'Operations Manager', 'Management', 'MIS']) assert.throws(() => assertTrainingActor({ ...fo, role }, { mutation: true }), { code: 'forbidden_role' });
+  for (const role of ['Admin', 'Management', 'MIS']) assert.throws(() => assertTrainingActor({ ...fo, role }, { mutation: true }), { code: 'forbidden_role' });
 });
 test('current checked-in FO attendance/visit context passes; foreign and closed visits fail', async () => {
   const input = { attendance_id: 'attendance', site_visit_id: 'visit' };
@@ -27,10 +27,10 @@ test('current checked-in FO attendance/visit context passes; foreign and closed 
   }
 });
 test('authoritative Retail store gate denies other state, business and unsupported supervisor category', async () => {
-  assert.equal((await loadTrainingRetailStore(client(), fo, 'retail', 'technical_mep')).id, 'retail');
-  await assert.rejects(loadTrainingRetailStore(client(), { ...fo, state: 'TN' }, 'retail', 'technical_mep'), { code: 'store_scope_forbidden' });
-  await assert.rejects(loadTrainingRetailStore(client(), { ...fo, business: 'Other' }, 'retail', 'technical_mep'), { code: 'store_scope_forbidden' });
-  await assert.rejects(loadTrainingRetailStore(client(), fo, 'retail', 'housekeeping'), { code: 'store_scope_forbidden' });
+  assert.equal((await loadTrainingRetailStore(client(), {...fo,role:'KAM'}, 'retail', 'technical_mep')).id, 'retail');
+  await assert.rejects(loadTrainingRetailStore(client(), { ...fo, role:'KAM', state: 'TN' }, 'retail', 'technical_mep'), { code: 'store_scope_forbidden' });
+  await assert.rejects(loadTrainingRetailStore(client(), { ...fo, business: 'Other' }, 'retail', 'hk'), { code: 'forbidden_business' });
+  await assert.rejects(loadTrainingRetailStore(client(), fo, 'retail', 'hk'), { code: 'store_scope_forbidden' });
 });
 
 function scopedClient(overrides={}) {
@@ -77,19 +77,19 @@ test('KA Training searches all own-state stores without zone assignment; supervi
  const db=scopedClient(),profile={...fo,state:'KA'};
  const zones=await listTrainingZones(db,profile);
  assert.equal(zones[0].id,'STATE_WIDE');
- const found=await searchTrainingRetailStores(db,profile,{zone_id:'STATE_WIDE',limit:25});
- assert.deepEqual(found.stores.map(x=>x.store_code),['KA01','KA02','KA03']);
+ const found=await searchTrainingRetailStores(db,profile,{category_code:'hk',zone_id:'STATE_WIDE',limit:25});
+ assert.deepEqual(found.stores.map(x=>x.store_code),['KA01','KA02']);
  assert.equal((await loadTrainingRetailStore(db,profile,'ka-no-zone','hk')).id,'ka-no-zone');
  await assert.rejects(loadTrainingRetailStore(db,profile,'ka-supervisor','hk'),{code:'store_scope_forbidden'});
- assert.equal((await loadTrainingRetailStore(db,profile,'ka-supervisor','technical_mep')).id,'ka-supervisor');
+ assert.equal((await loadTrainingRetailStore(db,{...profile,role:'KAM'},'ka-supervisor','technical_mep')).id,'ka-supervisor');
  await assert.rejects(loadTrainingRetailStore(db,profile,'tn-zone','hk'),{code:'store_scope_forbidden'});
 });
 test('TN Training exposes only active assigned zones and rejects another zone',async()=>{
  const db=scopedClient(),profile={...fo,id:'tn-fo',state:'TN'};
  assert.deepEqual((await listTrainingZones(db,profile)).map(z=>z.zone_code),['TN1']);
- const eligible=await searchTrainingRetailStores(db,profile,{zone_id:'zone-tn'});
+ const eligible=await searchTrainingRetailStores(db,profile,{category_code:'hk',zone_id:'zone-tn'});
  assert.deepEqual(eligible.stores.map(x=>x.store_code),['TN01']);
- await assert.rejects(searchTrainingRetailStores(db,profile,{zone_id:'zone-other'}),{code:'store_scope_forbidden'});
+ await assert.rejects(searchTrainingRetailStores(db,profile,{category_code:'hk',zone_id:'zone-other'}),{code:'store_scope_forbidden'});
  await assert.rejects(loadTrainingRetailStore(db,profile,'tn-other','hk'),{code:'store_scope_forbidden'});
  assert.equal((await loadTrainingRetailStore(db,profile,'tn-zone','hk')).id,'tn-zone');
 });

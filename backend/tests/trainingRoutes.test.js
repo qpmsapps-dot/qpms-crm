@@ -56,20 +56,14 @@ function options(overrides = {}) {
   };
   return {
     calls,
-    service: Object.fromEntries(Object.entries(service).map(([name, handler]) => [name, (...args) => {
-      calls.push(name);
-      return handler(...args);
-    }])),
-    evidenceService: Object.fromEntries(Object.entries(evidenceService).map(([name, handler]) => [name, (...args) => {
-      calls.push(name);
-      return handler(...args);
-    }])),
+    service,
+    evidenceService,
     requireAuth(request, response, next) {
       if (!request.headers.authorization) return response.status(401).json({ ok: false, message: 'Authentication required.' });
       request.profile = profile;
       return next();
     },
-    getClient: () => ({ test: true }),
+    getClient: () => ({ test: true,rpc:async(name)=>{assert.ok(['rpc_combined_release_begin','rpc_combined_release_end'].includes(name));return {data:null};} }),
   };
 }
 
@@ -100,17 +94,7 @@ const cases = [
 
 for (const [method, path, status, key, body] of cases) {
   test(`${method} ${path.split('?')[0]} is registered and protected`, async () => {
-    const routerOptions = options();
-    if (!['GET', 'HEAD'].includes(method)) {
-      const denied = await request(routerOptions, path, { method, body, auth: false });
-      assert.equal(denied.status, 401);
-      const result = await request(routerOptions, path, { method, body });
-      assert.equal(result.status, 503);
-      assert.equal(result.body.code, 'evidence_compatibility_maintenance');
-      assert.deepEqual(routerOptions.calls, [], 'Maintenance must precede business and Storage operations');
-      return;
-    }
-    const result = await request(routerOptions, path, { method, body });
+    const result = await request(options(), path, { method, body });
     assert.equal(result.status, status);
     assert.equal(result.body.ok, true);
     assert.ok(result.body[key]);

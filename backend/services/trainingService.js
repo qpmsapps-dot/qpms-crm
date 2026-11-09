@@ -2,10 +2,12 @@ import {
   RELIANCE_TRAINING_CLIENT_ID,
   RELIANCE_TRAINING_CLIENT_CODE,
   assertTrainingActor,
+  assertTrainingCategory,
+  resolveTrainingMutationProfile,
+  canonicalTrainingRole,
   cleanTrainingText,
   loadAuthorizedTrainingSession,
   loadTrainingCreateContext,
-  normalizeTrainingKey,
   resolveTrainingReadScope,
   trainingEmployeeCode,
   trainingError,
@@ -55,8 +57,9 @@ async function activeMaster(client, table, id, code) {
 }
 
 export async function listTrainingCategories(client, profile) {
-  assertTrainingActor(profile);
-  return rows(client.from('training_categories').select('*').eq('is_active', true).order('sort_order').order('name'));
+  profile = await resolveTrainingMutationProfile(client, profile);
+  const categories = await rows(client.from('training_categories').select('*').eq('is_active', true).order('sort_order').order('name'));
+  return categories.filter(c => { try { assertTrainingCategory(profile, c.code); return true; } catch { return false; } });
 }
 
 export async function listTrainingTypes(client, profile) {
@@ -87,8 +90,8 @@ export async function searchTrainingSiteStaff(client, profile, input = {}) {
   if (!store && !error) ({ data: store, error } = await client.from('store_master').select('*').eq('id', storeId).maybeSingle());
   if (error) throw error;
   if (!store || (!retailStore && !isRelianceRetailStore(store))) throw trainingError(403, 'non_reliance_store', 'A Reliance Retail site is required.');
-  const actorState = normalizeTrainingKey(profile.state);
-  if (actorState && actorState !== normalizeTrainingKey(store.state)) {
+  const actorState = retailStateKey(profile.state);
+  if (actorState && actorState !== retailStateKey(store.state)) {
     throw trainingError(403, 'cross_state_forbidden', 'Site is outside your state scope.');
   }
   const limit = Math.min(50, Math.max(1, Number.parseInt(input.limit, 10) || 20));
@@ -121,16 +124,19 @@ function normalizeSessionInput(input = {}) {
 }
 
 export async function createTrainingSession(client, profile, input = {}) {
+  profile = await resolveTrainingMutationProfile(client, profile);
   assertTrainingActor(profile, { mutation: true });
   await loadTrainingCreateContext(client, profile, input);
   const normalized = normalizeSessionInput(input);
   const category = await activeMaster(client, 'training_categories', normalized.categoryId, 'category');
+  assertTrainingCategory(profile, category.code);
   await loadTrainingRetailStore(client, profile, input.retail_store_id, category.code);
   await Promise.all([
     activeMaster(client, 'training_categories', normalized.categoryId, 'category'),
     activeMaster(client, 'training_types', normalized.trainingTypeId, 'training_type'),
   ]);
-  const id = await rpc(client, 'rpc_create_reliance_training_session_v3', {
+  const id = await rpc(client, 'rpc_create_reliance_training_session_v4', {
+    p_creation_key: boundedText(input.creation_key, {required: true, max: 160, code: 'creation_key', label: 'Creation key'}),
     p_actor_profile_id: profile.id,
     p_attendance_id: cleanTrainingText(input.attendance_id),
     p_site_visit_id: cleanTrainingText(input.site_visit_id),
@@ -267,6 +273,7 @@ export async function getTrainingSession(client, profile, sessionId) {
 export async function updateTrainingSession(client, profile, sessionId, input = {}) {
   const { session } = await loadAuthorizedTrainingSession(client, profile, sessionId, { editable: true });
   const normalized = normalizeSessionInput(input);
+  if (normalized.categoryId !== session.category_id) throw trainingError(409,'category_change_forbidden','Start a separate draft to change category.');
   await Promise.all([
     activeMaster(client, 'training_categories', normalized.categoryId, 'category'),
     activeMaster(client, 'training_types', normalized.trainingTypeId, 'training_type'),
@@ -361,21 +368,24 @@ export function trainingIndiaDate(now = new Date()) {
 
 function retailActor(profile) {
   assertTrainingActor(profile);
-  if (!isRelianceRetailValue(profile.business) || !cleanTrainingText(profile.state)) {
+  if ((!isRelianceRetailValue(profile.business) && !profile.trainingRetailVerified) || !cleanTrainingText(profile.state)) {
     throw trainingError(403, 'store_scope_forbidden', 'Reliance Retail business and an assigned state are required.');
   }
 }
 
 export async function listTrainingZones(client, profile) {
+  profile = await resolveTrainingMutationProfile(client, profile);
   retailActor(profile);
   const state=retailStateKey(profile.state);
-  if(state==='TN')return loadAuthorizedRetailZones(client,profile);
+  if(state==='TN')return trainingAuthorizedZones(client,profile);
   if(!retailStateQueryValues(profile.state).length)throw trainingError(403,'store_scope_forbidden','A verified exact state is required.');
   // Keep the mobile zone picker compatible while exposing state-wide stores.
   return [{id:'STATE_WIDE',zone_code:'ALL_STORES',zone_name:'All stores in state',state:profile.state}];
 }
 
 export async function searchTrainingRetailStores(client, profile, input = {}) {
+  profile = await resolveTrainingMutationProfile(client, profile);
+  assertTrainingCategory(profile, input.category_code);
   retailActor(profile);
   const state=retailStateKey(profile.state),states=retailStateQueryValues(profile.state);
   if(!states.length)throw trainingError(403,'store_scope_forbidden','A verified exact state is required.');
@@ -390,7 +400,7 @@ export async function searchTrainingRetailStores(client, profile, input = {}) {
    .eq('status','Active').in('state',states);
   if(supervisorOnly)query=query.is('zone_id',null).eq('metadata->>operational_model','SUPERVISOR_ONLY');
   else if(tnZoneScope){
-   const zones=await loadAuthorizedRetailZones(client,profile);
+   const zones=await trainingAuthorizedZones(client,profile);
    if(!zones.some(zone=>zone.id===input.zone_id))
     throw trainingError(403,'store_scope_forbidden','Select one of your assigned TN zones.');
    query=query.eq('zone_id',input.zone_id);
@@ -399,11 +409,13 @@ export async function searchTrainingRetailStores(client, profile, input = {}) {
   const q=cleanTrainingText(input.q).replace(/[^\p{L}\p{N} -]/gu,' ').slice(0,80).trim();
   if(q)query=query.or(`store_code.ilike.%${q}%,store_name.ilike.%${q}%`);
   const result=await rows(query.order('store_code').order('id').range(offset,offset+limit));
-  return {stores:result.filter(store=>retailStateKey(store.state)===state).slice(0,limit),
+  return {stores:result.filter(store=>retailStateKey(store.state)===state && (input.category_code==='technical_mep' || store.metadata?.operational_model!=='SUPERVISOR_ONLY')).slice(0,limit),
    has_more:result.length>limit,offset,limit};
 }
 
 export async function loadTrainingRetailStore(client, profile, storeId, categoryCode) {
+  profile = await resolveTrainingMutationProfile(client, profile);
+  assertTrainingCategory(profile, categoryCode);
   retailActor(profile);
   const state=retailStateKey(profile.state),states=retailStateQueryValues(profile.state);
   if(!states.length)throw trainingError(403,'store_scope_forbidden','A verified exact state is required.');
@@ -416,11 +428,18 @@ export async function loadTrainingRetailStore(client, profile, storeId, category
    throw trainingError(403,'store_scope_forbidden','Supervisor-only stores support Technical Training only.');
   if(state==='TN'){
    if(store.zone_id){
-    const zones=await loadAuthorizedRetailZones(client,profile);
+    const zones=await trainingAuthorizedZones(client,profile);
     if(!zones.some(zone=>zone.id===store.zone_id))
      throw trainingError(403,'store_scope_forbidden','Store zone is not assigned to this TN FO.');
    }else if(store.metadata?.operational_model!=='SUPERVISOR_ONLY'||categoryCode!=='technical_mep')
     throw trainingError(403,'store_scope_forbidden','TN Training requires your assigned zone.');
   }
   return store;
+}
+
+async function trainingAuthorizedZones(client, profile) {
+  if (canonicalTrainingRole(profile.role) === 'FO') return loadAuthorizedRetailZones(client, profile);
+  const {data,error} = await client.rpc('training_authorized_zones_v4', {p_actor_profile_id:profile.id});
+  if(error) throw translateTrainingDatabaseError(error);
+  return data || [];
 }

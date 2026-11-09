@@ -7,7 +7,7 @@ export const RETAIL_MIS_STATES = Object.freeze(['AP-1','AP-2','KA','KL','TG','TN
 export const RETAIL_MIS_MODULES = Object.freeze({
  CENTRAL_MIS:['dashboard','stores','attendance-hk','attendance-mepc','cleaning','pest','training-hk','training-mepc','fault','maintenance','thermography','oos','imports'],
  MIS_HK:['stores','attendance-hk','cleaning','pest','training-hk'],
- MIS_MEPC:['stores','attendance-mepc','fault','maintenance','thermography'],
+ MIS_MEPC:['stores','attendance-mepc','fault','maintenance','thermography','training-mepc'],
  MIS_OOS:['oos'],
 });
 export const PADMA_RETAIL_IDENTITY = Object.freeze({profile_id:'83231458-af73-435a-abda-48bec9f29e5e',auth_user_id:'e843bc42-5f61-474d-8eca-1cf8d01ce2c1',employee_code:'QPMSAP2519'});

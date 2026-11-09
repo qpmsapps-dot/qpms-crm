@@ -26,9 +26,9 @@ export function cleaningReport(snapshot, filter = {}) {
     const store = canonicalActivityStore(stores,plan);
     if (!store) { exceptions.push({id:plan.id,reason:'Ambiguous, conflicting or unknown canonical Store Code'}); return []; }
     if (!visible(store)) return [];
-    const matches = submissions.filter(s => s.store.id === store.id && s.deep_cleaning_date === plan.scheduled_date && completed(s.status) && (s.source_kind!=='verified_fo_link'||s.schedule_id===plan.id));
+    const matches = [...new Map(submissions.filter(s => s.store.id === store.id && s.schedule_id === plan.id && s.deep_cleaning_date === plan.scheduled_date && completed(s.status) && !['NOT DONE','NOT COMPLETED'].includes(storeKey(s.final_outcome))).map(s=>[s.id,s])).values()];
     const status = storeKey(plan.status), terminal = ['CANCELLED','NOT DONE','NOT COMPLETED'].includes(status);
-    const effective = status === 'COMPLETED' || (!terminal && matches.length) ? 'Completed' : ['NOT DONE','NOT COMPLETED'].includes(status) ? 'Not Completed' : status === 'CANCELLED' ? 'Cancelled' : ['PLANNED','SCHEDULED'].includes(status) ? 'Scheduled' : 'Unknown';
+    const effective = status === 'CANCELLED' ? 'Cancelled' : ['NOT DONE','NOT COMPLETED'].includes(status) ? 'Not Completed' : !terminal && matches.length ? 'Completed' : ['PLANNED','SCHEDULED','COMPLETED'].includes(status) ? 'Scheduled' : 'Unknown';
     return [{...plan,store,reporting_state:reportingState(store.state),display_status:effective,submission_ids:matches.map(s=>s.id),overdue:effective==='Scheduled' && plan.scheduled_date < (filter.to || snapshot.to)}];
   });
   return {schedules,submissions,exceptions,states:[...new Set(stores.filter(visible).map(s=>reportingState(s.state)))].sort(),
@@ -36,13 +36,16 @@ export function cleaningReport(snapshot, filter = {}) {
 }
 
 export function completedTrainingReport(sessions, stores, filter = {}) {
- const rows=[],exceptions=[];
+ const rows=[],exceptions=[],seen=new Set();
  for(const session of sessions){
   if(!completed(session.status))continue;
   const store=canonicalActivityStore(stores,session),code=session.category?.code;
   const training_class=code==='hk'?'HK':code==='technical_mep'?'MEPC':null;
   if(!store||!training_class){exceptions.push({id:session.id,reason:!store?'Unresolved canonical Store Code':'Unclassified training category'});continue;}
   if(filter.state&&reportingState(store.state)!==reportingState(filter.state)||filter.store&&store.id!==filter.store)continue;
+  if(filter.from&&session.training_date<filter.from||filter.to&&session.training_date>filter.to)continue;
+  if(!session.id){exceptions.push({reason:'Missing session identity'});continue;}
+  if(seen.has(session.id))continue;seen.add(session.id);
   rows.push({...session,store,canonical_store_id:store.id,training_class,reporting_state:reportingState(store.state)});
  }
  const group=key=>{const groups=new Map();for(const r of rows){const id=key==='state'?r.reporting_state:r.store.id;const g=groups.get(id)||{state:r.reporting_state,...(key==='store'?{store_id:r.store.id,store_code:r.store.store_code,store_name:r.store.store_name}:{}),hk:0,mepc:0};g[r.training_class==='HK'?'hk':'mepc']++;groups.set(id,g);}return [...groups.values()];};
