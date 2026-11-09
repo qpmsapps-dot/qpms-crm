@@ -10,7 +10,7 @@ import {ReportHeader,ReportFilters,ReportNotice,ReportPager} from '../../compone
 import {matchesReportQuery,reportPage} from '../../utils/retailReportView.js';
 import RetailCleaningSchedule from '../../components/reliance-retail/RetailCleaningSchedule.jsx';
 import RetailStatePerformance from '../../components/reliance-retail/RetailStatePerformance.jsx';
-import {summarizeCleaningSchedules} from '../../utils/retailStatePerformance.js';
+import {summarizeVerifiedCleaningSchedules} from '../../utils/retailStatePerformance.js';
 import {useAuth} from '../../context/auth-context.js';
 import {isReadOnlyUser} from '../../utils/demoAccess.js';
 import {isPlatformAdmin} from '../../utils/authRoles.js';
@@ -24,6 +24,7 @@ function VerifiedFoLink({scheduleId,onSaved}){
 export default function RetailScopedDeepCleaning() {
  usePageTitle('Reliance Retail Deep Cleaning');
  const {user}=useAuth();
+ const showSubmittedAt=isPlatformAdmin(user);
  const [scheduling,setScheduling]=useState(false);
  const today=indiaToday();
  const [from,setFrom]=useState(today.slice(0,7)+'-01'),[to,setTo]=useState(today),[state,setState]=useState(''),[store,setStore]=useState(''),[status,setStatus]=useState('');
@@ -51,7 +52,7 @@ export default function RetailScopedDeepCleaning() {
  const rows=[...(report?.schedules||[]),...historical.schedules].filter(row=>(!status||row.display_status===status)&&matches(row));
  const work=[...(report?.submissions||[]),...historical.submissions].filter(matches),totals=report?.totals;
  const allSchedules=[...(report?.schedules||[]),...historical.schedules];
- const summary=summarizeCleaningSchedules(allSchedules);
+ const summary=summarizeVerifiedCleaningSchedules(allSchedules);
  const reportedCompleted=historical.submissions.length;
  async function exportReport(){
   setExporting(true);setError('');
@@ -84,15 +85,15 @@ export default function RetailScopedDeepCleaning() {
   {report&&<>
    <RetailStatePerformance title="Deep Cleaning — state-wise performance" summary={summary}
     selectedState={state} onState={value=>{resetView();setState(value);setStore('');}}
-    note="Scheduled counts include October Excel and live schedules; Completed reflects reported status. Percentage = Completed ÷ Scheduled. Excel completions are unverified; FO photo evidence remains separately controlled."/>
+    note="Operational schedules only; Completed requires an exact linked submission. Historical Excel remains separately reported below; cancelled schedules are excluded from the denominator."/>
    {excel.loading&&<ReportNotice>Loading October Excel schedules into the tables…</ReportNotice>}
    {excel.error&&<ReportNotice error>October Excel records could not be loaded: {excel.error}</ReportNotice>}
    {historical.schedules.length>0&&<p className="retail-report-description">October Excel: {historical.schedules.length} source schedule rows, {reportedCompleted} source-reported completions. Excel rows are read-only, may lack actual completion dates, and lack FO-verified before/after evidence. Live FO completion counts remain separate.</p>}
-   <p className="retail-report-description">Detailed work below contains actual FO submissions and Excel-reported completions, each identified by source. The stage totals above include pending and cancelled work; an overdue schedule is not automatically a recorded failure.</p>
+   <p className="retail-report-description">Detailed work below contains actual FO submissions and Excel-reported completions, each identified by source. The operational totals above include pending work and exclude cancelled schedules and historical Excel; an overdue schedule is not automatically a recorded failure.</p>
    {!totals&&<ReportNotice>Schedule storage is unavailable. Completion submissions remain visible; scheduled totals are unavailable.</ReportNotice>}
    {!!report.exceptions.length&&<ReportNotice>{report.exceptions.length} records excluded from totals because canonical store identity is unresolved.</ReportNotice>}
    <div className="retail-report-panel"><div className="retail-report-panel-heading"><h2>Store-wise submitted work</h2><span>{work.length} matching submissions</span></div>
-    <div className="retail-report-table" role="region" aria-label="Submitted cleaning work" tabIndex={0}><table><thead><tr>{['Store Code','Date','Recorded status','Before / After','Evidence'].map(label=><th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{reportPage(work,workPage,size).map(row=><tr key={row.id}><td>{row.store.store_code}<p>{row.store.store_name}</p></td><td>{row.deep_cleaning_date||'Not recorded in Excel'}</td><td>{row.status}{isExcelSource(row)&&<p className="retail-report-description">Source: October Excel · unverified</p>}</td><td>{isExcelSource(row)?'Not supplied':`${row.before_count} / ${row.after_count}`}</td><td>{isExcelSource(row)?'No FO photo evidence in Excel':<button disabled={evidenceBusy} onClick={()=>void inspect(row.id)}>View evidence</button>}</td></tr>)}</tbody></table></div>
+    <div className="retail-report-table" role="region" aria-label="Submitted cleaning work" tabIndex={0}><table><thead><tr>{['Store Code','Date',...(showSubmittedAt?['Submitted at']:[]),'Recorded status','Before / After','Evidence'].map(label=><th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{reportPage(work,workPage,size).map(row=><tr key={row.id}><td>{row.store.store_code}<p>{row.store.store_name}</p></td><td>{row.deep_cleaning_date||'Not recorded in Excel'}</td>{showSubmittedAt&&<td>{!isExcelSource(row)&&row.submitted_at?<time dateTime={row.submitted_at}>{row.submitted_at}</time>:'Not recorded'}</td>}<td>{row.status}{isExcelSource(row)&&<p className="retail-report-description">Source: October Excel · unverified</p>}</td><td>{isExcelSource(row)?'Not supplied':`${row.before_count} / ${row.after_count}`}</td><td>{isExcelSource(row)?'No FO photo evidence in Excel':<button disabled={evidenceBusy} onClick={()=>void inspect(row.id)}>View evidence</button>}</td></tr>)}</tbody></table></div>
     {!work.length&&<p className="retail-report-empty">No authorized submissions match this period, scope and search.</p>}
     <ReportPager label="Cleaning work" count={work.length} page={workPage} size={size} onPage={setWorkPage} onSize={setSize}/>
    </div>

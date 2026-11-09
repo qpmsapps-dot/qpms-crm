@@ -35,6 +35,11 @@ export function summarizeCleaningSchedules(schedules){
    verified:row.source_kind==='IFMS_EXCEL'?0:(status==='completed'?1:0),entries:row.source_kind==='IFMS_EXCEL'?1:0};
  });
 }
+// Operational KPI only. Historical rows remain visible in the detailed report.
+export function summarizeVerifiedCleaningSchedules(schedules){
+ return summarizeCleaningSchedules(schedules.filter(row=>row.source_kind!=='IFMS_EXCEL'&&String(row.display_status||row.status).toLowerCase()!=='cancelled').map(row=>
+  String(row.display_status||row.status).toLowerCase()==='completed'&&!row.submission_ids?.length?{...row,display_status:'Scheduled'}:row));
+}
 export function summarizeReportedOperations(rows){
  return summarizeStateRows(rows,row=>{
   const state=String(row.status||'').trim().toLowerCase();
@@ -52,6 +57,12 @@ export function summarizeTrainingEntries(rows){
    verified:row.source_kind==='IFMS_EXCEL'?0:(completed?1:0),
    entries:row.source_kind==='IFMS_EXCEL'?1:0};
  },row=>row.reporting_state||row.state);
+}
+export function operationalTrainingRows(rows){
+ const seen=new Set();return (rows||[]).filter(row=>{
+  if(!row.id||row.source_kind==='IFMS_EXCEL'||!['submitted','completed'].includes(String(row.status).toLowerCase())||!['HK','MEPC'].includes(row.training_class)||seen.has(row.id))return false;
+  seen.add(row.id);return true;
+ });
 }
 
 export function summarizeTrainingByClass(rows){
