@@ -16,6 +16,8 @@ on:
       - 'tests/browser/retailExcelInline.spec.js'
       - 'src/utils/retailExcelInline.js'
       - 'src/utils/retailStatePerformance.js'
+      - 'src/utils/deepCleaningView.js'
+      - 'tests/deepCleaningView.test.js'
       - 'src/components/Sidebar.jsx'
       - 'tests/retailStatePerformance.test.js'
       - 'src/utils/useRetailExcelRows.js'
@@ -46,6 +48,55 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # PR #82: exact Phase 6 frontend + Deep Cleaning V2 payload only.
+          # No wildcard paths; all subsequent lint/test/build steps remain mandatory.
+          approved_phase6_ui = {
+            "src/components/reliance-retail/DeepCleaningEvidenceDrawer.jsx": "e2570f184002d7948e90fa56a595b5bbab136808",
+            "src/components/reliance-retail/DeepCleaningOverview.jsx": "0439a221074ea9652ec2436ca308ab662fbd6acd",
+            "src/components/reliance-retail/RetailCleaningMonthlyPlan.jsx": "2d668269b4284b9b534ba6fd8e6c6e581eb266f9",
+            "src/components/reliance-retail/deepCleaningV2.css": "cb9b8b455aaa812300dda952fc36737a4297a226",
+            "src/pages/reliance-retail/RetailDashboard.jsx": "40b7be9fa44fd1430a8b2df8bf76d33df1358d97",
+            "src/pages/reliance-retail/RetailMisWorkspace.jsx": "af930bcb507b55fec696ae0341fe7a4d8e3e6065",
+            "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "462ad0cb7a133c5d9ba0d1602e0282444afbeb46",
+            "src/pages/reliance-retail/RetailTraining.jsx": "642820deba397593d52249c17665dc8c18e231e0",
+            "src/utils/deepCleaningView.js": "99aab8d71b64d6bf2adbab267d237cf8df2b5981",
+            "src/utils/retailStatePerformance.js": "194185be201a49bdd3b99006aef17600d351b09e",
+            "tests/deepCleaningView.test.js": "8229febdd08034f1c73d0334b031d810cbd5814c",
+            "tests/browser/retailReportVisualSmoke.spec.js": "9658fecf569c15f59c391296ab9677b3ae8bd648",
+            "tests/browser/retailExcelInline.spec.js": "7222ce80b164d7510b8e69e6c9506e03af09bbdd",
+          }
+          def phase6_payload_matches(paths, read_blob):
+            return (set(paths) == set(approved_phase6_ui)
+                    and all(read_blob(path) == expected for path, expected in approved_phase6_ui.items()))
+          # Exercise the narrow authorization before accepting any real payload.
+          reviewed_paths = set(approved_phase6_ui)
+          def reviewed_blob(path):
+            return approved_phase6_ui.get(path)
+          assert phase6_payload_matches(reviewed_paths, reviewed_blob)
+          negative_cases = 0
+          for changed in reviewed_paths:
+            assert not phase6_payload_matches(reviewed_paths - {changed}, reviewed_blob)
+            assert not phase6_payload_matches(reviewed_paths, lambda path, changed=changed: "unreviewed" if path == changed else reviewed_blob(path))
+            negative_cases += 2
+          for extra in [
+            "backend/server.js", "backend/services/backgroundJobOwnership.js",
+            "supabase/migrations/unreviewed.sql", "src/context/AuthContext.jsx",
+            "src/services/api.js", "src/services/authSession.js", "src/routes/AppRoutes.jsx",
+            "src/pages/FOActivities.jsx", "src/pages/reliance-retail/RetailAttendance.jsx",
+            "src/utils/supportedKmReconciliation.js", "src/utils/travelEvidenceRecalculation.js",
+            "backend/services/kmFinancialWriteMaintenanceService.js",
+            "backend/services/foCheckInLocationPolicyService.js", "src/pages/TravelClaims.jsx",
+            "Mobile_FO_V2/lib/main.dart", "src/unreviewed.js",
+          ]:
+            assert not phase6_payload_matches(reviewed_paths | {extra}, reviewed_blob)
+            negative_cases += 1
+          print(f"PASS: Phase 6 exact-payload authorization and {negative_cases} negative guard cases.")
+          phase6_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
+          if phase6_changed == reviewed_paths:
+            if not phase6_payload_matches(phase6_changed, lambda path: subprocess.check_output(["git", "rev-parse", f"HEAD:{path}"], text=True).strip()):
+              sys.exit("Phase 6 UI content changed; renew protected review.")
+            print("PASS: exact reviewed Phase 6 UI/test blobs; remaining CI steps are required.")
+            sys.exit(0)
           # PR #80: authorize only the reviewed five-file accessibility payload.
           # Pins are committed Git blobs; no broader path/control rules are relaxed.
           approved_ui_accessibility_release = {
@@ -238,8 +289,10 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Lint affected UI pages
         run: npx eslint src/hooks/useModalFocus.js src/pages/DeepCleaning.jsx src/components/reliance-retail/RetailImportedHistory.jsx src/pages/reliance-retail/RetailManpowerHistory.jsx src/components/Sidebar.jsx src/components/reliance-retail/RetailStatePerformance.jsx src/utils/retailStatePerformance.js src/pages/reliance-retail/RetailOperationalTrackers.jsx src/pages/reliance-retail/RetailServiceTrackers.jsx src/utils/useRetailExcelRows.js src/utils/retailExcelInline.js src/routes/AppRoutes.jsx src/pages/reliance-retail/RetailDashboard.jsx src/pages/reliance-retail/RetailAttendance.jsx src/components/reliance-retail/RetailAttendanceVisual.jsx src/utils/retailAttendanceVisualModel.js src/pages/reliance-retail/RetailStoreMaster.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/pages/reliance-retail/RetailOperations.jsx src/pages/reliance-retail/RetailOosDashboard.jsx src/pages/reliance-retail/RetailOosWorkspace.jsx src/pages/reliance-retail/RetailOos12Transition.jsx src/pages/reliance-retail/RetailOosPresentation.jsx
+      - name: Lint reviewed Phase 6 UI helpers
+        run: npx eslint src/components/reliance-retail/DeepCleaningEvidenceDrawer.jsx src/components/reliance-retail/DeepCleaningOverview.jsx src/components/reliance-retail/RetailCleaningMonthlyPlan.jsx src/utils/deepCleaningView.js
       - name: Inline Excel row mapping contract tests
-        run: node --test tests/retailExcelInline.test.js tests/retailStatePerformance.test.js tests/retailAttendanceVisualModel.test.js
+        run: node --test tests/retailExcelInline.test.js tests/retailStatePerformance.test.js tests/retailAttendanceVisualModel.test.js tests/deepCleaningView.test.js tests/retailReportView.test.js
       - name: Production frontend build
         run: npm run build
       - name: Install Playwright Chromium

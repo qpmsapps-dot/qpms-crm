@@ -1195,3 +1195,10 @@
     max-height: 160px;
   }
 }
+
+@media (max-width: 650px) {
+  .dc-actions {
+    max-width: 100%;
+    flex-shrink: 1;
+  }
+}

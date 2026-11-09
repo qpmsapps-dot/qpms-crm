@@ -59,7 +59,7 @@ const views = [
 ];
 const reports = [
   { name: 'Training', path: '/reliance-retail/training', title: 'HK & MEPC Training', actions: ['Refresh', 'Export Training review'] },
-  { name: 'Deep Cleaning', path: '/reliance-retail/deep-cleaning', title: 'Reliance Retail Deep Cleaning', actions: ['Schedule Deep Cleaning', 'Refresh', 'Export cleaning report'] },
+  { name: 'Deep Cleaning', path: '/reliance-retail/deep-cleaning', title: 'Deep Cleaning', actions: ['Refresh', 'Export Report'] },
   { name: 'CM PM', path: '/reliance-retail/cmpm', title: 'CM / PM Calls', actions: ['Record CM/PM Call', 'Refresh', 'Export Excel'] },
   { name: 'Thermography', path: '/reliance-retail/thermography', title: 'Thermography', actions: ['Schedule Thermography', 'Refresh', 'Export Excel'] },
 ];
@@ -72,11 +72,18 @@ for (const report of reports) {
     for (const label of report.actions) {
       await expect(page.getByRole('button', { name: label, exact: true })).toBeVisible();
     }
+    if (report.name === 'Deep Cleaning') {
+      const schedule = page.locator('.dc-schedule-menu summary');
+      await expect(schedule).toBeVisible();
+      await schedule.click();
+      await expect(page.getByRole('button', { name: 'Schedule a visit', exact: true })).toBeVisible();
+      await schedule.click();
+    }
     for (const [name, width, height] of views) {
       await page.setViewportSize({ width, height });
       await expect(page.locator('section.retail-report')).toBeVisible();
       if (width < 1024) {
-        await expect.poll(() => page.locator('aside').evaluate(el => el.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+        await expect.poll(() => page.locator('aside:has(nav)').evaluate(el => el.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
       }
       const size = await page.evaluate(() => ({
         documentWidth: document.documentElement.scrollWidth,
@@ -101,7 +108,7 @@ test('Store Master retains all seven tabs and core store controls across breakpo
   for (const [name, width, height] of views) {
     await page.setViewportSize({ width, height });
     if (width < 1024) {
-      await expect.poll(() => page.locator('aside').evaluate(el => el.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+      await expect.poll(() => page.locator('aside:has(nav)').evaluate(el => el.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
     }
     const size = await page.evaluate(() => ({
       documentWidth: document.documentElement.scrollWidth,

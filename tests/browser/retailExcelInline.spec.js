@@ -35,21 +35,22 @@ async function setup(page){
 test('Deep Cleaning shows state summary and submitted work first; schedules only in collapsed admin maintenance',async({page})=>{
  await setup(page);
  await page.goto('/reliance-retail/deep-cleaning');
- await expect(page.getByRole('heading',{name:'Reliance Retail Deep Cleaning'})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'Deep Cleaning',exact:true})).toBeVisible();
  await page.getByLabel('Cleaning from').fill('2026-10-01');
  await page.getByLabel('Cleaning to').fill('2026-10-31');
- const summary=page.getByRole('region',{name:'Deep Cleaning — state-wise performance',exact:true});
+ const summary=page.getByRole('region',{name:'State-wise Deep Cleaning performance',exact:true});
  const work=page.getByRole('region',{name:'Submitted cleaning work'});
  await expect(summary).toBeVisible();
- const stateRow=summary.getByRole('row').filter({has:page.getByRole('button',{name:'AP-1'})});
- await expect(stateRow.getByText('50%')).toBeVisible();
- await expect(page.getByRole('heading',{name:'Store-wise submitted work'})).toBeVisible();
+ // Excel-reported completion is never a verified operational KPI.
+ await expect(page.locator('.dc-kpis .dc-kpi').first().locator('strong')).toHaveText('0');
+ await expect(summary.getByRole('img',{name:/AP-1: 0 scheduled, 0 completed, N\/A completion/})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'Store-wise Submitted Work'})).toBeVisible();
  // Admin maintenance survives but no longer occupies the primary report.
  await expect(page.getByRole('region',{name:'Cleaning schedules'})).toBeHidden();
  await expect(work.getByText('Completed (Excel reported)')).toBeVisible();
- await expect(work.getByText('No FO photo evidence in Excel')).toBeVisible();
+ await expect(work.getByText('No FO evidence')).toBeVisible();
  await expect(page.getByText('Deep Cleaning — imported October records')).toHaveCount(0);
- await expect(work.getByRole('button',{name:'View evidence'})).toHaveCount(0);
- await expect(summary.getByRole('row')).toHaveCount(8); // Header + six states + total
- await expect(page.getByText('Advanced · Schedule administration and verified FO linking')).toBeVisible();
+ await expect(work.getByRole('button',{name:/View evidence/})).toHaveCount(0);
+ await expect(summary.locator('.dc-zero-states span')).toHaveCount(6); // All six states remain explicitly unavailable.
+ await expect(page.locator('.retail-schedule-admin summary')).toContainText('Schedule administration and verified FO linking');
 });
