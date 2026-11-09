@@ -117,7 +117,7 @@ export default function RetailDashboard() {
       sheet.addRow(['Module','State','From','To','Source','HK credits','MEPC credits','Attendance target',
        'Completed / submitted','Scheduled / source rows','Pending / other','Completion %','Reported shortage','Vacancies','Note']);
       for(const module of modules){
-        const historical=month==='2026-10'?historyForCard(data?.historical_ifms,module.id,global||local[module.id]||''):null;
+        const historical=month==='2026-10'&&!['technical','soft'].includes(module.id)?historyForCard(data?.historical_ifms,module.id,global||local[module.id]||''):null;
         if(historical){
           for(const row of historical.summary.rows.filter(r=>(!global||r.state===global)&&(!local[module.id]||r.state===local[module.id])))
             sheet.addRow([module.title,row.label,'2026-10-01','2026-10-31','Excel reported',null,null,null,
@@ -138,6 +138,10 @@ export default function RetailDashboard() {
          row.completed??null,row.scheduled??null,row.pending??null,null,null,null,
          row.complete===false?'Incomplete approved coverage':null]);
       }
+      if(month==='2026-10'){
+        const reported=book.addWorksheet('Reported Training Excel');reported.addRow(['Module','State','Source rows','Source-reported completions','Verified operational sessions']);
+        for(const id of ['technical','soft']){const h=historyForCard(data?.historical_ifms,id,global||local[id]||'');for(const r of h?.summary.rows||[])if((!global||r.state===global)&&(!local[id]||r.state===local[id]))reported.addRow([id==='soft'?'HK':'MEPC',r.label,r.scheduled,r.completed,'Not verified']);}
+      }
       await downloadUnified(book,'Retail_Operations_Summary.xlsx');
     }catch(error){setInventory(v=>({...v,error:error.message}));}
   }
@@ -152,7 +156,8 @@ export default function RetailDashboard() {
       const rows = selectRows(source?.rows||[], global, local[id] || '');
       const stores = selectRows(inventory.rows, global, local[id] || '');
       const window = id === 'cm' || id === 'pm' ? callWindow(month, id, today) : null;
-      const historical=month==='2026-10'?historyForCard(data?.historical_ifms,id,global||local[id]||''):null;
+      const historical=month==='2026-10'&&!['technical','soft'].includes(id)?historyForCard(data?.historical_ifms,id,global||local[id]||''):null;
+      const reportedTraining=month==='2026-10'&&['technical','soft'].includes(id)?historyForCard(data?.historical_ifms,id,global||local[id]||''):null;
       return <section key={id} className={`ifms-card ${index < 4 || month==='2026-10' ? 'ifms-wide' : 'ifms-third'}`} style={{ '--module-color': color }} aria-labelledby={`ifms-${id}`}>
         <div className="ifms-card-header"><div className="ifms-card-heading"><span className="ifms-icon">{createElement(Icon, { size: 21 })}</span><div><h2 id={`ifms-${id}`}>{title}</h2><p>{window ? window.label : 'This Month Till Today'}</p></div></div><StateFilter label={`${title} reporting state`} value={local[id] || ''} global={global} onChange={value => setLocal(previous => ({ ...previous, [id]: value }))}/></div>
         {window && <p className="ifms-window">{window.status} · All applicable stores due by {window.endLabel}</p>}
@@ -170,6 +175,7 @@ export default function RetailDashboard() {
          <p className="ifms-note">{id==='fault'?'View the Fault Tracker for authorized live call counts and closed-ticket reconciliation.':'Select October 2026 to view reported manpower vacancies and shortages.'}</p>:
          <ModuleBody id={id} rows={rows} stores={stores} storeStatus={inventory.status} source={source}/>}
 
+        {reportedTraining&&<details><summary>Historical Excel Training — reported separately</summary><RetailStatePerformance summary={reportedTraining.summary} columns={[{key:'scheduled',label:'Source rows'},{key:'completed',label:'Source-reported'}]} note="Historical employee rows are not verified operational Training sessions and do not enter the card totals."/></details>}
         {!!source?.identity_exceptions&&<p className="ifms-note">{source.identity_exceptions} source records excluded from totals for unresolved store identity or category.</p>}
         <footer className="ifms-card-footer"><span>{global || local[id] ? REPORTING_STATES.find(state => state.code === (global || local[id]))?.label : 'All six reporting states'}</span>{route && canAccessRoute(user, route) && <Link to={route}>View Details <ArrowUpRight size={13}/></Link>}</footer>
       </section>;
