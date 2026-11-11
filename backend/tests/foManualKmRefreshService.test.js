@@ -7,7 +7,7 @@ import { createManualKmRefreshService, assertManualKmRangeAllowed, assertKmBulkA
 const admin = { id: 'admin-profile', auth_user_id: 'admin-auth', employee_code: 'ADMIN-1',
   role: 'Admin', status: 'active', is_active: true, web_access_enabled: true };
 const environment = { KM_FINANCIAL_WRITES_MAINTENANCE: 'true', KM_FINANCIAL_WRITES_EMERGENCY_PAUSE: 'false' };
-function fixture() {
+function fixture(checkoutEligible = true, calculationFails = false) {
   const attendance = { id: 'attendance-1', employee_code: 'EMP-1', fo_user_id: 'fo-profile',
     attendance_date: '2026-10-10', status: 'Completed', logout_time: '2026-10-10T12:00:00Z',
     total_route_km: 0, total_approved_km: 0, petrol_amount: 0, metadata: {}, updated_at: '2026-10-10T12:01:00Z' };
@@ -32,12 +32,69 @@ function fixture() {
     canonical_calculation: { calculationVersion: 'KM_ENGINE_V2', inputDigest: 'a'.repeat(64),
       payableKm: 2, reimbursement: 8, decision: 'ACCEPTED', canonicalLegs: [{ type: 'last_checkout_to_end_day' }] } };
   let clock = 0;
-  const service = createManualKmRefreshService({ calculateFinalLeg: async () => ({final_leg_evidence:{checkout_eligibility:{petrol_eligible_after_checkout:true}}}), calculate: async () => structuredClone(prepared), now: () => clock, token: () => 'opaque-preview' });
+  const service = createManualKmRefreshService({ calculateFinalLeg: async () => ({final_leg_evidence:{checkout_eligibility:{petrol_eligible_after_checkout:checkoutEligible}}}), calculate: async () => {
+    if (calculationFails) throw Object.assign(new Error('Synthetic unavailable evidence'), {code:'KM_PREVIEW_UNAVAILABLE'});
+    return structuredClone(prepared);
+  }, now: () => clock, token: () => 'opaque-preview' });
   const payload = { manual_refresh: true, dry_run: true, employee_code: 'EMP-1', date: '2026-10-10', approval_reason: 'Reviewed missing final leg' };
   const invoke = (body = payload, extra = {}) => service({ client, payload: body, profile: admin, authUser: { id: admin.auth_user_id }, environment, ...extra });
   const apply = () => ({ ...payload, dry_run: false, attendance_id: attendance.id, preview_token: 'opaque-preview' });
   return { attendance, rows, calls, client, prepared, payload, invoke, apply, expire: () => { clock = 300001; } };
 }
+
+test('read-only evidence preview survives checkout review and closed posting gate without a token or write', async () => {
+  for (const eligible of [true, false]) {
+    const f = fixture(eligible);
+    f.rows.fo_site_visits = [{id:'site-1',attendance_id:f.attendance.id,route_km:105.53}];
+    f.rows.fo_km_financial_control = [{control_key:'canonical_v2',financial_writes_enabled:false}];
+    f.prepared.actual_travel_km = 106.42;
+    const before = structuredClone(f.rows);
+    const result = await f.invoke({...f.payload,evidence_preview:true}, {environment:{KM_FINANCIAL_WRITES_EMERGENCY_PAUSE:'true'}});
+    assert.equal(result.before.route_km,105.53);
+    assert.equal(result.after.payable_km,0);
+    assert.equal(result.calculation.route_km,106.42);
+    assert.equal(result.status,eligible?'Financial Posting Blocked':'Review Required');
+    assert.equal(result.read_only,true); assert.equal(result.preview_token,undefined);
+    assert.equal(f.calls.length,0); assert.deepEqual(f.rows,before);
+    await assert.rejects(f.invoke({...f.apply(),evidence_preview:true}),error=>error.code==='KM_READ_ONLY_PREVIEW_REQUIRED');
+  }
+});
+
+test('failed recalculation preserves saved route visibility and evidence preview retains Admin authorization', async () => {
+  const f = fixture(false, true);
+  f.rows.fo_site_visits = [{id:'site-1',attendance_id:f.attendance.id,route_km:105.53}];
+  f.rows.fo_km_financial_control = [{control_key:'canonical_v2',financial_writes_enabled:false}];
+  const payload = {...f.payload,evidence_preview:true};
+  const result = await f.invoke(payload);
+  assert.equal(result.before.route_km,105.53);
+  assert.equal(result.calculation.route_km,null);
+  assert.equal(result.calculation.error,'KM_PREVIEW_UNAVAILABLE');
+  assert.equal(result.after.payable_km,0); assert.equal(f.calls.length,0);
+  await assert.rejects(f.invoke(payload,{profile:{...admin,role:'FO'}}),error=>error.statusCode===403);
+  await assert.rejects(f.invoke({...payload,attendance_id:'another-attendance'}),error=>error.code==='KM_ATTENDANCE_NOT_FOUND');
+  assert.equal((await f.invoke(payload,{profile:{...admin,role:'QPMS Admin'}})).read_only,true);
+});
+
+test('failed final-leg diagnostic still returns saved evidence and cannot enable posting', async () => {
+  const f=fixture();
+  f.rows.fo_site_visits=[{id:'synthetic-site',attendance_id:f.attendance.id,route_km:105.53}];
+  f.rows.fo_km_financial_control=[{control_key:'canonical_v2',financial_writes_enabled:false}];
+  const service=createManualKmRefreshService({
+    calculateFinalLeg:async (_client,_payload,options)=>{
+      assert.equal(options.maxGoogleDirectionsCalls,0);
+      assert.equal(options.googleDirectionsContext.enabled,false);
+      throw new Error('Synthetic diagnostic unavailable');
+    },
+    calculate:async (_client,payload,options)=>{
+      assert.equal(payload.dry_run,true); assert.equal(options.persist,false);
+      assert.equal(options.maxGoogleDirectionsCalls,0); assert.equal(options.googleDirectionsContext.enabled,false);
+      return {...f.prepared,actual_travel_km:106};
+    },
+  });
+  const result=await service({client:f.client,payload:{...f.payload,evidence_preview:true},profile:admin,authUser:{id:admin.auth_user_id},environment});
+  assert.equal(result.before.route_km,105.53); assert.equal(result.status,'Review Required');
+  assert.equal(result.preview_token,undefined); assert.equal(f.calls.length,0);
+});
 
 test('preview writes nothing; apply sends only the server-reviewed calculation through narrow guarded RPC', async () => {
   const f = fixture(); const before = structuredClone(f.rows);
@@ -194,6 +251,26 @@ test('real canonical engine preview includes final leg and apply compares the sa
   const invoke = body => service({ client: f.client, payload: body, profile: admin, authUser: { id: admin.auth_user_id }, environment });
   const oldFetch = globalThis.fetch; globalThis.fetch = () => { throw new Error('Network forbidden'); };
   try {
+    f.rows.fo_km_financial_control = [{control_key:'canonical_v2',financial_writes_enabled:false}];
+    const oldEnabled = process.env.ENABLE_GOOGLE_DIRECTIONS;
+    const snapshot = structuredClone(f.rows);
+    let requests = 0;
+    globalThis.fetch = () => { requests++; throw new Error('Network forbidden'); };
+    process.env.ENABLE_GOOGLE_DIRECTIONS = 'true';
+    try {
+      const evidence = await invoke({...payload,evidence_preview:true});
+      assert.equal(evidence.evidence_preview,true);
+      assert.equal(evidence.preview_token,undefined);
+      assert.equal(evidence.read_only,true);
+      assert.equal(evidence.calculation.error,null);
+      assert.equal(requests,0);
+      assert.equal(f.calls.length,0);
+      // VM-created fixture objects have a different prototype realm.
+      assert.equal(JSON.stringify(f.rows),JSON.stringify(snapshot));
+    } finally {
+      if(oldEnabled===undefined) delete process.env.ENABLE_GOOGLE_DIRECTIONS;
+      else process.env.ENABLE_GOOGLE_DIRECTIONS=oldEnabled;
+    }
     const preview = await invoke(payload); assert.ok(preview.final_leg.km > 0); assert.ok(preview.after.payable_km > 0);
     f.client.rpc = async (name, args) => {
       assert.equal(name, 'rpc_apply_fo_manual_km_refresh_v1');
