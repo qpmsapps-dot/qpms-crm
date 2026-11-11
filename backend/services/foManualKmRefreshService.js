@@ -86,6 +86,9 @@ export function createManualKmRefreshService({ calculate = recalculateFoKm, calc
     if (!admin) fail(400, 'KM_APPROVAL_REASON_REQUIRED', 'Enter an Admin approval reason.');
     const { employee, date } = selection(payload);
     const dryRun = payload.dry_run === true;
+    if (payload.evidence_preview === true && !dryRun) {
+      fail(400, 'KM_READ_ONLY_PREVIEW_REQUIRED', 'Route evidence preview requires dry_run=true.');
+    }
     for (const [key, value] of previews) if (value.expires <= now()) previews.delete(key);
     let preview;
     if (!dryRun) {
@@ -115,13 +118,60 @@ export function createManualKmRefreshService({ calculate = recalculateFoKm, calc
         fail(422, 'KM_COMPLETED_ATTENDANCE_REQUIRED', 'End Day must be completed before recalculation.');
       }
       const protectedRecord = await protectedAttendance(client, attendance);
-      const diagnostic = await calculateFinalLeg(client, { attendance_id: attendance.id, dry_run: true }, {
-        persist: false, includeOriginComparison: dryRun, maxGoogleDirectionsCalls: 3,
-      });
+      const evidencePreview = dryRun && payload.evidence_preview === true;
+      const noDirections = { maxGoogleDirectionsCalls: 0,
+        googleDirectionsContext: { enabled: false, callsAttempted: 0, maxCalls: 0 } };
+      let diagnostic;
+      try {
+        diagnostic = await calculateFinalLeg(client, { attendance_id: attendance.id, dry_run: true }, {
+          persist: false, includeOriginComparison: dryRun, maxGoogleDirectionsCalls: 3,
+          ...(evidencePreview ? noDirections : {}),
+        });
+      } catch (error) {
+        if (!evidencePreview) throw error;
+        diagnostic = { skipped: true, final_leg_status: 'unavailable' };
+      }
       // Distance evidence cannot override checkout eligibility. Missing evidence
       // requires review too; these previews must never receive an apply token.
       const checkoutEligible = diagnostic.final_leg_evidence?.checkout_eligibility?.petrol_eligible_after_checkout === true &&
         diagnostic.final_leg_evidence?.requires_endpoint_review !== true;
+      if (dryRun && payload.evidence_preview === true) {
+        // This branch cannot create an apply token or reach commit. Eligibility
+        // controls posting, not visibility of already saved distance evidence.
+        const visits = await client.from('fo_site_visits').select('id,attendance_id,route_km')
+          .eq('attendance_id', attendance.id);
+        if (visits.error) throw visits.error;
+        const unique = [...new Map((visits.data || []).map(row => [row.id, row])).values()];
+        const known = unique.filter(row => row.route_km != null && String(row.route_km).trim() !== '' &&
+          Number.isFinite(Number(row.route_km)) && Number(row.route_km) >= 0);
+        const routeKm = known.length ? Math.round(known.reduce((sum, row) => sum + Number(row.route_km), 0) * 100) / 100 : null;
+        const gate = await client.from('fo_km_financial_control').select('financial_writes_enabled')
+          .eq('control_key', 'canonical_v2').maybeSingle();
+        let prepared = null;
+        let calculationError = null;
+        try {
+          prepared = await calculate(client, { attendance_id: attendance.id, dry_run: true }, {
+            prepareOnly: true, persist: false, refreshMissingKmReviews: false,
+            ...noDirections, environment,
+          });
+        } catch (error) { calculationError = error.code || 'KM_PREVIEW_UNAVAILABLE'; }
+        const postingBlocked = gate.error || gate.data?.financial_writes_enabled !== true ||
+          kmFinancialWritesMaintenanceEnabled(environment) ||
+          String(environment.KM_FINANCIAL_WRITES_EMERGENCY_PAUSE).toLowerCase() === 'true';
+        const before = { route_km: routeKm, payable_km: Number(attendance.total_approved_km || 0),
+          amount: Number(attendance.petrol_amount || 0) };
+        return { ok: true, evidence_preview: true, dry_run: true, read_only: true, financial_eligible: false,
+          attendance_id: attendance.id, employee_code: employee, date, before, after: { ...before },
+          status: !checkoutEligible || protectedRecord ? 'Review Required' : postingBlocked ? 'Financial Posting Blocked'
+            : prepared?.ok && !prepared.skipped ? 'Calculated' : 'Pending Recalculation',
+          financial_posting_status: postingBlocked ? 'Financial Posting Blocked' : 'Not requested',
+          calculation: { route_km: prepared?.actual_travel_km ?? null, error: calculationError,
+            decision: prepared?.canonical_calculation?.decision ?? null },
+          message: 'Read-only distance evidence. Saved payable KM, approved additions and financial receipts are unchanged.',
+          final_leg: { ...diagnostic.final_leg_evidence, km: diagnostic.skipped ? null : diagnostic.final_return_leg_km,
+            source: diagnostic.source || diagnostic.provider || null, status: diagnostic.final_leg_status || 'unavailable' },
+        };
+      }
       if (preview && checkoutEligible && attendance.updated_at !== preview.updatedAt) {
         // A successful save itself makes attendance financially protected.
         // Only the locked database guard may replay this exact Admin/digest's

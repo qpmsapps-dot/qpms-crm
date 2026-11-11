@@ -1,3 +1,4 @@
+import { assertReadOnlyKmPreview } from '../utils/savedFoFinancials.js';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { authenticatedFetch } from '../services/api.js';
@@ -57,9 +58,10 @@ export default function ManualKmRefreshDialog({ employee, endpoint, rangeEndpoin
     return () => { element.close(); previous?.focus?.(); };
   }, []);
   function invalidate() { setPreview(null); setConfirmed(false); setError(''); }
-  async function submit(apply) {
+  async function submit(apply, evidencePreview = false) {
     if (inFlight.current || !date || (rangeMode && !endDate) || !reason.trim() || (apply && (!preview || preview.read_only || !confirmed))) return;
     inFlight.current = true;
+    if (evidencePreview) { setPreview(null); setConfirmed(false); }
     setBusy(true);
     setError('');
     const controller = new AbortController();
@@ -68,13 +70,18 @@ export default function ManualKmRefreshDialog({ employee, endpoint, rangeEndpoin
       const response = await request(rangeMode ? rangeEndpoint : endpoint, {
         method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ employee_code: employee,
-          ...(rangeMode ? { start_date: date, end_date: endDate } : { manual_refresh: true, date }),
+          ...(rangeMode ? { start_date: date, end_date: endDate } : { manual_refresh: true, date, evidence_preview: !apply && evidencePreview }),
           approval_reason: reason.trim(), dry_run: !apply,
           ...(apply ? rangeMode ? { range_token: preview.range_token }
             : { attendance_id: preview.attendance_id, preview_token: preview.preview_token } : {}),
         }),
       });
       const result = await response.json();
+      if (evidencePreview && !apply) {
+        setPreview(null);
+        setConfirmed(false);
+        assertReadOnlyKmPreview(result);
+      }
       if (!response.ok || !result.ok) {
         if (response.status === 409) { setPreview(null); setConfirmed(false); }
         throw new Error(`${result.message || 'Recalculation could not be completed.'}${result.code ? ` (${result.code})` : ''}`);
@@ -111,10 +118,12 @@ export default function ManualKmRefreshDialog({ employee, endpoint, rangeEndpoin
         onChange={(event) => { setReason(event.target.value); invalidate(); }} className="mt-1 block w-full rounded border p-2" /></label>
       {preview && !receipt && rangeMode ? <RangeResults result={preview} /> : null}
       {preview && !receipt && !rangeMode ? <section aria-label="KM calculation preview" className="my-4">
+        {preview.status ? <p role="status">{preview.status} · {preview.financial_posting_status}</p> : null}
+        {preview.calculation ? <p>Recalculated route evidence: {preview.calculation.route_km == null ? 'Unavailable' : `${Number(preview.calculation.route_km).toFixed(2)} km`}{preview.calculation.error ? ` (${preview.calculation.error})` : ''}</p> : null}
         <p className="text-sm">Employee {preview.employee_code} · {preview.date}</p>
         <table className="my-2 w-full text-left text-sm"><thead><tr><th>Calculation</th><th>Before</th><th>After</th></tr></thead>
           <tbody>{[['Route KM', 'route_km'], ['Payable KM', 'payable_km'], ['Amount (₹)', 'amount']].map(([label, key]) =>
-            <tr key={key}><th className="py-2">{label}</th><td>{Number(preview.before[key]).toFixed(2)}</td><td>{Number(preview.after[key]).toFixed(2)}</td></tr>)}</tbody></table>
+            <tr key={key}><th className="py-2">{label}</th><td>{preview.before[key] == null ? 'Unknown' : Number(preview.before[key]).toFixed(2)}</td><td>{preview.after[key] == null ? 'Unknown' : Number(preview.after[key]).toFixed(2)}</td></tr>)}</tbody></table>
         <p className="text-sm">Last Checkout → End Day: {preview.final_leg.km ?? 'Unavailable'} km · {preview.final_leg.source || preview.final_leg.status || 'No accepted evidence'}</p>
         <FinalLegEvidence leg={preview.final_leg} />
         {preview.read_only ? <p role="status" className="my-2 text-sm">{preview.message} This distance is not included in saved route or payable totals.</p>
@@ -131,6 +140,7 @@ export default function ManualKmRefreshDialog({ employee, endpoint, rangeEndpoin
       {receipt && !rangeMode ? <p role="status" className="my-3 text-green-800">KM saved. Calculation receipt: {receipt.calculation_run_id}</p> : null}
       {error ? <p role="alert" className="my-3 text-red-700">{error}</p> : null}
       <div className="mt-4 flex flex-wrap justify-end gap-3">
+        {!rangeMode && !receipt ? <button type="button" disabled={busy || !date || !reason.trim()} onClick={() => submit(false, true)} className="rounded border px-4 py-2">Read-only route preview</button> : null}
         <button type="button" disabled={busy} onClick={onClose} className="rounded border px-4 py-2">Close</button>
         {!receipt ? <button type="button" disabled={busy || !date || (rangeMode && !endDate) || !reason.trim()} onClick={() => submit(false)} className="rounded border px-4 py-2">{busy ? 'Please wait…' : 'Preview KM'}</button> : null}
         {preview && !preview.read_only && !receipt && (!rangeMode || preview.summary.ready > 0) ? <button type="button" disabled={busy || !confirmed} onClick={() => submit(true)} className="rounded bg-blue-700 px-4 py-2 text-white">Approve and save</button> : null}

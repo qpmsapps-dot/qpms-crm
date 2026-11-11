@@ -1,4 +1,4 @@
-import { savedFoPayableKm, savedFoPetrolAmount } from '../utils/savedFoFinancials.js';
+import { savedFoPayableKm, savedFoPetrolAmount, savedSiteRouteKm, savedRouteKmLabel } from '../utils/savedFoFinancials.js';
 import { runSupportedKmPeriod, supportedKmDryRun } from '../utils/supportedKmReconciliation.js';
 import { octoberRecoveryExportRows } from '../utils/octoberRecoveryExport.js';
 import { evidenceDates, gpsEvidenceDisplay } from '../utils/travelEvidenceRecalculation.js';
@@ -8627,7 +8627,7 @@ function FieldOfficerDetailsView({
                       <td className="whitespace-nowrap px-3 py-3">{formatDateTime(visit.check_in_time)}</td>
                       <td className="whitespace-nowrap px-3 py-3">{formatDateTime(siteVisitCheckoutValue(visit))}</td>
                       <td className="px-3 py-3">{durationMinutesLabel(visitMinutes(visit))}</td>
-                      <td className="px-3 py-3">{numberLabel(visit.route_km, " km")}</td>
+                      <td className="px-3 py-3">{savedRouteKmLabel(visit.route_km)}</td>
                       <td className="px-3 py-3">{visitRemarks(visit)}</td>
                     </tr>
                   ))}
@@ -10360,6 +10360,16 @@ function FieldOfficerDetailsView({
 
       {activeDetailTab === "km" ? (
         <section className="fo-screen-only rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 space-y-2" aria-label="Saved route evidence by attendance">
+            {attendances.map((record) => {
+              const route = savedSiteRouteKm(record.id, visits);
+              return <p key={record.id} className="text-sm font-semibold">
+                {record.attendance_date}: Route KM (calculated evidence): {route === null ? "Unknown" : `${route.toFixed(2)} km`}
+                {" · "}{record.route_sync_status === "review_required" ? "Review Required" : route === null ? "Pending Recalculation" : "Calculated"}
+                {" · "}Payable KM (approved/saved): {savedFoPayableKm(record).toFixed(2)} km
+              </p>;
+            })}
+          </div>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             {[
               ["Base Payable KM", `${basePayableKm.toFixed(1)} km`, "text-slate-800"],
@@ -10395,11 +10405,7 @@ function FieldOfficerDetailsView({
               <tbody className="divide-y divide-slate-100">
                 {visits.map((visit, index) => {
                   const exception = checkoutExceptionForVisit(visit);
-                  const routeKm = Number(visit?.route_km);
                   const missingEvidence = missingCheckoutEvidence(visit);
-                  const finalPayableKm =
-                    (Number.isFinite(routeKm) && routeKm > 0 ? routeKm : 0) +
-                    (Number.isFinite(missingEvidence.approvedKm) ? missingEvidence.approvedKm : 0);
                   return (
                     <tr key={visit.id || index}>
                       <td className="px-3 py-3 font-black text-slate-900">
@@ -10409,7 +10415,7 @@ function FieldOfficerDetailsView({
                         {index === 0 ? "Start Day" : visitTitle(visits[index - 1])}
                       </td>
                       <td className="px-3 py-3 text-slate-700">
-                        {numberLabel(visit.route_km, " km")}
+                        {savedRouteKmLabel(visit.route_km)}
                       </td>
                       <td className="px-3 py-3 text-amber-700">
                         <div className="space-y-1">
@@ -10431,9 +10437,7 @@ function FieldOfficerDetailsView({
                           : "0.0 km"}
                       </td>
                       <td className="px-3 py-3 font-bold text-emerald-700">
-                        {finalPayableKm > 0
-                          ? `${finalPayableKm.toFixed(1)} km`
-                          : "--"}
+                        See saved attendance total
                       </td>
                       <td className="px-3 py-3">
                         <div className="space-y-1">

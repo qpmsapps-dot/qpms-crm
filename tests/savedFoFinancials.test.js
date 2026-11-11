@@ -1,7 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {savedFoPayableKm,savedFoPetrolAmount} from '../src/utils/savedFoFinancials.js';
+import {savedFoPayableKm,savedFoPetrolAmount,savedSiteRouteKm,savedRouteKmLabel,assertReadOnlyKmPreview} from '../src/utils/savedFoFinancials.js';
+
+test('old backend financial previews cannot become read-only previews or enable approval', () => {
+ const valid={evidence_preview:true,read_only:true,dry_run:true,financial_eligible:false};
+ assert.doesNotThrow(()=>assertReadOnlyKmPreview(valid));
+ for(const result of [{ok:true,preview_token:'old-token'}, {...valid,evidence_preview:undefined}, {...valid,preview_token:'unexpected'}, {...valid,updated:true}]) {
+  assert.throws(()=>assertReadOnlyKmPreview(result),/Saved route evidence remains visible/);
+ }
+});
+
+test('HINDUPURAM route evidence remains 105.53 while saved payable stays zero', () => {
+ const visit={id:'site-1',attendance_id:'00000000-0000-4000-8000-000000000123',route_km:105.53};
+ const a={id:visit.attendance_id,total_approved_km:0,petrol_amount:0};
+ assert.equal(savedSiteRouteKm(a.id,[visit,visit,{...visit,id:'foreign',attendance_id:'other',route_km:999}]),105.53);
+ assert.equal(savedFoPayableKm(a),0); assert.equal(savedFoPetrolAmount(a),0);
+ assert.equal(savedRouteKmLabel(visit.route_km),'105.53 km');
+ assert.equal(savedRouteKmLabel(null),'Unknown');
+ assert.equal(savedSiteRouteKm(a.id,[{...visit,route_km:null}]),null);
+ assert.equal(savedSiteRouteKm(a.id,[{...visit,route_km:0}]),0);
+});
 test('saved zero wins over GPS, visits, stale route and eligible evidence',()=>{
  const a={total_approved_km:0,eligible_km:58.27,total_route_km:51.08,raw_gps_km:58.2,petrol_amount:0};
  assert.equal(savedFoPayableKm(a),0);assert.equal(savedFoPetrolAmount(a),0);
