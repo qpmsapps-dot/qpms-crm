@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {withCombinedReleaseOperation} from './combinedReleaseGate.js';
 import { removeRetiredEvidenceObject } from './retiredEvidenceStorageService.js';
+import { CLEANING_CONTRACT, actualCleaningDate, cleaningCommand, cleaningUuid, rejectScheduledWrite } from './deepCleaningIndependentContract.js';
 import { scheduledCleaningCommand } from './retailCleaningDeliveryService.js';
 import { normalizedStateKey, stateScopeQueryValues } from './workMappingScope.js';
 
@@ -271,7 +272,7 @@ function storeSnapshot(store) {
 }
 
 function submissionSelect() {
-  return 'id,schedule_id,final_outcome,not_done_reason,business,store_id,retail_store_id,store_code,store_name,client_name,state,city,store_format,deep_cleaning_date,performed_by_type,vendor_name,submitted_by_user_id,submitted_by_employee_code,remarks,status,submitted_at,metadata,created_at,updated_at';
+  return 'id,request_id,schedule_id,final_outcome,not_done_reason,business,store_id,retail_store_id,store_code,store_name,client_name,state,city,store_format,deep_cleaning_date,performed_by_type,vendor_name,submitted_by_user_id,submitted_by_employee_code,remarks,status,submitted_at,metadata,created_at,updated_at';
 }
 
 function uploadSelect() {
@@ -327,29 +328,39 @@ export async function searchRelianceRetailStores(client, profile, filters = {}) 
   return {rows,zones:zoneScoped?zones:[],pagination:{page,limit,total:count??rows.length}};
 }
 
+function requireSupportedScheduledWrite(submission, payload = {}) {
+  if (!submission.schedule_id || submission.metadata?.contract_version === CLEANING_CONTRACT ||
+      (submission.metadata?.contract_version != null && submission.metadata.contract_version !== 'retail-cleaning.v1') ||
+      (payload.schedule_id != null && payload.schedule_id !== submission.schedule_id)) {
+    throw clientDeepCleaningError(409, 'cleaning_upgrade_required',
+      'Unsupported legacy draft. Keep the original record; no direct-write fallback is available.');
+  }
+}
+
 export async function createClientDeepCleaningSubmission(client, profile, payload = {}) {
-  const actor = assertRelianceRetailFo(profile);
-  if (payload.schedule_id) return scheduledCleaningCommand(client, profile, 'begin', payload);
-  const draft = validateDraftPayload(payload, { requireStore: true });
+  assertRelianceRetailFo(profile);
+  if (payload.schedule_id) {
+    return scheduledCleaningCommand(client, profile, 'begin', payload);
+  }
+  rejectScheduledWrite(payload);
+  const requestId = cleaningUuid(payload.request_id, 'draft request_id');
+  const date = actualCleaningDate(payload.deep_cleaning_date);
+  if (payload.evidence_format != null && payload.evidence_format !== 'paired_v1') {
+    throw clientDeepCleaningError(409, 'cleaning_upgrade_required', 'Before/After paired evidence is required.');
+  }
+  const draft = validateDraftPayload(payload, {requireStore: true});
   const store = await loadRelianceRetailStore(client, profile, draft.storeCode);
-  const { data, error } = await client
-    .from('client_deep_cleaning_submissions')
-    .insert({
-      business: CLIENT_DEEP_CLEANING_BUSINESS,
-      ...storeSnapshot(store),
-      deep_cleaning_date: draft.deepCleaningDate,
-      performed_by_type: 'vendor',
-      vendor_name: draft.vendorName,
-      submitted_by_user_id: actor.userId,
-      submitted_by_employee_code: actor.employeeCode,
-      remarks: draft.remarks,
-      status: 'draft',
-      metadata: { source: 'client_deep_cleaning_api_v1', ...(payload.evidence_format === 'paired_v1' ? {evidence_format:'paired_v1'} : {}) },
-    })
-    .select(submissionSelect())
-    .single();
-  if (error) throw error;
-  return data;
+  const saved = await cleaningCommand(client, profile, 'begin', {
+    request_id: requestId, retail_store_id: store.id, store_code: store.store_code,
+    deep_cleaning_date: date, evidence_format: 'paired_v1',
+    vendor_name: draft.vendorName, remarks: draft.remarks,
+  });
+  // A replay may contain a later user-edited date; the immutable creation
+  // request is checked in SQL. Never override that current server draft here.
+  if (saved.request_id !== requestId || saved.retail_store_id !== store.id || saved.metadata?.evidence_format !== 'paired_v1') {
+    throw clientDeepCleaningError(503, 'cleaning_contract_unavailable', 'The paired draft contract could not be confirmed. Keep the request identity.');
+  }
+  return saved;
 }
 
 export async function listClientDeepCleaningSubmissions(client, profile, filters = {}) {
@@ -386,6 +397,8 @@ export async function loadOwnedSubmission(client, profile, submissionId, { inclu
   if (!data || data.submitted_by_user_id !== actor.userId) {
     throw clientDeepCleaningError(404, 'submission_not_found', 'Deep Cleaning submission was not found.');
   }
+  if (data.metadata?.contract_version === CLEANING_CONTRACT &&
+      (data.schedule_id || data.metadata?.source === 'retail-cleaning.v1')) rejectScheduledWrite({}, data);
   // Metadata keeps pre-migration ad-hoc payloads readable without selecting missing columns.
   if (data.schedule_id || data.metadata?.source === 'retail-cleaning.v1') {
     const scheduled = await scheduledCleaningCommand(client, profile, 'validate', { submission_id: data.id });
@@ -404,32 +417,47 @@ export async function loadOwnedSubmission(client, profile, submissionId, { inclu
 
 export async function updateClientDeepCleaningDraft(client, profile, submissionId, payload = {}) {
   const existing = await loadOwnedSubmission(client, profile, submissionId);
+  if (existing.metadata?.contract_version !== CLEANING_CONTRACT) {
+    requireSupportedScheduledWrite(existing, payload);
+    if (!DRAFT_STATUSES.has(existing.status)) {
+      throw clientDeepCleaningError(409, 'submitted_record_locked', 'Submitted Deep Cleaning records cannot be edited.');
+    }
+    const patch = validateDraftPayload(payload);
+    if (existing.schedule_id && ((payload.store_code && text(payload.store_code).toUpperCase() !== text(existing.store_code).toUpperCase()) || (payload.deep_cleaning_date && payload.deep_cleaning_date !== existing.deep_cleaning_date))) {
+      throw clientDeepCleaningError(409, 'scheduled_fields_locked', 'Store and date are controlled by the schedule.');
+    }
+    const update = {};
+    if (Object.prototype.hasOwnProperty.call(payload, 'store_code')) {
+      if (!patch.storeCode) throw clientDeepCleaningError(400, 'store_code_required', 'Store code is required.');
+      const store = await loadRelianceRetailStore(client, profile, patch.storeCode);
+      Object.assign(update, storeSnapshot(store));
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, 'deep_cleaning_date')) update.deep_cleaning_date = patch.deepCleaningDate;
+    if (Object.prototype.hasOwnProperty.call(payload, 'vendor_name')) update.vendor_name = patch.vendorName;
+    if (Object.prototype.hasOwnProperty.call(payload, 'remarks')) update.remarks = patch.remarks;
+    if (!Object.keys(update).length) return existing;
+    const { data, error } = await client
+      .from('client_deep_cleaning_submissions')
+      .update(update)
+      .eq('id', existing.id)
+      .eq('submitted_by_user_id', existing.submitted_by_user_id)
+      .select(submissionSelect())
+      .single();
+    if (error) throw error;
+    return data;
+  }
+  rejectScheduledWrite(payload, existing);
   if (!DRAFT_STATUSES.has(existing.status)) {
     throw clientDeepCleaningError(409, 'submitted_record_locked', 'Submitted Deep Cleaning records cannot be edited.');
   }
-  const patch = validateDraftPayload(payload);
-  if (existing.schedule_id && ((payload.store_code && text(payload.store_code).toUpperCase() !== text(existing.store_code).toUpperCase()) || (payload.deep_cleaning_date && payload.deep_cleaning_date !== existing.deep_cleaning_date))) {
-    throw clientDeepCleaningError(409, 'scheduled_fields_locked', 'Store and date are controlled by the schedule.');
+  if (payload.store_code != null && text(payload.store_code) !== existing.store_code) {
+    throw clientDeepCleaningError(409, 'draft_store_locked', 'Keep this evidence with its original store.');
   }
-  const update = {};
-  if (Object.prototype.hasOwnProperty.call(payload, 'store_code')) {
-    if (!patch.storeCode) throw clientDeepCleaningError(400, 'store_code_required', 'Store code is required.');
-    const store = await loadRelianceRetailStore(client, profile, patch.storeCode);
-    Object.assign(update, storeSnapshot(store));
-  }
-  if (Object.prototype.hasOwnProperty.call(payload, 'deep_cleaning_date')) update.deep_cleaning_date = patch.deepCleaningDate;
-  if (Object.prototype.hasOwnProperty.call(payload, 'vendor_name')) update.vendor_name = patch.vendorName;
-  if (Object.prototype.hasOwnProperty.call(payload, 'remarks')) update.remarks = patch.remarks;
-  if (!Object.keys(update).length) return existing;
-  const { data, error } = await client
-    .from('client_deep_cleaning_submissions')
-    .update(update)
-    .eq('id', existing.id)
-    .eq('submitted_by_user_id', existing.submitted_by_user_id)
-    .select(submissionSelect())
-    .single();
-  if (error) throw error;
-  return data;
+  await loadRelianceRetailStore(client, profile, existing.store_code);
+  const patch = {};
+  if (Object.hasOwn(payload, 'deep_cleaning_date')) patch.deep_cleaning_date = actualCleaningDate(payload.deep_cleaning_date);
+  for (const field of ['vendor_name', 'remarks']) if (Object.hasOwn(payload, field)) patch[field] = nullableText(payload[field]);
+  return cleaningCommand(client, profile, 'update', {submission_id: existing.id, ...patch});
 }
 
 export function buildClientDeepCleaningStoragePath({ submission, uploadType, mimeType, id = randomUUID() }) {
@@ -450,90 +478,125 @@ function expectedStoragePrefix(submission) {
 
 export async function createClientDeepCleaningUploadUrl(client, profile, submissionId, payload = {}) {
   const submission = await loadOwnedSubmission(client, profile, submissionId);
-  const actor = assertRelianceRetailFo(profile);
-  if (!DRAFT_STATUSES.has(submission.status)) {
-    throw clientDeepCleaningError(409, 'submitted_record_locked', 'Uploads cannot be added to a submitted Deep Cleaning record.');
-  }
-  const upload = validateUploadInput(payload);
-  pairMetadata(payload, submission, upload.uploadType);
-  if (payload.request_id && !payload.upload_id) {
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text(payload.request_id))) throw clientDeepCleaningError(400,'invalid_upload_request','A UUID upload request ID is required.');
-    const storagePath=buildClientDeepCleaningStoragePath({submission,uploadType:upload.uploadType,mimeType:upload.mimeType,id:text(payload.request_id)});
-    const {data:intent,error}=await client.rpc('rpc_client_cleaning_upload_intent_v1',{
-      p_actor:profile.id,p_auth:actor.userId,p_submission:submission.id,p_request:text(payload.request_id),
-      p_upload:{upload_type:upload.uploadType,mime_type:upload.mimeType,file_size:upload.fileSize,original_filename:upload.originalFilename,storage_path:storagePath,pair_id:nullableText(payload.pair_id),pair_order:Number(payload.pair_order||0)},
+  if (submission.metadata?.contract_version !== CLEANING_CONTRACT) {
+    requireSupportedScheduledWrite(submission, payload);
+    const actor = assertRelianceRetailFo(profile);
+    if (!DRAFT_STATUSES.has(submission.status)) {
+      throw clientDeepCleaningError(409, 'submitted_record_locked', 'Uploads cannot be added to a submitted Deep Cleaning record.');
+    }
+    const upload = validateUploadInput(payload);
+    pairMetadata(payload, submission, upload.uploadType);
+    if (payload.request_id && !payload.upload_id) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text(payload.request_id))) throw clientDeepCleaningError(400,'invalid_upload_request','A UUID upload request ID is required.');
+      const storagePath=buildClientDeepCleaningStoragePath({submission,uploadType:upload.uploadType,mimeType:upload.mimeType,id:text(payload.request_id)});
+      const {data:intent,error}=await client.rpc('rpc_client_cleaning_upload_intent_v1',{
+        p_actor:profile.id,p_auth:actor.userId,p_submission:submission.id,p_request:text(payload.request_id),
+        p_upload:{upload_type:upload.uploadType,mime_type:upload.mimeType,file_size:upload.fileSize,original_filename:upload.originalFilename,storage_path:storagePath,pair_id:nullableText(payload.pair_id),pair_order:Number(payload.pair_order||0)},
+      });
+      if(error) throw clientDeepCleaningError(error.code==='42501'?403:error.code==='22023'?400:error.code==='23505'?409:503,'upload_intent_rejected',error.code==='42501'?'Upload access denied.':error.code==='23505'?'Upload request ID was reused for another file.':'Compatible upload delivery is required.');
+      const signed=await withCombinedReleaseOperation(client,profile.id,'storage:cleaning-upload-grant',()=>client.storage.from(CLIENT_DEEP_CLEANING_BUCKET).createSignedUploadUrl(intent.storage_path,{contentType:intent.mime_type}));
+      if(signed.error)throw signed.error;
+      return {upload_id:intent.id,storage_bucket:intent.storage_bucket,storage_path:intent.storage_path,signed_url:signed.data.signedUrl,upload_type:intent.upload_type,mime_type:intent.mime_type,max_file_size:CLIENT_DEEP_CLEANING_MAX_BYTES};
+    }
+    if (payload.upload_id) {
+      const {data:intent,error}=await client.from('client_deep_cleaning_uploads').select(uploadSelect()).eq('id',text(payload.upload_id)).eq('submission_id',submission.id).maybeSingle();
+      if(error)throw error;
+      if(!intent || intent.uploaded_by_user_id!==actor.userId || intent.upload_type!==upload.uploadType || intent.mime_type!==upload.mimeType || Number(intent.file_size)!==upload.fileSize || intent.storage_bucket!==CLIENT_DEEP_CLEANING_BUCKET || !intent.storage_path.startsWith(expectedStoragePrefix(submission))) throw clientDeepCleaningError(403,'upload_intent_mismatch','Owned matching upload intent required.');
+      const signed=await withCombinedReleaseOperation(client,profile.id,'storage:cleaning-upload-grant',()=>client.storage.from(CLIENT_DEEP_CLEANING_BUCKET).createSignedUploadUrl(intent.storage_path,{contentType:intent.mime_type}));
+      if(signed.error)throw signed.error;
+      return {upload_id:intent.id,storage_bucket:intent.storage_bucket,storage_path:intent.storage_path,signed_url:signed.data.signedUrl,upload_type:intent.upload_type,mime_type:intent.mime_type,max_file_size:CLIENT_DEEP_CLEANING_MAX_BYTES};
+    }
+    const { count, error: countError } = await client
+      .from('client_deep_cleaning_uploads')
+      .select('id', { count: 'exact', head: true })
+      .eq('submission_id', submission.id)
+      .eq('upload_type', upload.uploadType);
+    if (countError) throw countError;
+    const storagePath = buildClientDeepCleaningStoragePath({
+      submission,
+      uploadType: upload.uploadType,
+      mimeType: upload.mimeType,
     });
-    if(error) throw clientDeepCleaningError(error.code==='42501'?403:error.code==='22023'?400:error.code==='23505'?409:503,'upload_intent_rejected',error.code==='42501'?'Upload access denied.':error.code==='23505'?'Upload request ID was reused for another file.':'Compatible upload delivery is required.');
-    const signed=await withCombinedReleaseOperation(client,profile.id,'storage:cleaning-upload-grant',()=>client.storage.from(CLIENT_DEEP_CLEANING_BUCKET).createSignedUploadUrl(intent.storage_path,{contentType:intent.mime_type}));
-    if(signed.error)throw signed.error;
-    return {upload_id:intent.id,storage_bucket:intent.storage_bucket,storage_path:intent.storage_path,signed_url:signed.data.signedUrl,upload_type:intent.upload_type,mime_type:intent.mime_type,max_file_size:CLIENT_DEEP_CLEANING_MAX_BYTES};
-  }
-  if (payload.upload_id) {
-    const {data:intent,error}=await client.from('client_deep_cleaning_uploads').select(uploadSelect()).eq('id',text(payload.upload_id)).eq('submission_id',submission.id).maybeSingle();
-    if(error)throw error;
-    if(!intent || intent.uploaded_by_user_id!==actor.userId || intent.upload_type!==upload.uploadType || intent.mime_type!==upload.mimeType || Number(intent.file_size)!==upload.fileSize || intent.storage_bucket!==CLIENT_DEEP_CLEANING_BUCKET || !intent.storage_path.startsWith(expectedStoragePrefix(submission))) throw clientDeepCleaningError(403,'upload_intent_mismatch','Owned matching upload intent required.');
-    const signed=await withCombinedReleaseOperation(client,profile.id,'storage:cleaning-upload-grant',()=>client.storage.from(CLIENT_DEEP_CLEANING_BUCKET).createSignedUploadUrl(intent.storage_path,{contentType:intent.mime_type}));
-    if(signed.error)throw signed.error;
-    return {upload_id:intent.id,storage_bucket:intent.storage_bucket,storage_path:intent.storage_path,signed_url:signed.data.signedUrl,upload_type:intent.upload_type,mime_type:intent.mime_type,max_file_size:CLIENT_DEEP_CLEANING_MAX_BYTES};
-  }
-  const { count, error: countError } = await client
-    .from('client_deep_cleaning_uploads')
-    .select('id', { count: 'exact', head: true })
-    .eq('submission_id', submission.id)
-    .eq('upload_type', upload.uploadType);
-  if (countError) throw countError;
-  const storagePath = buildClientDeepCleaningStoragePath({
-    submission,
-    uploadType: upload.uploadType,
-    mimeType: upload.mimeType,
-  });
-  const { data: intent, error: intentError } = await client
-    .from('client_deep_cleaning_uploads')
-    .insert({
-      submission_id: submission.id,
-      upload_type: upload.uploadType,
+    const { data: intent, error: intentError } = await client
+      .from('client_deep_cleaning_uploads')
+      .insert({
+        submission_id: submission.id,
+        upload_type: upload.uploadType,
+        storage_bucket: CLIENT_DEEP_CLEANING_BUCKET,
+        storage_path: storagePath,
+        original_filename: upload.originalFilename,
+        mime_type: upload.mimeType,
+        file_size: upload.fileSize,
+        sequence_no: (count || 0) + 1,
+        uploaded_by_user_id: actor.userId,
+        upload_status: 'pending',
+        uploaded_at: null,
+        metadata: { source: 'client_deep_cleaning_api_v1', intent_created_at: new Date().toISOString(), ...(payload.pair_id ? {pair_id: text(payload.pair_id), pair_order: Number(payload.pair_order || 0)} : {}) },
+      })
+      .select(uploadSelect())
+      .single();
+    if (intentError) throw intentError;
+    const { data, error } = await withCombinedReleaseOperation(client,profile.id,'storage:cleaning-upload-grant',()=>client.storage
+      .from(CLIENT_DEEP_CLEANING_BUCKET)
+      .createSignedUploadUrl(storagePath, { contentType: upload.mimeType }));
+    if (error) {
+      await client
+        .from('client_deep_cleaning_uploads')
+        .delete()
+        .eq('id', intent.id)
+        .eq('upload_status', 'pending');
+      throw error;
+    }
+    if (submission.status === 'draft') {
+      await client
+        .from('client_deep_cleaning_submissions')
+        .update({ status: 'uploading' })
+        .eq('id', submission.id)
+        .eq('status', 'draft');
+    }
+    return {
+      upload_id: intent.id,
       storage_bucket: CLIENT_DEEP_CLEANING_BUCKET,
       storage_path: storagePath,
-      original_filename: upload.originalFilename,
+      signed_url: data?.signedUrl,
+      token: data?.token,
+      upload_type: upload.uploadType,
       mime_type: upload.mimeType,
-      file_size: upload.fileSize,
-      sequence_no: (count || 0) + 1,
-      uploaded_by_user_id: actor.userId,
-      upload_status: 'pending',
-      uploaded_at: null,
-      metadata: { source: 'client_deep_cleaning_api_v1', intent_created_at: new Date().toISOString(), ...(payload.pair_id ? {pair_id: text(payload.pair_id), pair_order: Number(payload.pair_order || 0)} : {}) },
-    })
-    .select(uploadSelect())
-    .single();
-  if (intentError) throw intentError;
-  const { data, error } = await withCombinedReleaseOperation(client,profile.id,'storage:cleaning-upload-grant',()=>client.storage
-    .from(CLIENT_DEEP_CLEANING_BUCKET)
-    .createSignedUploadUrl(storagePath, { contentType: upload.mimeType }));
-  if (error) {
-    await client
-      .from('client_deep_cleaning_uploads')
-      .delete()
-      .eq('id', intent.id)
-      .eq('upload_status', 'pending');
-    throw error;
+      max_file_size: CLIENT_DEEP_CLEANING_MAX_BYTES,
+    };
   }
-  if (submission.status === 'draft') {
-    await client
-      .from('client_deep_cleaning_submissions')
-      .update({ status: 'uploading' })
-      .eq('id', submission.id)
-      .eq('status', 'draft');
+  assertRelianceRetailFo(profile);
+  rejectScheduledWrite(payload, submission);
+  if (!DRAFT_STATUSES.has(submission.status)) {
+    throw clientDeepCleaningError(409, 'submitted_record_locked', 'Submitted evidence is read-only.');
   }
-  return {
-    upload_id: intent.id,
-    storage_bucket: CLIENT_DEEP_CLEANING_BUCKET,
-    storage_path: storagePath,
-    signed_url: data?.signedUrl,
-    token: data?.token,
-    upload_type: upload.uploadType,
-    mime_type: upload.mimeType,
-    max_file_size: CLIENT_DEEP_CLEANING_MAX_BYTES,
-  };
+  await loadRelianceRetailStore(client, profile, submission.store_code);
+  const upload = validateUploadInput(payload);
+  const requestId = cleaningUuid(payload.request_id, 'upload request_id');
+  const comparison = pairMetadata(payload, {metadata: {evidence_format: 'paired_v1'}}, upload.uploadType);
+  if (comparison.pair_id) comparison.pair_id = cleaningUuid(comparison.pair_id, 'pair_id');
+  const expectedPath = buildClientDeepCleaningStoragePath({submission, uploadType: upload.uploadType, mimeType: upload.mimeType, id: requestId});
+  const intent = await cleaningCommand(client, profile, 'intent', {
+    submission_id: submission.id, request_id: requestId,
+    upload_id: payload.upload_id ? cleaningUuid(payload.upload_id, 'upload_id') : null,
+    upload_type: upload.uploadType, mime_type: upload.mimeType, file_size: upload.fileSize,
+    original_filename: upload.originalFilename, ...comparison,
+    storage_path: expectedPath,
+  });
+  if (intent.storage_bucket !== CLIENT_DEEP_CLEANING_BUCKET ||
+      intent.storage_path !== expectedPath || intent.submission_id !== submission.id ||
+      intent.uploaded_by_user_id !== profile.auth_user_id || intent.mime_type !== upload.mimeType ||
+      Number(intent.file_size) !== upload.fileSize || intent.upload_type !== upload.uploadType ||
+      intent.metadata?.request_id !== requestId || (payload.upload_id && intent.id !== payload.upload_id)) {
+    throw clientDeepCleaningError(503, 'cleaning_contract_unavailable', 'Server-issued evidence identity could not be confirmed.');
+  }
+  // Keep the intent when grant issuance fails. The same request recovers it.
+  const result = await withCombinedReleaseOperation(client, profile.id, 'storage:cleaning-upload-grant', () =>
+    client.storage.from(CLIENT_DEEP_CLEANING_BUCKET).createSignedUploadUrl(intent.storage_path, {contentType: intent.mime_type, upsert: false}));
+  if (result.error) throw result.error;
+  return {upload_id: intent.id, storage_bucket: intent.storage_bucket, storage_path: intent.storage_path,
+    signed_url: result.data?.signedUrl, upload_type: intent.upload_type, mime_type: intent.mime_type,
+    max_file_size: CLIENT_DEEP_CLEANING_MAX_BYTES};
 }
 
 function storageDirectoryAndName(path) {
@@ -569,106 +632,128 @@ export async function verifyClientDeepCleaningStorageObject(client, bucket, path
 
 export async function completeClientDeepCleaningUpload(client, profile, submissionId, payload = {}) {
   const submission = await loadOwnedSubmission(client, profile, submissionId);
-  const actor = assertRelianceRetailFo(profile);
-  if (!DRAFT_STATUSES.has(submission.status)) {
-    throw clientDeepCleaningError(409, 'submitted_record_locked', 'Uploads cannot be completed for a submitted Deep Cleaning record.');
+  if (submission.metadata?.contract_version !== CLEANING_CONTRACT) {
+    requireSupportedScheduledWrite(submission, payload);
+    const actor = assertRelianceRetailFo(profile);
+    if (!DRAFT_STATUSES.has(submission.status)) {
+      throw clientDeepCleaningError(409, 'submitted_record_locked', 'Uploads cannot be completed for a submitted Deep Cleaning record.');
+    }
+    const upload = validateUploadInput(payload);
+    const storageBucket = nullableText(payload.storage_bucket) || CLIENT_DEEP_CLEANING_BUCKET;
+    const storagePath = nullableText(payload.storage_path);
+    if (storageBucket !== CLIENT_DEEP_CLEANING_BUCKET || !storagePath) {
+      throw clientDeepCleaningError(400, 'invalid_storage_path', 'A valid Deep Cleaning storage path is required.');
+    }
+    const expectedPrefix = expectedStoragePrefix(submission);
+    if (!storagePath.startsWith(expectedPrefix)) {
+      throw clientDeepCleaningError(403, 'storage_path_forbidden', 'Storage path is outside this submission.');
+    }
+    const uploadId = nullableText(payload.upload_id);
+    if (!uploadId) {
+      throw clientDeepCleaningError(400, 'upload_id_required', 'Upload completion requires a server-issued upload ID.');
+    }
+    const { data: intent, error: intentError } = await client
+      .from('client_deep_cleaning_uploads')
+      .select(uploadSelect())
+      .eq('id', uploadId)
+      .eq('submission_id', submission.id)
+      .maybeSingle();
+    if (intentError) throw intentError;
+    if (!intent || intent.uploaded_by_user_id !== actor.userId) {
+      throw clientDeepCleaningError(404, 'upload_intent_not_found', 'Upload intent was not found for this submission.');
+    }
+    if (intent.upload_type !== upload.uploadType || intent.storage_bucket !== storageBucket || intent.storage_path !== storagePath) {
+      throw clientDeepCleaningError(409, 'upload_intent_mismatch', 'Upload completion does not match the issued upload intent.');
+    }
+    if (intent.mime_type !== upload.mimeType || Number(intent.file_size) !== upload.fileSize) {
+      throw clientDeepCleaningError(409, 'upload_intent_file_mismatch', 'Uploaded evidence metadata does not match the upload intent.');
+    }
+    if (intent.upload_status === 'uploaded') return intent;
+    await verifyClientDeepCleaningStorageObject(client, storageBucket, storagePath, upload.fileSize, upload.mimeType);
+    const { data, error } = await client
+      .from('client_deep_cleaning_uploads')
+      .update({
+        upload_status: 'uploaded',
+        uploaded_at: new Date().toISOString(),
+        metadata: {
+          ...(intent.metadata && typeof intent.metadata === 'object' ? intent.metadata : {}),
+          completed_at: new Date().toISOString(),
+          source: 'client_deep_cleaning_api_v1',
+        },
+      })
+      .eq('id', intent.id)
+      .eq('upload_status', 'pending')
+      .select(uploadSelect())
+      .maybeSingle();
+    if (error) throw error;
+    if(!data){
+      const replay=await client.from('client_deep_cleaning_uploads').select(uploadSelect()).eq('id',intent.id).eq('submission_id',submission.id).maybeSingle();
+      if(replay.error)throw replay.error;
+      if(replay.data?.upload_status==='uploaded' && replay.data.uploaded_by_user_id===actor.userId && replay.data.storage_path===storagePath) return replay.data;
+      throw clientDeepCleaningError(409,'upload_state_changed','Upload state changed. Refresh before retrying.');
+    }
+    return data;
   }
+  rejectScheduledWrite(payload, submission);
   const upload = validateUploadInput(payload);
-  const storageBucket = nullableText(payload.storage_bucket) || CLIENT_DEEP_CLEANING_BUCKET;
-  const storagePath = nullableText(payload.storage_path);
-  if (storageBucket !== CLIENT_DEEP_CLEANING_BUCKET || !storagePath) {
-    throw clientDeepCleaningError(400, 'invalid_storage_path', 'A valid Deep Cleaning storage path is required.');
-  }
-  const expectedPrefix = expectedStoragePrefix(submission);
-  if (!storagePath.startsWith(expectedPrefix)) {
-    throw clientDeepCleaningError(403, 'storage_path_forbidden', 'Storage path is outside this submission.');
-  }
-  const uploadId = nullableText(payload.upload_id);
-  if (!uploadId) {
-    throw clientDeepCleaningError(400, 'upload_id_required', 'Upload completion requires a server-issued upload ID.');
-  }
-  const { data: intent, error: intentError } = await client
-    .from('client_deep_cleaning_uploads')
-    .select(uploadSelect())
-    .eq('id', uploadId)
-    .eq('submission_id', submission.id)
-    .maybeSingle();
-  if (intentError) throw intentError;
-  if (!intent || intent.uploaded_by_user_id !== actor.userId) {
-    throw clientDeepCleaningError(404, 'upload_intent_not_found', 'Upload intent was not found for this submission.');
-  }
-  if (intent.upload_type !== upload.uploadType || intent.storage_bucket !== storageBucket || intent.storage_path !== storagePath) {
-    throw clientDeepCleaningError(409, 'upload_intent_mismatch', 'Upload completion does not match the issued upload intent.');
-  }
-  if (intent.mime_type !== upload.mimeType || Number(intent.file_size) !== upload.fileSize) {
-    throw clientDeepCleaningError(409, 'upload_intent_file_mismatch', 'Uploaded evidence metadata does not match the upload intent.');
-  }
-  if (intent.upload_status === 'uploaded') return intent;
-  await verifyClientDeepCleaningStorageObject(client, storageBucket, storagePath, upload.fileSize, upload.mimeType);
-  const { data, error } = await client
-    .from('client_deep_cleaning_uploads')
-    .update({
-      upload_status: 'uploaded',
-      uploaded_at: new Date().toISOString(),
-      metadata: {
-        ...(intent.metadata && typeof intent.metadata === 'object' ? intent.metadata : {}),
-        completed_at: new Date().toISOString(),
-        source: 'client_deep_cleaning_api_v1',
-      },
-    })
-    .eq('id', intent.id)
-    .eq('upload_status', 'pending')
-    .select(uploadSelect())
-    .maybeSingle();
-  if (error) throw error;
-  if(!data){
-    const replay=await client.from('client_deep_cleaning_uploads').select(uploadSelect()).eq('id',intent.id).eq('submission_id',submission.id).maybeSingle();
-    if(replay.error)throw replay.error;
-    if(replay.data?.upload_status==='uploaded' && replay.data.uploaded_by_user_id===actor.userId && replay.data.storage_path===storagePath) return replay.data;
-    throw clientDeepCleaningError(409,'upload_state_changed','Upload state changed. Refresh before retrying.');
-  }
-  return data;
+  // SQL locks the parent, verifies intent and Storage metadata, and replays the
+  // same completion atomically. Never mark evidence uploaded from client claims.
+  return cleaningCommand(client, profile, 'complete', {
+    submission_id: submission.id, upload_id: cleaningUuid(payload.upload_id, 'upload_id'),
+    upload_type: upload.uploadType, mime_type: upload.mimeType, file_size: upload.fileSize,
+    storage_bucket: payload.storage_bucket, storage_path: payload.storage_path,
+  });
 }
 
 export async function deleteClientDeepCleaningUpload(client, profile, submissionId, uploadId) {
   const submission = await loadOwnedSubmission(client, profile, submissionId);
-  if (!DRAFT_STATUSES.has(submission.status)) {
-    throw clientDeepCleaningError(409, 'submitted_record_locked', 'Submitted Deep Cleaning uploads cannot be deleted.');
+  if (submission.metadata?.contract_version !== CLEANING_CONTRACT) {
+    requireSupportedScheduledWrite(submission, {});
+    if (!DRAFT_STATUSES.has(submission.status)) {
+      throw clientDeepCleaningError(409, 'submitted_record_locked', 'Submitted Deep Cleaning uploads cannot be deleted.');
+    }
+    const { data: upload, error: loadError } = await client
+      .from('client_deep_cleaning_uploads')
+      .select(uploadSelect())
+      .eq('id', uploadId)
+      .eq('submission_id', submission.id)
+      .maybeSingle();
+    if (loadError) throw loadError;
+    const actor = assertRelianceRetailFo(profile);
+    if (!upload) {
+      const replay=await client.from('evidence_storage_retirements').select('*')
+        .eq('bucket',CLIENT_DEEP_CLEANING_BUCKET).eq('evidence_id',uploadId).eq('parent_id',submission.id).eq('owner_id',actor.userId).maybeSingle();
+      if(replay.error) throw replay.error;
+      if(!replay.data || !replay.data.path?.startsWith(expectedStoragePrefix(submission))) throw clientDeepCleaningError(404,'upload_not_found','Upload was not found.');
+      await removeRetiredEvidenceObject(client,{bucket:CLIENT_DEEP_CLEANING_BUCKET,path:replay.data.path,evidenceId:uploadId,parentId:submission.id,ownerId:actor.userId});
+      return {id:uploadId,storage_path:replay.data.path};
+    }
+    if (upload.uploaded_by_user_id !== actor.userId || upload.storage_bucket !== CLIENT_DEEP_CLEANING_BUCKET || !upload.storage_path?.startsWith(expectedStoragePrefix(submission))) {
+      throw clientDeepCleaningError(409,'invalid_storage_path','Owned server-issued evidence is required.');
+    }
+    // The database locks the parent and permanently retires the path atomically
+    // with this DELETE. Never remove Storage based on an earlier draft read.
+    const deleted = await client
+      .from('client_deep_cleaning_uploads')
+      .delete()
+      .eq('id', upload.id)
+      .eq('submission_id', submission.id)
+      .select(uploadSelect())
+      .maybeSingle();
+    if (deleted.error) throw deleted.error;
+    if (!deleted.data || deleted.data.storage_path !== upload.storage_path || deleted.data.storage_bucket !== upload.storage_bucket || deleted.data.uploaded_by_user_id !== actor.userId) {
+      throw clientDeepCleaningError(409,'evidence_delete_unconfirmed','Evidence deletion was not confirmed. Storage retained.');
+    }
+    await removeRetiredEvidenceObject(client,{bucket:upload.storage_bucket,path:upload.storage_path,evidenceId:upload.id,parentId:submission.id,ownerId:actor.userId});
+    return { id: upload.id, storage_path: upload.storage_path };
   }
-  const { data: upload, error: loadError } = await client
-    .from('client_deep_cleaning_uploads')
-    .select(uploadSelect())
-    .eq('id', uploadId)
-    .eq('submission_id', submission.id)
-    .maybeSingle();
-  if (loadError) throw loadError;
-  const actor = assertRelianceRetailFo(profile);
-  if (!upload) {
-    const replay=await client.from('evidence_storage_retirements').select('*')
-      .eq('bucket',CLIENT_DEEP_CLEANING_BUCKET).eq('evidence_id',uploadId).eq('parent_id',submission.id).eq('owner_id',actor.userId).maybeSingle();
-    if(replay.error) throw replay.error;
-    if(!replay.data || !replay.data.path?.startsWith(expectedStoragePrefix(submission))) throw clientDeepCleaningError(404,'upload_not_found','Upload was not found.');
-    await removeRetiredEvidenceObject(client,{bucket:CLIENT_DEEP_CLEANING_BUCKET,path:replay.data.path,evidenceId:uploadId,parentId:submission.id,ownerId:actor.userId});
-    return {id:uploadId,storage_path:replay.data.path};
-  }
-  if (upload.uploaded_by_user_id !== actor.userId || upload.storage_bucket !== CLIENT_DEEP_CLEANING_BUCKET || !upload.storage_path?.startsWith(expectedStoragePrefix(submission))) {
-    throw clientDeepCleaningError(409,'invalid_storage_path','Owned server-issued evidence is required.');
-  }
-  // The database locks the parent and permanently retires the path atomically
-  // with this DELETE. Never remove Storage based on an earlier draft read.
-  const deleted = await client
-    .from('client_deep_cleaning_uploads')
-    .delete()
-    .eq('id', upload.id)
-    .eq('submission_id', submission.id)
-    .select(uploadSelect())
-    .maybeSingle();
-  if (deleted.error) throw deleted.error;
-  if (!deleted.data || deleted.data.storage_path !== upload.storage_path || deleted.data.storage_bucket !== upload.storage_bucket || deleted.data.uploaded_by_user_id !== actor.userId) {
-    throw clientDeepCleaningError(409,'evidence_delete_unconfirmed','Evidence deletion was not confirmed. Storage retained.');
-  }
-  await removeRetiredEvidenceObject(client,{bucket:upload.storage_bucket,path:upload.storage_path,evidenceId:upload.id,parentId:submission.id,ownerId:actor.userId});
-  return { id: upload.id, storage_path: upload.storage_path };
+  rejectScheduledWrite({}, submission);
+  const retired = await cleaningCommand(client, profile, 'retire', {
+    submission_id: submission.id, upload_id: cleaningUuid(uploadId, 'upload_id'),
+  });
+  await removeRetiredEvidenceObject(client, {bucket: retired.storage_bucket, path: retired.storage_path,
+    evidenceId: uploadId, parentId: submission.id, ownerId: profile.auth_user_id});
+  return {id: uploadId, storage_path: retired.storage_path};
 }
 
 export async function createClientDeepCleaningUploadViewUrl(client, profile, submissionId, uploadId) {
@@ -712,69 +797,53 @@ export async function createClientDeepCleaningUploadViewUrl(client, profile, sub
 
 export async function submitClientDeepCleaningSubmission(client, profile, submissionId, payload = {}) {
   const submission = await loadOwnedSubmission(client, profile, submissionId, { includeUploads: true });
-  if (submission.schedule_id) {
-    const outcome = payload.outcome === 'NotDone' ? 'Not Done' : payload.outcome;
-    if (!['Completed', 'Not Done'].includes(outcome)) throw clientDeepCleaningError(400, 'invalid_outcome', 'Select Done or Not Done.');
-    const reason = nullableText(payload.not_done_reason);
-    if (outcome === 'Not Done' && !reason) throw clientDeepCleaningError(400, 'not_done_reason_required', 'A reason is required when cleaning is Not Done.');
-    if (submission.status === 'submitted') {
-      if (submission.final_outcome !== outcome) throw clientDeepCleaningError(409, 'outcome_already_saved', 'The saved outcome cannot be changed.');
-      return submission;
+  if (submission.metadata?.contract_version !== CLEANING_CONTRACT) {
+    requireSupportedScheduledWrite(submission, payload);
+    if (submission.schedule_id) {
+      const outcome = payload.outcome === 'NotDone' ? 'Not Done' : payload.outcome;
+      if (!['Completed', 'Not Done'].includes(outcome)) throw clientDeepCleaningError(400, 'invalid_outcome', 'Select Done or Not Done.');
+      const reason = nullableText(payload.not_done_reason);
+      if (outcome === 'Not Done' && !reason) throw clientDeepCleaningError(400, 'not_done_reason_required', 'A reason is required when cleaning is Not Done.');
+      if (submission.status === 'submitted') {
+        if (submission.final_outcome !== outcome) throw clientDeepCleaningError(409, 'outcome_already_saved', 'The saved outcome cannot be changed.');
+        return submission;
+      }
+      if (outcome === 'Completed') {
+        assertScheduledCleaningEvidence(submission);
+        await Promise.all(submission.uploads.filter(u => u.upload_status === 'uploaded').map(u => verifyClientDeepCleaningStorageObject(client, u.storage_bucket, u.storage_path, Number(u.file_size), u.mime_type)));
+      }
+      const saved = await scheduledCleaningCommand(client, profile, 'finalize', {
+        submission_id: submission.id, outcome, not_done_reason: outcome === 'Not Done' ? reason : null,
+      });
+      return { ...saved, uploads: submission.uploads };
     }
-    if (outcome === 'Completed') {
-      assertScheduledCleaningEvidence(submission);
-      await Promise.all(submission.uploads.filter(u => u.upload_status === 'uploaded').map(u => verifyClientDeepCleaningStorageObject(client, u.storage_bucket, u.storage_path, Number(u.file_size), u.mime_type)));
+  }
+  rejectScheduledWrite(payload, submission);
+  if (submission.final_outcome === 'Not Done') {
+    throw clientDeepCleaningError(409, 'cleaning_upgrade_required', 'Not Done is not actual completed work.');
+  }
+  // SQL replays submitted independent records without changing their timestamp.
+  if (submission.status !== 'submitted') {
+    actualCleaningDate(submission.deep_cleaning_date);
+    const store = await loadRelianceRetailStore(client, profile, submission.store_code);
+    if (store.id !== submission.retail_store_id) throw clientDeepCleaningError(403, 'store_not_authorized', 'Store identity changed.');
+    for (const upload of submission.uploads) {
+      validateUploadInput(upload);
+      if (upload.uploaded_by_user_id !== profile.auth_user_id || upload.storage_bucket !== CLIENT_DEEP_CLEANING_BUCKET ||
+          !upload.storage_path?.startsWith(expectedStoragePrefix(submission))) {
+        throw clientDeepCleaningError(403, 'evidence_not_authorized', 'Owned server-issued evidence is required.');
+      }
     }
-    const saved = await scheduledCleaningCommand(client, profile, 'finalize', {
-      submission_id: submission.id, outcome, not_done_reason: outcome === 'Not Done' ? reason : null,
-    });
-    return { ...saved, uploads: submission.uploads };
+    assertCompleteComparisonPairs({...submission, metadata: {...submission.metadata, evidence_format: 'paired_v1'}}, submission.uploads);
+    assertScheduledCleaningEvidence(submission);
+    await Promise.all(submission.uploads.map(upload => verifyClientDeepCleaningStorageObject(
+      client, upload.storage_bucket, upload.storage_path, Number(upload.file_size), upload.mime_type)));
   }
-  if (submission.status === 'submitted') return submission;
-  if (!DRAFT_STATUSES.has(submission.status)) {
-    throw clientDeepCleaningError(409, 'invalid_status', 'Deep Cleaning submission cannot be submitted from its current status.');
+  const saved = await cleaningCommand(client, profile, 'finalize', {submission_id: submission.id});
+  if (saved.deep_cleaning_date !== submission.deep_cleaning_date || saved.status !== 'submitted' || !saved.submitted_at) {
+    throw clientDeepCleaningError(503, 'cleaning_contract_unavailable', 'Finalization contract did not preserve the actual date. Refresh this report.');
   }
-  const authorizedStore = await loadRelianceRetailStore(client, profile, submission.store_code);
-  if (authorizedStore.id !== submission.retail_store_id) {
-    throw clientDeepCleaningError(403, 'store_authorization_changed', 'The selected store is no longer authorized for this account.');
-  }
-  if (!submission.deep_cleaning_date) {
-    throw clientDeepCleaningError(400, 'deep_cleaning_date_required', 'Deep Cleaning date is required before submit.');
-  }
-  const completedUploads = submission.uploads.filter((upload) => upload.upload_status === 'uploaded');
-  assertCompleteComparisonPairs(submission, completedUploads);
-  const beforeCount = completedUploads.filter((upload) => upload.upload_type === 'before').length;
-  const afterCount = completedUploads.filter((upload) => upload.upload_type === 'after').length;
-  if (beforeCount < 1) {
-    throw clientDeepCleaningError(400, 'before_upload_required', 'At least one before image is required.');
-  }
-  if (afterCount < 1) {
-    throw clientDeepCleaningError(400, 'after_upload_required', 'At least one after image is required.');
-  }
-  const documents = completedUploads.filter(u => ['checklist', 'document'].includes(u.upload_type));
-  if (documents.length !== 1) throw clientDeepCleaningError(400, 'single_supporting_document_required', 'Exactly one supporting image or PDF is required.');
-  await Promise.all(
-    completedUploads.map((upload) => verifyClientDeepCleaningStorageObject(
-      client,
-      upload.storage_bucket,
-      upload.storage_path,
-      Number(upload.file_size),
-      upload.mime_type,
-    )),
-  );
-  const { data, error } = await client
-    .from('client_deep_cleaning_submissions')
-    .update({
-      status: 'submitted',
-      submitted_at: new Date().toISOString(),
-    })
-    .eq('id', submission.id)
-    .eq('submitted_by_user_id', submission.submitted_by_user_id)
-    .in('status', [...DRAFT_STATUSES])
-    .select(submissionSelect())
-    .single();
-  if (error) throw error;
-  return { ...data, uploads: submission.uploads };
+  return {...saved, uploads: submission.uploads};
 }
 
 // Application boundary defense; the pending SQL patch adds the same document
