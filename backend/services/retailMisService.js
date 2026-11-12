@@ -7,10 +7,25 @@ export async function retailMisAccess(client,profile,authUser){
  if(!profile?.id||!authUser?.id||profile.auth_user_id!==authUser.id)throw Object.assign(Error('Verified account required.'),{statusCode:401});
  return misRpc(client,'rpc_retail_mis_access',{p_actor:profile.id,p_auth:authUser.id});
 }
+export async function signMisTrainingEvidence(client,profile,access,module,sessionId,evidenceId){
+ assertRetailMis(access,module);
+ if(!['training-hk','training-mepc'].includes(module))throw Object.assign(Error('Training module required.'),{statusCode:403});
+ const meta=await misRpc(client,'rpc_retail_mis_training_evidence_v4',{p_actor:profile.id,p_auth:profile.auth_user_id,p_category:module==='training-hk'?'hk':'technical_mep',p_session:sessionId,p_evidence:evidenceId});
+ if(meta?.bucket!=='training-evidence'||!meta.path?.startsWith(`training/${sessionId}/${evidenceId}/`)||/[\\?#]|\.\./.test(meta.path))throw Object.assign(Error('Private evidence metadata invalid.'),{statusCode:403});
+ const result=await client.storage.from('training-evidence').createSignedUrl(meta.path,120);
+ if(result.error||!result.data?.signedUrl?.startsWith('https://'))throw Object.assign(Error('Private evidence unavailable.'),{statusCode:503});
+ return {url:result.data.signedUrl,expires_in:120};
+}
 export async function retailMisReport(client,profile,access,module,input={}){
  assertRetailMis(access,module);const today=new Date(Date.now()+330*60000).toISOString().slice(0,10),to=input.to||today,from=input.from||to.slice(0,7)+'-01';
  if(module.startsWith('attendance-')&&from!==to.slice(0,7)+'-01')throw Object.assign(Error('Attendance targets require a month-start to cutoff reporting period.'),{statusCode:400});
+ if(['training-hk','training-mepc'].includes(module))return misRpc(client,'rpc_retail_mis_training_v4',{p_actor:profile.id,p_auth:profile.auth_user_id,p_category:module==='training-hk'?'hk':'technical_mep',p_from:from,p_to:to,p_state:input.state||null});
  const result=await misRpc(client,'rpc_retail_mis_report',{p_actor:profile.id,p_module:module,p_from:from,p_to:to,p_state:input.state||null});
+ if(module==='dashboard'){
+  const reports=await Promise.all(['hk','technical_mep'].map(category=>misRpc(client,'rpc_retail_mis_training_v4',{p_actor:profile.id,p_auth:profile.auth_user_id,p_category:category,p_from:from,p_to:to,p_state:input.state||null})));
+  const hk=reports[0].counts.completed_sessions,mepc=reports[1].counts.completed_sessions;
+  result.rows=(result.rows||[{}]).map(row=>({...row,existing_training_sessions:hk+mepc,hk_training_completed:hk,mepc_training_completed:mepc}));
+ }
  if(module.startsWith('attendance-')){const kind=module==='attendance-hk'?'HK':'MEPC';result.summary=summarizeAttendance({stores:result.stores,attendance:result.rows,aop:result.aop.map(a=>({...a,hk_count:kind==='HK'?a.hk_count:0,mepc_count:kind==='MEPC'?a.mepc_count:0,aop_class:null})),cutoff:to});}
  return result;
 }

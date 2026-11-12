@@ -45,7 +45,7 @@ function contextTables(overrides = {}) {
     }],
     fo_site_visits: [{
       id: 'visit-1', attendance_id: 'attendance-1', employee_code: 'FO001', store_id: 'store-1',
-      check_out_time: null, checkout_time: null, ...overrides.visit,
+      check_in_time: '2026-10-20T03:00:00Z', check_out_time: null, checkout_time: null, ...overrides.visit,
     }],
     store_master: [{
       id: 'store-1', status: 'Active', business: 'Reliance Retail', client_name: 'Reliance Retail', state: 'KA',
@@ -63,38 +63,13 @@ test('Reliance FO create authorization is allowed despite designation mismatch',
   assert.equal(assertTrainingActor(baseProfile, { mutation: true }).id, 'profile-1');
 });
 
-test('Reliance Operations Manager create authorization is allowed', () => {
-  assert.equal(assertTrainingActor({ ...baseProfile, role: 'Operations Manager' }, { mutation: true }).id, 'profile-1');
-});
-
-test('Admin mutation authorization is allowed only with authoritative Reliance context checks', async () => {
-  const admin = { ...baseProfile, role: 'Admin', business: 'QPMS' };
-  assert.equal(assertTrainingActor(admin, { mutation: true }).id, 'profile-1');
-  const result = await loadTrainingCreateContext(fakeClient(contextTables()), admin, {
-    attendance_id: 'attendance-1', site_visit_id: 'visit-1',
+for (const role of ['Admin']) {
+  test(role + ' has read-only access and cannot mutate Training', () => {
+    assert.throws(() => assertTrainingActor({ ...baseProfile, role }, { mutation: true }), { code: 'forbidden_role' });
   });
-  assert.equal(result.store.id, 'store-1');
-});
+}
 
-test('Admin cannot create against a verified non-Reliance store', async () => {
-  const admin = { ...baseProfile, role: 'Admin', business: 'QPMS' };
-  await assert.rejects(() => loadTrainingCreateContext(fakeClient(contextTables({
-    store: { business: 'Other', client_name: 'Other' },
-  })), admin, {
-    attendance_id: 'attendance-1', site_visit_id: 'visit-1',
-  }), { code: 'non_reliance_store' });
-});
-
-test('Admin still requires its own valid attendance and site visit', async () => {
-  const admin = { ...baseProfile, role: 'Admin', business: 'QPMS' };
-  await assert.rejects(() => loadTrainingCreateContext(fakeClient(contextTables({
-    attendance: { employee_code: 'OTHER' },
-  })), admin, {
-    attendance_id: 'attendance-1', site_visit_id: 'visit-1',
-  }), { code: 'attendance_forbidden' });
-});
-
-for (const role of ['Branch Head', 'KAM', 'Management', 'Executive Assistant']) {
+for (const role of ['Management', 'Executive Assistant']) {
   test(`${role} cannot create structured Training`, () => {
     assert.throws(() => assertTrainingActor({ ...baseProfile, role }, { mutation: true }), { code: 'forbidden_role' });
   });
@@ -112,15 +87,14 @@ test('verified current attendance and site visit context passes', async () => {
   const result = await loadTrainingCreateContext(fakeClient(contextTables()), baseProfile, {
     attendance_id: 'attendance-1', site_visit_id: 'visit-1', business: 'fake Reliance text',
   });
-  assert.equal(result.store.id, 'store-1');
+  assert.equal(result.visit.id, 'visit-1');
 });
 
-test('client-supplied Reliance text cannot bypass a non-Reliance verified store', async () => {
-  await assert.rejects(() => loadTrainingCreateContext(fakeClient(contextTables({
-    store: { business: 'Other', client_name: 'Other' },
-  })), baseProfile, {
-    attendance_id: 'attendance-1', site_visit_id: 'visit-1', business: 'Reliance Retail',
-  }), { code: 'non_reliance_store' });
+test('Check-In authorizes independently of store source, assignment or checked-in business', async () => {
+  const tables = contextTables({ visit: { store_id: null, retail_store_id: 'checked-in-other-store' } });
+  const result = await loadTrainingCreateContext(fakeClient(tables), baseProfile, { attendance_id: 'attendance-1', site_visit_id: 'visit-1' });
+  assert.equal(result.visit.retail_store_id, 'checked-in-other-store');
+  assert.equal(result.store, undefined);
 });
 
 test('invalid attendance is denied', async () => {
@@ -141,10 +115,9 @@ test('historical checked-out visit cannot create a new session', async () => {
   })), baseProfile, { attendance_id: 'attendance-1', site_visit_id: 'visit-1' }), { code: 'site_visit_not_active' });
 });
 
-test('cross-state create is denied', async () => {
-  await assert.rejects(() => loadTrainingCreateContext(fakeClient(contextTables({
-    store: { state: 'TN' },
-  })), baseProfile, { attendance_id: 'attendance-1', site_visit_id: 'visit-1' }), { code: 'cross_state_forbidden' });
+test('Check-In store state does not select or authorize the independent Training store', async () => {
+  const result = await loadTrainingCreateContext(fakeClient(contextTables({ store: { state: 'TN' } })), baseProfile, { attendance_id: 'attendance-1', site_visit_id: 'visit-1' });
+  assert.equal(result.visit.id, 'visit-1');
 });
 
 const validEvidence = { evidence_type: 'topic_photo', training_session_topic_id: 'topic-1', file_name: 'photo.jpg', mime_type: 'image/jpeg', file_size: 1024 };

@@ -1,5 +1,5 @@
 import express from 'express';
-import {closeEvidenceMutationRoutes} from '../services/compatibilityAdmission.js';
+import {gateCombinedMutationRoutes} from '../services/combinedReleaseGate.js';
 import * as defaultTrainingService from '../services/trainingService.js';
 import * as defaultEvidenceService from '../services/trainingEvidenceService.js';
 import { safeTrainingError } from '../services/trainingAccessService.js';
@@ -23,7 +23,7 @@ export function createTrainingRouter({
   if (typeof requireAuth !== 'function') throw new Error('createTrainingRouter requires requireAuth middleware.');
   if (typeof getClient !== 'function') throw new Error('createTrainingRouter requires getClient.');
   const router = express.Router();
-  closeEvidenceMutationRoutes(router);
+  gateCombinedMutationRoutes(router,{getClient});
   router.use(requireAuth);
   router.use((request, response, next) => {
     if (isRetailHkTrainingReader(request.profile) && (!['GET', 'HEAD'].includes(request.method)
