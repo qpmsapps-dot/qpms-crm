@@ -58,7 +58,10 @@ export default function RetailDashboard() {
     queueMicrotask(() => { if (live) { setError(''); setPreviousError(''); setLoaded(null); } });
     if (!to) { queueMicrotask(() => { if (live) setError('Upcoming reporting period.'); }); return () => { live = false; controller.abort(); }; }
     const prior = previousPeriod(period.start, to);
-    const request = params => authenticatedApiRequest({ url: '/api/reliance-retail/module-reports/dashboard', params, signal: controller.signal }).then(r => {
+    const request = params => Promise.resolve().then(() => {
+      if(!live)throw new DOMException('Cancelled report request','AbortError');
+      return authenticatedApiRequest({ url: '/api/reliance-retail/module-reports/dashboard', params, signal: controller.signal });
+    }).then(r => {
       const report = r.data?.report;
       if (!Array.isArray(report?.stores) || !report.modules || report.from !== params.from || report.to !== params.to) throw Error('Report identity or authorized Store Master inventory is incomplete.');
       return report;

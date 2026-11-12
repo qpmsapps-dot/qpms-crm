@@ -79,11 +79,16 @@ export default function RetailScopedDeepCleaning() {
     [evidence, setEvidence] = useState(null),
     [evidenceBusy, setEvidenceBusy] = useState(false);
   const evidenceRequest = useRef(0);
+  const evidenceFlight = useRef(null);
   const invalidateEvidence = useCallback(() => {
     evidenceRequest.current++;
+    evidenceFlight.current?.controller.abort();
+    evidenceFlight.current=null;
   }, []);
   const clearEvidence = useCallback(() => {
     evidenceRequest.current++;
+    evidenceFlight.current?.controller.abort();
+    evidenceFlight.current=null;
     setEvidence(null);
     setSelected(null);
     setEvidenceError('');
@@ -96,6 +101,7 @@ export default function RetailScopedDeepCleaning() {
   }
   useEffect(() => {
     let live = true;
+    const controller = new AbortController();
     invalidateEvidence();
     queueMicrotask(() => {
       if (live) {
@@ -108,15 +114,16 @@ export default function RetailScopedDeepCleaning() {
         setEvidenceBusy(false);
       }
     });
-    authenticatedApiRequest({
+    Promise.resolve().then(() => live ? authenticatedApiRequest({
       url: '/api/reliance-retail/module-reports/deep-cleaning',
+      signal: controller.signal,
       params: {
         from,
         to,
         state,
         store
       }
-    }).then(r => {
+    }) : null).then(r => {
       if (live) setReport(r.data.report);
     }).catch(e => {
       if (live) setError(e.response?.data?.message || e.message);
@@ -125,10 +132,16 @@ export default function RetailScopedDeepCleaning() {
     });
     return () => {
       live = false;
+      controller.abort();
       invalidateEvidence();
     };
   }, [from, to, state, store, refresh, invalidateEvidence]);
   async function inspect(id, record) {
+    const key=JSON.stringify([id,from,to,state,store]);
+    if(evidenceFlight.current?.key===key)return;
+    evidenceFlight.current?.controller.abort();
+    const controller=new AbortController();
+    evidenceFlight.current={key,controller};
     const request = ++evidenceRequest.current;
     setSelected(record || view.work.find(row => row.id === id) || {
       id
@@ -139,6 +152,7 @@ export default function RetailScopedDeepCleaning() {
     try {
       const result = await authenticatedApiRequest({
         url: `/api/reliance-retail/module-reports/deep-cleaning/${encodeURIComponent(id)}/evidence`,
+        signal: controller.signal,
         params: {
           from,
           to,
@@ -150,6 +164,7 @@ export default function RetailScopedDeepCleaning() {
     } catch (e) {
       if (request === evidenceRequest.current) setEvidenceError(e.response?.data?.message || e.message);
     } finally {
+      if(evidenceFlight.current?.controller===controller)evidenceFlight.current=null;
       if (request === evidenceRequest.current) setEvidenceBusy(false);
     }
   }

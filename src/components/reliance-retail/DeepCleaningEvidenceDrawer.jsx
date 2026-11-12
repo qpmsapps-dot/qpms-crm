@@ -18,7 +18,7 @@ function Photo({
   onPreview
 }) {
   const [state, setState] = useState('loading');
-  return <button className="dc-photo" aria-label={'Preview ' + item.name} onClick={() => onPreview(item)} disabled={state === 'failed'}>{state !== 'ready' && <span>{state === 'failed' ? 'Image unavailable' : 'Loading image...'}</span>}<img src={item.url} alt={item.type + ' - ' + item.name} onLoad={() => setState('ready')} onError={() => setState('failed')} style={{
+  return <button className="dc-photo" aria-label={'Preview ' + item.name} onClick={() => onPreview(item)} disabled={state === 'failed'}>{state !== 'ready' && <span>{state === 'failed' ? 'Image unavailable' : 'Loading image...'}</span>}<img loading="lazy" decoding="async" src={item.url} alt={item.type + ' - ' + item.name} onLoad={() => setState('ready')} onError={() => setState('failed')} style={{
       visibility: state === 'ready' ? 'visible' : 'hidden'
     }} referrerPolicy="no-referrer" /><Expand size={14} className="dc-expand" /></button>;
 }

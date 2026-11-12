@@ -1,7 +1,22 @@
 const fail=(statusCode,message)=>Object.assign(Error(message),{statusCode});
+export async function reportRead(operation,work){
+ const start=performance.now();
+ try{return await work();}catch(error){
+  error.reportOperation ||= operation;
+  error.reportDurationMs ??= Math.round(performance.now()-start);
+  throw error;
+ }
+}
+export async function boundedCleaningReads(rows,work){
+ const result=new Array(rows.length);let next=0;
+ await Promise.all(Array.from({length:Math.min(4,rows.length)},async()=>{
+  for(;;){const index=next++;if(index>=rows.length)return;result[index]=await work(rows[index],index);}
+ }));
+ return result;
+}
 export async function linkedFoCleaningSource(client,profile,scheduleId){
  const {data,error}=await client.rpc('rpc_retail_cleaning_link_source',{p_actor:profile.id,p_schedule:scheduleId});
- if(error){if(error.code==='42501')throw fail(403,'Outside authorized cleaning scope.');throw fail(503,'Verified FO completion evidence is unavailable.');}return data;
+ if(error){if(error.code==='42501')throw Object.assign(fail(403,'Outside authorized cleaning scope.'),{code:error.code});throw Object.assign(fail(503,'Verified FO completion evidence is unavailable.'),{code:error.code});}return data;
 }
 export async function linkFoCleaning(client,profile,scheduleId,input){
  if(!['ADMIN','QPMSADMIN'].includes(String(profile.role||'').toUpperCase().replace(/[^A-Z0-9]/g,''))||profile.is_active!==true)throw fail(403,'Existing active Admin required to confirm linkage.');
@@ -19,7 +34,7 @@ export async function signVerifiedFoCleaningSource(client,source,expires=600){
  const info=await client.storage.getBucket(bucket);if(info.error||info.data?.public!==false)throw fail(503,'Legacy evidence bucket must be private before report links are issued.');
  const prefix=`${source.employee_code}/${source.deep_cleaning_date}/deep_cleaning/${source.id.slice(3)}/`,uploads=source.uploads||[];
  if(uploads.length>100)throw fail(413,'Too many evidence objects.');
- for(const row of uploads){
+ await boundedCleaningReads(uploads,async row=>{
   const path=String(row.file_url||'').replace(/^fo-activity-uploads\//,'');
   if(row.storage_bucket!==bucket||!path.startsWith(prefix)||path.split('/').some(p=>['.','..'].includes(p)||p.includes('\\'))||!['image/jpeg','image/png','image/webp'].includes(row.file_type))throw fail(409,'Evidence path is outside this verified submission.');
   // Keep the dedicated Deep Cleaning verifier restricted to its own bucket.
@@ -29,6 +44,6 @@ export async function signVerifiedFoCleaningSource(client,source,expires=600){
   const object=(result.data||[]).find(item=>item.name===name);
   const size=Number(object?.size??object?.metadata?.size??object?.metadata?.contentLength);
   if(!object||!Number.isFinite(size)||size!==Number(row.file_size))throw fail(409,'Stored evidence is missing or its size no longer matches.');
- }
- return Promise.all(uploads.map(async row=>{const path=row.file_url.slice(bucket.length+1),signed=await client.storage.from(bucket).createSignedUrl(path,expires);if(signed.error)throw signed.error;return {id:row.id,type:row.upload_role==='deep_cleaning_before'?'before':'after',name:row.file_name,mime_type:row.file_type,url:signed.data.signedUrl};}));
+ });
+ return boundedCleaningReads(uploads,async row=>{const path=row.file_url.slice(bucket.length+1),signed=await client.storage.from(bucket).createSignedUrl(path,expires);if(signed.error)throw signed.error;return {id:row.id,type:row.upload_role==='deep_cleaning_before'?'before':'after',name:row.file_name,mime_type:row.file_type,url:signed.data.signedUrl};});
 }
