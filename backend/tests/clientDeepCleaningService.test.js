@@ -2,13 +2,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import test from 'node:test';
+import { randomUUID } from 'node:crypto';
 import express from 'express';
 import { createClientDeepCleaningRouter } from '../routes/clientDeepCleaningRoutes.js';
 import {
   CLIENT_DEEP_CLEANING_BUSINESS,
   completeClientDeepCleaningUpload,
-  createClientDeepCleaningSubmission,
-  createClientDeepCleaningUploadUrl,
+  createClientDeepCleaningSubmission as createSubmission,
+  createClientDeepCleaningUploadUrl as issueUpload,
   createClientDeepCleaningUploadViewUrl,
   deleteClientDeepCleaningUpload,
   listClientDeepCleaningSubmissions,
@@ -19,6 +20,20 @@ import {
   updateClientDeepCleaningDraft,
   validateUploadInput,
 } from '../services/clientDeepCleaningService.js';
+import { CLEANING_CONTRACT, CLEANING_RPC } from '../services/deepCleaningIndependentContract.js';
+
+// Current independent clients supply stable request and comparison identities.
+// Raw adapter calls below still test that missing identities fail closed.
+function createClientDeepCleaningSubmission(db, profile, payload) {
+  return createSubmission(db, profile, { request_id: randomUUID(), deep_cleaning_date: '2026-09-01', evidence_format: 'paired_v1', ...payload });
+}
+function createClientDeepCleaningUploadUrl(db, profile, submissionId, payload) {
+  db.pairs ||= new Map();
+  if (!db.pairs.has(submissionId)) db.pairs.set(submissionId, randomUUID());
+  return issueUpload(db, profile, submissionId, {
+    request_id: randomUUID(), pair_id: db.pairs.get(submissionId), pair_order: 1, ...payload,
+  });
+}
 
 const FO_PROFILE = {
   id: 'profile-1',
@@ -191,6 +206,9 @@ class Query {
   }
 
   async execute() {
+    if (this._operation !== 'select' && ['client_deep_cleaning_submissions', 'client_deep_cleaning_uploads'].includes(this.table)) {
+      throw Error('Independent writes must use the versioned RPC; direct-table fallback is forbidden');
+    }
     // Existing submission tests use a fixed current zone projection. Temporal
     // Store/Zone/FO behavior is exercised against actual PostgreSQL separately.
     const rows = this.db.tables[this.table === 'reliance_retail_store_operational_ownership' ? 'reliance_retail_store_master' : this.table];
@@ -244,9 +262,63 @@ class Query {
 }
 
 class FakeSupabase {
-  async rpc(name) {
+  // Receipt simulation for adapter tests, not proof of installed SQL/locks/RLS.
+  async rpc(name, args) {
+    this.rpcCalls ||= [];
+    this.rpcCalls.push({ name, args: clone(args) });
     if(name==='rpc_combined_release_begin'||name==='rpc_combined_release_end')return {data:null};
-    throw Error('Unexpected RPC '+name);
+    assert.equal(name, CLEANING_RPC, 'Only the installed independent writer contract is mocked');
+    const profile = [FO_PROFILE, OTHER_FO_PROFILE].find(row => row.id === args.p_actor);
+    assert.equal(args.p_auth, profile?.auth_user_id);
+    const data = args.p_data;
+    const submissions = this.tables.client_deep_cleaning_submissions;
+    const uploads = this.tables.client_deep_cleaning_uploads;
+    let record = submissions.find(row => row.id === data.submission_id);
+    if (args.p_action === 'begin') {
+      record = submissions.find(row => row.request_id === data.request_id);
+      if (!record) {
+        const store = this.tables.reliance_retail_store_master.find(row => row.id === data.retail_store_id);
+        record = { id: randomUUID(), ...clone(data), business: CLIENT_DEEP_CLEANING_BUSINESS,
+          store_id: null, store_name: store.store_name, state: store.state, city: store.city,
+          store_format: store.store_format, performed_by_type: 'vendor', status: 'draft',
+          submitted_by_user_id: profile.auth_user_id, submitted_by_employee_code: profile.employee_code,
+          metadata: { contract_version: CLEANING_CONTRACT, evidence_format: 'paired_v1' } };
+        submissions.push(record);
+      }
+    } else {
+      if (!record || record.submitted_by_user_id !== profile.auth_user_id) return { error: { code: '42501' } };
+      if (record.status === 'submitted' && args.p_action !== 'finalize') return { error: { code: '40001' } };
+      if (args.p_action === 'intent') {
+        record.status = 'uploading';
+        let intent = uploads.find(row => row.metadata.request_id === data.request_id);
+        if (!intent) {
+          intent = { id: randomUUID(), ...clone(data), storage_bucket: 'client-deep-cleaning-uploads',
+            uploaded_by_user_id: profile.auth_user_id, upload_status: 'pending', sequence_no: uploads.length + 1,
+            metadata: { contract_version: CLEANING_CONTRACT, request_id: data.request_id,
+              ...(['before', 'after'].includes(data.upload_type) ? { pair_id: data.pair_id, pair_order: data.pair_order } : {}) } };
+          uploads.push(intent);
+        }
+        record = intent;
+      } else if (args.p_action === 'complete') {
+        const intent = uploads.find(row => row.id === data.upload_id && row.submission_id === record.id);
+        if (!intent || ['storage_path', 'storage_bucket', 'upload_type', 'mime_type', 'file_size'].some(key => intent[key] !== data[key])) return { error: { code: '42501' } };
+        const object = (this.storageObjects.get(intent.storage_bucket) || []).find(row => row.path === intent.storage_path);
+        if (!object || object.size !== intent.file_size) return { error: { code: 'P0002' } };
+        intent.upload_status = 'uploaded'; intent.uploaded_at ||= new Date().toISOString(); record = intent;
+      } else if (args.p_action === 'update') {
+        for (const key of ['deep_cleaning_date', 'vendor_name', 'remarks']) if (Object.hasOwn(data, key)) record[key] = data[key];
+      } else if (args.p_action === 'finalize') {
+        record.status = 'submitted'; record.submitted_at ||= new Date().toISOString(); record.final_outcome = 'Completed';
+      } else if (args.p_action === 'retire') {
+        const index = uploads.findIndex(row => row.id === data.upload_id && row.submission_id === record.id);
+        if (index < 0) return { error: { code: '42501' } };
+        record = uploads.splice(index, 1)[0];
+        this.tables.evidence_storage_retirements ||= [];
+        this.tables.evidence_storage_retirements.push({ bucket: record.storage_bucket, path: record.storage_path,
+          evidence_id: record.id, parent_id: record.submission_id, owner_id: profile.auth_user_id });
+      } else throw Error('Unexpected independent action ' + args.p_action);
+    }
+    return { data: { contract_version: CLEANING_CONTRACT, record: clone(record) }, error: null };
   }
   constructor(seed = {}) {
     this.tables = Object.fromEntries(TABLES.map((table) => [table, clone(seed[table] || [])]));
@@ -416,6 +488,29 @@ test('Reliance Retail FO can create draft and forged trusted fields are ignored'
   assert.equal(row.store_format, 'Smart');
   assert.equal(row.attendance_id, undefined);
   assert.equal(row.site_visit_id, undefined);
+  assert.equal(row.metadata.contract_version, CLEANING_CONTRACT);
+  const begin = db.rpcCalls.find(call => call.name === CLEANING_RPC);
+  assert.equal(begin.args.p_action, 'begin');
+  assert.equal(begin.args.p_auth, FO_PROFILE.auth_user_id);
+  assert.equal(begin.args.p_data.business, undefined);
+});
+
+test('independent creation rejects missing UUID/date without invoking writer or direct fallback', async () => {
+  const db = client();
+  await assert.rejects(() => createSubmission(db, FO_PROFILE, { store_code: 'RR001', deep_cleaning_date: '2026-09-01' }), error => error.code === 'request_id_required');
+  await assert.rejects(() => createSubmission(db, FO_PROFILE, { store_code: 'RR001', request_id: randomUUID() }), error => error.code === 'invalid_deep_cleaning_date');
+  assert.equal(db.rpcCalls?.length || 0, 0);
+  assert.equal(db.tables.client_deep_cleaning_submissions.length, 0);
+});
+
+test('independent draft replays the same stable request through the versioned RPC', async () => {
+  const db = client();
+  const payload = { request_id: randomUUID(), store_code: 'RR001', deep_cleaning_date: '2026-09-01' };
+  const first = await createSubmission(db, FO_PROFILE, payload);
+  const replay = await createSubmission(db, FO_PROFILE, payload);
+  assert.equal(replay.id, first.id);
+  assert.equal(replay.request_id, payload.request_id);
+  assert.equal(db.tables.client_deep_cleaning_submissions.length, 1);
 });
 
 test('Non-Reliance FO receives 403 and unauthenticated route receives 401', async () => {
@@ -646,16 +741,19 @@ test('FO cannot modify another FO draft, draft can be edited, and submitted reco
   const other = await createClientDeepCleaningSubmission(db, OTHER_FO_PROFILE, { store_code: 'TH72' });
   await assert.rejects(() => updateClientDeepCleaningDraft(db, FO_PROFILE, other.id, { remarks: 'Nope' }), /not found/);
   assert.equal((await loadOwnedSubmission(db, FO_PROFILE, own.id)).store_code, 'LEGACY');
-  const edited = await updateClientDeepCleaningDraft(db, FO_PROFILE, own.id, { remarks: 'Updated', vendor_name: 'Vendor Two' });
-  assert.equal(edited.remarks, 'Updated');
+  const retained = clone(legacy);
+  await assert.rejects(() => updateClientDeepCleaningDraft(db, FO_PROFILE, own.id, { remarks: 'Updated' }), error => error.code === 'invalid_store');
   await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, own.id), (error) => error.code === 'invalid_store');
   assert.equal(legacy.status, 'uploading');
-  const reassigned = await updateClientDeepCleaningDraft(db, FO_PROFILE, own.id, { store_code: 'RR001' });
-  assert.equal(reassigned.store_id, null);
-  assert.equal(reassigned.retail_store_id, 'store-rr-1');
-  const submitted = await submitClientDeepCleaningSubmission(db, FO_PROFILE, own.id);
+  await assert.rejects(() => updateClientDeepCleaningDraft(db, FO_PROFILE, own.id, { store_code: 'RR001' }), error => error.code === 'draft_store_locked');
+  assert.deepEqual(legacy, retained, 'Evidence stays with the original immutable store identity');
+  const current = await createReadySubmission(db);
+  const edited = await updateClientDeepCleaningDraft(db, FO_PROFILE, current.id, { remarks: 'Updated', vendor_name: 'Vendor Two' });
+  assert.equal(edited.remarks, 'Updated');
+  assert.equal(edited.retail_store_id, 'store-rr-1');
+  const submitted = await submitClientDeepCleaningSubmission(db, FO_PROFILE, current.id);
   assert.equal(submitted.status, 'submitted');
-  await assert.rejects(() => updateClientDeepCleaningDraft(db, FO_PROFILE, own.id, { remarks: 'After submit' }), /cannot be edited/);
+  await assert.rejects(() => updateClientDeepCleaningDraft(db, FO_PROFILE, current.id, { remarks: 'After submit' }), error => error.code === 'submitted_record_locked');
 });
 
 test('Upload validation rejects invalid type, oversize, and unsafe MIME', () => {
@@ -700,7 +798,7 @@ test('Upload complete verifies issued intent and physical storage object', async
       mime_type: 'image/jpeg',
       file_size: 1000,
     }),
-    /not found in storage/,
+    error => error.code === 'storage_object_missing',
   );
   assert.equal(db.tables.client_deep_cleaning_uploads[0].upload_status, 'pending');
   db.addStorageObject(issued.storage_bucket, issued.storage_path, 1000);
@@ -752,9 +850,9 @@ test('Submit requires before, after and one separate document, succeeds with min
     deep_cleaning_date: '2026-09-01',
     vendor_name: 'Vendor One',
   });
-  await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id), /before image/);
+  await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id), error => error.code === 'incomplete_comparison_pair');
   await issueAndCompleteUpload(db, draft, 'before');
-  await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id), /after image/);
+  await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id), error => error.code === 'incomplete_comparison_pair');
   await issueAndCompleteUpload(db, draft, 'after');
   await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id), e => e.code === 'single_supporting_document_required');
   await issueAndCompleteUpload(db, draft, 'document');
@@ -799,7 +897,7 @@ test('Deleting own draft upload removes storage and metadata, but another FO or 
   const submittedUpload = db.tables.client_deep_cleaning_uploads.find((row) => row.submission_id === ready.id);
   await assert.rejects(
     () => deleteClientDeepCleaningUpload(db, FO_PROFILE, ready.id, submittedUpload.id),
-    /cannot be deleted/,
+    error => error.code === 'cleaning_state_changed',
   );
 });
 
