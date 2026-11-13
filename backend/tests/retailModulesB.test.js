@@ -33,7 +33,7 @@ test('canonical identity rejects duplicate codes and contradictory UUID/geograph
  assert.equal(canonicalActivityStore(stores,{store_code:'P1',state:'TN'}),null);
 });
 test('cleaning joins recorded completion and image counts, preserves Not Done and does not invent overdue failure',()=>{
- const snapshot={stores,to:'2026-10-31',schedules:[{id:'s1',retail_store_id:'py',scheduled_date:'2026-10-01',status:'Planned'},{id:'s2',retail_store_id:'tn',scheduled_date:'2026-10-02',status:'Not Done'},{id:'s3',retail_store_id:'tn',scheduled_date:'2026-10-03',status:'Scheduled'}],deep_cleaning:[{id:'d1',store_code:'P1',state:'PY',deep_cleaning_date:'2026-10-01',status:'submitted'}],images:[{submission_id:'d1',photo_type:'before',uploaded:true},{submission_id:'d1',photo_type:'after',uploaded:true}]};
+ const snapshot={stores,to:'2026-10-31',schedules:[{id:'s1',retail_store_id:'py',scheduled_date:'2026-10-01',status:'Planned'},{id:'s2',retail_store_id:'tn',scheduled_date:'2026-10-02',status:'Not Done'},{id:'s3',retail_store_id:'tn',scheduled_date:'2026-10-03',status:'Scheduled'}],deep_cleaning:[{id:'d1',schedule_id:'s1',store_code:'P1',state:'PY',deep_cleaning_date:'2026-10-01',status:'submitted'}],images:[{submission_id:'d1',photo_type:'before',uploaded:true},{submission_id:'d1',photo_type:'after',uploaded:true}]};
  const r=cleaningReport(snapshot,{state:'TN'});assert.deepEqual(r.schedules.map(s=>s.display_status),['Completed','Not Completed','Scheduled']);assert.equal(r.schedules[2].overdue,true);assert.equal(r.submissions[0].before_count,1);assert.equal(r.totals.completed,1);assert.deepEqual(r.states,['TN']);
 });
 test('unavailable schedules stay unavailable; unmatched evidence never completes a store',()=>{
