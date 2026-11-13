@@ -34,6 +34,22 @@ export function scopedActivity(rows, report, scope = {}) {
     return [{ ...row, store }];
   });
 }
+export function cleaningSubmissionCounts(report, scope = {}) {
+  const empty = { 'Submitted reports': null, 'Done reports': null, 'Not Done reports': null };
+  const source = report?.modules?.cleaning?.submitted_reports;
+  if (scope.store || source?.status !== 'ready' || !Array.isArray(source.rows) ||
+      scope.from && scope.from !== report.from || scope.to && scope.to !== report.to) return empty;
+  const seen = new Set();
+  for (const row of source.rows) {
+    const state = reportingState(row.state);
+    if (!EXECUTIVE_STATES.includes(state) || seen.has(state) ||
+        ['submitted', 'done', 'not_done'].some(key => !Number.isSafeInteger(row[key]) || row[key] < 0) ||
+        row.submitted !== row.done + row.not_done) return empty;
+    seen.add(state);
+  }
+  const rows = source.rows.filter(row => !scope.state || reportingState(row.state) === scope.state);
+  return { 'Submitted reports': sum(rows, 'submitted'), 'Done reports': sum(rows, 'done'), 'Not Done reports': sum(rows, 'not_done') };
+}
 function sourceRows(report, id, scope) {
   const source = report?.modules?.[id];
   if (source?.status !== 'ready' || !Array.isArray(source.rows)) return null;
