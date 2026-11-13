@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {retailCleaningReport,retailCleaningEvidence,retailCompletedTraining,retailModuleDashboard,moduleReportRange} from '../services/retailModuleReportService.js';
 import {RELIANCE_TRAINING_CLIENT_ID} from '../services/trainingAccessService.js';
+import {submittedCleaningReport,cleaningReport} from '../shared/retailModuleReports.js';
 import express from 'express';
 import http from 'node:http';
 import {createRelianceRetailManagementRouter} from '../routes/relianceRetailManagementRoutes.js';
@@ -70,4 +71,55 @@ test('new Retail report HTTP routes require authentication and capability before
  const server=http.createServer(app);await new Promise(r=>server.listen(0,'127.0.0.1',r));
  try{const base='http://127.0.0.1:'+server.address().port+'/retail/module-reports/';for(const path of ['dashboard','training','deep-cleaning','deep-cleaning/outside/evidence']){assert.equal((await fetch(base+path)).status,401);assert.equal((await fetch(base+path,{headers:{authorization:'Bearer local-fixture'}})).status,403);}assert.equal((await fetch(base+'deep-cleaning/outside/link-fo',{method:'POST'})).status,401);assert.equal((await fetch(base+'deep-cleaning/outside/link-fo',{method:'POST',headers:{authorization:'Bearer local-fixture'}})).status,403);assert.equal(reads,0);}
  finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
+});
+
+
+test('independent submitted cleaning reports retain explicit outcomes, dates, identity and deduplication',()=>{
+ const done={id:'done',store_code:'T1',state:'TN',status:'submitted',deep_cleaning_date:'2026-10-01'};
+ const notDone={...done,id:'not-done',final_outcome:'Not Done'};
+ const input={...snapshot,deep_cleaning:[done,done,notDone,{...done,id:'draft',status:'draft'},{...done,id:'outside',deep_cleaning_date:'2026-09-30'}],schedules:null};
+ assert.deepEqual(submittedCleaningReport(input,range),{status:'ready',rows:[{state:'TN',submitted:2,done:1,not_done:1}],identity_exceptions:0});
+ assert.equal(cleaningReport(input).totals,null,'No schedule denominator is invented');
+ assert.equal(submittedCleaningReport({stores:snapshot.stores},range).status,'unavailable');
+ const unlinked={...snapshot,schedules:[{id:'plan',retail_store_id:'s',scheduled_date:'2026-10-01',status:'Scheduled'}],deep_cleaning:[done]};
+ assert.equal(cleaningReport(unlinked).totals.completed,0,'Independent reports do not complete schedules by Store Code/date alone');
+ for(const changed of [{store_code:'UNKNOWN'},{state:'KA'},{final_outcome:'Unknown'}]){
+  const report=submittedCleaningReport({...input,deep_cleaning:[{...done,...changed}]},range);
+  assert.equal(report.status,'unavailable');assert.deepEqual(report.rows,[]);
+ }
+});
+
+test('submitted Not Done schedule report is not mislabeled pending; cancellation and Done priority remain',()=>{
+ const plan={id:'plan',retail_store_id:'s',scheduled_date:'2026-10-01',status:'Scheduled'};
+ const row={...snapshot.deep_cleaning[0],schedule_id:'plan',final_outcome:'Not Done'};
+ const source={...snapshot,schedules:[plan],deep_cleaning:[row]};
+ assert.deepEqual(cleaningReport(source).totals,{scheduled:1,completed:0,not_completed:1,pending:0});
+ assert.equal(cleaningReport({...source,schedules:[{...plan,status:'Cancelled'}]}).schedules[0].display_status,'Cancelled');
+ assert.equal(cleaningReport({...source,deep_cleaning:[row,{...row,id:'done',final_outcome:'Completed'}]}).totals.completed,1);
+});
+
+test('dashboard includes independent report counts without changing schedule totals',async()=>{
+ const {client}=trainingFixture(0);const result=await retailModuleDashboard(client,{...admin,employee_code:'ADMIN'},range);
+ assert.deepEqual(result.modules.cleaning.rows,[]);
+ assert.deepEqual(result.modules.cleaning.submitted_reports.rows,[{state:'TN',submitted:1,done:1,not_done:0}]);
+});
+
+test('legacy Training identities resolve only inside the preserved employee/client envelope',async()=>{
+ const {client,tables}=trainingFixture(4);
+ tables.store_master=[{id:'legacy',store_code:'T1',state:'TN',business:'Reliance Retail'}];
+ tables.training_sessions[0]={...tables.training_sessions[0],retail_store_id:null,store_code_snapshot:null,state_snapshot:null,store_id:'legacy'};
+ tables.training_sessions[1]={...tables.training_sessions[1],retail_store_id:null,store_code_snapshot:null,store_id:'s'};
+ tables.training_sessions[2]={...tables.training_sessions[2],retail_store_id:null,store_code_snapshot:null,store_id:'unknown'};
+ tables.training_sessions.push({...tables.training_sessions[0],id:'outside-envelope'});
+ const report=await retailCompletedTraining(client,{...admin,employee_code:'ADMIN'},range);
+ assert.equal(report.rows.length,3);assert.equal(report.exceptions.length,1);assert.deepEqual(report.total,{hk:1,mepc:2});
+ assert.ok(!report.rows.some(r=>r.id==='outside-envelope'));
+ tables.store_master[0].state='KA';
+ assert.equal((await retailCompletedTraining(client,{...admin,employee_code:'ADMIN'},range)).rows.length,2);
+});
+
+test('Training reads more than 1000 employee envelopes and retains separate HK/MEPC counts',async()=>{
+ const {client}=trainingFixture(1201);
+ const result=await retailCompletedTraining(client,{...admin,employee_code:'ADMIN'},range);
+ assert.equal(result.rows.length,1201);assert.deepEqual(result.total,{hk:601,mepc:600});
 });

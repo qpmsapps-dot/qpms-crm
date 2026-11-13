@@ -5,6 +5,7 @@ import { resolveRetailHkTrainingScope, isRetailHkTrainingReader } from '../servi
 import { loadAuthorizedTrainingSession, resolveTrainingReadScope, RELIANCE_TRAINING_CLIENT_ID } from '../services/trainingAccessService.js';
 import { listTrainingSessions } from '../services/trainingService.js';
 import { retailDashboard } from '../services/relianceRetailManagementService.js';
+import { retailCompletedTraining } from '../services/retailModuleReportService.js';
 import { createTrainingRouter } from '../routes/trainingRoutes.js';
 
 const S1 = '10000000-0000-0000-0000-000000000001';
@@ -66,6 +67,16 @@ test('HK verified assignments: canonical, legacy and both IDs appear once; dashb
   for (const id of ['unassigned', 'otherstate', 'otherclient', 'otherfo', 'nonfo', 'snapshot', 'draft', 'cancelled']) {
     await assert.rejects(() => loadAuthorizedTrainingSession(f.client, hk, id), e => [403,404].includes(e.statusCode));
   }
+});
+
+test('completed Training module resolves legacy codes without widening verified HK store or employee scope', async () => {
+  const f = fixture();
+  f.tables.training_categories[0].code = 'hk';
+  const result = await retailCompletedTraining(f.client, hk, { from: '2026-10-01', to: '2026-10-31' }, { stores: f.tables.reliance_retail_store_master });
+  assert.deepEqual(result.rows.map(row => row.id).sort(), ['both', 'canonical', 'legacy']);
+  assert.deepEqual(result.total, { hk: 3, mepc: 0 });
+  f.tables.access_user_scopes = [];
+  await assert.rejects(() => retailCompletedTraining(f.client, hk, { from: '2026-10-01', to: '2026-10-31' }, { stores: f.tables.reliance_retail_store_master }), error => error.statusCode === 403);
 });
 
 test('HK store, state and date selections narrow scope and cannot replace it', async () => {
