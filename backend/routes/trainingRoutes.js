@@ -23,7 +23,7 @@ export function createTrainingRouter({
   if (typeof requireAuth !== 'function') throw new Error('createTrainingRouter requires requireAuth middleware.');
   if (typeof getClient !== 'function') throw new Error('createTrainingRouter requires getClient.');
   const router = express.Router();
-  gateCombinedMutationRoutes(router,{getClient});
+gateCombinedMutationRoutes(router,{normalOperations:true,getClient});
   router.use(requireAuth);
   router.use((request, response, next) => {
     if (isRetailHkTrainingReader(request.profile) && (!['GET', 'HEAD'].includes(request.method)

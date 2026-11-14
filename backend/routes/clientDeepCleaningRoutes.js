@@ -24,7 +24,7 @@ export function createClientDeepCleaningRouter({ requireAuth, getClient }) {
   }
 
   const router = express.Router();
-  gateCombinedMutationRoutes(router,{getClient});
+gateCombinedMutationRoutes(router,{normalOperations:true,getClient});
   router.use(requireAuth);
 
   // FO execution and explicitly granted IFMS viewing share one fail-closed contract.

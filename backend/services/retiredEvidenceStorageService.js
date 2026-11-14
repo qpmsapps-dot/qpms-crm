@@ -10,6 +10,11 @@ export async function removeRetiredEvidenceObject(client, {bucket, path, evidenc
   if(!retired || retired.bucket!==bucket || retired.path!==path || retired.evidence_id!==evidenceId || retired.parent_id!==parentId || retired.owner_id!==ownerId) {
     throw Object.assign(new Error('Evidence retirement is not confirmed; storage retained.'),{statusCode:409,code:'evidence_retirement_unconfirmed'});
   }
-  const result=await withCombinedReleaseOperation(client,ownerId,'storage:retired-evidence-delete',()=>client.storage.from(bucket).remove([path]));
+  // The committed tombstone above remains mandatory. Normal Cleaning/Training
+  // cleanup is independent of release admission; other buckets keep their gate.
+  const remove=()=>client.storage.from(bucket).remove([path]);
+  const result=['client-deep-cleaning-uploads','training-evidence'].includes(bucket)
+    ? await remove()
+    : await withCombinedReleaseOperation(client,ownerId,'storage:retired-evidence-delete',remove);
   if(result.error) throw Object.assign(new Error('Evidence reference retired; storage cleanup can be retried safely.'),{statusCode:409,code:'storage_delete_failed'});
 }

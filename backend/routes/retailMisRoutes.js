@@ -9,7 +9,7 @@ import {signVerifiedFoCleaningSource} from '../services/retailCleaningFoLinkServ
 import {isOos12Specialist,requireOos12Environment} from '../shared/retailOos12Workflow.js';
 export function createRetailMisRouter({getClient,environment=process.env}){
  const router=express.Router();
- gateCombinedMutationRoutes(router,{getClient,matches:path=>path==='/command/:module'||path.startsWith('/evidence/')||path.startsWith('/cleaning/')&&!path.endsWith('/preview'),shouldGate:async req=>{
+gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=>path==='/command/:module'||path.startsWith('/evidence/')||path.startsWith('/cleaning/')&&!path.endsWith('/preview'),shouldGate:async req=>{
   const scoped=module=>['cleaning','training-hk','training-mepc'].includes(module);
   if(req.params.module)return !(req.params.module==='training-mepc'&&req.retailMis?.role==='MIS_MEPC')&&scoped(req.params.module);
   if(req.path==='/evidence/prepare')return !(req.body?.module==='training-mepc'&&req.retailMis?.role==='MIS_MEPC')&&scoped(req.body?.module);

@@ -86,7 +86,7 @@ function fixture() {
       } else if(a==='finalize'){
         if(state.draft.status!=='submitted'){
           state.finalizeCount++;
-          Object.assign(state.draft,{status:'submitted',submitted_at:'2026-01-02T12:00:00Z',final_outcome:'Completed'});
+          Object.assign(state.draft,{status:'submitted',submitted_at:state.submittedAt||'2026-01-02T12:00:00Z',final_outcome:'Completed'});
         }
         record=state.draft;
         if(state.lostFinalizeReply){state.lostFinalizeReply=false;throw Error('lost finalization response');}
@@ -96,6 +96,25 @@ function fixture() {
   };
   return {state,client};
 }
+
+test('all genuine 1–14 November dates remain actual dates in independent creation and readback',async()=>{
+  for(let day=1;day<=14;day++){
+    const date=`2026-11-${String(day).padStart(2,'0')}`;
+    const {client,state}=fixture();
+    state.submittedAt='2026-11-16T04:30:00Z';
+    const saved=await create(client,profile,{...input,deep_cleaning_date:date});
+    assert.equal(saved.deep_cleaning_date,date);
+    assert.equal(state.created.deep_cleaning_date,date);
+    const done=await finalize(client,profile,saved.id,{});
+    assert.equal(done.deep_cleaning_date,date);
+    assert.equal(done.submitted_at,state.submittedAt);
+    const retry=await finalize(client,profile,saved.id,{});
+    assert.equal(retry.id,done.id);
+    assert.equal(retry.submitted_at,done.submitted_at);
+    assert.equal(state.finalizeCount,1);
+    assert.equal(state.uploads.filter(u=>u.upload_status==='uploaded').length,3);
+  }
+});
 const errorCode=code=>error=>error.code===code;
 const photo={request_id:id(31),pair_id:id(20),pair_order:1,upload_type:'before',mime_type:'image/jpeg',file_size:10,filename:'before.jpg'};
 

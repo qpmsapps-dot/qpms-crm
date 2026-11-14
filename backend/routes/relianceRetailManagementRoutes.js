@@ -2,7 +2,6 @@ import {createRetailFoSelfRouter} from './retailFoSelfRoutes.js';
 import {createRetailMisRouter} from './retailMisRoutes.js';
 import {retailMisRole} from '../shared/retailMisAccess.js';
 import express from 'express';
-import {randomUUID} from 'node:crypto';
 import {gateCombinedMutationRoutes} from '../services/combinedReleaseGate.js';
 import {createRetailOperationsRouter} from './retailOperationsRoutes.js';
 import {retailCleaningReport,retailCleaningEvidence,retailCompletedTraining,retailModuleDashboard} from '../services/retailModuleReportService.js';
@@ -39,31 +38,18 @@ function sendError(response, error) {
 
 export function createRelianceRetailManagementRouter({ requireAuth, getClient }) {
   const router = express.Router();
-  const reportHandler=(route,work)=>async(req,res)=>{
-    const requestId=randomUUID(),start=performance.now();
-    res.set('X-Report-Request-Id',requestId);
-    try {res.json(await work(req));}catch(error){
-      if(Number(error.statusCode||500)>=500)console.error('[RetailReportReadFailed]',{
-        request_id:requestId,route,operation:error.reportOperation||'report_processing',
-        sqlstate:/^[0-9A-Z]{5}$/.test(String(error.code||''))?error.code:null,
-        upstream_code:/^[A-Z0-9_]{1,60}$/.test(String(error.code||''))?error.code:'unknown',
-        duration_ms:Math.round(performance.now()-start),operation_duration_ms:error.reportDurationMs??null,
-      });
-      sendError(res,error);
-    }
-  };
-  gateCombinedMutationRoutes(router,{getClient,matches:path=>/^\/deep-cleaning(?:\/|$)|^\/module-reports\/deep-cleaning\//.test(path)});
+gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=>/^\/deep-cleaning(?:\/|$)|^\/module-reports\/deep-cleaning\//.test(path)});
   router.use(requireAuth);
   router.use('/mis',createRetailMisRouter({getClient}));
   router.use((req,res,next)=>retailMisRole(req.profile?.role)&&req.path!=='/access'?res.status(403).json({ok:false,message:'Use the state-scoped Retail MIS API.'}):next());
   router.use(createInitialRetailWriteGate({getClient}));
   router.post('/module-reports/deep-cleaning/:id/link-fo',async(req,res)=>{try{res.json({ok:true,result:await linkFoCleaning(getClient(),req.profile,req.params.id,req.body||{})});}catch(e){sendError(res,e);}});
   router.use('/operations',createRetailOperationsRouter({getClient}));
-  router.get('/module-reports/dashboard',reportHandler('dashboard',async req=>({ok:true,report:await retailModuleDashboard(getClient(),req.profile,req.query)})));
+  router.get('/module-reports/dashboard',async(req,res)=>{try{res.json({ok:true,report:await retailModuleDashboard(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
   router.get('/module-reports/ifms-history',async(req,res)=>{try{res.json({ok:true,report:await retailIfmsHistoryRows(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
   router.get('/module-reports/training',async(req,res)=>{try{res.json({ok:true,report:await retailCompletedTraining(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
-  router.get('/module-reports/deep-cleaning',reportHandler('deep-cleaning',async req=>({ok:true,report:await retailCleaningReport(getClient(),req.profile,req.query)})));
-  router.get('/module-reports/deep-cleaning/:id/evidence',reportHandler('deep-cleaning/:id/evidence',async req=>({ok:true,uploads:await retailCleaningEvidence(getClient(),req.profile,req.params.id,req.query)})));
+  router.get('/module-reports/deep-cleaning',async(req,res)=>{try{res.json({ok:true,report:await retailCleaningReport(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
+  router.get('/module-reports/deep-cleaning/:id/evidence',async(req,res)=>{try{res.json({ok:true,uploads:await retailCleaningEvidence(getClient(),req.profile,req.params.id,req.query)});}catch(e){sendError(res,e);}});
   router.use('/fo-self',createRetailFoSelfRouter({getClient}));
   router.use('/service-trackers',createRetailServiceTrackerRouter({getClient}));
   router.use('/unified-master', createRetailUnifiedRouter({ getClient }));

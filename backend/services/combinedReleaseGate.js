@@ -4,6 +4,9 @@ function unavailable() {
   return Object.assign(new Error('Training and Deep Cleaning writes are temporarily unavailable.'),{statusCode:503,code:'combined_release_frozen'});
 }
 export async function withCombinedReleaseOperation(client,actor,route,work) {
+  // These normal evidence operations retain their own actor/object checks.
+  // Release-control admission is no longer their operational availability switch.
+  if (['storage:cleaning-upload-grant','storage:training-content'].includes(route)) return await work();
   const token=randomUUID();
   let begin;
   try {begin=await client.rpc('rpc_combined_release_begin',{p_token:token,p_actor:actor,p_route:route});}
@@ -23,7 +26,9 @@ export async function withCombinedReleaseOperation(client,actor,route,work) {
 
 // Wrap only the final controller, after authentication/body parsing. Wrapping
 // registration makes all present/future mutation methods use one gate contract.
-export function gateCombinedMutationRoutes(router,{getClient,matches=()=>true,shouldGate=()=>true}) {
+export function gateCombinedMutationRoutes(router,{getClient,matches=()=>true,shouldGate=()=>true,normalOperations=false}) {
+  // Explicitly retired at existing Retail call sites; controller auth stays intact.
+  if (normalOperations) return router;
   for(const method of ['post','put','patch','delete']) {
     const register=router[method].bind(router);
     router[method]=(path,...handlers)=>{

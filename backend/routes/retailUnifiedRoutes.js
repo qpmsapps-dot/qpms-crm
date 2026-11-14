@@ -7,7 +7,7 @@ import {previewZoneMappings} from '../shared/retailZoneMapping.js';
 import {unifiedSnapshot,previewUnified,stageUnified,createPendingStore,proposeUnified,decideUnified,applyUnified,scheduleDirectRetailCleaning} from '../services/retailUnifiedService.js';
 export function createRetailUnifiedRouter({getClient,environment=process.env}){
  const router=express.Router();
- gateCombinedMutationRoutes(router,{getClient,matches:path=>['/cleaning/schedule','/propose','/decide','/apply'].includes(path),shouldGate:async req=>{
+gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=>['/cleaning/schedule','/propose','/decide','/apply'].includes(path),shouldGate:async req=>{
   if(req.path==='/cleaning/schedule')return true;
   if(req.path==='/propose')return req.body?.kind==='DC_SCHEDULE';
   const today=indiaToday(),snapshot=await getClient().rpc('rpc_retail_unified_snapshot',{p_actor:req.profile.id,p_from:today,p_to:today});
