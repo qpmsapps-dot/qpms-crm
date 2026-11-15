@@ -1,0 +1,11 @@
+.training-export-control{position:relative;display:inline-flex;align-items:center;gap:4px;vertical-align:middle}
+.tv-v2 .dc-actions>.training-export-control>button:not(.training-export-toggle){font-size:10px;white-space:nowrap}
+.training-export-control .training-export-toggle{padding:8px;display:inline-flex;align-items:center;justify-content:center;color:#185aa6;background:#fff;border:1px solid #dce5f1;border-radius:8px}
+.training-export-menu{position:fixed;z-index:1000;width:300px;max-width:calc(100vw - 40px);max-height:calc(100vh - 24px);overflow:auto;box-sizing:border-box;padding:12px;display:grid;gap:8px;border:1px solid #dce5f1;border-radius:10px;background:#fff;box-shadow:0 10px 25px #18315322;white-space:normal;text-align:left}
+.training-export-menu label{display:grid;gap:6px;font-size:12px;color:#183153}
+.training-export-menu input{width:100%;border:1px solid #dce5f1;border-radius:6px;padding:7px;color:#183153;background:white}
+.training-export-menu button{text-align:left;white-space:normal;font-size:12px;color:#185aa6;background:#fff;border:1px solid #dce5f1;border-radius:6px;padding:8px}
+.training-export-menu p{font-size:12px;line-height:1.5;overflow-wrap:anywhere;margin:0;max-height:180px;overflow:auto}
+.training-export-menu [role=alert]{color:#b91c1c}
+.training-export-menu button:focus-visible,.training-export-toggle:focus-visible{outline:2px solid #185aa6;outline-offset:2px}
+.training-export-menu button:disabled{opacity:.5;cursor:wait}
