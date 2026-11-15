@@ -5,12 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createServer} from 'vite';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
+import {fixture as executiveReportFixture} from './browser/fixtures/retailExecutiveFixture.js';
 const root=fileURLToPath(new URL('../',import.meta.url));
 test('OOS register retained with workflow actions; main dashboard hides OOS during development',{timeout:120000},async()=>{
  Object.assign(process.env,{VITE_ENABLE_DEMO_AUTH:'true',VITE_APP_MODE:'demo',VITE_SUPABASE_URL:'',VITE_SUPABASE_ANON_KEY:'',VITE_API_URL:'http://127.0.0.1:4999'});
  const server=await createServer({cacheDir:path.join(os.tmpdir(),'qpms-oos-ageing-vite'),server:{host:'127.0.0.1',port:0,watch:{ignored:[path.resolve('tmp').split(path.sep).join('/')+'/**',path.resolve('dist').split(path.sep).join('/')+'/**']}},logLevel:'error'});await server.listen();
  const browser=await chromium.launch({headless:true}),context=await browser.newContext({viewport:{width:1440,height:1000}}),errors=[];
+ await context.route('**/*',route=>['127.0.0.1','localhost'].includes(new URL(route.request().url()).hostname)?route.continue():route.abort());
  await context.addInitScript(()=>{localStorage.setItem('qpms-crm-auth-user',JSON.stringify({id:'fixture-auth',profileId:'fixture-profile',employeeCode:'QPMSADMIN',name:'LOCAL SYNTHETIC QA',role:'Admin',rawRole:'Admin',status:'Active',isActive:true,webAccessEnabled:true,is_demo:true,isDemoReadOnly:true,read_only:false}));sessionStorage.setItem('qpms-crm-backend-token','synthetic-local-token');});
  const now='2026-10-01',rows=Array.from({length:31},(_,i)=>({id:'order-'+i,reference:'QA-LOCAL-'+String(i).padStart(3,'0'),workflow_version:1,status:i%2?'PO_RECORDED':'QUOTED',revision:2,rework_count:1,store_ids:['s'+i],mapped_stores:[{id:'s'+i,store_code:'00'+i,store_name:'Synthetic QA store '+i,state:i<20?'TN':'KA'}],original_items:[{total_amount:1500,quotation_header:{quotation_date:now,totals:{total_amount:1500,taxable_amount:'1200.00',total_gst:'216.00',management_fees:'84.00',source_row:99,raw:{secret:'not display'}}}}],original_po_date:i%2?'2026-10-03':null,original_po_number:i%2?'PO-00'+i:null,status_entered_at:'2026-10-04T18:31:00Z',created_at:'2026-10-01T00:00:00Z',updated_at:'2026-11-02T04:00:00Z',details:{items:[{store_id:'s'+i,description:'Synthetic line item',quantity:1,unit_rate:1500,total_amount:1500}]},history:[{id:'e'+i,action:'CREATE_OOS',actor_id:'synthetic-author',created_at:'2026-10-01T00:00:00Z',revision:1,has_workbook:true,evidence:{fields:{confirming_person_name:'QA Confirming Person',confirming_department:'Commercial',confirmation_reference:'OFFLINE-LOCAL'},confirmation_authenticity:'MIS_SUBMITTED_UNVERIFIED'}}]}));
  // Mix legacy history with a genuine 12-stage row: the dashboard must show only V2.
@@ -22,7 +24,7 @@ test('OOS register retained with workflow actions; main dashboard hides OOS duri
   else if(u.pathname.endsWith('/oos/register')){registerRequests++;result={complete:true,states:['TN','KA'],rows,twelve_stage_enabled:false};}
   else if(u.pathname.endsWith('/oos/capabilities'))result={writes_enabled:legacyEnabled,environment_writes_enabled:legacyEnabled,database_writes_enabled:legacyEnabled,actions:legacyEnabled?{'order-0':['PO_RECORDED']}:{}};
   else if(u.pathname.includes('/oos/history/')){historyRequests++;result=rows.find(r=>u.pathname.endsWith(r.id)).history;}
-  else if(u.pathname.endsWith('/module-reports/dashboard'))return route.fulfill({json:{ok:true,report:{stores:[],modules:{},from:now,to:'2026-11-02'}}});
+  else if(u.pathname.endsWith('/module-reports/dashboard'))return route.fulfill({json:{ok:true,report:executiveReportFixture(u.searchParams.get('from'),u.searchParams.get('to'))}});
   else return route.fulfill({status:403,json:{message:'Synthetic unassigned route'}});
   return route.fulfill({json:{ok:true,result}});
  });
@@ -60,13 +62,15 @@ test('OOS register retained with workflow actions; main dashboard hides OOS duri
   await page.getByRole('button',{name:'Close drawer'}).click();
   await page.setViewportSize({width:1440,height:1000});
   await page.goto(base+'/reliance-retail');
-  await page.getByRole('heading',{name:'South Zone – IFMS Operations Summary'}).waitFor();
+  await page.getByRole('heading',{name:'Reliance Retail — Executive Operations Report',level:1,exact:true}).waitFor();
+  await expect(page.getByRole('button',{name:'Export report',exact:true})).toBeEnabled();
   assert.equal(await page.getByRole('table',{name:'Twelve-stage OOS state matrix'}).count(),0,
    'OOS must not appear on the main dashboard while under development');
   assert.equal(await page.getByRole('link',{name:'OOS Tracker'}).count(),0,
    'OOS sidebar must not be clickable');
   await page.getByText('Under development',{exact:true}).waitFor();
-  assert.equal(await page.locator('.ifms-card').count(),9);
+  const snapshot=page.getByRole('region',{name:'Module Performance Snapshot',exact:true});
+  assert.deepEqual(await snapshot.getByRole('heading',{level:3}).allTextContents(),['Attendance','Thermography','CM','PM','Deep Cleaning','Training']);
   await page.screenshot({path:path.join(shots,'main-dashboard-no-oos.png'),fullPage:true});
   await page.goto(base+'/reliance-retail/mis/oos');
   await page.getByText('31 authorized quotations',{exact:true}).waitFor();
