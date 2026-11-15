@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { moduleMetric, executiveReport, previousPeriod, comparison, sameInventory, reportExceptions, executiveConclusion, scopedActivity } from '../src/utils/retailExecutiveReport.js';
+import { moduleMetric, executiveReport, previousPeriod, comparison, sameInventory, reportExceptions, executiveConclusion, scopedActivity, cleaningSubmissionCounts } from '../src/utils/retailExecutiveReport.js';
 
 const attendance = { state: 'TN', hk_actual: 8, hk_target: 10, mepc_actual: 2, mepc_target: 2, total_actual: 10, total_target: 12, complete: true };
 function report() { return { from: '2026-11-01', to: '2026-11-09', stores: [{ id: 's1', state: 'TN', store_code: 'S1' }, { id: 's2', state: 'PY', store_code: 'S2' }], modules: {
@@ -98,4 +98,22 @@ test('later approval is current cohort status, never historical comparison or ac
   assert.match(metric.reason,/not status at the historical cutoff/);
   assert.equal(comparison(metric,{ready:true,value:0},true),null);
   assert.equal(executiveConclusion(executiveReport(r),{thermography:comparison(metric,{ready:true,value:0},true)}).achievements.includes('Thermography'),false);
+});
+
+
+test('submitted cleaning report totals remain separate from schedule KPIs and respect reporting state',()=>{
+ const r=report();r.modules.cleaning.submitted_reports={status:'ready',rows:[{state:'TN',submitted:4,done:3,not_done:1},{state:'KN',submitted:2,done:1,not_done:1}]};
+ assert.deepEqual(cleaningSubmissionCounts(r),{'Submitted reports':6,'Done reports':4,'Not Done reports':2});
+ assert.deepEqual(cleaningSubmissionCounts(r,{state:'TN'}),{'Submitted reports':4,'Done reports':3,'Not Done reports':1});
+ assert.equal(moduleMetric(r,'cleaning').counts.Completed,6,'Existing scheduled completion KPI remains intact');
+ assert.equal(cleaningSubmissionCounts(r,{store:'s1'})['Done reports'],null);
+ assert.equal(cleaningSubmissionCounts(r,{from:'2020-01-01'})['Done reports'],null);
+});
+
+test('missing, failed or inconsistent submitted report contract never becomes a false zero',()=>{
+ assert.equal(cleaningSubmissionCounts(report())['Done reports'],null);
+ for(const source of [{status:'unavailable',rows:[]},{status:'ready',rows:[{state:'TN',submitted:1,done:2,not_done:0}]},{status:'ready',rows:[{state:'TN',submitted:-1,done:-1,not_done:0}]}]){
+  const r=report();r.modules.cleaning.submitted_reports=source;assert.equal(cleaningSubmissionCounts(r)['Done reports'],null);
+ }
+ const r=report();r.modules.cleaning.submitted_reports={status:'ready',rows:[]};assert.equal(cleaningSubmissionCounts(r)['Done reports'],0);
 });

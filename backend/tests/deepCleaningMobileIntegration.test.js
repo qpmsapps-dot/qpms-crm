@@ -148,9 +148,11 @@ test('authenticated HTTP schedule/outcome contract preserves body, denies anothe
     assert.equal(saved.submission.final_outcome,'Not Done');assert.equal(saved.submission.not_done_reason,'Store closed');
   } finally { server.closeAllConnections();await new Promise(resolve=>server.close(resolve)); }
 });
-test('pending database patch pins the inspected function and adds only reviewed evidence invariants',()=>{
-  const original=readFileSync(new URL('../../artifacts/deep-cleaning-integration/installed-finalizer-baseline.sql',import.meta.url),'utf8').replaceAll('\r','').trim();
-  const sql=readFileSync(new URL('../../supabase/pending_review/20261106_deep_cleaning_required_document.sql',import.meta.url),'utf8');
+test('historical pending patch fixture pins its baseline and adds only reviewed evidence invariants',()=>{
+  // Exact historical 2026-11-06 sources, packaged as read-only test inputs.
+  // They are never executed and do not establish the current installed DB state.
+  const original=readFileSync(new URL('./fixtures/cleaning-finalizer-baseline.sql.fixture',import.meta.url),'utf8').replaceAll('\r','').trim();
+  const sql=readFileSync(new URL('./fixtures/cleaning-required-document.sql.fixture',import.meta.url),'utf8');
   const fingerprint=createHash('md5').update(original).digest('hex');
   assert.ok(sql.includes(fingerprint));
   assert.ok(sql.includes("if outcome='Completed' and ("));
