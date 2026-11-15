@@ -4,6 +4,14 @@ on:
   pull_request:
     paths:
       - 'src/hooks/useModalFocus.js'
+      # BEGIN DEEP CLEANING EXPORT TRIGGERS
+      - '.github/deepCleaningExportGuard.mjs'
+      - 'tests/deepCleaningExportGuard.test.js'
+      - 'tests/deepCleaningExports.test.js'
+      - 'tests/deepCleaningExports.browser.test.js'
+      - 'src/utils/deepCleaningExport.js'
+      - 'src/utils/deepCleaningExportFiles.js'
+      # END DEEP CLEANING EXPORT TRIGGERS
       # BEGIN TRAINING EXPORT TRIGGERS
       - '.github/trainingExportGuard.mjs'
       - 'tests/trainingExportGuard.test.js'
@@ -77,6 +85,24 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # BEGIN DEEP CLEANING EXPORT EXACT PAYLOAD
+          approved_cleaning_exports = {
+            ".github/deepCleaningExportGuard.mjs": "d3ee4072d294a8869c969481005d67dcc3a2b1f5",
+            "tests/deepCleaningExportGuard.test.js": "391602139dc3c03505cbb4102ff96fce76bf564e",
+            "tests/trainingExportGuard.test.js": "f24a80c66546dbd281e939367abf35dea3c1904f",
+            "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "9716e433b15fdc90f3efc042e2cfb3db1720ae98",
+            "src/components/reliance-retail/DeepCleaningExportControls.jsx": "8195c0d24e62b02352c3d9369929e7f1b72f7cb6",
+            "src/utils/deepCleaningExport.js": "06628add1d1130c5813fb5d48d83b23588d2bed7",
+            "src/utils/deepCleaningExportFiles.js": "9b32acfaa7a51cbf6632b4248a14387dbe18ced0",
+            "tests/deepCleaningExports.test.js": "44294a46f53d68463c6a7456b88f88175dc68156",
+            "tests/deepCleaningExports.browser.test.js": "9594ee886e9757ba2599756e4408512d40783f89"
+          }
+          cleaning_changed = set(files) - {'.github/workflows/retail-ui-visual-checks.yml'}
+          if '.github/deepCleaningExportGuard.mjs' in cleaning_changed:
+            subprocess.run(['node', '.github/deepCleaningExportGuard.mjs', base], check=True)
+            print('PASS: exact export-only payload; every following CI step remains mandatory.')
+            sys.exit(0)
+          # END DEEP CLEANING EXPORT EXACT PAYLOAD
           # BEGIN TRAINING EXPORT EXACT PAYLOAD
           approved_training_exports = {
             "package.json": "d09171ac1f85630d6c4882ab724a0f425097896e",
@@ -377,6 +403,12 @@ jobs:
         run: npx eslint src/components/reliance-retail/TrainingV2Overview.jsx src/components/reliance-retail/TrainingV2Drawer.jsx src/utils/trainingView.js
       - name: Training V2 frontend regression tests
         run: node --test tests/trainingView.test.js
+      # BEGIN DEEP CLEANING EXPORT CHECKS
+      - name: Deep Cleaning export scoped lint
+        run: npx eslint src/components/reliance-retail/DeepCleaningExportControls.jsx src/utils/deepCleaningExport.js src/utils/deepCleaningExportFiles.js
+      - name: Deep Cleaning export files and exact payload regressions
+        run: node --test tests/deepCleaningExports.test.js tests/deepCleaningExportGuard.test.js
+      # END DEEP CLEANING EXPORT CHECKS
       # BEGIN TRAINING EXPORT CHECKS
       - name: Training export scoped lint
         run: npx eslint src/components/reliance-retail/TrainingExportControls.jsx src/utils/trainingExport.js src/utils/trainingExportFiles.js
@@ -393,6 +425,10 @@ jobs:
         run: npm run build
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
+      # BEGIN DEEP CLEANING EXPORT BROWSER CHECK
+      - name: Deep Cleaning export browser regression
+        run: node --test tests/deepCleaningExports.browser.test.js
+      # END DEEP CLEANING EXPORT BROWSER CHECK
       # BEGIN TRAINING EXPORT BROWSER CHECK
       - name: Training V2 export browser regression
         run: node --test tests/trainingExports.browser.test.js
