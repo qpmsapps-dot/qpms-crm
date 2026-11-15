@@ -7,8 +7,8 @@ import { createClientDeepCleaningRouter } from '../routes/clientDeepCleaningRout
 import {
   CLIENT_DEEP_CLEANING_BUSINESS,
   completeClientDeepCleaningUpload,
-  createClientDeepCleaningSubmission,
-  createClientDeepCleaningUploadUrl,
+  createClientDeepCleaningSubmission as createSubmission,
+  createClientDeepCleaningUploadUrl as issueUploadUrl,
   createClientDeepCleaningUploadViewUrl,
   deleteClientDeepCleaningUpload,
   listClientDeepCleaningSubmissions,
@@ -18,7 +18,20 @@ import {
   submitClientDeepCleaningSubmission,
   updateClientDeepCleaningDraft,
   validateUploadInput,
+  verifyClientDeepCleaningStorageObject,
 } from '../services/clientDeepCleaningService.js';
+import {CLEANING_CONTRACT,CLEANING_RPC} from '../services/deepCleaningIndependentContract.js';
+
+const fixtureUuid = n => `00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+// Supply mandatory client inputs once per logical fixture operation. Explicit
+// retry payloads retain their request_id; raw imports test missing/invalid IDs.
+function createClientDeepCleaningSubmission(db,profile,payload={}) {
+  return createSubmission(db,profile,{request_id:db.nextUuid(),deep_cleaning_date:'2026-09-01',...payload});
+}
+function createClientDeepCleaningUploadUrl(db,profile,submissionId,payload={}) {
+  const paired=['before','after'].includes(payload.upload_type);
+  return issueUploadUrl(db,profile,submissionId,{request_id:db.nextUuid(),...(paired?{pair_id:db.pairFor(submissionId),pair_order:1}:{}),...payload});
+}
 
 const FO_PROFILE = {
   id: 'profile-1',
@@ -244,13 +257,64 @@ class Query {
 }
 
 class FakeSupabase {
-  async rpc(name) {
+  // In-memory receipts for the current service/RPC boundary, not a substitute
+  // for PostgreSQL authorization, locking, RLS or concurrency acceptance tests.
+  async rpc(name,params={}) {
     if(name==='rpc_combined_release_begin'||name==='rpc_combined_release_end')return {data:null};
-    throw Error('Unexpected RPC '+name);
+    assert.equal(name,CLEANING_RPC);
+    this.rpcCalls.push(clone(params));
+    const {p_action:action,p_data:input,p_auth:owner}=params;
+    const submissions=this.tables.client_deep_cleaning_submissions,uploads=this.tables.client_deep_cleaning_uploads;
+    const reply=record=>({data:{contract_version:CLEANING_CONTRACT,record:clone(record)},error:null});
+    const reject=code=>({data:null,error:{code}});
+    if(action==='begin') {
+      const previous=submissions.find(row=>row.request_id===input.request_id&&row.submitted_by_user_id===owner);
+      if(previous)return previous.retail_store_id===input.retail_store_id&&previous.deep_cleaning_date===input.deep_cleaning_date?reply(previous):reject('23505');
+      const store=this.tables.reliance_retail_store_master.find(row=>row.id===input.retail_store_id);
+      const actor=[FO_PROFILE,OTHER_FO_PROFILE].find(row=>row.id===params.p_actor&&row.auth_user_id===owner);
+      assert.ok(store&&actor);
+      const record={id:this.nextUuid(),...input,business:CLIENT_DEEP_CLEANING_BUSINESS,store_id:null,
+        store_name:store.store_name,client_name:CLIENT_DEEP_CLEANING_BUSINESS,state:store.state,city:store.city,store_format:store.store_format,
+        performed_by_type:'vendor',submitted_by_user_id:owner,submitted_by_employee_code:actor.employee_code,status:'draft',submitted_at:null,
+        created_at:'2026-09-01T00:00:00Z',metadata:{contract_version:CLEANING_CONTRACT,evidence_format:'paired_v1'}};
+      submissions.push(record);return reply(record);
+    }
+    const parent=submissions.find(row=>row.id===input.submission_id&&row.submitted_by_user_id===owner);
+    if(!parent)return reject('42501');
+    if(action==='finalize') {
+      if(parent.status!=='submitted')Object.assign(parent,{status:'submitted',submitted_at:'2026-09-01T12:00:00Z',final_outcome:'Completed'});
+      return reply(parent);
+    }
+    if(parent.status==='submitted')return reject('23514');
+    if(action==='update') {const {submission_id,...patch}=input;assert.equal(submission_id,parent.id);Object.assign(parent,patch);return reply(parent);}
+    if(action==='intent') {
+      const previous=uploads.find(row=>row.submission_id===parent.id&&row.metadata?.request_id===input.request_id);
+      if(previous)return reply(previous);
+      const record={id:input.upload_id||this.nextUuid(),submission_id:parent.id,upload_type:input.upload_type,
+        storage_bucket:'client-deep-cleaning-uploads',storage_path:input.storage_path,original_filename:input.original_filename,
+        mime_type:input.mime_type,file_size:input.file_size,uploaded_by_user_id:owner,upload_status:'pending',
+        metadata:{contract_version:CLEANING_CONTRACT,request_id:input.request_id,...(input.pair_id?{pair_id:input.pair_id,pair_order:input.pair_order}:{})}};
+      uploads.push(record);parent.status='uploading';return reply(record);
+    }
+    const upload=uploads.find(row=>row.id===input.upload_id&&row.submission_id===parent.id&&row.uploaded_by_user_id===owner);
+    if(!upload)return reject('42501');
+    if(action==='complete') {
+      if(upload.storage_path!==input.storage_path||upload.storage_bucket!==input.storage_bucket)return reject('42501');
+      if(upload.upload_type!==input.upload_type||upload.mime_type!==input.mime_type||upload.file_size!==input.file_size)return reject('22023');
+      await verifyClientDeepCleaningStorageObject(this,upload.storage_bucket,upload.storage_path,upload.file_size,upload.mime_type);
+      if(upload.upload_status!=='uploaded')Object.assign(upload,{upload_status:'uploaded',uploaded_at:'2026-09-01T01:00:00Z'});
+      return reply(upload);
+    }
+    if(action==='retire') {
+      const deleted=await this.from('client_deep_cleaning_uploads').delete().eq('id',upload.id).select('*').maybeSingle();
+      return reply(deleted.data);
+    }
+    throw Error('Unexpected Cleaning action '+action);
   }
   constructor(seed = {}) {
     this.tables = Object.fromEntries(TABLES.map((table) => [table, clone(seed[table] || [])]));
     this.idCounters = {};
+    this.uuidCounter=0;this.pairs=new Map();this.rpcCalls=[];
     this.storageObjects = new Map();
     this.storage = {
       from: (bucket) => ({
@@ -287,6 +351,9 @@ class FakeSupabase {
     this.idCounters[table] = (this.idCounters[table] || 0) + 1;
     return `${table}-${this.idCounters[table]}`;
   }
+
+  nextUuid() {return fixtureUuid(++this.uuidCounter);}
+  pairFor(submissionId) {if(!this.pairs.has(submissionId))this.pairs.set(submissionId,this.nextUuid());return this.pairs.get(submissionId);}
 
   from(table) {
     return new Query(this, table);
@@ -416,6 +483,31 @@ test('Reliance Retail FO can create draft and forged trusted fields are ignored'
   assert.equal(row.store_format, 'Smart');
   assert.equal(row.attendance_id, undefined);
   assert.equal(row.site_visit_id, undefined);
+  assert.equal(db.rpcCalls[0].p_actor,FO_PROFILE.id);
+  assert.equal(db.rpcCalls[0].p_data.business,undefined);
+  assert.equal(db.rpcCalls[0].p_data.submitted_by_user_id,undefined);
+});
+
+test('Independent draft requests require UUIDs and replay the same logical draft',async()=>{
+  const db=client(),input={store_code:'RR001',deep_cleaning_date:'2026-09-01'};
+  for(const request_id of [undefined,'not-a-uuid'])await assert.rejects(()=>createSubmission(db,FO_PROFILE,{...input,request_id}),e=>e.code==='request_id_required');
+  assert.equal(db.rpcCalls.length,0);
+  const request_id=fixtureUuid(100),first=await createSubmission(db,FO_PROFILE,{...input,request_id});
+  const retry=await createSubmission(db,FO_PROFILE,{...input,request_id});
+  assert.equal(retry.id,first.id);assert.equal(retry.request_id,request_id);assert.equal(db.tables.client_deep_cleaning_submissions.length,1);
+  await assert.rejects(()=>createSubmission(db,FO_PROFILE,{...input,request_id,deep_cleaning_date:'2026-09-02'}),e=>e.code==='cleaning_request_conflict');
+});
+
+test('Independent upload requests require stable UUIDs and paired image metadata',async()=>{
+  const db=client(),draft=await createClientDeepCleaningSubmission(db,FO_PROFILE,{store_code:'RR001'});
+  const input={upload_type:'before',filename:'before.jpg',mime_type:'image/jpeg',file_size:1000};
+  const calls=db.rpcCalls.length;
+  for(const request_id of [undefined,'not-a-uuid'])await assert.rejects(()=>issueUploadUrl(db,FO_PROFILE,draft.id,{...input,request_id}),e=>e.code==='request_id_required');
+  await assert.rejects(()=>issueUploadUrl(db,FO_PROFILE,draft.id,{...input,request_id:fixtureUuid(101)}),e=>e.code==='invalid_comparison_pair');
+  assert.equal(db.rpcCalls.length,calls);
+  const request={...input,request_id:fixtureUuid(102),pair_id:fixtureUuid(103),pair_order:1};
+  const first=await issueUploadUrl(db,FO_PROFILE,draft.id,request),retry=await issueUploadUrl(db,FO_PROFILE,draft.id,request);
+  assert.equal(retry.upload_id,first.upload_id);assert.equal(retry.storage_path,first.storage_path);assert.equal(db.tables.client_deep_cleaning_uploads.length,1);
 });
 
 test('Non-Reliance FO receives 403 and unauthenticated route receives 401', async () => {
@@ -639,23 +731,25 @@ test('FO can list and read own submissions but not another FO record', async () 
 test('FO cannot modify another FO draft, draft can be edited, and submitted record is locked', async () => {
   const db = client();
   const own = await createReadySubmission(db);
-  const legacy = db.tables.client_deep_cleaning_submissions.find((row) => row.id === own.id);
-  legacy.store_id = 'legacy-store';
-  legacy.retail_store_id = null;
-  legacy.store_code = 'LEGACY';
   const other = await createClientDeepCleaningSubmission(db, OTHER_FO_PROFILE, { store_code: 'TH72' });
   await assert.rejects(() => updateClientDeepCleaningDraft(db, FO_PROFILE, other.id, { remarks: 'Nope' }), /not found/);
-  assert.equal((await loadOwnedSubmission(db, FO_PROFILE, own.id)).store_code, 'LEGACY');
+  assert.equal((await loadOwnedSubmission(db, FO_PROFILE, own.id)).store_code, 'RR001');
   const edited = await updateClientDeepCleaningDraft(db, FO_PROFILE, own.id, { remarks: 'Updated', vendor_name: 'Vendor Two' });
   assert.equal(edited.remarks, 'Updated');
-  await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, own.id), (error) => error.code === 'invalid_store');
-  assert.equal(legacy.status, 'uploading');
-  const reassigned = await updateClientDeepCleaningDraft(db, FO_PROFILE, own.id, { store_code: 'RR001' });
-  assert.equal(reassigned.store_id, null);
-  assert.equal(reassigned.retail_store_id, 'store-rr-1');
+  await assert.rejects(() => updateClientDeepCleaningDraft(db,FO_PROFILE,own.id,{store_code:'TH72'}),e=>e.code==='draft_store_locked');
+  assert.equal(db.tables.client_deep_cleaning_submissions.find(row=>row.id===own.id).retail_store_id,'store-rr-1');
   const submitted = await submitClientDeepCleaningSubmission(db, FO_PROFILE, own.id);
   assert.equal(submitted.status, 'submitted');
   await assert.rejects(() => updateClientDeepCleaningDraft(db, FO_PROFILE, own.id, { remarks: 'After submit' }), /cannot be edited/);
+});
+
+test('Unsupported historical records stay readable and cannot be silently reassigned',async()=>{
+  const db=client(),draft=await createClientDeepCleaningSubmission(db,FO_PROFILE,{store_code:'RR001'});
+  const legacy=db.tables.client_deep_cleaning_submissions.find(row=>row.id===draft.id);
+  Object.assign(legacy,{store_id:'legacy-store',retail_store_id:null,store_code:'LEGACY',metadata:{}});
+  assert.equal((await loadOwnedSubmission(db,FO_PROFILE,draft.id)).store_code,'LEGACY');
+  await assert.rejects(()=>updateClientDeepCleaningDraft(db,FO_PROFILE,draft.id,{store_code:'RR001'}),e=>e.code==='cleaning_upgrade_required');
+  assert.equal(legacy.store_code,'LEGACY');assert.equal(legacy.retail_store_id,null);
 });
 
 test('Upload validation rejects invalid type, oversize, and unsafe MIME', () => {
@@ -752,9 +846,9 @@ test('Submit requires before, after and one separate document, succeeds with min
     deep_cleaning_date: '2026-09-01',
     vendor_name: 'Vendor One',
   });
-  await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id), /before image/);
+  await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id), e=>e.code==='incomplete_comparison_pair');
   await issueAndCompleteUpload(db, draft, 'before');
-  await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id), /after image/);
+  await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id), e=>e.code==='incomplete_comparison_pair');
   await issueAndCompleteUpload(db, draft, 'after');
   await assert.rejects(() => submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id), e => e.code === 'single_supporting_document_required');
   await issueAndCompleteUpload(db, draft, 'document');
@@ -763,6 +857,7 @@ test('Submit requires before, after and one separate document, succeeds with min
   assert.ok(submitted.submitted_at);
   const repeated = await submitClientDeepCleaningSubmission(db, FO_PROFILE, draft.id);
   assert.equal(repeated.status, 'submitted');
+  assert.equal(repeated.submitted_at,submitted.submitted_at);
   assert.equal(db.tables.client_deep_cleaning_submissions.length, 1);
 });
 
@@ -799,7 +894,7 @@ test('Deleting own draft upload removes storage and metadata, but another FO or 
   const submittedUpload = db.tables.client_deep_cleaning_uploads.find((row) => row.submission_id === ready.id);
   await assert.rejects(
     () => deleteClientDeepCleaningUpload(db, FO_PROFILE, ready.id, submittedUpload.id),
-    /cannot be deleted/,
+    e=>e.code==='cleaning_evidence_protected',
   );
 });
 
