@@ -4,6 +4,16 @@ on:
   pull_request:
     paths:
       - 'src/hooks/useModalFocus.js'
+      # BEGIN TRAINING EXPORT TRIGGERS
+      - '.github/trainingExportGuard.mjs'
+      - 'tests/trainingExportGuard.test.js'
+      - 'tests/trainingExports.test.js'
+      - 'tests/trainingExports.browser.test.js'
+      - 'src/utils/trainingExport.js'
+      - 'src/utils/trainingExportFiles.js'
+      - 'package.json'
+      - 'package-lock.json'
+      # END TRAINING EXPORT TRIGGERS
       - 'src/pages/DeepCleaning.jsx'
       - 'src/pages/reliance-retail/**'
       - 'src/components/reliance-retail/**'
@@ -67,6 +77,30 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # BEGIN TRAINING EXPORT EXACT PAYLOAD
+          approved_training_exports = {
+            "package.json": "d09171ac1f85630d6c4882ab724a0f425097896e",
+            "package-lock.json": "cbac25222684bad886563cddce7f2e19993da6f5",
+            "src/pages/reliance-retail/RetailTraining.jsx": "2393b9e4cc3cc06c1af79d04cec521a7d55fd05e",
+            "src/components/reliance-retail/TrainingExportControls.jsx": "d510c64dfe0db35cef8f987058b1425d0d2f99b7",
+            "src/components/reliance-retail/trainingExports.css": "08d034ed88e50639ca1c5fcf35daf61bdf4946b3",
+            "src/utils/trainingExport.js": "8f8b21d2094be0ce0d9da2dd296dbac31499495b",
+            "src/utils/trainingExportFiles.js": "69954dfeaa2febeed720e945cb93cd3f6b0c820d",
+            "tests/trainingExports.test.js": "7626aeca04dfd23bc0658304ebf8d73349cc6e6d",
+            "tests/trainingExports.browser.test.js": "50be16d0dc6c1ab12a491b1583080c2ac2e4d047",
+            ".github/trainingExportGuard.mjs": "174dee37f9e572f96b9a20145a124f4de4126ce7",
+            "tests/trainingExportGuard.test.js": "e136dc64e1b65823de8bd3402555946c335de967"
+          }
+          training_export_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
+          if training_export_changed == set(approved_training_exports):
+            mismatch = [path for path, expected in approved_training_exports.items()
+                        if subprocess.check_output(["git", "rev-parse", f"HEAD:{path}"], text=True).strip() != expected]
+            if mismatch:
+              sys.exit("Training export payload changed; renew protected review: " + ", ".join(mismatch))
+            subprocess.run(["node", ".github/trainingExportGuard.mjs", base], check=True)
+            print("PASS: exact Training export payload; all following CI steps remain mandatory.")
+            sys.exit(0)
+          # END TRAINING EXPORT EXACT PAYLOAD
           # Combined Executive V3 + Training V2: exact reviewed payload only.
           import json
           combined_manifest = ".github/retail-combined-ui-pins.json"
@@ -343,6 +377,12 @@ jobs:
         run: npx eslint src/components/reliance-retail/TrainingV2Overview.jsx src/components/reliance-retail/TrainingV2Drawer.jsx src/utils/trainingView.js
       - name: Training V2 frontend regression tests
         run: node --test tests/trainingView.test.js
+      # BEGIN TRAINING EXPORT CHECKS
+      - name: Training export scoped lint
+        run: npx eslint src/components/reliance-retail/TrainingExportControls.jsx src/utils/trainingExport.js src/utils/trainingExportFiles.js
+      - name: Training export files and exact-payload guard regressions
+        run: node --test tests/trainingExports.test.js tests/trainingExportGuard.test.js
+      # END TRAINING EXPORT CHECKS
       - name: Inline Excel row mapping contract tests
         run: node --test tests/retailExcelInline.test.js tests/retailStatePerformance.test.js tests/retailAttendanceVisualModel.test.js tests/deepCleaningView.test.js tests/retailReportView.test.js
       - name: Combined reporting and guard tests
@@ -353,6 +393,10 @@ jobs:
         run: npm run build
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
+      # BEGIN TRAINING EXPORT BROWSER CHECK
+      - name: Training V2 export browser regression
+        run: node --test tests/trainingExports.browser.test.js
+      # END TRAINING EXPORT BROWSER CHECK
       - name: Retail report browser regressions and visual smoke
         run: npx playwright test tests/browser/ifmsDashboard.spec.js tests/browser/retailAttendance.spec.js tests/browser/retailReportVisualSmoke.spec.js tests/browser/retailExcelInline.spec.js tests/browser/trainingV2.spec.js tests/browser/retailCombined.spec.js --reporter=line
       - name: OOS presentation and workflow regressions
