@@ -17,8 +17,17 @@ async function executeOwnedJob(client,job,work,{slot=null,logger=console}={}) {
   if(claim?.error || claim?.data!==true)return {ran:false,reason:claim?.error?'ownership_unavailable':'standby_or_busy'};
   let value,failed=false,workError;
   try {value=await work();}catch(error){failed=true;workError=error;}
+  // A transient transport/database failure must not permanently strand an owned claim.
+  // Retry the same token only; never re-run the financial work or steal another owner's lease.
   let released;
-  try {released=await client.rpc('rpc_worker_release_v1',{p_job:job,p_owner:owner,p_token:token});}catch {released=null;}
+  for(let attempt=0;attempt<3;attempt++){
+    try {released=await client.rpc('rpc_worker_release_v1',{p_job:job,p_owner:owner,p_token:token});}
+    catch {released=null;}
+    if(released?.data===true && !released.error)break;
+    // A definitive false means the claim is no longer ours; require operator review.
+    if(released?.data===false && !released.error)break;
+    if(attempt<2)await new Promise(resolve=>setTimeout(resolve,250*(attempt+1)));
+  }
   if(released?.error || released?.data!==true){
     logger.error('[Worker ownership] Completion uncertain; operator reconciliation required.',{job});
     throw Object.assign(new Error('Worker ownership completion is uncertain.'),{code:'worker_completion_uncertain'});
