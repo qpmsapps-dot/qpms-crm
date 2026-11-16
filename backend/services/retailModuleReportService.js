@@ -25,6 +25,9 @@ export async function retailCleaningReport(client,profile,input={}) {
  assertRetailAccess(profile,'deepCleaning');
  if(profile.is_active===false||['INACTIVE','DISABLED'].includes(String(profile.status||'').toUpperCase()))throw fail(403,'Active Retail access required.');
  const range=moduleReportRange(input),original=await authorizedSnapshot(client,profile,range);
+ return {...range,...await cleaningFromSnapshot(client,profile,original,range,input)};
+}
+async function cleaningFromSnapshot(client,profile,original,range,input={}) {
  const snapshot={...original,deep_cleaning:[...(original.deep_cleaning||[])],images:[...(original.images||[])]};
  const linked=(snapshot.schedules||[]).filter(s=>s.metadata?.retail_fo_completion);
  if(linked.length>1000)throw fail(413,'Narrow the schedule reporting range.');
@@ -32,7 +35,7 @@ export async function retailCleaningReport(client,profile,input={}) {
  for(const source of sources){
   if(source){snapshot.deep_cleaning=[...(snapshot.deep_cleaning||[]),{...source,uploads:undefined}];snapshot.images=[...(snapshot.images||[]),...(source.uploads||[]).map(u=>({submission_id:source.id,photo_type:u.upload_role==='deep_cleaning_before'?'before':'after',uploaded:true}))];}
  }
- return {...range,...cleaningReport(snapshot,{state:input.state,store:input.store,to:range.to}),stores:snapshot.stores.map(({id,store_code,store_name,state})=>({id,store_code,store_name,state}))};
+ return {...range,...cleaningReport(snapshot,{state:input.state,store:input.store,...range}),stores:snapshot.stores.map(({id,store_code,store_name,state})=>({id,store_code,store_name,state}))};
 }
 export async function retailCleaningEvidence(client,profile,id,input={}) {
  // Recheck the authenticated actor's canonical state/store scope before signing anything.
@@ -116,12 +119,9 @@ export async function retailModuleDashboard(client,profile,input={}) {
   modules.attendance={status:'ready',rows:summary.states,total:summary.total};
  }catch{modules.attendance=unavailable('Attendance is unavailable in this authorized scope.');}
  try{
-  assertRetailAccess(profile,'deepCleaning');const report=cleaningReport(snapshot),groups=new Map();
-  if(report.schedules===null)modules.cleaning=unavailable('Deep Cleaning schedule infrastructure is unavailable.');
-  else{
-   for(const r of report.schedules){if(r.display_status==='Cancelled')continue;const g=groups.get(r.reporting_state)||{state:r.reporting_state,scheduled:0,completed:0,not_completed:0,pending:0,remaining:0};g.scheduled++;if(r.display_status==='Completed')g.completed++;if(r.display_status==='Not Completed')g.not_completed++;if(r.display_status==='Scheduled')g.pending++;g.remaining=g.scheduled-g.completed;groups.set(g.state,g);}
-   modules.cleaning={status:'ready',rows:[...groups.values()],identity_exceptions:report.exceptions.length};
-  }
+  assertRetailAccess(profile,'deepCleaning');const report=await cleaningFromSnapshot(client,profile,snapshot,range);
+  modules.cleaning={status:'ready',rows:report.summary.rows,stores:report.summary.stores,
+   schedule_available:report.summary.schedule_available,identity_exceptions:report.exceptions.length};
   modules.cleaning.submitted_reports=submittedCleaningReport(snapshot,range);
  }catch{modules.cleaning=unavailable('Deep Cleaning is unavailable in this authorized scope.');}
  const trainingRead=(async()=>{try{

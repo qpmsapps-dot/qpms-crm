@@ -83,3 +83,14 @@ test('unlinked completed schedules are not counted as verified completions', () 
   assert.equal(v.summary.total.completed, 0);
   assert.equal(v.summary.total.pending, 1);
 });
+
+test('Completed KPI and state chart include independent reports without FO verification',()=>{
+ const standalone={id:'independent',store,status:'submitted',reporting_state:'TN'};
+ const v=cleaningView({...report,submissions:[...report.submissions,standalone,standalone,
+  {id:'draft',store,status:'draft'},{id:'failed',store,status:'failed'}]},{});
+ assert.equal(v.summary.total.completed,2);assert.equal(v.summary.rows.find(row=>row.state==='TN').completed,2);
+ assert.equal(v.summary.total.scheduled,2);assert.equal(v.summary.total.pending,1);
+ assert.equal(v.summary.total.percentage,50,'Schedule completion is independent of the report count');
+ const selected=cleaningView({...report,submissions:[standalone]}, {}, {status:'Completed'});
+ assert.equal(selected.work.length,1);assert.equal(selected.summary.total.completed,1);
+});

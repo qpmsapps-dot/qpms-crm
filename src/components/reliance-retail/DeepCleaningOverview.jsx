@@ -24,7 +24,7 @@ export default function DeepCleaningOverview({
     total,
     rows
   } = view.summary;
-  const val = n => available ? n.toLocaleString('en-IN') : 'N/A';
+  const val = n => available && Number.isFinite(n) ? n.toLocaleString('en-IN') : 'N/A';
   const items = [{
     label: 'Scheduled',
     value: val(total.scheduled),
@@ -34,8 +34,7 @@ export default function DeepCleaningOverview({
   }, {
     label: 'Completed',
     value: val(total.completed),
-    note: 'Verified linked completions',
-    badge: available ? percent(total.percentage) : null,
+    note: 'Submitted reports, scheduled or independent',
     Icon: CheckCircle2,
     tone: 'green'
   }, {
@@ -46,9 +45,9 @@ export default function DeepCleaningOverview({
     Icon: Clock3,
     tone: 'amber'
   }, {
-    label: 'Completion',
+    label: 'Schedule completion',
     value: available ? percent(total.percentage) : 'N/A',
-    note: 'Comparison unavailable',
+    note: 'Matched scheduled work only',
     Icon: ChartNoAxesColumn,
     tone: 'blue'
   }];
@@ -82,11 +81,11 @@ export default function DeepCleaningOverview({
                 }} /><YAxis yAxisId="rate" orientation="right" domain={[0, 100]} tickFormatter={v => v + '%'} tickLine={false} axisLine={false} tick={{
                   fontSize: 9,
                   fill: '#697a98'
-                }} width={35} /><Tooltip formatter={(value, name) => [name === 'Completion %' ? percent(value) : value, name]} contentStyle={{
+                }} width={35} /><Tooltip formatter={(value, name) => [name === 'Schedule completion %' ? percent(value) : value, name]} contentStyle={{
                   borderRadius: 10,
                   borderColor: '#dce4f3',
                   fontSize: 12
-                }} /><Bar isAnimationActive={false} yAxisId="count" name="Scheduled" dataKey="scheduled" fill="url(#dcScheduled)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="scheduled" content={<CountLabel />} /></Bar><Bar isAnimationActive={false} yAxisId="count" name="Completed" dataKey="completed" fill="url(#dcCompleted)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="completed" content={<CountLabel />} /></Bar><Line isAnimationActive={false} yAxisId="rate" name="Completion %" dataKey="percentage" stroke="#1747ef" strokeWidth={2} dot={{
+                }} /><Bar isAnimationActive={false} yAxisId="count" name="Scheduled" dataKey="scheduled" fill="url(#dcScheduled)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="scheduled" content={<CountLabel />} /></Bar><Bar isAnimationActive={false} yAxisId="count" name="Completed" dataKey="completed" fill="url(#dcCompleted)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="completed" content={<CountLabel />} /></Bar><Line isAnimationActive={false} yAxisId="rate" name="Schedule completion %" dataKey="percentage" stroke="#1747ef" strokeWidth={2} dot={{
                   r: 3,
                   fill: '#1747ef',
                   stroke: '#fff',
@@ -101,7 +100,7 @@ export default function DeepCleaningOverview({
           Icon: CheckCircle2,
           tone: 'green',
           value: val(total.completed) + ' visits',
-          label: 'Verified linked completions'
+          label: 'Submitted reports'
         }, {
           Icon: Clock3,
           tone: 'amber',

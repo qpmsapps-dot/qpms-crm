@@ -1,4 +1,5 @@
 import { summarizeVerifiedCleaningSchedules } from './retailStatePerformance.js';
+import { summarizeCleaningReports } from '../../backend/shared/retailModuleReports.js';
 export const recordedFoName = row => row?.fo_name || row?.submitted_by_name || row?.submitted_by_employee_name || row?.performed_by_name || row?.metadata?.executor_name || '';
 export const recordedFoCode = row => row?.submitted_by_employee_code || row?.employee_code || row?.metadata?.executor_employee_code || '';
 export const recordedStatus = row => row?.status || row?.display_status || 'Not recorded';
@@ -18,10 +19,15 @@ export function cleaningView(report, historical, {
   const term = query.trim().toLocaleLowerCase();
   const matches = row => !term || [row.store?.store_code, row.store?.store_name, recordedFoName(row), recordedFoCode(row), row.not_done_reason].filter(Boolean).join(' ').toLocaleLowerCase().includes(term);
   const linked = plan => joined.filter(row => row.schedule_id === plan.id || plan.submission_ids?.includes(row.id));
-  const statusMatches = (row, plan) => !status || row.status === status || row.display_status === status || plan?.display_status === status;
+  const statusMatches = (row, plan) => !status || row.status === status || row.display_status === status || plan?.display_status === status || (status==='Completed' && String(row.status).toLowerCase()==='submitted');
   const schedules = sourceSchedules.filter(plan => (matches(plan) || linked(plan).some(matches)) && (statusMatches(plan) || linked(plan).some(row => statusMatches(row))));
   const work = joined.filter(row => matches(row) && statusMatches(row, row.schedule));
-  const summary = summarizeVerifiedCleaningSchedules(schedules);
+  const scheduledSummary = summarizeVerifiedCleaningSchedules(schedules);
+  const matchedSchedules=schedules.map(row=>String(row.display_status||row.status).toLowerCase()==='completed'&&!row.submission_ids?.length?{...row,display_status:'Scheduled'}:row);
+  const completion = summarizeCleaningReports(work,report?.schedules===null?null:matchedSchedules);
+  const summary = {...scheduledSummary,total:{...scheduledSummary.total,...completion.total},
+    rows:scheduledSummary.rows.map(row=>({...row,...completion.rows.find(state=>state.state===row.state),
+      ...(completion.schedule_available?{}:{scheduled:null,pending:null,other:null,percentage:null})}))};
   const operational = schedules.filter(row => row.source_kind !== 'IFMS_EXCEL');
   return {
     schedules,

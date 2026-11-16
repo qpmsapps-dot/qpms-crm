@@ -7,7 +7,7 @@ export const EXECUTIVE_MODULES = [
   { id: 'thermography', title: 'Thermography', route: '/reliance-retail/thermography', unit: '', note: 'Currently approved in schedule cohort' },
   { id: 'cm', title: 'CM', route: '/reliance-retail/cmpm', unit: '%', note: 'Completed / applicable stores' },
   { id: 'pm', title: 'PM', route: '/reliance-retail/cmpm', unit: '%', note: 'Completed / applicable stores' },
-  { id: 'cleaning', title: 'Deep Cleaning', route: '/reliance-retail/deep-cleaning', unit: '%', note: 'Completed / scheduled jobs' },
+  { id: 'cleaning', title: 'Deep Cleaning', route: '/reliance-retail/deep-cleaning', unit: '', note: 'Submitted reports, scheduled or independent' },
   { id: 'training', title: 'Training', route: '/reliance-retail/training', unit: '', note: 'HK + MEPC operational sessions' },
 ];
 export const EXECUTIVE_STATES = ['TN', 'KN', 'KL', 'AP-1', 'AP-2', 'TG'];
@@ -37,8 +37,10 @@ export function scopedActivity(rows, report, scope = {}) {
 function sourceRows(report, id, scope) {
   const source = report?.modules?.[id];
   if (source?.status !== 'ready' || !Array.isArray(source.rows)) return null;
-  if (scope.store) return null; // The dashboard contract exposes state aggregates, not per-store attendance/training totals.
-  return source.rows.filter(r => !scope.state || reportingState(r.state) === scope.state);
+  if (scope.store && id!=='cleaning') return null; // Other dashboard modules expose state aggregates only.
+  const rows=scope.store?source.stores?.filter(row=>row.store_id===scope.store):source.rows;
+  if(!rows)return null;
+  return rows.filter(r => !scope.state || reportingState(r.state) === scope.state);
 }
 export function moduleMetric(report, id, scope = {}) {
   const unavailable = reason => ({ id, value: null, ready: false, reason, counts: {}, rows: [] });
@@ -61,10 +63,10 @@ export function moduleMetric(report, id, scope = {}) {
   } else if (id === 'cleaning') {
     const scheduled = total('scheduled'), completed = total('completed'), pending = total('pending'), notDone = total('not_completed');
     result.counts = { Scheduled: scheduled, Completed: completed, Pending: pending, 'Recorded Not Done': notDone };
-    result.value = valid(completed) && completed <= scheduled ? ratio(completed, scheduled) : null;
-    result.segments = [completed, pending, notDone].every(valid) && scheduled >= completed + pending + notDone
-      ? [{ name: 'Completed', value: completed, color: '#22b573' }, { name: 'Pending', value: pending, color: '#eab44a' }, { name: 'Recorded Not Done', value: notDone, color: '#eb6b76' }, { name: 'Other recorded', value: scheduled - completed - pending - notDone, color: '#c7d2e1' }] : null;
-    result.reason = 'Cancelled schedules excluded. Overdue counts are not supplied; pending does not mean Not Done.';
+    result.value = completed;
+    result.segments = valid(completed)?[{name:'Submitted reports',value:completed,color:'#22b573'}]:null;
+    if(report.modules.cleaning.schedule_available===false){result.counts.Scheduled=null;result.counts.Pending=null;result.counts['Recorded Not Done']=null;}
+    result.reason = 'Completed counts unique submitted reports by actual cleaning date, independently of schedules or FO verification. Scheduled and Pending retain schedule matching rules.';
   } else if (id === 'cm' || id === 'pm') {
     result.counts = { 'Applicable stores': total('eligible'), Completed: total('completed'), Remaining: total('remaining') };
     result.value = total('completed') <= total('eligible') ? ratio(total('completed'), total('eligible')) : null;

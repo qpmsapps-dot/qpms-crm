@@ -27,7 +27,8 @@ export function StateBars({ rows, metric = 'attendance', reduced }) {
 export function CompletionRing({ metric, title, reduced }) {
   const [ref, entered] = useEntry(reduced);
   const value = metric.value;
-  return <div className="er-ring-group" ref={ref}><div className="er-ring" role="img" aria-label={`${title}: ${number(value)}${value == null ? '' : '%'} completion`}>
+  const suffix=metric.id==='cleaning'?'':'%';
+  return <div className="er-ring-group" ref={ref}><div className="er-ring" role="img" aria-label={`${title}: ${number(value)}${value == null ? '' : suffix} ${metric.id==='cleaning'?'submitted reports':'completion'}`}>
     {metric.segments?.some(s => s.value > 0) ? <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={entered ? metric.segments.filter(s => s.value > 0) : []} dataKey="value" innerRadius="76%" outerRadius="96%" startAngle={90} endAngle={-270} stroke="none" isAnimationActive={!reduced} animationDuration={700}>{metric.segments.filter(s => s.value > 0).map(s => <Cell key={s.name} fill={s.color} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer> : <svg viewBox="0 0 100 100" aria-hidden="true"><circle className="er-ring-track" cx="50" cy="50" r="43" /><circle className="er-ring-fill" cx="50" cy="50" r="43" style={{ '--er-ring': value == null ? 0 : Math.max(0, Math.min(value, 100)) }} /></svg>}
-    <div><strong>{number(value)}{value == null ? '' : '%'}</strong><small>{title}</small></div></div></div>;
+    <div><strong>{number(value)}{value == null ? '' : suffix}</strong><small>{title}</small></div></div></div>;
 }

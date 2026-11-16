@@ -12,6 +12,41 @@ export function canonicalActivityStore(stores, record) {
   return store;
 }
 
+// Counts only authorized, canonically resolved records supplied by cleaningReport.
+// Report completion and schedule fulfilment are independent measures.
+export function summarizeCleaningReports(submissions, schedules, filter = {}) {
+  const scheduleAvailable = Array.isArray(schedules), states = new Map(), stores = new Map(), seen = new Set();
+  const empty = () => ({scheduled:scheduleAvailable?0:null,completed:0,pending:scheduleAvailable?0:null,
+    not_completed:scheduleAvailable?0:null,scheduled_completed:scheduleAvailable?0:null});
+  const total=empty();
+  const targets = row => {
+    const state=row.reporting_state||reportingState(row.store?.state);
+    if(!states.has(state))states.set(state,{state,...empty()});
+    const store=row.store;
+    if(!stores.has(store.id))stores.set(store.id,{state,store_id:store.id,store_code:store.store_code,store_name:store.store_name,...empty()});
+    return [total,states.get(state),stores.get(store.id)];
+  };
+  for(const row of schedules||[]){
+    if(row.source_kind==='IFMS_EXCEL'||row.display_status==='Cancelled')continue;
+    for(const group of targets(row)){
+      group.scheduled++;
+      if(row.display_status==='Completed')group.scheduled_completed++;
+      if(row.display_status==='Scheduled')group.pending++;
+      if(row.display_status==='Not Completed')group.not_completed++;
+    }
+  }
+  for(const row of submissions||[]){
+    if(!row.id||seen.has(row.id)||row.source_kind==='IFMS_EXCEL'||storeKey(row.status)!=='SUBMITTED')continue;
+    if((filter.from||filter.to)&&!row.deep_cleaning_date)continue;
+    if(filter.from&&row.deep_cleaning_date<filter.from||filter.to&&row.deep_cleaning_date>filter.to)continue;
+    seen.add(row.id);
+    for(const group of targets(row))group.completed++;
+  }
+  const finish = row => ({...row,remaining:scheduleAvailable?row.scheduled-row.scheduled_completed:null,
+    percentage:scheduleAvailable&&row.scheduled>0?Math.round(row.scheduled_completed/row.scheduled*1000)/10:null});
+  return {total:finish(total),rows:[...states.values()].map(finish),stores:[...stores.values()].map(finish),schedule_available:scheduleAvailable};
+}
+
 export function cleaningReport(snapshot, filter = {}) {
   const stores = snapshot.stores || [], exceptions = [];
   const visible = store => (!filter.state || reportingState(store.state) === reportingState(filter.state)) && (!filter.store || store.id === filter.store);
@@ -32,8 +67,10 @@ export function cleaningReport(snapshot, filter = {}) {
     const effective = status === 'CANCELLED' ? 'Cancelled' : ['NOT DONE','NOT COMPLETED'].includes(status) ? 'Not Completed' : !terminal && matches.length ? 'Completed' : recordedNotDone ? 'Not Completed' : ['PLANNED','SCHEDULED','COMPLETED'].includes(status) ? 'Scheduled' : 'Unknown';
     return [{...plan,store,reporting_state:reportingState(store.state),display_status:effective,submission_ids:matches.map(s=>s.id),overdue:effective==='Scheduled' && plan.scheduled_date < (filter.to || snapshot.to)}];
   });
-  return {schedules,submissions,exceptions,states:[...new Set(stores.filter(visible).map(s=>reportingState(s.state)))].sort(),
-    totals:schedules===null?null:{scheduled:schedules.filter(s=>s.display_status!=='Cancelled').length,completed:schedules.filter(s=>s.display_status==='Completed').length,not_completed:schedules.filter(s=>s.display_status==='Not Completed').length,pending:schedules.filter(s=>s.display_status==='Scheduled').length}};
+  const summary=summarizeCleaningReports(submissions,schedules,filter);
+  const {scheduled,completed:reportsCompleted,not_completed,pending}=summary.total;
+  return {schedules,submissions,exceptions,summary,states:[...new Set(stores.filter(visible).map(s=>reportingState(s.state)))].sort(),
+    totals:{scheduled,completed:reportsCompleted,not_completed,pending}};
 }
 
 // Submitted-report counts are independent of schedule KPIs and their denominator.

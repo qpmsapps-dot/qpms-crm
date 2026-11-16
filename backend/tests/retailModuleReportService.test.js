@@ -79,10 +79,11 @@ test('independent submitted cleaning reports retain explicit outcomes, dates, id
  const notDone={...done,id:'not-done',final_outcome:'Not Done'};
  const input={...snapshot,deep_cleaning:[done,done,notDone,{...done,id:'draft',status:'draft'},{...done,id:'outside',deep_cleaning_date:'2026-09-30'}],schedules:null};
  assert.deepEqual(submittedCleaningReport(input,range),{status:'ready',rows:[{state:'TN',submitted:2,done:1,not_done:1}],identity_exceptions:0});
- assert.equal(cleaningReport(input).totals,null,'No schedule denominator is invented');
+ assert.equal(cleaningReport(input).totals.scheduled,null,'No schedule denominator is invented');
  assert.equal(submittedCleaningReport({stores:snapshot.stores},range).status,'unavailable');
  const unlinked={...snapshot,schedules:[{id:'plan',retail_store_id:'s',scheduled_date:'2026-10-01',status:'Scheduled'}],deep_cleaning:[done]};
- assert.equal(cleaningReport(unlinked).totals.completed,0,'Independent reports do not complete schedules by Store Code/date alone');
+ assert.equal(cleaningReport(unlinked).totals.completed,1,'Submitted reports complete independently of scheduling');
+ assert.equal(cleaningReport(unlinked).schedules[0].display_status,'Scheduled','No schedule is completed by Store Code/date alone');
  for(const changed of [{store_code:'UNKNOWN'},{state:'KA'},{final_outcome:'Unknown'}]){
   const report=submittedCleaningReport({...input,deep_cleaning:[{...done,...changed}]},range);
   assert.equal(report.status,'unavailable');assert.deepEqual(report.rows,[]);
@@ -93,15 +94,59 @@ test('submitted Not Done schedule report is not mislabeled pending; cancellation
  const plan={id:'plan',retail_store_id:'s',scheduled_date:'2026-10-01',status:'Scheduled'};
  const row={...snapshot.deep_cleaning[0],schedule_id:'plan',final_outcome:'Not Done'};
  const source={...snapshot,schedules:[plan],deep_cleaning:[row]};
- assert.deepEqual(cleaningReport(source).totals,{scheduled:1,completed:0,not_completed:1,pending:0});
+ assert.deepEqual(cleaningReport(source).totals,{scheduled:1,completed:1,not_completed:1,pending:0});
  assert.equal(cleaningReport({...source,schedules:[{...plan,status:'Cancelled'}]}).schedules[0].display_status,'Cancelled');
- assert.equal(cleaningReport({...source,deep_cleaning:[row,{...row,id:'done',final_outcome:'Completed'}]}).totals.completed,1);
+ assert.equal(cleaningReport({...source,deep_cleaning:[row,{...row,id:'done',final_outcome:'Completed'}]}).totals.completed,2);
 });
 
 test('dashboard includes independent report counts without changing schedule totals',async()=>{
  const {client}=trainingFixture(0);const result=await retailModuleDashboard(client,{...admin,employee_code:'ADMIN'},range);
- assert.deepEqual(result.modules.cleaning.rows,[]);
+ assert.equal(result.modules.cleaning.rows[0].completed,1);
+ assert.equal(result.modules.cleaning.rows[0].scheduled,0);
  assert.deepEqual(result.modules.cleaning.submitted_reports.rows,[{state:'TN',submitted:1,done:1,not_done:0}]);
+});
+
+test('page and dashboard reconcile scheduled and independent submitted reports without verification or schedule mutations',async()=>{
+ const source={...snapshot,stores:[...snapshot.stores,{id:'ap',store_code:'AP2',state:'AP-2'}],
+  schedules:[{id:'plan',retail_store_id:'s',scheduled_date:'2026-10-01',status:'Scheduled'},
+   {id:'pending',retail_store_id:'ap',scheduled_date:'2026-10-02',status:'Scheduled'}],
+  deep_cleaning:[{...snapshot.deep_cleaning[0],schedule_id:'plan'},
+   {id:'independent',retail_store_id:'ap',status:'submitted',deep_cleaning_date:'2026-10-03'},
+   {id:'independent',retail_store_id:'ap',status:'submitted',deep_cleaning_date:'2026-10-03'},
+   {id:'another',retail_store_id:'ap',status:'submitted',deep_cleaning_date:'2026-10-04',ownership:null},
+   ...['draft','uploading','failed','incomplete','completed'].map(status=>({id:status,retail_store_id:'ap',status,deep_cleaning_date:'2026-10-03'})),
+   {id:'previous',retail_store_id:'s',status:'submitted',deep_cleaning_date:'2026-09-30'},
+   {id:'future',retail_store_id:'s',status:'submitted',deep_cleaning_date:'2026-11-01'}]};
+ const unchanged=structuredClone(source),{client}=trainingFixture(0);
+ client.rpc=async name=>name==='rpc_retail_unified_snapshot'?{data:source}:{error:{code:'42P01'}};
+ const page=await retailCleaningReport(client,admin,range),dashboard=await retailModuleDashboard(client,admin,range);
+ assert.deepEqual(page.totals,{scheduled:2,completed:3,not_completed:0,pending:1});
+ assert.deepEqual(dashboard.modules.cleaning.rows,page.summary.rows);
+ assert.deepEqual(dashboard.modules.cleaning.stores,page.summary.stores);
+ assert.equal(page.summary.total.scheduled_completed,1);
+ assert.equal(page.schedules.find(row=>row.id==='pending').display_status,'Scheduled');
+ const ap=await retailCleaningReport(client,admin,{...range,state:'AP-2',store:'ap'});
+ assert.equal(ap.totals.completed,2);assert.equal(ap.totals.pending,1);
+ assert.deepEqual(source,unchanged,'Read-only reports must not update schedules or submissions');
+});
+
+test('submitted report totals remain available when schedule infrastructure is absent',async()=>{
+ const {client}=trainingFixture(0);
+ client.rpc=async name=>name==='rpc_retail_unified_snapshot'?{data:{...snapshot,schedules:null}}:{error:{code:'42P01'}};
+ const page=await retailCleaningReport(client,admin,range),dashboard=await retailModuleDashboard(client,admin,range);
+ assert.deepEqual(page.totals,{scheduled:null,completed:1,not_completed:null,pending:null});
+ assert.equal(dashboard.modules.cleaning.rows[0].completed,1);
+ assert.equal(dashboard.modules.cleaning.schedule_available,false);
+});
+
+test('both report endpoints resolve the same existing linked source and deduplicate it',async()=>{
+ const source={...snapshot,schedules:[{id:'linked-plan',retail_store_id:'s',scheduled_date:'2026-10-02',status:'Scheduled',metadata:{retail_fo_completion:{source_id:'legacy'}}}]};
+ const linked={id:'fo:legacy',retail_store_id:'s',schedule_id:'linked-plan',status:'submitted',deep_cleaning_date:'2026-10-02',uploads:[]};
+ const {client}=trainingFixture(0),requests=[];
+ client.rpc=async name=>{requests.push(name);return name==='rpc_retail_unified_snapshot'?{data:source}:name==='rpc_retail_cleaning_link_source'?{data:linked}:{error:{code:'42P01'}};};
+ const page=await retailCleaningReport(client,admin,range),dashboard=await retailModuleDashboard(client,admin,range);
+ assert.equal(page.totals.completed,2);assert.deepEqual(page.summary.rows,dashboard.modules.cleaning.rows);
+ assert.equal(requests.filter(name=>name==='rpc_retail_cleaning_link_source').length,2);
 });
 
 test('legacy Training identities resolve only inside the preserved employee/client envelope',async()=>{

@@ -33,13 +33,26 @@ test('Training is an operational count requiring both valid sources, never a com
   r.modules.soft = { status: 'unavailable' };
   assert.equal(moduleMetric(r, 'training').ready, false);
 });
-test('Cleaning donut partitions are exclusive, pending never becomes Not Done', () => {
+test('Cleaning reports are counts independent of scheduled and pending work', () => {
   const m = moduleMetric(report(), 'cleaning');
-  assert.equal(m.value, 60);
-  assert.equal(m.segments.reduce((n, x) => n + x.value, 0), 10);
+  assert.equal(m.value, 6);
+  assert.equal(m.segments.reduce((n, x) => n + x.value, 0), 6);
   assert.equal(m.counts['Recorded Not Done'], 1);
   const r = report(); r.modules.cleaning.rows[0].pending = 8;
-  assert.equal(moduleMetric(r, 'cleaning').segments, null);
+  assert.equal(moduleMetric(r, 'cleaning').value, 6);
+  assert.equal(moduleMetric(r, 'cleaning').counts.Pending,8);
+});
+
+test('Cleaning MTD and store charts retain submitted counts above schedule totals',()=>{
+ const r=report();r.modules.cleaning.rows=[{state:'TN',scheduled:0,completed:4,pending:0,not_completed:0}];
+ r.modules.cleaning.stores=[{store_id:'s1',state:'TN',scheduled:0,completed:4,pending:0,not_completed:0}];
+ assert.equal(moduleMetric(r,'cleaning').value,4);
+ assert.equal(moduleMetric(r,'cleaning',{state:'TN'}).counts.Completed,4);
+ assert.equal(moduleMetric(r,'cleaning',{store:'s1'}).value,4);
+ assert.equal(executiveReport(r).states[0].modules.cleaning.value,4);
+ r.modules.cleaning.schedule_available=false;
+ assert.equal(moduleMetric(r,'cleaning').counts.Scheduled,null);
+ assert.equal(moduleMetric(r,'cleaning').counts.Completed,4);
 });
 test('thermography overdue is a subset, not an added inspection total', () => {
   const m = moduleMetric(report(), 'thermography');
