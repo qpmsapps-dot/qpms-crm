@@ -30,7 +30,7 @@ test('authoritative Retail store gate denies other state, business and unsupport
   assert.equal((await loadTrainingRetailStore(client(), {...fo,role:'KAM'}, 'retail', 'technical_mep')).id, 'retail');
   await assert.rejects(loadTrainingRetailStore(client(), { ...fo, role:'KAM', state: 'TN' }, 'retail', 'technical_mep'), { code: 'store_scope_forbidden' });
   await assert.rejects(loadTrainingRetailStore(client(), { ...fo, business: 'Other' }, 'retail', 'hk'), { code: 'forbidden_business' });
-  await assert.rejects(loadTrainingRetailStore(client(), fo, 'retail', 'hk'), { code: 'store_scope_forbidden' });
+  assert.equal((await loadTrainingRetailStore(client(), fo, 'retail', 'hk')).id,'retail');
 });
 
 function scopedClient(overrides={}) {
@@ -76,26 +76,35 @@ function scopedClient(overrides={}) {
 test('KA Training searches all own-state stores without zone assignment; supervisor-only remains Technical',async()=>{
  const db=scopedClient(),profile={...fo,state:'KA'};
  const zones=await listTrainingZones(db,profile);
- assert.equal(zones[0].id,'STATE_WIDE');
+ assert.deepEqual(zones,[]);
  const found=await searchTrainingRetailStores(db,profile,{category_code:'hk',zone_id:'STATE_WIDE',limit:25});
- assert.deepEqual(found.stores.map(x=>x.store_code),['KA01','KA02']);
+ assert.deepEqual(found.stores.map(x=>x.store_code),['KA01','KA02','KA03']);
  assert.equal((await loadTrainingRetailStore(db,profile,'ka-no-zone','hk')).id,'ka-no-zone');
- await assert.rejects(loadTrainingRetailStore(db,profile,'ka-supervisor','hk'),{code:'store_scope_forbidden'});
+ assert.equal((await loadTrainingRetailStore(db,profile,'ka-supervisor','hk')).id,'ka-supervisor');
  assert.equal((await loadTrainingRetailStore(db,{...profile,role:'KAM'},'ka-supervisor','technical_mep')).id,'ka-supervisor');
  await assert.rejects(loadTrainingRetailStore(db,profile,'tn-zone','hk'),{code:'store_scope_forbidden'});
 });
-test('TN Training exposes only active assigned zones and rejects another zone',async()=>{
+test('TN Training uses state-wide stores and does not require Zone assignment',async()=>{
  const db=scopedClient(),profile={...fo,id:'tn-fo',state:'TN'};
- assert.deepEqual((await listTrainingZones(db,profile)).map(z=>z.zone_code),['TN1']);
+ assert.deepEqual(await listTrainingZones(db,profile),[]);
  const eligible=await searchTrainingRetailStores(db,profile,{category_code:'hk',zone_id:'zone-tn'});
- assert.deepEqual(eligible.stores.map(x=>x.store_code),['TN01']);
- await assert.rejects(searchTrainingRetailStores(db,profile,{category_code:'hk',zone_id:'zone-other'}),{code:'store_scope_forbidden'});
- await assert.rejects(loadTrainingRetailStore(db,profile,'tn-other','hk'),{code:'store_scope_forbidden'});
+ assert.deepEqual(eligible.stores.map(x=>x.store_code),['TN01','TN02']);
+ assert.equal((await loadTrainingRetailStore(db,profile,'tn-other','hk')).id,'tn-other');
  assert.equal((await loadTrainingRetailStore(db,profile,'tn-zone','hk')).id,'tn-zone');
 });
-test('expired TN zone assignment does not authorize Training',async()=>{
+for(const [state,storeState] of [['TN','Tamil Nadu'],['PY','Puducherry'],['AP','AP-1'],['AP','AP-2'],['KA','KN'],['KL','Kerala'],['TG','TS']]){
+ test(`${state}/${storeState} Training HK uses state access without Zones`,async()=>{
+  const profile={...fo,state};
+  const db=scopedClient({reliance_retail_store_master:[{id:'state-store',store_code:'STATE',state:storeState,status:'Active',zone_id:null}],reliance_retail_zone_fo_assignments:[]});
+  assert.equal((await searchTrainingRetailStores(db,profile,{category_code:'hk'})).stores.length,1);
+  assert.equal((await loadTrainingRetailStore(db,profile,'state-store','hk')).id,'state-store');
+  await assert.rejects(loadTrainingRetailStore(db,{...profile,state:'XX'},'state-store','hk'),{code:'store_scope_forbidden'});
+ });
+}
+
+test('expired TN Zone assignment does not remove existing state authorization',async()=>{
  const db=scopedClient({reliance_retail_zone_fo_assignments:[{zone_id:'zone-tn',fo_profile_id:'tn-fo',effective_from:'2025-01-01T00:00:00Z',effective_to:'2026-01-01T00:00:00Z'}]});
  const profile={...fo,id:'tn-fo',state:'TN'};
  assert.deepEqual(await listTrainingZones(db,profile),[]);
- await assert.rejects(loadTrainingRetailStore(db,profile,'tn-zone','hk'),{code:'store_scope_forbidden'});
+ assert.equal((await loadTrainingRetailStore(db,profile,'tn-zone','hk')).id,'tn-zone');
 });

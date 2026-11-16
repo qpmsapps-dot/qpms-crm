@@ -1,5 +1,6 @@
 import { isRelianceRetailStore, isRelianceRetailValue, retailStateKey } from './clientDeepCleaningService.js';
 import { foOperationalAllowedEmployeeCodes } from './foOperationalAccessService.js';
+import { retailFoStateAllows } from './retailFoStoreScope.js';
 import { resolveRetailHkTrainingScope, applyRetailTrainingStoreScope, retailTrainingFoCodes, retailTrainingFoProfiles } from './retailTrainingReadScopeService.js';
 
 export const RELIANCE_TRAINING_CLIENT_ID = '369d2d5f-396f-49f9-a47d-bfbc8f7cb922';
@@ -142,6 +143,7 @@ function employeeMatches(profile, record) {
 }
 
 function stateMatches(profile, state) {
+  if (canonicalTrainingRole(profile?.role) === 'FO') return retailFoStateAllows(profile.state, state);
   const actorState = retailStateKey(profile?.state);
   return !actorState || actorState === retailStateKey(state);
 }

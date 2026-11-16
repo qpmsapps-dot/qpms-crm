@@ -16,6 +16,7 @@ import {
 import { isRelianceRetailStore, isRelianceRetailValue,retailStateKey,retailStateQueryValues,loadAuthorizedRetailZones } from './clientDeepCleaningService.js';
 import { applyRetailTrainingStoreScope, narrowRetailTrainingScope, retailTrainingEnvelopeIds } from './retailTrainingReadScopeService.js';
 import { normalizedStateKey } from './workMappingScope.js';
+import { retailFoStateAllows, retailFoStateValues } from './retailFoStoreScope.js';
 
 function nullableText(value) {
   const valueText = cleanTrainingText(value);
@@ -345,6 +346,10 @@ export async function submitTrainingSession(client, profile, sessionId, { verify
     return getTrainingSession(client, profile, sessionId);
   }
   await loadAuthorizedTrainingSession(client, profile, sessionId, { editable: true });
+  if (context.session.retail_store_id) {
+    const category = await activeMaster(client, 'training_categories', context.session.category_id, 'category');
+    await loadTrainingRetailStore(client, profile, context.session.retail_store_id, category.code);
+  }
   if (verifyEvidenceObjects) await verifyEvidenceObjects(client, profile, sessionId);
   await rpc(client, 'rpc_submit_reliance_training_session_v2', {
     p_session_id: sessionId,
@@ -376,6 +381,7 @@ function retailActor(profile) {
 export async function listTrainingZones(client, profile) {
   profile = await resolveTrainingMutationProfile(client, profile);
   retailActor(profile);
+  if(canonicalTrainingRole(profile.role)==='FO')return [];
   const state=retailStateKey(profile.state);
   if(state==='TN')return trainingAuthorizedZones(client,profile);
   if(!retailStateQueryValues(profile.state).length)throw trainingError(403,'store_scope_forbidden','A verified exact state is required.');
@@ -387,9 +393,10 @@ export async function searchTrainingRetailStores(client, profile, input = {}) {
   profile = await resolveTrainingMutationProfile(client, profile);
   assertTrainingCategory(profile, input.category_code);
   retailActor(profile);
-  const state=retailStateKey(profile.state),states=retailStateQueryValues(profile.state);
+  const foStateScope=canonicalTrainingRole(profile.role)==='FO';
+  const state=retailStateKey(profile.state),states=foStateScope?retailFoStateValues(profile.state):retailStateQueryValues(profile.state);
   if(!states.length)throw trainingError(403,'store_scope_forbidden','A verified exact state is required.');
-  const tnZoneScope=state==='TN';
+  const tnZoneScope=!foStateScope&&state==='TN';
   const supervisorOnly=input.supervisor_only==='true';
   if(supervisorOnly&&input.category_code!=='technical_mep')
    throw trainingError(403,'store_scope_forbidden','Supervisor-only stores are available for Technical Training.');
@@ -409,21 +416,23 @@ export async function searchTrainingRetailStores(client, profile, input = {}) {
   const q=cleanTrainingText(input.q).replace(/[^\p{L}\p{N} -]/gu,' ').slice(0,80).trim();
   if(q)query=query.or(`store_code.ilike.%${q}%,store_name.ilike.%${q}%`);
   const result=await rows(query.order('store_code').order('id').range(offset,offset+limit));
-  return {stores:result.filter(store=>retailStateKey(store.state)===state && (input.category_code==='technical_mep' || store.metadata?.operational_model!=='SUPERVISOR_ONLY')).slice(0,limit),
-   has_more:result.length>limit,offset,limit};
+  return {stores:result.filter(store=>(foStateScope?retailFoStateAllows(profile.state,store.state):retailStateKey(store.state)===state) && (foStateScope || input.category_code==='technical_mep' || store.metadata?.operational_model!=='SUPERVISOR_ONLY')).slice(0,limit),
+   has_more:result.length>limit,offset,limit,...(foStateScope?{zone_required:false}:{})};
 }
 
 export async function loadTrainingRetailStore(client, profile, storeId, categoryCode) {
   profile = await resolveTrainingMutationProfile(client, profile);
   assertTrainingCategory(profile, categoryCode);
   retailActor(profile);
-  const state=retailStateKey(profile.state),states=retailStateQueryValues(profile.state);
+  const foStateScope=canonicalTrainingRole(profile.role)==='FO';
+  const state=retailStateKey(profile.state),states=foStateScope?retailFoStateValues(profile.state):retailStateQueryValues(profile.state);
   if(!states.length)throw trainingError(403,'store_scope_forbidden','A verified exact state is required.');
   const {data:store,error}=await client.from('reliance_retail_store_master').select('*')
     .eq('id',cleanTrainingText(storeId)).maybeSingle();
   if(error)throw error;
-  if(!store||store.status!=='Active'||retailStateKey(store.state)!==state)
+  if(!store||store.status!=='Active'||!(foStateScope?retailFoStateAllows(profile.state,store.state):retailStateKey(store.state)===state))
    throw trainingError(403,'store_scope_forbidden','Select an active Training store in your authorized state.');
+  if(foStateScope)return store;
   if(store.metadata?.operational_model==='SUPERVISOR_ONLY'&&categoryCode!=='technical_mep')
    throw trainingError(403,'store_scope_forbidden','Supervisor-only stores support Technical Training only.');
   if(state==='TN'){

@@ -552,12 +552,38 @@ test('Unlisted store is rejected and Retail store saves canonical business', asy
   assert.equal(row.business, 'Reliance Retail');
 });
 
-test('Retail FO search is TN zone scoped and state-wide outside TN', async () => {
+for(const [state,storeStates] of [['TN',['Tamil Nadu']],['PY',['Puducherry']],['AP',['AP-1','AP-2']],['KA',['KN']],['KL',['Kerala']],['TG',['TS']]]){
+ test(`${state} searches and creates canonical stores without Zone assignments`,async()=>{
+  const db=client(),profile={...FO_PROFILE,state};
+  db.tables.reliance_retail_zone_fo_assignments=[];
+  db.tables.reliance_retail_store_master=storeStates.map((value,i)=>({id:`regional-${i}`,store_code:`REG${i}`,store_name:'Regional store',state:value,status:'Active',zone_id:null}));
+  db.tables.reliance_retail_store_master.push({id:'foreign',store_code:'FOREIGN',state:'XX',status:'Active',zone_id:null});
+  const result=await searchRelianceRetailStores(db,profile);
+  assert.equal(result.zone_required,false);assert.equal(result.rows.length,storeStates.length);
+  assert.equal((await createClientDeepCleaningSubmission(db,profile,{store_code:'REG0'})).retail_store_id,'regional-0');
+  await assert.rejects(()=>loadRelianceRetailStore(db,profile,'FOREIGN'),{code:'invalid_store'});
+ });
+}
+
+test('AP state returns all 251 active AP-1/AP-2 stores across pages',async()=>{
+ const db=client(),profile={...FO_PROFILE,state:'AP'};
+ db.tables.reliance_retail_zone_fo_assignments=[];
+ db.tables.reliance_retail_store_master=Array.from({length:251},(_,i)=>({id:`ap-${i}`,store_code:`AP${i}`,store_name:'AP store',state:i<95?'AP-1':'AP-2',status:'Active',zone_id:null}));
+ const found=new Set();
+ for(let page=1;page<=6;page++){
+  const result=await searchRelianceRetailStores(db,profile,{page,limit:50});
+  assert.equal(result.pagination.total,251);result.rows.forEach(store=>found.add(store.id));
+ }
+ assert.equal(found.size,251);
+ assert.equal((await searchRelianceRetailStores(db,profile,{q:'AP250'})).rows[0].store_code,'AP250');
+});
+
+test('Retail FO search is state-wide while retaining optional Zone metadata', async () => {
   const db = client();
   const retail = await searchRelianceRetailStores(db, FO_PROFILE, { limit: 10 });
   assert.equal(retail.rows.length, 1);
   assert.deepEqual(retail.rows.map((row) => row.business), ['Reliance Retail']);
-  assert.deepEqual(retail.zones, [], 'TG users select stores statewide without requiring a zone');
+  assert.equal(retail.zone_required,false,'Zone metadata does not restrict state-wide access');
   assert.ok(retail.rows.every((row) => row.store_code !== 'ST001' && row.store_code !== 'TH72-OTHER'));
 
   db.tables.reliance_retail_store_master.push({id:'tg-unzoned',store_code:'TGNEW',store_name:'New TG Retail',state:'TG',status:'Active',zone_id:null});
@@ -580,7 +606,7 @@ test('Retail FO search is TN zone scoped and state-wide outside TN', async () =>
   );
 });
 
-test('TN Zone 1 includes eligible TN/PY stores across 20-row pages', async () => {
+test('TN state stores paginate across Zones while PY remains a separate access scope', async () => {
   const db = client();
   const dharani = { ...FO_PROFILE, id: 'dharani-profile', employee_code: 'QPMSTN10465', state: 'TN' };
   db.tables.reliance_retail_zones.push({ id: 'zone-1', zone_code: 'ZONE-1', zone_name: 'Zone 1', state: 'TN', status: 'Active' });
@@ -600,36 +626,36 @@ test('TN Zone 1 includes eligible TN/PY stores across 20-row pages', async () =>
   );
   const first = await searchRelianceRetailStores(db, dharani);
   const second = await searchRelianceRetailStores(db, dharani, { page: 2 });
-  assert.deepEqual(first.zones.map((zone) => zone.zone_code), ['ZONE-1']);
+  assert.ok(first.zones.some(zone=>zone.zone_code==='ZONE-1'));
   assert.equal(first.pagination.limit, 20);
   assert.equal(first.pagination.total, 33);
   assert.equal(first.rows.length, 20);
   assert.equal(second.rows.length, 13);
   assert.equal(second.pagination.total, 33);
   assert.equal(new Set([...first.rows, ...second.rows].map(row=>row.id)).size,33);
-  assert.ok([...first.rows,...second.rows].every(row=>row.zone_id==='zone-1'&&['TN','PY'].includes(row.state)));
-  assert.ok([...first.rows,...second.rows].some(row=>row.state==='PY'),'PY belongs to TN reporting and zone permissions');
+  assert.ok([...first.rows,...second.rows].every(row=>row.state==='TN'));
+  assert.ok([...first.rows,...second.rows].some(row=>row.zone_id!=='zone-1'),'All TN stores are selectable');
   const searched = await searchRelianceRetailStores(db, dharani, { q: 'Z1-32', zone_id: 'zone-1' });
   assert.deepEqual(searched.rows.map((row) => row.store_code), ['Z1-32']);
   assert.equal(searched.pagination.total, 1);
 });
 
-test('TN zone assignment, inactive zone and out-of-state zone all fail closed', async()=>{
+test('TN state authorization is independent of missing, inactive or out-of-state Zone metadata', async()=>{
   const db=client();
   const missing=await searchRelianceRetailStores(db,{...OTHER_FO_PROFILE,id:'unassigned'});
-  assert.deepEqual(missing.zones,[]);
-  assert.deepEqual(missing.rows,[]);
-  assert.equal(missing.pagination.total,0);
+  assert.equal(missing.zone_required,false);
+  assert.equal(missing.rows.length,1);
+  assert.equal(missing.pagination.total,1);
 
   db.tables.reliance_retail_zones.find(z=>z.id==='zone-tn').status='Inactive';
   const inactive=await searchRelianceRetailStores(db,OTHER_FO_PROFILE);
   assert.deepEqual(inactive.zones,[]);
-  assert.deepEqual(inactive.rows,[]);
+  assert.equal(inactive.rows.length,1);
   db.tables.reliance_retail_zones.find(z=>z.id==='zone-tn').status='Active';
   db.tables.reliance_retail_zones.find(z=>z.id==='zone-tn').state='TG';
   const wrongState=await searchRelianceRetailStores(db,OTHER_FO_PROFILE);
   assert.deepEqual(wrongState.zones,[]);
-  assert.deepEqual(wrongState.rows,[]);
+  assert.equal(wrongState.rows.length,1);
 });
 
 test('TN assigned zone with no active stores remains visible',async()=>{
@@ -641,15 +667,15 @@ test('TN assigned zone with no active stores remains visible',async()=>{
   assert.equal(found.pagination.total,0);
 });
 
-test('TN future and ended assignments cannot authorize a zone or store',async()=>{
+test('TN future and ended Zone assignments do not restrict the assigned state',async()=>{
   const db=client();
   const assignment=db.tables.reliance_retail_zone_fo_assignments.find(row=>row.fo_profile_id===OTHER_FO_PROFILE.id);
   assignment.effective_from='2099-01-01T00:00:00Z';
-  assert.deepEqual((await searchRelianceRetailStores(db,OTHER_FO_PROFILE)).zones,[]);
+  assert.equal((await searchRelianceRetailStores(db,OTHER_FO_PROFILE)).rows.length,1);
   assignment.effective_from='2026-01-01T00:00:00Z';
   assignment.effective_to='2026-10-01T00:00:00Z';
-  assert.deepEqual((await searchRelianceRetailStores(db,OTHER_FO_PROFILE)).zones,[]);
-  await assert.rejects(()=>loadRelianceRetailStore(db,OTHER_FO_PROFILE,'TH72'),error=>error.code==='no_zone_assigned');
+  assert.equal((await searchRelianceRetailStores(db,OTHER_FO_PROFILE)).rows.length,1);
+  assert.equal((await loadRelianceRetailStore(db,OTHER_FO_PROFILE,'TH72')).store_code,'TH72');
 });
 
 test('Unauthorized zone and store requests are rejected without widening access', async () => {
@@ -668,16 +694,12 @@ test('Unauthorized zone and store requests are rejected without widening access'
   );
 });
 
-test('TN draft submission fails closed when its zone assignment ends', async () => {
+test('TN draft submission retains state authorization when its Zone assignment ends', async () => {
   const db = client();
   const draft = await createReadySubmission(db,OTHER_FO_PROFILE,'TH72');
   const assignment = db.tables.reliance_retail_zone_fo_assignments.find((row) => row.fo_profile_id === OTHER_FO_PROFILE.id);
   assignment.effective_to = '2026-10-01T00:00:00Z';
-  await assert.rejects(
-    () => submitClientDeepCleaningSubmission(db, OTHER_FO_PROFILE, draft.id),
-    (error) => error.code === 'no_zone_assigned',
-  );
-  assert.equal(db.tables.client_deep_cleaning_submissions.find((row) => row.id === draft.id).status, 'uploading');
+  assert.equal((await submitClientDeepCleaningSubmission(db, OTHER_FO_PROFILE, draft.id)).status,'submitted');
 });
 
 test('Deep Cleaning store route enforces auth profile and paginated response shape', async () => {
@@ -706,7 +728,7 @@ test('Deep Cleaning store route enforces auth profile and paginated response sha
     assert.equal(body.rows.length, 1);
     assert.equal(body.rows[0].store_code, 'RR001');
     assert.equal(body.rows[0].business, 'Reliance Retail');
-    assert.deepEqual(body.zones,[], 'TG has state-wide store search without zonal restriction');
+    assert.equal(body.zone_required,false, 'TG has state-wide store search without zonal restriction');
     assert.equal(body.pagination.limit, 1);
 
     const denied = await fetch(`http://127.0.0.1:${port}/api/client-deep-cleaning/stores`, {
