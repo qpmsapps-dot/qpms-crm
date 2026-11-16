@@ -12,16 +12,60 @@ import '../models/training_topic.dart';
 import '../models/training_type.dart';
 
 class TrainingFlowController extends ChangeNotifier {
-  TrainingFlowController({required TrainingRepository repository})
-    : _repository = repository;
+  TrainingFlowController({
+    required TrainingRepository repository,
+    this.activeContextCheck,
+  }) : _repository = repository;
   final TrainingRepository _repository;
+  final Future<bool> Function()? activeContextCheck;
   TrainingSession? session;
   List<TrainingCategory> categories = [];
   List<TrainingType> types = [];
   List<TrainingTopic> topics = [];
   TrainingCategory? selectedCategory;
   TrainingType? selectedTrainingType;
-  DateTime trainingDate = DateTime.now();
+  static DateTime indiaDate([DateTime? now]) {
+    final ist = (now ?? DateTime.now()).toUtc().add(
+      const Duration(minutes: 330),
+    );
+    return DateTime(ist.year, ist.month, ist.day);
+  }
+
+  DateTime trainingDate = indiaDate();
+  Map<String, dynamic>? selectedStore;
+  bool readOnlyContext = false;
+  void lockForHistory() {
+    readOnlyContext = true;
+    notifyListeners();
+  }
+
+  String? get retailStoreId => selectedStore?['id'] as String?;
+  Future<List<Map<String, dynamic>>> getZones() {
+    final categoryCode = selectedCategory?.code;
+    if (categoryCode == null) return Future.value([]);
+    return _repository.getZones(categoryCode: categoryCode);
+  }
+
+  Future<Map<String, dynamic>> searchStores({
+    String? zoneId,
+    bool supervisorOnly = false,
+    String query = '',
+    int offset = 0,
+  }) => _repository.searchStores(
+    categoryCode: selectedCategory?.code ?? '',
+    zoneId: zoneId,
+    supervisorOnly: supervisorOnly,
+    query: query,
+    offset: offset,
+  );
+  void selectStore(Map<String, dynamic> store) {
+    _ensureEditable();
+    if (session != null) return;
+    selectedStore = store;
+    isDirty = true;
+    notifyListeners();
+  }
+
   String trainerName = '';
   String remarks = '';
   String attendanceId = '';
@@ -47,7 +91,7 @@ class TrainingFlowController extends ChangeNotifier {
       session == null || session!.status == TrainingSessionStatus.draft;
   bool get isSubmitted => session?.status == TrainingSessionStatus.submitted;
   bool get isCancelled => session?.status == TrainingSessionStatus.cancelled;
-  bool get isEditable => !isSubmitted && !isCancelled;
+  bool get isEditable => !readOnlyContext && (session?.isEditable ?? true);
   int get attendeeCount => attendees.length;
   int get selectedTopicCount => selectedSessionTopics.length;
   int get coveredTopicCount =>
@@ -90,8 +134,10 @@ class TrainingFlowController extends ChangeNotifier {
   bool get canContinueDetails =>
       selectedCategory != null &&
       selectedTrainingType != null &&
-      trainerName.trim().isNotEmpty;
+      trainerName.trim().isNotEmpty &&
+      (session != null || retailStoreId != null);
   bool get canContinueAttendees =>
+      selectedCategory?.code == 'hk' ||
       !(session?.requireAttendeeSnapshot ??
           selectedCategory?.requireAttendee ??
           true) ||
@@ -138,7 +184,7 @@ class TrainingFlowController extends ChangeNotifier {
     this.attendanceId = attendanceId;
     this.siteVisitId = siteVisitId;
     this.trainerName = trainerName;
-    this.trainingDate = trainingDate ?? DateTime.now();
+    this.trainingDate = indiaDate();
     cacheId = '$attendanceId:$siteVisitId';
     await _busy(() async {
       await _loadMasters();
@@ -180,6 +226,7 @@ class TrainingFlowController extends ChangeNotifier {
   void selectCategory(TrainingCategory value) {
     _ensureEditable();
     selectedCategory = value;
+    if (session == null) selectedStore = null;
     selectedSessionTopics = [];
     topics = [];
     isDirty = true;
@@ -206,7 +253,7 @@ class TrainingFlowController extends ChangeNotifier {
 
   void setDetails({DateTime? date, String? trainer, String? remarks}) {
     _ensureEditable();
-    if (date != null) trainingDate = date;
+    // Creation date is assigned by the server and is immutable.
     if (trainer != null) trainerName = trainer;
     if (remarks != null) this.remarks = remarks;
     isDirty = true;
@@ -221,6 +268,7 @@ class TrainingFlowController extends ChangeNotifier {
   }
 
   Future<TrainingSession> saveDraft() async {
+    await _verifyLocalContext();
     _ensureEditable();
     if (!canContinueDetails) {
       throw const TrainingValidationException(
@@ -236,6 +284,7 @@ class TrainingFlowController extends ChangeNotifier {
           ? await _repository.createSession(
               attendanceId: attendanceId,
               siteVisitId: siteVisitId,
+              retailStoreId: retailStoreId,
               categoryId: selectedCategory!.id,
               trainingTypeId: selectedTrainingType!.id,
               trainingDate: trainingDate,
@@ -273,7 +322,7 @@ class TrainingFlowController extends ChangeNotifier {
   Future<void> persistLocalDraft() => _cacheLocal();
 
   Future<void> addAttendee(TrainingStaffSuggestion suggestion) async {
-    _ensureServerDraft();
+    await _requireActiveDraft();
     if (attendees.any((item) => item.profileId == suggestion.profileId)) {
       throw const TrainingConflictException('This attendee is already added.');
     }
@@ -309,14 +358,14 @@ class TrainingFlowController extends ChangeNotifier {
   }
 
   Future<void> removeAttendee(String attendeeId) async {
-    _ensureServerDraft();
+    await _requireActiveDraft();
     await _repository.removeAttendee(session!.id, attendeeId);
     attendees = attendees.where((item) => item.id != attendeeId).toList();
     notifyListeners();
   }
 
   Future<void> setSelectedTopics(List<String> topicIds) async {
-    _ensureServerDraft();
+    await _requireActiveDraft();
     final refreshed = await _repository.setTopics(session!.id, topicIds);
     _applySession(refreshed);
     notifyListeners();
@@ -327,7 +376,7 @@ class TrainingFlowController extends ChangeNotifier {
     required bool isCovered,
     String? remarks,
   }) async {
-    _ensureServerDraft();
+    await _requireActiveDraft();
     final updated = await _repository.updateSessionTopic(
       session!.id,
       sessionTopicId,
@@ -349,7 +398,7 @@ class TrainingFlowController extends ChangeNotifier {
     required String mimeType,
     required int fileSize,
   }) async {
-    _ensureServerDraft();
+    await _requireActiveDraft();
     final item = await _repository.enqueueEvidence(
       localId: localId,
       sessionId: session!.id,
@@ -368,7 +417,7 @@ class TrainingFlowController extends ChangeNotifier {
   }
 
   Future<void> uploadQueued(String localId) async {
-    _ensureServerDraft();
+    await _requireActiveDraft();
     final item = pendingEvidence.firstWhere((row) => row.localId == localId);
     isUploading = true;
     notifyListeners();
@@ -388,7 +437,7 @@ class TrainingFlowController extends ChangeNotifier {
   }
 
   Future<void> removePendingUpload(String localId) async {
-    _ensureServerDraft();
+    await _requireActiveDraft();
     await _repository.removePendingUpload(localId);
     pendingEvidence = pendingEvidence
         .where((item) => item.localId != localId)
@@ -411,7 +460,7 @@ class TrainingFlowController extends ChangeNotifier {
   }
 
   Future<void> retryUploads() async {
-    _ensureServerDraft();
+    await _requireActiveDraft();
     isUploading = true;
     notifyListeners();
     try {
@@ -427,7 +476,7 @@ class TrainingFlowController extends ChangeNotifier {
   }
 
   Future<void> deleteEvidence(String evidenceId) async {
-    _ensureServerDraft();
+    await _requireActiveDraft();
     await _repository.deleteEvidence(session!.id, evidenceId);
     evidence = evidence.where((item) => item.id != evidenceId).toList();
     notifyListeners();
@@ -439,7 +488,7 @@ class TrainingFlowController extends ChangeNotifier {
   }
 
   Future<void> submit() async {
-    _ensureServerDraft();
+    await _requireActiveDraft();
     isSubmitting = true;
     notifyListeners();
     try {
@@ -454,13 +503,18 @@ class TrainingFlowController extends ChangeNotifier {
   }
 
   Future<void> cancel() async {
-    _ensureServerDraft();
+    await _requireActiveDraft();
     _applySession(await _repository.cancel(session!.id));
     notifyListeners();
   }
 
   void _applySession(TrainingSession value) {
     session = value;
+    selectedStore = {
+      'id': value.storeId,
+      'store_name': value.storeNameSnapshot,
+      'store_code': value.storeCodeSnapshot,
+    };
     selectedCategory = value.category;
     selectedTrainingType = value.trainingType;
     trainingDate = value.trainingDate ?? trainingDate;
@@ -478,7 +532,7 @@ class TrainingFlowController extends ChangeNotifier {
   void _applyDraft(TrainingDraftRecord value) {
     attendanceId = value.attendanceId;
     siteVisitId = value.siteVisitId;
-    trainingDate = value.trainingDate;
+    trainingDate = value.sessionId == null ? indiaDate() : value.trainingDate;
     trainerName = value.trainerName;
     remarks = value.remarks ?? '';
     currentStep = value.currentStep;
@@ -542,7 +596,7 @@ class TrainingFlowController extends ChangeNotifier {
   void _ensureEditable() {
     if (!isEditable) {
       throw const TrainingConflictException(
-        'Submitted or cancelled Training sessions cannot be changed.',
+        'Training is read-only. An active Check-In is required to make changes.',
       );
     }
   }
@@ -554,5 +608,17 @@ class TrainingFlowController extends ChangeNotifier {
         'Save the Training details before continuing.',
       );
     }
+  }
+
+  Future<void> _verifyLocalContext() async {
+    if (activeContextCheck != null && !await activeContextCheck!()) {
+      lockForHistory();
+    }
+    _ensureEditable();
+  }
+
+  Future<void> _requireActiveDraft() async {
+    await _verifyLocalContext();
+    _ensureServerDraft();
   }
 }

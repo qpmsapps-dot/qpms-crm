@@ -24,6 +24,7 @@ import '../training/training_launcher.dart';
 import '../ui/fo_ui.dart';
 import '../utils/date_utils.dart';
 import '../utils/local_id.dart';
+import '../utils/mobile_roles.dart';
 
 enum _CheckoutRecoveryAction { retry, fixState }
 
@@ -1929,6 +1930,7 @@ class _TasksScreenState extends State<TasksScreen>
                         ? () => _toast('Please check-in to a site first.')
                         : () => _openActivity(FoActivityType.inspection),
                   ),
+                  if (!isRelianceRetailBusiness(widget.user.business))
                   _activityCard(
                     width: width,
                     title: 'Deep Cleaning',

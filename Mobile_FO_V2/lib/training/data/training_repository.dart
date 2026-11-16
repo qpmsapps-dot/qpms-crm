@@ -47,9 +47,26 @@ class TrainingRepository {
     String? query,
     int? limit,
   }) => _api.searchSiteStaff(siteId: siteId, query: query, limit: limit);
+  Future<List<Map<String, dynamic>>> getZones({required String categoryCode}) =>
+      _api.getZones(categoryCode: categoryCode);
+  Future<Map<String, dynamic>> searchStores({
+    required String categoryCode,
+    String? zoneId,
+    bool supervisorOnly = false,
+    String query = '',
+    int offset = 0,
+  }) => _api.searchStores(
+    categoryCode: categoryCode,
+    zoneId: zoneId,
+    supervisorOnly: supervisorOnly,
+    query: query,
+    offset: offset,
+  );
+
   Future<TrainingSession> createSession({
     required String attendanceId,
     required String siteVisitId,
+    String? retailStoreId,
     required String categoryId,
     required String trainingTypeId,
     required DateTime trainingDate,
@@ -58,6 +75,7 @@ class TrainingRepository {
   }) => _api.createSession(
     attendanceId: attendanceId,
     siteVisitId: siteVisitId,
+    retailStoreId: retailStoreId,
     categoryId: categoryId,
     trainingTypeId: trainingTypeId,
     trainingDate: trainingDate,
@@ -67,6 +85,7 @@ class TrainingRepository {
   Future<TrainingSession> getSession(String id) => _api.getSession(id);
   Future<List<TrainingSession>> getSessions({
     bool? mine,
+    String? siteVisitId,
     String? status,
     DateTime? dateFrom,
     DateTime? dateTo,
@@ -75,6 +94,7 @@ class TrainingRepository {
     int? limit,
   }) => _api.getSessions(
     mine: mine,
+    siteVisitId: siteVisitId,
     status: status,
     dateFrom: dateFrom,
     dateTo: dateTo,
@@ -263,6 +283,13 @@ class TrainingRepository {
         mimeType: item.mimeType,
         fileSize: item.fileSize,
       );
+      if (!evidence.isUploaded) {
+        throw const TrainingUploadException(
+          'The server has not confirmed the photo upload. Retry the upload before submitting.',
+          code: 'evidence_upload_unconfirmed',
+          retryable: true,
+        );
+      }
       await _cache.removePendingEvidence(item.localId);
       return evidence;
     } on TrainingException catch (error) {

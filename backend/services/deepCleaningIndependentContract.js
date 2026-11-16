@@ -40,6 +40,15 @@ export async function cleaningCommand(client, profile, action, payload) {
     p_actor: profile.id, p_auth: profile.auth_user_id, p_action: action, p_data: payload,
   });
   if (error) {
+    // Translate only reviewed authorization messages; never expose raw SQL errors.
+    const authorizationErrors = {
+      'Active authenticated Retail FO required': ['inactive_or_unauthorized_actor', 'An active authenticated Reliance Retail FO profile is required.'],
+      'Authorized unique active canonical store required': ['store_state_forbidden', 'The database rejected this store under its state-access rules. Your draft was not saved; keep the selected files.'],
+      'Effective TN zone assignment required': ['store_zone_forbidden', 'The database still requires a Zone assignment for this store. Your draft was not saved; keep the selected files.'],
+      'Owned submission required': ['not_submission_owner', 'This Deep Cleaning draft belongs to another account or is no longer available.'],
+    };
+    const authorization = error.code === '42501' && authorizationErrors[error.message];
+    if (authorization) reject(403, ...authorization);
     const known = {
       '42501': [403, 'store_not_authorized', 'Store or evidence access is no longer authorized.'],
       '22023': [400, 'invalid_cleaning_evidence', 'Check the actual date, complete Before/After pairs and exactly one supporting document.'],

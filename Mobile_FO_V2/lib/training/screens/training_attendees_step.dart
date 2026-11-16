@@ -53,7 +53,9 @@ class _TrainingAttendeesStepState extends State<TrainingAttendeesStep> {
             children: [
               FoSectionTitle(
                 title: 'Staff Attended',
-                subtitle: 'Add the team members who attended this training',
+                subtitle: controller.selectedCategory?.code == 'hk'
+                    ? 'Optional — you may continue without adding participants'
+                    : 'Add the team members who attended this training',
                 trailing: FoStatusBadge(
                   label: '${controller.attendeeCount} Staff Added',
                 ),
@@ -61,6 +63,7 @@ class _TrainingAttendeesStepState extends State<TrainingAttendeesStep> {
               const SizedBox(height: 16),
               TextField(
                 key: const Key('staff-search-field'),
+                enabled: controller.isEditable,
                 onChanged: _search,
                 decoration: InputDecoration(
                   hintText: 'Search by employee ID or name',
@@ -98,7 +101,9 @@ class _TrainingAttendeesStepState extends State<TrainingAttendeesStep> {
                     child: TrainingAttendeeCard.suggestion(
                       suggestion,
                       added: added,
-                      onAdd: _busyProfiles.contains(suggestion.profileId)
+                      onAdd:
+                          !controller.isEditable ||
+                              _busyProfiles.contains(suggestion.profileId)
                           ? null
                           : () => _add(suggestion),
                     ),

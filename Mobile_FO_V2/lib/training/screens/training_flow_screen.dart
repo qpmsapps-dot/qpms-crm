@@ -93,7 +93,7 @@ class _TrainingFlowScreenState extends State<TrainingFlowScreen> {
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 9),
                 child: TrainingStepper(currentStep: controller.currentStep),
               ),
-              if (controller.isSubmitted || controller.isCancelled)
+              if (!controller.isEditable)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(18, 2, 18, 8),
                   child: Align(
@@ -101,7 +101,9 @@ class _TrainingFlowScreenState extends State<TrainingFlowScreen> {
                     child: FoStatusBadge(
                       label: controller.isSubmitted
                           ? 'Submitted • Read only'
-                          : 'Cancelled • Read only',
+                          : controller.isCancelled
+                          ? 'Cancelled • Read only'
+                          : 'Check-In ended • Read only',
                       color: controller.isSubmitted
                           ? foGreen
                           : const Color(0xFFD15A5A),

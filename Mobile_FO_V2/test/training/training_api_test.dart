@@ -108,6 +108,8 @@ void main() {
       unorderedEquals([
         'attendance_id',
         'site_visit_id',
+        'retail_store_id',
+        'creation_key',
         'category_id',
         'training_type_id',
         'training_date',
@@ -116,7 +118,33 @@ void main() {
       ]),
     );
     expect(transport.calls.single.body, isNot(contains('store_id')));
+    final firstKey = transport.calls.single.body!['creation_key'];
+    await api.createSession(
+      attendanceId: 'a',
+      siteVisitId: 'v',
+      categoryId: 'c',
+      trainingTypeId: 't',
+      trainingDate: DateTime(2026, 9, 29),
+      trainerName: 'Trainer',
+    );
+    expect(transport.calls.last.body!['creation_key'], firstKey);
   });
+
+  for (final categoryCode in ['hk', 'technical_mep']) {
+    test(
+      '$categoryCode zone and store discovery send the same explicit category',
+      () async {
+        transport.responses['GET /api/training/zones'] =
+            const TrainingHttpResponse(200, {'zones': []});
+        await api.getZones(categoryCode: categoryCode);
+        expect(transport.calls.last.path, '/api/training/zones');
+        expect(transport.calls.last.query, {'category_code': categoryCode});
+        await api.searchStores(categoryCode: categoryCode, zoneId: 'zone');
+        expect(transport.calls.last.query!['category_code'], categoryCode);
+        expect(transport.calls.last.query!['zone_id'], 'zone');
+      },
+    );
+  }
 
   test(
     'session, attendee, topic, submit and cancel methods use exact verbs',

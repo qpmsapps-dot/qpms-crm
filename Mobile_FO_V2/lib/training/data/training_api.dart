@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import '../../models/fo_models.dart';
@@ -125,9 +126,26 @@ class AuthenticatedTrainingTransport implements TrainingTransport {
     String mimeType,
   ) async {
     try {
-      final request = await _client
-          .putUrl(Uri.parse(signedUrl))
-          .timeout(_uploadTimeout);
+      final isBackendUpload = signedUrl.startsWith('/api/training/');
+      final uri = isBackendUpload
+          ? Uri.parse(
+              '${AppConfig.backendApiUrl.trim().replaceFirst(RegExp(r"/+$"), "")}$signedUrl',
+            )
+          : Uri.parse(signedUrl);
+      final session = isBackendUpload
+          ? await SupabaseService.requireAuthenticatedSession(
+              user,
+              screen: 'StructuredTraining',
+              action: 'UPLOAD',
+            )
+          : null;
+      final request = await _client.putUrl(uri).timeout(_uploadTimeout);
+      if (isBackendUpload) {
+        request.headers.set(
+          HttpHeaders.authorizationHeader,
+          'Bearer ${session!.accessToken}',
+        );
+      }
       request.headers.contentType = ContentType.parse(mimeType);
       request.contentLength = bytes.length;
       request.add(bytes);
@@ -142,6 +160,10 @@ class AuthenticatedTrainingTransport implements TrainingTransport {
       }
     } on TrainingException {
       rethrow;
+    } on AuthSessionExpiredException {
+      throw const TrainingAuthException(
+        'Your login session expired. Please login again.',
+      );
     } on SocketException catch (_) {
       throw const TrainingTransportException(
         'Evidence upload could not reach storage.',
@@ -156,6 +178,8 @@ class TrainingApi {
   TrainingApi({required FoUser user, TrainingTransport? transport})
     : _transport = transport ?? AuthenticatedTrainingTransport(user);
   final TrainingTransport _transport;
+  final String _creationKey =
+      '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
   static const _base = '/api/training';
 
   Future<Map<String, dynamic>> _request(
@@ -220,9 +244,41 @@ class TrainingApi {
         .toList();
   }
 
+  Future<List<Map<String, dynamic>>> getZones({
+    required String categoryCode,
+  }) async =>
+      ((await _request(
+                'GET',
+                '/zones',
+                query: {'category_code': categoryCode},
+              ))['zones']
+              as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+  Future<Map<String, dynamic>> searchStores({
+    required String categoryCode,
+    String? zoneId,
+    bool supervisorOnly = false,
+    String query = '',
+    int offset = 0,
+  }) => _request(
+    'GET',
+    '/stores',
+    query: {
+      'category_code': categoryCode,
+      'zone_id': ?zoneId,
+      'supervisor_only': '$supervisorOnly',
+      'q': query,
+      'offset': '$offset',
+      'limit': '25',
+    },
+  );
+
   Future<TrainingSession> createSession({
     required String attendanceId,
     required String siteVisitId,
+    String? retailStoreId,
     required String categoryId,
     required String trainingTypeId,
     required DateTime trainingDate,
@@ -235,6 +291,8 @@ class TrainingApi {
       body: {
         'attendance_id': attendanceId,
         'site_visit_id': siteVisitId,
+        'retail_store_id': retailStoreId,
+        'creation_key': _creationKey,
         'category_id': categoryId,
         'training_type_id': trainingTypeId,
         'training_date': _date(trainingDate),
@@ -247,6 +305,7 @@ class TrainingApi {
       TrainingSession.fromJson(await _request('GET', '/sessions/$id'));
   Future<List<TrainingSession>> getSessions({
     bool? mine,
+    String? siteVisitId,
     String? status,
     DateTime? dateFrom,
     DateTime? dateTo,
@@ -256,6 +315,7 @@ class TrainingApi {
   }) async {
     final query = <String, String>{
       if (mine != null) 'mine': '$mine',
+      'site_visit_id': ?siteVisitId,
       'status': ?status,
       if (dateFrom != null) 'date_from': _date(dateFrom),
       if (dateTo != null) 'date_to': _date(dateTo),

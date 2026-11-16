@@ -28,6 +28,7 @@ class TrainingEvidenceStep extends StatefulWidget {
 
 class _TrainingEvidenceStepState extends State<TrainingEvidenceStep> {
   final _imagePicker = ImagePicker();
+  bool _picking = false;
   final Set<String> _busyTopics = {};
   final Map<String, Future<String>> _viewUrls = {};
 
@@ -95,7 +96,10 @@ class _TrainingEvidenceStepState extends State<TrainingEvidenceStep> {
                     sessionTopic: topic,
                     photoCount: controller.topicPhotoCount(topic.id),
                     editable: controller.isEditable,
-                    busy: _busyTopics.contains(topic.id),
+                    busy:
+                        _busyTopics.contains(topic.id) ||
+                        _picking ||
+                        controller.isUploading,
                     onAddPhoto: () =>
                         _pick(TrainingEvidenceType.topicPhoto, topic.id),
                     onRemarks: () => _editRemarks(topic),
@@ -119,10 +123,15 @@ class _TrainingEvidenceStepState extends State<TrainingEvidenceStep> {
             (item) => _PendingUploadTile(
               item: item,
               editable: controller.isEditable,
-              onRetry: item.state == TrainingUploadState.failed
+              onRetry:
+                  !_picking &&
+                      !controller.isUploading &&
+                      (item.state == TrainingUploadState.failed ||
+                          item.state == TrainingUploadState.pending)
                   ? () => _retry(item.localId)
                   : null,
-              onRemove: controller.isEditable
+              onRemove:
+                  controller.isEditable && !_picking && !controller.isUploading
                   ? () => controller.removePendingUpload(item.localId)
                   : null,
             ),
@@ -143,9 +152,21 @@ class _TrainingEvidenceStepState extends State<TrainingEvidenceStep> {
           actionLabel: 'Add Photos',
           enabled:
               controller.isEditable &&
+              !_picking &&
+              !controller.isUploading &&
               controller.groupPhotoCount <
                   (controller.session?.maxGroupPhotosSnapshot ?? 10),
           onAction: () => _pick(TrainingEvidenceType.groupPhoto, null),
+        ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final item in controller.pendingEvidence.where(
+              (e) => e.evidenceType == TrainingEvidenceType.groupPhoto,
+            ))
+              _PendingPhoto(item: item),
+          ],
         ),
         _SupportingCard(
           icon: Icons.fact_check_outlined,
@@ -153,7 +174,8 @@ class _TrainingEvidenceStepState extends State<TrainingEvidenceStep> {
           subtitle: 'PDF, JPG or PNG',
           value: controller.hasAttendanceSheet ? 'Uploaded' : 'Not uploaded',
           actionLabel: controller.hasAttendanceSheet ? 'Replace' : 'Upload',
-          enabled: controller.isEditable,
+          enabled:
+              controller.isEditable && !_picking && !controller.isUploading,
           onAction: () => _pick(TrainingEvidenceType.attendanceSheet, null),
         ),
         _SupportingCard(
@@ -162,7 +184,8 @@ class _TrainingEvidenceStepState extends State<TrainingEvidenceStep> {
           subtitle: 'PDF only',
           value: controller.hasTrainingDocument ? 'Uploaded' : 'Not uploaded',
           actionLabel: controller.hasTrainingDocument ? 'Replace' : 'Upload',
-          enabled: controller.isEditable,
+          enabled:
+              controller.isEditable && !_picking && !controller.isUploading,
           onAction: () => _pick(TrainingEvidenceType.trainingDocument, null),
         ),
         _SupportingCard(
@@ -172,7 +195,8 @@ class _TrainingEvidenceStepState extends State<TrainingEvidenceStep> {
           value:
               '${controller.supportingEvidenceByType(TrainingEvidenceType.additionalDocument).length} files',
           actionLabel: 'Add File',
-          enabled: controller.isEditable,
+          enabled:
+              controller.isEditable && !_picking && !controller.isUploading,
           onAction: () => _pick(TrainingEvidenceType.additionalDocument, null),
         ),
         const SizedBox(height: 6),
@@ -212,20 +236,28 @@ class _TrainingEvidenceStepState extends State<TrainingEvidenceStep> {
   }
 
   Future<void> _pick(TrainingEvidenceType type, String? topicId) async {
-    if (widget.evidencePicker != null) {
-      await widget.evidencePicker!(type, topicId);
+    if (_picking ||
+        widget.controller.isUploading ||
+        !widget.controller.isEditable) {
       return;
     }
+    setState(() => _picking = true);
+    Object? lastError;
     try {
+      if (widget.evidencePicker != null) {
+        await widget.evidencePicker!(type, topicId);
+        return;
+      }
+      final selected = <({String path, String? name})>[];
       if (type == TrainingEvidenceType.groupPhoto) {
         final files = await _imagePicker.pickMultiImage(
           maxWidth: 1600,
           maxHeight: 1600,
           imageQuality: 78,
         );
-        for (final file in files) {
-          await _queue(file.path, type, topicId);
-        }
+        selected.addAll(
+          files.map((file) => (path: file.path, name: file.name)),
+        );
       } else if (type == TrainingEvidenceType.topicPhoto) {
         final file = await _imagePicker.pickImage(
           source: ImageSource.camera,
@@ -233,7 +265,7 @@ class _TrainingEvidenceStepState extends State<TrainingEvidenceStep> {
           maxHeight: 1600,
           imageQuality: 78,
         );
-        if (file != null) await _queue(file.path, type, topicId);
+        if (file != null) selected.add((path: file.path, name: file.name));
       } else {
         final extensions = type == TrainingEvidenceType.trainingDocument
             ? ['pdf']
@@ -242,17 +274,39 @@ class _TrainingEvidenceStepState extends State<TrainingEvidenceStep> {
           type: FileType.custom,
           allowedExtensions: extensions,
         );
-        final path = result?.files.single.path;
-        if (path != null) {
-          await _queue(path, type, topicId, name: result?.files.single.name);
+        final file = result?.files.single;
+        if (file?.path != null) {
+          selected.add((path: file!.path!, name: file.name));
+        }
+      }
+      // Persist every valid selection with its existing queue identity first.
+      final queued = <String>[];
+      for (final file in selected) {
+        if (!mounted) return;
+        try {
+          queued.add(await _queue(file.path, type, topicId, name: file.name));
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      // Keep one upload in flight. Failed files remain in the durable retry queue.
+      for (final localId in queued) {
+        if (!mounted) return;
+        try {
+          await widget.controller.uploadQueued(localId);
+        } catch (error) {
+          lastError = error;
         }
       }
     } catch (error) {
-      if (mounted) _snack(error);
+      lastError = error;
+    } finally {
+      if (mounted) setState(() => _picking = false);
     }
+    if (mounted && lastError != null) _snack(lastError);
   }
 
-  Future<void> _queue(
+  Future<String> _queue(
     String path,
     TrainingEvidenceType type,
     String? topicId, {
@@ -272,7 +326,7 @@ class _TrainingEvidenceStepState extends State<TrainingEvidenceStep> {
       mimeType: mime,
       fileSize: length,
     );
-    await widget.controller.uploadQueued(localId);
+    return localId;
   }
 
   String _mime(String name) {
@@ -356,6 +410,7 @@ class _TrainingEvidenceStepState extends State<TrainingEvidenceStep> {
   }
 
   Future<void> _retry(String localId) async {
+    if (_picking || widget.controller.isUploading) return;
     try {
       await widget.controller.uploadQueued(localId);
     } catch (error) {
@@ -413,14 +468,24 @@ class _PhotoStrip extends StatelessWidget {
         .evidenceForTopic(sessionTopicId)
         .where((item) => item.evidenceType == TrainingEvidenceType.topicPhoto)
         .toList();
-    if (photos.isEmpty) return const SizedBox.shrink();
+    final pending = controller.pendingEvidence
+        .where(
+          (item) =>
+              item.sessionTopicId == sessionTopicId &&
+              item.evidenceType == TrainingEvidenceType.topicPhoto,
+        )
+        .toList();
+    if (photos.isEmpty && pending.isEmpty) return const SizedBox.shrink();
     return SizedBox(
-      height: 74,
+      height: 108,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        itemCount: photos.length,
+        itemCount: photos.length + pending.length,
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
+          if (index >= photos.length) {
+            return _PendingPhoto(item: pending[index - photos.length]);
+          }
           final item = photos[index];
           final future = viewUrls.putIfAbsent(
             item.id,
@@ -476,6 +541,39 @@ class _PhotoStrip extends StatelessWidget {
       ),
     );
   }
+}
+
+class _PendingPhoto extends StatelessWidget {
+  const _PendingPhoto({required this.item});
+  final TrainingPendingEvidence item;
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 88,
+    height: 108,
+    child: Column(
+      children: [
+        Image.file(
+          File(item.localFilePath),
+          width: 88,
+          height: 74,
+          fit: BoxFit.cover,
+          cacheWidth: (88 * MediaQuery.devicePixelRatioOf(context)).ceil(),
+          semanticLabel: 'Local photo, not confirmed by server',
+          errorBuilder: (_, _, _) => const SizedBox(
+            width: 88,
+            height: 74,
+            child: Icon(Icons.broken_image_outlined),
+          ),
+        ),
+        Text(
+          item.state == TrainingUploadState.failed
+              ? 'Upload failed'
+              : 'Not confirmed',
+          style: const TextStyle(fontSize: 11),
+        ),
+      ],
+    ),
+  );
 }
 
 class _PendingUploadTile extends StatelessWidget {

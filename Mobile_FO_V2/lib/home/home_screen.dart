@@ -39,6 +39,8 @@ class HomeScreen extends StatefulWidget {
     this.onOpenAdminHospital,
     this.onOpenHospitalTicketing,
     this.showHospitalTicketingEntry = false,
+    this.onOpenRelianceDeepCleaning,
+    this.showRelianceDeepCleaningEntry = false,
     super.key,
   });
 
@@ -50,6 +52,8 @@ class HomeScreen extends StatefulWidget {
   final VoidCallback? onOpenAdminHospital;
   final VoidCallback? onOpenHospitalTicketing;
   final bool showHospitalTicketingEntry;
+  final VoidCallback? onOpenRelianceDeepCleaning;
+  final bool showRelianceDeepCleaningEntry;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -2164,6 +2168,25 @@ class _HomeScreenState extends State<HomeScreen>
           _homeHeader(),
           const SizedBox(height: 22),
           _overviewCard(),
+          if (widget.showRelianceDeepCleaningEntry &&
+              widget.onOpenRelianceDeepCleaning != null) ...[
+            const SizedBox(height: 16),
+            Card(
+              child: ListTile(
+                leading: const Icon(
+                  Icons.cleaning_services_outlined,
+                  color: qpmsBlue,
+                ),
+                title: const Text(
+                  'Deep Cleaning',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                subtitle: const Text('Drafts and submitted reports'),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: widget.onOpenRelianceDeepCleaning,
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           if (_showHospitalTicketingEntry) ...[
             _hospitalTicketingQuickAccessCard(),

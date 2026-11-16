@@ -32,6 +32,8 @@ class TrainingSession {
     required this.id,
     required this.status,
     this.trainingDate,
+    this.canEdit = true,
+    this.hkTrainingPolicy,
     this.category,
     this.trainingType,
     this.trainerName,
@@ -67,6 +69,8 @@ class TrainingSession {
   final String id;
   final TrainingSessionStatus status;
   final DateTime? trainingDate;
+  final bool canEdit;
+  final String? hkTrainingPolicy;
   final TrainingCategory? category;
   final TrainingType? trainingType;
   final String? trainerName;
@@ -98,7 +102,7 @@ class TrainingSession {
   final int? coveredTopicCount;
   final int? evidenceCount;
 
-  bool get isEditable => status == TrainingSessionStatus.draft;
+  bool get isEditable => canEdit && status == TrainingSessionStatus.draft;
 
   factory TrainingSession.fromJson(Map<String, dynamic> envelope) {
     final session = _map(envelope['session']) ?? envelope;
@@ -110,6 +114,8 @@ class TrainingSession {
     final counts = _map(envelope['counts']);
     return TrainingSession(
       id: '${session['id'] ?? ''}',
+      canEdit: session['can_edit'] as bool? ?? false,
+      hkTrainingPolicy: session['hk_training_policy'] as String?,
       status: TrainingSessionStatusValue.parse(session['status']),
       trainingDate: _date(session['training_date']),
       category: categoryJson == null
@@ -122,7 +128,9 @@ class TrainingSession {
       remarks: session['remarks'] as String?,
       attendanceId: session['attendance_id'] as String?,
       siteVisitId: session['site_visit_id'] as String?,
-      storeId: (session['store_id'] ?? store?['id']) as String?,
+      storeId:
+          (session['retail_store_id'] ?? session['store_id'] ?? store?['id'])
+              as String?,
       accessClientCode: session['access_client_code'] as String?,
       businessNameSnapshot: session['business_name_snapshot'] as String?,
       stateSnapshot: (session['state_snapshot'] ?? store?['state']) as String?,
@@ -191,6 +199,8 @@ class TrainingSession {
     id: id,
     status: status ?? this.status,
     trainingDate: trainingDate,
+    canEdit: canEdit,
+    hkTrainingPolicy: hkTrainingPolicy,
     category: category,
     trainingType: trainingType,
     trainerName: trainerName,

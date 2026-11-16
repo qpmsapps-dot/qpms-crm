@@ -109,6 +109,7 @@ class FakeRepository extends TrainingRepository {
   Future<TrainingSession> createSession({
     required String attendanceId,
     required String siteVisitId,
+    String? retailStoreId,
     required String categoryId,
     required String trainingTypeId,
     required DateTime trainingDate,
@@ -219,6 +220,10 @@ void main() {
       );
       controller.selectCategory(category);
       controller.selectTrainingType(type);
+      controller.selectStore({
+        'id': 'independent-retail-store',
+        'store_name': 'Training Store',
+      });
       expect(controller.canContinueDetails, isTrue);
       await controller.saveDraft();
       expect(repository.creates, 1);

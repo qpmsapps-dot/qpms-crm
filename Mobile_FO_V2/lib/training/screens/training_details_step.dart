@@ -4,7 +4,7 @@ import 'package:intl/intl.dart';
 import '../../ui/fo_ui.dart';
 import '../state/training_flow_controller.dart';
 import '../widgets/training_category_card.dart';
-import '../widgets/training_site_card.dart';
+import '../widgets/training_store_picker.dart';
 import '../widgets/training_site_context.dart';
 
 class TrainingDetailsStep extends StatefulWidget {
@@ -41,19 +41,34 @@ class _TrainingDetailsStepState extends State<TrainingDetailsStep> {
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
-    final site = widget.siteContext;
     return ListView(
       key: const PageStorageKey('training-details-step'),
       padding: const EdgeInsets.fromLTRB(18, 10, 18, 28),
       children: [
-        TrainingSiteCard(
-          siteName: site.siteName,
-          state: site.state,
-          business: site.business,
-          checkedIn: site.checkedIn,
-          checkInTime: site.checkInTime == null
-              ? null
-              : DateFormat.jm().format(site.checkInTime!),
+        ListTile(
+          title: const Text('Training Store'),
+          subtitle: Text(
+            controller.selectedStore?['store_name']?.toString() ??
+                'Select independently of your Check-In',
+          ),
+          trailing: controller.isEditable && controller.session == null
+              ? const Icon(Icons.search)
+              : null,
+          onTap:
+              controller.isEditable &&
+                  controller.session == null &&
+                  controller.selectedCategory != null
+              ? () async {
+                  final store = await showDialog<Map<String, dynamic>>(
+                    context: context,
+                    builder: (_) => TrainingStorePicker(controller: controller),
+                  );
+                  if (store != null) controller.selectStore(store);
+                }
+              : null,
+        ),
+        const Text(
+          'Check-In authorizes this session; it does not select the Training store.',
         ),
         const SizedBox(height: 16),
         const FoSectionTitle(
@@ -92,7 +107,6 @@ class _TrainingDetailsStepState extends State<TrainingDetailsStep> {
                   labelText: 'Training Date',
                   prefixIcon: Icon(Icons.calendar_today_outlined),
                 ),
-                onTap: controller.isEditable ? () => _pickDate(context) : null,
               ),
               const SizedBox(height: 14),
               TextField(
@@ -164,7 +178,7 @@ class _TrainingDetailsStepState extends State<TrainingDetailsStep> {
               SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'You can save as draft and complete evidence later.',
+                  'Save and complete evidence while your Check-In remains active.',
                   style: TextStyle(
                     color: Color(0xFF35527D),
                     fontWeight: FontWeight.w700,
@@ -177,18 +191,5 @@ class _TrainingDetailsStepState extends State<TrainingDetailsStep> {
         ),
       ],
     );
-  }
-
-  Future<void> _pickDate(BuildContext context) async {
-    final value = await showDatePicker(
-      context: context,
-      initialDate: widget.controller.trainingDate,
-      firstDate: DateTime.now().subtract(const Duration(days: 30)),
-      lastDate: DateTime.now().add(const Duration(days: 30)),
-    );
-    if (value != null) {
-      widget.controller.setDetails(date: value);
-      setState(() {});
-    }
   }
 }

@@ -266,6 +266,20 @@ bool canAssignBusinessDevelopmentLead(String role) {
 String _normalizedRoleText(String? value) =>
     (value ?? '').trim().replaceAll(RegExp(r'[\s_-]+'), '').toUpperCase();
 
+bool isRelianceRetailBusiness(String? business) => const {
+  'RELIANCE',
+  'RELIANCERETAIL',
+}.contains(_normalizedRoleText(business));
+
+bool isRelianceRetailFo({required String role, String? business}) {
+  try {
+    return canonicalMobileRole(role) == 'FO' &&
+        isRelianceRetailBusiness(business);
+  } catch (_) {
+    return false;
+  }
+}
+
 bool isMobileDebugVisible({
   String? role,
   String? designation,

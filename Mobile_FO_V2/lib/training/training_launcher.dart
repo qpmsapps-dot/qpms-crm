@@ -2,16 +2,31 @@ import 'package:flutter/material.dart';
 
 import '../models/fo_models.dart';
 import '../services/supabase_service.dart';
+import '../services/local_store.dart';
 import '../utils/mobile_roles.dart';
 import 'data/training_api.dart';
 import 'data/training_draft_cache.dart';
 import 'data/training_errors.dart';
 import 'data/training_repository.dart';
+import 'models/training_category.dart';
 import 'screens/training_flow_screen.dart';
+import 'screens/hk_training_screen.dart';
 import 'state/training_flow_controller.dart';
 import 'widgets/training_site_context.dart';
 
 enum TrainingLaunchMode { structuredNew, structuredResume, legacy }
+
+bool isTrainingFoRole(String role) =>
+    {'FO', 'FIELDOFFICER'}.contains(_normalizedTrainingStoreText(role));
+
+bool isTrainingCreatorRole(String role) {
+  try {
+    return const {'FO', 'KAM', 'Operations Manager', 'Branch Head'}
+        .contains(canonicalMobileRole(role));
+  } catch (_) {
+    return false;
+  }
+}
 
 String _normalizedTrainingStoreText(String? value) =>
     (value ?? '').trim().replaceAll(RegExp(r'[\s_-]+'), '').toUpperCase();
@@ -58,7 +73,7 @@ TrainingLaunchMode resolveTrainingLaunchMode({
   TrainingDraftRecord? localDraft,
 }) {
   final eligible =
-      isRelianceStructuredTrainingRole(role) &&
+      isTrainingCreatorRole(role) &&
       isRelianceStructuredTrainingStore(
         business: business,
         clientName: clientName,
@@ -74,6 +89,23 @@ TrainingLaunchMode resolveTrainingLaunchMode({
 }
 
 typedef LegacyTrainingBuilder = Widget Function(BuildContext context);
+
+Future<TrainingCategory?> selectNewTrainingCategory(
+  BuildContext context,
+  List<TrainingCategory> categories,
+) => showDialog<TrainingCategory>(
+  context: context,
+  builder: (dialogContext) => SimpleDialog(
+    title: const Text('Training category'),
+    children: [
+      for (final category in categories.where((item) => item.isActive))
+        SimpleDialogOption(
+          onPressed: () => Navigator.pop(dialogContext, category),
+          child: Text(category.name),
+        ),
+    ],
+  ),
+);
 
 class TrainingLauncher {
   TrainingLauncher._();
@@ -97,126 +129,127 @@ class TrainingLauncher {
     }
 
     try {
-      final cache = TrainingDraftCache();
-      TrainingDraftRecord? localDraft;
-      try {
-        localDraft = await cache.loadDraft(contextKey);
-      } catch (_) {
-        if (context.mounted) {
-          await _showError(
-            context,
-            'The saved Training draft could not be read. Please try again.',
-            retryable: true,
-          );
-        }
-        return null;
+      if (!isRelianceStructuredTrainingStore(business: user.business) &&
+          !isRelianceStructuredTrainingStore(
+            business: siteVisit.business,
+            clientName: siteVisit.clientName,
+            storeName: siteVisit.storeName,
+          )) {
+        return _openLegacy(context, legacyBuilder);
       }
-      if (!context.mounted) return null;
-
-      final contextAllowsNew =
+      final repository = TrainingRepository(
+        api: TrainingApi(user: user),
+        cache: TrainingDraftCache(),
+      );
+      final canCreate =
+          isTrainingCreatorRole(user.role) &&
           attendance.isActive &&
           siteVisit.isActive &&
           SupabaseService.isValidUuid(attendanceId) &&
           SupabaseService.isValidUuid(siteVisitId);
-      var mode = resolveTrainingLaunchMode(
-        role: user.role,
-        business: siteVisit.business,
-        clientName: siteVisit.clientName,
-        storeName: siteVisit.storeName,
-        contextAllowsNew: contextAllowsNew,
-        localDraft: localDraft,
+      final sessions = await repository.getSessions(
+        mine: true,
+        siteVisitId: siteVisitId,
+        limit: 200,
       );
-      if (mode == TrainingLaunchMode.legacy) {
+      if (!context.mounted) return null;
+      String? selectedId;
+      if (sessions.isNotEmpty) {
+        selectedId = await showDialog<String>(
+          context: context,
+          builder: (dialogContext) => SimpleDialog(
+            title: const Text('Training reports'),
+            children: [
+              for (final session in sessions)
+                SimpleDialogOption(
+                  onPressed: () => Navigator.pop(dialogContext, session.id),
+                  child: Text(
+                    '${session.storeNameSnapshot ?? 'Training'} • ${session.trainingDate?.toIso8601String().split('T').first ?? ''} • ${session.status.name}',
+                  ),
+                ),
+              if (canCreate)
+                SimpleDialogOption(
+                  onPressed: () => Navigator.pop(dialogContext, '__new__'),
+                  child: const Text('Create new Training'),
+                ),
+            ],
+          ),
+        );
+        if (selectedId == null || !context.mounted) return null;
+      } else if (!canCreate) {
         return _openLegacy(context, legacyBuilder);
       }
-
-      while (context.mounted) {
-        if (!context.mounted) return null;
-        _showLoading(context);
-        TrainingFlowController? controller;
-        try {
-          final repository = TrainingRepository(
-            api: TrainingApi(user: user),
-            cache: cache,
+      final controller = TrainingFlowController(
+        repository: repository,
+        activeContextCheck: () async {
+          final currentAttendance = await LocalStore.getAttendance();
+          final currentVisit = await LocalStore.activeVisit(
+            user: user,
+            attendance: currentAttendance,
           );
-          controller = TrainingFlowController(repository: repository);
-          if (mode == TrainingLaunchMode.structuredResume) {
-            await controller.resume(localDraft!.sessionId!.trim());
-            if (!_matchesContext(
-              controller,
-              attendanceId: attendanceId,
-              siteVisitId: siteVisitId,
-            )) {
-              await cache.clearDraft(contextKey);
+          return currentAttendance?.isActive == true &&
+              currentVisit?.isActive == true &&
+              _remoteId(currentAttendance!.remoteId, currentAttendance.id) ==
+                  attendanceId &&
+              _remoteId(currentVisit!.remoteId, currentVisit.id) == siteVisitId;
+        },
+      )..readOnlyContext = !canCreate;
+      try {
+        if (selectedId != null && selectedId != '__new__') {
+          await controller.resume(selectedId);
+        } else {
+          await controller.initializeNew(
+            attendanceId: attendanceId,
+            siteVisitId: siteVisitId,
+            trainerName: user.fullName,
+          );
+          if (isTrainingFoRole(user.role) &&
+              isRelianceStructuredTrainingStore(business: user.business) &&
+              controller.session == null &&
+              controller.selectedCategory == null) {
+            if (!context.mounted) {
               controller.dispose();
-              controller = null;
-              mode = contextAllowsNew
-                  ? TrainingLaunchMode.structuredNew
-                  : TrainingLaunchMode.legacy;
-            } else if (!controller.isEditable) {
-              await cache.clearDraft(contextKey);
+              return null;
             }
-          }
-          if (mode == TrainingLaunchMode.structuredNew) {
-            await controller!.initializeNew(
-              attendanceId: attendanceId,
-              siteVisitId: siteVisitId,
-              trainerName: user.fullName,
+            if (!controller.categories.any((item) => item.isActive)) {
+              throw const TrainingValidationException(
+                'Training is unavailable. Contact your administrator.',
+              );
+            }
+            final category = await selectNewTrainingCategory(
+              context,
+              controller.categories,
             );
+            if (category == null || !context.mounted) {
+              controller.dispose();
+              return null;
+            }
+            controller.selectCategory(category);
+            await controller.loadTopics();
           }
-          if (context.mounted) _closeLoading(context);
-          if (!context.mounted) return null;
-          if (mode == TrainingLaunchMode.legacy) {
-            return _openLegacy(context, legacyBuilder);
-          }
-          if (!context.mounted || controller == null) return null;
-          final result = await Navigator.of(context).push<bool>(
-            MaterialPageRoute(
-              builder: (_) => _TrainingControllerRoute(
-                controller: controller!,
-                siteContext: TrainingSiteDisplayContext(
-                  siteName: siteVisit.storeName,
-                  state: siteVisit.state,
-                  business: siteVisit.business ?? siteVisit.clientName,
-                  checkedIn: siteVisit.isActive,
-                  checkInTime: siteVisit.checkInTime,
-                ),
+        }
+        if (!context.mounted) {
+          controller.dispose();
+          return null;
+        }
+        return await Navigator.of(context).push<bool>(
+          MaterialPageRoute(
+            builder: (_) => _TrainingControllerRoute(
+              controller: controller,
+              siteContext: TrainingSiteDisplayContext(
+                siteName: '',
+                checkedIn: canCreate,
               ),
             ),
-          );
-          return result;
-        } on TrainingNotFoundException catch (_) {
-          controller?.dispose();
-          if (context.mounted) _closeLoading(context);
-          await cache.clearDraft(contextKey);
-          localDraft = null;
-          mode = contextAllowsNew
-              ? TrainingLaunchMode.structuredNew
-              : TrainingLaunchMode.legacy;
-          if (mode == TrainingLaunchMode.legacy && context.mounted) {
-            return _openLegacy(context, legacyBuilder);
-          }
-        } on TrainingException catch (error) {
-          controller?.dispose();
-          if (context.mounted) _closeLoading(context);
-          if (!context.mounted) return null;
-          final retry = await _showError(
-            context,
-            error.message,
-            retryable: error.retryable,
-          );
-          if (!retry) return null;
-        } catch (_) {
-          controller?.dispose();
-          if (context.mounted) _closeLoading(context);
-          if (!context.mounted) return null;
-          final retry = await _showError(
-            context,
-            'Training could not be opened right now.',
-            retryable: true,
-          );
-          if (!retry) return null;
-        }
+          ),
+        );
+      } catch (_) {
+        controller.dispose();
+        rethrow;
+      }
+    } on TrainingException catch (error) {
+      if (context.mounted) {
+        await _showError(context, error.message, retryable: false);
       }
       return null;
     } finally {
@@ -227,48 +260,10 @@ class TrainingLauncher {
   static String _remoteId(String? remoteId, String localId) =>
       remoteId?.trim().isNotEmpty == true ? remoteId!.trim() : localId.trim();
 
-  static bool _matchesContext(
-    TrainingFlowController controller, {
-    required String attendanceId,
-    required String siteVisitId,
-  }) {
-    final session = controller.session;
-    return session != null &&
-        session.attendanceId == attendanceId &&
-        session.siteVisitId == siteVisitId;
-  }
-
   static Future<bool?> _openLegacy(
     BuildContext context,
     LegacyTrainingBuilder builder,
   ) => Navigator.of(context).push<bool>(MaterialPageRoute(builder: builder));
-
-  static void _showLoading(BuildContext context) {
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const PopScope(
-        canPop: false,
-        child: AlertDialog(
-          content: Row(
-            children: [
-              SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2.5),
-              ),
-              SizedBox(width: 16),
-              Expanded(child: Text('Preparing Training...')),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  static void _closeLoading(BuildContext context) {
-    Navigator.of(context, rootNavigator: true).pop();
-  }
 
   static Future<bool> _showError(
     BuildContext context,
@@ -316,16 +311,40 @@ class _TrainingControllerRoute extends StatefulWidget {
       _TrainingControllerRouteState();
 }
 
-class _TrainingControllerRouteState extends State<_TrainingControllerRoute> {
+class _TrainingControllerRouteState extends State<_TrainingControllerRoute>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        widget.controller.session != null) {
+      widget.controller.refresh().catchError((Object _) {
+        // Fail closed until the employee can refresh an authoritative session.
+        widget.controller.lockForHistory();
+      });
+    }
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.controller.dispose();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) => TrainingFlowScreen(
-    controller: widget.controller,
-    siteContext: widget.siteContext,
-  );
+  Widget build(BuildContext context) =>
+      (widget.controller.session?.hkTrainingPolicy == 'hk_single_page_v1' ||
+          (widget.controller.session == null &&
+              widget.controller.selectedCategory?.code == 'hk'))
+      ? HkTrainingScreen(controller: widget.controller)
+      : TrainingFlowScreen(
+          controller: widget.controller,
+          siteContext: widget.siteContext,
+        );
 }

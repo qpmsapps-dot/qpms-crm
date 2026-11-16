@@ -75,6 +75,7 @@ void main() {
       'session': {
         'id': 's',
         'status': 'draft',
+        'can_edit': true,
         'training_date': '2026-09-29',
         'trainer_name_snapshot': 'Trainer',
       },

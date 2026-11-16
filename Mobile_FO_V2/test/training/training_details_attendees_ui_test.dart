@@ -39,8 +39,12 @@ void main() {
           ),
         ),
       );
-      expect(find.text('Site Information'), findsOneWidget);
-      expect(find.text('Reliance Retail Bengaluru'), findsOneWidget);
+      expect(find.text('Training Store'), findsOneWidget);
+      expect(find.text('Reliance Retail Bengaluru'), findsNothing);
+      expect(
+        find.text('Select independently of your Check-In'),
+        findsOneWidget,
+      );
       expect(find.text('Housekeeping (HK)'), findsOneWidget);
       expect(find.text('Technical / MEP'), findsOneWidget);
       expect(find.text('Toolbox'), findsOneWidget);

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../admin/admin_modules_screen.dart';
 import '../bd/bd_shell.dart';
+import '../deep_cleaning/deep_cleaning_screen.dart';
 import '../hospital_housekeeping/hospital_models.dart';
 import '../hospital_housekeeping/hospital_shell.dart';
 import '../hospital_housekeeping/hospital_ticket_api.dart';
@@ -317,6 +318,15 @@ class _HomeShellState extends State<HomeShell> {
             : null,
         onOpenHospitalTicketing: _openHospitalTicketingLauncher,
         showHospitalTicketingEntry: _showHospitalTicketingEntry,
+        onOpenRelianceDeepCleaning: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => DeepCleaningScreen(user: widget.user),
+          ),
+        ),
+        showRelianceDeepCleaningEntry: isRelianceRetailFo(
+          role: widget.user.role,
+          business: widget.user.business,
+        ),
         key: const PageStorageKey('home'),
       ),
       TasksScreen(

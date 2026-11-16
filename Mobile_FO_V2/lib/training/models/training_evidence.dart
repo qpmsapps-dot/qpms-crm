@@ -31,6 +31,7 @@ class TrainingEvidence {
     required this.mimeType,
     required this.fileSize,
     this.createdAt,
+    this.isUploaded = false,
   });
   final String id;
   final String trainingSessionId;
@@ -40,6 +41,7 @@ class TrainingEvidence {
   final String mimeType;
   final int fileSize;
   final DateTime? createdAt;
+  final bool isUploaded;
   factory TrainingEvidence.fromJson(Map<String, dynamic> json) =>
       TrainingEvidence(
         id: '${json['id'] ?? ''}',
@@ -51,6 +53,7 @@ class TrainingEvidence {
         fileName: '${json['file_name'] ?? ''}',
         mimeType: '${json['mime_type'] ?? ''}',
         fileSize: (json['file_size'] as num?)?.toInt() ?? 0,
+        isUploaded: (json['metadata'] as Map?)?['upload_status'] == 'uploaded',
         createdAt: json['created_at'] == null
             ? null
             : DateTime.tryParse('${json['created_at']}'),

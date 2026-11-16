@@ -28,6 +28,7 @@ class UploadTransport implements TrainingTransport {
   int uploads = 0;
   int temporaryFailures = 0;
   int? permanentFailureStatus;
+  bool confirmCompletion = true;
   @override
   Future<TrainingHttpResponse> send(
     String method,
@@ -53,6 +54,10 @@ class UploadTransport implements TrainingTransport {
           'file_name': body['file_name'],
           'mime_type': body['mime_type'],
           'file_size': body['file_size'],
+          'training_session_topic_id': body['training_session_topic_id'],
+          'metadata': {
+            'upload_status': confirmCompletion ? 'uploaded' : 'pending',
+          },
         },
       });
     }
@@ -91,6 +96,45 @@ const user = FoUser(
 );
 
 void main() {
+  test(
+    'HK photo completion must be server-confirmed before the queue is cleared',
+    () async {
+      final cache = TrainingDraftCache(store: MemoryStore());
+      final transport = UploadTransport()..confirmCompletion = false;
+      final repository = TrainingRepository(
+        api: TrainingApi(user: user, transport: transport),
+        cache: cache,
+        readFile: (_) async => Uint8List(3),
+      );
+      final job = await repository.enqueueEvidence(
+        localId: 'hk-photo',
+        sessionId: 's',
+        sessionTopicId: 'st',
+        evidenceType: TrainingEvidenceType.topicPhoto,
+        localFilePath: 'selected.jpg',
+        fileName: 'selected.jpg',
+        mimeType: 'image/jpeg',
+        fileSize: 3,
+      );
+      await expectLater(
+        repository.uploadPending(job),
+        throwsA(
+          isA<TrainingUploadException>().having(
+            (e) => e.code,
+            'code',
+            'evidence_upload_unconfirmed',
+          ),
+        ),
+      );
+      final pending = await cache.queueForSession('s');
+      expect(pending, hasLength(1));
+      expect(pending.single.state, TrainingUploadState.failed);
+      transport.confirmCompletion = true;
+      final uploaded = await repository.retryPending('s');
+      expect(uploaded.single.isUploaded, isTrue);
+      expect(await cache.queueForSession('s'), isEmpty);
+    },
+  );
   test(
     'draft persists and restores step without tokens or signed URLs',
     () async {

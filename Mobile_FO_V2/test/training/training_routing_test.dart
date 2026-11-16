@@ -37,22 +37,15 @@ void main() {
       expect(route(role: 'Field Officer'), TrainingLaunchMode.structuredNew);
     });
 
-    test('Reliance Operations Manager aliases open structured flow', () {
-      expect(
-        route(role: 'Operations Manager'),
-        TrainingLaunchMode.structuredNew,
-      );
-      expect(route(role: 'OM'), TrainingLaunchMode.structuredNew);
-    });
-
-    test('Reliance Admin opens structured flow for controlled testing', () {
-      expect(route(role: 'Admin'), TrainingLaunchMode.structuredNew);
+    test('existing Technical Training creator roles retain structured access', () {
+      for (final role in ['Operations Manager', 'OM', 'KAM', 'Branch Head']) {
+        expect(route(role: role), TrainingLaunchMode.structuredNew);
+      }
     });
 
     test('Reliance roles outside FO, OM, and Admin stay on legacy', () {
       for (final role in [
-        'Branch Head',
-        'KAM',
+        'Admin',
         'GM',
         'Management',
         'Unknown',
@@ -131,7 +124,7 @@ void main() {
 
     test('cached server draft wins over new-session routing', () {
       expect(
-        route(role: 'Operations Manager', localDraft: draft()),
+        route(role: 'FO', localDraft: draft()),
         TrainingLaunchMode.structuredResume,
       );
     });
