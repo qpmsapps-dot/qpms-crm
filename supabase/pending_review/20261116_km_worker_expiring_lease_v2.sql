@@ -7,7 +7,8 @@ set local statement_timeout='25s';
 
 alter table qpms_workers.jobs
   add column if not exists lease_until timestamptz,
-  add column if not exists claimed_epoch bigint;
+  add column if not exists claimed_epoch bigint,
+  add column if not exists last_released_token uuid;
 
 -- Only the END DAY KM worker opts into leases; the other six/background
 -- services continue to use their existing rpc_worker_claim_v1 contract.
@@ -43,12 +44,13 @@ begin
   end if;
 
   insert into qpms_workers.jobs
-    (job,owner,token,started_at,slot,lease_until,claimed_epoch)
+    (job,owner,token,started_at,slot,lease_until,claimed_epoch,last_released_token)
   values
-    (p_job,p_owner,p_token,clock_timestamp(),p_slot,clock_timestamp()+interval '180 seconds',v_epoch)
+    (p_job,p_owner,p_token,clock_timestamp(),p_slot,clock_timestamp()+interval '180 seconds',v_epoch,null)
   on conflict(job) do update set
     owner=excluded.owner,token=excluded.token,started_at=excluded.started_at,
-    slot=excluded.slot,lease_until=excluded.lease_until,claimed_epoch=excluded.claimed_epoch
+    slot=excluded.slot,lease_until=excluded.lease_until,claimed_epoch=excluded.claimed_epoch,
+    last_released_token=null
   where (qpms_workers.jobs.token is null or
     (qpms_workers.jobs.lease_until is not null
       and qpms_workers.jobs.lease_until<=clock_timestamp()
@@ -97,13 +99,13 @@ begin
   end if;
   update qpms_workers.jobs
   set owner=null,token=null,last_completed_slot=coalesce(slot,last_completed_slot),
-      slot=null,lease_until=null,claimed_epoch=null
+      slot=null,lease_until=null,claimed_epoch=null,last_released_token=p_token
   where job=p_job and owner=p_owner and token=p_token;
   if found then return true; end if;
   -- If the DB committed the release but its response was lost, a retry is
   -- successful only if the job is unowned. Never clear another owner's claim.
   return exists(select 1 from qpms_workers.jobs
-    where job=p_job and owner is null and token is null);
+    where job=p_job and owner is null and token is null and last_released_token=p_token);
 end $$;
 
 revoke all on function
