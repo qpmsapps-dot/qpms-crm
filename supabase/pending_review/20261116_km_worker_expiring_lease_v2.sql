@@ -43,7 +43,7 @@ begin
       'expired_at',prior.lease_until,'replacement_owner',p_owner));
   end if;
 
-  insert into qpms_workers.jobs
+  insert into qpms_workers.jobs as current_claim
     (job,owner,token,started_at,slot,lease_until,claimed_epoch,last_released_token)
   values
     (p_job,p_owner,p_token,clock_timestamp(),p_slot,clock_timestamp()+interval '180 seconds',v_epoch,null)
@@ -51,11 +51,11 @@ begin
     owner=excluded.owner,token=excluded.token,started_at=excluded.started_at,
     slot=excluded.slot,lease_until=excluded.lease_until,claimed_epoch=excluded.claimed_epoch,
     last_released_token=null
-  where (qpms_workers.jobs.token is null or
-    (qpms_workers.jobs.lease_until is not null
-      and qpms_workers.jobs.lease_until<=clock_timestamp()
-      and qpms_workers.jobs.claimed_epoch=v_epoch))
-    and (excluded.slot is null or qpms_workers.jobs.last_completed_slot is distinct from excluded.slot)
+  where (current_claim.token is null or
+    (current_claim.lease_until is not null
+      and current_claim.lease_until<=clock_timestamp()
+      and current_claim.claimed_epoch=v_epoch))
+    and (excluded.slot is null or current_claim.last_completed_slot is distinct from excluded.slot)
   returning token into v_claimed;
   return coalesce(v_claimed=p_token,false);
 end $$;
