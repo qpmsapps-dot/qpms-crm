@@ -2,7 +2,7 @@ import { reconcileSupportedKm, sharedKmReconciliationEnabled, kmReconciliationDe
 
 // Database outbox is written in the attendance/GPS transaction. A worker never
 // reports posting merely because attendance closure or evidence calculation succeeded.
-export async function processKmReconciliationJobs(client, { environment = process.env, limit = 10, reconcile = reconcileSupportedKm } = {}) {
+export async function processKmReconciliationJobs(client, { environment = process.env, limit = 10, reconcile = reconcileSupportedKm, shouldContinue = () => true } = {}) {
   if (!sharedKmReconciliationEnabled(environment) || environment.END_DAY_KM_AUTO_RECALC_ENABLED !== 'true') return { disabled: true, processed: 0 };
   const policy = environment.KM_CANONICAL_POLICY_ENABLED === 'true';
   const automatic = environment.KM_CANONICAL_AUTOMATION_ENABLED === 'true';
@@ -16,6 +16,8 @@ export async function processKmReconciliationJobs(client, { environment = proces
   if (version.data !== (automatic ? 247 : 246)) throw Object.assign(new Error('Compatible database authorization is required before claiming any KM job.'), {code:'KM_ATTENDANCE_AUTHORIZATION_REQUIRED',retryable:true});
   const results = [];
   for (let i = 0; i < Math.min(limit, 50); i++) {
+    // A lost outer worker lease must never claim another attendance.
+    if (!shouldContinue()) return { processed: results.length, results, leaseLost: true };
     const { data: job, error } = await client.rpc(automatic ? 'rpc_claim_fo_automatic_km_v1' : 'rpc_claim_fo_policy_km_v1');
     if (error) throw kmReconciliationDependencyError(error);
     if (!job) break;
@@ -35,6 +37,9 @@ export async function processKmReconciliationJobs(client, { environment = proces
       (/^google_(timeout|deadline_exceeded|fetch_error|unavailable|unknown_error|over_query_limit|http_429|http_5\d\d)$/.test(l.evidence_status||l.reason||l.fallback_reason||'') ||
        (roadBudget>0 && (l.evidence_status||l.reason||l.fallback_reason)==='google_call_limit')));
     const done = !routingRetry && (result.financial_posted === true || ['unchanged','partial_unresolved'].includes(result.status));
+    // Any already-committed receipt is idempotent; do not write more side effects
+    // after the owner detects a revoked or expired lease.
+    if (!shouldContinue()) throw Object.assign(new Error('KM worker lease lost during reconciliation.'), {code:'km_worker_lease_lost',retryable:true});
     const finalEvidence=result.legs?.find(l=>l.type==='last_checkout_to_end_day');
     if(automatic && job.final_leg_only===true && finalEvidence){
       const recorded=await client.rpc('rpc_record_final_leg_evidence_v251',{p_attendance:job.attendance_id,p_lease:job.lease,p_final:finalEvidence});
