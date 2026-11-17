@@ -94,7 +94,7 @@ jobs:
           # BEGIN THERMOGRAPHY FULLSTACK EXACT PAYLOAD
           thermo_manifest = ".github/thermography-fullstack-pins.json"
           if thermo_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{thermo_manifest}"],text=True).strip() != "87eac2d4de5474f64c19a39f40d3cd062ab3de35":
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{thermo_manifest}"],text=True).strip() != "42fa1344979be205b2638e983a79f0a63e53daf3":
               sys.exit("Thermography manifest changed; renew full-stack review")
             if subprocess.check_output(["git","rev-parse","HEAD:.github/thermographyFullstackGuard.mjs"],text=True).strip() != "c1bf43c2e4c285e711ac26a38c04eb6459c86707":
               sys.exit("Thermography guard changed; renew full-stack review")

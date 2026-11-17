@@ -11,7 +11,7 @@
     "backend/services/thermographyReportsService.js": "6b1b6d184f35107555a6d9a13b2f582913c05565",
     "backend/services/thermographyWorkbook.js": "e162fcc8d2f60bd46d58e83259d0bf0d061a6d4c",
     "backend/shared/retailOperations.js": "534a5cb0e8b445a10975ebe9b813e8dfd4c90f38",
-    "backend/tests/helpers/nativeThermographyPostgres.js": "0ab36f43a1b2484cc8f7fe4affbd502c32b03574",
+    "backend/tests/helpers/nativeThermographyPostgres.js": "8d3235124f82ca4aabb1710b65fcf655b46cb4f5",
     "backend/tests/helpers/thermographyFixture.js": "193903dd9b162c3a5bb231d5148099e461f8f434",
     "backend/tests/helpers/thermographyServiceFixture.js": "bf5b1cb5120232c6c1c33c1b822942dcb0b9db73",
     "backend/tests/thermographyReports.concurrent.test.js": "aa382e4261122ef4d136056ce0b08ea73b6cdf59",
