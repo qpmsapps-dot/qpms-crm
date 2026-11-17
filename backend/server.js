@@ -1,5 +1,6 @@
 import {prepareRetailMisUser,saveRetailMisUser} from './services/retailMisUserManagement.js';
 import {scopedFaultTrackerReport} from './services/faultTrackerStoreScope.js';
+import {isRetailLeadership} from './shared/retailSouthHeadAccess.js';
 import {updateRetailFault} from './services/retailFaultUpdateService.js';
 import {requireInitialRetailAdmin} from './services/retailInitialAdminAccess.js';
 import {retailMisApiAllowed} from './shared/retailMisAccess.js';
@@ -5099,6 +5100,17 @@ function faultTrackerCanReadAll(profile) {
   return isRetailTechnicalMis(profile) || FAULT_TRACKER_READ_ALL_ROLE_KEYS.has(faultTrackerRoleKey(profile));
 }
 
+async function verifiedRetailFaultStates(request,client) {
+  if(!isRetailLeadership(request.profile))return null;
+  if(!request.profile.id||request.profile.auth_user_id!==request.authUser?.id)
+    throw faultTrackerHttpError(403,'retail_identity_forbidden','Verified Retail account required.');
+  const {data,error}=await client.rpc('retail_role_states',{p_actor:request.profile.id});
+  if(error)throw faultTrackerHttpError(503,'retail_scope_unavailable','Retail state authorization unavailable.');
+  const states=Array.isArray(data)?data.filter(s=>['TN','PY','KA','KL','TG','AP-1','AP-2'].includes(s)):[];
+  if(!states.length||!Array.isArray(data)||states.length!==data.length)
+    throw faultTrackerHttpError(403,'retail_scope_forbidden','Verified Retail state assignment required.');
+  return states;
+}
 function faultTrackerStateCode(value) {
   const key = faultTrackerKey(value);
   const stateMap = {
@@ -5309,9 +5321,12 @@ app.patch('/api/fault-tracker/tickets/:id',requireSupabaseJwt,requireFaultTracke
 });
 app.get('/api/fault-tracker/tickets', requireSupabaseJwtOrDemoApiRead, requireFaultTrackerAccess, async (request, response) => {
   try {
-    const result = await scopedFaultTrackerReport(requireServiceRoleSupabase(),request.profile,request.query,{
+    const client=requireServiceRoleSupabase();
+    const roleStates=await verifiedRetailFaultStates(request,client);
+    const result = await scopedFaultTrackerReport(client,request.profile,request.query,{
       readAll:faultTrackerCanReadAll(request.profile)&&(!isRetailTechnicalMis(request.profile)||FAULT_TRACKER_READ_ALL_ROLE_KEYS.has(faultTrackerRoleKey(request.profile))),
       isAdmin:faultTrackerCanManage(request.profile),stateCode:faultTrackerStateCode,
+      allowedStates:roleStates,
     });
     if(isDemoUser(request.profile))result.tickets=result.tickets.map(row=>sanitizeDemoRecord(row));
     response.json(result);
