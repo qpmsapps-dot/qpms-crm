@@ -1,7 +1,7 @@
 import { isRelianceRetailStore, isRelianceRetailValue, retailStateKey } from './clientDeepCleaningService.js';
 import { foOperationalAllowedEmployeeCodes } from './foOperationalAccessService.js';
 import { retailFoStateAllows } from './retailFoStoreScope.js';
-import { resolveRetailHkTrainingScope, applyRetailTrainingStoreScope, retailTrainingFoCodes, retailTrainingFoProfiles } from './retailTrainingReadScopeService.js';
+import { resolveRetailHkTrainingScope, resolveRetailLeadershipTrainingScope, applyRetailTrainingStoreScope, retailTrainingFoCodes, retailTrainingFoProfiles } from './retailTrainingReadScopeService.js';
 
 export const RELIANCE_TRAINING_CLIENT_ID = '369d2d5f-396f-49f9-a47d-bfbc8f7cb922';
 export const RELIANCE_TRAINING_CLIENT_CODE = 'reliance_retail';
@@ -196,7 +196,8 @@ async function loadScopeRows(client) {
 
 export async function resolveTrainingReadScope(client, profile) {
   assertTrainingActor(profile);
-  const retailScope = await resolveRetailHkTrainingScope(client, profile);
+  const retailScope = await resolveRetailLeadershipTrainingScope(client,profile)
+    || await resolveRetailHkTrainingScope(client, profile);
   if (retailScope) {
     const profiles = await retailTrainingFoProfiles(client);
     return { profiles, hierarchy: [], retailScope, employeeCodes: new Set(retailTrainingFoCodes(profiles)) };
@@ -211,7 +212,8 @@ export async function resolveTrainingReadScope(client, profile) {
 export async function loadAuthorizedTrainingSession(client, profile, sessionId, { editable = false } = {}) {
   if (editable) profile = await resolveTrainingMutationProfile(client, profile);
   assertTrainingActor(profile, { mutation: editable });
-  const retailScope = editable ? null : await resolveRetailHkTrainingScope(client, profile);
+  const retailScope = editable ? null : await resolveRetailLeadershipTrainingScope(client,profile)
+    || await resolveRetailHkTrainingScope(client, profile);
   let sessionQuery = client.from('training_sessions').select('*').eq('id', sessionId);
   if (retailScope) sessionQuery = applyRetailTrainingStoreScope(sessionQuery, retailScope)
     .eq('access_client_id', RELIANCE_TRAINING_CLIENT_ID).eq('access_client_code', RELIANCE_TRAINING_CLIENT_CODE);

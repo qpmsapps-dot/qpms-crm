@@ -25,13 +25,19 @@ export async function faultTrackerAssignmentGrants(client,profile,isAdmin){
  if(!access.access_granted||access.source!=='unified')throw fail(403,'Verified Retail Fault Tracker scope required.');
  return access.assignments.map(a=>({states:a.scopes.filter(s=>s.scope_type==='state').map(s=>s.scope_code||s.scope_text),stores:a.scopes.filter(s=>s.scope_type==='store').map(s=>s.scope_id),all:a.scopes.some(s=>['global','client','all_client'].includes(s.scope_type))}));
 }
-export function scopeFaultTickets(source,master,{readAll=false,profileState='',stateCode,isAdmin=false,grants=null}={}){
+export function scopeFaultTickets(source,master,{readAll=false,profileState='',stateCode,isAdmin=false,grants=null,allowedStates=null}={}){
  const ownState=geographicState(profileState,stateCode);
- if(!readAll&&!ownState)throw fail(403,'State mapping not configured for your profile.');
+ // A verified leadership state scope overrides generic all-state role defaults.
+ // An explicitly supplied but empty/invalid scope denies rather than falling back.
+ const roleStates=allowedStates===null?null:new Set(
+  Array.isArray(allowedStates)?allowedStates.map(s=>geographicState(s,stateCode)).filter(Boolean):[]);
+ if(roleStates&&roleStates.size===0)throw fail(403,'Verified Retail state grant required.');
+ if(!readAll&&!ownState&&!roleStates)throw fail(403,'State mapping not configured for your profile.');
  const byCode=new Map(),ambiguous=new Set();
  for(const store of master){const code=normalizedFaultStoreCode(store.store_code);if(!code)continue;if(byCode.has(code))ambiguous.add(code);else byCode.set(code,store);}
  const allowed=store=>{
-  if(!readAll&&geographicState(store.state,stateCode)!==ownState)return false;
+  const storeState=geographicState(store.state,stateCode);
+  if(roleStates ? !roleStates.has(storeState) : !readAll&&storeState!==ownState)return false;
   if(!grants)return true;
   return grants.some(g=>(!g.states.length||g.states.some(s=>geographicState(s,stateCode)===geographicState(store.state,stateCode)))&&(!g.stores.length||g.stores.includes(store.id))&&(g.all||g.states.length||g.stores.length));
  };
