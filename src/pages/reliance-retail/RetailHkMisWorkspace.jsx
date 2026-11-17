@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { CircleMarker, MapContainer, Popup, TileLayer } from 'react-leaflet';
 import { Download, Eye, RefreshCw, ShieldCheck } from 'lucide-react';
+import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { authenticatedApiRequest } from '../../services/api.js';
-import { indiaToday } from '../../../backend/shared/retailAttendance.js';
+import { indiaToday, monthDates, summarizeAttendance } from '../../../backend/shared/retailAttendance.js';
 import 'leaflet/dist/leaflet.css';
 
 const MODULE_LABELS = Object.freeze({
@@ -54,6 +55,60 @@ function SimpleTable({ columns, rows, empty = 'No authorized records found.' }) 
     {!rows.length && <p className="p-4 text-sm text-slate-500">{empty}</p>}
   </div>;
 }
+// Use the same audited attendance aggregation as the MIS backend. Never turn
+// missing attendance/AOP coverage into a zero-percent data point.
+function dailyAttendanceTrend(report) {
+  if (!report?.summary?.cutoff || !Array.isArray(report.stores) ||
+      !Array.isArray(report.rows) || !Array.isArray(report.aop)) return [];
+  return monthDates(report.summary.cutoff).map(date => {
+    try {
+      const summary = summarizeAttendance({
+        stores: report.stores, attendance: report.rows,
+        aop: report.aop.map(a => ({ ...a, hk_count: a.hk_count, mepc_count: 0, aop_class: null })),
+        cutoff: date, view: 'daily',
+      }).total;
+      return { date, value: summary.complete ? summary.hk_pct : null };
+    } catch { return { date, value: null }; }
+  });
+}
+function dailySubmittedTrend(report, module) {
+  const rows = module === 'cleaning' ? submittedCleaning(report) : trainingRows(report);
+  const counts = new Map();
+  for (const row of rows) {
+    const date = module === 'cleaning'
+      ? (row.deep_cleaning_date || row.activity_date || row.submitted_at || '')
+      : (row.training_date || row.activity_date || '');
+    const day = String(date).slice(0, 10);
+    if (/^20\\d{2}-\\d{2}-\\d{2}$/.test(day)) counts.set(day, (counts.get(day) || 0) + 1);
+  }
+  return [...counts].sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, value]) => ({ date, value }));
+}
+function TrendGraph({ title, points, unit = 'count', note }) {
+  const available = points.some(p => Number.isFinite(p.value));
+  return <section className={CARD}>
+    <h2 className="font-semibold">{title}</h2>
+    {note && <p className="mt-1 text-xs text-slate-500">{note}</p>}
+    {available ? <div className="mt-3 h-56" role="img" aria-label={title + ': ' + points.map(p =>
+      p.date + ' ' + (p.value == null ? 'N/A' : fmt(p.value) + (unit === 'percent' ? '%' : ''))).join('; ')}>
+      <ResponsiveContainer width="100%" height="100%">
+        {unit === 'percent' ? <LineChart data={points} margin={{ left: 0, right: 14, top: 12, bottom: 4 }}>
+          <CartesianGrid strokeDasharray="3 3" vertical={false}/>
+          <XAxis dataKey="date" tickFormatter={d => d.slice(-2)} tick={{ fontSize: 11 }}/>
+          <YAxis tickFormatter={v => v + '%'} width={48}/>
+          <Tooltip formatter={v => [percent(v), 'HK Attendance']} />
+          <Line dataKey="value" type="monotone" name="HK Attendance" stroke="#2563eb" strokeWidth={2} connectNulls={false} dot={{ r: 2 }} isAnimationActive={false}/>
+        </LineChart> : <BarChart data={points} margin={{ left: 0, right: 14, top: 12, bottom: 4 }}>
+          <CartesianGrid strokeDasharray="3 3" vertical={false}/>
+          <XAxis dataKey="date" tickFormatter={d => d.slice(-2)} tick={{ fontSize: 11 }}/>
+          <YAxis allowDecimals={false} width={42}/>
+          <Tooltip formatter={v => [fmt(v), 'Submitted']} />
+          <Bar dataKey="value" name="Submitted" fill="#2563eb" maxBarSize={38} isAnimationActive={false}/>
+        </BarChart>}
+      </ResponsiveContainer>
+    </div> : <p className="mt-4 text-sm text-slate-500">No verified observations available for this period.</p>}
+  </section>;
+}
 function ReportSummary({ attendance, cleaning, training }) {
   const total = attendance?.summary?.total || {};
   return <><Metrics items={[
@@ -67,6 +122,14 @@ function ReportSummary({ attendance, cleaning, training }) {
       <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Deep Cleaning scheduled: {fmt(scheduleCleaning(cleaning).length)}.
         Submitted: {fmt(submittedCleaning(cleaning).length)}. These are separate counts, not a schedule-completion percentage.
         Attendance percentages are shown only when approved coverage is complete.</p>
+    </div>
+    <div className="grid gap-3 lg:grid-cols-3">
+      <TrendGraph title="Daily HK attendance %" points={dailyAttendanceTrend(attendance)} unit="percent"
+        note="Only days with verified attendance and AOP coverage have a percentage; missing days remain N/A."/>
+      <TrendGraph title="Deep Cleaning submissions by date" points={dailySubmittedTrend(cleaning, 'cleaning')}
+        note="Submitted work, including independent reports; not a schedule completion percentage."/>
+      <TrendGraph title="HK Training sessions by date" points={dailySubmittedTrend(training, 'training')}
+        note="Submitted housekeeping training sessions only."/>
     </div></>;
 }
 function AttendanceView({ report }) {
@@ -96,6 +159,8 @@ function AttendanceView({ report }) {
       </div>
       {!daily.length && <p className="py-5 text-sm text-slate-500">No recorded attendance within this period.</p>}
     </section>
+    <TrendGraph title="Daily HK attendance %" points={dailyAttendanceTrend(report)} unit="percent"
+      note="Only complete daily source/AOP coverage produces a percentage; missing days remain N/A."/>
     <h2 className="font-semibold">Store-wise HK attendance</h2>
     <SimpleTable columns={[
       {key:'store_code',label:'Store Code'}, {key:'store_name',label:'Store'},
@@ -185,6 +250,8 @@ function RecordsView({ report, module }) {
     {label:'Uploaded Evidence',value:fmt((report?.evidence||[]).filter(e=>e.status==='uploaded').length)},
   ]}/>
     <p className="text-sm text-slate-500">Read-only: {total} authorized {module==='cleaning'?'schedules and submitted reports':'HK training sessions'}.</p>
+    <TrendGraph title={module==='cleaning'?'Deep Cleaning submissions by date':'HK Training sessions by date'}
+      points={dailySubmittedTrend(report,module)}/>
     <SimpleTable columns={module==='cleaning'?[
       {key:'store_code',label:'Store Code',render:r=>r.store_code || report.stores?.find(s=>s.id===r.retail_store_id)?.store_code || 'N/A'},
       {key:'store_name',label:'Store',render:r=>r.store_name || report.stores?.find(s=>s.id===r.retail_store_id)?.store_name || 'N/A'},
