@@ -125,6 +125,33 @@ gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=
     try {
       assertRetailAccess(req.profile, 'zones');
       const client = getClient();
+      const states=req.profile._retailRoleStates;
+      if (states) {
+        // Scope legacy history by authorized Store Master and zone identities.
+        const [zoneScope,storeScope]=await Promise.all([
+          client.from('reliance_retail_zones').select('id').in('state',states).limit(1000),
+          client.from('reliance_retail_store_master').select('id').in('state',states).limit(2500),
+        ]);
+        if(zoneScope.error||storeScope.error)throw zoneScope.error||storeScope.error;
+        const zoneIds=new Set((zoneScope.data||[]).map(r=>r.id));
+        const storeIds=new Set((storeScope.data||[]).map(r=>r.id));
+        const [zone,store,audit]=await Promise.all([
+          client.from('reliance_retail_zone_fo_assignments').select('*').order('effective_from',{ascending:false}).limit(2000),
+          client.from('reliance_retail_store_zone_history').select('*').order('changed_at',{ascending:false}).limit(2000),
+          client.from('reliance_retail_management_audit').select('*').order('created_at',{ascending:false}).limit(2500),
+        ]);
+        if(zone.error||store.error||audit.error)throw zone.error||store.error||audit.error;
+        const valid=new Set(states);
+        const visibleAudit=(audit.data||[]).filter(row =>
+          (row.entity_type==='store'&&storeIds.has(row.entity_id)) ||
+          (row.entity_type==='zone'&&zoneIds.has(row.entity_id)) ||
+          (valid.has(row.after_state?.state) && valid.has(row.before_state?.state || row.after_state.state))
+        ).slice(0,200);
+        return res.json({ok:true,
+          zone_assignments:(zone.data||[]).filter(row=>zoneIds.has(row.zone_id)).slice(0,200),
+          store_assignments:(store.data||[]).filter(row=>storeIds.has(row.retail_store_id)).slice(0,200),
+          audit:visibleAudit});
+      }
       const [zone, store, audit] = await Promise.all([
         client.from('reliance_retail_zone_fo_assignments').select('*').order('effective_from', { ascending: false }).limit(200),
         client.from('reliance_retail_store_zone_history').select('*').order('changed_at', { ascending: false }).limit(200),
