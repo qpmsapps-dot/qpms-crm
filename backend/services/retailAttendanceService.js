@@ -29,7 +29,7 @@ export function attendanceAccess(profile, write = false) {
   if (leadership && !states.length) throw attendanceError(403, 'Verified Retail state grants required.');
   const state = admin || leadership ? null : stateLabel(profile.state);
   if (!admin && !leadership && (!state || ['ALL', 'ALL STATES', 'ALLSTATES', 'AP', 'ANDHRA PRADESH'].includes(state))) throw attendanceError(403, 'An unambiguous authorized Retail state is required.');
-  return { admin, state, states };
+  return leadership ? { admin, state, states } : { admin, state };
 }
 
 // Check declared ZIP expansion before invoking the existing Excel parser.
