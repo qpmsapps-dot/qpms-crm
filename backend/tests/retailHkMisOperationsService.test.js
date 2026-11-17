@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { retailHkMisOperations } from '../services/retailHkMisOperationsService.js';
+import { retailHkMisOperations,retailSouthHeadOperations } from '../services/retailHkMisOperationsService.js';
 import { indiaToday } from '../shared/retailAttendance.js';
 
 function mockClient(rows, queries) {
@@ -19,6 +19,19 @@ test('HK MIS FO overview fails closed for unauthorized roles and empty state gra
   await assert.rejects(()=>retailHkMisOperations(client,{role:'MIS_MEPC',states:['TN'],active:true}),/HK MIS/);
   await assert.rejects(()=>retailHkMisOperations(client,{role:'MIS_HK',states:[],active:true}),/No authorized state/);
   assert.equal(calls.length,0);
+});
+
+test('South Head operations reuse the nonfinancial reader only after effective Retail state grants',async()=>{
+ const profile={id:'actor',auth_user_id:'auth',employee_code:'SYNTHETIC',role:'South Head',business:'Reliance Retail',
+  is_active:true,status:'Active',web_access_enabled:true,_retailRoleStates:['TN','AP-1','AP-2']};
+ const calls=[],client=mockClient({profiles:[]},calls);
+ for(const denied of [{...profile,_retailRoleStates:[]},{...profile,business:'Hospital'},{...profile,role:'FO'},
+  {...profile,_retailRoleStates:['AP']},{...profile,is_active:false}])
+  await assert.rejects(()=>retailSouthHeadOperations(client,denied),e=>e.statusCode===403);
+ assert.equal(calls.length,0);
+ const result=await retailSouthHeadOperations(client,profile);
+ assert.deepEqual(result.states,['TN','AP-1','AP-2']);assert.equal(result.read_only,true);
+ await assert.rejects(()=>retailHkMisOperations(client,{role:'MIS_HK',states:['TN'],active:true},{state:'AP-1'}),e=>e.statusCode===403);
 });
 test('HK MIS returns only state-matched Reliance Retail FO attendance, site visits and live coordinates without finances',async()=>{
   const date=indiaToday(),calls=[];

@@ -1,4 +1,3 @@
-import {unifiedSnapshot} from './retailUnifiedService.js';
 import {assertRetailAccess,retailAccess} from './relianceRetailManagementService.js';
 import {canonicalActivityStore,cleaningReport,completedTrainingReport,submittedCleaningReport} from '../shared/retailModuleReports.js';
 import {resolveTrainingReadScope,RELIANCE_TRAINING_CLIENT_ID} from './trainingAccessService.js';
@@ -15,10 +14,14 @@ export function moduleReportRange(input={}) {
  if(to<from||(Date.parse(to)-Date.parse(from))/86400000>366)throw fail(400,'Select a reporting range up to 366 days.');
  return {from,to};
 }
-async function authorizedSnapshot(client,profile,range){
- try{return await reportRead('rpc_retail_unified_snapshot',()=>unifiedSnapshot(client,profile,range));}catch(e){
+async function authorizedSnapshot(client,profile,range,module='cleaning'){
+ try{return await reportRead('rpc_retail_reporting_snapshot',async()=>{
+  const {data,error}=await client.rpc('rpc_retail_reporting_snapshot',{p_actor:profile.id,p_from:range.from,p_to:range.to,p_module:module});
+  if(error)throw error;return data;
+ });}catch(e){
   if(['PGRST202','42P01','42883'].includes(e.code))throw Object.assign(fail(503,'Existing Retail reporting infrastructure awaits separate authorized database setup.'),{code:e.code,reportOperation:e.reportOperation,reportDurationMs:e.reportDurationMs});
-  if(e.code==='42501')throw Object.assign(fail(403,'Verified Retail state/store permission required.'),{code:e.code,reportOperation:e.reportOperation,reportDurationMs:e.reportDurationMs});throw e;
+  if(e.code==='42501')throw Object.assign(fail(403,'Verified Retail state/store permission required.'),{code:e.code,reportOperation:e.reportOperation,reportDurationMs:e.reportDurationMs});
+  if(e.code==='57014')throw Object.assign(e,{statusCode:503,message:'Retail reporting source timed out. Values are unavailable; refresh later.'});throw e;
  }
 }
 export async function retailCleaningReport(client,profile,input={}) {
@@ -76,7 +79,7 @@ export async function retailCleaningEvidence(client,profile,id,input={}) {
 export async function retailCompletedTraining(client,profile,input={},existingSnapshot=null) {
  assertRetailAccess(profile,'training');
  const range=moduleReportRange(input),scope=await resolveTrainingReadScope(client,profile);
- const snapshot=existingSnapshot||await authorizedSnapshot(client,profile,range);
+ const snapshot=existingSnapshot||await authorizedSnapshot(client,profile,range,'training');
  const ids=await retailTrainingEnvelopeIds(client,[...scope.employeeCodes]),sessions=new Map();
  // Bounded ID batches preserve the existing employee-envelope and verified HK store scope.
  // No 200-row UI cap is used for period totals, and no training mutation workflow changes.
@@ -115,7 +118,7 @@ export async function retailModuleDashboard(client,profile,input={}) {
  if(profile.is_active===false||['INACTIVE','DISABLED'].includes(String(profile.status||'').toUpperCase()))throw fail(403,'Active Retail access required.');
  const range=moduleReportRange(input);
  if(range.from!==range.to.slice(0,7)+'-01'||range.to>indiaToday())throw fail(400,'Select a month-to-date or historical monthly reporting period.');
- const snapshot=await authorizedSnapshot(client,profile,range),modules={};
+ const snapshot=await authorizedSnapshot(client,profile,range,'dashboard'),modules={};
  const unavailable=reason=>({status:'unavailable',reason});
  try{
   const scope=attendanceAccess(profile),stores=snapshot.stores.filter(s=>canonicalActivityStore(snapshot.stores,{retail_store_id:s.id,store_code:s.store_code})&&(!scope.state||stateLabel(s.state)===scope.state));

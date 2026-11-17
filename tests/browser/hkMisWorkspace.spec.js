@@ -77,9 +77,10 @@ test('HK MIS sees only the five Reliance Retail pages, reports and nonfinancial 
   await page.goto('/reliance-retail/mis/dashboard');
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
   const nav = page.locator('aside nav');
-  for (const title of ['Dashboard', 'Operations', 'Attendance', 'Training', 'Deep Cleaning']) {
+  for (const title of ['Dashboard', 'Operations', 'Attendance', 'Deep Cleaning', 'Training']) {
     await expect(nav.getByRole('link', { name: title, exact: true })).toBeVisible();
   }
+  await expect(nav.getByRole('link')).toHaveText(['Dashboard','Operations','Attendance','Deep Cleaning','Training']);
   await expect(page.getByRole('heading', { name: 'Daily HK attendance %' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Deep Cleaning submissions by date' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'HK Training sessions by date' })).toBeVisible();

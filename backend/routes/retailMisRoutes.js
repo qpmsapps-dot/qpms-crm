@@ -34,7 +34,7 @@ gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=
    return res.status(403).json({ok:false,message:'HK MIS is view and download only.'});
   next();
  });
- router.get('/hk-operations',run((r,c)=>retailHkMisOperations(c,r.retailMis)));
+ router.get('/hk-operations',run((r,c)=>retailHkMisOperations(c,r.retailMis,r.query)));
  router.post('/cleaning/schedule',express.json({limit:'6kb'}),run(async(r,c)=>{
   assertRetailMis(r.retailMis,'cleaning');
   const body=r.body||{};

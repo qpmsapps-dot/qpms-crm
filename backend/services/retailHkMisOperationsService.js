@@ -1,5 +1,6 @@
 import { assertRetailMis, retailMisState } from '../shared/retailMisAccess.js';
 import { indiaToday } from '../shared/retailAttendance.js';
+import {isRetailSouthHead} from '../shared/retailSouthHeadAccess.js';
 
 // Purposefully return operational fields only. Never select or serialize
 // route distance, GPS history, conveyance, rates, financial or KM columns.
@@ -10,14 +11,26 @@ function requireRows(result, source) {
 const key = value => String(value || '').trim().toUpperCase();
 const distinctSites = visits => new Set(visits.map(v => key(v.site_name || v.site_code)).filter(Boolean)).size;
 
-export async function retailHkMisOperations(client, access) {
+export async function retailHkMisOperations(client, access, input={}) {
   if (access?.role !== 'MIS_HK') {
     throw Object.assign(Error('HK MIS access required.'), { statusCode: 403 });
   }
   assertRetailMis(access, 'attendance-hk');
   const states = [...new Set((access.states || []).map(retailMisState).filter(Boolean))];
   if (!states.length) throw Object.assign(Error('No authorized state.'), { statusCode: 403 });
+  if(input.state&&!states.includes(input.state))throw Object.assign(Error('Outside authorized HK MIS state.'),{statusCode:403});
+  return readRetailOfficers(client,input.state?[input.state]:states);
+}
 
+export async function retailSouthHeadOperations(client,profile){
+  if(!isRetailSouthHead(profile)||!Array.isArray(profile._retailRoleStates)||!profile._retailRoleStates.length)
+    throw Object.assign(Error('Verified Reliance Retail South Head state grants required.'),{statusCode:403});
+  const states=[...new Set(profile._retailRoleStates)];
+  if(states.some(state=>!retailMisState(state)))throw Object.assign(Error('Invalid verified Retail state grants.'),{statusCode:403});
+  return readRetailOfficers(client,states);
+}
+
+async function readRetailOfficers(client,states){
   // Employee business must be explicitly Reliance Retail, never generic
   // Standalone/Hospital/IFMS or an unverified client-name match.
   const profiles = requireRows(await client.from('profiles')

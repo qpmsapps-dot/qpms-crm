@@ -1,8 +1,10 @@
 import {createRetailFoSelfRouter} from './retailFoSelfRoutes.js';
 import {createRetailMisRouter} from './retailMisRoutes.js';
 import {retailMisRole} from '../shared/retailMisAccess.js';
+import {retailSouthHeadOperations} from '../services/retailHkMisOperationsService.js';
 import {isRetailLeadership,isRetailBranchHead} from '../shared/retailSouthHeadAccess.js';
 import express from 'express';
+import {randomUUID} from 'node:crypto';
 import {gateCombinedMutationRoutes} from '../services/combinedReleaseGate.js';
 import {createRetailOperationsRouter} from './retailOperationsRoutes.js';
 import {retailCleaningReport,retailCleaningEvidence,retailCompletedTraining,retailModuleDashboard} from '../services/retailModuleReportService.js';
@@ -34,7 +36,11 @@ import {
 
 function sendError(response, error) {
   const status = Number(error?.statusCode || (error?.code === '23505' ? 409 : 500));
-  response.status(status).json({ ok: false, code: error?.code || 'retail_management_failed', message: status >= 500 ? 'Reliance Retail request failed.' : error.message });
+  if(status>=500&&error?.reportOperation){
+    const requestId=randomUUID();response.set('x-report-request-id',requestId);
+    console.error('[Retail report unavailable]',{request_id:requestId,operation:error.reportOperation,sqlstate:error.code||null,duration_ms:error.reportDurationMs??null});
+  }
+  response.status(status).json({ ok: false, code: error?.code || 'retail_management_failed', message: status >= 500 ? 'Reliance Retail data is unavailable. Values are N/A; retry later.' : error.message });
 }
 
 export function createRelianceRetailManagementRouter({ requireAuth, getClient }) {
@@ -63,6 +69,7 @@ gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=
     } catch {return res.status(503).json({ok:false,message:'Retail state authorization unavailable.'});}
   });
   router.use(createInitialRetailWriteGate({getClient}));
+  router.get('/field-operations',async(req,res)=>{try{res.json({ok:true,report:await retailSouthHeadOperations(getClient(),req.profile)});}catch(e){sendError(res,e);}});
   router.post('/module-reports/deep-cleaning/:id/link-fo',async(req,res)=>{try{res.json({ok:true,result:await linkFoCleaning(getClient(),req.profile,req.params.id,req.body||{})});}catch(e){sendError(res,e);}});
   router.use('/operations',createRetailOperationsRouter({getClient}));
   router.get('/module-reports/dashboard',async(req,res)=>{try{res.json({ok:true,report:await retailModuleDashboard(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});

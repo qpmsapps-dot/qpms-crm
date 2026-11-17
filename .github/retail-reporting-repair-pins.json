@@ -1,0 +1,32 @@
+{
+  "schema": "retail-reporting-repair.v1",
+  "base_sha": "46707ec63c440d015c21339b00c423b461089ff1",
+  "review": "Prepared exact repair payload; production SQL and protected release approval remain separate.",
+  "files": {
+    ".github/retailReportingRepairGuard.mjs": "6d9b9c2e3c4fca5a3b35a32f5dad74aa10c82943",
+    ".github/workflows/retail-reporting-repair.yml": "77a4637eacc8260b763f89f403154abaef744fd6",
+    "backend/routes/relianceRetailManagementRoutes.js": "6854aae845443d2227229d362e5fb2bfe6e4ce31",
+    "backend/routes/retailMisRoutes.js": "187cebb77decac4e551fbb39b57b3f9c343380d6",
+    "backend/services/retailHkMisOperationsService.js": "a21879dd5dc6c7c287ce0f27b2829f1b0f50e016",
+    "backend/services/retailModuleReportService.js": "d5b12b3371ef9310f345a124cdddefadb37517fa",
+    "backend/shared/retailMisAccess.js": "551b8d5b5bc03467e54eea7afab8db16fa36ba0e",
+    "backend/tests/fixtures/retailReportingSnapshotBaseline.json": "f1b055b82ea604879763b376c0691f320ef87511",
+    "backend/tests/helpers/nativeRetailReportingPostgres.js": "ba9752774e98c4849acdee2ef9ba87f778136532",
+    "backend/tests/retailHkMisOperationsService.test.js": "f4c852f3657ecb9fc5445b6ee0e576f1345a623f",
+    "backend/tests/retailModuleReportService.test.js": "8df5b4f06319ae9d16a012b039c1f041175c2960",
+    "backend/tests/retailReportPerformance.test.js": "a1ce561ce43faac3de88e7cafb40e69e089e35fc",
+    "backend/tests/retailReportingRepairPostgres.test.js": "32e922d1d869e48d79550eb04e280d4c1a8d4603",
+    "docs/RETAIL_REPORTING_REPAIR_20261117.md": "b3998f3a3897a3882001726149ee06fc1d415047",
+    "src/components/Sidebar.jsx": "5e0abedb4938c5b90f8d74d84cfcfbe3412f7d49",
+    "src/pages/reliance-retail/RetailFieldOperations.jsx": "43f2e1bac5fdc44d6d01b08c08c86f9fefb9c385",
+    "src/pages/reliance-retail/RetailHkMisWorkspace.jsx": "c715d211c9d37cc8bd52549bcdf3642cb048f7b6",
+    "src/routes/AppRoutes.jsx": "f2ed5231d1251c90804b75f241e9276d8a46f3d0",
+    "supabase/proposals/20261117_retail_reporting_repair_REVIEW.sql": "0c9ebbd897b780f7b8f34cb72551d5b15fbf13c2",
+    "supabase/proposals/20261117_retail_reporting_repair_ROLLBACK_REVIEW.sql": "19d2d31724ec194934cb3f52c59eb06d624cc76e",
+    "tests/browser/hkMisWorkspace.spec.js": "73c7168edae58736f6542715a255a387bdba4c2d",
+    "tests/browser/retailSouthHeadOperations.spec.js": "2d6be0e738c55b7fad80287f3f72f1a962e705ee",
+    "tests/deepCleaningExportGuard.test.js": "c95e52c40848ff74eb180caa3c26a732c6f81902",
+    "tests/retailReportingRepairGuard.test.js": "a8fa484d58390bd4365c856cbb2edfb50130bfea",
+    "tests/trainingExportGuard.test.js": "67c22fded0cf4c8468d5e19b208cfeb85b295f5e"
+  }
+}
