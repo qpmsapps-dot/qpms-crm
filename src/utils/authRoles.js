@@ -1,4 +1,5 @@
 import {retailMisRole,RETAIL_MIS_MODULES,retailMisRouteModule,RETAIL_MIS_ASSIGNMENT_ADMIN} from '../../backend/shared/retailMisAccess.js';
+import {isRetailSouthHead} from '../../backend/shared/retailSouthHeadAccess.js';
 import {isOos12Specialist} from '../../backend/shared/retailOos12Workflow.js';
 const viteEnv = import.meta.env || {};
 const explicitDemoAuthFlag = String(
@@ -275,15 +276,16 @@ export function retailWebAccess(user) {
   const business = normalizeRawRole(user.business);
   const keys = [user.rawRole, user.role, user.designation, user.department].map(normalizeRawRole);
   const retail = ['RELIANCE', 'RELIANCERETAIL'].includes(business);
+  const southHead = retail && isRetailSouthHead(user);
   return {
     // Navigation only; database state grants determine every unified data/action permission.
     master: retail,
-    dashboard: retail && keys.some((key) => ['HKMIS', 'HOUSEKEEPINGMIS', 'TECHNICALMIS', 'TECHMIS', 'KAM', 'MIS'].includes(key)),
-    hk: retail && keys.some((key) => ['HKMIS', 'HOUSEKEEPINGMIS'].includes(key)),
-    technical: retail && keys.some((key) => ['TECHNICALMIS', 'TECHMIS'].includes(key)),
-    oos: retail && keys.some(key=>['OOSMIS','OUTOFSCOPEMIS','TECHNICALMIS','TECHMIS'].includes(key)),
+    dashboard: southHead || retail && keys.some((key) => ['HKMIS', 'HOUSEKEEPINGMIS', 'TECHNICALMIS', 'TECHMIS', 'KAM', 'MIS'].includes(key)),
+    hk: southHead || retail && keys.some((key) => ['HKMIS', 'HOUSEKEEPINGMIS'].includes(key)),
+    technical: southHead || retail && keys.some((key) => ['TECHNICALMIS', 'TECHMIS'].includes(key)),
+    oos: southHead || retail && keys.some(key=>['OOSMIS','OUTOFSCOPEMIS','TECHNICALMIS','TECHMIS'].includes(key)),
     kam: retail && keys.includes('KAM'),
-    operations: retail && keys.some(key=>['HKMIS','HOUSEKEEPINGMIS','TECHNICALMIS','TECHMIS','KAM','MIS'].includes(key)),
+    operations: southHead || retail && keys.some(key=>['HKMIS','HOUSEKEEPINGMIS','TECHNICALMIS','TECHMIS','KAM','MIS'].includes(key)),
   };
 }
 
