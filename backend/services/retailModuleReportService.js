@@ -102,7 +102,12 @@ export async function retailCompletedTraining(client,profile,input={},existingSn
  });
  const categories=categoryIds.length?await client.from('training_categories').select('id,code').in('id',categoryIds):{data:[]};if(categories.error)throw categories.error;
  const categoryById=new Map(categories.data.map(c=>[c.id,c]));
- return {...range,...completedTrainingReport(normalized.map(s=>({...s,category:categoryById.get(s.category_id),trainer_name:s.trainer_name_snapshot})),snapshot.stores,{state:input.state,store:input.store}),complete:true};
+ // A regional leader's FO envelope spans multiple states. Do not expose even
+ // exception IDs for out-of-scope sessions through state-scoped reports.
+ const scopedSessions=Array.isArray(profile._retailRoleStates)
+  ? normalized.filter(s=>canonicalActivityStore(snapshot.stores,s))
+  : normalized;
+ return {...range,...completedTrainingReport(scopedSessions.map(s=>({...s,category:categoryById.get(s.category_id),trainer_name:s.trainer_name_snapshot})),snapshot.stores,{state:input.state,store:input.store}),complete:true};
 }
 
 export async function retailModuleDashboard(client,profile,input={}) {
