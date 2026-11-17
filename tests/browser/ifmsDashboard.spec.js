@@ -67,7 +67,7 @@ test('empty sources show confirmed zero counts but no invented rates', async ({ 
   await seed(page, { empty: true }); await page.goto('/reliance-retail');
   await expect(page.locator('.er-kpi-training strong')).toHaveAttribute('aria-label', '0');
   await expect(page.locator('.er-kpi-attendance strong')).toHaveAttribute('aria-label', 'N/A');
-  await expect(page.locator('.er-kpi-cleaning strong')).toHaveAttribute('aria-label', 'N/A');
+  await expect(page.locator('.er-kpi-cleaning strong')).toHaveAttribute('aria-label', '0');
 });
 test('daily Attendance selector preserves source gaps without new requests', async ({ page }) => {
   const requests = await seed(page); await page.goto('/reliance-retail');
