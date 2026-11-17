@@ -57,13 +57,33 @@ diagnostics retain safe operation/SQLSTATE/request ID without private query data
 
 ## Validation
 
-Native disposable PostgreSQL test compares full snapshots before/after actual SQL,
-and narrow output against baseline: 996 synthetic stores, 34,860 attendance rows,
-1,708 imports, 18 cleaning reports, 72 uploads; distinct TN/AP-1/AP-2 readers;
-unknown actors/modules and anon/authenticated calls denied. Synthetic fixtures
-are not production acceptance. Focused permission/reporting tests and four
-Playwright navigation/export checks passed. Full required CI results are recorded
-in the repair PR; production acceptance remains separately gated.
+Native validation has two mandatory phases in the same disposable PostgreSQL 17:
+
+1. Exact original/repaired comparison on 12 stores, 420 attendance rows, 36 import
+   rows, six cleaning reports, 24 uploads and three training records. Four readers
+   cover South-wide, TN-only, AP-1-only and AP-2-only grants. Full snapshots match;
+   narrow report values, credits, AOP, schedules and evidence counts match as well.
+   Unknown actors, cross-state authority checks, unsupported modules and direct
+   anon/authenticated calls fail closed; service_role executes the approved RPC.
+2. After installing the repair in that disposable database, reseed 996 stores,
+   34,860 attendance rows, 1,708 imports, 18 cleaning reports, 72 uploads and 11
+   training records. Never run the known-slow original on this full-size dataset.
+   Require the repaired full snapshot, each module query and each TN/AP query to
+   satisfy both a 5,000 ms PostgreSQL statement timeout and a client-observed
+   elapsed-time assertion below 5,000 ms. Verify exact full-size and scoped counts.
+   Setup and the small baseline retain the existing 8-second helper default;
+   performance checks tighten it to five seconds rather than increasing timeouts.
+
+Local full-size timings (synthetic, Node 24 / Windows): full snapshot 514 ms;
+dashboard 311 ms; cleaning 28 ms; training 8 ms; TN 117 ms; AP-1 117 ms;
+AP-2 124 ms. The Linux/Node 22 CI timings and final required workflow results
+are recorded in PR #99. Synthetic fixtures are not production acceptance.
+Focused permission/reporting tests and four Playwright navigation/export checks
+passed; production acceptance remains separately gated.
+
+The original CI test failed before repair installation because it used the
+full-size dataset for baseline equivalence. The split preserves exact comparison
+and adds explicit full-load performance assertions for the repaired SQL.
 
 The historical performance test previously compared dashboard totals with a
 baseline predating independent completed-report counts and assumed an existing
@@ -98,6 +118,27 @@ Seven have generic AP profile state and no current verified zone assignment:
 do not infer AP-1/AP-2 or silently broaden their state grants. Verify their
 authoritative mapping with its owner. Mixed line endings in the two touched
 router files are normalized to LF so committed pins and whitespace checks agree.
+
+### Independent custom-domain certificate investigation (2026-11-17)
+
+Cloudflare (1.1.1.1) and Google (8.8.8.8) both resolved myqpms.com to
+162.0.235.134. A TLS handshake with rejectUnauthorized=true and myqpms.com SNI
+failed ERR_TLS_CERT_ALTNAME_INVALID: the presented certificate covers
+*.web-hosting.com / web-hosting.com, not myqpms.com. It is not an expired
+certificate (valid November 3, 2026 through May 20, 2027).
+
+Railway confirms the custom domain is attached to the frontend, but is unverified
+and its certificate is still ISSUING. Required traffic target is
+qy8ofczl.up.railway.app; Railway reports the required traffic record unset and
+REQUIRES_UPDATE. Public lookup of _railway-verify.myqpms.com returned NXDOMAIN.
+The Railway-managed https://myqpms.up.railway.app endpoint passed normal HTTPS
+validation and returned HTTP 200. This is endpoint reachability, not authenticated
+user acceptance. Root cause is public DNS still routing to another hosting endpoint,
+with Railway ownership/traffic records not completed. No DNS, domain, certificate,
+application setting or production service was changed; validation was never bypassed.
+
+Separate owner approval is required to correct the traffic and ownership records
+specified by Railway and verify issuance before custom-domain user acceptance.
 
 TN HK MIS checklist: five links in order; only TN selector; no mutation controls;
 named FOs/day/visits and last-known location; Attendance coverage vs source/AOP;

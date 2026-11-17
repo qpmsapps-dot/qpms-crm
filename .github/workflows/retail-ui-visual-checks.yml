@@ -94,7 +94,7 @@ jobs:
           # BEGIN RETAIL REPORTING REPAIR FULLSTACK EXACT PAYLOAD
           thermo_manifest = ".github/retail-reporting-repair-pins.json"
           if thermo_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{thermo_manifest}"],text=True).strip() != "c1b63a162cc0bbf12c839c56f3f73e810bca8e3b":
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{thermo_manifest}"],text=True).strip() != "3cf5a17765cbb4a818801941b48b4f7f8e156d4d":
               sys.exit("Retail reporting repair manifest changed; renew full-stack review")
             if subprocess.check_output(["git","rev-parse","HEAD:.github/retailReportingRepairGuard.mjs"],text=True).strip() != "6d9b9c2e3c4fca5a3b35a32f5dad74aa10c82943":
               sys.exit("Retail reporting repair guard changed; renew full-stack review")
