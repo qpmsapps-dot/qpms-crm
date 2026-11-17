@@ -24,7 +24,7 @@ export async function retailHkMisOperations(client, access) {
     .select('employee_code,full_name,display_name,state,business,role,is_active,status')
     .eq('role', 'FO').eq('business', 'Reliance Retail')
     .eq('is_active', true).in('state', states), 'Reliance Retail officers')
-    .filter(p => key(p.status) === 'ACTIVE' && states.includes(retailMisState(p.state)) && key(p.employee_code));
+    .filter(p => key(p.role) === 'FO' && key(p.business) === 'RELIANCE RETAIL' && key(p.status) === 'ACTIVE' && states.includes(retailMisState(p.state)) && key(p.employee_code));
 
   const date = indiaToday();
   if (!profiles.length) return { date, states, officers: [], read_only: true };
