@@ -23,7 +23,7 @@ export const payloadPaths=Object.freeze([
  'supabase/migrations/20261115140000_retail_thermography_reports.sql',
  'supabase/verification/retail_thermography_reports_postinstall_read_only.sql',
  'supabase/verification/retail_thermography_reports_preflight_read_only.sql',
- 'tests/browser/retailReportVisualSmoke.spec.js','tests/retailOperationsShapeBrowser.test.js',
+ 'tests/browser/retailReportVisualSmoke.spec.js','tests/browser/ifmsDashboard.spec.js','tests/retailOperationsShapeBrowser.test.js',
  'tests/thermographyReports.browser.test.js','tests/thermographyReports.test.js',
  'src/utils/thermographyTusUpload.js','tests/thermographyTusUpload.test.js',
 ]);

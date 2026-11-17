@@ -94,9 +94,9 @@ jobs:
           # BEGIN THERMOGRAPHY FULLSTACK EXACT PAYLOAD
           thermo_manifest = ".github/thermography-fullstack-pins.json"
           if thermo_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{thermo_manifest}"],text=True).strip() != "455c3f5fad2f85caff55427bb09468ad0d08ee14":
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{thermo_manifest}"],text=True).strip() != "87eac2d4de5474f64c19a39f40d3cd062ab3de35":
               sys.exit("Thermography manifest changed; renew full-stack review")
-            if subprocess.check_output(["git","rev-parse","HEAD:.github/thermographyFullstackGuard.mjs"],text=True).strip() != "a0f9fecd7f58532d940adf9bf58aa17247262ec4":
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/thermographyFullstackGuard.mjs"],text=True).strip() != "c1bf43c2e4c285e711ac26a38c04eb6459c86707":
               sys.exit("Thermography guard changed; renew full-stack review")
             subprocess.run(["node", ".github/thermographyFullstackGuard.mjs", base],check=True)
             print("PASS: exact Thermography payload; all following UI checks and dedicated full-stack checks remain mandatory.")

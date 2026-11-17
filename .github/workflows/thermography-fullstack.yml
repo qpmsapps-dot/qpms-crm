@@ -62,8 +62,12 @@ jobs:
         run: node --test backend/tests/retailModuleReportService.test.js tests/retailExecutiveReport.test.js tests/deepCleaningView.test.js
       - name: Provision isolated PostgreSQL 17 test tools
         run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl --fail --show-error --silent --location -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
           sudo apt-get install -y postgresql-17
+          /usr/lib/postgresql/17/bin/postgres --version | grep -E '^postgres \(PostgreSQL\) 17\.'
           npm install --prefix "$RUNNER_TEMP/thermography-tools" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund pg@8.16.3
       - name: Required native multi-session concurrency (no opt-in skip)
         env:

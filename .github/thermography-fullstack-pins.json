@@ -3,8 +3,8 @@
   "base_sha": "f23bb8ac03afcba3222b9738369a01043ede2d11",
   "review": "Prepared for independent full-stack review; no production authorization implied.",
   "files": {
-    ".github/thermographyFullstackGuard.mjs": "a0f9fecd7f58532d940adf9bf58aa17247262ec4",
-    ".github/workflows/thermography-fullstack.yml": "7bc4ab3274bcc9011572ad8359915e80402b8dbe",
+    ".github/thermographyFullstackGuard.mjs": "c1bf43c2e4c285e711ac26a38c04eb6459c86707",
+    ".github/workflows/thermography-fullstack.yml": "bfeb38570a65d9744a881d1d8d4bba80696217dc",
     "backend/routes/relianceRetailManagementRoutes.js": "9d72ff1e30b95851ebf7a20674154d057d783c1a",
     "backend/routes/thermographyReportsRoutes.js": "63c5980ab0267f108e7c83b0245ead416e0d7b97",
     "backend/services/retailModuleReportService.js": "452966219c8bd25dfa851666041d7971895c0c0b",
@@ -39,6 +39,7 @@
     "tests/thermographyReports.browser.test.js": "ba7658b21b046342414b63e092f3502e620e1601",
     "tests/thermographyReports.test.js": "a2ed4205d9751ba7d37f938666a1cc394682322b",
     "tests/thermographyTusUpload.test.js": "761d7a6ca985b47557059c1ec6acafd44c5f61f0",
-    "tests/trainingExportGuard.test.js": "a6221adea91a99cee3c3396f2d05ff6811a224d1"
+    "tests/trainingExportGuard.test.js": "a6221adea91a99cee3c3396f2d05ff6811a224d1",
+    "tests/browser/ifmsDashboard.spec.js": "0b1ffab8e591f421dbefda155a734298e0f929d1"
   }
 }
