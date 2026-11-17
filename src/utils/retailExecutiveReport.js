@@ -73,9 +73,10 @@ export function moduleMetric(report, id, scope = {}) {
     result.reason = report?.from ? callWindow(report.from.slice(0, 7), id, report.to).label + '; remaining is not a recorded Not Done result.' : 'Reporting window unavailable.';
   } else if (id === 'thermography') {
     result.counts = { Scheduled: total('scheduled'), 'Awaiting approval': total('awaiting'), 'Client approved': total('approved'), 'Approval overdue': total('overdue') };
+    if(rows.every(row=>valid(row.rework)))result.counts['Rework Required']=total('rework');
     result.value = total('approved');
     result.comparisonEligible = false;
-    result.reason = 'Current recorded statuses for the selected schedule cohort, not status at the historical cutoff. Approval/overdue may have changed later. Historical status comparison unavailable; overdue is a subset of awaiting approval.';
+    result.reason = 'Current recorded statuses for the selected report-date cohort (legacy: scheduled date), not status at the historical cutoff. Approval/overdue may have changed later. Historical status comparison unavailable; overdue is a subset of awaiting approval, not rework. Approval is not a thermal-condition classification.';
   } else {
     result.value = total('completed');
     result.counts = { Sessions: result.value };

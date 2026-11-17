@@ -37,7 +37,8 @@ export function maintenanceReport(source,month,filter={}) {
 }
 export function thermographyReport(source,month,filter={}) {
   const stores=selected(source.stores,filter),byId=new Map(stores.map(s=>[s.id,s]));
-  const rows=source.thermography.filter(t=>byId.has(t.retail_store_id)).map(t=>({...t,store:byId.get(t.retail_store_id),reporting_state:reportingState(byId.get(t.retail_store_id).state),approval_overdue:t.status==='Completed'&&source.today>t.approval_due_on}));
-  const count=group=>({scheduled:group.filter(t=>t.status==='Scheduled').length,awaiting:group.filter(t=>t.status==='Completed').length,approved:group.filter(t=>t.status==='Client Approved').length,overdue:group.filter(t=>t.approval_overdue).length,approved_late:group.filter(t=>t.approved_late).length});
+  const rows=source.thermography.filter(t=>!t.report_deleted_at&&byId.has(t.retail_store_id)).map(t=>({...t,store:byId.get(t.retail_store_id),reporting_state:reportingState(byId.get(t.retail_store_id).state),approval_overdue:t.status==='Completed'&&t.report_review_state!=='rework'&&source.today>t.approval_due_on}));
+  const count=group=>({scheduled:group.filter(t=>t.status==='Scheduled').length,awaiting:group.filter(t=>t.status==='Completed'&&t.report_review_state!=='rework').length,approved:group.filter(t=>t.status==='Client Approved').length,overdue:group.filter(t=>t.approval_overdue).length,approved_late:group.filter(t=>t.approved_late).length,
+    ...(source.thermography.some(t=>Object.hasOwn(t,'report_managed'))?{rework:group.filter(t=>t.report_review_state==='rework').length,active_reports:group.filter(t=>t.active_report_version_id).length}:{})});
   return {month,today:source.today,stores,rows,total:count(rows),states:STATE_OPTIONS.map(state=>({state,...count(rows.filter(t=>t.reporting_state===state))})).filter(s=>!filter.state||s.state===reportingState(filter.state)),events:source.events.filter(e=>rows.some(t=>t.id===e.entity_id))};
 }

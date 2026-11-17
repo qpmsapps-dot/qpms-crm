@@ -131,7 +131,7 @@ export async function retailModuleDashboard(client,profile,input={}) {
  }catch{modules.technical=modules.soft=unavailable('Completed Training is unavailable in this authorized scope or its reporting dependency failed.');}})();
  const operationsRead=(async()=>{try{
   const {source,month}=await reportRead('dashboard.operations_source',()=>retailOperationsSource(client,profile,'maintenance',{month:range.from.slice(0,7)}));
-  const current={...source,calls:source.calls.filter(c=>c.completed_on<=range.to),thermography:source.thermography.filter(t=>t.scheduled_date<=range.to)};
+  const current={...source,calls:source.calls.filter(c=>c.completed_on<=range.to),thermography:source.thermography.filter(t=>(t.report_date||t.scheduled_date)<=range.to)};
   const maintenance=maintenanceReport(current,month),thermography=thermographyReport(current,month);
   modules.cm=maintenance.modules.cm;modules.pm=maintenance.modules.pm;
   modules.thermography={status:'ready',rows:thermography.states};

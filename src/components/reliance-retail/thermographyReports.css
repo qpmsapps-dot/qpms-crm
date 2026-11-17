@@ -1,0 +1,21 @@
+.thermo-reports .thermo-row-actions{display:flex;flex-wrap:wrap;gap:6px;min-width:190px}
+.thermo-reports td small{display:block;margin-top:4px;color:#64748b;font-size:11px}
+.thermo-reports .thermo-check{display:flex;align-items:center;gap:8px}
+.thermo-reports .thermo-check input{width:auto}
+.thermo-empty{padding:24px;color:#64748b}
+.thermo-modal-backdrop{position:fixed;inset:0;z-index:1100;background:#0f172a88;display:grid;place-items:center;padding:20px;box-sizing:border-box}
+.thermo-modal{position:relative;background:#fff;color:#183153;width:min(680px,100%);max-height:calc(100dvh - 40px);overflow:auto;border-radius:14px;padding:26px;box-shadow:0 20px 60px #0f172a44;box-sizing:border-box}
+.thermo-modal h2{font-size:20px;font-weight:700;color:#185aa6;margin:0 30px 16px 0}
+.thermo-modal h3{font-size:16px;font-weight:700;margin-top:18px}
+.thermo-modal p{font-size:13px;line-height:1.6;overflow-wrap:anywhere;margin:10px 0}
+.thermo-modal form{display:grid;gap:12px}
+.thermo-modal label{display:grid;gap:6px;font-size:13px;font-weight:600}
+.thermo-modal input,.thermo-modal select,.thermo-modal textarea{border:1px solid #dce5f1;border-radius:7px;padding:9px;width:100%;box-sizing:border-box;background:#fff;color:#183153;min-width:0}
+.thermo-modal button{border:1px solid #dce5f1;border-radius:7px;background:#fff;color:#185aa6;padding:9px;font-size:13px}
+.thermo-modal button:disabled{opacity:.55;cursor:wait}
+.thermo-modal button:focus-visible,.thermo-modal input:focus-visible,.thermo-modal select:focus-visible,.thermo-modal textarea:focus-visible{outline:2px solid #185aa6;outline-offset:2px}
+.thermo-modal .thermo-close{position:absolute;top:12px;right:12px;padding:6px}
+.thermo-modal progress{width:100%;accent-color:#185aa6}
+.thermo-modal [role=alert]{color:#b91c1c}
+.thermo-version{border:1px solid #dce5f1;padding:12px;border-radius:8px;margin:10px 0}
+@media(max-width:600px){.thermo-modal-backdrop{padding:8px}.thermo-modal{padding:20px;max-height:calc(100dvh - 16px)}}

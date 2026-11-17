@@ -6,11 +6,16 @@ import {RETAIL_MIS_MODULES,RETAIL_MIS_ROLES} from '../../../backend/shared/retai
 import {indiaToday} from '../../../backend/shared/retailAttendance.js';
 import {RETAIL_FAULT_STAGES} from '../../../backend/shared/retailFaultWorkflow.js';
 import {OOS_STAGES} from '../../../backend/shared/retailServiceWorkflow.js';
+import ThermographyReports from '../../components/reliance-retail/ThermographyReports.jsx';
 const titles={'dashboard':'Retail Dashboard',stores:'Store Master','attendance-hk':'HK M-Here Attendance','attendance-mepc':'MEPC M-Here Attendance',cleaning:'Deep Cleaning',pest:'Pest Control','training-hk':'HK Training','training-mepc':'MEPC Training',fault:'Fault Tracker',maintenance:'CM/PM',thermography:'Thermography',oos:'OOS Tracker',imports:'MIS Imports'};
 const api=async(url,config={})=>(await authenticatedApiRequest({url:'/api/reliance-retail/mis'+url,...config})).data.result;
 const flatValue=v=>v==null?'':typeof v==='object'?JSON.stringify(v):String(v);
 const displayCell=(column,value)=>column==='topic_names'&&Array.isArray(value)?value.join(', '):flatValue(value);
 export default function RetailMisWorkspace(){
+ const {module}=useParams();
+ return module==='thermography'?<ThermographyReports/>:<RetailMisExistingWorkspace/>;
+}
+function RetailMisExistingWorkspace(){
  const {module}=useParams(),{user}=useAuth(),role=user?.rawRole||user?.role;
  const [access,setAccess]=useState(null),[report,setReport]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
  const [from,setFrom]=useState(indiaToday().slice(0,7)+'-01'),[to,setTo]=useState(indiaToday()),[state,setState]=useState(''),[refresh,setRefresh]=useState(0),[page,setPage]=useState(0),[search,setSearch]=useState('');
