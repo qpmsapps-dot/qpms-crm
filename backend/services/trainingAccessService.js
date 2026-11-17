@@ -2,7 +2,7 @@ import { isRelianceRetailStore, isRelianceRetailValue, retailStateKey } from './
 import { foOperationalAllowedEmployeeCodes } from './foOperationalAccessService.js';
 import { retailFoStateAllows } from './retailFoStoreScope.js';
 import { resolveRetailHkTrainingScope, applyRetailTrainingStoreScope, retailTrainingFoCodes, retailTrainingFoProfiles } from './retailTrainingReadScopeService.js';
-import { isRetailSouthHead } from '../shared/retailSouthHeadAccess.js';
+import { isRetailLeadership } from '../shared/retailSouthHeadAccess.js';
 
 export const RELIANCE_TRAINING_CLIENT_ID = '369d2d5f-396f-49f9-a47d-bfbc8f7cb922';
 export const RELIANCE_TRAINING_CLIENT_CODE = 'reliance_retail';
@@ -200,7 +200,7 @@ export async function resolveTrainingReadScope(client, profile) {
   // South-wide leadership includes all Reliance Retail field officers, never
   // staff of other businesses. The report's canonical store snapshot remains
   // DB state-scoped to the actor; mutation permissions are unchanged.
-  if (isRetailSouthHead(profile)) {
+  if (isRetailLeadership(profile)) {
     const profiles = await retailTrainingFoProfiles(client);
     return { profiles, hierarchy: [], retailScope: null,
       employeeCodes: new Set(retailTrainingFoCodes(profiles)) };
