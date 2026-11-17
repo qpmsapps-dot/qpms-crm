@@ -7,6 +7,7 @@ import { retailAccess, assertRetailAccess } from './relianceRetailManagementServ
 import { ATTENDANCE_MAX_FILE_BYTES, attendanceClass, attendanceCredit, validDate, stateLabel, reportingState, STATE_OPTIONS, storeKey, summarizeAttendance, indiaToday } from '../shared/retailAttendance.js';
 import {retailAttendanceTrend} from '../shared/retailAttendanceTrend.js';
 import {retailMisRole,assertRetailMis} from '../shared/retailMisAccess.js';
+import {isRetailSouthHead} from '../shared/retailSouthHeadAccess.js';
 
 export const ATTENDANCE_COLUMNS = Object.freeze({ employee_code: 'EP No', employee_name: 'EP Name', store_code: 'Site Code', attendance_date: 'Att. Date', original_status: 'Att. Status', class: 'Class' });
 export function attendanceError(statusCode, message, code = 'retail_attendance_invalid') { return Object.assign(new Error(message), { statusCode, code }); }
@@ -21,9 +22,10 @@ export function attendanceAccess(profile, write = false) {
   // Reuse the existing global Retail administrator role mapping, not browser claims.
   const admin = retailAccess({ ...profile, business: '' }).allowed;
   if (write && !admin) throw attendanceError(403, 'Only authorized administrators may upload or correct attendance.');
-  const state = admin ? null : stateLabel(profile.state);
-  if (!admin && (!state || ['ALL', 'ALL STATES', 'ALLSTATES', 'AP', 'ANDHRA PRADESH'].includes(state))) throw attendanceError(403, 'An unambiguous authorized Retail state is required.');
-  return { admin, state };
+  const southHead = isRetailSouthHead(profile);
+  const state = admin || southHead ? null : stateLabel(profile.state);
+  if (!admin && !southHead && (!state || ['ALL', 'ALL STATES', 'ALLSTATES', 'AP', 'ANDHRA PRADESH'].includes(state))) throw attendanceError(403, 'An unambiguous authorized Retail state is required.');
+  return { admin, state, southHead };
 }
 
 // Check declared ZIP expansion before invoking the existing Excel parser.
@@ -139,10 +141,21 @@ async function pages(makeQuery, read = data) {
 async function scopedStores(client, profile, state = '', read = data) {
   const scope = attendanceAccess(profile);
   if (state && scope.state && reportingState(state) !== reportingState(scope.state)) throw attendanceError(403, 'State is outside your authorized Retail scope.');
+  // A South Head's report is multi-state but must follow the database grant,
+  // not assume that an account identity is a permanent all-states override.
+  let allowedStates = null;
+  if (scope.southHead) {
+    const result = await client.from('retail_provisional_access')
+      .select('state,permission').eq('actor_id', profile.id);
+    if (result.error) throw attendanceError(503, 'Retail state grants unavailable.');
+    allowedStates = new Set((result.data || []).filter(x =>
+      ['viewer', 'editor', 'reviewer'].includes(x.permission)).map(x => x.state));
+    if (!allowedStates.size) throw attendanceError(403, 'South-wide Retail state grants are required.');
+  }
   const stores = await pages(() => client.from('reliance_retail_store_master').select('id,store_code,store_name,state,status').order('id'), read);
   if(scope.mis&&stores.some(s=>(scope.mis.role==='CENTRAL_MIS'||scope.mis.states.includes(s.state))&&stores.filter(d=>storeKey(d.store_code)===storeKey(s.store_code)).length!==1))throw attendanceError(409,'Ambiguous canonical Store Code; reconcile Store Master before attendance operations.');
   if(scope.mis)return stores.filter(s=>(scope.mis.role==='CENTRAL_MIS'||scope.mis.states.includes(s.state))&&(!state||s.state===state));
-  return stores.filter(s => (!scope.state || stateLabel(s.state) === scope.state) && (!state || reportingState(s.state) === reportingState(state)));
+  return stores.filter(s => (!scope.state || stateLabel(s.state) === scope.state) && (!allowedStates || allowedStates.has(stateLabel(s.state))) && (!state || reportingState(s.state) === reportingState(state)));
 }
 
 export async function previewRetailAttendance(client, profile, bytes, filename, context = {}) {
