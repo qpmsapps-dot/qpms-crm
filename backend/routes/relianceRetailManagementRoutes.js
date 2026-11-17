@@ -60,7 +60,7 @@ gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=
       if (isRetailBranchHead(req.profile) && !['GET','HEAD','OPTIONS'].includes(req.method))
         return res.status(403).json({ok:false,message:'Branch Heads have state-scoped Retail viewing access only.'});
       return next();
-    } catch(e) {return res.status(503).json({ok:false,message:'Retail state authorization unavailable.'});}
+    } catch {return res.status(503).json({ok:false,message:'Retail state authorization unavailable.'});}
   });
   router.use(createInitialRetailWriteGate({getClient}));
   router.post('/module-reports/deep-cleaning/:id/link-fo',async(req,res)=>{try{res.json({ok:true,result:await linkFoCleaning(getClient(),req.profile,req.params.id,req.body||{})});}catch(e){sendError(res,e);}});
