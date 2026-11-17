@@ -60,12 +60,20 @@ async function request(profile,dbStates,path='/access',method='GET',authId=auth)
       return {data:dbStates,error:null};
     }};},
   }));
-  const server=app.listen(0,'127.0.0.1');
+  const server=await new Promise((resolve,reject)=>{
+    const listener=app.listen(0,'127.0.0.1',()=>resolve(listener));
+    listener.once('error',reject);
+  });
   try{
     const {port}=server.address();
     const response=await fetch(`http://127.0.0.1:${port}/retail${path}`,{method});
     return {status:response.status,body:await response.json()};
-  }finally{await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
+  }finally{
+    if(server.listening){
+      server.closeAllConnections();
+      await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+    }
+  }
 }
 
 test('Retail backend applies DB states and rejects mutation for Branch Head',async()=>{
