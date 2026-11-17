@@ -59,7 +59,7 @@ begin
 end;$$;
 create or replace function public.retail_mis_fault_update(p_actor uuid,p_ticket uuid,p_stage text,p_remarks text,p_expected timestamptz,p_request uuid) returns jsonb
 language plpgsql security definer set search_path=pg_catalog,public as $$
-declare p public.profiles%rowtype;t public.fault_tracker_tickets%rowtype;e public.fault_tracker_ticket_updates%rowtype; valid text[]:=array['Fault Raised - Quote Yet to Submit','Quote Submitted - PO Yet to Receive','PO Received - Fund Request Pending','Fund Released - Work Yet to Start','Fund Released - Work in Progress','Work Completed - Documents Pending','Documents Received - JMS Yet to Create','JMS Created - Invoice Yet to Raise','Invoice Raised - Payment Pending','Set Off Pending'];completion boolean;
+declare p public.profiles%rowtype;t public.fault_tracker_tickets%rowtype;e public.fault_tracker_ticket_updates%rowtype; valid text[]:=array['Fault Raised - Quote Yet to Submit','Quote Submitted - PO Yet to Receive','PO Received - Fund Request Pending','Fund Released - Work Yet to Start','Fund Released - Work in Progress','Work Completed - Documents Pending','Documents Received - JMS Yet to Create','JMS Created - Invoice Yet to Raise','Invoice Raised - Payment Pending','Set Off Pending','CAMC','OEM','MEPC','IOT'];completion boolean;
 begin
  select * into p from public.profiles where id=p_actor;
  if not found or p.is_active is not true or upper(coalesce(p.status,'Active'))<>'ACTIVE' or not public.retail_mis_allowed(p_actor,'fault',null,true) then raise exception using errcode='42501',message='Existing ticket manager required';end if;
@@ -73,10 +73,10 @@ begin
   return jsonb_build_object('id',t.id,'replayed',true);
  end if;
  if t.updated_at is distinct from p_expected then raise exception using errcode='40001',message='Ticket changed';end if;
- completion:=array_position(valid,t.stage) between 1 and 5 and array_position(valid,p_stage)>=6;
+ completion:=(array_position(valid,t.stage) between 1 and 5 or array_position(valid,t.stage) between 11 and 14) and array_position(valid,p_stage) between 6 and 10;
  insert into public.fault_tracker_ticket_updates(ticket_id,updated_by_auth_user_id,updated_by_employee_code,update_type,previous_stage,new_stage,remarks,metadata)
  values(t.id,p.auth_user_id,p.employee_code,case when completion then 'WORK_COMPLETED' else 'STAGE_OR_REMARKS' end,t.stage,p_stage,p_remarks,jsonb_build_object('retail_request_id',p_request,'retail_workflow_version',1,'actor_profile_id',p.id,'previous_remarks',t.remarks));
- update public.fault_tracker_tickets set stage=p_stage,stage_group=case when array_position(valid,p_stage)=10 then 'Closed' when array_position(valid,p_stage)>=6 then 'Completed' when array_position(valid,p_stage)=5 then 'In Progress' else 'Pending' end,remarks=p_remarks,updated_at=clock_timestamp(),metadata=coalesce(metadata,'{}')||jsonb_build_object('lastUpdatedBy',p.employee_code) where id=t.id;
+ update public.fault_tracker_tickets set stage=p_stage,stage_group=case when array_position(valid,p_stage)=10 then 'Closed' when array_position(valid,p_stage) between 6 and 9 then 'Completed' when array_position(valid,p_stage)=5 then 'In Progress' else 'Pending' end,remarks=p_remarks,updated_at=clock_timestamp(),metadata=coalesce(metadata,'{}')||jsonb_build_object('lastUpdatedBy',p.employee_code) where id=t.id;
  return jsonb_build_object('id',t.id,'saved',true);
 end;$$;
 create or replace function public.retail_mis_cleaning_link_source(p_actor uuid,p_schedule uuid) returns jsonb
