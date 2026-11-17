@@ -43,7 +43,9 @@ test('real HTTP router binds actors, denies self-assignment/admin escalation, ke
  const calls=[],client={rpc:async(name,args)=>{calls.push({name,args});if(name==='rpc_retail_mis_access')return {data:{role:'MIS_HK',active:true,states:['TN']}};if(name==='rpc_retail_mis_report')return {data:{rows:[],stores:[]}};if(name==='rpc_retail_mis_evidence_object')return {error:{code:'42501',message:'Outside scope'}};return {data:[]};},storage:{from(){throw Error('Unauthorized evidence must not reach storage');}}};
  const app=express();app.use((req,res,next)=>{req.profile={id:'fixture-profile',auth_user_id:'fixture-auth',role:'MIS_HK',is_active:true};req.authUser={id:'fixture-auth'};next();});app.use('/api/reliance-retail/mis',createRetailMisRouter({getClient:()=>client,environment:{RETAIL_OOS_MUTATIONS_FROZEN:'false'}}));const server=app.listen(0,'127.0.0.1');await once(server,'listening');const url='http://127.0.0.1:'+server.address().port+'/api/reliance-retail/mis';
  try{
-  assert.equal((await fetch(url+'/report/pest?actor=forged&state=TN')).status,200);assert.equal(calls.find(c=>c.name==='rpc_retail_mis_report').args.p_actor,'fixture-profile');
+  assert.equal((await fetch(url+'/report/cleaning?actor=forged&state=TN')).status,200);
+  assert.equal((await fetch(url+'/report/pest?actor=forged&state=TN')).status,403);
+  assert.equal((await fetch(url+'/attendance/commit',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,403);assert.equal(calls.find(c=>c.name==='rpc_retail_mis_report').args.p_actor,'fixture-profile');
   assert.equal((await fetch(url+'/report/maintenance')).status,403);
   assert.equal((await fetch(url+'/oos/register?actor=forged')).status,403);
   assert.equal((await fetch(url+'/assignments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role:'CENTRAL_MIS',profile_id:'fixture-profile'})})).status,403);

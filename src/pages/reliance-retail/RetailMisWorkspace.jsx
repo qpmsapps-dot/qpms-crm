@@ -1,3 +1,4 @@
+import RetailHkMisWorkspace from './RetailHkMisWorkspace.jsx';
 import {useEffect,useState} from 'react';
 import {useParams,Link} from 'react-router-dom';
 import {useAuth} from '../../context/auth-context.js';
@@ -10,7 +11,11 @@ const titles={'dashboard':'Retail Dashboard',stores:'Store Master','attendance-h
 const api=async(url,config={})=>(await authenticatedApiRequest({url:'/api/reliance-retail/mis'+url,...config})).data.result;
 const flatValue=v=>v==null?'':typeof v==='object'?JSON.stringify(v):String(v);
 const displayCell=(column,value)=>column==='topic_names'&&Array.isArray(value)?value.join(', '):flatValue(value);
-export default function RetailMisWorkspace(){
+export default function RetailMisWorkspace() {
+ const {user}=useAuth();
+ return (user?.rawRole||user?.role)==='MIS_HK' ? <RetailHkMisWorkspace/> : <RetailMisLegacyWorkspace/>;
+}
+function RetailMisLegacyWorkspace(){
  const {module}=useParams(),{user}=useAuth(),role=user?.rawRole||user?.role;
  const [access,setAccess]=useState(null),[report,setReport]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
  const [from,setFrom]=useState(indiaToday().slice(0,7)+'-01'),[to,setTo]=useState(indiaToday()),[state,setState]=useState(''),[refresh,setRefresh]=useState(0),[page,setPage]=useState(0),[search,setSearch]=useState('');

@@ -6,7 +6,7 @@ export const retailOosState = value => retailMisState(value)==='PY'?'TN':retailM
 export const RETAIL_MIS_STATES = Object.freeze(['AP-1','AP-2','KA','KL','TG','TN','PY']);
 export const RETAIL_MIS_MODULES = Object.freeze({
  CENTRAL_MIS:['dashboard','stores','attendance-hk','attendance-mepc','cleaning','pest','training-hk','training-mepc','fault','maintenance','thermography','oos','imports'],
- MIS_HK:['stores','attendance-hk','cleaning','pest','training-hk'],
+ MIS_HK:['dashboard','operations','attendance-hk','training-hk','cleaning'],
  MIS_MEPC:['stores','attendance-mepc','fault','maintenance','thermography','training-mepc'],
  MIS_OOS:['oos'],
 });
