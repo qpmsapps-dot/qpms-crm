@@ -25,6 +25,21 @@ test('state and explicit store scopes intersect without broadening TN into sourc
  assert.deepEqual(scopeFaultTickets(source,master,{...authorization,grants:[{states:['KA'],stores:['b'],all:false}]}).tickets.map(t=>t.id),['t3']);
  assert.throws(()=>scopeFaultTickets(source,master,{readAll:false,profileState:'',stateCode}),e=>e.statusCode===403);
 });
+test('Retail Branch Head scope overrides all-state Fault Tracker defaults and protects direct record lookup',()=>{
+ const tn=scopeFaultTickets(source,master,{...authorization,allowedStates:['TN','PY']});
+ assert.deepEqual(tn.tickets.map(t=>t.id),['t1','t2','t8']);
+ assert.equal(tn.tickets.some(t=>t.canonical_store_code==='K001'),false);
+ const ka=scopeFaultTickets(source,master,{...authorization,allowedStates:['KA']});
+ assert.deepEqual(ka.tickets.map(t=>t.id),['t3']);
+ const apMaster=[...master,{id:'ap1',store_code:'AP100',state:'AP-1',status:'Active'},
+  {id:'ap2',store_code:'AP200',state:'AP-2',status:'Active'}];
+ const apSource=[...source,{...source[0],id:'ap-one',store_code:'AP100'},
+  {...source[0],id:'ap-two',store_code:'AP200'}];
+ assert.deepEqual(scopeFaultTickets(apSource,apMaster,{...authorization,
+  allowedStates:['AP-1','AP-2']}).tickets.map(t=>t.id),['ap-one','ap-two']);
+ assert.throws(()=>scopeFaultTickets(source,master,{...authorization,allowedStates:[]}),
+  e=>e.statusCode===403);
+});
 test('search, state, store, supervisor, date, detail and pagination never recover excluded tickets',async()=>{
  const client=fixture(),mis={...admin,role:'MIS'};
  const read=input=>scopedFaultTrackerReport(client,mis,input,{readAll:false,isAdmin:false,stateCode});

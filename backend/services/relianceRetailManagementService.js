@@ -1,4 +1,5 @@
 import { resolveTrainingReadScope, RELIANCE_TRAINING_CLIENT_ID } from './trainingAccessService.js';
+import { isRetailSouthHead, isRetailBranchHead } from '../shared/retailSouthHeadAccess.js';
 import { isRetailHkTrainingReader, applyRetailTrainingStoreScope, narrowRetailTrainingScope, retailTrainingEnvelopeIds } from './retailTrainingReadScopeService.js';
 
 const norm = (value) => String(value ?? '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
@@ -17,18 +18,23 @@ export function retailAccess(profile) {
   const technical = retail && keys.some((key) => TECH.has(key));
   const kam = retail && keys.some((key) => KAM.has(key));
   const operationsMis = retail && keys.includes('MIS');
+  // Verified scope is supplied by Retail API auth middleware, not client input.
+  const leadershipScope = Array.isArray(profile?._retailRoleStates) && profile._retailRoleStates.length > 0;
+  const southHead = retail && leadershipScope && isRetailSouthHead(profile);
+  const branchHead = retail && leadershipScope && isRetailBranchHead(profile);
+  const leader = southHead || branchHead;
   return {
-    allowed: admin || hk || technical || kam || operationsMis,
-    dashboard: admin || hk || technical || kam || operationsMis,
-    stores: admin || hk,
-    zones: admin || hk,
-    deepCleaning: admin || hk,
-    training: admin || hk,
-    faultTracker: admin || technical,
-    oos: admin || technical,
-    cmpm: admin || hk || technical || kam || operationsMis,
-    thermography: admin || hk || technical || kam || operationsMis,
-    manpower: admin || hk,
+    allowed: admin || hk || technical || kam || operationsMis || leader,
+    dashboard: admin || hk || technical || kam || operationsMis || leader,
+    stores: admin || hk || leader,
+    zones: admin || hk || leader,
+    deepCleaning: admin || hk || leader,
+    training: admin || hk || leader,
+    faultTracker: admin || technical || leader,
+    oos: admin || technical || leader,
+    cmpm: admin || hk || technical || kam || operationsMis || leader,
+    thermography: admin || hk || technical || kam || operationsMis || leader,
+    manpower: admin || hk || leader,
   };
 }
 
@@ -42,6 +48,27 @@ export function assertRetailAccess(profile, capability = 'dashboard') {
   return access;
 }
 
+function leadershipStates(profile) {
+  return Array.isArray(profile?._retailRoleStates) && profile._retailRoleStates.length
+    ? profile._retailRoleStates : null;
+}
+function restrictLeadershipStates(query, profile, column='state') {
+  const states=leadershipStates(profile);
+  return states ? query.in(column, states) : query;
+}
+async function leadershipStoreIds(client, profile) {
+  const states=leadershipStates(profile);
+  if(!states)return null;
+  const ids=[];
+  for(let from=0;from<10000;from+=1000) {
+    const {data,error}=await client.from('reliance_retail_store_master')
+      .select('id').in('state',states).order('id').range(from,from+999);
+    if(error)throw error;
+    ids.push(...(data||[]).map(row=>row.id));
+    if((data||[]).length<1000)return ids;
+  }
+  throw Object.assign(Error('Retail store scope is too large for this report.'),{statusCode:503});
+}
 function page(input) {
   const size = Math.max(1, Math.min(Number(input.limit) || 50, 500));
   const number = Math.max(1, Number(input.page) || 1);
@@ -53,6 +80,7 @@ export async function listRetailStores(client, profile, input = {}) {
   const p = page(input);
   let query = client.from('reliance_retail_store_operational_ownership').select('*', { count: 'exact' })
     .order('store_code').range(p.from, p.to);
+  query = restrictLeadershipStates(query,profile);
   if (text(input.state)) query = query.eq('state', text(input.state));
   if (text(input.zone_id)) query = query.eq('zone_id', text(input.zone_id));
   if (text(input.fo_profile_id)) query = query.eq('current_responsible_fo_profile_id', text(input.fo_profile_id));
@@ -74,6 +102,7 @@ export async function listRetailStores(client, profile, input = {}) {
 export async function listRetailZones(client, profile, { includeInactive = false } = {}) {
   assertRetailAccess(profile, 'dashboard');
   let query = client.from('reliance_retail_zones').select('*').order('zone_code');
+  query = restrictLeadershipStates(query,profile);
   if (!includeInactive) query = query.eq('status', 'Active');
   const [{ data: zones, error }, { data: assignments, error: assignmentError }, { data: stores, error: storeError }] = await Promise.all([
     query,
@@ -296,15 +325,17 @@ export async function saveManpowerBudget(client, profile, storeId, input = {}) {
 
 export async function listRetailDeepCleaningRecords(client, profile) {
   assertRetailAccess(profile, 'deepCleaning');
-  const submissions = await client.from('client_deep_cleaning_submissions').select('*')
-    .in('business', ['Reliance Retail', 'Reliance']).order('submitted_at', { ascending: false }).limit(1000);
+  let submissionQuery=client.from('client_deep_cleaning_submissions').select('*')
+    .in('business', ['Reliance Retail', 'Reliance']);
+  submissionQuery=restrictLeadershipStates(submissionQuery,profile);
+  const submissions=await submissionQuery.order('submitted_at',{ascending:false}).limit(1000);
   if (submissions.error) throw submissions.error;
   const submissionIds = (submissions.data || []).map((row) => row.id);
   const storeCodes = [...new Set((submissions.data || []).map((row) => row.store_code).filter(Boolean))];
   const employeeCodes = [...new Set((submissions.data || []).map((row) => row.submitted_by_employee_code).filter(Boolean))];
   const [uploads, stores, profiles] = await Promise.all([
     submissionIds.length ? client.from('client_deep_cleaning_uploads').select('*').in('submission_id', submissionIds).eq('upload_status', 'uploaded').limit(1500) : { data: [], error: null },
-    storeCodes.length ? client.from('reliance_retail_store_master').select('id,store_code,store_name,state,city,store_format,status,latitude,longitude,gps_accuracy,metadata').in('store_code', storeCodes).limit(1000) : { data: [], error: null },
+    storeCodes.length ? restrictLeadershipStates(client.from('reliance_retail_store_master').select('id,store_code,store_name,state,city,store_format,status,latitude,longitude,gps_accuracy,metadata').in('store_code', storeCodes),profile).limit(1000) : { data: [], error: null },
     employeeCodes.length ? client.from('profiles').select('employee_code,username,full_name,display_name,business,state,role,designation,department').in('employee_code', employeeCodes).limit(500) : { data: [], error: null },
   ]);
   if (uploads.error || stores.error || profiles.error) throw uploads.error || stores.error || profiles.error;
@@ -460,6 +491,7 @@ async function loadManagedRetailSchedule(client, id) {
 
 export async function listRetailDeepCleaningSchedules(client, profile, input = {}) {
   assertRetailAccess(profile, 'deepCleaning');
+  const allowedIds=await leadershipStoreIds(client,profile);
   const p = page(input);
   let query = client
     .from('client_deep_cleaning_schedules')
@@ -467,6 +499,7 @@ export async function listRetailDeepCleaningSchedules(client, profile, input = {
     .order('scheduled_date', { ascending: false })
     .order('created_at', { ascending: false })
     .range(p.from, p.to);
+  if(allowedIds)query=query.in('retail_store_id',allowedIds.length?allowedIds:['00000000-0000-0000-0000-000000000000']);
   if (text(input.status)) query = query.eq('status', text(input.status));
   if (text(input.fo_profile_id)) {
     query = query.eq('assigned_fo_profile_id', text(input.fo_profile_id));
@@ -596,6 +629,7 @@ export async function retailDashboard(client, profile, input = {}) {
   assertRetailAccess(profile, 'dashboard');
   const trainingScope = isRetailHkTrainingReader(profile) ? await resolveTrainingReadScope(client, profile) : null;
   let storeQuery = client.from('reliance_retail_store_master').select('id,store_code,store_name,status,location_status,state,zone_id').limit(5000);
+  storeQuery = restrictLeadershipStates(storeQuery,profile);
   if (trainingScope) storeQuery = storeQuery.in('id', trainingScope.retailScope.retailStoreIds);
   if (text(input.state)) storeQuery = storeQuery.eq('state', text(input.state));
   if (text(input.zone_id)) storeQuery = storeQuery.eq('zone_id', text(input.zone_id));
