@@ -4,6 +4,12 @@ on:
   pull_request:
     paths:
       - 'src/hooks/useModalFocus.js'
+      # BEGIN RETAIL REPORTING REPAIR FULLSTACK TRIGGERS
+      - '.github/retail-reporting-repair-pins.json'
+      - '.github/retailReportingRepairGuard.mjs'
+      - '.github/workflows/retail-reporting-repair.yml'
+      - 'tests/retailReportingRepairGuard.test.js'
+      # END RETAIL REPORTING REPAIR FULLSTACK TRIGGERS
       # BEGIN DEEP CLEANING EXPORT TRIGGERS
       - '.github/deepCleaningExportGuard.mjs'
       - 'tests/deepCleaningExportGuard.test.js'
@@ -85,6 +91,17 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # BEGIN RETAIL REPORTING REPAIR FULLSTACK EXACT PAYLOAD
+          thermo_manifest = ".github/retail-reporting-repair-pins.json"
+          if thermo_manifest in files:
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{thermo_manifest}"],text=True).strip() != "c1b63a162cc0bbf12c839c56f3f73e810bca8e3b":
+              sys.exit("Retail reporting repair manifest changed; renew full-stack review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/retailReportingRepairGuard.mjs"],text=True).strip() != "6d9b9c2e3c4fca5a3b35a32f5dad74aa10c82943":
+              sys.exit("Retail reporting repair guard changed; renew full-stack review")
+            subprocess.run(["node", ".github/retailReportingRepairGuard.mjs", base],check=True)
+            print("PASS: exact Retail reporting repair payload; all following UI checks and dedicated full-stack checks remain mandatory.")
+            sys.exit(0)
+          # END RETAIL REPORTING REPAIR FULLSTACK EXACT PAYLOAD
           # BEGIN DEEP CLEANING EXPORT EXACT PAYLOAD
           approved_cleaning_exports = {
             ".github/deepCleaningExportGuard.mjs": "d3ee4072d294a8869c969481005d67dcc3a2b1f5",

@@ -1,4 +1,5 @@
 import {retailMisRole,RETAIL_MIS_MODULES,RETAIL_MIS_ROLES} from '../../backend/shared/retailMisAccess.js';
+import {isRetailSouthHead} from '../../backend/shared/retailSouthHeadAccess.js';
 import {isOos12Specialist} from '../../backend/shared/retailOos12Workflow.js';
 import {
   BarChart3,
@@ -62,6 +63,7 @@ const relianceRetailNavGroup = {
   title: 'Reliance Retail',
   items: [
     { label: 'Dashboard', to: '/reliance-retail', icon: Home },
+    { label: 'Operations', to: '/reliance-retail/operations', icon: MapPinned, southHeadOnly: true },
     { label: 'Attendance', to: '/reliance-retail/attendance', icon: ClipboardCheck },
     { label: 'Deep Cleaning', to: '/reliance-retail/deep-cleaning', icon: Sparkles },
     { label: 'Training', to: '/reliance-retail/training', icon: ListChecks },
@@ -326,8 +328,7 @@ export default function Sidebar({ isOpen, onClose }) {
       icon: misRole === 'MIS_HK' ? hkMisNavigation[module]?.icon || ClipboardList : ClipboardList,
     })),
   }] : isOos12Specialist({role:user?.rawRole||user?.role,business:user?.business}) ? [{title:'OOS workflow',items:[{label:'OOS Tracker',to:'/reliance-retail/mis/oos',icon:ClipboardList}]},...roleNavGroups] : retailWorkspace ? [
-    {...relianceRetailNavGroup,items:relianceRetailNavGroup.items.slice(0,7)},
-    {title:'Retail tools',items:relianceRetailNavGroup.items.slice(7)},
+    relianceRetailNavGroup,
     {title:'Workspace',items:[{label:'Back to QPMS',to:'/dashboard',icon:Home}]},
   ] : isDemoUser(user) ? roleNavGroups : [...roleNavGroups, ...((retailWebAccess(user).dashboard || retailWebAccess(user).master) ? [relianceRetailNavGroup] : [])];
   const canSeeFaultTracker = canAccessNavRoute(user, '/fault-tracker');
@@ -344,6 +345,7 @@ export default function Sidebar({ isOpen, onClose }) {
     ...group,
     items: group.items.filter((item) => {
       const routePath = item.to.split('?')[0];
+      if(item.southHeadOnly&&!isRetailSouthHead(user))return false;
       return (isPlatformAdmin(user) || !TEMPORARILY_HIDDEN_NAV_ROUTES.has(routePath))
         && canAccessNavRoute(user, routePath);
     }),

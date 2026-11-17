@@ -169,7 +169,7 @@ function AttendanceView({ report }) {
       {key:'complete',label:'Coverage',render:r=>r.complete?'Complete':'Incomplete'},
     ]} rows={(report?.summary?.stores || []).map(s=>({...s,id:s.id}))}/></>;
 }
-function OperationsView({ report }) {
+export function OperationsView({ report }) {
   const [selected, setSelected] = useState('');
   const officers = report?.officers || [];
   const current = officers.find(fo=>fo.employee_code===selected) || officers[0];
@@ -352,7 +352,7 @@ export default function RetailHkMisWorkspace() {
       ]);
       return {attendance,cleaning,training};
     }
-    if(module==='operations')return api('/hk-operations');
+    if(module==='operations')return api('/hk-operations',{state});
     return api('/report/'+module,{from:module==='attendance-hk'?to.slice(0,7)+'-01':from,to,state});
   },[module,from,to,state]);
   useEffect(()=>{

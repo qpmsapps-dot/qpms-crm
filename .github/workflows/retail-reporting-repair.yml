@@ -1,0 +1,57 @@
+name: Retail reporting repair exact full-stack verification
+on:
+  pull_request:
+    paths:
+      - '.github/retailReportingRepairGuard.mjs'
+      - '.github/retail-reporting-repair-pins.json'
+      - '.github/workflows/retail-reporting-repair.yml'
+      - 'tests/retailReportingRepairGuard.test.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Exact payload and preserved guards
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '46707ec63c440d015c21339b00c423b461089ff1' }}
+        run: node .github/retailReportingRepairGuard.mjs "$BASE_SHA"
+      - name: Locked local dependencies
+        run: |
+          npm ci --no-audit --no-fund
+          npm ci --prefix backend --no-audit --no-fund
+      - name: Permission, reporting, count and authorization regression
+        run: node --test tests/retailReportingRepairGuard.test.js tests/deepCleaningExportGuard.test.js tests/trainingExportGuard.test.js backend/tests/retailModuleReportService.test.js backend/tests/retailMisAccess.test.js backend/tests/retailHkMisOperationsService.test.js backend/tests/retailLeadershipRoleScope.test.js backend/tests/retailLeadershipTrainingScope.test.js backend/tests/retailAttendanceReportScope.test.js backend/tests/retailAttendanceTrend.test.js tests/retailExecutiveReport.test.js tests/deepCleaningView.test.js backend/tests/retailReportPerformance.test.js backend/tests/retailMisMountedAuth.test.js
+      - name: Provision isolated PostgreSQL 17
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl --fail --show-error --silent --location -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-17
+          /usr/lib/postgresql/17/bin/postgres --version | grep -E '^postgres \(PostgreSQL\) 17\.'
+          npm install --prefix "$RUNNER_TEMP/retail-reporting-tools" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund pg@8.16.3
+      - name: Mandatory actual SQL correctness and state-boundary comparison
+        env:
+          RUN_RETAIL_REPORTING_POSTGRES_TESTS: true
+          RETAIL_REPORTING_TEST_TOOLS_DIR: ${{ runner.temp }}/retail-reporting-tools
+          RETAIL_REPORTING_TEST_PG_BIN: /usr/lib/postgresql/17/bin
+          RETAIL_REPORTING_NATIVE_OUTPUT_DIR: ${{ runner.temp }}
+        run: node --test backend/tests/retailReportingRepairPostgres.test.js
+      - name: Scoped lint
+        run: npx eslint .github/retailReportingRepairGuard.mjs tests/retailReportingRepairGuard.test.js backend/routes/relianceRetailManagementRoutes.js backend/routes/retailMisRoutes.js backend/services/retailHkMisOperationsService.js backend/services/retailModuleReportService.js backend/shared/retailMisAccess.js backend/tests/retailReportingRepairPostgres.test.js backend/tests/helpers/nativeRetailReportingPostgres.js src/components/Sidebar.jsx src/pages/reliance-retail/RetailHkMisWorkspace.jsx src/pages/reliance-retail/RetailFieldOperations.jsx src/routes/AppRoutes.jsx tests/browser/retailSouthHeadOperations.spec.js
+      - name: Production web build
+        run: npm run build
+      - name: Browser installation
+        run: npx playwright install --with-deps chromium
+      - name: HK MIS and South Head navigation, state denial and exports
+        run: npx playwright test tests/browser/hkMisWorkspace.spec.js tests/browser/retailSouthHeadOperations.spec.js --reporter=line

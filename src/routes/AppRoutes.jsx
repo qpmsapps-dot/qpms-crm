@@ -38,6 +38,7 @@ import RetailScopedDeepCleaning from '../pages/reliance-retail/RetailScopedDeepC
 import RetailTraining from '../pages/reliance-retail/RetailTraining.jsx';
 import RetailAttendance from '../pages/reliance-retail/RetailAttendance.jsx';
 import RetailOperations from '../pages/reliance-retail/RetailOperations.jsx';
+import RetailFieldOperations from '../pages/reliance-retail/RetailFieldOperations.jsx';
 import RetailManpowerHistory from '../pages/reliance-retail/RetailManpowerHistory.jsx';
 import FaultTracker from '../pages/FaultTracker.jsx';
 import DeepCleaning from '../pages/DeepCleaning.jsx';
@@ -127,6 +128,7 @@ const productionRoutes = [
           { path: 'fault-tracker', element: <FaultTracker /> },
           { path: 'deep-cleaning', element: <DeepCleaning /> },
           { path: 'reliance-retail', element: <RetailDashboard /> },
+          { path: 'reliance-retail/operations', element: <RetailFieldOperations /> },
           { path: 'reliance-retail/mis/oos', element: <RetailOosWorkspace /> },
           { path: 'reliance-retail/mis/:module', element: <RetailMisWorkspace /> },
           { path: 'settings/retail-mis-access', element: <RetailMisAssignments /> },

@@ -10,7 +10,7 @@ const admin={id:'actor',role:'Admin',is_active:true};
 const snapshot={stores:[{id:'s',store_code:'T1',state:'TN'}],deep_cleaning:[{id:'d',retail_store_id:'s',status:'submitted',deep_cleaning_date:'2026-10-01'}],schedules:[],images:[]};
 const range={from:'2026-10-01',to:'2026-10-31'};
 test('module reports enforce capability and actor-specific database scope without writes',async()=>{
- let called=0;const client={rpc:async(name,args)=>{called++;assert.equal(name,'rpc_retail_unified_snapshot');assert.equal(args.p_actor,'actor');return {data:snapshot};}};
+ let called=0;const client={rpc:async(name,args)=>{called++;assert.equal(name,'rpc_retail_reporting_snapshot');assert.equal(args.p_actor,'actor');return {data:snapshot};}};
  const report=await retailCleaningReport(client,admin,range);assert.equal(report.submissions.length,1);
  await assert.rejects(()=>retailCleaningReport(client,{id:'other',role:'FO'},range),e=>e.statusCode===403);assert.equal(called,1);
  await assert.rejects(()=>retailCleaningReport(client,{...admin,is_active:false},range),e=>e.statusCode===403);
@@ -118,7 +118,7 @@ test('page and dashboard reconcile scheduled and independent submitted reports w
    {id:'previous',retail_store_id:'s',status:'submitted',deep_cleaning_date:'2026-09-30'},
    {id:'future',retail_store_id:'s',status:'submitted',deep_cleaning_date:'2026-11-01'}]};
  const unchanged=structuredClone(source),{client}=trainingFixture(0);
- client.rpc=async name=>name==='rpc_retail_unified_snapshot'?{data:source}:{error:{code:'42P01'}};
+ client.rpc=async name=>name==='rpc_retail_reporting_snapshot'?{data:source}:{error:{code:'42P01'}};
  const page=await retailCleaningReport(client,admin,range),dashboard=await retailModuleDashboard(client,admin,range);
  assert.deepEqual(page.totals,{scheduled:2,completed:3,not_completed:0,pending:1});
  assert.deepEqual(dashboard.modules.cleaning.rows,page.summary.rows);
@@ -132,7 +132,7 @@ test('page and dashboard reconcile scheduled and independent submitted reports w
 
 test('submitted report totals remain available when schedule infrastructure is absent',async()=>{
  const {client}=trainingFixture(0);
- client.rpc=async name=>name==='rpc_retail_unified_snapshot'?{data:{...snapshot,schedules:null}}:{error:{code:'42P01'}};
+ client.rpc=async name=>name==='rpc_retail_reporting_snapshot'?{data:{...snapshot,schedules:null}}:{error:{code:'42P01'}};
  const page=await retailCleaningReport(client,admin,range),dashboard=await retailModuleDashboard(client,admin,range);
  assert.deepEqual(page.totals,{scheduled:null,completed:1,not_completed:null,pending:null});
  assert.equal(dashboard.modules.cleaning.rows[0].completed,1);
@@ -143,7 +143,7 @@ test('both report endpoints resolve the same existing linked source and deduplic
  const source={...snapshot,schedules:[{id:'linked-plan',retail_store_id:'s',scheduled_date:'2026-10-02',status:'Scheduled',metadata:{retail_fo_completion:{source_id:'legacy'}}}]};
  const linked={id:'fo:legacy',retail_store_id:'s',schedule_id:'linked-plan',status:'submitted',deep_cleaning_date:'2026-10-02',uploads:[]};
  const {client}=trainingFixture(0),requests=[];
- client.rpc=async name=>{requests.push(name);return name==='rpc_retail_unified_snapshot'?{data:source}:name==='rpc_retail_cleaning_link_source'?{data:linked}:{error:{code:'42P01'}};};
+ client.rpc=async name=>{requests.push(name);return name==='rpc_retail_reporting_snapshot'?{data:source}:name==='rpc_retail_cleaning_link_source'?{data:linked}:{error:{code:'42P01'}};};
  const page=await retailCleaningReport(client,admin,range),dashboard=await retailModuleDashboard(client,admin,range);
  assert.equal(page.totals.completed,2);assert.deepEqual(page.summary.rows,dashboard.modules.cleaning.rows);
  assert.equal(requests.filter(name=>name==='rpc_retail_cleaning_link_source').length,2);
