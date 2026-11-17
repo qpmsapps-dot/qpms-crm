@@ -1,4 +1,5 @@
 import { resolveTrainingReadScope, RELIANCE_TRAINING_CLIENT_ID } from './trainingAccessService.js';
+import { isRetailSouthHead } from '../shared/retailSouthHeadAccess.js';
 import { isRetailHkTrainingReader, applyRetailTrainingStoreScope, narrowRetailTrainingScope, retailTrainingEnvelopeIds } from './retailTrainingReadScopeService.js';
 
 const norm = (value) => String(value ?? '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
@@ -17,18 +18,19 @@ export function retailAccess(profile) {
   const technical = retail && keys.some((key) => TECH.has(key));
   const kam = retail && keys.some((key) => KAM.has(key));
   const operationsMis = retail && keys.includes('MIS');
+  const southHead = retail && isRetailSouthHead(profile);
   return {
-    allowed: admin || hk || technical || kam || operationsMis,
-    dashboard: admin || hk || technical || kam || operationsMis,
-    stores: admin || hk,
-    zones: admin || hk,
-    deepCleaning: admin || hk,
-    training: admin || hk,
-    faultTracker: admin || technical,
-    oos: admin || technical,
-    cmpm: admin || hk || technical || kam || operationsMis,
-    thermography: admin || hk || technical || kam || operationsMis,
-    manpower: admin || hk,
+    allowed: admin || hk || technical || kam || operationsMis || southHead,
+    dashboard: admin || hk || technical || kam || operationsMis || southHead,
+    stores: admin || hk || southHead,
+    zones: admin || hk || southHead,
+    deepCleaning: admin || hk || southHead,
+    training: admin || hk || southHead,
+    faultTracker: admin || technical || southHead,
+    oos: admin || technical || southHead,
+    cmpm: admin || hk || technical || kam || operationsMis || southHead,
+    thermography: admin || hk || technical || kam || operationsMis || southHead,
+    manpower: admin || hk || southHead,
   };
 }
 
