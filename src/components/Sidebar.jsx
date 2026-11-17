@@ -311,7 +311,21 @@ export default function Sidebar({ isOpen, onClose }) {
     : baseNavGroups;
   const retailWorkspace = location.pathname.startsWith('/reliance-retail') || (location.pathname === '/fault-tracker' && retailWebAccess(user).dashboard);
   const misRole=retailMisRole(user?.rawRole||user?.role);
-  const authorizedNavGroups = misRole ? [{title:RETAIL_MIS_ROLES[misRole],items:RETAIL_MIS_MODULES[misRole].map(module=>({label:module.replaceAll('-',' '),to:'/reliance-retail/mis/'+module,icon:ClipboardList}))}] : isOos12Specialist({role:user?.rawRole||user?.role,business:user?.business}) ? [{title:'OOS workflow',items:[{label:'OOS Tracker',to:'/reliance-retail/mis/oos',icon:ClipboardList}]},...roleNavGroups] : retailWorkspace ? [
+  const hkMisNavigation = {
+    dashboard: { label: 'Dashboard', icon: Home },
+    operations: { label: 'Operations', icon: MapPinned },
+    'attendance-hk': { label: 'Attendance', icon: ClipboardCheck },
+    'training-hk': { label: 'Training', icon: ListChecks },
+    cleaning: { label: 'Deep Cleaning', icon: Sparkles },
+  };
+  const authorizedNavGroups = misRole ? [{
+    title: misRole === 'MIS_HK' ? 'Reliance Retail' : RETAIL_MIS_ROLES[misRole],
+    items: RETAIL_MIS_MODULES[misRole].map(module => ({
+      label: misRole === 'MIS_HK' ? hkMisNavigation[module]?.label || module : module.replaceAll('-', ' '),
+      to: '/reliance-retail/mis/' + module,
+      icon: misRole === 'MIS_HK' ? hkMisNavigation[module]?.icon || ClipboardList : ClipboardList,
+    })),
+  }] : isOos12Specialist({role:user?.rawRole||user?.role,business:user?.business}) ? [{title:'OOS workflow',items:[{label:'OOS Tracker',to:'/reliance-retail/mis/oos',icon:ClipboardList}]},...roleNavGroups] : retailWorkspace ? [
     {...relianceRetailNavGroup,items:relianceRetailNavGroup.items.slice(0,7)},
     {title:'Retail tools',items:relianceRetailNavGroup.items.slice(7)},
     {title:'Workspace',items:[{label:'Back to QPMS',to:'/dashboard',icon:Home}]},
