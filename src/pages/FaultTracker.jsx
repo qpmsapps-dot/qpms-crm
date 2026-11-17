@@ -32,7 +32,7 @@ import {
 } from 'recharts';
 import * as XLSX from 'xlsx';
 import {scopedFaultExportRows} from '../utils/faultTrackerExport.js';
-import {verifiedWeeklyCompletions} from '../../backend/shared/retailFaultWorkflow.js';
+import {verifiedWeeklyCompletions,RETAIL_FAULT_STAGES} from '../../backend/shared/retailFaultWorkflow.js';
 import { useAuth } from '../context/auth-context.js';
 import { usePageTitle } from '../hooks/usePageTitle.js';
 import { authenticatedFetch } from '../services/api.js';
@@ -97,18 +97,7 @@ function hkPcStateDisplayLabel(state) {
   return hkPcStateDisplayLabels[state] || state;
 }
 
-const ifmsStages = [
-  'Fault Raised - Quote Yet to Submit',
-  'Quote Submitted - PO Yet to Receive',
-  'PO Received - Fund Request Pending',
-  'Fund Released - Work Yet to Start',
-  'Fund Released - Work in Progress',
-  'Work Completed - Documents Pending',
-  'Documents Received - JMS Yet to Create',
-  'JMS Created - Invoice Yet to Raise',
-  'Invoice Raised - Payment Pending',
-  'Set Off Pending',
-];
+const ifmsStages = RETAIL_FAULT_STAGES;
 
 const pcSummaryRows = [
   'Total Fault Raised',
@@ -424,7 +413,7 @@ function latestDateForMonth(tickets, monthKey) {
   return dates[0] || null;
 }
 
-function buildStatePerformanceData(tickets, selectedMonth) {
+function buildStatePerformanceData(tickets, selectedMonth, closedBetweenDumps) {
   const hasImport = tickets.length > 0;
   const scopedTickets = hasImport
     ? tickets.filter((ticket) => selectedMonth === 'all' || monthKeyFromDate(ticket.createdAt) === selectedMonth)
@@ -437,12 +426,16 @@ function buildStatePerformanceData(tickets, selectedMonth) {
     const closed = hasImport
       ? stateTickets.filter(isClosedTicket).length
       : 0;
+    const inferredClosed = selectedMonth === 'all'
+      ? closedBetweenDumps?.by_state?.find((item) => groupedStateFor(item.state) === state)?.count ?? null
+      : null;
     const open = Math.max(0, total - closed);
     const score = total > 0 ? Math.round((closed / total) * 100) : 0;
     return [state, {
       total,
       open,
       closed,
+      inferredClosed,
       score: hasImport ? Math.max(0, Math.min(100, score)) : 0,
     }];
   }));
@@ -973,7 +966,8 @@ function StatePerformanceOverview({ data, monthOptions, selectedMonth, onSelecte
                   <div className="mt-2 space-y-1 text-xs font-bold text-slate-500">
                     <p>Total: {formatNumber(summary.total)}</p>
                     <p>Open: <span className="text-orange-600">{formatNumber(summary.open)}</span></p>
-                    <p>Closed: <span className="text-emerald-600">{formatNumber(summary.closed)}</span></p>
+                    <p>Closed (current stage): <span className="text-emerald-600">{formatNumber(summary.closed)}</span></p>
+                    <p>Missing since prior dump (unverified): <span className="text-amber-700">{summary.inferredClosed == null ? "—" : formatNumber(summary.inferredClosed)}</span></p>
                   </div>
                 </div>
                 <p className="text-lg font-black text-emerald-600">{summary.score}%</p>
@@ -1323,8 +1317,8 @@ function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, ca
   );
   const data = useMemo(() => buildManagementData(scopedManagementTickets), [scopedManagementTickets]);
   const statePerformanceData = useMemo(
-    () => buildStatePerformanceData(tickets, safePerformanceMonth),
-    [tickets, safePerformanceMonth],
+    () => buildStatePerformanceData(tickets, safePerformanceMonth, closedBetweenDumps),
+    [tickets, safePerformanceMonth, closedBetweenDumps],
   );
   const monthScopeLabel = safePerformanceMonth === 'all'
     ? 'Eligible active Retail Store Codes'
@@ -1428,13 +1422,15 @@ function FaultClosedBetweenDumps({summary}) {
   return <section className="rounded-2xl border border-emerald-200 bg-white px-5 py-4 shadow-sm" aria-label="Closed calls since previous IFMS dump">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div><h2 className="text-sm font-black text-slate-900">Calls closed since previous pending dump</h2>
-      <p className="mt-1 text-xs text-slate-500">Not present in the latest comparable pending report, matched by ticket number and store code. This is a snapshot comparison, not an independently verified closure date.</p></div>
+      <p className="mt-1 text-xs text-slate-500">Not present in the latest comparable pending report, matched by ticket number and store code. Only eligible active Store Master codes are included. These are inferred missing calls, not verified closures.</p></div>
       <strong className="text-2xl font-black text-emerald-700">{formatNumber(summary.count)}</strong>
     </div>
     <details className="mt-3 text-xs text-slate-600">
       <summary className="cursor-pointer font-bold">Call categories and compared files</summary>
       <p className="mt-2">Previous: {summary.previous_file}</p><p>Latest: {summary.latest_file}</p>
       <div className="mt-2 flex flex-wrap gap-2">{summary.by_category.map(item=><span className="rounded-full bg-slate-100 px-3 py-1" key={item.category}>{item.category}: {formatNumber(item.count)}</span>)}</div>
+      <p className="mt-3 font-bold">State-wise missing calls (unverified)</p>
+      <div className="mt-2 flex flex-wrap gap-2">{(summary.by_state||[]).map(item=><span className="rounded-full bg-amber-50 px-3 py-1" key={item.state}>{stateDisplayLabel(groupedStateFor(item.state)||item.state)}: {formatNumber(item.count)}</span>)}</div>
     </details>
   </section>;
 }
