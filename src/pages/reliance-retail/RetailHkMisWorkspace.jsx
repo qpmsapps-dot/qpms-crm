@@ -79,7 +79,7 @@ function dailySubmittedTrend(report, module) {
       ? (row.deep_cleaning_date || row.activity_date || row.submitted_at || '')
       : (row.training_date || row.activity_date || '');
     const day = String(date).slice(0, 10);
-    if (/^20\\d{2}-\\d{2}-\\d{2}$/.test(day)) counts.set(day, (counts.get(day) || 0) + 1);
+    if (/^20\d{2}-\d{2}-\d{2}$/.test(day)) counts.set(day, (counts.get(day) || 0) + 1);
   }
   return [...counts].sort(([a], [b]) => a.localeCompare(b))
     .map(([date, value]) => ({ date, value }));
