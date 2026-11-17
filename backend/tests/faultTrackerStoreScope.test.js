@@ -1,6 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';import express from 'express';
 import {normalizedFaultStoreCode,scopeFaultTickets,filterScopedFaultTickets,scopedFaultTrackerReport} from '../services/faultTrackerStoreScope.js';
 import {reportingState} from '../shared/retailAttendance.js';
+import {RETAIL_FAULT_STAGES,RETAIL_FAULT_VENDOR_STAGES,summarizeDisappearedFaultTickets} from '../shared/retailFaultWorkflow.js';
 import {scopedFaultExportRows} from '../../src/utils/faultTrackerExport.js';
 const stateCode=v=>reportingState(v).replace(/^AP-/,'AP');
 const master=[{id:'a',store_code:'SL81',state:'TN',status:'Active'},{id:'b',store_code:'K001',state:'KA',status:'Active'},{id:'c',store_code:'IN0',state:'TN',status:'Inactive'},{id:'d',store_code:'P001',state:'PY',status:'Active'}];
@@ -64,10 +65,13 @@ test('latest pending dump calculates closed count and call categories without le
  ],[current,old]);
  const all=await scopedFaultTrackerReport(db,admin,{},authorization);
  assert.equal(all.closed_since_previous.count,2);
+ assert.deepEqual(all.closed_since_previous.by_state,[{state:'KN',count:1},{state:'TN',count:1}]);
+ assert.equal(all.closed_since_previous.basis,'inferred_missing_from_latest_pending_snapshot');
  assert.deepEqual(all.closed_since_previous.by_category,[{category:'HVAC',count:1},{category:'Pest Control',count:1}]);
  assert.equal(all.closed_since_previous.previous_file,old.original_file_name);
  const tn=await scopedFaultTrackerReport(db,{...admin,role:'MIS'},{},{readAll:false,isAdmin:false,stateCode});
  assert.equal(tn.closed_since_previous.count,1);
+ assert.deepEqual(tn.closed_since_previous.by_state,[{state:'TN',count:1}]);
  assert.deepEqual(tn.closed_since_previous.by_category,[{category:'HVAC',count:1}]);
  assert.deepEqual(tn.tickets.map(row=>row.ticket_no),['T-2']);
 });
@@ -80,4 +84,27 @@ test('cannot infer closures across different IFMS dump families',async()=>{
  ],[current,other]);
  const report=await scopedFaultTrackerReport(db,admin,{},authorization);
  assert.equal(report.closed_since_previous,null);
+});
+
+test('four vendor statuses append without changing the established ten or implying completion',()=>{
+ assert.deepEqual(RETAIL_FAULT_VENDOR_STAGES,['CAMC','OEM','MEPC','IOT']);
+ assert.equal(RETAIL_FAULT_STAGES.length,14);
+ assert.deepEqual(RETAIL_FAULT_STAGES.slice(-4),RETAIL_FAULT_VENDOR_STAGES);
+ assert.equal(RETAIL_FAULT_STAGES[9],'Set Off Pending');
+});
+test('disappeared-ticket comparison groups by canonical scoped state, deduplicates keys and never mutates sources',()=>{
+ const previous=[
+  {store_code:' SL81 ',ticket_no:' A-1 ',operational_state_code:'TN',category:'HVAC'},
+  {store_code:'sl81',ticket_no:'a-1',operational_state_code:'TN',category:'HVAC'},
+  {store_code:'K001',ticket_no:'B-2',operational_state_code:'KN',category:'Mechanical'},
+  {store_code:'P001',ticket_no:'C-3',operational_state_code:'TN',category:'Electrical'},
+  {store_code:'UNKNOWN',ticket_no:'X-4',operational_state_code:'TN'},
+ ];
+ const current=[{store_code:'P001',ticket_no:'C-3'}];
+ const allowed=scopeFaultTickets(previous,master,authorization).tickets;
+ const result=summarizeDisappearedFaultTickets(allowed,scopeFaultTickets(current,master,authorization).tickets);
+ assert.equal(result.count,2);
+ assert.deepEqual(result.by_state,[{state:'KN',count:1},{state:'TN',count:1}]);
+ assert.deepEqual(result.by_category,[{category:'HVAC',count:1},{category:'Mechanical',count:1}]);
+ assert.equal(previous.length,5);
 });
