@@ -1,5 +1,6 @@
 import { resolveCurrentUserAccess } from './accessControlService.js';
 import { normalizedStateKey, stateScopeQueryValues } from './workMappingScope.js';
+import { isRetailLeadership } from '../shared/retailSouthHeadAccess.js';
 
 const key = value => String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const retail = value => ['RELIANCE', 'RELIANCERETAIL'].includes(key(value));
@@ -40,6 +41,41 @@ export async function resolveRetailHkTrainingScope(client, profile) {
     && stores.some(r => r.store_code === s.store_code && normalizedStateKey(r.state) === normalizedStateKey(s.state)));
   return { retailStoreIds: stores.map(s => s.id), legacyStoreIds: legacyStores.map(s => s.id), stores, legacyStores,
     states: [...new Set(stores.flatMap(s => [s.state, ...stateScopeQueryValues(s.state)]))] };
+}
+
+// Leadership access is determined from effective DB role/client/state assignments
+// even for the legacy /training API (which does not pass through Retail middleware).
+// Never allow Branch Heads to inherit all-state training visibility from FO codes.
+export async function resolveRetailLeadershipTrainingScope(client, profile) {
+  if (!isRetailLeadership(profile)) return null;
+  const {data:allowed,error:scopeError}=await client.rpc('retail_role_states',{p_actor:profile.id});
+  if(scopeError)throw Object.assign(new Error('Retail state authorization unavailable.'),{statusCode:503});
+  const states=Array.isArray(allowed)?allowed:[];
+  if(!states.length||states.some(s=>!['TN','PY','KA','KL','TG','AP-1','AP-2'].includes(s)))throw denied();
+  async function allRows(makeQuery){
+    const results=[];
+    for(let start=0;start<100000;start+=1000){
+      const {data,error}=await makeQuery().order('id').range(start,start+999);
+      if(error)throw error;
+      results.push(...(data||[]));
+      if((data||[]).length<1000)return results;
+    }
+    throw Object.assign(new Error('Retail leadership Training scope exceeds safe bounds.'),{statusCode:503});
+  }
+  const stores=await allRows(()=>client.from('reliance_retail_store_master')
+    .select('id,store_code,state,status,zone_id').in('state',states).eq('status','Active'));
+  if(!stores.length)throw denied();
+  const legacy=await allRows(()=>client.from('store_master')
+    .select('id,store_code,state,business,status')
+    .in('business',['Reliance Retail','Reliance']).eq('status','Active'));
+  const byIdentity=new Set(stores.map(s=>key(s.store_code)+'|'+normalizedStateKey(s.state)));
+  const legacyStores=legacy.filter(s=>byIdentity.has(key(s.store_code)+'|'+normalizedStateKey(s.state)));
+  return {
+    stores,legacyStores,
+    retailStoreIds:stores.map(s=>s.id),
+    legacyStoreIds:legacyStores.map(s=>s.id),
+    states:[...new Set(stores.flatMap(s=>[s.state,...stateScopeQueryValues(s.state)]))],
+  };
 }
 
 export function narrowRetailTrainingScope(scope, retailIds) {
