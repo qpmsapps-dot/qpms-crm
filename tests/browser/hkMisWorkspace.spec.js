@@ -83,6 +83,8 @@ test('HK MIS sees only the five Reliance Retail pages, reports and nonfinancial 
   await expect(page.getByRole('heading', { name: 'Daily HK attendance %' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Deep Cleaning submissions by date' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'HK Training sessions by date' })).toBeVisible();
+  await expect(page.getByRole('img', { name: /Deep Cleaning submissions by date:/ })).toBeVisible();
+  await expect(page.getByRole('img', { name: /HK Training sessions by date:/ })).toBeVisible();
   await expect(page.getByLabel('Authorized State')).toHaveValue('TN');
   expect(await page.getByLabel('Authorized State').locator('option').allTextContents()).toEqual(['TN']);
   await page.goto('/reliance-retail/mis/operations');
@@ -126,9 +128,13 @@ test('HK MIS state-only Excel and PPT reports retain the permitted store and nev
   expect((await cleaningPpt).suggestedFilename()).toMatch(/Retail_HK_MIS_TN_cleaning\.pptx$/);
 });
 test('HK MIS unknown module and missing authorized states fail closed', async ({ page }) => {
-  await seed(page, []);
+  const requests = await seed(page, []);
   await page.goto('/reliance-retail/mis/dashboard');
   await expect(page.getByRole('alert').filter({ hasText: 'Verified HK MIS assignment required' })).toBeVisible();
   await page.goto('/reliance-retail/mis/pest');
-  await expect(page.getByText('This page is not available for HK MIS.')).toBeVisible();
+  // The route guard safely redirects unsupported modules back to Dashboard.
+  await expect(page).toHaveURL(/\/reliance-retail\/mis\/dashboard$/);
+  await expect(page.getByRole('alert').filter({ hasText: 'Verified HK MIS assignment required' })).toBeVisible();
+  expect(requests.some(x => x.path.includes('/mis/report/pest'))).toBe(false);
+  expect(requests.some(x => x.method !== 'GET')).toBe(false);
 });
