@@ -1,6 +1,7 @@
 import {createRetailFoSelfRouter} from './retailFoSelfRoutes.js';
 import {createRetailMisRouter} from './retailMisRoutes.js';
 import {retailMisRole} from '../shared/retailMisAccess.js';
+import {isRetailLeadership,isRetailBranchHead} from '../shared/retailSouthHeadAccess.js';
 import express from 'express';
 import {gateCombinedMutationRoutes} from '../services/combinedReleaseGate.js';
 import {createRetailOperationsRouter} from './retailOperationsRoutes.js';
@@ -42,6 +43,25 @@ gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=
   router.use(requireAuth);
   router.use('/mis',createRetailMisRouter({getClient}));
   router.use((req,res,next)=>retailMisRole(req.profile?.role)&&req.path!=='/access'?res.status(403).json({ok:false,message:'Use the state-scoped Retail MIS API.'}):next());
+  // Read effective client/role/state assignments from the database on every
+  // request, never from a browser's role claim or requested state parameter.
+  router.use(async (req,res,next) => {
+    if (!isRetailLeadership(req.profile)) return next();
+    if (req.profile.auth_user_id !== req.authUser?.id) {
+      return res.status(403).json({ok:false,message:'Verified Retail identity required.'});
+    }
+    try {
+      const {data,error}=await getClient().rpc('retail_role_states',{p_actor:req.profile.id});
+      if(error)throw error;
+      const states=Array.isArray(data)?data.filter(s=>['TN','PY','KA','KL','TG','AP-1','AP-2'].includes(s)):[];
+      if(!states.length || !Array.isArray(data) || states.length!==data.length)
+        return res.status(403).json({ok:false,message:'Verified Retail geographic assignment required.'});
+      req.profile={...req.profile,_retailRoleStates:states};
+      if (isRetailBranchHead(req.profile) && !['GET','HEAD','OPTIONS'].includes(req.method))
+        return res.status(403).json({ok:false,message:'Branch Heads have state-scoped Retail viewing access only.'});
+      return next();
+    } catch(e) {return res.status(503).json({ok:false,message:'Retail state authorization unavailable.'});}
+  });
   router.use(createInitialRetailWriteGate({getClient}));
   router.post('/module-reports/deep-cleaning/:id/link-fo',async(req,res)=>{try{res.json({ok:true,result:await linkFoCleaning(getClient(),req.profile,req.params.id,req.body||{})});}catch(e){sendError(res,e);}});
   router.use('/operations',createRetailOperationsRouter({getClient}));
@@ -90,7 +110,13 @@ gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=
   router.get('/fos', async (req, res) => {
     try {
       assertRetailAccess(req.profile, 'zones');
-      const { data, error } = await getClient().from('profiles').select('id,employee_code,full_name,role,designation,state,status,is_active').eq('is_active', true).in('business', ['Reliance Retail', 'Reliance']).order('full_name').limit(200);
+      let query=getClient().from('profiles').select('id,employee_code,full_name,role,designation,state,status,is_active')
+        .eq('is_active', true).in('business', ['Reliance Retail', 'Reliance']).order('full_name').limit(200);
+      if (req.profile._retailRoleStates) {
+        const states=req.profile._retailRoleStates;
+        query=query.in('state',states.some(s=>s.startsWith('AP-'))?[...states,'AP']:states);
+      }
+      const { data, error } = await query;
       if (error) throw error;
       res.json({ ok: true, employees: (data || []).filter((row) => ['FO', 'FIELDOFFICER'].includes(String(row.role || '').toUpperCase().replace(/[^A-Z0-9]+/g, ''))) });
     } catch (e) { sendError(res, e); }
