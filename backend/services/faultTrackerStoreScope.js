@@ -1,4 +1,5 @@
 import {stateLabel,reportingState,validDate} from '../shared/retailAttendance.js';
+import {summarizeDisappearedFaultTickets} from '../shared/retailFaultWorkflow.js';
 import {resolveCurrentUserAccess} from './accessControlService.js';
 import {isInitialRetailAdmin} from './retailInitialAdminAccess.js';
 
@@ -103,13 +104,9 @@ export async function scopedFaultTrackerReport(client,profile,input,authorizatio
    const previousSource=await pages(()=>client.from('fault_tracker_tickets').select('*')
     .eq('import_batch_id',prior.id).order('created_at_source',{ascending:false,nullsFirst:false}).order('id'));
    const earlier=scopeFaultTickets(previousSource,master,{...authorization,profileState:profile.state,grants}).tickets;
-   const key=t=>`${normalizedFaultStoreCode(t.store_code)}|${normalizedFaultStoreCode(t.ticket_no)}`;
-   const currentKeys=new Set(scoped.tickets.map(key));
-   const missing=earlier.filter(t=>t.ticket_no&&!currentKeys.has(key(t)));
-   const categories=new Map();
-   for(const t of missing){const category=String(t.category||'Unspecified').trim()||'Unspecified';categories.set(category,(categories.get(category)||0)+1);}
-   closed_since_previous={count:missing.length,previous_file:prior.original_file_name,latest_file:batch.original_file_name,
-    by_category:[...categories].map(([category,count])=>({category,count})).sort((a,b)=>b.count-a.count)};
+   const missing=summarizeDisappearedFaultTickets(earlier,scoped.tickets);
+   closed_since_previous={...missing,previous_file:prior.original_file_name,latest_file:batch.original_file_name,
+    basis:'inferred_missing_from_latest_pending_snapshot',scope:'eligible_active_unique_store_master'};
   }
   }
  }
