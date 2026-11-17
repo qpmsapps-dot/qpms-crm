@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {cleaningPayloadPaths,readCleaningExportPins,verifyCleaningExportPayload} from '../.github/deepCleaningExportGuard.mjs';
 import {exportPayloadPaths as trainingPaths,workflowPath} from '../.github/trainingExportGuard.mjs';
+import {priorWorkflowForChecks} from '../.github/thermographyFullstackGuard.mjs';
 const pins=Object.fromEntries(cleaningPayloadPaths.map(p=>[p,'1'.repeat(40)])),training=Object.fromEntries(trainingPaths.map(p=>[p,'1'.repeat(40)]));
 for(const combined of [false,true]){
   const paths=[...new Set([...cleaningPayloadPaths,...(combined?trainingPaths:[]),workflowPath])];
@@ -17,6 +18,6 @@ test('malformed/broadened maps fail closed',()=>{
 });
 test('all existing Training and application workflow safeguards remain byte-for-byte intact',()=>{
   const original=execFileSync('git',['-c',`safe.directory=${process.cwd()}`,'show',`56d5be2434d0f994305d76057da5e3f1cbb17cfb:${workflowPath}`],{encoding:'utf8'}).replaceAll('\r\n','\n');
-  const current=readFileSync(workflowPath,'utf8').replaceAll('\r\n','\n');readCleaningExportPins(current);
+  const current=priorWorkflowForChecks(readFileSync(workflowPath,'utf8'));readCleaningExportPins(current);
   assert.equal(current.replace(/^( *)# BEGIN DEEP CLEANING EXPORT [^\n]+\n[\s\S]*?^\1# END DEEP CLEANING EXPORT [^\n]+\n/gm,''),original);
 });

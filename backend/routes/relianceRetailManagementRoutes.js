@@ -1,5 +1,6 @@
 import {createRetailFoSelfRouter} from './retailFoSelfRoutes.js';
 import {createRetailMisRouter} from './retailMisRoutes.js';
+import {createThermographyReportsRouter} from './thermographyReportsRoutes.js';
 import {retailMisRole} from '../shared/retailMisAccess.js';
 import express from 'express';
 import {gateCombinedMutationRoutes} from '../services/combinedReleaseGate.js';
@@ -40,6 +41,8 @@ export function createRelianceRetailManagementRouter({ requireAuth, getClient })
   const router = express.Router();
 gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=>/^\/deep-cleaning(?:\/|$)|^\/module-reports\/deep-cleaning\//.test(path)});
   router.use(requireAuth);
+  // Thermography-specific RPCs recheck existing actor/MIS/state permissions independently.
+  router.use('/mis/thermography',createThermographyReportsRouter({getClient}));
   router.use('/mis',createRetailMisRouter({getClient}));
   router.use((req,res,next)=>retailMisRole(req.profile?.role)&&req.path!=='/access'?res.status(403).json({ok:false,message:'Use the state-scoped Retail MIS API.'}):next());
   router.use(createInitialRetailWriteGate({getClient}));

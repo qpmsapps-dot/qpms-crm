@@ -4,6 +4,12 @@ on:
   pull_request:
     paths:
       - 'src/hooks/useModalFocus.js'
+      # BEGIN THERMOGRAPHY FULLSTACK TRIGGERS
+      - '.github/thermography-fullstack-pins.json'
+      - '.github/thermographyFullstackGuard.mjs'
+      - '.github/workflows/thermography-fullstack.yml'
+      - 'tests/thermographyFullstackGuard.test.js'
+      # END THERMOGRAPHY FULLSTACK TRIGGERS
       # BEGIN DEEP CLEANING EXPORT TRIGGERS
       - '.github/deepCleaningExportGuard.mjs'
       - 'tests/deepCleaningExportGuard.test.js'
@@ -85,6 +91,17 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # BEGIN THERMOGRAPHY FULLSTACK EXACT PAYLOAD
+          thermo_manifest = ".github/thermography-fullstack-pins.json"
+          if thermo_manifest in files:
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{thermo_manifest}"],text=True).strip() != "42fa1344979be205b2638e983a79f0a63e53daf3":
+              sys.exit("Thermography manifest changed; renew full-stack review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/thermographyFullstackGuard.mjs"],text=True).strip() != "c1bf43c2e4c285e711ac26a38c04eb6459c86707":
+              sys.exit("Thermography guard changed; renew full-stack review")
+            subprocess.run(["node", ".github/thermographyFullstackGuard.mjs", base],check=True)
+            print("PASS: exact Thermography payload; all following UI checks and dedicated full-stack checks remain mandatory.")
+            sys.exit(0)
+          # END THERMOGRAPHY FULLSTACK EXACT PAYLOAD
           # BEGIN DEEP CLEANING EXPORT EXACT PAYLOAD
           approved_cleaning_exports = {
             ".github/deepCleaningExportGuard.mjs": "d3ee4072d294a8869c969481005d67dcc3a2b1f5",

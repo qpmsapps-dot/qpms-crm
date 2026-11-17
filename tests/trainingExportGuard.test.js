@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {exportPayloadPaths,workflowPath,verifyTrainingExportPayload,readTrainingExportPins} from '../.github/trainingExportGuard.mjs';
+import {priorWorkflowForChecks} from '../.github/thermographyFullstackGuard.mjs';
 
 const pins=Object.fromEntries(exportPayloadPaths.map(p=>[p,'1'.repeat(40)]));
 const paths=[...exportPayloadPaths,workflowPath],hash=p=>pins[p];
@@ -18,7 +19,7 @@ test('Training export guard rejects malformed, missing, empty and broadened pin 
 });
 test('Training export CI integration preserves every pre-existing safeguard and step',()=>{
   const original=execFileSync('git',['-c',`safe.directory=${process.cwd()}`,'show',`f15f390fcab107efd480f5889454fe8ca95c08ca:${workflowPath}`],{encoding:'utf8'}).replaceAll('\r\n','\n');
-  let current=readFileSync(workflowPath,'utf8').replaceAll('\r\n','\n');
+  let current=priorWorkflowForChecks(readFileSync(workflowPath,'utf8'));
   readTrainingExportPins(current);
   current=current.replace(/^( *)# BEGIN DEEP CLEANING EXPORT [^\n]+\n[\s\S]*?^\1# END DEEP CLEANING EXPORT [^\n]+\n/gm,'');
   current=current.replace(/ {6}# BEGIN TRAINING EXPORT TRIGGERS\n[\s\S]*? {6}# END TRAINING EXPORT TRIGGERS\n/,'')

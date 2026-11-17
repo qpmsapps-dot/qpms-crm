@@ -15,6 +15,9 @@ const operationsFixture = {
   modules: { cm: emptyMaintenanceModule, pm: emptyMaintenanceModule },
 };
 const thermoFixture = {
+  contract: 'thermography-reports.v1', scope_digest: 'synthetic-thermography',
+  counts: { scheduled: 0, awaiting: 0, rework: 0, approved: 0, active_reports: 0 },
+  max_bytes: 26214400, page: 0, limit: 25, can_upload: false, can_schedule: true, is_super: true,
   today: '2026-11-03',
   stores: [],
   events: [],
@@ -47,6 +50,7 @@ async function seed(page) {
     });
     if (path.endsWith('/operations/maintenance')) return route.fulfill({ json: { result: operationsFixture } });
     if (path.endsWith('/operations/thermography')) return route.fulfill({ json: { result: thermoFixture } });
+    if (path.endsWith('/mis/thermography/reports')) return route.fulfill({ json: { result: { ...thermoFixture, total: 0 } } });
     if (path.endsWith('/stores')) return route.fulfill({ json: { rows: [], total: 0 } });
     if (path.endsWith('/zones')) return route.fulfill({ json: { zones: [] } });
     return route.fulfill({ json: { stores: [], zones: [], fos: [], snapshot: { stores: [], zones: [], fos: [] } } });
