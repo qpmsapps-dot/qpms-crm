@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - 'src/hooks/useModalFocus.js'
+      # BEGIN THERMOGRAPHY V2 TRIGGERS
+      - '.github/thermography-v2-pins.json'
+      - '.github/thermographyV2Guard.mjs'
+      # END THERMOGRAPHY V2 TRIGGERS
       # BEGIN DEEP CLEANING EXPORT TRIGGERS
       - '.github/deepCleaningExportGuard.mjs'
       - 'tests/deepCleaningExportGuard.test.js'
@@ -85,6 +89,17 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # BEGIN THERMOGRAPHY V2 EXACT PAYLOAD
+          v2_manifest = ".github/thermography-v2-pins.json"
+          if v2_manifest in files:
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{v2_manifest}"],text=True).strip() != "8ec5ad45c794aadd695bd953d3f8ed38b8e05877":
+              sys.exit("Thermography V2 manifest changed; renew independent review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/thermographyV2Guard.mjs"],text=True).strip() != "fb76fa8b4a228302f861f3c7b7aedb601d42d7a4":
+              sys.exit("Thermography V2 guard changed; renew independent review")
+            subprocess.run(["node",".github/thermographyV2Guard.mjs",base],check=True)
+            print("PASS: exact reviewed Thermography V2 payload; every subsequent check remains mandatory.")
+            sys.exit(0)
+          # END THERMOGRAPHY V2 EXACT PAYLOAD
           # BEGIN DEEP CLEANING EXPORT EXACT PAYLOAD
           approved_cleaning_exports = {
             ".github/deepCleaningExportGuard.mjs": "d3ee4072d294a8869c969481005d67dcc3a2b1f5",

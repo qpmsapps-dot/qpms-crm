@@ -1,3 +1,4 @@
+import ThermographyReports from '../../components/reliance-retail/ThermographyReports.jsx';
 import { useLocation } from 'react-router-dom';
 import { readRetailNavigation } from '../../utils/retailNavigation.js';
 import {useRetailExcelRows} from '../../utils/useRetailExcelRows.js';
@@ -18,6 +19,9 @@ import {summarizeReportedOperations} from '../../utils/retailStatePerformance.js
 
 const emptyForm=()=>({store_id:'',scheduled_date:indiaToday(),request_id:crypto.randomUUID()});
 export default function RetailOperations({kind='maintenance'}) {
+ return kind==='thermography'?<ThermographyReports/>:<RetailOperationsTracker kind={kind}/>;
+}
+function RetailOperationsTracker({kind}) {
  const {user}=useAuth();
  const entry=useRef(null);
  const maintenance=kind==='maintenance',title=maintenance?'CM / PM Calls':'Thermography';
