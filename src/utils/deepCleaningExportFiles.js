@@ -34,18 +34,32 @@ export async function buildCleaningPresentation(data,{title,scope}) {
   const ordered=[...data.records].sort((a,b)=>text(a.state).localeCompare(text(b.state))||text(a.storeCode).localeCompare(text(b.storeCode))||text(a.date).localeCompare(text(b.date)));
   for(const r of ordered) {
     pages(`Deep Cleaning | ${text(r.storeCode)}`,[`Store: ${text(r.storeName)}`,`State: ${text(r.state)} | Actual cleaning date: ${text(r.date)}`,`FO: ${text(r.fo)} | Employee code: ${text(r.employeeCode)}`,`Status: ${text(r.status)} | Submitted: ${text(r.submittedAt)}`,`Submission: ${r.id}`,`Evidence: ${r.evidenceStatus}`]);
-    for(const type of ['before','after']) {
-      const photos=r.evidence.filter(e=>e.type===type&&e.image),heading=`${type.toUpperCase()} | ${text(r.storeCode)} | ${text(r.date)}`;
-      if(!photos.length)pages(heading,[`No authorized ${type.toUpperCase()} photographs available in this export.`,r.evidenceStatus,'See export warnings for missing evidence, access or download failures.']);
-      for(const batch of chunks(photos,2)) {
-        const s=slide(heading);
-        for(const [index,e] of batch.entries()) {
-          const x=.6+index*6.15,w=batch.length===1?12:5.85;
-          s.addImage({data:e.image,...containTrainingPhoto(e.width,e.height,x,1.6,w,4.5)});
-          s.addText(text(e.fileName),{x,y:6.25,w,h:.45,fontSize:12,color:'183153',margin:0,fit:'resize'});
-          s.addNotes(`Submission ${r.id}; ${type}; evidence ${e.id}; ${e.reference}. Authorized at export; no temporary signed URL retained.`);
-        }
+    // Align independently ordered before/after photographs for visual review.
+    // Matching positions do not assert that two photographs depict the same area.
+    const before=r.evidence.filter(e=>e.type==='before'&&e.image);
+    const after=r.evidence.filter(e=>e.type==='after'&&e.image);
+    const count=Math.max(before.length,after.length);
+    if(!count)pages(`Photo evidence | ${text(r.storeCode)}`,[
+      'No authorized Before or After photographs available in this export.',
+      r.evidenceStatus,'See export warnings for missing evidence or access failures.'
+    ]);
+    for(let i=0;i<count;i+=2){
+      const sheet=slide(`Deep Cleaning Evidence | ${text(r.storeCode)}`);
+      sheet.addText(`Store Code: ${text(r.storeCode)}  |  Visit Date: ${text(r.date)}  |  Uploaded Date: ${text(r.submittedAt)}`,{
+        x:.6,y:1.15,w:12.1,h:.35,fontSize:13,color:'183153',margin:0,fit:'shrink'
+      });
+      sheet.addText('BEFORE',{x:.6,y:1.6,w:5.85,h:.35,fontSize:17,bold:true,color:'185AA6',align:'center'});
+      sheet.addText('AFTER',{x:6.85,y:1.6,w:5.85,h:.35,fontSize:17,bold:true,color:'185AA6',align:'center'});
+      const pair=[[before[i],.6,'Before'],[after[i],6.85,'After']];
+      for(const [e,x,label] of pair){
+        if(!e){sheet.addText('No corresponding image',{x,y:2.15,w:5.85,h:3.6,fontSize:13,color:'64748B',align:'center',valign:'mid'});continue;}
+        sheet.addImage({data:e.image,...containTrainingPhoto(e.width,e.height,x,2.1,5.85,3.85)});
+        sheet.addText(`${label} Image ${i+1}`,{x,y:6.05,w:5.85,h:.3,fontSize:13,bold:true,color:'183153',align:'center',margin:0});
+        sheet.addNotes(`Submission ${r.id}; ${label}; evidence ${e.id}; ${e.reference}. Display-order alignment only; not a verified image pair.`);
       }
+      sheet.addText('Images aligned by sequence only; locations are not independently matched.',{
+        x:.6,y:6.55,w:12,h:.25,fontSize:9,color:'64748B',margin:0
+      });
     }
     const supporting=r.evidence.filter(e=>!['before','after'].includes(e.type));
     pages(`Supporting evidence | ${text(r.storeCode)}`,supporting.length?supporting.map(e=>`${text(e.type)} | ${text(e.fileName)} | ${e.access}`):['Supporting evidence: Not recorded or unavailable.']);
