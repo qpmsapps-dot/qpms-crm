@@ -13,8 +13,12 @@ test('Excel named fields resolve explicit FO and dates independently of column p
  const rows=parseCleaningPlan(workbook([['FO1','2026-12-01','KA','STORE1','notes']]),'plan.xlsx');
  assert.deepEqual(rows,[{FO_EMPLOYEE_CODE:'FO1',SCHEDULE_DATE:'2026-12-01',STATE:'KA',STORE_CODE:'STORE1',REMARKS:'notes'}]);
 });
+test('Excel accepts store-only monthly schedule without FO assignment',()=>{
+ const rows=parseCleaningPlan(workbook([['TN','2629','2026-12-05','Monthly cleaning']],['STATE','STORE_CODE','SCHEDULE_DATE','REMARKS']),'plan.xlsx');
+ assert.deepEqual(rows,[{STATE:'TN',STORE_CODE:'2629',SCHEDULE_DATE:'2026-12-05',REMARKS:'Monthly cleaning'}]);
+});
 test('Excel rejects missing/duplicate/unknown headers and invalid containers',()=>{
- for(const h of [['STATE','STORE_CODE'],['STATE','STORE_CODE','SCHEDULE_DATE','FO_EMPLOYEE_CODE','STATE'],['STATE','STORE_CODE','SCHEDULE_DATE','FO_EMPLOYEE_CODE','UNKNOWN']])assert.throws(()=>parseCleaningPlan(workbook([['x']],h),'plan.xlsx'));
+ for(const h of [['STATE','STORE_CODE'],['STATE','STORE_CODE','SCHEDULE_DATE','STATE'],['STATE','STORE_CODE','SCHEDULE_DATE','UNKNOWN']])assert.throws(()=>parseCleaningPlan(workbook([['x']],h),'plan.xlsx'));
  assert.throws(()=>parseCleaningPlan(Buffer.from('bad'),'plan.xlsx'));
 });
 test('Excel retains invalid/empty rows and blank FO for authoritative row-level validation',()=>{
