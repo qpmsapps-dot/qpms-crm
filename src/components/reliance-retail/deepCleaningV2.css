@@ -1239,3 +1239,16 @@
 @media(max-width:700px) {
   .dc-v2 .dc-photo-pair { grid-template-columns: minmax(0, 1fr); }
 }
+
+
+/* Streamlined monthly reporting layout. */
+.dc-v2 .dc-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.dc-v2 .dc-performance { display: block; }
+.dc-v2 .dc-insights { display: none; }
+.dc-v2 .dc-chart-card { width: 100%; }
+.dc-v2 .dc-main > .dc-filter-card { order: 1; }
+.dc-v2 .dc-main > .dc-kpis { order: 2; }
+.dc-v2 .dc-main > .dc-performance { order: 3; }
+@media(max-width:700px) {
+  .dc-v2 .dc-kpis { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+}
