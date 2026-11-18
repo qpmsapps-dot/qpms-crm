@@ -1,3 +1,4 @@
+import {priorWorkflowForChecks} from '../.github/thermographyV2Guard.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -18,7 +19,7 @@ test('Training export guard rejects malformed, missing, empty and broadened pin 
 });
 test('Training export CI integration preserves every pre-existing safeguard and step',()=>{
   const original=execFileSync('git',['-c',`safe.directory=${process.cwd()}`,'show',`f15f390fcab107efd480f5889454fe8ca95c08ca:${workflowPath}`],{encoding:'utf8'}).replaceAll('\r\n','\n');
-  let current=readFileSync(workflowPath,'utf8').replaceAll('\r\n','\n');
+  let current=priorWorkflowForChecks(readFileSync(workflowPath,'utf8')).replaceAll('\r\n','\n');
   readTrainingExportPins(current);
   current=current.replace(/^( *)# BEGIN DEEP CLEANING EXPORT [^\n]+\n[\s\S]*?^\1# END DEEP CLEANING EXPORT [^\n]+\n/gm,'');
   current=current.replace(/ {6}# BEGIN TRAINING EXPORT TRIGGERS\n[\s\S]*? {6}# END TRAINING EXPORT TRIGGERS\n/,'')

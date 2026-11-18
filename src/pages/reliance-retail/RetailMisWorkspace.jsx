@@ -1,3 +1,4 @@
+import ThermographyReports from '../../components/reliance-retail/ThermographyReports.jsx';
 import RetailHkMisWorkspace from './RetailHkMisWorkspace.jsx';
 import {useEffect,useState} from 'react';
 import {useParams,Link} from 'react-router-dom';
@@ -12,8 +13,9 @@ const api=async(url,config={})=>(await authenticatedApiRequest({url:'/api/relian
 const flatValue=v=>v==null?'':typeof v==='object'?JSON.stringify(v):String(v);
 const displayCell=(column,value)=>column==='topic_names'&&Array.isArray(value)?value.join(', '):flatValue(value);
 export default function RetailMisWorkspace() {
+ const {module}=useParams();
  const {user}=useAuth();
- return (user?.rawRole||user?.role)==='MIS_HK' ? <RetailHkMisWorkspace/> : <RetailMisLegacyWorkspace/>;
+ return (user?.rawRole||user?.role)==='MIS_HK' ? <RetailHkMisWorkspace/> : module==='thermography' ? <ThermographyReports/> : <RetailMisLegacyWorkspace/>;
 }
 function RetailMisLegacyWorkspace(){
  const {module}=useParams(),{user}=useAuth(),role=user?.rawRole||user?.role;
