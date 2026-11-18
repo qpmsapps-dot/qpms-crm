@@ -6,7 +6,7 @@ import path from 'node:path';
 import {createServer} from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import ExcelJS from 'exceljs';
 import {thermoServiceFixture,syntheticThermoPdf,express} from '../backend/tests/helpers/thermographyServiceFixture.js';
 import {createThermographyReportsRouter} from '../backend/routes/thermographyReportsRoutes.js';
@@ -34,6 +34,8 @@ test('V2 browser + real isolated SQL: Excel preview/import, till-date vs whole m
   }
   if(!['127.0.0.1','localhost'].includes(url.hostname))return route.abort();
   if(url.pathname.startsWith('/api/reliance-retail/mis/thermography/')){
+   // Keep the loading state observable: one placeholder row is not a result row.
+   if(url.pathname.endsWith('/dashboard')&&url.searchParams.get('q'))await new Promise(resolve=>setTimeout(resolve,100));
    const response=await route.fetch({url:backendBase+url.pathname+url.search});
    if(url.pathname.endsWith('/uploads/finalize')&&loseFinalize){loseFinalize=false;return route.abort('failed');}return route.fulfill({response});
   }
@@ -56,8 +58,8 @@ test('V2 browser + real isolated SQL: Excel preview/import, till-date vs whole m
   await first.getByRole('button',{name:'History 0012',exact:true}).click();await page.getByRole('button',{name:'Client approve',exact:true}).click();await page.getByRole('button',{name:'Confirm approval',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});await first.getByText('Client: Approved',{exact:true}).waitFor();assert.equal(await first.getByRole('button',{name:'Replace PDF',exact:true}).count(),0);
   await page.getByLabel('KPI start date').fill('2026-11-06');await page.getByLabel('KPI end date').fill('2026-11-18');await page.waitForFunction(()=>document.querySelector('.thv2-scheduled strong')?.textContent==='1');assert.equal(await page.locator('.thv2-completed strong').innerText(),'0');assert.equal(await page.locator('.thv2-schedule tbody tr').count(),3,'Custom KPI range must retain the full monthly table');
   const exported=await download(page.getByRole('button',{name:'Export Excel',exact:true})),summary=new ExcelJS.Workbook();await summary.xlsx.load(exported);assert.equal(summary.worksheets[0].rowCount,4);assert.equal(summary.worksheets[0].getCell('B2').value,'0012');assert.equal(summary.worksheets[0].getCell('E2').value,'Completed');
-  await page.getByRole('button',{name:'Completed (1)',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.thv2-schedule tbody tr').length===1);await page.getByRole('button',{name:'All (3)',exact:true}).click();await page.getByLabel('Search by Store Code').fill('0099');await page.waitForFunction(()=>document.querySelectorAll('.thv2-schedule tbody tr').length===1);assert.match(await page.locator('.thv2-schedule tbody').innerText(),/0099/);await page.getByLabel('Search by Store Code').fill('');
-  await page.getByRole('button',{name:'Schedule History',exact:true}).click();await page.getByText('any-month-name.xlsx',{exact:true}).waitFor();await page.getByLabel('Close dialog').click();
+  await page.getByRole('button',{name:'Completed (1)',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.thv2-schedule tbody tr').length===1);await page.getByRole('button',{name:'All (3)',exact:true}).click();await page.getByLabel('Search by Store Code').fill('0099');await expect(page.locator('.thv2-schedule tbody')).toContainText('0099');await expect(page.locator('.thv2-schedule tbody tr')).toHaveCount(1);assert.match(await page.locator('.thv2-schedule tbody').innerText(),/0099/);await page.getByLabel('Search by Store Code').fill('');
+  await page.getByRole('button',{name:'Schedule History',exact:true}).click();await page.getByText('any-month-name.xlsx',{exact:true}).waitFor();await page.getByLabel('Close dialog').click();await expect(page.locator('.thv2-schedule tbody tr')).toHaveCount(3);
   for(const width of [1440,1120,768,390]){await page.setViewportSize({width,height:1000});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+2));await page.screenshot({path:path.join(output,`thermography-v2-${width}.png`),fullPage:true});}
   actor=h.other;await page.reload({waitUntil:'domcontentloaded'});await page.getByLabel('Month',{exact:true}).fill('2026-11');await page.waitForFunction(()=>document.querySelector('.thv2-schedule tbody')?.textContent.includes('0099'));assert.equal(await row('0012').count(),0);assert.equal(await row('0099').count(),1);
   assert.deepEqual(errors,[]);assert.equal(storageUploads.length,2);console.log('Synthetic browser screenshots: '+output);

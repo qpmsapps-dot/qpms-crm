@@ -98,9 +98,9 @@ jobs:
           # BEGIN THERMOGRAPHY V2 EXACT PAYLOAD
           v2_manifest = ".github/thermography-v2-pins.json"
           if v2_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{v2_manifest}"],text=True).strip() != "7a3587f3f932662cc2f7ba72691da9bb344cacb8":
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{v2_manifest}"],text=True).strip() != "34c8f00840bae2efcd8f767bac9af0ee3b854c75":
               sys.exit("Thermography V2 manifest changed; renew independent review")
-            if subprocess.check_output(["git","rev-parse","HEAD:.github/thermographyV2Guard.mjs"],text=True).strip() != "cc7b96bbc723295224478c20cb66c0bde89ad2b0":
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/thermographyV2Guard.mjs"],text=True).strip() != "5fa6d993abb1aa5f17a9025b5a748f0ccd663470":
               sys.exit("Thermography V2 guard changed; renew independent review")
             subprocess.run(["node",".github/thermographyV2Guard.mjs",base],check=True)
             print("PASS: exact reviewed Thermography V2 payload; every subsequent check remains mandatory.")

@@ -11,7 +11,7 @@ export const payloadPaths=Object.freeze([
  'backend/tests/helpers/thermographyFixture.js','backend/tests/helpers/thermographyServiceFixture.js','backend/tests/thermographyReports.concurrent.test.js','backend/tests/thermographyReports.database.test.js','backend/tests/thermographyReports.limits.test.js','backend/tests/thermographyReports.test.js','backend/tests/thermographySchedule.test.js','backend/tests/thermographyDashboard.test.js',
  'src/components/reliance-retail/ThermographyReports.jsx','src/components/reliance-retail/thermographyReports.css','src/utils/thermographyV2.js',
  'supabase/migrations/20261115140000_retail_thermography_reports.sql','supabase/migrations/20261118010000_retail_thermography_schedule_v2.sql',
- 'tests/retailOperationsShapeBrowser.test.js','tests/thermographyReports.browser.test.js','tests/thermographyReports.test.js','docs/THERMOGRAPHY_V2_RELEASE.md',
+ 'tests/browser/retailReportVisualSmoke.spec.js','tests/retailOperationsShapeBrowser.test.js','tests/thermographyReports.browser.test.js','tests/thermographyReports.test.js','docs/THERMOGRAPHY_V2_RELEASE.md',
 ]);
 const normalize=s=>s.replaceAll('\r\n','\n');
 export function reviewedWorkflow(base,manifestHash,guardHash){

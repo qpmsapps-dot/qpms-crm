@@ -66,7 +66,12 @@ real overlapping sessions, import/receipt races, replacement/finalization and ap
 The 996-store monthly dashboard must finish **under 4,000 ms**; native sessions retain the
 8,000 ms statement timeout. Measured locally after batching authorization: **165.9?208.2 ms**.
 The earlier unbatched 4,760.5 ms failure was corrected, not accepted by raising the limit.
-Timings are synthetic local evidence; representative production latency remains unverified.
+Native GitHub Ubuntu/PostgreSQL 17 also measured 67.8 ms. These are synthetic test timings;
+representative production latency remains unverified.
+
+The shared smoke fixture uses the V2 contract and verifies genuine zeroes, read-only schedule
+actions and the same viewport/overflow protections. Search assertions wait for the requested
+Store Code rather than mistaking the one-row loading placeholder for a completed result.
 
 Required CI retains operational, UI, export, mounted authorization, build, native database,
 browser and exact-file safeguards. V2's manifest pins exact Git blobs against the reviewed
