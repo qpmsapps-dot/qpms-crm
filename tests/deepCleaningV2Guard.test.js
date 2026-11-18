@@ -20,6 +20,7 @@ test('dedicated workflow uses runner context only after a runner exists and keep
  const workflow=yaml.load(readFileSync('.github/workflows/deep-cleaning-pr102-browser-validation.yml','utf8'));
  assert.equal(workflow.permissions.contents,'read');
  for(const job of Object.values(workflow.jobs)){
+  assert.equal(job['runs-on'],'ubuntu-24.04','Native PG17 noble packages require the matching Ubuntu release');
   assert.equal(JSON.stringify(job.env||{}).includes('runner.'),false,'runner context is unavailable in jobs.<job_id>.env');
   assert.ok(job.steps.some(step=>step.run?.includes('deepCleaningStoreOnlyPostgres.test.js')));
   assert.equal(job.steps.some(step=>step['continue-on-error']),false);

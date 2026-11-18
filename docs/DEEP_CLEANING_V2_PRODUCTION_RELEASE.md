@@ -137,6 +137,10 @@ The dedicated workflow used runner.temp at job-level env, where GitHub does not
 provide runner context; the value now lives in the browser step environment.
 Reference: https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
 
+The dedicated job is pinned to Ubuntu 24.04, matching its reviewed noble PG17
+repository. ubuntu-latest selected 26.04 and could not satisfy libicu74. Native
+PostgreSQL tests remain mandatory with the original 8-second statement limit.
+
 ## Reviewed file scope
 
 Application changes are confined to Deep Cleaning. Shared files add only scoped
