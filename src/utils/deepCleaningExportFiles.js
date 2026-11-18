@@ -43,7 +43,7 @@ export async function buildCleaningPresentation(data,{title,scope}) {
       'No authorized Before or After photographs available in this export.',
       r.evidenceStatus,'See export warnings for missing evidence or access failures.'
     ]);
-    for(let i=0;i<count;i+=2){
+    for(let i=0;i<count;i++){
       const sheet=slide(`Deep Cleaning Evidence | ${text(r.storeCode)}`);
       sheet.addText(`Store Code: ${text(r.storeCode)}  |  Visit Date: ${text(r.date)}  |  Uploaded Date: ${text(r.submittedAt)}`,{
         x:.6,y:1.15,w:12.1,h:.35,fontSize:13,color:'183153',margin:0,fit:'shrink'
