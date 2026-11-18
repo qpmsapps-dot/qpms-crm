@@ -1,13 +1,6 @@
 import { createElement } from 'react';
-import { CalendarDays, CheckCircle2, Clock3, ChartNoAxesColumn, ChartSpline, Lightbulb, TrendingUp, Store } from 'lucide-react';
-import { ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, LabelList } from 'recharts';
-const percent = value => value == null ? 'N/A' : value + '%';
-function PercentageLabel({
-  x,
-  value
-}) {
-  return <text x={x} y={12} textAnchor="middle" fill={value == null ? '#64748b' : value >= 90 ? '#15803d' : value >= 85 ? '#946200' : '#b42332'} fontSize={11} fontWeight={750}>{percent(value)}</text>;
-}
+import { CalendarDays, CheckCircle2, Clock3, ChartSpline } from 'lucide-react';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LabelList } from 'recharts';
 function CountLabel({
   x,
   y,
@@ -26,13 +19,13 @@ export default function DeepCleaningOverview({
   } = view.summary;
   const val = n => available && Number.isFinite(n) ? n.toLocaleString('en-IN') : 'N/A';
   const items = [{
-    label: 'Scheduled',
+    label: 'Schedules',
     value: val(total.scheduled),
     note: 'Stores / visits',
     Icon: CalendarDays,
     tone: 'blue'
   }, {
-    label: 'Completed',
+    label: 'Done',
     value: val(total.completed),
     note: 'Submitted reports, scheduled or independent',
     Icon: CheckCircle2,
@@ -40,16 +33,9 @@ export default function DeepCleaningOverview({
   }, {
     label: 'Pending',
     value: val(total.pending),
-    note: 'Scheduled work',
-    badge: available && total.scheduled ? percent(Math.round(total.pending / total.scheduled * 1000) / 10) : null,
+    note: 'Scheduled work' ,
     Icon: Clock3,
     tone: 'amber'
-  }, {
-    label: 'Schedule completion',
-    value: available ? percent(total.percentage) : 'N/A',
-    note: 'Matched scheduled work only',
-    Icon: ChartNoAxesColumn,
-    tone: 'blue'
   }];
   return <><div className="dc-kpis">{items.map(({
         label,
@@ -64,8 +50,8 @@ export default function DeepCleaningOverview({
           className: "dc-kpi-watermark",
           "aria-hidden": true
         })}</article>)}</div>
- <div className="dc-performance"><section className="dc-card dc-chart-card" aria-label="State-wise Deep Cleaning performance"><div className="dc-card-heading"><h2><ChartSpline size={18} />State-wise Deep Cleaning Performance</h2><div className="dc-legend"><span><i className="dc-blue-key" />Scheduled</span><span><i className="dc-green-key" />Completed</span><span><i className="dc-line-key" />Completion %</span></div></div>
-  {available ? <><div className="dc-chart" role="img" aria-label={rows.map(r => r.label + ': ' + r.scheduled + ' scheduled, ' + r.completed + ' completed, ' + percent(r.percentage) + ' completion').join('; ')}><ResponsiveContainer width="100%" height="100%"><ComposedChart data={rows} margin={{
+ <div className="dc-performance"><section className="dc-card dc-chart-card" aria-label="State-wise Deep Cleaning performance"><div className="dc-card-heading"><h2><ChartSpline size={18} />State-wise Deep Cleaning Performance</h2><div className="dc-legend"><span><i className="dc-blue-key" />Schedules</span><span><i className="dc-green-key" />Done</span></div></div>
+  {available ? <><div className="dc-chart" role="img" aria-label={rows.map(r => r.label + ': ' + r.scheduled + ' scheduled, ' + r.completed + ' completed, ' + percent(r.percentage) + ' completion').join('; ')}><ResponsiveContainer width="100%" height="100%"><BarChart data={rows} margin={{
                 top: 35,
                 right: 2,
                 left: -23,
@@ -75,22 +61,14 @@ export default function DeepCleaningOverview({
                 }} tick={{
                   fontSize: 10,
                   fill: '#263861'
-                }} interval={0} /><YAxis yAxisId="count" allowDecimals={false} tickLine={false} axisLine={false} tick={{
+                }} interval={0} /><YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{
                   fontSize: 10,
                   fill: '#697a98'
-                }} /><YAxis yAxisId="rate" orientation="right" domain={[0, 100]} tickFormatter={v => v + '%'} tickLine={false} axisLine={false} tick={{
-                  fontSize: 9,
-                  fill: '#697a98'
-                }} width={35} /><Tooltip formatter={(value, name) => [name === 'Schedule completion %' ? percent(value) : value, name]} contentStyle={{
+                }} /><Tooltip formatter={(value, name) => [value, name]} contentStyle={{
                   borderRadius: 10,
                   borderColor: '#dce4f3',
                   fontSize: 12
-                }} /><Bar isAnimationActive={false} yAxisId="count" name="Scheduled" dataKey="scheduled" fill="url(#dcScheduled)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="scheduled" content={<CountLabel />} /></Bar><Bar isAnimationActive={false} yAxisId="count" name="Completed" dataKey="completed" fill="url(#dcCompleted)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="completed" content={<CountLabel />} /></Bar><Line isAnimationActive={false} yAxisId="rate" name="Schedule completion %" dataKey="percentage" stroke="#1747ef" strokeWidth={2} dot={{
-                  r: 3,
-                  fill: '#1747ef',
-                  stroke: '#fff',
-                  strokeWidth: 1
-                }} connectNulls={false}><LabelList dataKey="percentage" content={<PercentageLabel />} /></Line></ComposedChart></ResponsiveContainer></div><div className="dc-zero-states">{rows.filter(r => r.percentage == null).map(r => <span key={r.state}>{r.label}: N/A</span>)}</div></> : <p className="dc-empty">Schedule reporting unavailable.</p>}
+                }} /><Bar isAnimationActive={false} name="Schedules" dataKey="scheduled" fill="url(#dcScheduled)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="scheduled" content={<CountLabel />} /></Bar><Bar isAnimationActive={false} name="Done" dataKey="completed" fill="url(#dcCompleted)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="completed" content={<CountLabel />} /></Bar></BarChart></ResponsiveContainer></div></> : <p className="dc-empty">Schedule reporting unavailable.</p>}
  </section><aside className="dc-card dc-insights"><div className="dc-card-heading"><h2><Lightbulb size={17} />Quick Insights</h2></div>{[{
           Icon: TrendingUp,
           tone: 'green',
