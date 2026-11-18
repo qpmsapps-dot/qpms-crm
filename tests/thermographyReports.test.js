@@ -7,6 +7,17 @@ import JSZip from 'jszip';
 import {thermoMonthRange,thermoFileIdentity,validateThermoSelection,thermoPendingKey,readThermoPending,saveThermoPending,thermoOperation,loadThermoExport,buildThermoSummary} from '../src/utils/thermographyReports.js';
 import {thermographyReport} from '../backend/shared/retailOperations.js';
 import {moduleMetric} from '../src/utils/retailExecutiveReport.js';
+import {scheduleWorkbook,exportRows} from '../src/utils/thermographyV2.js';
+
+test('V2 template has exactly two columns, text codes and DD-MM-YYYY dates; export preserves complete filtered rows',async()=>{
+ const template=await scheduleWorkbook({template:true}),book=new ExcelJS.Workbook();await book.xlsx.load(await template.arrayBuffer());
+ const s=book.worksheets[0];assert.equal(s.columnCount,2);assert.deepEqual(s.getRow(1).values.slice(1),['Store Code','Scheduled Date']);assert.equal(s.getColumn(1).numFmt,'@');assert.equal(s.getColumn(2).numFmt,'dd-mm-yyyy');
+ const filter={month:'2026-11',state:'AP-1',q:'0012',status:'Completed'},calls=[];
+ const rows=await exportRows(async p=>{calls.push(p);return {scope_digest:'same',total:2,rows:[{id:String(p.page),store_code:'0012',state:'AP-1',scheduled_date:'2026-11-01',pdf_verified:true}]};},filter);
+ assert.equal(rows.length,2);assert.equal(calls[1].state,'AP-1');assert.equal(calls[1].q,'0012');
+ const exported=await scheduleWorkbook({rows}),read=new ExcelJS.Workbook();await read.xlsx.load(await exported.arrayBuffer());assert.equal(read.worksheets[0].getCell('B2').value,'0012');assert.equal(read.worksheets[0].getCell('E2').value,'Completed');
+ for(const mode of ['digest','duplicate','total'])await assert.rejects(exportRows(async p=>({scope_digest:mode==='digest'&&p.page?'changed':'same',total:mode==='total'&&p.page?3:2,rows:[{id:mode==='duplicate'?'same':String(p.page)}]}),filter),/changed|reconcile/);
+});
 
 const storage=()=>{const m=new Map();return {getItem:k=>m.get(k)||null,setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k)};};
 test('original-file identity is bounded and stable; invalid formats and oversized selections fail before upload',async()=>{
@@ -46,6 +57,7 @@ test('unrelated modules, mobile, existing migrations/policies and shared mainten
  const file='backend/shared/retailOperations.js';assert.equal(readFileSync(file,'utf8').replaceAll('\r\n','\n').split('export function thermographyReport')[0],git(['show',base+':'+file]).replaceAll('\r\n','\n').split('export function thermographyReport')[0]);
  const routes='backend/routes/relianceRetailManagementRoutes.js',routeSource=readFileSync(routes,'utf8').replaceAll('\r\n','\n').replace(/^import \{createThermographyReportsRouter\}[^\n]+\n/m,'').replace(/^  \/\/ Thermography-specific RPCs[^\n]+\n  router.use\('\/mis\/thermography',createThermographyReportsRouter\(\{getClient\}\)\);\n/m,'');assert.equal(routeSource,git(['show',base+':'+routes]).replaceAll('\r\n','\n'));
  const service='backend/services/retailModuleReportService.js',serviceSource=readFileSync(service,'utf8').replaceAll('\r\n','\n').replace('(t.report_date||t.scheduled_date)<=range.to','t.scheduled_date<=range.to');assert.equal(serviceSource,git(['show',base+':'+service]).replaceAll('\r\n','\n'));
- for(const file of git(['diff','--name-only',base,'--','supabase/migrations']).trim().split('\n').filter(Boolean))assert.equal(file,'supabase/migrations/20261115140000_retail_thermography_reports.sql');
+ assert.deepEqual([...new Set((git(['diff','--name-only',base,'--','supabase/migrations'])+git(['ls-files','--others','--exclude-standard','--','supabase/migrations'])).trim().split('\n').filter(Boolean))].sort(),['supabase/migrations/20261115140000_retail_thermography_reports.sql','supabase/migrations/20261118010000_retail_thermography_schedule_v2.sql']);
+ assert.ok(readFileSync('supabase/migrations/20261118010000_retail_thermography_schedule_v2.sql','utf8').includes('rpc_retail_thermography_schedule'));
  const mis='src/pages/reliance-retail/RetailMisWorkspace.jsx',current=readFileSync(mis,'utf8').replaceAll('\r\n','\n').replace(/^import ThermographyReports[^\n]+\n/m,'').replace(/export default function RetailMisWorkspace\(\)\{\n const \{module\}=useParams\(\);\n return module==='thermography'\?<ThermographyReports\/>:<RetailMisExistingWorkspace\/>;\n\}\nfunction RetailMisExistingWorkspace\(\)\{/,'export default function RetailMisWorkspace(){');assert.equal(current,git(['show',base+':'+mis]).replaceAll('\r\n','\n'));
 });

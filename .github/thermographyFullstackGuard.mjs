@@ -1,3 +1,4 @@
+import {priorV2WorkflowForChecks} from './thermographyV2Guard.mjs';
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -52,6 +53,7 @@ export function verifyThermographyPayload({paths,manifest,hash,base,workflow,bas
 // Existing export guard tests still compare their exact historical workflows.
 // Remove no arbitrary text: first require this release's entire workflow to match.
 export function priorWorkflowForChecks(workflow){
+ if(workflow.includes('# BEGIN THERMOGRAPHY V2 EXACT PAYLOAD'))return priorV2WorkflowForChecks(workflow);
  const git=args=>execFileSync('git',['-c',`safe.directory=${process.cwd()}`,...args],{encoding:'utf8'});
  const base=git(['show',`${approvedBase}:${workflowPath}`]);
  const hash=p=>git(['hash-object',`--path=${p}`,p]).trim();
