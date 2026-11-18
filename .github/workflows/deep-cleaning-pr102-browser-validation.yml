@@ -1,0 +1,52 @@
+name: Deep Cleaning PR102 browser validation
+on:
+  push:
+    branches:
+      - feat/retail-deep-cleaning-refresh-20261118
+    paths:
+      - '.github/workflows/deep-cleaning-pr102-browser-validation.yml'
+      - 'src/components/reliance-retail/**'
+      - 'src/pages/reliance-retail/RetailScopedDeepCleaning.jsx'
+      - 'src/utils/deepCleaning**'
+      - 'tests/deepCleaning**'
+      - 'backend/services/retailCleaningPlanService.js'
+      - 'backend/tests/retailCleaningPhase1.test.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ui-browser-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Scoped Deep Cleaning UI lint
+        run: npx eslint src/components/reliance-retail/DeepCleaningEvidenceDrawer.jsx src/components/reliance-retail/DeepCleaningOverview.jsx src/components/reliance-retail/RetailCleaningMonthlyPlan.jsx src/pages/reliance-retail/RetailScopedDeepCleaning.jsx src/utils/deepCleaningView.js src/utils/deepCleaningExport.js src/utils/deepCleaningExportFiles.js
+      - name: Deep Cleaning view, export and backend regression tests
+        run: |
+          node --test tests/deepCleaningView.test.js tests/deepCleaningExports.test.js
+          node --test backend/tests/retailCleaningPhase1.test.js
+      - name: Production frontend build
+        run: npm run build
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Deep Cleaning export browser tests
+        run: node --test tests/deepCleaningExports.browser.test.js
+      - name: Retail visual browser smoke tests
+        run: npx playwright test tests/browser/retailReportVisualSmoke.spec.js --reporter=line
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deep-cleaning-pr102-browser-evidence
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
