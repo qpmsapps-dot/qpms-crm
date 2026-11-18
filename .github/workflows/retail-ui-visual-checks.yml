@@ -89,6 +89,26 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # PR #102: exact reviewed Deep Cleaning-only change set.
+          # Reject any added/removed file or changed blob; never authorize unrelated modules.
+          approved_deep_cleaning_pr102 = {
+            "backend/services/retailCleaningPlanService.js": "e9453474e3608a45a33420faff7272297e16e113",
+            "backend/tests/retailCleaningPhase1.test.js": "742ad72f75bf24da5da086de11b3524f46ac366b",
+            "src/components/reliance-retail/DeepCleaningEvidenceDrawer.jsx": "e2c1752cf41f8e3613fa2bed6ad764bae4c2a622",
+            "src/components/reliance-retail/DeepCleaningOverview.jsx": "50fb2cd9182fb1810454edccbfa0efc0877317f3",
+            "src/components/reliance-retail/RetailCleaningMonthlyPlan.jsx": "0d940b290cd25acacea39f6ef0f33005fd903701",
+            "src/components/reliance-retail/deepCleaningV2.css": "c487866f0f0af308aeb64b40ce8d3646ed3ff7ca",
+            "src/utils/deepCleaningExportFiles.js": "6604170899594fe75652b4efb6fdfb197f5f4b15",
+            "supabase/proposals/retail_cleaning_store_only_import_20261118.sql": "2b5f90a1c471d558f6c4de3997bab904733b6f0b",
+          }
+          deep_cleaning_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
+          if deep_cleaning_changed == set(approved_deep_cleaning_pr102):
+            mismatch = [path for path, expected in approved_deep_cleaning_pr102.items()
+                        if subprocess.check_output(["git", "rev-parse", f"HEAD:{path}"], text=True).strip() != expected]
+            if mismatch:
+              sys.exit("Deep Cleaning PR #102 exact-payload review required: " + ", ".join(mismatch))
+            print("PASS: exact pinned Deep Cleaning PR #102 payload; all subsequent CI checks remain mandatory.")
+            sys.exit(0)
           # BEGIN THERMOGRAPHY V2 EXACT PAYLOAD
           v2_manifest = ".github/thermography-v2-pins.json"
           if v2_manifest in files:
