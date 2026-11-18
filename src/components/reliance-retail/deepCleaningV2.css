@@ -1205,6 +1205,9 @@
 
 
 /* Full-page evidence drill-down: preserve the underlying dashboard width. */
+.dc-v2 .dc-report-month { display: flex; align-items: center; gap: 8px; margin-left: auto; font-size: 12px; color: #263f76; }
+.dc-v2 .dc-report-month input { min-width: 0; max-width: 155px; border: 1px solid #dce4f3; border-radius: 6px; padding: 5px; }
+@media(max-width:700px) { .dc-v2 .dc-filter-card>.dc-card-heading { flex-wrap: wrap; } .dc-v2 .dc-report-month { margin-left: 0; } }
 .dc-v2 .dc-drawer {
   position: fixed;
   inset: 0;

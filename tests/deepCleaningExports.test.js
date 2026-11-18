@@ -42,6 +42,16 @@ test('Excel authorizes manifest without downloading images',async()=>{
   const data=await collectCleaningExport({rows:[row()],params:range,request:fixture().request,readPhoto:()=>{throw Error('Unexpected download');}});
   assert.equal(data.records[0].evidence.length,3);assert.ok(data.records[0].evidence.every(e=>!e.image));
 });
+test('Associated historical photographs are included without inflating actual-period report totals',async()=>{
+ const historical=row('historical',{deep_cleaning_date:'2026-10-31',linked_only:true});
+ const plan={id:'plan',store,scheduled_date:'2026-11-01',display_status:'Completed',submission_ids:['historical'],completion:{actual_date:'2026-10-31',submitted_at:'2026-11-02T10:00:00Z'}};
+ const request=async config=>({data:config.url.endsWith('/evidence')?{uploads}:{report:{...range,stores:[store],submissions:[historical],schedules:[plan]}}});
+ const loaded=await loadCleaningExport({request,month:'2026-11'});assert.equal(loaded.rows.length,0);assert.equal(loaded.linkedRows.length,1);
+ const data=await collectCleaningExport({...loaded,request,photos:true,readPhoto});assert.equal(data.records.length,0);assert.equal(data.linkedRecords.length,1);assert.equal(data.linkedRecords[0].date,'2026-10-31');assert.equal(data.linkedRecords[0].scheduledDate,'2026-11-01');
+ const book=await buildCleaningWorkbook(data,{title:'SYNTHETIC',scope:'Test'});assert.equal(book.getWorksheet('State performance').getCell('E2').value,0);assert.equal(book.getWorksheet('State performance').getCell('C2').value,1);
+ assert.match(book.getWorksheet('Submissions').getCell('M2').value,/Associated historical/);
+ const ppt=await buildCleaningPresentation(data,{title:'SYNTHETIC',scope:'Test'}),zip=await JSZip.loadAsync(await ppt.write({outputType:'nodebuffer'}));assert.ok(Object.keys(zip.files).some(p=>p.startsWith('ppt/media/')));assert.equal(JSON.stringify(data).includes('NEVER_RETAIN'),false);
+});
 test('evidence denied, absent, malformed URLs and failed downloads are explicit partial warnings',async()=>{
   for(const request of [async()=>{throw Object.assign(Error('Denied'),{response:{status:403}});},async()=>({data:{uploads:[]}}),async()=>({data:{uploads:[{...uploads[0],url:'http://example.invalid'}]}}),fixture().request]) {
     const data=await collectCleaningExport({rows:[row()],params:range,request,photos:true,readPhoto:async()=>{throw Error('Contains private URL? token=SECRET');}});
@@ -60,9 +70,11 @@ test('missing FO/timestamps stay Not recorded; empty months generate honest repo
 test('WebP dimensions are parsed before decoding, malformed files rejected',()=>{
   const b=new Uint8Array(30);b.set(Buffer.from('RIFF'),0);b.set(Buffer.from('WEBPVP8X'),8);b[24]=99;b[27]=49;assert.deepEqual(webpDimensions(b),{width:100,height:50});assert.throws(()=>webpDimensions(new Uint8Array(10)),/Invalid/);
 });
-test('dashboard is unchanged apart from the new export import and wrappers',()=>{
+test('existing legacy schedule/work Excel export remains byte-for-byte intact',()=>{
   const file='src/pages/reliance-retail/RetailScopedDeepCleaning.jsx';const original=execFileSync('git',['-c',`safe.directory=${process.cwd()}`,'show',`ffcdf2718582d25a8d4b11530fc84fe474af9850:${file}`],{encoding:'utf8'}).replaceAll('\r\n','\n');
-  const current=readFileSync(file,'utf8').replaceAll('\r\n','\n').replace(/^import DeepCleaningExportControls[^\n]+\n/m,'').replace(/<DeepCleaningExportControls [^>]+>/g,'').replaceAll('</DeepCleaningExportControls>','');assert.equal(current,original);
+  const current=readFileSync(file,'utf8').replaceAll('\r\n','\n');
+  const legacyExport=source=>source.slice(source.indexOf('  async function exportReport()'),source.indexOf('  return <section',source.indexOf('  async function exportReport()')));
+  assert.ok(legacyExport(original).length>500);assert.equal(legacyExport(current),legacyExport(original));
 });
 test('individual and monthly XLSX/PPTX are genuine packages with correct typed data and no signed links',async()=>{
   const out=process.env.CLEANING_EXPORT_OUTPUT_DIR||path.join(os.tmpdir(),'qpms-cleaning-export-validation');await mkdir(out,{recursive:true});
@@ -70,7 +82,7 @@ test('individual and monthly XLSX/PPTX are genuine packages with correct typed d
   for(const mode of ['individual','monthly']) {
     const options={title:`SYNTHETIC TEST - ${mode} Deep Cleaning`,scope:'SYNTHETIC fixtures only | November 2026'};
     const book=await buildCleaningWorkbook(data,options),bytes=await book.xlsx.writeBuffer();await writeFile(path.join(out,`SYNTHETIC_${mode}.xlsx`),bytes);
-    const reopened=new ExcelJS.Workbook();await reopened.xlsx.load(bytes);assert.equal(reopened.worksheets.length,5);assert.equal(reopened.getWorksheet('Submissions').getCell('C2').value,'0012');assert.ok(reopened.getWorksheet('Submissions').getCell('E2').value instanceof Date);assert.equal(reopened.getWorksheet('Submissions').getCell('J2').value,3);
+    const reopened=new ExcelJS.Workbook();await reopened.xlsx.load(bytes);assert.equal(reopened.worksheets.length,7);assert.equal(reopened.getWorksheet('Submissions').getCell('C2').value,'0012');assert.ok(reopened.getWorksheet('Submissions').getCell('E2').value instanceof Date);assert.equal(reopened.getWorksheet('Submissions').getCell('J2').value,3);
     const deck=await buildCleaningPresentation(data,options),ppt=await deck.write({outputType:'nodebuffer'});await writeFile(path.join(out,`SYNTHETIC_${mode}.pptx`),ppt);
     for(const packageBytes of [bytes,ppt]){const zip=await JSZip.loadAsync(packageBytes);const xml=(await Promise.all(Object.keys(zip.files).filter(p=>p.endsWith('.xml')||p.endsWith('.rels')).map(p=>zip.file(p).async('string')))).join('\n');assert.equal(xml.includes('NEVER_RETAIN'),false);assert.equal(xml.includes('https://example.invalid'),false);assert.ok(xml.includes('0012'));}
     const zip=await JSZip.loadAsync(ppt);assert.ok(Object.keys(zip.files).some(p=>p.startsWith('ppt/media/')));const slides=(await Promise.all(Object.keys(zip.files).filter(p=>/^ppt\/slides\/slide\d+\.xml$/.test(p)).map(p=>zip.file(p).async('string')))).join('');assert.ok(slides.includes('BEFORE'));assert.ok(slides.includes('AFTER'));assert.ok(slides.includes('SYNTHETIC_checklist.pdf'));

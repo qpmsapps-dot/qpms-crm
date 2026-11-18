@@ -9,13 +9,13 @@ function download(name,rows){
  const url=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}));
  const a=document.createElement('a');a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);
 }
-export default function RetailCleaningMonthlyPlan(){
+export default function RetailCleaningMonthlyPlan({onImported}){
  const [month,setMonth]=useState(indiaToday().slice(0,7)),[file,setFile]=useState(null),[preview,setPreview]=useState(null),[request,setRequest]=useState(()=>crypto.randomUUID());
  const [rows,setRows]=useState([]),[error,setError]=useState(''),[busy,setBusy]=useState(false),[receipt,setReceipt]=useState(null),[selected,setSelected]=useState(null),[operation,setOperation]=useState('reassign'),[fo,setFo]=useState(''),[date,setDate]=useState(''),[reason,setReason]=useState(''),[history,setHistory]=useState(null),[confirmed,setConfirmed]=useState(false),[refresh,setRefresh]=useState(0);
  useEffect(()=>{let live=true;api(root,{params:{month}}).then(x=>{if(live)setRows(x.schedules||[]);}).catch(e=>{if(live)setError(e.response?.data?.message||e.message);});return()=>{live=false;};},[month,refresh]);
  async function run(work){setBusy(true);setError('');try{await work();}catch(e){setError(e.response?.data?.message||e.message);}finally{setBusy(false);}}
  async function inspect(){await run(async()=>{const bytes=await file.arrayBuffer();const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await new Blob([month,bytes]).arrayBuffer())),b=>b.toString(16).padStart(2,'0')).join('');const key=hash.slice(0,12)+'4'+hash.slice(13,16)+'8'+hash.slice(17,32);setRequest(`${key.slice(0,8)}-${key.slice(8,12)}-${key.slice(12,16)}-${key.slice(16,20)}-${key.slice(20)}`);const data=await api(root+'/preview',{method:'POST',params:{month},data:bytes,headers:{'content-type':'application/octet-stream','x-file-name':encodeURIComponent(file.name)}});setPreview(data);setConfirmed(false);setReceipt(null);});}
- async function save(){await run(async()=>{const result=await api(root+'/import',{method:'POST',data:{month,request_id:request,rows:preview.rows.map(r=>r.input)}});setReceipt(result);setPreview(null);setRefresh(x=>x+1);});}
+ async function save(){await run(async()=>{const result=await api(root+'/import',{method:'POST',data:{month,request_id:request,rows:preview.rows.map(r=>r.input)}});setReceipt(result);setPreview(null);setRefresh(x=>x+1);onImported?.();});}
  async function correct(e){e.preventDefault();await run(async()=>{await api(root+'/'+selected.id+'/correct',{method:'POST',data:{operation,revision:selected.revision,reason,...(operation==='reassign'?{fo_employee_code:fo}:operation==='reschedule'?{scheduled_date:date}:{})}});setSelected(null);setRefresh(x=>x+1);});}
  const count=code=>preview?.rows.filter(r=>r.errors.some(e=>e.includes(code))).length||0;
  return <section aria-label="Monthly Cleaning schedules">

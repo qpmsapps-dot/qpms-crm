@@ -13,7 +13,7 @@ import {
   deleteClientDeepCleaningUpload as retire,
   createClientDeepCleaningUploadViewUrl as view,
 } from '../services/clientDeepCleaningService.js';
-import {actualCleaningDate, cleaningCommand, CLEANING_CONTRACT, CLEANING_RPC} from '../services/deepCleaningIndependentContract.js';
+import {actualCleaningDate, CLEANING_CONTRACT, CLEANING_RPC} from '../services/deepCleaningIndependentContract.js';
 
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const profile = {id:id(1),auth_user_id:id(2),employee_code:'SYNTHETIC',role:'FO',business:'Reliance Retail',state:'TG',status:'Active',is_active:true};
@@ -42,7 +42,7 @@ function fixture() {
         insert(){throw Error('Direct insert forbidden');},update(){throw Error('Direct update forbidden');},delete(){throw Error('Direct delete forbidden');},
         maybeSingle(){return q.then(r=>({...r,data:r.data[0]||null}));},
         then(resolve,reject){
-          let rows=table==='reliance_retail_store_operational_ownership'?state.stores:
+          let rows=table==='reliance_retail_store_master'?state.stores:
             table==='client_deep_cleaning_submissions'?[state.draft]:
             table==='client_deep_cleaning_uploads'?state.uploads:[];
           rows=rows.filter(r=>filters.every(f=>f(r)));

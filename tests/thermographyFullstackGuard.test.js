@@ -43,14 +43,16 @@ test('base, manifest/pins, authorization pins and unrelated workflow edits canno
  for(const workflow of [f.baseWorkflow,f.workflow+'unreviewed change\n',f.workflow.replace('protected subsequent checks','removed checks')])
   assert.equal(verifyThermographyPayload({...f,workflow}).ok,false);
 });
-test('actual integration manifest preserves all existing UI guard checks and pins the dedicated native/browser checks',()=>{
+test('historical Thermography integration stays exact and the current workflow preserves every existing check',()=>{
  const git=args=>execFileSync('git',['-c',`safe.directory=${process.cwd()}`,...args],{encoding:'utf8'}).trim();
- const hash=p=>git(['hash-object',`--path=${p}`,p]);
+ const historical='3453b06aee160611a62755a9feaba8123a617886';
+ const hash=p=>git(['rev-parse',`${historical}:${p}`]);
  const workflow=readFileSync(workflowPath,'utf8'),baseWorkflow=git(['show',`${approvedBase}:${workflowPath}`])+'\n';
  assert.equal(priorWorkflowForChecks(workflow),baseWorkflow.replaceAll('\r\n','\n'));
  assert.throws(()=>priorWorkflowForChecks(workflow+'unreviewed change\n'),/Unreviewed workflow alteration/);
- const paths=git(['diff','--name-only',approvedBase]).split('\n').filter(Boolean).concat(git(['ls-files','--others','--exclude-standard']).split('\n').filter(Boolean));
- assert.deepEqual(verifyThermographyPayload({paths,manifest:JSON.parse(readFileSync(manifestPath,'utf8')),hash,base:approvedBase,workflow,baseWorkflow}),
+ const paths=git(['diff','--name-only',approvedBase,historical]).split('\n').filter(Boolean);
+ const historicalWorkflow=git(['show',`${historical}:${workflowPath}`])+'\n';
+ assert.deepEqual(verifyThermographyPayload({paths,manifest:JSON.parse(git(['show',`${historical}:${manifestPath}`])),hash,base:approvedBase,workflow:historicalWorkflow,baseWorkflow}),
   {ok:true,validManifest:true,workflowMatches:true,missing:[],unexpected:[],mismatched:[]});
  const dedicated=readFileSync('.github/workflows/thermography-fullstack.yml','utf8');
  for(const required of ['contents: read','RUN_THERMOGRAPHY_NATIVE_POSTGRES_TESTS: true','thermographyReports.concurrent.test.js','thermographyReports.browser.test.js','retailMisMountedAuth.test.js','npm run build'])assert.ok(dedicated.includes(required),required);

@@ -21,13 +21,13 @@ export default function DeepCleaningOverview({
   const items = [{
     label: 'Schedules',
     value: val(total.scheduled),
-    note: 'Stores / visits',
+    note: 'Active scheduled jobs',
     Icon: CalendarDays,
     tone: 'blue'
   }, {
     label: 'Done',
     value: val(total.completed),
-    note: 'Submitted reports, scheduled or independent',
+    note: 'Completed schedules with a verified linked report',
     Icon: CheckCircle2,
     tone: 'green'
   }, {
@@ -77,7 +77,7 @@ export default function DeepCleaningOverview({
         }, {
           Icon: CheckCircle2,
           tone: 'green',
-          value: val(total.completed) + ' visits',
+          value: val(total.report_completed) + ' reports',
           label: 'Submitted reports'
         }, {
           Icon: Clock3,
