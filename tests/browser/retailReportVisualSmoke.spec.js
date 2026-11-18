@@ -15,15 +15,13 @@ const operationsFixture = {
   modules: { cm: emptyMaintenanceModule, pm: emptyMaintenanceModule },
 };
 const thermoFixture = {
-  contract: 'thermography-reports.v1', scope_digest: 'synthetic-thermography',
-  counts: { scheduled: 0, awaiting: 0, rework: 0, approved: 0, active_reports: 0 },
-  max_bytes: 26214400, page: 0, limit: 25, can_upload: false, can_schedule: true, is_super: true,
-  today: '2026-11-03',
-  stores: [],
-  events: [],
-  total: { scheduled: 0, awaiting: 0, approved: 0, overdue: 0 },
-  states: [],
-  rows: [],
+  contract: 'thermography.v2', scope_digest: 'synthetic-thermography-v2',
+  summary: { scheduled: 0, completed: 0, percentage: 0 },
+  monthly: { total: 0, completed: 0, scheduled: 0 },
+  max_bytes: 10000000, page: 0, limit: 25, can_upload: false, can_schedule: false,
+  month: '2026-11', from: '2026-11-01', to: '2026-11-30',
+  kpi_from: '2026-11-01', kpi_to: '2026-11-03', today: '2026-11-03',
+  stores: [], chart: [], total: 0, rows: [],
 };
 
 async function seed(page) {
@@ -50,7 +48,7 @@ async function seed(page) {
     });
     if (path.endsWith('/operations/maintenance')) return route.fulfill({ json: { result: operationsFixture } });
     if (path.endsWith('/operations/thermography')) return route.fulfill({ json: { result: thermoFixture } });
-    if (path.endsWith('/mis/thermography/reports')) return route.fulfill({ json: { result: { ...thermoFixture, total: 0 } } });
+    if (path.endsWith('/mis/thermography/dashboard')) return route.fulfill({ json: { result: { ...thermoFixture, total: 0 } } });
     if (path.endsWith('/stores')) return route.fulfill({ json: { rows: [], total: 0 } });
     if (path.endsWith('/zones')) return route.fulfill({ json: { zones: [] } });
     return route.fulfill({ json: { stores: [], zones: [], fos: [], snapshot: { stores: [], zones: [], fos: [] } } });
@@ -65,7 +63,7 @@ const reports = [
   { name: 'Training', path: '/reliance-retail/training', title: 'HK & MEPC Training', actions: ['Refresh', 'Export Training review'] },
   { name: 'Deep Cleaning', path: '/reliance-retail/deep-cleaning', title: 'Deep Cleaning', actions: ['Refresh', 'Export Report'] },
   { name: 'CM PM', path: '/reliance-retail/cmpm', title: 'CM / PM Calls', actions: ['Record CM/PM Call', 'Refresh', 'Export Excel'] },
-  { name: 'Thermography', path: '/reliance-retail/thermography', title: 'Thermography', actions: ['Schedule Thermography', 'Refresh', 'Export Excel'] },
+  { name: 'Thermography', path: '/reliance-retail/thermography', title: 'Thermography', actions: ['Upload Schedule (Excel)', 'Download Template', 'Export Excel', 'Schedule History', 'Instructions'] },
 ];
 
 for (const report of reports) {
@@ -76,6 +74,12 @@ for (const report of reports) {
     for (const label of report.actions) {
       await expect(page.getByRole('button', { name: label, exact: true })).toBeVisible();
     }
+    if (report.name === 'Thermography') {
+      await expect(page.locator('.thv2-scheduled strong')).toHaveText('0');
+      await expect(page.locator('.thv2-completed strong')).toHaveText('0');
+      await expect(page.getByRole('button', { name: 'Export Excel', exact: true })).toBeEnabled();
+      await expect(page.getByRole('button', { name: 'Upload Schedule (Excel)', exact: true })).toBeDisabled();
+    }
     if (report.name === 'Deep Cleaning') {
       const schedule = page.locator('.dc-schedule-menu summary');
       await expect(schedule).toBeVisible();
@@ -85,7 +89,7 @@ for (const report of reports) {
     }
     for (const [name, width, height] of views) {
       await page.setViewportSize({ width, height });
-      await expect(page.locator('section.retail-report')).toBeVisible();
+      await expect(page.locator(report.name === 'Thermography' ? 'main.thermo-v2' : 'section.retail-report')).toBeVisible();
       if (width < 1024) {
         await expect.poll(() => page.locator('aside:has(nav)').evaluate(el => el.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
       }

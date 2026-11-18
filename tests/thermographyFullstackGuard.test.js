@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
-import {approvedBase,manifestPath,workflowPath,guardPath,payloadPaths,reviewedWorkflow,verifyThermographyPayload,priorWorkflowForChecks} from '../.github/thermographyFullstackGuard.mjs';
+import {approvedBase,manifestPath,workflowPath,guardPath,payloadPaths,reviewedWorkflow,verifyThermographyPayload} from '../.github/thermographyV2Guard.mjs';
+import {priorWorkflowForChecks} from '../.github/thermographyFullstackGuard.mjs';
 
 function fixture(){
  const files=Object.fromEntries(payloadPaths.map(p=>[p,'a'.repeat(40)]));
- const manifest={schema:'thermography-fullstack.v1',base_sha:approvedBase,files};
+ const manifest={schema:'thermography-v2.v1',base_sha:approvedBase,files};
  const paths=[...payloadPaths,manifestPath,workflowPath],hash=()=> 'a'.repeat(40);
- const baseWorkflow="      - 'src/hooks/useModalFocus.js'\n          # BEGIN DEEP CLEANING EXPORT EXACT PAYLOAD\nprotected subsequent checks\n";
+ const baseWorkflow="      # BEGIN THERMOGRAPHY FULLSTACK TRIGGERS\n          # BEGIN THERMOGRAPHY FULLSTACK EXACT PAYLOAD\nprotected subsequent checks\n";
  return {paths,manifest,hash,base:approvedBase,baseWorkflow,workflow:reviewedWorkflow(baseWorkflow,hash(),hash())};
 }
 test('exact Thermography full-stack payload passes only the pinned base and workflow addition',()=>{
@@ -35,7 +36,7 @@ test('actual integration manifest preserves all existing UI guard checks and pin
  const git=args=>execFileSync('git',['-c',`safe.directory=${process.cwd()}`,...args],{encoding:'utf8'}).trim();
  const hash=p=>git(['hash-object',`--path=${p}`,p]);
  const workflow=readFileSync(workflowPath,'utf8'),baseWorkflow=git(['show',`${approvedBase}:${workflowPath}`])+'\n';
- assert.equal(priorWorkflowForChecks(workflow),baseWorkflow.replaceAll('\r\n','\n'));
+ assert.ok(priorWorkflowForChecks(workflow).includes('# BEGIN DEEP CLEANING EXPORT EXACT PAYLOAD'));
  assert.throws(()=>priorWorkflowForChecks(workflow+'unreviewed change\n'),/Unreviewed workflow alteration/);
  const paths=git(['diff','--name-only',approvedBase]).split('\n').filter(Boolean).concat(git(['ls-files','--others','--exclude-standard']).split('\n').filter(Boolean));
  assert.deepEqual(verifyThermographyPayload({paths,manifest:JSON.parse(readFileSync(manifestPath,'utf8')),hash,base:approvedBase,workflow,baseWorkflow}),

@@ -1,144 +1,102 @@
 import {useEffect,useRef,useState} from 'react';
-import {Download,Upload,RefreshCw,History,X} from 'lucide-react';
+import {CalendarDays,CheckCircle2,Download,Upload,History,Info,Search,Eye,X,ChevronLeft,ChevronRight,FileText} from 'lucide-react';
 import {useAuth} from '../../context/auth-context.js';
 import {authenticatedApiRequest} from '../../services/api.js';
-import {indiaToday,reportingState} from '../../../backend/shared/retailAttendance.js';
+import {indiaToday} from '../../../backend/shared/retailAttendance.js';
 import {usePageTitle} from '../../hooks/usePageTitle.js';
-import {REPORTING_STATES} from '../../pages/reliance-retail/ifmsDashboardModel.js';
-import {ReportHeader,ReportFilters,ReportStats,ReportNotice,ReportPager} from './RetailReportUi.jsx';
-import {THERMO_XLSX_MIME,THERMO_UPLOAD_LIMIT,isCompleteThermoReport,thermoMonthRange,thermoFileIdentity,thermoPendingKey,readThermoPending,saveThermoPending,thermoOperation,uploadThermoFile,loadThermoExport,buildThermoSummary} from '../../utils/thermographyReports.js';
+import {PDF_MIME,isThermographyV2Dashboard,pdfIdentity,putPdf,pendingKey,scheduleWorkbook,saveBlob,exportRows} from '../../utils/thermographyV2.js';
 import './thermographyReports.css';
-import {uploadThermoResumable} from '../../utils/thermographyTusUpload.js';
 
 const base='/api/reliance-retail/mis/thermography';
 const api=async(url,config={})=>(await authenticatedApiRequest({url:base+url,...config})).data.result;
-const recorded=v=>v==null||v===''?'Not recorded':String(v);
-const timestamp=v=>v?new Intl.DateTimeFormat('en-IN',{timeZone:'Asia/Kolkata',dateStyle:'medium',timeStyle:'short'}).format(new Date(v)):'Not recorded';
-export default function ThermographyReports({legacy}){
+const message=e=>e.response?.data?.message||e.message||'Thermography is unavailable. No action confirmed.';
+const defaultRange=month=>{
+ if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return {from:'',to:''};
+ const today=indiaToday(),end=new Date(Date.UTC(Number(month.slice(0,4)),Number(month.slice(5)),0)).toISOString().slice(0,10);
+ return {from:month+'-01',to:month===today.slice(0,7)?today:end};
+};
+const date=v=>v&&Number.isFinite(Date.parse(v))?new Date(v+'T00:00:00+05:30').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric',timeZone:'Asia/Kolkata'}).replaceAll(' ','-'):'—';
+export default function ThermographyReports(){
  usePageTitle('Reliance Retail Thermography');const {user}=useAuth(),userKey=user?.profileId||user?.id||'unverified';
- const [month,setMonth]=useState(()=>indiaToday().slice(0,7)),[dates,setDates]=useState(()=>thermoMonthRange()),[state,setState]=useState(''),[store,setStore]=useState(''),[status,setStatus]=useState(''),[query,setQuery]=useState(''),[deleted,setDeleted]=useState(false);
- const [page,setPage]=useState(0),[size,setSize]=useState(25),[refresh,setRefresh]=useState(0),[report,setReport]=useState(null),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[setupMissing,setSetupMissing]=useState(false);
- const [upload,setUpload]=useState(null),[file,setFile]=useState(null),[progress,setProgress]=useState(null),[uploadError,setUploadError]=useState(''),[confirmation,setConfirmation]=useState(null),[reason,setReason]=useState(''),[history,setHistory]=useState(null),[showLegacy,setShowLegacy]=useState(false),[resumable,setResumable]=useState(false);
- const running=useRef(false),dialog=useRef(null),returnFocus=useRef(null);
- const filter={...dates,state:state||undefined,store:store||undefined,status:status||undefined,q:query||undefined,deleted:deleted?'true':undefined};
- const filterKey=JSON.stringify(filter);
- useEffect(()=>{let live=true;const controller=new AbortController();queueMicrotask(()=>{if(live){setLoading(true);setError('');setReport(null);}});api('/reports',{params:{...JSON.parse(filterKey),page,limit:size},signal:controller.signal}).then(data=>{if(!isCompleteThermoReport(data))throw Error('Thermography report contract is incomplete or unavailable.');if(live){setReport(data);setSetupMissing(false);}}).catch(e=>{if(live&&e.code!=='ERR_CANCELED'){setError(e.response?.data?.message||e.message);setSetupMissing(e.response?.status===503);}}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;controller.abort();};},[filterKey,page,size,refresh]);
- useEffect(()=>{queueMicrotask(()=>setResumable(!!readThermoPending(sessionStorage,userKey)));},[userKey,refresh]);
- const dialogOpen=!!(upload||confirmation||history);
- useEffect(()=>{
-  if(!dialogOpen)return;const previous=document.activeElement;returnFocus.current=previous;dialog.current?.querySelector('input,button,select,textarea')?.focus();return()=>previous?.focus();
- },[dialogOpen]);
+ const [month,setMonth]=useState(()=>indiaToday().slice(0,7)),[state,setState]=useState(''),[store,setStore]=useState(''),[range,setRange]=useState(()=>defaultRange(indiaToday().slice(0,7))),[query,setQuery]=useState(''),[status,setStatus]=useState(''),[page,setPage]=useState(0);
+ const [data,setData]=useState(null),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState(''),[refresh,setRefresh]=useState(0),[busy,setBusy]=useState(false),[modal,setModal]=useState(null),[file,setFile]=useState(null),[reason,setReason]=useState(''),[progress,setProgress]=useState(0);
+ const running=useRef(false),dialog=useRef(null);const filters={month,state,store,q:query,status,kpi_from:range.from,kpi_to:range.to};const key=JSON.stringify(filters);
+ useEffect(()=>{let live=true;const controller=new AbortController();queueMicrotask(()=>{if(live){setLoading(true);setError('');setData(null);}});
+  api('/dashboard',{params:{...JSON.parse(key),page,limit:25},signal:controller.signal}).then(r=>{if(!isThermographyV2Dashboard(r))throw Error('Thermography V2 contract is incomplete or unavailable.');if(live)setData(r);}).catch(e=>{if(live&&e.code!=='ERR_CANCELED')setError(message(e));}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;controller.abort();};},[key,page,refresh]);
+ useEffect(()=>{if(!modal)return;const previous=document.activeElement;dialog.current?.querySelector('button,input,select')?.focus();return()=>previous?.focus();},[modal]);
  const change=fn=>{fn();setPage(0);};
- function close(){if(running.current)return;setUpload(null);setFile(null);setUploadError('');setConfirmation(null);setReason('');setHistory(null);returnFocus.current?.focus();}
- async function work(fn){if(running.current)return;running.current=true;setBusy(true);setError('');try{await fn();}catch(e){setError(e.response?.data?.message||e.message||'Thermography action failed. Retry safely.');}finally{running.current=false;setBusy(false);}}
- function openUpload(row){
-  const pending=readThermoPending(sessionStorage,userKey);setUploadError('');setProgress(null);setFile(null);
-  if(pending&&(!row||pending.inspection_id===row.id||pending.payload.id===row.id)){setUpload({...pending.payload,row,resume:true});return;}
-  const p=row?.pending_upload;
-  setUpload({id:row?.id,revision:p?.revision??row?.revision,request_id:p?.request_id,source_sha256:p?.source_sha256,store_id:row?.retail_store_id||store,date:row?.report_date||row?.scheduled_date||indiaToday(),period_end:row?.report_period_end||'',row});
+ const close=()=>{if(!running.current){setModal(null);setFile(null);setReason('');setProgress(0);}};
+ async function work(fn){if(running.current)return;running.current=true;setBusy(true);setError('');try{await fn();}catch(e){setError(message(e));}finally{running.current=false;setBusy(false);}}
+ const reload=()=>setRefresh(v=>v+1);
+ async function download(row,version){await work(async()=>{const r=await authenticatedApiRequest({url:base+`/reports/${row.id}${version?`/versions/${version}`:''}/download`,responseType:'blob'});saveBlob(r.data,row.filename||'Thermography.pdf');});}
+ function viewPdf(row){
+  const tab=window.open('about:blank','_blank');if(tab)tab.opener=null;
+  work(async()=>{if(!tab)throw Error('Allow the PDF viewer tab, or download the original using its filename.');
+   try{const r=await authenticatedApiRequest({url:base+`/reports/${row.id}/download`,responseType:'blob'}),url=URL.createObjectURL(r.data);tab.location.href=url;const timer=setInterval(()=>{if(tab.closed){URL.revokeObjectURL(url);clearInterval(timer);}},1000);}catch(e){tab.close();throw e;}
+  });
  }
- async function submitUpload(e){e.preventDefault();if(running.current)return;running.current=true;setBusy(true);setUploadError('');setProgress(0);
-  try{
-   if(!file)throw Error('Select the original .xlsx workbook.');
-   setNotice('Checking workbook identity...');const digest=await thermoFileIdentity(file,report.max_bytes);
-   if(upload.source_sha256&&upload.source_sha256!==digest)throw Error('This retry belongs to a different workbook. Re-select the same original file; confirmed versions will not be overwritten.');
-   const payload={id:upload.id,revision:upload.revision,request_id:upload.request_id||crypto.randomUUID(),store_id:upload.store_id,date:upload.date,period_end:upload.period_end||undefined,filename:file.name,size:file.size,mime:file.type||THERMO_XLSX_MIME,source_sha256:digest};
-   let pending=readThermoPending(sessionStorage,userKey);
-   if(pending){if(JSON.stringify({...pending.payload,mime:undefined})!==JSON.stringify({...payload,request_id:pending.payload.request_id,mime:undefined})){throw Error('A pending upload has a different file or report selection. Resume it or explicitly discard its retry identity first.');}payload.request_id=pending.payload.request_id;}
-   pending={payload,inspection_id:pending?.inspection_id};saveThermoPending(sessionStorage,userKey,pending);setResumable(true);setUpload(u=>({...u,...payload}));
-   const prepared=await api('/uploads/prepare',{method:'POST',data:payload});pending.inspection_id=prepared.inspection_id;saveThermoPending(sessionStorage,userKey,pending);
-   if(prepared.upload_url){
-    setNotice(prepared.tus?'Uploading resumable workbook chunks...':'Uploading the original workbook...');
-    if(file.size>6*1024*1024){
-     if(!prepared.tus)throw Error('Resumable upload authorization is unavailable. Retry the same report.');
-     await uploadThermoResumable(prepared.tus,file,{actor:userKey,requestId:payload.request_id,sourceSha:digest,storage:sessionStorage,onProgress:setProgress});
-    }else await uploadThermoFile(prepared.upload_url,file,setProgress);
-   }
-   setNotice('Verifying stored workbook and finalizing report...');setProgress(100);
-   const receipt=await api('/uploads/finalize',{method:'POST',data:{request_id:payload.request_id},timeout:240000});
-   if(!receipt?.id||!receipt.version_id||!Number.isInteger(receipt.revision))throw Error('Server submission confirmation is incomplete. Retry with the retained identity.');
-   sessionStorage.removeItem(thermoPendingKey(userKey));setResumable(false);setUpload(null);setFile(null);setNotice('Workbook upload confirmed by the server. Current status is shown in the refreshed table; original versions remain in history.');setRefresh(v=>v+1);
-  }catch(e){setNotice('');setUploadError(e.response?.data?.message||e.message);setResumable(!!readThermoPending(sessionStorage,userKey));}
-  finally{running.current=false;setBusy(false);}
- }
- function ask(action,row){setReason('');setConfirmation({action,row});}
- async function act(e){e.preventDefault();await work(async()=>{
-  const {action,row}=confirmation,payload=action==='schedule'?{store_id:confirmation.store_id,date:confirmation.date}:{id:row.id,revision:row.revision,reason:reason||undefined};
-  if(['restore','reopen'].includes(action)&&reason.trim().length<3)throw Error('Enter an audit reason of at least three characters.');
-  const key=`myqpms.thermography.action.${userKey}.${action}.${row?.id||'new'}`,request_id=thermoOperation(sessionStorage,key,payload);
-  const result=await api('/reports/'+action,{method:'POST',data:{...payload,request_id}});if(!result?.id)throw Error('Server confirmation unavailable. Retain this action and retry.');
-  sessionStorage.removeItem(key);setConfirmation(null);setNotice(action==='approve'?'MIS confirmation of external client approval recorded.':`${action==='schedule'?'Schedule':action.charAt(0).toUpperCase()+action.slice(1)} confirmed by the server.`);setRefresh(v=>v+1);
+ async function history(row,page=0){await work(async()=>setModal({kind:'versions',row,value:await api(`/reports/${row.id}/history`,{params:{page,limit:100}})}));}
+ async function uploadPdf(e){e.preventDefault();await work(async()=>{
+  if(!file)throw Error('Select the original PDF.');setProgress(0);const row=modal.row,hash=await pdfIdentity(file,data.max_bytes),storageKey=pendingKey(userKey,row.id);
+  let pending;try{pending=JSON.parse(sessionStorage.getItem(storageKey)||'null');}catch{throw Error('Stored retry identity is damaged. Contact an administrator before retrying.');}
+  if(pending&&pending.revision<row.revision&&!row.pending_upload){sessionStorage.removeItem(storageKey);pending=null;}
+  if(pending&&(pending.source_sha256!==hash||pending.revision!==row.revision))throw Error('A different upload is pending for this inspection. Reselect that original PDF or refresh after reconciliation.');
+  const payload=pending||{id:row.id,revision:row.revision,request_id:row.pending_upload?.request_id||crypto.randomUUID(),store_id:row.retail_store_id,date:row.report_date||data.today,period_end:row.report_period_end||undefined,filename:file.name,size:file.size,mime:PDF_MIME,source_sha256:hash};
+  if(row.pending_upload&&row.pending_upload.source_sha256!==hash)throw Error('A pending upload already exists. Reselect the same original PDF.');
+  sessionStorage.setItem(storageKey,JSON.stringify(payload));const prepared=await api('/uploads/prepare',{method:'POST',data:payload});
+  if(!prepared.object_exists&&prepared.state==='pending'){if(!prepared.upload_url)throw Error('Private PDF upload authorization unavailable.');await putPdf(prepared.upload_url,file,setProgress);}
+  setProgress(95);await api('/uploads/finalize',{method:'POST',data:{request_id:payload.request_id}});sessionStorage.removeItem(storageKey);setProgress(100);setNotice('PDF verified. Inspection completed; client approval remains separate.');setModal(null);setFile(null);reload();
  });}
- async function download(row,version){await work(async()=>{
-  const response=await authenticatedApiRequest({url:`${base}/reports/${encodeURIComponent(row.id)}/${version?'versions/'+encodeURIComponent(version.id)+'/':''}download`,responseType:'blob'});
-  const bytes=response.data;if(!(bytes instanceof Blob)||bytes.size>THERMO_UPLOAD_LIMIT||bytes.size<22)throw Error('Workbook download was incomplete or oversized.');
-  const url=URL.createObjectURL(bytes),a=document.createElement('a');a.href=url;a.download=version?.filename||row.filename||'Thermography.xlsx';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);setNotice('Original workbook download prepared. Approval status was not changed.');
+ async function schedule(action){await work(async()=>{
+  if(!file)throw Error('Select an .xlsx schedule.');if(!/\.xlsx$/i.test(file.name)||file.size>5_000_000)throw Error('Select an .xlsx schedule up to 5 MB.');
+  const headers={'Content-Type':'application/octet-stream','x-schedule-filename':encodeURIComponent(file.name),'x-schedule-month':month};
+  if(action==='import'){headers['x-request-id']=modal.request;headers['x-preview-digest']=modal.preview.preview_digest;headers['x-upload-reason']=encodeURIComponent(reason);}
+  const result=await api('/schedules/'+action,{method:'POST',headers,data:file});
+  if(action==='preview')setModal({kind:'schedule',preview:result,request:crypto.randomUUID()});
+  else{setNotice(`${result.count} inspections scheduled. Import receipt recorded.`);setModal(null);setFile(null);setReason('');reload();}
  });}
- async function inspect(row,historyPage=0){await work(async()=>{const data=await api(`/reports/${encodeURIComponent(row.id)}/history`,{params:{page:historyPage,limit:25}});setHistory({row,...data});});}
- async function exportSummary(){await work(async()=>{const data=await loadThermoExport(params=>api('/reports',{params}),filter);const book=await buildThermoSummary(data,filter);const {downloadUnified}=await import('../../utils/retailUnifiedExport.js');await downloadUnified(book,`Retail_Thermography_${dates.from}_${dates.to}.xlsx`);setNotice(`Summary downloaded: ${data.total} authorized records, using the same filters as the table.`);});}
- const states=new Set((report?.stores||[]).map(s=>reportingState(s.state))),stores=(report?.stores||[]).filter(s=>!state||reportingState(s.state)===state);
- const uploadStores=(report?.stores||[]).filter(s=>s.can_upload&&s.status==='Active');
- return <section className="retail-report retail-thermography-report thermo-reports">
-  <ReportHeader title="Thermography" description="Original Excel reports, rework and MIS confirmation of external client approval.">
-   {report?.can_upload&&<button disabled={busy||loading} onClick={()=>openUpload()}><Upload size={15}/>Upload Thermography Report</button>}
-   {report?.can_schedule&&<button disabled={busy||loading} onClick={()=>setConfirmation({action:'schedule',store_id:'',date:indiaToday()})}>Schedule Thermography</button>}
-   <button disabled={busy||loading} onClick={()=>setRefresh(v=>v+1)}><RefreshCw size={15}/>Refresh</button><button disabled={busy||loading||!report} onClick={()=>void exportSummary()}><Download size={15}/>Export Excel</button>
-  </ReportHeader>
-  <ReportFilters>
-   <label>Month<input aria-label="Thermography month" type="month" value={month} onChange={e=>{if(e.target.value)change(()=>{setMonth(e.target.value);setDates(thermoMonthRange(e.target.value));});}}/></label>
-   <label>From<input aria-label="Thermography from" type="date" value={dates.from} max={dates.to} onChange={e=>change(()=>setDates(d=>({...d,from:e.target.value})))}/></label><label>To<input aria-label="Thermography to" type="date" value={dates.to} min={dates.from} onChange={e=>change(()=>setDates(d=>({...d,to:e.target.value})))}/></label>
-   <label>State<select aria-label="Thermography state" value={state} onChange={e=>change(()=>{setState(e.target.value);setStore('');})}><option value="">All authorized states</option>{REPORTING_STATES.filter(s=>states.has(s.code)).map(s=><option key={s.code} value={s.code}>{s.label}</option>)}</select></label>
-   <label>Store Code / Name<select aria-label="Thermography store" value={store} onChange={e=>change(()=>setStore(e.target.value))}><option value="">All authorized stores</option>{stores.map(s=><option key={s.id} value={s.id}>{s.store_code} — {s.store_name}</option>)}</select></label>
-   <label>Approval status<select aria-label="Thermography status" value={status} onChange={e=>change(()=>setStatus(e.target.value))}><option value="">All statuses</option><option>Scheduled</option><option value="awaiting">Awaiting Client Approval (all versions)</option><option>Awaiting Client Approval — Revised</option><option>Rework Required</option><option>Client Approved</option><option>Completed (legacy; no workbook)</option></select></label>
-   <label>Search<input aria-label="Search Thermography reports" type="search" placeholder="Store Code / Store Name / status" value={query} onChange={e=>change(()=>setQuery(e.target.value))}/></label>
-   {report?.is_super&&<label className="thermo-check"><input type="checkbox" checked={deleted} onChange={e=>change(()=>setDeleted(e.target.checked))}/>Deleted reports</label>}
-  </ReportFilters>
-  <p className="retail-report-description">Dates use Asia/Kolkata. Reports are grouped by inspection date / reporting-period start. Approval counts are not thermal-condition results. Legacy status-only records retain their original meaning.</p>
-  {loading&&<ReportNotice>Loading authorized Thermography reports...</ReportNotice>}{error&&<ReportNotice error>{error}</ReportNotice>}{notice&&<ReportNotice>{notice}</ReportNotice>}
-  {resumable&&report?.can_upload&&<ReportNotice>An upload retry identity is retained. The local workbook is not saved by this page. <button disabled={busy} onClick={()=>openUpload()}>Resume pending upload</button></ReportNotice>}
-  {report&&<>
-   <ReportStats items={[['Scheduled','scheduled'],['Awaiting Client Approval','awaiting'],['Rework Required','rework'],['Client Approved','approved'],['Total Active Reports','active_reports']].map(([label,key])=>({label,value:report.counts[key]}))}/>
-   <div className="retail-report-panel retail-report-table" role="region" aria-label="Thermography reports" tabIndex={0}><table><thead><tr>{['State','Store Code','Store Name','Inspection Date / Period','Report File','Version','Status','Uploaded By','Uploaded On','Approved By','Approved On','Actions'].map(h=><th scope="col" key={h}>{h}</th>)}</tr></thead><tbody>{report.rows.map(r=><tr key={r.id}>
-    <td>{REPORTING_STATES.find(s=>s.code===reportingState(r.state))?.label||r.state}</td><td>{r.store_code}</td><td>{r.store_name}</td><td>{r.report_date||r.scheduled_date}{r.report_period_end&&<> to {r.report_period_end}</>}</td><td>{r.filename||'No uploaded workbook'}</td><td>{recorded(r.version_number)}<small>Rework: {r.report_rework_count||0}</small></td><td>{r.display_status}{!r.report_managed&&<small>Legacy status record; no uploaded workbook</small>}{r.approval_due_on&&<small>Approval due: {r.approval_due_on}</small>}{r.approval_overdue&&<small>Approval overdue</small>}</td><td>{recorded(r.uploaded_by_name||r.uploaded_by)}</td><td>{timestamp(r.uploaded_at)}</td><td>{recorded(r.approved_by_name||r.approved_by)}</td><td>{timestamp(r.approved_at)}</td>
-    <td><div className="thermo-row-actions">
-     {r.active_version_id&&<button disabled={busy} onClick={()=>void download(r)}><Download size={13}/>Download Excel</button>}
-     {!r.report_deleted_at&&r.can_upload&&<button disabled={busy} onClick={()=>openUpload(r)}>Upload Report</button>}
-     {!r.report_deleted_at&&r.can_replace&&<button disabled={busy} onClick={()=>openUpload(r)}>Replace Report</button>}
-     {!r.report_deleted_at&&r.can_approve&&<><button disabled={busy} onClick={()=>ask('approve',r)}>Mark Client Approved</button><button disabled={busy} onClick={()=>ask('reject',r)}>Mark Rework Required</button></>}
-     {!r.report_deleted_at&&r.can_reopen&&r.status==='Client Approved'&&r.active_version_id&&<button disabled={busy} onClick={()=>ask('reopen',r)}>Authorized Reopening</button>}
-     {!r.report_deleted_at&&r.can_write&&<button disabled={busy} onClick={()=>ask('delete',r)}>Delete Report</button>}
-     {r.report_deleted_at&&r.can_restore&&<button disabled={busy} onClick={()=>ask('restore',r)}>Restore Report</button>}
-     <button disabled={busy} onClick={()=>void inspect(r)}><History size={13}/>Version History</button>
-    </div></td>
-   </tr>)}</tbody></table>{!report.rows.length&&<p className="thermo-empty">No authorized reports match these filters.</p>}</div>
-   <ReportPager label="Thermography" count={report.total} page={page} size={size} onPage={setPage} onSize={setSize}/>
-  </>}
-  {setupMissing&&legacy&&<><button onClick={()=>setShowLegacy(v=>!v)}>View existing tracker</button>{showLegacy&&legacy}</>}
-  {dialogOpen&&<div className="thermo-modal-backdrop"><section ref={dialog} className="thermo-modal" role="dialog" aria-modal="true" aria-label={upload?upload.row?.active_version_id?'Replace Thermography Report':'Upload Thermography Report':history?'Thermography Version History':'Confirm Thermography action'} onKeyDown={e=>{
-   if(e.key==='Escape'){e.preventDefault();close();}if(e.key==='Tab'){const items=[...e.currentTarget.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href]')];const first=items[0],last=items.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}
-  }}>
-   <button type="button" className="thermo-close" aria-label="Close Thermography dialog" disabled={busy} onClick={close}><X size={18}/></button>
-   {upload&&<form onSubmit={e=>void submitUpload(e)}><h2>{upload.row?.active_version_id?'Replace rejected report':'Upload Thermography Report'}</h2>
-    <p>The original workbook, including photographs, formatting and worksheets, is stored unchanged. Only server-confirmed uploads become active.</p>
-    <label>State<select aria-label="Upload state" required disabled={busy||!!upload.id||upload.resume} value={report?.stores.find(s=>s.id===upload.store_id)?.state||upload.state||''} onChange={e=>setUpload(u=>({...u,state:e.target.value,store_id:''}))}><option value="">Select state</option>{[...new Set(uploadStores.map(s=>s.state))].map(s=><option key={s}>{s}</option>)}</select></label>
-    <label>Store Code / Store Name<select aria-label="Upload store" required disabled={busy||!!upload.id||upload.resume} value={upload.store_id||''} onChange={e=>setUpload(u=>({...u,store_id:e.target.value}))}><option value="">Select authorized store</option>{uploadStores.filter(s=>!upload.state||s.state===upload.state).map(s=><option key={s.id} value={s.id}>{s.store_code} — {s.store_name}</option>)}</select></label>
-    <label>Inspection date / Period start<input aria-label="Inspection date" required type="date" max={report.today} disabled={busy||!!upload.row?.active_version_id||upload.resume} value={upload.date||''} onChange={e=>setUpload(u=>({...u,date:e.target.value}))}/></label>
-    <label>Period end (optional)<input aria-label="Period end" type="date" min={upload.date} max={report.today} disabled={busy||!!upload.row?.active_version_id||upload.resume} value={upload.period_end||''} onChange={e=>setUpload(u=>({...u,period_end:e.target.value}))}/></label>
-    <label>Excel workbook (.xlsx, up to {Math.floor(report.max_bytes/1024/1024)} MiB)<input aria-label="Thermography workbook" required type="file" accept=".xlsx" disabled={busy} onChange={e=>{setFile(e.target.files?.[0]||null);setUploadError('');}}/></label>
-    {file&&<p>{file.name} — {(file.size/1024/1024).toFixed(2)} MiB</p>}{upload.resume&&<p>Re-select the same workbook to continue. Nothing is claimed as saved locally.</p>}
-    {progress!==null&&<label>Upload progress<progress max="100" value={progress}/>{progress}%</label>}{uploadError&&<p role="alert">{uploadError}</p>}
-    <button disabled={busy||!file||!upload.store_id}>{busy?'Uploading / verifying...':uploadError?'Retry Upload':'Confirm Upload'}</button><button type="button" disabled={busy} onClick={close}>Close</button>
-    {resumable&&!busy&&<button type="button" onClick={()=>{if(window.confirm('Discard this retry identity? No confirmed workbook is deleted. Re-select the report row before starting a different file. Abandoned pending objects require reconciliation.')){sessionStorage.removeItem(thermoPendingKey(userKey));setResumable(false);setUpload(null);setFile(null);}}}>Discard pending retry identity</button>}
-   </form>}
-   {confirmation&&<form onSubmit={e=>void act(e)}><h2>{confirmation.action==='approve'?'Confirm external client approval':confirmation.action==='reject'?'Record client rejection':confirmation.action==='delete'?'Delete Report':confirmation.action==='restore'?'Restore Report':confirmation.action==='reopen'?'Authorized correction / reopening':'Schedule Thermography'}</h2>
-    {confirmation.row&&<p>{confirmation.row.store_code} — {confirmation.row.store_name}<br/>{confirmation.row.filename||'No uploaded workbook'}</p>}
-    {confirmation.action==='approve'&&<p>You are confirming that the client approved the current workbook externally. No attachment is required.</p>}
-    {confirmation.action==='delete'&&<p>This removes the record from active listings and KPIs. Files and version history are retained. Super Admin can restore it.</p>}
-    {confirmation.action==='schedule'&&<><label>Store<select required aria-label="Schedule store" value={confirmation.store_id} onChange={e=>setConfirmation(c=>({...c,store_id:e.target.value}))}><option value="">Select authorized store</option>{report.stores.filter(s=>s.can_schedule&&s.status==='Active').map(s=><option key={s.id} value={s.id}>{s.store_code} — {s.store_name}</option>)}</select></label><label>Scheduled date<input required aria-label="Scheduled date" type="date" value={confirmation.date} onChange={e=>setConfirmation(c=>({...c,date:e.target.value}))}/></label></>}
-    {['reject','reopen','restore'].includes(confirmation.action)&&<label>{confirmation.action==='reject'?'Rejection remark (optional)':'Audit reason (required)'}<textarea aria-label="Thermography action reason" maxLength={2000} required={confirmation.action!=='reject'} value={reason} onChange={e=>setReason(e.target.value)}/></label>}
-    {error&&<p role="alert">{error}</p>}<button disabled={busy}>{busy?'Confirming...':'Confirm'}</button><button type="button" disabled={busy} onClick={close}>Cancel</button>
-   </form>}
-   {history&&<><h2>Version History — {history.row.store_code}</h2><p>Only confirmed versions are downloadable. Earlier workbooks are retained unchanged.</p>{!history.versions.length&&<p>No workbook versions recorded. Existing status history is shown below.</p>}{history.versions.map(v=><article key={v.id} className="thermo-version"><strong>Version {v.version_number}{v.active?' — Current':''}</strong><p>{v.filename} — {v.state} — {recorded(v.review_status)}</p><p>{timestamp(v.uploaded_at)}{v.remark&&<> — {v.remark}</>}</p>{v.state==='uploaded'&&<button disabled={busy} onClick={()=>void download(history.row,v)}>Download Version {v.version_number}</button>}</article>)}<h3>Audit trail</h3>{[...history.legacy_events,...history.events].sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at))).map(e=><p key={e.id}>{timestamp(e.created_at)} — {e.action} — Actor: {e.actor_id}{e.remark&&<> — {e.remark}</>}</p>)}<nav className="thermo-history-pages" aria-label="Version history pages"><button disabled={busy||!history.page} onClick={()=>void inspect(history.row,history.page-1)}>History previous</button><span>Page {history.page+1}</span><button disabled={busy||(history.page+1)*history.limit>=Math.max(history.versions_total,history.events_total,history.legacy_total)} onClick={()=>void inspect(history.row,history.page+1)}>History next</button></nav></>}
+ async function review(row,action){setModal({kind:'review',row,action});setReason('');}
+ const monthLabel=new Date(month+'-01T00:00:00+05:30').toLocaleDateString('en-IN',{month:'long',year:'numeric',timeZone:'Asia/Kolkata'});
+ const stores=(data?.stores||[]).filter(s=>!state||s.state===state||state==='TN'&&s.state==='PY');const states=[...new Set((data?.stores||[]).map(s=>s.state))].sort();
+ const maxChart=Math.max(1,...(data?.chart||[]).map(v=>v.scheduled));const totalPages=Math.max(1,Math.ceil((data?.total||0)/25));
+ return <main className="thermo-v2" aria-busy={loading}>
+  <header className="thv2-header"><div><div className="thv2-eyebrow">RELIANCE RETAIL / OPERATIONS</div><h1>Thermography</h1><p>Manage monthly thermography schedules, upload inspection reports (PDF) and track completion.</p></div><div className="thv2-actions">
+   <button disabled={!data||busy} onClick={()=>work(async()=>{const rows=await exportRows(params=>api('/dashboard',{params}),filters);saveBlob(await scheduleWorkbook({rows}),`Thermography-${month}.xlsx`);})}><Download size={16}/> Export Excel</button>
+   <button disabled={busy} onClick={()=>work(async()=>setModal({kind:'history',value:await api('/schedules/history')}))}><History size={16}/> Schedule History</button>
+   <button onClick={()=>setModal({kind:'instructions'})}><Info size={16}/> Instructions</button></div></header>
+  <section className="thv2-filters" aria-label="Thermography filters">
+   <label>Month<input type="month" value={month} onChange={e=>change(()=>{setMonth(e.target.value);setRange(defaultRange(e.target.value));})}/></label>
+   <label>State<select value={state} onChange={e=>change(()=>{setState(e.target.value);setStore('');})}><option value="">All States</option>{states.map(s=><option key={s}>{s}</option>)}</select></label>
+   <label>Store<select value={store} onChange={e=>change(()=>setStore(e.target.value))}><option value="">All Stores</option>{stores.map(s=><option key={s.id} value={s.id}>{s.store_code} — {s.store_name}</option>)}</select></label>
+   <fieldset><legend>KPI Date Range</legend><div className="thv2-dates"><input aria-label="KPI start date" type="date" value={range.from} onChange={e=>change(()=>setRange({...range,from:e.target.value}))}/><span>–</span><input aria-label="KPI end date" type="date" value={range.to} onChange={e=>change(()=>setRange({...range,to:e.target.value}))}/></div></fieldset>
+  </section>
+  {error&&<div className="thv2-error" role="alert">{error} <button disabled={busy} onClick={reload}>Retry</button></div>}{notice&&<p className="thv2-notice" role="status">{notice}</p>}
+  <section className="thv2-summary" aria-label="Till-date performance">
+   <div className="thv2-kpis"><article className="thv2-card thv2-scheduled"><CalendarDays/><div><h2>Scheduled Till Date</h2><strong>{data?data.summary.scheduled:'N/A'}</strong><small>{data?`${date(data.kpi_from)} – ${date(data.kpi_to)}`:loading?'Loading…':'Unavailable'}</small></div></article>
+    <article className="thv2-card thv2-completed"><CheckCircle2/><div><h2>Completed Till Date</h2><strong>{data?data.summary.completed:'N/A'}</strong><small>{data?`${date(data.kpi_from)} – ${date(data.kpi_to)}`:loading?'Loading…':'Unavailable'}</small></div></article>
+    <article className="thv2-completion"><h2>Completion</h2><div><strong>{data?`${data.summary.percentage.toFixed(1)}%`:'N/A'}</strong><progress aria-label="Completion percentage" max="100" value={data?.summary.percentage||0}/></div></article></div>
+   <article className="thv2-chart"><div className="thv2-chart-head"><h2>Thermography – Scheduled vs Completed (Till Date)</h2><span><i className="thv2-blue"/> Scheduled <i className="thv2-green"/> Completed</span></div>
+    <div className="thv2-bars" role="img" aria-label={data?data.chart.map(s=>`${s.state}: ${s.scheduled} scheduled, ${s.completed} completed`).join('; '):'Chart unavailable'}>{data?.chart.length?data.chart.map(s=><div className="thv2-bar-group" key={s.state}><div className="thv2-bar-pair"><div style={{height:`${s.scheduled/maxChart*85}%`}} className="thv2-bar thv2-blue"><b>{s.scheduled}</b></div><div style={{height:`${s.completed/maxChart*85}%`}} className="thv2-bar thv2-green"><b>{s.completed}</b></div></div><strong>{s.state}</strong></div>):<p>{loading?'Loading chart…':data?'No inspections scheduled through the cutoff.':'N/A — reporting unavailable'}</p>}</div>
+   </article>
+  </section>
+  <section className="thv2-upload-strip"><CalendarDays/><div><h2>Upload Monthly Schedule</h2><p>Upload Excel (.xlsx) with Store Code and Scheduled Date. Expected on the last calendar day before the schedule month.</p></div><div className="thv2-actions"><button className="thv2-primary" disabled={!data?.can_schedule||busy} onClick={()=>{setModal({kind:'schedule'});setFile(null);setReason('');}}><Upload size={16}/> Upload Schedule (Excel)</button><button disabled={busy} onClick={()=>work(async()=>saveBlob(await scheduleWorkbook({template:true}),'Thermography-Schedule-Template.xlsx'))}><Download size={16}/> Download Template</button></div></section>
+  <section className="thv2-schedule"><div className="thv2-table-title"><h2>Scheduled Thermography – {monthLabel}</h2><p>Total: <b>{data?.monthly.total??'N/A'}</b> <span>|</span> Completed: <b>{data?.monthly.completed??'N/A'}</b> <span>|</span> Pending: <b>{data?.monthly.scheduled??'N/A'}</b></p></div>
+   <div className="thv2-table-tools"><label className="thv2-search"><Search size={16}/><input aria-label="Search by Store Code" placeholder="Search by Store Code" value={query} onChange={e=>change(()=>setQuery(e.target.value))}/></label><div className="thv2-tabs" aria-label="Schedule status">{[['','All',data?.monthly.total],['Scheduled','Scheduled',data?.monthly.scheduled],['Completed','Completed',data?.monthly.completed]].map(([value,label,count])=><button key={label} aria-pressed={status===value} className={status===value?'thv2-primary':''} onClick={()=>change(()=>setStatus(value))}>{label} ({count??'—'})</button>)}</div></div>
+   <div className="thv2-table-scroll"><table><thead><tr>{['#','State','Store Code','Store Name','Scheduled Date','Report (PDF)','Status','Action'].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>
+    {data?.rows.map((row,i)=><tr key={row.id}><td>{page*25+i+1}</td><td><span className="thv2-state">{row.state}</span></td><td>{row.store_code}</td><td>{row.store_name}</td><td>{date(row.scheduled_date)}</td><td>{row.pdf_verified?<button className="thv2-file" disabled={busy} onClick={()=>download(row)}><FileText size={15}/><span>{row.filename} ({(row.file_size/1e6).toFixed(1)} MB)</span><Download size={14}/></button>:<span title={row.status!=='Scheduled'?'Legacy completion has no verified PDF. Original status retained.':undefined}>—</span>}</td>
+     <td><span className={`thv2-badge ${row.pdf_verified?'thv2-done':''}`}>{row.pdf_verified?<CheckCircle2 size={13}/>:<CalendarDays size={13}/>} {row.pdf_verified?'Completed':'Scheduled'}</span>{row.report_review_state&&<small className="thv2-review">Client: {row.report_review_state==='awaiting'?'Awaiting approval':row.report_review_state==='rework'?'Rework requested':'Approved'}</small>}{row.status!=='Scheduled'&&!row.pdf_verified&&<small className="thv2-review">Legacy: {row.status}; PDF unverified</small>}</td>
+     <td><div className="thv2-row-actions">{row.pdf_verified&&<button disabled={busy} onClick={()=>viewPdf(row)}><Eye size={14}/> View</button>}{(row.can_upload||row.can_replace||row.can_write&&row.status==='Scheduled')&&<button disabled={busy||!row.can_upload&&!row.can_replace} title={row.scheduled_date>data.today?'PDF upload becomes available on the scheduled date.':undefined} onClick={()=>{setModal({kind:'pdf',row});setFile(null);setProgress(0);}}><Upload size={14}/> {row.can_replace?'Replace PDF':'Upload PDF'}</button>}<button aria-label={`History ${row.store_code}`} disabled={busy} onClick={()=>history(row)}>•••</button></div></td></tr>)}
+    {!data?.rows.length&&<tr><td colSpan="8" className="thv2-empty">{loading?'Loading authorized monthly schedule…':data?'No scheduled inspections match these filters.':'N/A — schedule unavailable. See the error above.'}</td></tr>}
+   </tbody></table></div><footer className="thv2-pagination"><span>{data?.total?`Showing ${page*25+1} – ${Math.min((page+1)*25,data.total)} of ${data.total}`:'Showing 0 inspections'} · Entire selected month</span><div><button aria-label="Previous page" disabled={page===0||loading} onClick={()=>setPage(p=>p-1)}><ChevronLeft size={16}/></button><span>{page+1} / {totalPages}</span><button aria-label="Next page" disabled={page+1>=totalPages||loading} onClick={()=>setPage(p=>p+1)}><ChevronRight size={16}/></button></div></footer>
+  </section>
+  {modal&&<div className="thv2-overlay" onKeyDown={e=>{if(e.key==='Escape')close();if(e.key==='Tab'){const nodes=dialog.current?.querySelectorAll('button:not(:disabled),input,textarea,select');if(!nodes?.length)return;const first=nodes[0],last=nodes[nodes.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}}}><section className="thv2-modal" role="dialog" aria-modal="true" aria-labelledby="thv2-dialog-title" ref={dialog}><button className="thv2-close" aria-label="Close dialog" disabled={busy} onClick={close}><X/></button><h2 id="thv2-dialog-title">{({pdf:'Upload inspection PDF',schedule:'Upload monthly schedule',history:'Schedule upload history',versions:'PDF history & client review',instructions:'Thermography instructions',review:'Client review'})[modal.kind]}</h2>
+   {error&&<p role="alert" className="thv2-error">{error}</p>}
+   {modal.kind==='instructions'&&<><p>Upload the next month’s two-column Excel schedule on the last calendar day of the preceding month. Early, late and corrective imports require an audit reason. Existing schedules are never overwritten.</p><p>Store Code is text; preserve leading zeros. Scheduled Date uses DD-MM-YYYY. State and Store Name are resolved from the authorized Store Master. Review all rejected rows before confirmation.</p><p>Top cards and chart count scheduled inspections through today in Asia/Kolkata. The table includes the entire selected month, including future dates. KPI date filters affect only cards and chart.</p><p>Each scheduled inspection accepts an original PDF up to 10 MB (10,000,000 bytes). Only a successfully verified private upload marks it Completed. Client approval is separate. Legacy completion without a verified PDF is excluded from PDF totals.</p></>}
+   {modal.kind==='pdf'&&<form onSubmit={uploadPdf}><p>{modal.row.store_code} — {modal.row.store_name} · {date(modal.row.scheduled_date)}</p><p>PDF only · Maximum 10 MB. Select the same original file when retrying an interrupted upload.</p><input aria-label="Inspection PDF" type="file" accept=".pdf,application/pdf" disabled={busy} onChange={e=>setFile(e.target.files[0])}/><progress aria-label="PDF upload progress" value={progress} max="100"/><button className="thv2-primary" disabled={busy||!file}>{busy?`Uploading / verifying ${progress}%`:'Upload & verify PDF'}</button></form>}
+   {modal.kind==='schedule'&&<><p>Selected month: <b>{monthLabel}</b>. Required columns: Store Code | Scheduled Date. Store Codes must retain leading zeros.</p><input aria-label="Monthly Excel schedule" disabled={busy} type="file" accept=".xlsx" onChange={e=>{setFile(e.target.files[0]);setModal({kind:'schedule'});}}/><button disabled={busy||!file} onClick={()=>schedule('preview')}>Validate & preview</button>{modal.preview&&<><p><b>{modal.preview.valid} valid</b> · {modal.preview.rejected} rejected · Expected upload: {date(modal.preview.expected_upload_date)}</p><div className="thv2-preview"><table><thead><tr><th>Row</th><th>Store Code</th><th>Store / State</th><th>Date</th><th>Validation</th></tr></thead><tbody>{modal.preview.rows.map(r=><tr key={r.row}><td>{r.row}</td><td>{r.store_code}</td><td>{r.store_name} {r.state}</td><td>{date(r.scheduled_date)}</td><td>{r.error||'Valid'}</td></tr>)}</tbody></table></div><label>Audit reason {modal.preview.requires_reason?'(required for early / late / corrective upload)':'(optional)'}<textarea maxLength={2000} value={reason} onChange={e=>setReason(e.target.value)}/></label><button className="thv2-primary" disabled={busy||modal.preview.rejected>0||modal.preview.requires_reason&&reason.trim().length<3} onClick={()=>schedule('import')}>Confirm import ({modal.preview.valid} inspections)</button></>}</>}
+   {modal.kind==='history'&&<div className="thv2-preview"><table><thead><tr><th>Month</th><th>File</th><th>Uploader</th><th>Inspections</th><th>Uploaded</th><th>Reason</th></tr></thead><tbody>{modal.value.map(r=><tr key={r.id}><td>{r.month.slice(0,7)}</td><td>{r.filename}</td><td>{r.uploader}</td><td>{r.count}</td><td>{new Date(r.created_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})}</td><td>{r.reason||'On-time upload'}</td></tr>)}</tbody></table>{!modal.value.length&&<p>No authorized schedule uploads recorded.</p>}</div>}
+   {modal.kind==='versions'&&<><p>{modal.row.store_code} — {modal.row.store_name}</p>{modal.value.versions.map(v=><div className="thv2-version" key={v.id}><span>Version {v.version_number}: {v.filename} · {v.state} · {v.review_status||'Not reviewed'}</span>{v.state==='uploaded'&&<button disabled={busy} onClick={()=>download({...modal.row,filename:v.filename},v.id)}>Download original</button>}</div>)}{!modal.value.versions.length&&<p>No PDF versions. Existing legacy history remains preserved.</p>}<details><summary>Audit history</summary>{[...modal.value.events,...modal.value.legacy_events].map(event=><p key={event.id}>{event.action} ? {new Date(event.created_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})} {event.remark||''}</p>)}</details><div className="thv2-actions"><button disabled={busy||modal.value.page===0} onClick={()=>history(modal.row,modal.value.page-1)}>Previous history</button><span>Page {modal.value.page+1}</span><button disabled={busy||(modal.value.page+1)*100>=Math.max(modal.value.versions_total,modal.value.events_total,modal.value.legacy_total)} onClick={()=>history(modal.row,modal.value.page+1)}>Next history</button></div>{modal.row.can_approve&&<div className="thv2-actions"><button className="thv2-primary" onClick={()=>review(modal.row,'approve')}>Client approve</button><button onClick={()=>review(modal.row,'reject')}>Request rework</button></div>}</>}
+   {modal.kind==='review'&&<><p>{modal.action==='approve'?'Confirm client approval for the verified current PDF.':'Request rework. The verified original PDF remains in history.'}</p><label>Audit remark<textarea value={reason} maxLength={2000} onChange={e=>setReason(e.target.value)}/></label><button disabled={busy||modal.action==='reject'&&reason.trim().length<3} onClick={()=>work(async()=>{await api(`/reports/${modal.action}`,{method:'POST',data:{id:modal.row.id,revision:modal.row.revision,request_id:crypto.randomUUID(),reason}});setModal(null);setReason('');reload();})}>Confirm {modal.action==='approve'?'approval':'rework'}</button></>}
   </section></div>}
- </section>;
+ </main>;
 }

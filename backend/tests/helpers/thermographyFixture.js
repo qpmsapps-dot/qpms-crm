@@ -4,7 +4,7 @@ import {PGlite} from '@electric-sql/pglite';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 export const thermoMigration=new URL('../../../supabase/migrations/20261115140000_retail_thermography_reports.sql',import.meta.url);
-export async function thermoFixture({db=new PGlite()}={}){
+export async function thermoFixture({db=new PGlite(),beforeReports,businessDate}={}){
  await db.exec(`create role anon;create role authenticated;create role service_role;
  create schema storage;
  create table public.profiles(id uuid primary key,auth_user_id uuid,employee_code text,full_name text,role text,designation text,department text,business text,is_active boolean,status text);
@@ -21,7 +21,10 @@ export async function thermoFixture({db=new PGlite()}={}){
   const match=mis.match(new RegExp('create function public\\.'+name+'\\([\\s\\S]*?\\$\\$;'));if(!match)throw Error('Missing source prerequisite '+name);await db.exec(match[0]);
  }
  const originalMisReport=(await db.query(`select prosrc from pg_proc where oid='public.rpc_retail_mis_report(uuid,text,date,date,text)'::regprocedure`)).rows[0].prosrc;
+ if(beforeReports)await beforeReports(db);
  await db.exec(readFileSync(thermoMigration,'utf8'));
+ await db.exec(readFileSync(new URL('../../../supabase/migrations/20261118010000_retail_thermography_schedule_v2.sql',import.meta.url),'utf8'));
+ if(businessDate){if(!/^\d{4}-\d{2}-\d{2}$/.test(businessDate))throw Error('Invalid synthetic fixture date');await db.exec(`create or replace function public.retail_operations_today() returns date language sql stable as $$select date '${businessDate}'$$;`);}
  const ids=Object.fromEntries(['mepc','other','hk','central','admin','store','otherStore'].map(k=>[k,randomUUID()]));
  for(const [key,role,states] of [['mepc','MIS_MEPC',['TN']],['other','MIS_MEPC',['KA']],['hk','MIS_HK',['TN']],['central','CENTRAL_MIS',[]],['admin','Super Admin',[]]]){
   await db.query(`insert into profiles values($1,$1,$2,$2,$3,null,null,'Reliance Retail',true,'Active')`,[ids[key],'SYNTHETIC '+key,role]);
@@ -30,9 +33,11 @@ export async function thermoFixture({db=new PGlite()}={}){
  await db.query(`insert into reliance_retail_store_master(id,store_code,store_name,state) values($1,'0012','SYNTHETIC TN STORE','TN'),($2,'0099','SYNTHETIC KA STORE','KA')`,[ids.store,ids.otherStore]);
  const today=(await db.query(`select retail_operations_today()::text as business_date`)).rows[0].business_date;
  const call=async(actor,action,data={})=>(await db.query(`select rpc_retail_thermography_reports($1,$2,$3::jsonb) result`,[actor,action,JSON.stringify(data)])).rows[0].result;
- const prepare=(data={},actor=ids.mepc)=>call(actor,'prepare',{request_id:randomUUID(),store_id:ids.store,date:today,filename:'SYNTHETIC.xlsx',size:100,source_sha256:'a'.repeat(64),...data});
+ let scheduleNumber=0;
+ const schedule=async(data={},actor=ids.admin)=>call(actor,'schedule',{request_id:randomUUID(),store_id:ids.store,date:new Date(Date.parse(today+'T00:00:00Z')-(scheduleNumber++)*86400000).toISOString().slice(0,10),...data});
+ const prepare=async(data={},actor=ids.mepc)=>{if(!data.id){const saved=await schedule({store_id:data.store_id||ids.store});data={id:saved.id,revision:1,...data};}return call(actor,'prepare',{request_id:randomUUID(),store_id:ids.store,date:today,filename:'SYNTHETIC.pdf',size:100,source_sha256:'a'.repeat(64),...data});};
  const object=async v=>(await db.query(`insert into storage.objects(bucket_id,name,metadata) values($1,$2,$3::jsonb) returning id`,[v.bucket,v.object_path,JSON.stringify({size:Number(v.file_size),mimetype:v.mime_type})])).rows[0].id;
  const finalize=async v=>{const object_id=await object(v);return call(ids.mepc,'finalize',{request_id:v.operation_id,sha256:'a'.repeat(64),object_id});};
  const row=async id=>(await db.query('select * from retail_thermography_inspections where id=$1',[id])).rows[0];
- return {db,ids,today,call,prepare,object,finalize,row,originalMisReport};
+ return {db,ids,today,call,schedule,prepare,object,finalize,row,originalMisReport};
 }

@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - 'src/hooks/useModalFocus.js'
+      # BEGIN THERMOGRAPHY V2 TRIGGERS
+      - '.github/thermography-v2-pins.json'
+      - '.github/thermographyV2Guard.mjs'
+      # END THERMOGRAPHY V2 TRIGGERS
       # BEGIN THERMOGRAPHY FULLSTACK TRIGGERS
       - '.github/thermography-fullstack-pins.json'
       - '.github/thermographyFullstackGuard.mjs'
@@ -91,6 +95,17 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # BEGIN THERMOGRAPHY V2 EXACT PAYLOAD
+          v2_manifest = ".github/thermography-v2-pins.json"
+          if v2_manifest in files:
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{v2_manifest}"],text=True).strip() != "3d02bd0fc7f3b4677fc82c0927bcb992facef234":
+              sys.exit("Thermography V2 manifest changed; renew independent review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/thermographyV2Guard.mjs"],text=True).strip() != "5fa6d993abb1aa5f17a9025b5a748f0ccd663470":
+              sys.exit("Thermography V2 guard changed; renew independent review")
+            subprocess.run(["node",".github/thermographyV2Guard.mjs",base],check=True)
+            print("PASS: exact reviewed Thermography V2 payload; every subsequent check remains mandatory.")
+            sys.exit(0)
+          # END THERMOGRAPHY V2 EXACT PAYLOAD
           # BEGIN THERMOGRAPHY FULLSTACK EXACT PAYLOAD
           thermo_manifest = ".github/thermography-fullstack-pins.json"
           if thermo_manifest in files:
