@@ -1,4 +1,11 @@
 import test from 'node:test';
+test('Empty authorized schedule arrays show verified zero for every state; unavailable schedules stay N/A',()=>{
+ const empty=cleaningView({schedules:[],submissions:[]},{});
+ assert.equal(empty.summary.rows.length,6);assert.equal(empty.summary.total.completed,0);
+ assert.ok(empty.summary.rows.every(row=>row.scheduled===0&&row.completed===0&&row.percentage===null));
+ const missing=cleaningView({schedules:null,submissions:[]},{});
+ assert.equal(missing.summary.total.completed,null);assert.ok(missing.summary.rows.every(row=>row.completed===null));
+});
 import assert from 'node:assert/strict';
 import { cleaningView, cleaningPhotoCount, recordedFoName } from '../src/utils/deepCleaningView.js';
 const store = {

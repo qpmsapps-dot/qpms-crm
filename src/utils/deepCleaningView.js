@@ -28,7 +28,7 @@ export function cleaningView(report, historical, {
   const matchedSchedules=schedules.map(row=>String(row.display_status||row.status).toLowerCase()==='completed'&&!row.submission_ids?.length?{...row,display_status:'Scheduled'}:row);
   const completion = summarizeCleaningReports(work,report?.schedules===null?null:matchedSchedules);
   const summary = {...scheduledSummary,total:{...scheduledSummary.total,...completion.total,report_completed:completion.total.completed,completed:completion.total.scheduled_completed},
-    rows:scheduledSummary.rows.map(row=>({...row,...completion.rows.find(state=>state.state===row.state),report_completed:completion.rows.find(state=>state.state===row.state)?.completed||0,completed:completion.rows.find(state=>state.state===row.state)?.scheduled_completed,
+    rows:scheduledSummary.rows.map(row=>({...row,...completion.rows.find(state=>state.state===row.state),report_completed:completion.rows.find(state=>state.state===row.state)?.completed||0,completed:completion.schedule_available?(completion.rows.find(state=>state.state===row.state)?.scheduled_completed??0):null,
       ...(completion.schedule_available?{}:{scheduled:null,pending:null,other:null,percentage:null})}))};
   const operational = schedules.filter(row => row.source_kind !== 'IFMS_EXCEL');
   return {

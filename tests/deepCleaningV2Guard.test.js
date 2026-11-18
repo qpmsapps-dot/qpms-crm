@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {approvedBase,payloadPaths,manifestPath,guardPath,workflowPath,reviewedWorkflow,verifyPayload,git} from '../.github/deepCleaningV2Guard.mjs';
+import {readFileSync} from 'node:fs';
+import yaml from 'js-yaml';
 const baseWorkflow=git(['show',`${approvedBase}:${workflowPath}`]);
 const hash=()=> '1'.repeat(40),paths=[...payloadPaths,manifestPath,workflowPath];
 const manifest={schema:'deep-cleaning-v2.v1',base_sha:approvedBase,files:Object.fromEntries(payloadPaths.map(p=>[p,hash()]))};
@@ -13,4 +15,13 @@ test('wrong base, broadened manifest and modified workflow assertions remain den
  assert.equal(verifyPayload({...fixture(),base:'0'.repeat(40)}).ok,false);
  assert.equal(verifyPayload({...fixture(),manifest:{...manifest,files:{...manifest.files,'unrelated':'1'.repeat(40)}}}).ok,false);
  assert.equal(verifyPayload({...fixture(),workflow:fixture().workflow.replace('Protect business logic','Bypass business logic')}).ok,false);
+});
+test('dedicated workflow uses runner context only after a runner exists and keeps every gate mandatory',()=>{
+ const workflow=yaml.load(readFileSync('.github/workflows/deep-cleaning-pr102-browser-validation.yml','utf8'));
+ assert.equal(workflow.permissions.contents,'read');
+ for(const job of Object.values(workflow.jobs)){
+  assert.equal(JSON.stringify(job.env||{}).includes('runner.'),false,'runner context is unavailable in jobs.<job_id>.env');
+  assert.ok(job.steps.some(step=>step.run?.includes('deepCleaningStoreOnlyPostgres.test.js')));
+  assert.equal(job.steps.some(step=>step['continue-on-error']),false);
+ }
 });

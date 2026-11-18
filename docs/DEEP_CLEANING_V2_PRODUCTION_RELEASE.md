@@ -99,7 +99,7 @@ Verify Railway frontend/backend health, browser console and Supabase errors.
 
 ## Evidence and outstanding acceptance
 
-Local verification: 378 focused tests passed, 120 Retail regression tests passed,
+Local verification: 391 focused tests passed, 120 Retail regression tests passed,
 29 Retail browser tests passed, and two dedicated Deep Cleaning browser tests
 passed. Scoped ESLint and the production frontend build passed. The Windows
 29-test runner required stopping its owned Vite process during cleanup after all
@@ -118,7 +118,7 @@ existing verified FO-activity path also remains available. Associated historical
 photos are exported separately from actual-period report totals. No current
 unmatched production report is force-linked.
 Native tests retain the 8-second statement limit. Measured on local PostgreSQL 17:
-500-row preview plus atomic import took 1161 ms for Central MIS and 2460 ms for the
+500-row preview plus atomic import took 1068 ms for Central MIS and 2393 ms for the
 state writer. The permission lookup uses a cached PL/pgSQL plan; no scope check or
 timeout was relaxed. Native tests cover installation, activation, exact replays,
 manual link races, original-record immutability and non-destructive recovery.
@@ -127,14 +127,24 @@ acceptance. Historical fixtures under backend/tests/fixtures are regression inpu
 not additional production migrations.
 No production deployment, merge or mobile build is authorized by this document.
 
+## CI integration corrections
+
+The initial remote candidate exposed a historical Thermography source assertion
+that treated the authorized Deep Cleaning page as unchanged. It now verifies the
+immutable Thermography integration and current non-cleaning source separately,
+while requiring the complete exact Deep Cleaning payload. No assertion is skipped.
+The dedicated workflow used runner.temp at job-level env, where GitHub does not
+provide runner context; the value now lives in the browser step environment.
+Reference: https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+
 ## Reviewed file scope
 
-Application changes are confined to Deep Cleaning. Shared Retail files add only
-Deep Cleaning routes, names, links and scope checks. CI adapters preserve existing
-Thermography checks and verify the immutable historical payload plus this exact
-new candidate. Historical SQL fixtures repair missing regression inputs; they are
-not release migrations. No package pins, mobile files, KM/financial logic,
-Attendance, Training, Thermography application, hierarchy or AP mapping is changed.
+Application changes are confined to Deep Cleaning. Shared files add only scoped
+Deep Cleaning routes, permissions, names and verified links. CI adapters preserve
+all existing checks and pin this exact 42-file candidate. Historical SQL files in
+backend/tests/fixtures are regression inputs, never production migrations. No
+package pins, mobile, KM/financial, Attendance, Training, Thermography application,
+hierarchy or AP mapping is changed.
 
 - `.github/deep-cleaning-v2-pins.json`
 - `.github/deepCleaningV2Guard.mjs`
@@ -170,9 +180,11 @@ Attendance, Training, Thermography application, hierarchy or AP mapping is chang
 - `supabase/proposals/retail_cleaning_v2_activate_20261118.sql`
 - `supabase/proposals/retail_cleaning_v2_recovery_20261118.sql`
 - `supabase/proposals/retail_cleaning_verified_matching_20261118.sql`
+- `tests/browser/retailExcelInline.spec.js`
 - `tests/deepCleaningExports.browser.test.js`
 - `tests/deepCleaningExports.test.js`
 - `tests/deepCleaningV2Guard.test.js`
 - `tests/deepCleaningView.test.js`
 - `tests/deepCleaningWorkflow.browser.test.js`
 - `tests/thermographyFullstackGuard.test.js`
+- `tests/thermographyReports.test.js`

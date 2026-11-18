@@ -43,7 +43,9 @@ export const payloadPaths=Object.freeze([
  'tests/deepCleaningView.test.js',
  'tests/deepCleaningV2Guard.test.js',
  'tests/deepCleaningWorkflow.browser.test.js',
- 'tests/thermographyFullstackGuard.test.js'
+ 'tests/thermographyFullstackGuard.test.js',
+ 'tests/thermographyReports.test.js',
+ 'tests/browser/retailExcelInline.spec.js'
 ]);
 const normalize=s=>s.replaceAll('\r\n','\n');
 export const git=args=>execFileSync('git',['-c',`safe.directory=${process.cwd()}`,...args],{encoding:'utf8'});

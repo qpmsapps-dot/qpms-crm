@@ -96,9 +96,9 @@ jobs:
           # BEGIN DEEP CLEANING V2 EXACT PAYLOAD
           dc_manifest = ".github/deep-cleaning-v2-pins.json"
           if dc_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{dc_manifest}"],text=True).strip() != "1b665238b96c2bcf0b0ab63f79e0dc0b786d81e0":
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{dc_manifest}"],text=True).strip() != "e63b18c729ccdb018037cfa72fd9762ae7f87e6d":
               sys.exit("Deep Cleaning manifest changed; renew review")
-            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningV2Guard.mjs"],text=True).strip() != "8d4ce7db9f94093a76742ed1ecb123f8b2ad6b97":
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningV2Guard.mjs"],text=True).strip() != "d39203d45f1ade863ecfe9a22b11a627d2f0b8cf":
               sys.exit("Deep Cleaning guard changed; renew review")
             subprocess.run(["node",".github/deepCleaningV2Guard.mjs",base],check=True)
             print("PASS: exact reviewed Deep Cleaning V2 payload; all subsequent checks remain mandatory.")
