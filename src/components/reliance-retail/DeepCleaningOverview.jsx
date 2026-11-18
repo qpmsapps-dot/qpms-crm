@@ -1,5 +1,5 @@
 import { createElement } from 'react';
-import { CalendarDays, CheckCircle2, Clock3, ChartSpline } from 'lucide-react';
+import { CalendarDays, CheckCircle2, Clock3, ChartSpline, Lightbulb, TrendingUp, Store } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LabelList } from 'recharts';
 function CountLabel({
   x,
@@ -51,7 +51,7 @@ export default function DeepCleaningOverview({
           "aria-hidden": true
         })}</article>)}</div>
  <div className="dc-performance"><section className="dc-card dc-chart-card" aria-label="State-wise Deep Cleaning performance"><div className="dc-card-heading"><h2><ChartSpline size={18} />State-wise Deep Cleaning Performance</h2><div className="dc-legend"><span><i className="dc-blue-key" />Schedules</span><span><i className="dc-green-key" />Done</span></div></div>
-  {available ? <><div className="dc-chart" role="img" aria-label={rows.map(r => r.label + ': ' + r.scheduled + ' scheduled, ' + r.completed + ' completed, ' + percent(r.percentage) + ' completion').join('; ')}><ResponsiveContainer width="100%" height="100%"><BarChart data={rows} margin={{
+  {available ? <><div className="dc-chart" role="img" aria-label={rows.map(r => r.label + ': ' + r.scheduled + ' schedules, ' + r.completed + ' done').join('; ')}><ResponsiveContainer width="100%" height="100%"><BarChart data={rows} margin={{
                 top: 35,
                 right: 2,
                 left: -23,
