@@ -230,8 +230,8 @@ export default function RetailScopedDeepCleaning() {
       setExporting(false);
     }
   }
-  return <section className={'retail-report dc-v2 dc-layout' + (selected ? ' dc-with-drawer' : '')}>
- <div className="dc-main"><header className="dc-page-header"><div><p className="dc-eyebrow">RELIANCE RETAIL / OPERATIONS</p><div className="dc-title"><Paintbrush size={37} /><div><h1>Deep Cleaning</h1><p>Plan, assign and track store deep cleaning with photo evidence.</p></div></div></div><div className="dc-actions"><details className="dc-schedule-menu" onToggle={e => {
+  return <section className="retail-report dc-v2 dc-layout">
+ <div className="dc-main"><header className="dc-page-header"><div><p className="dc-eyebrow">RELIANCE RETAIL / OPERATIONS</p><div className="dc-title"><Paintbrush size={37} /><div><h1>Deep Cleaning</h1><p>Track monthly schedules, completed store visits and photo evidence.</p></div></div></div><div className="dc-actions"><details className="dc-schedule-menu" onToggle={e => {
             if (e.currentTarget.open) void schedulingAccess();
           }}><summary><CalendarDays size={15} />Schedule Deep Cleaning<ChevronDown size={14} /></summary><div><button disabled={isReadOnlyUser(user)} onClick={e => {
                 e.currentTarget.closest('details').open = false;
