@@ -19,6 +19,8 @@ Reconfirm the installation ledger and schema immediately before any separately a
   State authorization uses the existing predicates, evaluated once per state. Canonical
   code uniqueness uses the identical case/trim comparison against the complete Store Master.
   No shared Operations/MIS functions, AP-1/AP-2 grants, financial or mobile code are changed.
+  Future rows retain their PDF action with a disabled/date explanation; the existing database
+  rule forbidding completion before the scheduled date is preserved.
 - Cards and chart use **scheduled dates** within the selected month, capped by server
   `retail_operations_today()` (Asia/Kolkata). Past months use the full month; future months
   return zero. Custom KPI dates do not narrow the full-month table. State/store filters

@@ -20,15 +20,15 @@
     "backend/tests/thermographyReports.test.js": "19cbaed599e2d2fc539e0128883e76865a459181",
     "backend/tests/thermographySchedule.test.js": "fe63db69ab3cc13e94bc962165fea0ba919a2595",
     "backend/tests/thermographyDashboard.test.js": "f7cadd1cf219e9bd1c600655c43839d225e5cd5c",
-    "src/components/reliance-retail/ThermographyReports.jsx": "5f739da09c9c4b9ab12236922b5c69d42803315b",
+    "src/components/reliance-retail/ThermographyReports.jsx": "69c93c720b521f90513404030ddc8048d024e73f",
     "src/components/reliance-retail/thermographyReports.css": "b0eba24b124e0623cfacc154b15ac1666d7adc73",
     "src/utils/thermographyV2.js": "964f9988db7a2dcc5f2b165f6825ad74bd5b6eed",
     "supabase/migrations/20261115140000_retail_thermography_reports.sql": "0cf7072aa87f4db360813974723de50f6d94223b",
     "supabase/migrations/20261118010000_retail_thermography_schedule_v2.sql": "f97c870ea1a6a418ed75b5134f68324e5638e7ba",
     "tests/browser/retailReportVisualSmoke.spec.js": "d1f20200df0e1460c1fc0f81638c187fb435d67f",
     "tests/retailOperationsShapeBrowser.test.js": "2ae2e79a5ea2c318008c2b566bcd816c837eb4c0",
-    "tests/thermographyReports.browser.test.js": "6f584bd8a267a0e3ac1c67005b75992f51535375",
+    "tests/thermographyReports.browser.test.js": "7c6ef61e2a22ceb81a4cefbc5ba7dcda8c6b1384",
     "tests/thermographyReports.test.js": "7e3c11cc9c0be23c274b2be2cc0b60f66e374c8a",
-    "docs/THERMOGRAPHY_V2_RELEASE.md": "0c1269bfa6284a7bbb6970cbe3d50bb04805655c"
+    "docs/THERMOGRAPHY_V2_RELEASE.md": "c871494c84999026673764b55e5a2e7a3ee31c20"
   }
 }

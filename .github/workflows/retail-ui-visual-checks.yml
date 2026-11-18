@@ -98,7 +98,7 @@ jobs:
           # BEGIN THERMOGRAPHY V2 EXACT PAYLOAD
           v2_manifest = ".github/thermography-v2-pins.json"
           if v2_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{v2_manifest}"],text=True).strip() != "34c8f00840bae2efcd8f767bac9af0ee3b854c75":
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{v2_manifest}"],text=True).strip() != "3d02bd0fc7f3b4677fc82c0927bcb992facef234":
               sys.exit("Thermography V2 manifest changed; renew independent review")
             if subprocess.check_output(["git","rev-parse","HEAD:.github/thermographyV2Guard.mjs"],text=True).strip() != "5fa6d993abb1aa5f17a9025b5a748f0ccd663470":
               sys.exit("Thermography V2 guard changed; renew independent review")
