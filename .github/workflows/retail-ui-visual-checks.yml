@@ -99,6 +99,7 @@ jobs:
             "src/components/reliance-retail/RetailCleaningMonthlyPlan.jsx": "0d940b290cd25acacea39f6ef0f33005fd903701",
             "src/components/reliance-retail/deepCleaningV2.css": "c487866f0f0af308aeb64b40ce8d3646ed3ff7ca",
             "src/utils/deepCleaningExportFiles.js": "6604170899594fe75652b4efb6fdfb197f5f4b15",
+            "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "bcf207a859c0592085dd61e478dd8fda92f70b32",
             "supabase/proposals/retail_cleaning_store_only_import_20261118.sql": "2b5f90a1c471d558f6c4de3997bab904733b6f0b",
           }
           deep_cleaning_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
