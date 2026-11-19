@@ -62,7 +62,12 @@ test('monthly wizard validates the whole workbook, confirms import, retries iden
   invalid=false;await page.getByRole('button',{name:'Preview and validate schedules'}).click();await page.getByText('Valid',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Confirm atomic import'}).isDisabled(),true);
   await page.getByLabel('I verified every Store Code, state and scheduled date.').check();await page.getByRole('button',{name:'Confirm atomic import'}).click();await page.getByRole('alert').filter({hasText:'Synthetic uncertain response'}).waitFor();
   await page.getByRole('button',{name:'Confirm atomic import'}).click();await page.getByRole('status').filter({hasText:'Import accepted'}).waitFor();assert.equal(imports.length,2);assert.deepEqual(imports[0],imports[1]);await page.getByRole('cell',{name:'Unassigned',exact:true}).waitFor();
-  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
+  await page.setViewportSize({width:390,height:844});
+  // Resize completion does not guarantee that responsive styles have painted.
+  // Synchronize rendering frames; retain the exact overflow threshold.
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  const geometry=await page.evaluate(()=>({viewport:innerWidth,width:document.documentElement.scrollWidth,overflow:[...document.querySelectorAll('body *')].filter(el=>el.getBoundingClientRect().right>innerWidth+2).slice(0,8).map(el=>({tag:el.tagName,class:el.className,right:el.getBoundingClientRect().right}))}));
+  assert.ok(geometry.width<=geometry.viewport+2,JSON.stringify(geometry));
   // The real administrator's training-only access response now carries an
   // independent server-verified monthly capability, without an MIS assignment.
   role='SUPER_ADMIN';input.SCHEDULE_DATE='2026-11-28';workbook.worksheets[0].getCell('C2').value=input.SCHEDULE_DATE;await page.reload();
