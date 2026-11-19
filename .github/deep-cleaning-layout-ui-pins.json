@@ -1,0 +1,17 @@
+{
+  "schema": "deep-cleaning-layout-ui.v1",
+  "base_sha": "f7dfc0a24eed2affb67e8b6469c4409e060e80cd",
+  "files": {
+    ".github/deepCleaningLayoutGuard.mjs": "8e69def991a081a861caef8a7387c8ffe7c2514a",
+    ".github/deepCleaningV2Guard.mjs": "465621eb0abfdbc1494a1aebd413cbfaa143a536",
+    ".github/thermographyV2Guard.mjs": "d8d50aef6c2dc60e2e04597b46e01889e422be2d",
+    "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "600f113e9a653635ddbad63693d4abdabd17c2bf",
+    "src/components/reliance-retail/DeepCleaningOverview.jsx": "b15dda57f1a3683e55756f0bff668f441cd7d14f",
+    "src/components/reliance-retail/RetailCleaningMonthlyPlan.jsx": "dcce4b6ff05d18c328b2404314bb40cbbd210636",
+    "src/components/reliance-retail/deepCleaningThermographyLayout.css": "18c5be0ee2758b7d12bac762574ed12f017ec01c",
+    "tests/deepCleaningExports.browser.test.js": "bdcadaf8733ec65cb3bec1444d5e4013abf53ce9",
+    "tests/deepCleaningWorkflow.browser.test.js": "14e672b8975352e0df5c1ec17b5c9bfaeb1d072a",
+    "tests/browser/retailExcelInline.spec.js": "c1e61b1b827c0598f7ca4d4718b3ba6be4c4af8d",
+    "tests/deepCleaningV2Guard.test.js": "db24b29b432cd310f4fc358e63240083dda78426"
+  }
+}

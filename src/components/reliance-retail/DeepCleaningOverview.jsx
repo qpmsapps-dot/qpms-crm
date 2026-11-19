@@ -1,5 +1,4 @@
-import { createElement } from 'react';
-import { CalendarDays, CheckCircle2, Clock3, ChartSpline, Lightbulb, TrendingUp, Store } from 'lucide-react';
+import { CalendarDays, CheckCircle2 } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LabelList } from 'recharts';
 function CountLabel({
   x,
@@ -11,48 +10,25 @@ function CountLabel({
 }
 export default function DeepCleaningOverview({
   view,
-  available
+  available, from, to, today
 }) {
   const {
     total,
     rows
   } = view.summary;
   const val = n => available && Number.isFinite(n) ? n.toLocaleString('en-IN') : 'N/A';
-  const items = [{
-    label: 'Schedules',
-    value: val(total.scheduled),
-    note: 'Active scheduled jobs',
-    Icon: CalendarDays,
-    tone: 'blue'
-  }, {
-    label: 'Done',
-    value: val(total.completed),
-    note: 'Completed schedules with a verified linked report',
-    Icon: CheckCircle2,
-    tone: 'green'
-  }, {
-    label: 'Pending',
-    value: val(total.pending),
-    note: 'Scheduled work' ,
-    Icon: Clock3,
-    tone: 'amber'
-  }];
-  return <><div className="dc-kpis">{items.map(({
-        label,
-        value,
-        note,
-        badge,
-        Icon,
-        tone
-      }) => <article className={'dc-kpi dc-' + tone} key={label}><span className="dc-kpi-icon">{createElement(Icon, {
-            size: 23
-          })}</span><div><h2>{label}</h2><strong>{value}</strong><small>{note}</small></div>{badge && <span className="dc-kpi-badge">{badge}</span>}{createElement(Icon, {
-          className: "dc-kpi-watermark",
-          "aria-hidden": true
-        })}</article>)}</div>
- <div className="dc-performance"><section className="dc-card dc-chart-card" aria-label="State-wise Deep Cleaning performance"><div className="dc-card-heading"><h2><ChartSpline size={18} />State-wise Deep Cleaning Performance</h2><div className="dc-legend"><span><i className="dc-blue-key" />Schedules</span><span><i className="dc-green-key" />Done</span></div></div>
+  const percentage = available && Number.isFinite(total.percentage) ? total.percentage : null;
+  const tillDate = !to || to <= today;
+  return <section className="thv2-summary dc-overview" aria-label="Deep Cleaning performance">
+    <div className="dc-kpis thv2-kpis">
+      <article className="thv2-card thv2-scheduled" data-kpi="scheduled"><CalendarDays aria-hidden="true"/><div><h2>{tillDate?'Scheduled Till Date':'Scheduled in Selected Range'}</h2><strong>{val(total.scheduled)}</strong><small>{from} - {to}</small></div></article>
+      <article className="thv2-card thv2-completed" data-kpi="completed"><CheckCircle2 aria-hidden="true"/><div><h2>{tillDate?'Completed Till Date':'Completed in Selected Range'}</h2><strong>{val(total.completed)}</strong><small>Verified linked schedules / {from} - {to}</small></div></article>
+      <article className="thv2-completion"><h2>Completion Percentage</h2><div><strong>{percentage==null?'N/A':percentage.toFixed(1)+'%'}</strong><progress aria-label="Completion percentage" max="100" value={percentage??0}/></div><small>Existing verified schedule calculation</small></article>
+      <p className="dc-metric-notes"><span>Pending: <b data-kpi="pending">{val(total.pending)}</b></span><span>Submitted reports: <b>{val(total.report_completed)}</b></span><span>Overdue: <b>{val(view.overdue)}</b></span></p>
+    </div>
+    <section className="dc-performance thv2-chart" aria-label="State-wise Deep Cleaning performance"><div className="thv2-chart-head"><h2>State-wise Scheduled vs Completed</h2><span><i className="thv2-blue"/> Scheduled <i className="thv2-green"/> Completed</span></div>
   {available ? <><div className="dc-chart" role="img" aria-label={rows.map(r => r.label + ': ' + r.scheduled + ' scheduled, ' + r.completed + ' completed, ' + (Number.isFinite(r.percentage)?r.percentage+'%':'N/A') + ' completion').join('; ')}><ResponsiveContainer width="100%" height="100%"><BarChart data={rows} margin={{
-                top: 35,
+                top: 20,
                 right: 2,
                 left: -23,
                 bottom: 0
@@ -68,33 +44,7 @@ export default function DeepCleaningOverview({
                   borderRadius: 10,
                   borderColor: '#dce4f3',
                   fontSize: 12
-                }} /><Bar isAnimationActive={false} name="Schedules" dataKey="scheduled" fill="url(#dcScheduled)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="scheduled" content={<CountLabel />} /></Bar><Bar isAnimationActive={false} name="Done" dataKey="completed" fill="url(#dcCompleted)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="completed" content={<CountLabel />} /></Bar></BarChart></ResponsiveContainer></div></> : <p className="dc-empty">Schedule reporting unavailable.</p>}
- </section><aside className="dc-card dc-insights"><div className="dc-card-heading"><h2><Lightbulb size={17} />Quick Insights</h2></div>{[{
-          Icon: TrendingUp,
-          tone: 'green',
-          value: 'Unavailable',
-          label: 'Monthly comparison'
-        }, {
-          Icon: CheckCircle2,
-          tone: 'green',
-          value: val(total.report_completed) + ' reports',
-          label: 'Submitted reports'
-        }, {
-          Icon: Clock3,
-          tone: 'amber',
-          value: val(total.pending) + ' visits',
-          label: 'Pending completion'
-        }, {
-          Icon: Store,
-          tone: 'red',
-          value: val(view.overdue) + ' visits',
-          label: 'Overdue schedules'
-        }].map(({
-          Icon,
-          tone,
-          value,
-          label
-        }) => <div className="dc-insight" key={label}><span className={'dc-insight-icon dc-' + tone}>{createElement(Icon, {
-              size: 19
-            })}</span><div><strong>{value}</strong><small>{label}</small></div></div>)}</aside></div></>;
+                }} /><Bar isAnimationActive={false} name="Scheduled" dataKey="scheduled" fill="url(#dcScheduled)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="scheduled" content={<CountLabel />} /></Bar><Bar isAnimationActive={false} name="Completed" dataKey="completed" fill="url(#dcCompleted)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="completed" content={<CountLabel />} /></Bar></BarChart></ResponsiveContainer></div></> : <p className="dc-empty">Schedule reporting unavailable.</p>}
+    <p className="dc-chart-note">Same authorized date range and verified schedule totals as the KPI cards.</p></section>
+  </section>;
 }

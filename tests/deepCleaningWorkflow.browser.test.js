@@ -17,6 +17,7 @@ test('monthly wizard validates the whole workbook, confirms import, retries iden
  await server.listen();await server.environments.client.warmupRequest('/src/main.jsx');await server.environments.client.waitForRequestsIdle();
  const browser=await chromium.launch({headless:true}),context=await browser.newContext({acceptDownloads:true}),page=await context.newPage();
  const errors=[],imports=[];page.on('pageerror',e=>errors.push(e.message));
+ let corrected=false;
  let role='CLEANING_SCHEDULE_WRITER',imported=false,invalid=false,first=true,manualMode=false,manualDone=false;
  const historicalId='00000000-0000-4000-8000-000000000040';
  const input={STATE:'TN',STORE_CODE:'0012',SCHEDULE_DATE:'2026-12-05',REMARKS:'Synthetic monthly schedule'};
@@ -48,7 +49,9 @@ test('monthly wizard validates the whole workbook, confirms import, retries iden
    if(first){first=false;return route.fulfill({status:503,json:{message:'Synthetic uncertain response; retry unchanged import'}});}
    imported=true;return route.fulfill({json:{result:{replayed:true,receipts:[{schedule_id:'synthetic-schedule',store_id:'synthetic-store',fo_profile_id:null}]}}});
   }
-  if(url.pathname.endsWith('/cleaning/plans'))return route.fulfill({json:{result:{schedules:imported?[{id:'synthetic-schedule',store_code:'0012',state:'TN',scheduled_date:'2026-12-05',status:'Planned',revision:0}]:[]}}});
+  if(url.pathname.endsWith('/cleaning/plans/synthetic-schedule/correct')){const body=req.postDataJSON();assert.equal(body.operation,'reschedule');assert.equal(body.revision,0);assert.equal(body.scheduled_date,'2026-12-06');assert.ok(body.reason.length>=8);assert.equal(body.actor,undefined);corrected=true;return route.fulfill({json:{result:{saved:true}}});}
+  if(url.pathname.endsWith('/cleaning/plans/synthetic-schedule/history'))return route.fulfill({json:{result:{history:[{action:'CLEANING_CORRECTION',actor_profile_id:'synthetic-writer',reason:'Verified revised date for synthetic plan'}]}}});
+  if(url.pathname.endsWith('/cleaning/plans'))return route.fulfill({json:{result:{schedules:imported?[{id:'synthetic-schedule',store_code:'0012',state:'TN',scheduled_date:corrected?'2026-12-06':'2026-12-05',status:'Planned',revision:corrected?1:0}]:[]}}});
   assert.equal(req.method(),'GET','Unexpected mutation: '+url.pathname);return route.fulfill({json:{}});
  });
  try{
@@ -61,7 +64,9 @@ test('monthly wizard validates the whole workbook, confirms import, retries iden
   invalid=true;await page.getByRole('button',{name:'Preview and validate schedules'}).click();await page.getByText('UNKNOWN_OR_AMBIGUOUS_STORE_CODE',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Confirm atomic import'}).isDisabled(),true);assert.equal(imports.length,0);
   invalid=false;await page.getByRole('button',{name:'Preview and validate schedules'}).click();await page.getByText('Valid',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Confirm atomic import'}).isDisabled(),true);
   await page.getByLabel('I verified every Store Code, state and scheduled date.').check();await page.getByRole('button',{name:'Confirm atomic import'}).click();await page.getByRole('alert').filter({hasText:'Synthetic uncertain response'}).waitFor();
-  await page.getByRole('button',{name:'Confirm atomic import'}).click();await page.getByRole('status').filter({hasText:'Import accepted'}).waitFor();assert.equal(imports.length,2);assert.deepEqual(imports[0],imports[1]);await page.getByRole('cell',{name:'Unassigned',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Confirm atomic import'}).click();await page.getByRole('status').filter({hasText:'Import accepted'}).waitFor();assert.equal(imports.length,2);assert.deepEqual(imports[0],imports[1]);await page.getByLabel('Cleaning reporting month',{exact:true}).fill('2026-12');await page.getByRole('button',{name:'Schedule History',exact:true}).click();await page.getByRole('cell',{name:'Unassigned',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Correct',exact:true}).click();await page.getByLabel('Operation',{exact:true}).selectOption('reschedule');await page.getByLabel('New date',{exact:true}).fill('2026-12-06');await page.getByLabel('Reason',{exact:true}).fill('Verified revised date for synthetic plan');await page.getByRole('button',{name:'Confirm audited correction',exact:true}).click();await page.getByRole('cell',{name:'2026-12-06',exact:true}).waitFor();assert.equal(corrected,true);
+  await page.getByRole('button',{name:'History',exact:true}).click();await page.getByText('Correction audit: actor, time, before/after and reason',{exact:true}).waitFor();
   await page.setViewportSize({width:390,height:844});
   // Resize completion does not guarantee that responsive styles have painted.
   // Synchronize rendering frames; retain the exact overflow threshold.
@@ -82,7 +87,7 @@ test('monthly wizard validates the whole workbook, confirms import, retries iden
   await page.getByLabel('Historical review reason').fill('Verified original dates and historical paired evidence');
   await page.getByLabel('I explicitly approve this recorded date exception after reviewing both original dates.').check();await page.getByLabel('I verified this submitted work against the recorded schedule.').check();
   await page.getByRole('button',{name:'Confirm verified link'}).click();await page.getByRole('region',{name:'Cleaning schedules',exact:true}).getByText('Completed',{exact:true}).waitFor();
-  assert.equal(manualDone,true);assert.equal(await page.getByRole('region',{name:'Submitted cleaning work'}).getByRole('cell',{name:'2026-11-02',exact:true}).count(),1);
+  assert.equal(manualDone,true);await page.getByRole('tab',{name:/Submitted Work & Evidence/}).click();assert.equal(await page.getByRole('region',{name:'Submitted cleaning work'}).getByRole('cell',{name:'2026-11-02',exact:true}).count(),1);
   assert.deepEqual(errors,[]);
  }catch(e){console.error('Synthetic browser failure:',page.url(),errors,(await page.locator('body').innerText()).slice(0,700));throw e;}finally{await context.close();await browser.close();await server.close();}
 });

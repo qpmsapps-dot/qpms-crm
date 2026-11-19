@@ -1,0 +1,78 @@
+.dc-thermo-layout.dc-v2{padding:18px!important;font-family:Inter,Arial,sans-serif;font-size:13px;gap:14px}
+.dc-thermo-layout :is(h1,h2,h3,table,button,label,input,select){font-family:Inter,Arial,sans-serif}
+.dc-thermo-layout .dc-main{min-width:0;gap:0}
+.dc-thermo-layout .thv2-header h1{font-size:27px;line-height:1.2}
+.dc-thermo-layout .thv2-header p{margin-top:4px;line-height:1.5}
+.dc-thermo-layout .thv2-header .thv2-eyebrow{font-size:10px;margin:0 0 3px}
+.dc-thermo-layout .thv2-filters.dc-filter-grid{grid-template-columns:1fr 1fr 1.15fr 1.65fr;gap:12px;padding:10px 12px;margin-bottom:0}
+.dc-thermo-layout .thv2-filters label{min-width:0;display:block}
+.dc-thermo-layout .thv2-filters input,.dc-thermo-layout .thv2-filters select{width:100%}
+.dc-thermo-layout .dc-range-tools{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:8px 0 14px;font-size:11px;color:#526580}
+.dc-thermo-layout .dc-range-tools>div{display:flex;gap:7px;flex-shrink:0}
+.dc-thermo-layout .dc-range-tools button{min-height:26px;padding:4px 8px;font-size:11px}
+.dc-thermo-layout .dc-overview{grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr);gap:14px}
+.dc-thermo-layout .dc-kpis{margin:0;gap:10px;grid-template-columns:repeat(2,minmax(0,1fr))}
+.dc-thermo-layout .dc-kpis .thv2-card{padding:12px;min-height:90px;gap:10px}
+.dc-thermo-layout .dc-kpis h2{font-size:12px}
+.dc-thermo-layout .dc-kpis small{font-size:10px;color:#42587b;line-height:1.4}
+.dc-thermo-layout .dc-kpis .thv2-completion{padding:10px 12px}
+.dc-thermo-layout .dc-metric-notes{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px 15px;font-size:10px;color:#526580;line-height:1.5}
+.dc-thermo-layout .dc-performance{display:block;padding:12px 14px;min-height:0;margin:0}
+.dc-thermo-layout .dc-chart{height:166px;margin:6px 0 0;min-height:0}
+.dc-thermo-layout .dc-chart-note{font-size:10px;color:#63728c;margin-top:3px}
+.dc-thermo-layout .dc-monthly-area{margin:16px 0;border:1px solid #d9e4f4;border-radius:10px;background:#fff;min-width:0}
+.dc-thermo-layout .thv2-upload-strip{border-radius:9px 9px 0 0;margin-bottom:0;min-width:0}
+.dc-thermo-layout .dc-schedule-menu{flex-shrink:0}
+.dc-thermo-layout .dc-schedule-menu summary{font-size:12px;min-height:34px;padding:7px 10px;display:flex;align-items:center;gap:6px}
+.dc-thermo-layout .dc-schedule-menu>div{z-index:30}
+.dc-thermo-layout .dc-monthly{padding:12px 14px;min-width:0}
+.dc-thermo-layout .dc-import-heading,.dc-thermo-layout .dc-admin-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.dc-thermo-layout .dc-import-heading h2{font-size:13px}
+.dc-thermo-layout .dc-plan>p{font-size:11px;line-height:1.5;color:#526580;margin:6px 0}
+.dc-thermo-layout .dc-import-grid{display:grid;grid-template-columns:1.1fr .85fr 1.5fr auto;align-items:end;gap:12px;margin:12px 0}
+.dc-thermo-layout .dc-import-grid>label{display:flex;flex-direction:column;gap:5px;min-width:0}
+.dc-thermo-layout .dc-template-action{display:flex;flex-direction:column;gap:5px;font-size:11px;font-weight:700;min-width:0}
+.dc-thermo-layout .dc-template-action button{align-self:flex-start}
+.dc-thermo-layout .dc-import-grid input{width:100%;min-width:0;min-height:34px;font-size:12px}
+.dc-thermo-layout input[type=file]{padding:5px;max-width:100%;font-size:11px}
+.dc-thermo-layout input[type=file]::file-selector-button{border:0;border-radius:4px;background:#edf3ff;color:#0646c9;padding:5px 7px;margin-right:7px;font:inherit;cursor:pointer}
+.dc-thermo-layout .dc-import-grid>button{white-space:normal;min-height:34px;font-size:11px;background:#0750d8;color:white}
+.dc-thermo-layout .dc-validation-summary{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.dc-thermo-layout .dc-validation-summary span{background:#f3f7fe;border:1px solid #d9e4f4;border-radius:6px;padding:7px 10px;font-size:11px}
+.dc-thermo-layout .dc-validation-summary b{margin-left:7px;color:#123c8f}
+.dc-thermo-layout .dc-import-confirm{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:12px 0}
+.dc-thermo-layout .dc-import-confirm label{display:flex;align-items:flex-start;gap:8px;font-size:12px;line-height:1.5}
+.dc-thermo-layout input[type=checkbox]{flex:0 0 auto;width:16px;height:16px;margin-top:1px}
+.dc-thermo-layout .dc-plan [role=alert]{border:1px solid #edb4b4;border-radius:6px;padding:10px;overflow-wrap:anywhere}
+.dc-thermo-layout .dc-plan pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}
+.dc-thermo-layout .dc-permission-note{padding:10px 14px;font-size:11px;color:#526580}
+.dc-thermo-layout .dc-view-tabs{display:flex;gap:6px;border-bottom:1px solid #d9e4f4;margin:16px 0 12px}
+.dc-thermo-layout .dc-view-tabs button{border:0;border-bottom:3px solid transparent;background:transparent;border-radius:6px 6px 0 0;box-shadow:none;padding:10px 14px;color:#526580;white-space:normal}
+.dc-thermo-layout .dc-view-tabs button[aria-selected=true]{color:#0646c9;border-bottom-color:#0750d8;background:#f1f6ff}
+.dc-thermo-layout .dc-view-tabs span{font-size:10px;background:#e7eefb;border-radius:10px;padding:2px 7px}
+.dc-thermo-layout [hidden]{display:none!important}
+.dc-thermo-layout .dc-record-tools{border:1px solid #d9e4f4;border-radius:8px;margin-bottom:12px;gap:12px}
+.dc-thermo-layout .dc-record-tools>label:last-child{display:flex;align-items:center;gap:8px;font-size:11px}
+.dc-thermo-layout .thv2-table-title{margin:12px 0 10px}
+.dc-thermo-layout .thv2-table-title h2{display:flex;align-items:center;gap:7px;font-size:16px}
+.dc-thermo-layout .thv2-table-title p{font-size:11px;color:#526580;white-space:normal}
+.dc-thermo-layout .thv2-table-scroll{border-radius:8px}
+.dc-thermo-layout table{table-layout:auto;font-size:12px}
+.dc-thermo-layout th,.dc-thermo-layout td{white-space:normal;overflow-wrap:break-word;padding:9px 10px}
+.dc-thermo-layout td small{display:block;font-size:10px;line-height:1.4;color:#63728c;margin-top:4px}
+.dc-thermo-layout td button{font-size:11px;min-height:28px;padding:4px 8px;white-space:normal}
+.dc-thermo-layout td details summary{color:#0646c9;font-size:11px;cursor:pointer;padding:4px 0}
+.dc-thermo-layout td details[open]{min-width:170px}
+.dc-thermo-layout td details p{font-size:11px;margin:5px 0;line-height:1.5}
+.dc-thermo-layout .dc-table-scroll{max-height:none}
+.dc-thermo-layout .dc-inline-note{background:#f7faff;border:1px solid #d9e4f4;border-radius:8px;padding:14px;margin:12px 0;min-width:0}
+.dc-thermo-layout .dc-inline-note p{margin:6px 0;line-height:1.6;font-size:12px}
+.dc-thermo-layout .dc-inline-note h2{font-size:14px}
+.dc-thermo-layout .dc-report-notes{margin-top:14px;padding:12px 0;border-top:1px solid #e1e9f5}
+.dc-thermo-layout .dc-report-notes summary{display:flex;gap:6px;font-size:11px;color:#526580;cursor:pointer}
+.dc-thermo-layout .retail-report-pager{font-size:11px;gap:8px;flex-wrap:wrap;padding:10px 0}
+.dc-thermo-layout .dc-plan form{display:grid;gap:10px;padding:12px 0}
+.dc-thermo-layout .dc-plan form input,.dc-thermo-layout .dc-plan form select{display:block;width:100%;margin-top:5px}
+@media(max-width:1200px){.dc-thermo-layout .dc-import-grid{grid-template-columns:1fr 1fr}.dc-thermo-layout .dc-import-grid>button{justify-self:start}.dc-thermo-layout .dc-kpis .thv2-card{padding:10px 8px;gap:7px}}
+@media(max-width:850px){.dc-thermo-layout.dc-v2{padding:12px!important}.dc-thermo-layout .dc-overview{grid-template-columns:minmax(0,1fr)}.dc-thermo-layout .thv2-filters.dc-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dc-thermo-layout .thv2-filters label:last-child{grid-column:auto}.dc-thermo-layout .thv2-table-scroll table{min-width:640px}.dc-thermo-layout .dc-chart{height:170px}.dc-thermo-layout .dc-range-tools{align-items:flex-start;flex-wrap:wrap}}
+@media(max-width:480px){.dc-thermo-layout .thv2-header .thv2-actions{width:100%;gap:6px}.dc-thermo-layout .thv2-header .thv2-actions>button{flex:1}.dc-thermo-layout .thv2-filters.dc-filter-grid{grid-template-columns:minmax(0,1fr)}.dc-thermo-layout .dc-import-grid{grid-template-columns:minmax(0,1fr)}.dc-thermo-layout .dc-import-confirm{flex-direction:column;align-items:stretch}.dc-thermo-layout .dc-view-tabs button{flex:1;padding:9px 7px;font-size:11px}.dc-thermo-layout .dc-import-heading{align-items:flex-start}.dc-thermo-layout .thv2-upload-strip .dc-schedule-menu{width:100%}.dc-thermo-layout .dc-record-tools>label:last-child{width:100%}.dc-thermo-layout .dc-record-tools select{flex:1}.dc-thermo-layout .thv2-table-scroll table{min-width:580px}.dc-thermo-layout .dc-admin-heading{flex-wrap:wrap;font-size:11px}.dc-thermo-layout .dc-inline-note{padding:10px}}
