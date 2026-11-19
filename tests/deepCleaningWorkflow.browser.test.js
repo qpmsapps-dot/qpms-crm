@@ -25,7 +25,7 @@ test('monthly wizard validates the whole workbook, confirms import, retries iden
   const req=route.request(),url=new URL(req.url());
   if(!['127.0.0.1','localhost'].includes(url.hostname))return route.abort();
   if(!url.pathname.startsWith('/api/'))return route.continue();
-  if(url.pathname.endsWith('/mis/access'))return route.fulfill({json:{result:{active:true,role,states:['TN'],modules:['cleaning'],schedule_writer:role==='CLEANING_SCHEDULE_WRITER',read_only:role==='MIS_HK'}}});
+  if(url.pathname.endsWith('/mis/access'))return route.fulfill({json:{result:{active:true,role,states:['TN'],modules:['cleaning'],schedule_writer:role==='CLEANING_SCHEDULE_WRITER',read_only:role==='MIS_HK',cleaning_schedule_admin:role==='SUPER_ADMIN'}}});
   if(url.pathname.endsWith('/module-reports/deep-cleaning')){
    const store={id:'store',store_code:'0012',store_name:'Synthetic historical store',state:'TN'};
    return route.fulfill({json:{report:{from:url.searchParams.get('from'),to:url.searchParams.get('to'),stores:manualMode?[store]:[],
@@ -40,6 +40,7 @@ test('monthly wizard validates the whole workbook, confirms import, retries iden
   }
   if(url.pathname.endsWith('/cleaning/plans/preview')){
    assert.equal(req.method(),'POST');assert.equal(req.headers()['x-file-name'],'monthly.xlsx');assert.ok(req.postDataBuffer().length>100);
+   if(role==='SUPER_ADMIN'){assert.equal(url.searchParams.get('month'),'2026-11');const uploaded=new ExcelJS.Workbook();await uploaded.xlsx.load(req.postDataBuffer());assert.equal(uploaded.worksheets[0].getCell('C2').value,'2026-11-28');}
    return route.fulfill({json:{result:{total:1,valid:invalid?0:1,invalid:invalid?1:0,rows:[{row:2,input,resolved:{state:'TN'},errors:invalid?['UNKNOWN_OR_AMBIGUOUS_STORE_CODE']:[]}]}}});
   }
   if(url.pathname.endsWith('/cleaning/plans/import')){
@@ -61,7 +62,18 @@ test('monthly wizard validates the whole workbook, confirms import, retries iden
   invalid=false;await page.getByRole('button',{name:'Preview and validate schedules'}).click();await page.getByText('Valid',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Confirm atomic import'}).isDisabled(),true);
   await page.getByLabel('I verified every Store Code, state and scheduled date.').check();await page.getByRole('button',{name:'Confirm atomic import'}).click();await page.getByRole('alert').filter({hasText:'Synthetic uncertain response'}).waitFor();
   await page.getByRole('button',{name:'Confirm atomic import'}).click();await page.getByRole('status').filter({hasText:'Import accepted'}).waitFor();assert.equal(imports.length,2);assert.deepEqual(imports[0],imports[1]);await page.getByRole('cell',{name:'Unassigned',exact:true}).waitFor();
-  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
+  await page.setViewportSize({width:390,height:844});
+  // Resize completion does not guarantee that responsive styles have painted.
+  // Synchronize rendering frames; retain the exact overflow threshold.
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  const geometry=await page.evaluate(()=>({viewport:innerWidth,width:document.documentElement.scrollWidth,overflow:[...document.querySelectorAll('body *')].filter(el=>el.getBoundingClientRect().right>innerWidth+2).slice(0,8).map(el=>({tag:el.tagName,class:el.className,right:el.getBoundingClientRect().right}))}));
+  assert.ok(geometry.width<=geometry.viewport+2,JSON.stringify(geometry));
+  // The real administrator's training-only access response now carries an
+  // independent server-verified monthly capability, without an MIS assignment.
+  role='SUPER_ADMIN';input.SCHEDULE_DATE='2026-11-28';workbook.worksheets[0].getCell('C2').value=input.SCHEDULE_DATE;await page.reload();
+  await page.getByText('Schedule Deep Cleaning',{exact:true}).click();await page.getByRole('button',{name:'Monthly Excel schedule import',exact:true}).click();
+  await page.getByLabel('Schedule month',{exact:true}).fill('2026-11');await page.getByLabel('Schedule workbook',{exact:true}).setInputFiles({name:'monthly.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:Buffer.from(await workbook.xlsx.writeBuffer())});
+  await page.getByRole('button',{name:'Preview and validate schedules'}).click();await page.getByText('Valid',{exact:true}).waitFor();
   role='MIS_HK';await page.reload();const accessReply=page.waitForResponse(r=>r.url().endsWith('/mis/access'));await page.getByText('Schedule Deep Cleaning',{exact:true}).click();await accessReply;assert.equal(await page.getByRole('button',{name:'Monthly Excel schedule import'}).count(),0);
   manualMode=true;role='CENTRAL_MIS';await page.setViewportSize({width:1440,height:1000});await page.reload();
   await page.getByText('Link verified FO completion',{exact:true}).click();await page.getByLabel('Submission source').selectOption('client');await page.getByLabel('Existing FO cleaning submission ID').fill(historicalId);

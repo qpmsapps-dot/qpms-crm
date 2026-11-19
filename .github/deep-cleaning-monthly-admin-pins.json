@@ -1,0 +1,20 @@
+{
+  "schema": "cleaning-superadmin-import.v1",
+  "base_sha": "661eee8bf757b8cf096b52e1ddc7dcb8766ae158",
+  "files": {
+    ".github/deepCleaningMonthlyAdminGuard.mjs": "60567205f86337c26bb2d62cb2b265e8c044c260",
+    ".github/deepCleaningV2Guard.mjs": "6415c1308d6d58cb859a8f4a2211f1c211b2449e",
+    ".github/thermographyV2Guard.mjs": "e4cb879a2a9654747a88fb785d98af851c662a41",
+    "backend/routes/retailMisRoutes.js": "f4cbe9191dd5dfd8133ec6c6ea5dca9742b4f040",
+    "backend/services/retailCleaningPlanService.js": "3af812cb576fcea962c99c2eafcbd149afdf6e02",
+    "backend/tests/deepCleaningWriterAccess.test.js": "74bf7e864bafb576dc4a47dd0ece4ed59e29e056",
+    "backend/tests/deepCleaningStoreOnlyPostgres.test.js": "275be8616d51106ea93fe41bea4505253811fdb8",
+    "backend/tests/helpers/deepCleaningSuperAdminAssertions.js": "a6e1d58fc8cff72ca0472bec6688069d1c61a8e3",
+    "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "cec469be3db39391b5ae70d9738aac7918dedaa8",
+    "supabase/proposals/retail_cleaning_superadmin_import_20261119.sql": "28534490d4dae629c9813403a6bb043abcd65424",
+    "supabase/proposals/retail_cleaning_superadmin_import_recovery_20261119.sql": "d076f96ded1456e26400697b5efc19f96e473124",
+    "tests/deepCleaningWorkflow.browser.test.js": "296b0fffec1b2d85a00a40f3507edc372be99265",
+    "tests/deepCleaningV2Guard.test.js": "f2ae5d5334c37a41d25db895f8534adb17c5310c",
+    "docs/DEEP_CLEANING_SUPERADMIN_IMPORT_20261119.md": "94875fa9d60b176fbfc5f90600a73e3db50201e2"
+  }
+}

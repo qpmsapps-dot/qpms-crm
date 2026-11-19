@@ -26,3 +26,19 @@ test('dedicated workflow uses runner context only after a runner exists and keep
   assert.equal(job.steps.some(step=>step['continue-on-error']),false);
  }
 });
+
+// The follow-up repair has its own fixed base and content pins; the historical
+// V2 authorization above is unchanged.
+import * as monthly from '../.github/deepCleaningMonthlyAdminGuard.mjs';
+test('monthly administrator repair rejects every missing, changed and unrelated file',()=>{
+ const paths=[...monthly.payloadPaths,monthly.manifestPath,monthly.workflowPath],hash=()=> '3'.repeat(40);
+ const baseWorkflow='          # BEGIN DEEP CLEANING V2 EXACT PAYLOAD\nexisting checks\n';
+ const f={base:monthly.approvedBase,paths,manifest:{schema:'cleaning-superadmin-import.v1',base_sha:monthly.approvedBase,files:Object.fromEntries(monthly.payloadPaths.map(p=>[p,hash()]))},hash,baseWorkflow,workflow:monthly.reviewedWorkflow(baseWorkflow,hash(),hash())};
+ assert.equal(monthly.verifyPayload(f).ok,true);
+ for(const path of paths)assert.equal(monthly.verifyPayload({...f,paths:paths.filter(p=>p!==path)}).ok,false,path);
+ for(const path of monthly.payloadPaths)assert.equal(monthly.verifyPayload({...f,hash:p=>p===path?'4'.repeat(40):hash()}).ok,false,path);
+ for(const path of ['backend/server.js','Mobile_FO_V2/lib/main.dart','src/pages/FOActivities.jsx','supabase/migrations/unreviewed.sql','.env'])assert.equal(monthly.verifyPayload({...f,paths:[...paths,path]}).ok,false,path);
+ assert.equal(monthly.verifyPayload({...f,base:'0'.repeat(40)}).ok,false);
+ assert.equal(monthly.verifyPayload({...f,workflow:f.workflow+'unreviewed'}).ok,false);
+ assert.equal(monthly.verifyPayload({...f,manifest:{...f.manifest,files:{...f.manifest.files,extra:hash()}}}).ok,false);
+});
