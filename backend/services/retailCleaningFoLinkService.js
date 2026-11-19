@@ -21,6 +21,13 @@ export async function linkedFoCleaningSource(client,profile,scheduleId){
 export async function linkFoCleaning(client,profile,scheduleId,input){
  if(!['ADMIN','QPMSADMIN'].includes(String(profile.role||'').toUpperCase().replace(/[^A-Z0-9]/g,''))||profile.is_active!==true)throw fail(403,'Existing active Admin required to confirm linkage.');
  if(!/^[a-f0-9-]{36}$/i.test(input.source_id||''))throw fail(400,'Existing verified FO submission ID required.');
+ if(input.source_kind&&!['legacy','client'].includes(input.source_kind))throw fail(400,'Unsupported Deep Cleaning source kind.');
+ if(input.source_kind==='client'){
+  if(!profile.auth_user_id)throw fail(403,'Verified Admin identity required.');
+  const {data,error}=await client.rpc('rpc_retail_cleaning_manual_link_v2',{p_actor:profile.id,p_auth:profile.auth_user_id,p_action:input.action||'link',p_data:{schedule_id:scheduleId,source_id:input.source_id,reason:input.reason,revision:input.revision,allow_date_exception:input.allow_date_exception===true}});
+  if(error)throw fail(error.code==='42501'?403:['40001','23505'].includes(error.code)?409:['PGRST202','42883'].includes(error.code)?503:400,'Manual link was not confirmed. Verify authorization, canonical identity, stored evidence, dates, revision and review reason.');
+  return data;
+ }
  const {data,error}=await client.rpc('rpc_retail_cleaning_link_fo',{p_actor:profile.id,p_schedule:scheduleId,p_source:input.source_id});
  if(error)throw fail(error.code==='42501'?403:error.code==='40001'?409:['PGRST202','42883'].includes(error.code)?503:400,error.code==='42501'?'Link is outside authorized schedule/FO scope.':error.code==='PGRST202'?'Verified linking awaits the reviewed database capability.':'Link was not saved: verify approval, exact store/date/FO and stored before/after evidence.');
  return {saved:true,schedule_id:scheduleId,submission_id:data.id};

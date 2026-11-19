@@ -32,7 +32,7 @@ async function setup(page){
   return route.fulfill({json:{stores:[],zones:[],fos:[],snapshot:{stores:[],zones:[],fos:[]}}});
  });
 }
-test('Deep Cleaning shows state summary and submitted work first; schedules only in collapsed admin maintenance',async({page})=>{
+test('Deep Cleaning V2 separates verified schedule KPIs from historical Excel and exposes scheduled work',async({page})=>{
  await setup(page);
  await page.goto('/reliance-retail/deep-cleaning');
  await expect(page.getByRole('heading',{name:'Deep Cleaning',exact:true})).toBeVisible();
@@ -45,12 +45,14 @@ test('Deep Cleaning shows state summary and submitted work first; schedules only
  await expect(page.locator('.dc-kpis .dc-kpi').first().locator('strong')).toHaveText('0');
  await expect(summary.getByRole('img',{name:/AP-1: 0 scheduled, 0 completed, N\/A completion/})).toBeVisible();
  await expect(page.getByRole('heading',{name:'Store-wise Submitted Work'})).toBeVisible();
- // Admin maintenance survives but no longer occupies the primary report.
- await expect(page.getByRole('region',{name:'Cleaning schedules'})).toBeHidden();
+ // Scheduled work is visible in V2; mutation controls remain authorized separately.
+ await expect(page.getByRole('region',{name:'Cleaning schedules'})).toBeVisible();
  await expect(work.getByText('Completed (Excel reported)')).toBeVisible();
  await expect(work.getByText('No FO evidence')).toBeVisible();
  await expect(page.getByText('Deep Cleaning — imported October records')).toHaveCount(0);
  await expect(work.getByRole('button',{name:/View evidence/})).toHaveCount(0);
- await expect(summary.locator('.dc-zero-states span')).toHaveCount(6); // All six states remain explicitly unavailable.
- await expect(page.locator('.retail-schedule-admin summary')).toContainText('Schedule administration and verified FO linking');
+ for(const state of ['TN','KA','KL','TG','AP-1','AP-2'])await expect(summary.getByRole('img',{name:new RegExp(state+': 0 scheduled, 0 completed, N/A completion')})).toBeVisible();
+ await expect(page.locator('.dc-kpis .dc-kpi').nth(1).locator('strong')).toHaveText('0');
+ await expect(page.locator('.dc-kpis .dc-kpi').nth(2).locator('strong')).toHaveText('0');
+ await expect(page.locator('.retail-schedule-admin summary')).toContainText('Scheduled work and verified completion links');
 });

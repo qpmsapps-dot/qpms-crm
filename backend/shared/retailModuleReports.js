@@ -61,11 +61,19 @@ export function cleaningReport(snapshot, filter = {}) {
     const store = canonicalActivityStore(stores,plan);
     if (!store) { exceptions.push({id:plan.id,reason:'Ambiguous, conflicting or unknown canonical Store Code'}); return []; }
     if (!visible(store)) return [];
-    const matches = [...new Map(submissions.filter(s => s.store.id === store.id && s.schedule_id === plan.id && s.deep_cleaning_date === plan.scheduled_date && completed(s.status) && !['NOT DONE','NOT COMPLETED'].includes(storeKey(s.final_outcome))).map(s=>[s.id,s])).values()];
+    const matches = [...new Map(submissions.filter(s => {
+      const exactDate=s.deep_cleaning_date===plan.scheduled_date;
+      const verifiedSource=plan.metadata?.verified_submission_id===s.id&&!s.schedule_id&&s.retail_store_id===store.id&&s.metadata?.contract_version==='cleaning-independent.phase1b.v1'&&s.status==='submitted'&&s.final_outcome==='Completed';
+      const automatic=verifiedSource&&plan.metadata.verified_link_contract==='cleaning-match.v2'&&exactDate;
+      const manual=verifiedSource&&plan.metadata.verified_link_contract==='cleaning-match.manual.v2'&&plan.metadata.verified_actual_date===s.deep_cleaning_date&&plan.metadata.manual_reason?.length>=20;
+      return s.store.id===store.id&&(s.schedule_id===plan.id&&exactDate||automatic||manual)&&completed(s.status)&&!['NOT DONE','NOT COMPLETED'].includes(storeKey(s.final_outcome));
+    }).map(s=>[s.id,s])).values()];
     const recordedNotDone = submissions.some(s => s.store.id === store.id && s.schedule_id === plan.id && s.deep_cleaning_date === plan.scheduled_date && completed(s.status) && ['NOT DONE','NOT COMPLETED'].includes(storeKey(s.final_outcome)));
     const status = storeKey(plan.status), terminal = ['CANCELLED','NOT DONE','NOT COMPLETED'].includes(status);
     const effective = status === 'CANCELLED' ? 'Cancelled' : ['NOT DONE','NOT COMPLETED'].includes(status) ? 'Not Completed' : !terminal && matches.length ? 'Completed' : recordedNotDone ? 'Not Completed' : ['PLANNED','SCHEDULED','COMPLETED'].includes(status) ? 'Scheduled' : 'Unknown';
-    return [{...plan,store,reporting_state:reportingState(store.state),display_status:effective,submission_ids:matches.map(s=>s.id),overdue:effective==='Scheduled' && plan.scheduled_date < (filter.to || snapshot.to)}];
+    const source=matches[0];
+    const completion=source?{submission_id:source.id,actual_date:source.deep_cleaning_date,submitted_at:source.submitted_at,fo_name:source.fo_name,employee_code:source.submitted_by_employee_code}:null;
+    return [{...plan,store,completion,reporting_state:reportingState(store.state),display_status:effective,submission_ids:matches.map(s=>s.id),overdue:effective==='Scheduled' && plan.scheduled_date < (filter.to || snapshot.to)}];
   });
   const summary=summarizeCleaningReports(submissions,schedules,filter);
   const {scheduled,completed:reportsCompleted,not_completed,pending}=summary.total;

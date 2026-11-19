@@ -27,8 +27,33 @@ export async function retailCleaningReport(client,profile,input={}) {
  const range=moduleReportRange(input),original=await authorizedSnapshot(client,profile,range);
  return {...range,...await cleaningFromSnapshot(client,profile,original,range,input)};
 }
+async function includeVerifiedCleaningSources(client,snapshot,range){
+ const existing=new Set((snapshot.deep_cleaning||[]).map(row=>row.id));
+ const plans=(snapshot.schedules||[]).filter(plan=>plan.metadata?.verified_link_contract==='cleaning-match.manual.v2'&&!existing.has(plan.metadata.verified_submission_id));
+ const ids=[...new Set(plans.map(plan=>plan.metadata.verified_submission_id))];
+ if(ids.length>1000)throw fail(413,'Narrow the manual-link reporting range.');
+ for(let start=0;start<ids.length;start+=100){
+  const result=await client.from('client_deep_cleaning_submissions').select('id,business,schedule_id,retail_store_id,store_code,store_name,state,deep_cleaning_date,status,final_outcome,submitted_by_user_id,submitted_by_employee_code,submitted_at,metadata').in('id',ids.slice(start,start+100)).eq('status','submitted');
+  if(result.error)throw result.error;
+  for(const row of result.data||[]){
+   if(plans.some(plan=>plan.retail_store_id===row.retail_store_id&&plan.metadata.verified_submission_id===row.id&&plan.metadata.verified_actual_date===row.deep_cleaning_date))snapshot.deep_cleaning.push({...row,linked_only:row.deep_cleaning_date<range.from||row.deep_cleaning_date>range.to});
+  }
+ }
+ return snapshot;
+}
 async function cleaningFromSnapshot(client,profile,original,range,input={}) {
  const snapshot={...original,deep_cleaning:[...(original.deep_cleaning||[])],images:[...(original.images||[])]};
+ await includeVerifiedCleaningSources(client,snapshot,range);
+ // Names come only from the already-authorized Retail FO envelope; ambiguous
+ // identities remain unrecorded rather than resolving against company-wide staff.
+ snapshot.deep_cleaning=snapshot.deep_cleaning.map(row=>{
+  const matches=(original.fos||[]).filter(fo=>fo.auth_user_id?fo.auth_user_id===row.submitted_by_user_id:fo.employee_code&&fo.employee_code===row.submitted_by_employee_code);
+  return matches.length===1?{...row,fo_name:row.fo_name||matches[0].name||matches[0].full_name}:row;
+ });
+ snapshot.schedules=snapshot.schedules?.map(plan=>{
+  const matches=(original.fos||[]).filter(fo=>fo.id===plan.assigned_fo_profile_id);
+  return matches.length===1?{...plan,assigned_fo_name:matches[0].name||matches[0].full_name,assigned_fo_employee_code:matches[0].employee_code}:plan;
+ })??snapshot.schedules;
  const linked=(snapshot.schedules||[]).filter(s=>s.metadata?.retail_fo_completion);
  if(linked.length>1000)throw fail(413,'Narrow the schedule reporting range.');
  const sources=await boundedCleaningReads(linked,schedule=>reportRead('rpc_retail_cleaning_link_source',()=>linkedFoCleaningSource(client,profile,schedule.id)));
@@ -41,7 +66,8 @@ export async function retailCleaningEvidence(client,profile,id,input={}) {
  // Recheck the authenticated actor's canonical state/store scope before signing anything.
  assertRetailAccess(profile,'deepCleaning');
  if(profile.is_active===false||['INACTIVE','DISABLED'].includes(String(profile.status||'').toUpperCase()))throw fail(403,'Active Retail access required.');
- const range=moduleReportRange(input),snapshot=await authorizedSnapshot(client,profile,range);
+ const range=moduleReportRange(input),original=await authorizedSnapshot(client,profile,range);
+ const snapshot=await includeVerifiedCleaningSources(client,{...original,deep_cleaning:[...(original.deep_cleaning||[])]},range);
  const report=cleaningReport(snapshot,{state:input.state,store:input.store,to:range.to});
  const submission=report.submissions.find(s=>s.id===id);
  if(!submission&&String(id).startsWith('fo:')){
@@ -56,7 +82,7 @@ export async function retailCleaningEvidence(client,profile,id,input={}) {
  if(submission.source_kind==='verified_fo_link')return signLinkedFoCleaningEvidence(client,profile,submission.schedule_id);
  const prefix=buildClientDeepCleaningStoragePath({submission:{...submission,store_code:submission.store_code||submission.store.store_code},uploadType:'before',mimeType:'image/jpeg',id:'prefix'}).split('/').slice(0,-2).join('/')+'/';
  const {data,error}=await reportRead('client_deep_cleaning_uploads.select',async()=>{
-  const result=await client.from('client_deep_cleaning_uploads').select('id,submission_id,upload_type,storage_bucket,storage_path,original_filename,mime_type,file_size').eq('submission_id',id).eq('upload_status','uploaded').order('id').limit(101);
+  const result=await client.from('client_deep_cleaning_uploads').select('id,submission_id,upload_type,storage_bucket,storage_path,original_filename,mime_type,file_size,uploaded_at').eq('submission_id',id).eq('upload_status','uploaded').order('id').limit(101);
   if(result.error)throw result.error;return result;
  });
  if(error)throw error;if(data.length>100)throw fail(413,'This submission exceeds the evidence viewing limit.');
@@ -68,7 +94,7 @@ export async function retailCleaningEvidence(client,profile,id,input={}) {
    const result=await client.storage.from(CLIENT_DEEP_CLEANING_BUCKET).createSignedUrl(row.storage_path,600);
    if(result.error)throw result.error;return result;
   });
-  return {id:row.id,type:row.upload_type,name:row.original_filename,mime_type:row.mime_type,url:signed.data.signedUrl};
+  return {id:row.id,type:row.upload_type,name:row.original_filename,mime_type:row.mime_type,url:signed.data.signedUrl,...(row.uploaded_at?{uploaded_at:row.uploaded_at}:{})};
  });
  return uploads.filter(Boolean);
 }

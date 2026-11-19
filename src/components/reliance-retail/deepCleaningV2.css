@@ -1202,3 +1202,56 @@
     flex-shrink: 1;
   }
 }
+
+
+/* Full-page evidence drill-down: preserve the underlying dashboard width. */
+.dc-v2 .dc-report-month { display: flex; align-items: center; gap: 8px; margin-left: auto; font-size: 12px; color: #263f76; }
+.dc-v2 .dc-report-month input { min-width: 0; max-width: 155px; border: 1px solid #dce4f3; border-radius: 6px; padding: 5px; }
+@media(max-width:700px) { .dc-v2 .dc-filter-card>.dc-card-heading { flex-wrap: wrap; } .dc-v2 .dc-report-month { margin-left: 0; } }
+.dc-v2 .dc-drawer {
+  position: fixed;
+  inset: 0;
+  top: 0;
+  width: 100vw;
+  height: 100dvh;
+  max-height: 100dvh;
+  z-index: 100;
+  border-radius: 0;
+  box-sizing: border-box;
+  background: #f8faff;
+  box-shadow: 0 0 0 100vmax #14244980;
+}
+.dc-v2 .dc-drawer-header,
+.dc-v2 .dc-drawer-footer {
+  padding-inline: max(20px, calc((100vw - 1200px) / 2));
+}
+.dc-v2 .dc-drawer-scroll {
+  width: min(1200px, 100%);
+  box-sizing: border-box;
+  margin-inline: auto;
+  padding: 20px;
+}
+.dc-v2 .dc-photo-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.dc-v2 .dc-photo-pair .dc-photo-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media(max-width:700px) {
+  .dc-v2 .dc-photo-pair { grid-template-columns: minmax(0, 1fr); }
+}
+
+
+/* Streamlined monthly reporting layout. */
+.dc-v2 .dc-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.dc-v2 .dc-performance { display: block; }
+.dc-v2 .dc-insights { display: none; }
+.dc-v2 .dc-chart-card { width: 100%; }
+.dc-v2 .dc-main > .dc-filter-card { order: 1; }
+.dc-v2 .dc-main > .dc-kpis { order: 2; }
+.dc-v2 .dc-main > .dc-performance { order: 3; }
+@media(max-width:700px) {
+  .dc-v2 .dc-kpis { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+}

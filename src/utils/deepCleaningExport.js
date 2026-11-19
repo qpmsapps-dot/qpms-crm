@@ -11,24 +11,30 @@ export async function loadCleaningExport({request,month,from,to,filter={},row}) 
   const response=await request({url:REPORT,params});
   const report=response.data?.report;
   if(!report||report.from!==range.from||report.to!==range.to||!Array.isArray(report.submissions)||!Array.isArray(report.stores)||report.complete===false)throw Error('Authorized cleaning report is incomplete. Export cancelled.');
-  const work=cleaningView(report,{schedules:[],submissions:[]},{status:filter.status,query:filter.query}).work;
+  const view=cleaningView(report,{schedules:[],submissions:[]},{status:filter.status,query:filter.query});
+  const work=view.work;
   const rows=[...new Map(work.filter(r=>r.source_kind!=='IFMS_EXCEL'&&submitted(r)&&r.deep_cleaning_date>=range.from&&r.deep_cleaning_date<=range.to).map(r=>[r.id,r])).values()];
   if(rows.some(r=>!r.id||!r.store?.id||!r.store?.store_code||!report.stores.some(s=>s.id===r.store.id&&s.store_code===r.store.store_code)))throw Error('Persisted submission/store identity could not be verified.');
   const selected=row?rows.filter(r=>r.id===row.id):rows;
   if(row&&(!selected.length||selected[0].store.id!==row.store?.id||selected[0].deep_cleaning_date!==row.deep_cleaning_date))throw Error('Submission is no longer available in this authorized view. Refresh before exporting.');
   if(selected.length>EXPORT_LIMITS.sessions)throw Error('More than 500 submissions selected. Narrow the month or filters; no export was downloaded.');
-  return {rows:selected,range,params,exceptions:report.exceptions?.length||0};
+  const schedules=Array.isArray(report.schedules)?view.schedules.filter(plan=>!row||plan.submission_ids?.includes(row.id)||plan.id===row.schedule_id):null;
+  const linkedRows=row?[]:[...new Map((report.submissions||[]).filter(r=>r.linked_only&&submitted(r)&&schedules?.some(plan=>plan.submission_ids?.includes(r.id))).map(r=>[r.id,{...r,scheduled_date:r.scheduled_date||schedules.find(plan=>plan.submission_ids?.includes(r.id))?.scheduled_date}])).values()];
+  if(linkedRows.some(r=>!r.store?.id||!report.stores.some(s=>s.id===r.store.id&&s.store_code===r.store.store_code)))throw Error('Associated historical submission/store identity could not be verified.');
+  if(selected.length+linkedRows.length>EXPORT_LIMITS.sessions)throw Error('More than 500 submissions selected including historical links. Narrow the selection.');
+  return {rows:selected,linkedRows,schedules,range,params,exceptions:report.exceptions?.length||0};
 }
-export async function collectCleaningExport({rows,params,exceptions=0,request,photos=false,readPhoto=readCleaningPhoto,onProgress=()=>{}}) {
-  const unique=[...new Map(rows.map(r=>[r.id,r])).values()];
+export async function collectCleaningExport({rows,linkedRows=[],schedules=null,params,exceptions=0,request,photos=false,readPhoto=readCleaningPhoto,onProgress=()=>{}}) {
+  const actualIds=new Set(rows.map(r=>r.id));
+  const unique=[...new Map([...linkedRows,...rows].map(r=>[r.id,r])).values()];
   if(unique.length>EXPORT_LIMITS.sessions)throw Error('More than 500 submissions selected. Narrow the month or filters.');
-  const data={records:[],warnings:[]};let evidenceCount=0,photoCount=0,photoBytes=0;
+  const data={records:[],linkedRecords:[],plans:schedules?.map(p=>({id:p.id,state:p.store?.state,storeCode:p.store?.store_code,storeName:p.store?.store_name,scheduledDate:p.scheduled_date,status:p.display_status,submissionIds:p.submission_ids||[],actualDate:p.completion?.actual_date,submittedAt:p.completion?.submitted_at,fo:p.completion?.fo_name,employeeCode:p.completion?.employee_code}))??null,warnings:[]};let evidenceCount=0,photoCount=0,photoBytes=0;
   if(exceptions)data.warnings.push(`${exceptions} source records excluded by the server because canonical store identity could not be resolved.`);
   for(const [index,row] of unique.entries()) {
     onProgress(`Loading authorized evidence ${index+1} of ${unique.length}`);
     const reference=`${REPORT}/${encodeURIComponent(row.id)}/evidence`;
-    const record={id:row.id,storeCode:row.store.store_code,storeName:row.store.store_name,state:row.store.state,date:row.deep_cleaning_date,
-      fo:recordedFoName(row),employeeCode:recordedFoCode(row),status:row.status,submittedAt:row.submitted_at,source:row.source_kind,evidence:[],evidenceStatus:'Not requested'};
+    const record={id:row.id,scope:actualIds.has(row.id)?'Actual-period report':'Associated historical evidence; excluded from actual-period report totals',storeCode:row.store.store_code,storeName:row.store.store_name,state:row.store.state,date:row.deep_cleaning_date,
+      scheduledDate:row.scheduled_date,fo:recordedFoName(row),employeeCode:recordedFoCode(row),status:row.status,submittedAt:row.submitted_at,source:row.source_kind,evidence:[],evidenceStatus:'Not requested'};
     let uploads;
     try {
       const response=await request({url:reference,params});
@@ -39,7 +45,8 @@ export async function collectCleaningExport({rows,params,exceptions=0,request,ph
       uploads=[...new Map(uploads.map(u=>[u.id,u])).values()];evidenceCount+=uploads.length;
       if(evidenceCount>EXPORT_LIMITS.evidence)throw Error('Too many evidence references. Narrow the selection; no export was downloaded.');
       for(const upload of uploads) {
-        const e={id:upload.id,type:upload.type,fileName:upload.name,mime:upload.mime_type,reference:`${reference}#${encodeURIComponent(upload.id||'unrecorded')}`,access:'Authorized at export; reopen through dashboard'};
+        const e={id:upload.id,type:upload.type,fileName:upload.name,mime:upload.mime_type,uploadedAt:upload.uploaded_at||null,reference:`${reference}#${encodeURIComponent(upload.id||'unrecorded')}`,access:'Authorized at export; reopen through dashboard'};
+        if(e.uploadedAt&&Number.isFinite(Date.parse(e.uploadedAt))&&(!record.uploadedAt||Date.parse(e.uploadedAt)>Date.parse(record.uploadedAt)))record.uploadedAt=e.uploadedAt;
         record.evidence.push(e);
         let valid=false;try{valid=!!upload.id&&new URL(upload.url).protocol==='https:';}catch{ /* Missing authorization URL. */ }
         if(!valid){e.access='Authorized download unavailable';data.warnings.push(`${row.id} / ${e.id||'Not recorded'}: ${e.access}.`);continue;}
@@ -55,9 +62,10 @@ export async function collectCleaningExport({rows,params,exceptions=0,request,ph
       if(!uploads.length){record.evidenceStatus='No uploaded evidence recorded';data.warnings.push(`${row.id}: No uploaded evidence recorded.`);}
     }
     if(photos)for(const type of ['before','after'])if(!record.evidence.some(e=>e.type===type&&e.image))data.warnings.push(`${row.id}: No authorized ${type.toUpperCase()} photographs included.`);
-    data.records.push(record);
+    (actualIds.has(row.id)?data.records:data.linkedRecords).push(record);
   }
   if(!unique.length)data.warnings.push('No submitted Deep Cleaning records match this selection.');
+  if(data.linkedRecords.length)data.warnings.push(`${data.linkedRecords.length} associated historical report(s) included for verified schedules; original dates are retained and excluded from actual-period submitted-report totals.`);
   return data;
 }
 // Export-only WebP conversion. Upload bytes, upload queues and evidence identities are untouched.

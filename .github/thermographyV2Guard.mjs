@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {approvedBase as cleaningBase,priorWorkflowForChecks as priorCleaningWorkflow,verifyCurrent as verifyCleaning} from './deepCleaningV2Guard.mjs';
 export const approvedBase='46707ec63c440d015c21339b00c423b461089ff1';
 export const manifestPath='.github/thermography-v2-pins.json';
 export const guardPath='.github/thermographyV2Guard.mjs';
@@ -69,6 +70,12 @@ export function verifyThermographyPayload({paths,manifest,hash,base,workflow,bas
 }
 const git=args=>execFileSync('git',['-c',`safe.directory=${process.cwd()}`,...args],{encoding:'utf8'});
 export function priorV2WorkflowForChecks(workflow){
+ if(workflow.includes('# BEGIN DEEP CLEANING V2 EXACT PAYLOAD')){
+  const prior=priorCleaningWorkflow(workflow),base=git(['show',`${approvedBase}:${workflowPath}`]);
+  const hash=p=>git(['rev-parse',`${cleaningBase}:${p}`]).trim();
+  if(normalize(prior)!==reviewedWorkflow(base,hash(manifestPath),hash(guardPath)))throw Error('Historical Thermography workflow altered');
+  return base.replaceAll('\r\n','\n');
+ }
  const base=git(['show',`${approvedBase}:${workflowPath}`]),hash=p=>git(['hash-object',`--path=${p}`,p]).trim();
  if(normalize(workflow)!==reviewedWorkflow(base,hash(manifestPath),hash(guardPath)))throw Error('Unreviewed workflow alteration');
  return base.replaceAll('\r\n','\n');
@@ -77,6 +84,13 @@ export const priorWorkflowForChecks=priorV2WorkflowForChecks;
 if(process.argv[1]&&fs.existsSync(process.argv[1])&&fileURLToPath(import.meta.url)===fs.realpathSync(process.argv[1])){
  const working=process.argv.includes('--working-tree'),base=process.argv.find(a=>/^[a-f0-9]{40}$/.test(a));
  if(!base)throw Error('Explicit reviewed base SHA required');
+ if(fs.existsSync('.github/deep-cleaning-v2-pins.json')){
+  const delta=git(['diff','--name-only',base,...(working?[]:['HEAD'])]).split('\n');
+  if(delta.includes('.github/deep-cleaning-v2-pins.json')){
+   const result=verifyCleaning(base,working);console.log(JSON.stringify(result));if(!result.ok)process.exitCode=1;
+   process.exit(process.exitCode||0);
+  }
+ }
  const paths=git(['diff','--name-only',base,...(working?[]:['HEAD'])]).trim().split('\n').filter(Boolean);
  if(working)paths.push(...git(['ls-files','--others','--exclude-standard']).trim().split('\n').filter(Boolean));
  const read=p=>working?fs.readFileSync(p,'utf8'):git(['show',`HEAD:${p}`]);

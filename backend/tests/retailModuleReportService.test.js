@@ -9,6 +9,23 @@ import {createRelianceRetailManagementRouter} from '../routes/relianceRetailMana
 const admin={id:'actor',role:'Admin',is_active:true};
 const snapshot={stores:[{id:'s',store_code:'T1',state:'TN'}],deep_cleaning:[{id:'d',retail_store_id:'s',status:'submitted',deep_cleaning_date:'2026-10-01'}],schedules:[],images:[]};
 const range={from:'2026-10-01',to:'2026-10-31'};
+
+test('Deep Cleaning resolves only unique names in the authorized FO envelope',async()=>{
+ for(const fos of [[{auth_user_id:'author',name:'Scoped FO'}],[{auth_user_id:'author',name:'Scoped FO'},{auth_user_id:'author',name:'Ambiguous FO'}]]){
+  const client={rpc:async()=>({data:{...snapshot,fos,deep_cleaning:[{...snapshot.deep_cleaning[0],submitted_by_user_id:'author'}]}})};
+  const report=await retailCleaningReport(client,admin,range);assert.equal(report.submissions[0].fo_name,fos.length===1?'Scoped FO':undefined);
+ }
+});
+test('A manually linked historical source outside the range completes only its authorized schedule',async()=>{
+ const metadata={verified_link_contract:'cleaning-match.manual.v2',verified_submission_id:'historical',verified_actual_date:'2026-09-30',manual_reason:'Authorized historical review of both original dates'};
+ const source={id:'historical',business:'Reliance Retail',retail_store_id:'s',store_code:'T1',state:'TN',status:'submitted',final_outcome:'Completed',deep_cleaning_date:'2026-09-30',metadata:{contract_version:'cleaning-independent.phase1b.v1'}};
+ const current={...snapshot,deep_cleaning:[],schedules:[{id:'plan',retail_store_id:'s',scheduled_date:'2026-10-01',status:'Completed',metadata}]};
+ let queries=0;const q={select(){return q;},in(k,ids){assert.deepEqual(ids,['historical']);return q;},eq(){return q;},then(resolve){queries++;return Promise.resolve({data:[source]}).then(resolve);}};
+ const client={rpc:async()=>({data:current}),from:table=>{assert.equal(table,'client_deep_cleaning_submissions');return q;}};
+ const report=await retailCleaningReport(client,admin,range);
+ assert.equal(report.summary.total.scheduled_completed,1);assert.equal(report.summary.total.completed,0);assert.equal(report.submissions[0].linked_only,true);assert.equal(report.schedules[0].completion.actual_date,'2026-09-30');assert.equal(queries,1);
+ const scoped=await retailCleaningReport(client,admin,{...range,state:'KA'});assert.equal(scoped.submissions.length,0);assert.equal(scoped.schedules.length,0);
+});
 test('module reports enforce capability and actor-specific database scope without writes',async()=>{
  let called=0;const client={rpc:async(name,args)=>{called++;assert.equal(name,'rpc_retail_unified_snapshot');assert.equal(args.p_actor,'actor');return {data:snapshot};}};
  const report=await retailCleaningReport(client,admin,range);assert.equal(report.submissions.length,1);

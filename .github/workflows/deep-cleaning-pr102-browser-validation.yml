@@ -1,0 +1,87 @@
+name: Deep Cleaning V2 production validation
+on:
+  pull_request:
+    paths:
+      - '**/*deepCleaning*'
+      - '**/*DeepCleaning*'
+      - '**/*retailCleaning*'
+      - 'supabase/proposals/retail_cleaning*'
+      - '.github/deep-cleaning-v2-pins.json'
+      - '.github/workflows/deep-cleaning-pr102-browser-validation.yml'
+  push:
+    branches:
+      - feat/deep-cleaning-v2-production-ready
+    paths:
+      - '.github/workflows/deep-cleaning-pr102-browser-validation.yml'
+      - 'src/components/reliance-retail/**'
+      - 'src/pages/reliance-retail/RetailScopedDeepCleaning.jsx'
+      - 'src/utils/deepCleaning**'
+      - 'tests/deepCleaning**'
+      - 'backend/services/retailCleaningPlanService.js'
+      - 'backend/tests/retailCleaningPhase1.test.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ui-browser-validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Require exact reviewed Deep Cleaning payload
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '3453b06aee160611a62755a9feaba8123a617886' }}
+        run: node .github/deepCleaningV2Guard.mjs "$BASE_SHA"
+      - name: Install dependencies
+        run: |
+          npm ci --no-audit --no-fund
+          npm ci --prefix backend --no-audit --no-fund
+      - name: Scoped Deep Cleaning application and guard lint
+        run: node --input-type=module -e "import {spawnSync} from 'node:child_process'; import {payloadPaths} from './.github/deepCleaningV2Guard.mjs'; const result=spawnSync('npx',['eslint',...payloadPaths.filter(p=>['.js','.jsx','.mjs'].some(ext=>p.endsWith(ext)))],{stdio:'inherit'}); process.exit(result.status??1);"
+      - name: Deep Cleaning view, export and backend regression tests
+        run: |
+          node --test tests/deepCleaningView.test.js tests/deepCleaningExports.test.js
+          node --test tests/deepCleaningV2Guard.test.js backend/tests/retailCleaningPhase1.test.js backend/tests/deepCleaningPhase1b.test.js backend/tests/deepCleaningMobileIntegration.test.js backend/tests/deepCleaningWriterAccess.test.js backend/tests/clientDeepCleaningService.test.js backend/tests/retailMisMountedAuth.test.js backend/tests/retailModuleReportService.test.js
+      - name: Provision isolated PostgreSQL 17 test tools
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl --fail --show-error --silent --location -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-17
+          /usr/lib/postgresql/17/bin/postgres --version | grep -E '^postgres \(PostgreSQL\) 17\.'
+          npm install --prefix "$RUNNER_TEMP/thermography-tools" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund pg@8.16.3
+      - name: Required native multi-session concurrency (no opt-in skip)
+        env:
+          RUN_THERMOGRAPHY_NATIVE_POSTGRES_TESTS: true
+          THERMOGRAPHY_TEST_TOOLS_DIR: ${{ runner.temp }}/thermography-tools
+          THERMOGRAPHY_TEST_PG_BIN: /usr/lib/postgresql/17/bin
+          THERMOGRAPHY_NATIVE_OUTPUT_DIR: ${{ runner.temp }}
+        run: node --test backend/tests/deepCleaningStoreOnlyPostgres.test.js
+      - name: Production frontend build
+        run: npm run build
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Deep Cleaning export browser tests
+        env:
+          CLEANING_EXPORT_OUTPUT_DIR: ${{ runner.temp }}/deep-cleaning-browser
+        run: node --test --test-concurrency=1 tests/deepCleaningExports.browser.test.js tests/deepCleaningWorkflow.browser.test.js
+      - name: Retail visual browser smoke tests
+        run: npx playwright test tests/browser/retailReportVisualSmoke.spec.js tests/browser/retailExcelInline.spec.js --reporter=line
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deep-cleaning-pr102-browser-evidence
+          path: |
+            ${{ runner.temp }}/deep-cleaning-browser/
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore

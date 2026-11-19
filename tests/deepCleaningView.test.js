@@ -1,4 +1,11 @@
 import test from 'node:test';
+test('Empty authorized schedule arrays show verified zero for every state; unavailable schedules stay N/A',()=>{
+ const empty=cleaningView({schedules:[],submissions:[]},{});
+ assert.equal(empty.summary.rows.length,6);assert.equal(empty.summary.total.completed,0);
+ assert.ok(empty.summary.rows.every(row=>row.scheduled===0&&row.completed===0&&row.percentage===null));
+ const missing=cleaningView({schedules:null,submissions:[]},{});
+ assert.equal(missing.summary.total.completed,null);assert.ok(missing.summary.rows.every(row=>row.completed===null));
+});
 import assert from 'node:assert/strict';
 import { cleaningView, cleaningPhotoCount, recordedFoName } from '../src/utils/deepCleaningView.js';
 const store = {
@@ -84,13 +91,14 @@ test('unlinked completed schedules are not counted as verified completions', () 
   assert.equal(v.summary.total.pending, 1);
 });
 
-test('Completed KPI and state chart include independent reports without FO verification',()=>{
+test('Done KPI and chart measure linked schedules; independent reports retain their separate count',()=>{
  const standalone={id:'independent',store,status:'submitted',reporting_state:'TN'};
  const v=cleaningView({...report,submissions:[...report.submissions,standalone,standalone,
   {id:'draft',store,status:'draft'},{id:'failed',store,status:'failed'}]},{});
- assert.equal(v.summary.total.completed,2);assert.equal(v.summary.rows.find(row=>row.state==='TN').completed,2);
+ assert.equal(v.summary.total.completed,1);assert.equal(v.summary.rows.find(row=>row.state==='TN').completed,1);
+ assert.equal(v.summary.total.report_completed,2);assert.equal(v.summary.rows.find(row=>row.state==='TN').report_completed,2);
  assert.equal(v.summary.total.scheduled,2);assert.equal(v.summary.total.pending,1);
  assert.equal(v.summary.total.percentage,50,'Schedule completion is independent of the report count');
  const selected=cleaningView({...report,submissions:[standalone]}, {}, {status:'Completed'});
- assert.equal(selected.work.length,1);assert.equal(selected.summary.total.completed,1);
+ assert.equal(selected.work.length,1);assert.equal(selected.summary.total.completed,1);assert.equal(selected.summary.total.report_completed,1);
 });

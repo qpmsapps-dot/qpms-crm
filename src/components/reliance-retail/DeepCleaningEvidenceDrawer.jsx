@@ -39,8 +39,7 @@ export default function DeepCleaningEvidenceDrawer({
   onClose,
   onRetry
 }) {
-  const [tab, setTab] = useState('before'),
-    [preview, setPreview] = useState(null),
+  const [preview, setPreview] = useState(null),
     [downloadError, setDownloadError] = useState(''),
     [downloading, setDownloading] = useState(false);
   const closeRef = useRef(null);
@@ -65,7 +64,6 @@ export default function DeepCleaningEvidenceDrawer({
   const photos = files.filter(item => ['before', 'after'].includes(item.type) && item.mime_type?.startsWith('image/'));
   const documents = files.filter(item => ['document', 'checklist'].includes(item.type));
   const other = files.filter(item => !photos.includes(item) && !documents.includes(item));
-  const selected = photos.filter(item => item.type === tab);
   const events = Array.isArray(record.audit_trail) ? record.audit_trail : Array.isArray(record.events) ? record.events : [];
   async function download(item) {
     setDownloadError('');
@@ -126,7 +124,13 @@ export default function DeepCleaningEvidenceDrawer({
         }) => <div key={title}>{createElement(Icon, {
             size: 17
           })}<div><span>{title}</span><strong>{text}</strong>{detail && <small>{detail}</small>}</div></div>)}</section>
- <section className="dc-drawer-section"><div className="dc-card-heading"><h3>Photo Evidence</h3><div className="dc-photo-tabs" role="group" aria-label="Photo type">{['before', 'after'].map(type => <button key={type} aria-pressed={tab === type} onClick={() => setTab(type)}>{type === 'before' ? 'Before' : 'After'} ({photos.filter(item => item.type === type).length})</button>)}</div></div>{busy ? <p role="status" className="dc-empty">Checking authorization and loading private evidence?</p> : error ? <div role="alert" className="dc-empty">{error}<button onClick={onRetry}>Retry evidence</button></div> : <div className="dc-photo-grid">{selected.map(item => <Photo key={item.id} item={item} onPreview={setPreview} />)}{!selected.length && <p className="dc-empty">No {tab} photos recorded.</p>}</div>}</section>
+ <section className="dc-drawer-section"><div className="dc-card-heading"><h3>Before / After Photo Evidence</h3></div>
+ {busy ? <p role="status" className="dc-empty">Checking authorization and loading private evidence...</p> : error ? <div role="alert" className="dc-empty">{error}<button onClick={onRetry}>Retry evidence</button></div> :
+ <div className="dc-photo-pair">{['before','after'].map(type=><section key={type} aria-label={type+' cleaning photographs'}>
+ <h3>{type==='before'?'Before':'After'} ({photos.filter(item=>item.type===type).length})</h3>
+ <div className="dc-photo-grid">{photos.filter(item=>item.type===type).map(item=><Photo key={item.id} item={item} onPreview={setPreview}/>)}
+ {!photos.some(item=>item.type===type)&&<p className="dc-empty">No {type} photos recorded.</p>}</div>
+ </section>)}</div>}</section>
  <section className="dc-drawer-section"><h3>Supporting Document</h3>{!busy && !error && !documents.length && <p className="dc-muted">No supporting documents recorded.</p>}{documents.map(item => <div className="dc-document" key={item.id}><FileText size={24} /><div><strong>{item.name}</strong><small>{item.mime_type}</small></div>{(item.mime_type === 'application/pdf' || item.mime_type?.startsWith('image/')) && <a className="dc-icon-button" aria-label={'Preview ' + item.name} href={item.url} target="_blank" rel="noreferrer"><Eye size={16} /></a>}<button aria-label={'Download ' + item.name} disabled={downloading} onClick={() => void download(item)}><Download size={16} /></button></div>)}{other.map(item => <p key={item.id}><a href={item.url} target="_blank" rel="noreferrer">{item.type}: {item.name}</a></p>)}{downloadError && <p role="alert">{downloadError}</p>}</section>
  <section className="dc-drawer-section dc-audit"><h3><History size={15} />Audit Trail</h3>{record.submitted_at && <article><span className="dc-audit-dot" /><strong>Submission recorded</strong><small>{recordedFoName(record) || recordedFoCode(record) || 'Submitter not recorded'}</small><time dateTime={record.submitted_at}>{stamp(record.submitted_at)}</time></article>}{events.map((event, i) => <article key={event.id || i}><span className="dc-audit-dot" /><strong>{event.action || event.event_type || 'Recorded event'}</strong><small>{event.actor_name || event.actor_profile_id || 'Actor not recorded'}</small>{(event.created_at || event.occurred_at) && <time dateTime={event.created_at || event.occurred_at}>{stamp(event.created_at || event.occurred_at)}</time>}</article>)}{!record.submitted_at && !events.length && <p className="dc-muted">No audit events supplied by this report.</p>}</section></div><footer className="dc-drawer-footer"><span>Read-only evidence viewer</span><button disabled={busy} onClick={onRetry}>Refresh evidence</button></footer>{preview && <Fullscreen item={preview} onClose={() => setPreview(null)} />}</aside>;
 }

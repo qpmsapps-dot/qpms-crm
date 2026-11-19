@@ -8,6 +8,16 @@ export function cleaningExportTotals(records,key) {
   for(const r of records){const id=key==='state'?text(r.state):[r.state,r.storeCode,r.storeName].join('|');const g=groups.get(id)||{state:text(r.state),storeCode:text(r.storeCode),storeName:text(r.storeName),count:0};g.count++;groups.set(id,g);}
   return [...groups.values()].sort((a,b)=>a.state.localeCompare(b.state)||a.storeCode.localeCompare(b.storeCode));
 }
+export function cleaningScheduleTotals(data){
+ const states=new Map();
+ for(const r of data.records)if(!states.has(text(r.state)))states.set(text(r.state),{state:text(r.state),scheduled:data.plans?0:'N/A',done:data.plans?0:'N/A',pending:data.plans?0:'N/A',reports:0});
+ for(const p of data.plans||[]){
+  const state=text(p.state);if(!states.has(state))states.set(state,{state,scheduled:0,done:0,pending:0,reports:0});
+  const row=states.get(state);if(p.status!=='Cancelled')row.scheduled++;if(p.status==='Completed'&&p.submissionIds.length)row.done++;if(p.status==='Scheduled')row.pending++;
+ }
+ for(const r of data.records)states.get(text(r.state)).reports++;
+ return [...states.values()].sort((a,b)=>a.state.localeCompare(b.state));
+}
 export async function buildCleaningWorkbook(data,{title,scope}) {
   const {default:ExcelJS}=await import('exceljs'),book=new ExcelJS.Workbook();book.creator='myQPMS';book.title=title;
   const sheet=(name,headers,rows)=>{
@@ -16,10 +26,12 @@ export async function buildCleaningWorkbook(data,{title,scope}) {
     s.eachRow((r,index)=>{r.alignment={vertical:'top',wrapText:true};r.height=42;if(index===1){r.font={bold:true,color:{argb:'FFFFFFFF'}};r.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF185AA6'}};}else r.eachCell(c=>{if(c.value instanceof Date)c.numFmt=headers[c.col-1].includes('Timestamp')?'yyyy-mm-dd hh:mm:ss "UTC"':'yyyy-mm-dd';});});
     s.pageSetup={orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0,printTitlesRow:'1:1'};return s;
   };
-  sheet('Summary',['Metric / State','Submitted records / Value'],[[title,scope],['Persisted submitted records',data.records.length],...cleaningExportTotals(data.records,'state').map(g=>[g.state,g.count]),['Reporting note','Actual cleaning dates; submitted records are independent of scheduled KPIs.'],['Evidence note','Authenticated references require fresh access through myQPMS. No temporary signed Storage URLs are retained.']]);
+  sheet('Summary',['Metric / State','Submitted records / Value'],[[title,scope],['Persisted submitted records',data.records.length],['Schedules',data.plans?.filter(p=>p.status!=='Cancelled').length??'N/A'],['Completed schedules',data.plans?.filter(p=>p.status==='Completed'&&p.submissionIds.length).length??'N/A'],['Pending schedules',data.plans?.filter(p=>p.status==='Scheduled').length??'N/A'],...cleaningExportTotals(data.records,'state').map(g=>[g.state,g.count]),['Reporting note','Actual cleaning dates; submitted records are independent of scheduled KPIs.'],['Evidence note','Authenticated references require fresh access through myQPMS. No temporary signed Storage URLs are retained.']]);
   sheet('Store summary',['State','Store Code','Store Name','Submitted Records'],cleaningExportTotals(data.records,'store').map(g=>[g.state,g.storeCode,g.storeName,g.count]));
-  sheet('Submissions',['Submission ID','State','Store Code','Store Name','Actual Cleaning Date','FO Name','Employee Code','Status','Submission Timestamp','Evidence Count','Evidence Availability'],data.records.map(r=>[r.id,text(r.state),text(r.storeCode),text(r.storeName),date(r.date),text(r.fo),text(r.employeeCode),text(r.status),date(r.submittedAt),r.evidenceStatus==='Authorized evidence list received'||r.evidenceStatus==='No uploaded evidence recorded'?r.evidence.length:'Not recorded',r.evidenceStatus]));
-  sheet('Evidence manifest',['Submission ID','Evidence ID','Type','File Name','MIME Type','Access Status','Authenticated Reference'],data.records.flatMap(r=>r.evidence.length?r.evidence.map(e=>[r.id,text(e.id),text(e.type),text(e.fileName),text(e.mime),e.access,e.reference]):[[r.id,'Not recorded','Not recorded','Not recorded','Not recorded',r.evidenceStatus,'Not recorded']]));
+  sheet('Submissions',['Submission ID','State','Store Code','Store Name','Actual Cleaning Date','FO Name','Employee Code','Status','Submission Timestamp','Evidence Count','Evidence Availability','Scheduled Date','Reporting Scope','Latest Evidence Uploaded Date'],[...data.records,...(data.linkedRecords||[])].map(r=>[r.id,text(r.state),text(r.storeCode),text(r.storeName),date(r.date),text(r.fo),text(r.employeeCode),text(r.status),date(r.submittedAt),r.evidenceStatus==='Authorized evidence list received'||r.evidenceStatus==='No uploaded evidence recorded'?r.evidence.length:'Not recorded',r.evidenceStatus,date(r.scheduledDate),r.scope||'Actual-period report',date(r.uploadedAt)]));
+  sheet('Evidence manifest',['Submission ID','Evidence ID','Type','File Name','MIME Type','Access Status','Authenticated Reference','Uploaded Timestamp'],[...data.records,...(data.linkedRecords||[])].flatMap(r=>r.evidence.length?r.evidence.map(e=>[r.id,text(e.id),text(e.type),text(e.fileName),text(e.mime),e.access,e.reference,date(e.uploadedAt)]):[[r.id,'Not recorded','Not recorded','Not recorded','Not recorded',r.evidenceStatus,'Not recorded']]));
+  sheet('Schedule details',['Schedule ID','State','Store Code','Store Name','Scheduled Date','Status','Verified submission IDs','Actual Visit Date','Submitted Date','FO Name','FO Employee Code'],data.plans?data.plans.map(p=>[p.id,text(p.state),text(p.storeCode),text(p.storeName),date(p.scheduledDate),p.status,p.submissionIds.join(', '),date(p.actualDate),date(p.submittedAt),text(p.fo),text(p.employeeCode)]):[['N/A','Schedule data unavailable']]);
+  sheet('State performance',['State','Schedules','Completed schedules','Pending schedules','Submitted reports'],cleaningScheduleTotals(data).map(r=>[r.state,r.scheduled,r.done,r.pending,r.reports]));
   sheet('Warnings',['Warning'],data.warnings.length?data.warnings.map(w=>[w]):[['No export warnings. Photographs are embedded in PowerPoint, not Excel.']]);
   return book;
 }
@@ -28,24 +40,40 @@ export async function buildCleaningPresentation(data,{title,scope}) {
   const chunks=(items,n)=>Array.from({length:Math.ceil(items.length/n)},(_,i)=>items.slice(i*n,(i+1)*n));
   const slide=heading=>{const s=pptx.addSlide();s.background={color:'FFFFFF'};s.addText(heading,{x:.55,y:.35,w:12.2,h:.9,fontSize:29,bold:true,color:'185AA6',margin:0,fit:'resize'});s.addText('myQPMS | Reliance Retail Deep Cleaning',{x:.55,y:7.08,w:12,h:.22,fontSize:10,color:'64748B',margin:0});return s;};
   const pages=(heading,items)=>{const lines=items.flatMap(item=>text(item).match(/.{1,88}(?:\s|$)|.{1,88}/g)||['']);for(const batch of chunks(lines,10)){const s=slide(heading);s.addText(batch.join('\n'),{x:.6,y:1.55,w:12,h:5.15,fontSize:18,color:'183153',margin:0,paraSpaceAfterPt:10,valign:'top'});}};
-  pages(title,[scope,`${data.records.length} persisted submitted records`,'Actual cleaning dates; independent of scheduled KPIs.',...(!data.records.length?['No submitted records match this selection.']:[])]);
+  pages(title,[scope,`${data.records.length} persisted submitted records`,'Actual cleaning dates; independent of scheduled KPIs.',data.plans?`${data.plans.filter(p=>p.status!=='Cancelled').length} schedules | ${data.plans.filter(p=>p.status==='Completed'&&p.submissionIds.length).length} completed schedules`:'Schedule data unavailable',...(!data.records.length?['No submitted records match this selection.']:[])]);
+  for(const group of chunks(cleaningScheduleTotals(data),8))slide('State-wise scheduled work').addTable([['State','Schedules','Completed','Pending','Reports'],...group.map(r=>[r.state,r.scheduled,r.done,r.pending,r.reports])],{x:.6,y:1.55,w:12,h:4.9,fontSize:16,border:{pt:.5,color:'DCE5F1'},autoPage:false});
+  for(const group of chunks(data.plans||[],8))slide('Scheduled store completion').addTable([['Store','Scheduled','Actual visit','Status','FO'],...group.map(p=>[`${text(p.storeCode)} - ${text(p.storeName)}`,text(p.scheduledDate),text(p.actualDate),p.status,text(p.fo||p.employeeCode)])],{x:.6,y:1.55,w:12,h:4.9,fontSize:13,border:{pt:.5,color:'DCE5F1'},autoPage:false});
   for(const group of chunks(cleaningExportTotals(data.records,'state'),10))slide('State-wise overview').addTable([['State','Submitted records'],...group.map(g=>[g.state,g.count])],{x:.6,y:1.55,w:12,h:4.9,fontSize:18,border:{pt:.5,color:'DCE5F1'},autoPage:false});
   for(const group of chunks(cleaningExportTotals(data.records,'store'),8))slide('Store-wise overview').addTable([['State','Store Code','Store Name','Records'],...group.map(g=>[g.state,g.storeCode,g.storeName,g.count])],{x:.6,y:1.55,w:12,h:4.9,fontSize:16,border:{pt:.5,color:'DCE5F1'},autoPage:false});
-  const ordered=[...data.records].sort((a,b)=>text(a.state).localeCompare(text(b.state))||text(a.storeCode).localeCompare(text(b.storeCode))||text(a.date).localeCompare(text(b.date)));
+  const ordered=[...data.records,...(data.linkedRecords||[])].sort((a,b)=>text(a.state).localeCompare(text(b.state))||text(a.storeCode).localeCompare(text(b.storeCode))||text(a.date).localeCompare(text(b.date)));
   for(const r of ordered) {
-    pages(`Deep Cleaning | ${text(r.storeCode)}`,[`Store: ${text(r.storeName)}`,`State: ${text(r.state)} | Actual cleaning date: ${text(r.date)}`,`FO: ${text(r.fo)} | Employee code: ${text(r.employeeCode)}`,`Status: ${text(r.status)} | Submitted: ${text(r.submittedAt)}`,`Submission: ${r.id}`,`Evidence: ${r.evidenceStatus}`]);
-    for(const type of ['before','after']) {
-      const photos=r.evidence.filter(e=>e.type===type&&e.image),heading=`${type.toUpperCase()} | ${text(r.storeCode)} | ${text(r.date)}`;
-      if(!photos.length)pages(heading,[`No authorized ${type.toUpperCase()} photographs available in this export.`,r.evidenceStatus,'See export warnings for missing evidence, access or download failures.']);
-      for(const batch of chunks(photos,2)) {
-        const s=slide(heading);
-        for(const [index,e] of batch.entries()) {
-          const x=.6+index*6.15,w=batch.length===1?12:5.85;
-          s.addImage({data:e.image,...containTrainingPhoto(e.width,e.height,x,1.6,w,4.5)});
-          s.addText(text(e.fileName),{x,y:6.25,w,h:.45,fontSize:12,color:'183153',margin:0,fit:'resize'});
-          s.addNotes(`Submission ${r.id}; ${type}; evidence ${e.id}; ${e.reference}. Authorized at export; no temporary signed URL retained.`);
-        }
+    pages(`Deep Cleaning | ${text(r.storeCode)}`,[`Store: ${text(r.storeName)}`,`Scope: ${text(r.scope||'Actual-period report')}`,`State: ${text(r.state)} | Scheduled date: ${text(r.scheduledDate)} | Actual cleaning date: ${text(r.date)}`,`FO: ${text(r.fo)} | Employee code: ${text(r.employeeCode)}`,`Status: ${text(r.status)} | Submitted: ${text(r.submittedAt)}`,`Submission: ${r.id}`,`Evidence: ${r.evidenceStatus}`]);
+    // Align independently ordered before/after photographs for visual review.
+    // Matching positions do not assert that two photographs depict the same area.
+    const before=r.evidence.filter(e=>e.type==='before'&&e.image);
+    const after=r.evidence.filter(e=>e.type==='after'&&e.image);
+    const count=Math.max(before.length,after.length);
+    if(!count)pages(`Photo evidence | ${text(r.storeCode)}`,[
+      'No authorized Before or After photographs available in this export.',
+      r.evidenceStatus,'See export warnings for missing evidence or access failures.'
+    ]);
+    for(let i=0;i<count;i++){
+      const sheet=slide(`Deep Cleaning Evidence | ${text(r.storeCode)}`);
+      sheet.addText(`Store Code: ${text(r.storeCode)}  |  Visit Date: ${text(r.date)}  |  Evidence uploaded: ${text(r.uploadedAt)}`,{
+        x:.6,y:1.15,w:12.1,h:.35,fontSize:13,color:'183153',margin:0,fit:'shrink'
+      });
+      sheet.addText('BEFORE',{x:.6,y:1.6,w:5.85,h:.35,fontSize:17,bold:true,color:'185AA6',align:'center'});
+      sheet.addText('AFTER',{x:6.85,y:1.6,w:5.85,h:.35,fontSize:17,bold:true,color:'185AA6',align:'center'});
+      const pair=[[before[i],.6,'Before'],[after[i],6.85,'After']];
+      for(const [e,x,label] of pair){
+        if(!e){sheet.addText('No corresponding image',{x,y:2.15,w:5.85,h:3.6,fontSize:13,color:'64748B',align:'center',valign:'mid'});continue;}
+        sheet.addImage({data:e.image,...containTrainingPhoto(e.width,e.height,x,2.1,5.85,3.85)});
+        sheet.addText(`${label} Image ${i+1}`,{x,y:6.05,w:5.85,h:.3,fontSize:13,bold:true,color:'183153',align:'center',margin:0});
+        sheet.addNotes(`Submission ${r.id}; ${label}; evidence ${e.id}; ${e.reference}. Display-order alignment only; not a verified image pair.`);
       }
+      sheet.addText('Images aligned by sequence only; locations are not independently matched.',{
+        x:.6,y:6.55,w:12,h:.25,fontSize:9,color:'64748B',margin:0
+      });
     }
     const supporting=r.evidence.filter(e=>!['before','after'].includes(e.type));
     pages(`Supporting evidence | ${text(r.storeCode)}`,supporting.length?supporting.map(e=>`${text(e.type)} | ${text(e.fileName)} | ${e.access}`):['Supporting evidence: Not recorded or unavailable.']);

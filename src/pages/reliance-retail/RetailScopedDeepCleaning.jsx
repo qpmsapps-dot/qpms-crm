@@ -5,6 +5,7 @@ import DeepCleaningExportControls from '../../components/reliance-retail/DeepCle
 import DeepCleaningEvidenceDrawer from '../../components/reliance-retail/DeepCleaningEvidenceDrawer.jsx';
 import RetailCleaningMonthlyPlan from '../../components/reliance-retail/RetailCleaningMonthlyPlan.jsx';
 import { cleaningView, recordedFoName, recordedFoCode, cleaningPhotoCount, recordedStatus } from '../../utils/deepCleaningView.js';
+import {trainingMonthRange as cleaningMonthRange} from '../../utils/deepCleaningExport.js';
 import { useRetailExcelRows } from '../../utils/useRetailExcelRows.js';
 import { excelCleaningRows, isExcelSource } from '../../utils/retailExcelInline.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -20,35 +21,30 @@ import { useAuth } from '../../context/auth-context.js';
 import { isReadOnlyUser } from '../../utils/demoAccess.js';
 import { isPlatformAdmin } from '../../utils/authRoles.js';
 import '../../components/reliance-retail/deepCleaningV2.css';
-function VerifiedFoLink({
-  scheduleId,
-  onSaved
-}) {
-  const [source, setSource] = useState(''),
-    [confirmed, setConfirmed] = useState(false),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState('');
-  async function save(e) {
-    e.preventDefault();
-    if (!confirmed || busy) return;
-    setBusy(true);
-    setError('');
-    try {
-      await authenticatedApiRequest({
-        method: 'POST',
-        url: `/api/reliance-retail/module-reports/deep-cleaning/${encodeURIComponent(scheduleId)}/link-fo`,
-        data: {
-          source_id: source
-        }
-      });
-      onSaved();
-    } catch (e) {
-      setError(e.response?.data?.message || e.message);
-    } finally {
-      setBusy(false);
-    }
+function VerifiedFoLink({scheduleId,onSaved}) {
+  const [source,setSource]=useState(''),[kind,setKind]=useState('legacy'),[reason,setReason]=useState('');
+  const [confirmed,setConfirmed]=useState(false),[exception,setException]=useState(false),[preview,setPreview]=useState(null);
+  const [busy,setBusy]=useState(false),[error,setError]=useState('');
+  const reset=()=>{setPreview(null);setConfirmed(false);setException(false);};
+  async function command(action){
+    setBusy(true);setError('');
+    try{
+      const response=await authenticatedApiRequest({method:'POST',url:`/api/reliance-retail/module-reports/deep-cleaning/${encodeURIComponent(scheduleId)}/link-fo`,data:{source_id:source,...(kind==='client'?{source_kind:'client',action,reason,revision:preview?.revision,allow_date_exception:exception}:{})}});
+      if(action==='preview')setPreview(response.data.result);else onSaved();
+    }catch(e){setError(e.response?.data?.message||e.message);}finally{setBusy(false);}
   }
-  return <details><summary>Link verified FO completion</summary><form onSubmit={save}><label>Existing FO submission ID<input required aria-label="Existing FO cleaning submission ID" value={source} onChange={e => setSource(e.target.value)} /></label><label><input required type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />I verified this submitted work against the recorded schedule.</label><p>The server requires exact store/date, verified historical FO ownership and stored before/after evidence. Older submissions are not backfilled.</p>{error && <p role="alert">{error}</p>}<button disabled={busy || !confirmed}>Confirm verified link</button></form></details>;
+  return <details><summary>Link verified FO completion</summary><form onSubmit={e=>{e.preventDefault();if(confirmed&&!busy)void command('link');}}>
+    <label>Submission source<select value={kind} onChange={e=>{setKind(e.target.value);reset();}}><option value="legacy">Existing verified FO activity</option><option value="client">Independent Deep Cleaning submission</option></select></label>
+    <label>Existing FO submission ID<input required aria-label="Existing FO cleaning submission ID" value={source} onChange={e=>{setSource(e.target.value);reset();}}/></label>
+    {kind==='client'&&<><button type="button" disabled={busy||!source} onClick={()=>void command('preview')}>Preview authorized historical link</button>
+      {preview&&<p role="status">Store {preview.store_code}; scheduled {preview.scheduled_date}; actual visit {preview.actual_date}; FO {preview.employee_code||'Not recorded'}. Original dates and evidence remain unchanged.</p>}
+      <label>Historical review reason<textarea required minLength={20} maxLength={2000} value={reason} onChange={e=>{setReason(e.target.value);setConfirmed(false);}}/></label>
+      {preview&&!preview.exact_date&&<label><input type="checkbox" checked={exception} onChange={e=>{setException(e.target.checked);setConfirmed(false);}}/>I explicitly approve this recorded date exception after reviewing both original dates.</label>}</>}
+    <label><input required type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>I verified this submitted work against the recorded schedule.</label>
+    <p>Automatic matching uses exact store/date only. Historical exceptions require an authorized Admin, a verified canonical submission, stored paired evidence and an audited reason. Missing identity or evidence cannot be overridden.</p>
+    {error&&<p role="alert">{error}</p>}
+    <button disabled={busy||!confirmed||kind==='client'&&(!preview||reason.trim().length<20||!preview.exact_date&&!exception)}>Confirm verified link</button>
+  </form></details>;
 }
 export default function RetailScopedDeepCleaning() {
   usePageTitle('Reliance Retail Deep Cleaning');
@@ -144,7 +140,7 @@ export default function RetailScopedDeepCleaning() {
     const controller=new AbortController();
     evidenceFlight.current={key,controller};
     const request = ++evidenceRequest.current;
-    setSelected(record || view.work.find(row => row.id === id) || {
+    setSelected(record || view.work.find(row => row.id === id) || view.linkedWork.find(row=>row.id===id) || {
       id
     });
     setEvidenceError('');
@@ -201,7 +197,7 @@ export default function RetailScopedDeepCleaning() {
         url: '/api/reliance-retail/mis/access'
       });
       const access = result.data.result;
-      setMonthlyAllowed(!isReadOnlyUser(user) && access?.active === true && !access.read_only && ['CENTRAL_MIS', 'MIS_HK'].includes(access.role) && access.modules?.includes('cleaning'));
+      setMonthlyAllowed(!isReadOnlyUser(user) && access?.active === true && !access.read_only && (access.role === 'CENTRAL_MIS' || access.role === 'CLEANING_SCHEDULE_WRITER' && access.schedule_writer === true) && access.modules?.includes('cleaning'));
     } catch {
       setMonthlyAllowed(false);
     }
@@ -230,8 +226,8 @@ export default function RetailScopedDeepCleaning() {
       setExporting(false);
     }
   }
-  return <section className={'retail-report dc-v2 dc-layout' + (selected ? ' dc-with-drawer' : '')}>
- <div className="dc-main"><header className="dc-page-header"><div><p className="dc-eyebrow">RELIANCE RETAIL / OPERATIONS</p><div className="dc-title"><Paintbrush size={37} /><div><h1>Deep Cleaning</h1><p>Plan, assign and track store deep cleaning with photo evidence.</p></div></div></div><div className="dc-actions"><details className="dc-schedule-menu" onToggle={e => {
+  return <section className="retail-report dc-v2 dc-layout">
+ <div className="dc-main"><header className="dc-page-header"><div><p className="dc-eyebrow">RELIANCE RETAIL / OPERATIONS</p><div className="dc-title"><Paintbrush size={37} /><div><h1>Deep Cleaning</h1><p>Track monthly schedules, completed store visits and photo evidence.</p></div></div></div><div className="dc-actions"><details className="dc-schedule-menu" onToggle={e => {
             if (e.currentTarget.open) void schedulingAccess();
           }}><summary><CalendarDays size={15} />Schedule Deep Cleaning<ChevronDown size={14} /></summary><div><button disabled={isReadOnlyUser(user)} onClick={e => {
                 e.currentTarget.closest('details').open = false;
@@ -253,10 +249,10 @@ export default function RetailScopedDeepCleaning() {
             setMonthly(false);
             resetView();
             setRefresh(v => v + 1);
-          }}>Close import</button></header><RetailCleaningMonthlyPlan /></section>}
+          }}>Close import</button></header><RetailCleaningMonthlyPlan onImported={()=>setRefresh(x=>x+1)} /></section>}
  {busy && <ReportNotice>Loading cleaning tracker?</ReportNotice>}{error && <ReportNotice error>{error}</ReportNotice>}
  <DeepCleaningOverview view={view} available={Boolean(report && totals && !busy)} />
- <section className="dc-card dc-filter-card" aria-label="Cleaning filters"><div className="dc-card-heading"><h2><Filter size={16} />Filters <span className="dc-filter-count">{activeFilters} Active</span></h2><button onClick={resetFilters}><RefreshCw size={12} />Reset</button></div><div className="dc-filter-grid"><label className="dc-date-label">Date Range<span className="dc-date-range"><input aria-label="Cleaning from" type="date" value={from} max={to} onChange={e => {
+ <section className="dc-card dc-filter-card" aria-label="Cleaning filters"><div className="dc-card-heading"><h2><Filter size={16} />Filters <span className="dc-filter-count">{activeFilters} Active</span></h2><label className="dc-report-month">Month<input aria-label="Cleaning reporting month" type="month" value={from.slice(0,7)===to.slice(0,7)?from.slice(0,7):''} onChange={e=>{if(e.target.value){const range=cleaningMonthRange(e.target.value);resetView();setFrom(range.from);setTo(range.to);}}}/></label><button onClick={resetFilters}><RefreshCw size={12} />Reset</button></div><div className="dc-filter-grid"><label className="dc-date-label">Date Range<span className="dc-date-range"><input aria-label="Cleaning from" type="date" value={from} max={to} onChange={e => {
                 if (e.target.value) {
                   resetView();
                   setFrom(e.target.value);
@@ -286,15 +282,15 @@ export default function RetailScopedDeepCleaning() {
               setSize(100);
               setWorkPage(0);
             }}>Show 100</button></div><div className="dc-table-scroll" role="region" aria-label="Submitted cleaning work" tabIndex={0}><table><thead><tr>{['Store Code', 'Store Name', 'State', 'FO Name', 'Scheduled Date', 'Visit Date', 'Status', 'Evidence', 'Actions'].map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{reportPage(work, workPage, size).map(row => <tr key={row.id} className={selected?.id === row.id ? 'dc-selected' : ''}><td><strong>{row.store.store_code}</strong></td><td>{row.store.store_name}</td><td>{row.store.state}</td><td>{recordedFoName(row) || recordedFoCode(row) || 'Not recorded'}</td><td>{row.scheduled_date || 'Not recorded'}</td><td>{row.deep_cleaning_date || 'Not recorded'}</td><td><span className="dc-status" data-status={recordedStatus(row)}>{recordedStatus(row)}</span>{isExcelSource(row) && <small>Excel reported - unverified</small>}</td><td><span className="dc-evidence-count"><Images size={13} />{isExcelSource(row) ? 'Not supplied' : cleaningPhotoCount(row) == null ? 'Not recorded' : cleaningPhotoCount(row) + ' photos'}</span></td><td>{isExcelSource(row) ? <small>No FO evidence</small> : <DeepCleaningExportControls row={row} from={from} to={to} state={state} store={store} status={status} query={query}><button aria-label={'View evidence for ' + row.store.store_code} onClick={() => void inspect(row.id, row)}><Eye size={12} />View</button></DeepCleaningExportControls>}</td></tr>)}</tbody></table></div>{!work.length && <p className="dc-empty">No authorized submissions match these filters.</p>}<ReportPager label="Cleaning work" count={work.length} page={workPage} size={size} onPage={setWorkPage} onSize={setSize} /></section>
- <details className="dc-report-notes"><summary>Reporting definitions and source history</summary><p>Operational KPIs require exact linked FO completion; cancelled schedules and Excel-reported rows are excluded. Pending and overdue do not mean recorded failure. Filtered charts and KPIs use the same authorized schedule set.</p><p>Month-on-month comparison and additional audit events are unavailable unless supplied by the existing API. Missing FO details and timestamps are never inferred.</p>{historical.schedules.length > 0 && <p>October Excel: {historical.schedules.length} source schedules; {reportedCompleted} source-reported completions, without FO-verified evidence.</p>}{excel.loading && <ReportNotice>Loading October Excel history?</ReportNotice>}{excel.error && <ReportNotice error>October Excel records could not be loaded: {excel.error}</ReportNotice>}</details>
-   {isPlatformAdmin(user) && <details className="retail-report-panel retail-schedule-admin">
-    <summary className="retail-report-panel-heading">Advanced · Schedule administration and verified FO linking</summary>
+ <details className="dc-report-notes"><summary>Reporting definitions and source history</summary><p>Operational KPIs require verified linked completion; manual historical date exceptions retain their original dates and an Admin audit. Cancelled schedules and Excel-reported rows are excluded. Pending and overdue do not mean recorded failure. Filtered charts and KPIs use the same authorized schedule set.</p><p>Month-on-month comparison and additional audit events are unavailable unless supplied by the existing API. Missing FO details and timestamps are never inferred.</p>{historical.schedules.length > 0 && <p>October Excel: {historical.schedules.length} source schedules; {reportedCompleted} source-reported completions, without FO-verified evidence.</p>}{excel.loading && <ReportNotice>Loading October Excel history?</ReportNotice>}{excel.error && <ReportNotice error>October Excel records could not be loaded: {excel.error}</ReportNotice>}</details>
+   {<details open className="retail-report-panel retail-schedule-admin">
+    <summary className="retail-report-panel-heading">Scheduled work and verified completion links</summary>
     <div className="retail-report-panel"><div className="retail-report-panel-heading"><h2>Store-wise cleaning schedules</h2><span>{rows.length} matching schedules</span></div>
-    <div className="retail-report-table" role="region" aria-label="Cleaning schedules" tabIndex={0}><table><thead><tr>{['Store Code / Name', 'State', 'Scheduled date', 'Status', 'Reason / Evidence'].map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{reportPage(rows, page, size).map(row => <tr key={row.id}>
+    <div className="retail-report-table" role="region" aria-label="Cleaning schedules" tabIndex={0}><table><thead><tr>{['Store Code / Name', 'State', 'Scheduled date', 'Actual visit date', 'FO Name / Code', 'Status', 'Reason / Evidence'].map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{reportPage(rows, page, size).map(row => <tr key={row.id}>
      <td>{row.store.id ? <button className="retail-report-link" onClick={() => {
                         resetView();
                         setStore(row.store.id);
-                      }}>{row.store.store_code}</button> : <strong>{row.store.store_code}</strong>}<p>{row.store.store_name || 'Store name unavailable'}</p>{isExcelSource(row) && <small>Excel reported · {row.match_status === 'MATCHED' ? 'Store matched' : 'Store identity unresolved'}</small>}</td><td>{REPORTING_STATES.find(item => item.code === row.reporting_state)?.label || row.reporting_state}</td><td>{row.scheduled_date}</td>
+                      }}>{row.store.store_code}</button> : <strong>{row.store.store_code}</strong>}<p>{row.store.store_name || 'Store name unavailable'}</p>{isExcelSource(row) && <small>Excel reported · {row.match_status === 'MATCHED' ? 'Store matched' : 'Store identity unresolved'}</small>}</td><td>{REPORTING_STATES.find(item => item.code === row.reporting_state)?.label || row.reporting_state}</td><td>{row.scheduled_date}</td><td>{row.completion?.actual_date || 'Not recorded'}</td><td>{row.completion?.fo_name || row.completion?.employee_code || row.assigned_fo_name || row.assigned_fo_employee_code || 'Unassigned / not recorded'}</td>
      <td><span className="retail-report-status" data-status={row.display_status}>{row.display_status}</span>{isExcelSource(row) && <p className="retail-report-description">Excel reported · not FO verified</p>}{row.overdue && <span className="retail-report-overdue">Overdue · completion not recorded</span>}</td>
      <td>{row.not_done_reason || '—'}{(row.submission_ids || []).map(id => <p key={id}><button className="retail-report-link" disabled={evidenceBusy} onClick={() => void inspect(id)}>Before / after evidence</button></p>)}{!isExcelSource(row) && isPlatformAdmin(user) && !isReadOnlyUser(user) && row.display_status === 'Scheduled' && <VerifiedFoLink scheduleId={row.id} onSaved={() => {
                         resetView();
