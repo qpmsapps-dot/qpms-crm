@@ -197,7 +197,7 @@ export default function RetailScopedDeepCleaning() {
         url: '/api/reliance-retail/mis/access'
       });
       const access = result.data.result;
-      setMonthlyAllowed(!isReadOnlyUser(user) && access?.active === true && !access.read_only && (access.role === 'CENTRAL_MIS' || access.role === 'CLEANING_SCHEDULE_WRITER' && access.schedule_writer === true) && access.modules?.includes('cleaning'));
+      setMonthlyAllowed(!isReadOnlyUser(user) && access?.active === true && (access.cleaning_schedule_admin === true || !access.read_only && (access.role === 'CENTRAL_MIS' || access.role === 'CLEANING_SCHEDULE_WRITER' && access.schedule_writer === true) && access.modules?.includes('cleaning')));
     } catch {
       setMonthlyAllowed(false);
     }

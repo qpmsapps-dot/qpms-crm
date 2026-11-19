@@ -93,6 +93,17 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # BEGIN DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD
+          monthly_manifest = ".github/deep-cleaning-monthly-admin-pins.json"
+          if monthly_manifest in files:
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{monthly_manifest}"],text=True).strip() != "773c31989342fd26f4862e43539e46e45a87203a":
+              sys.exit("Monthly administrator manifest changed; renew review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningMonthlyAdminGuard.mjs"],text=True).strip() != "60567205f86337c26bb2d62cb2b265e8c044c260":
+              sys.exit("Monthly administrator guard changed; renew review")
+            subprocess.run(["node",".github/deepCleaningMonthlyAdminGuard.mjs",base],check=True)
+            print("PASS: exact monthly administrator repair; all subsequent checks remain mandatory.")
+            sys.exit(0)
+          # END DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD
           # BEGIN DEEP CLEANING V2 EXACT PAYLOAD
           dc_manifest = ".github/deep-cleaning-v2-pins.json"
           if dc_manifest in files:

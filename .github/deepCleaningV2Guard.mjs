@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {approvedBase as monthlyBase,manifestPath as monthlyManifest,verifyCurrent as verifyMonthly,priorWorkflow as priorMonthlyWorkflow} from './deepCleaningMonthlyAdminGuard.mjs';
 export const approvedBase='3453b06aee160611a62755a9feaba8123a617886';
 export const manifestPath='.github/deep-cleaning-v2-pins.json';
 export const guardPath='.github/deepCleaningV2Guard.mjs';
@@ -65,12 +66,17 @@ export function verifyPayload({paths,manifest,hash,base,workflow,baseWorkflow}){
  return {ok:validManifest&&workflowMatches&&!missing.length&&!unexpected.length&&!mismatched.length,validManifest,workflowMatches,missing,unexpected,mismatched};
 }
 export function priorWorkflowForChecks(workflow){
+ if(workflow.includes('# BEGIN DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD')){
+  priorMonthlyWorkflow(workflow); // Validates the entire new workflow against current main.
+  return git(['show',`${approvedBase}:${workflowPath}`]);
+ }
  const base=git(['show',`${approvedBase}:${workflowPath}`]);
  const hash=p=>git(['hash-object',`--path=${p}`,p]).trim();
  if(normalize(workflow)!==reviewedWorkflow(base,hash(manifestPath),hash(guardPath)))throw Error('Unreviewed workflow alteration: Deep Cleaning');
  return base;
 }
 export function verifyCurrent(base,working=false){
+ if(base===monthlyBase&&fs.existsSync(monthlyManifest))return verifyMonthly(base,working);
  const paths=git(['diff','--name-only',base,...(working?[]:['HEAD'])]).trim().split('\n').filter(Boolean);
  if(working)paths.push(...git(['ls-files','--others','--exclude-standard']).trim().split('\n').filter(Boolean));
  const read=p=>working?fs.readFileSync(p,'utf8'):git(['show',`HEAD:${p}`]);

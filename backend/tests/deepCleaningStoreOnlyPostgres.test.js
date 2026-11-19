@@ -3,8 +3,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {nativeThermographyPostgres} from './helpers/nativeThermographyPostgres.js';
-const baseline=readFileSync(new URL('./fixtures/cleaningPlanValidatorBaseline.sql',import.meta.url),'utf8');
-const proposal=readFileSync(new URL('../../supabase/proposals/retail_cleaning_store_only_import_20261118.sql',import.meta.url),'utf8');
+import {verifySuperAdminImport} from './helpers/deepCleaningSuperAdminAssertions.js';
+const baseline=readFileSync(new URL('./fixtures/cleaningPlanValidatorBaseline.sql',import.meta.url),'utf8').replaceAll('\r\n','\n');
+const proposal=readFileSync(new URL('../../supabase/proposals/retail_cleaning_store_only_import_20261118.sql',import.meta.url),'utf8').replaceAll('\r\n','\n');
 const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 test('reviewed FO-optional validator installs atomically, preserves supplied-FO checks and fails closed on drift',async()=>{
  const pg=await nativeThermographyPostgres();
@@ -56,11 +57,11 @@ test('reviewed FO-optional validator installs atomically, preserves supplied-FO 
    create trigger guard_cleaning_phase1b_submitted before update or delete on client_deep_cleaning_submissions for each row execute function guard_cleaning_phase1b_submitted();
    insert into client_deep_cleaning_schedules(id,retail_store_id,scheduled_date,status) values('${id(30)}','${id(3)}','2026-11-01','Planned');
   `);
-  const matching=readFileSync(new URL('../../supabase/proposals/retail_cleaning_verified_matching_20261118.sql',import.meta.url),'utf8');
+  const matching=readFileSync(new URL('../../supabase/proposals/retail_cleaning_verified_matching_20261118.sql',import.meta.url),'utf8').replaceAll('\r\n','\n');
   await pg.db.exec(matching);await pg.db.exec(matching);
   assert.equal((await pg.db.query("select tgenabled from pg_trigger where tgname='z90_cleaning_verified_match_v2'")).rows[0].tgenabled,'D','Installation cannot alter completion behavior before matching readers deploy');
   assert.equal((await pg.db.query("select has_function_privilege('service_role','public.rpc_retail_cleaning_manual_link_v2(uuid,uuid,text,jsonb)','EXECUTE') allowed")).rows[0].allowed,false,'Manual completion is also staged until approval');
-  const activation=readFileSync(new URL('../../supabase/proposals/retail_cleaning_v2_activate_20261118.sql',import.meta.url),'utf8');
+  const activation=readFileSync(new URL('../../supabase/proposals/retail_cleaning_v2_activate_20261118.sql',import.meta.url),'utf8').replaceAll('\r\n','\n');
   await pg.db.exec(activation);await pg.db.exec(matching);
   assert.equal((await pg.db.query("select tgenabled from pg_trigger where tgname='z90_cleaning_verified_match_v2'")).rows[0].tgenabled,'O','Exact installation replay preserves approved activation');
   const source=id(43),prefix=`deep-cleaning/reliance-retail/0012/${source}/`;
@@ -122,7 +123,7 @@ test('reviewed FO-optional validator installs atomically, preserves supplied-FO 
    create or replace function qpms_release.assert_mutation() returns void language plpgsql as $$begin
     if not (select allowed from qpms_release.test_admission) then raise exception using errcode='55000',message='Synthetic mutation fence closed';end if;end$$;
   `);
-  await pg.db.exec(readFileSync(new URL('./fixtures/cleaningPlanRpcBaseline.sql',import.meta.url),'utf8'));
+  await pg.db.exec(readFileSync(new URL('./fixtures/cleaningPlanRpcBaseline.sql',import.meta.url),'utf8').replaceAll('\r\n','\n'));
   const command=(session,action,data,auth=id(10))=>session.query('select public.rpc_retail_cleaning_plan_v1($1,$2,$3,$4) result',[id(1),auth,action,data]);
   const payload={month:'2026-12',request_id:id(70),rows:[row]};
   assert.equal((await command(pg.admin,'preview',payload)).rows[0].result.valid,1);
@@ -177,7 +178,7 @@ test('reviewed FO-optional validator installs atomically, preserves supplied-FO 
    update reliance_retail_store_master set state='AP-1' where id='${id(4)}';
    update reliance_retail_store_master set state='AP-2' where id='${id(5)}';
   `);
-  const writerSql=readFileSync(new URL('../../supabase/proposals/retail_cleaning_schedule_writer_20261118.sql',import.meta.url),'utf8');
+  const writerSql=readFileSync(new URL('../../supabase/proposals/retail_cleaning_schedule_writer_20261118.sql',import.meta.url),'utf8').replaceAll('\r\n','\n');
   await pg.db.exec(writerSql);await pg.db.exec(writerSql);
   const permissions=(await pg.db.query("select permission.code from access_role_permissions rp join access_roles r on r.id=rp.role_id join access_permissions permission on permission.id=rp.permission_id where r.code='retail_deep_cleaning_schedule_writer'")).rows.map(r=>r.code);
   assert.deepEqual(permissions,['deep_cleaning.schedule.manage'],'The writer role grants no evidence, report export, submission, approval or other-module permission');
@@ -214,10 +215,11 @@ test('reviewed FO-optional validator installs atomically, preserves supplied-FO 
   await pg.db.exec("update access_user_assignments set client_id='369d2d5f-396f-49f9-a47d-bfbc8f7cb922'");
   await assert.rejects(writerCommand('approve',statePayload),/Unknown action/);
   assert.equal((await pg.db.query("select has_function_privilege('anon','public.rpc_retail_cleaning_writer_access_v2(uuid,uuid)','EXECUTE') allowed")).rows[0].allowed,false);
+  await verifySuperAdminImport(pg);
   await pg.db.exec('update qpms_release.test_admission set allowed=false');
   await assert.rejects(command(pg.admin,'import',{...payload,request_id:id(72),rows:[{...row,SCHEDULE_DATE:'2026-12-06'}]}),/mutation fence closed/);
   const countBefore=(await pg.db.query('select count(*)::int n from client_deep_cleaning_submissions')).rows[0].n;
-  await pg.db.exec(readFileSync(new URL('../../supabase/proposals/retail_cleaning_v2_recovery_20261118.sql',import.meta.url),'utf8'));
+  await pg.db.exec(readFileSync(new URL('../../supabase/proposals/retail_cleaning_v2_recovery_20261118.sql',import.meta.url),'utf8').replaceAll('\r\n','\n'));
   assert.equal((await writerAccess()).active,false);
   assert.equal((await pg.db.query('select count(*)::int n from client_deep_cleaning_submissions')).rows[0].n,countBefore);
   assert.equal((await pg.db.query("select tgenabled from pg_trigger where tgname='z90_cleaning_verified_match_v2'")).rows[0].tgenabled,'D');

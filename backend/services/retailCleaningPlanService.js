@@ -1,6 +1,8 @@
 import XLSX from 'xlsx';
 import {validateExcelContainer} from './retailAttendanceService.js';
 import {misRpc} from './retailMisService.js';
+import {normalizeRoleKey} from './roleNormalizationService.js';
+import {isInitialRetailAdmin} from './retailInitialAdminAccess.js';
 export const CLEANING_PLAN_HEADERS=['STATE','STORE_CODE','SCHEDULE_DATE','REMARKS','FO_EMPLOYEE_CODE'];
 const invalid=message=>Object.assign(Error(message),{statusCode:400});
 export function parseCleaningPlan(bytes,filename){
@@ -26,6 +28,15 @@ export function parseCleaningPlan(bytes,filename){
 }
 export function cleaningPlanCommand(client,profile,action,data){
  return misRpc(client,'rpc_retail_cleaning_plan_v1',{p_actor:profile.id,p_auth:profile.auth_user_id,p_action:action,p_data:data});
+}
+// This capability is limited to monthly plans, not a Retail MIS assignment.
+export async function cleaningScheduleAdminAccess(client,profile,authUser){
+ if(!profile?.id||!authUser?.id||profile.auth_user_id!==authUser.id)throw Object.assign(Error('Verified account required.'),{statusCode:401});
+ if(profile.is_active!==true||String(profile.status||'').toUpperCase()!=='ACTIVE')return false;
+ if(!isInitialRetailAdmin(profile,authUser)&&normalizeRoleKey(profile.role)!=='SUPERADMIN')return false;
+ const result=await misRpc(client,'rpc_retail_cleaning_schedule_admin_access_v1',{p_actor:profile.id,p_auth:authUser.id});
+ if(typeof result!=='boolean')throw Object.assign(Error('Deep Cleaning administrator capability unavailable.'),{statusCode:503});
+ return result;
 }
 export async function cleaningScheduleWriterAccess(client,profile,authUser){
  if(!profile?.id||!authUser?.id||profile.auth_user_id!==authUser.id)throw Object.assign(Error('Verified account required.'),{statusCode:401});
