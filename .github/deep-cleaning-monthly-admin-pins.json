@@ -3,7 +3,7 @@
   "base_sha": "661eee8bf757b8cf096b52e1ddc7dcb8766ae158",
   "files": {
     ".github/deepCleaningMonthlyAdminGuard.mjs": "60567205f86337c26bb2d62cb2b265e8c044c260",
-    ".github/deepCleaningV2Guard.mjs": "ae39902c688e2dfb0b6b6e7097d95a4395555fea",
+    ".github/deepCleaningV2Guard.mjs": "6415c1308d6d58cb859a8f4a2211f1c211b2449e",
     ".github/thermographyV2Guard.mjs": "e4cb879a2a9654747a88fb785d98af851c662a41",
     "backend/routes/retailMisRoutes.js": "f4cbe9191dd5dfd8133ec6c6ea5dca9742b4f040",
     "backend/services/retailCleaningPlanService.js": "3af812cb576fcea962c99c2eafcbd149afdf6e02",

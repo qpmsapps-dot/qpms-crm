@@ -96,7 +96,7 @@ jobs:
           # BEGIN DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD
           monthly_manifest = ".github/deep-cleaning-monthly-admin-pins.json"
           if monthly_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{monthly_manifest}"],text=True).strip() != "773c31989342fd26f4862e43539e46e45a87203a":
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{monthly_manifest}"],text=True).strip() != "30873fa8645649d4687ef533c7edaba3d446c50b":
               sys.exit("Monthly administrator manifest changed; renew review")
             if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningMonthlyAdminGuard.mjs"],text=True).strip() != "60567205f86337c26bb2d62cb2b265e8c044c260":
               sys.exit("Monthly administrator guard changed; renew review")

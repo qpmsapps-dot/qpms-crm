@@ -77,6 +77,14 @@ export function priorWorkflowForChecks(workflow){
 }
 export function verifyCurrent(base,working=false){
  if(base===monthlyBase&&fs.existsSync(monthlyManifest))return verifyMonthly(base,working);
+ if(base===approvedBase&&fs.existsSync(monthlyManifest)){
+  // Historical preservation checks must verify both complete exact deltas:
+  // the original V2 release, then this repair against its merged main base.
+  const current=verifyMonthly(monthlyBase,working);
+  const read=p=>git(['show',`${monthlyBase}:${p}`]);
+  const historical=verifyPayload({base,paths:git(['diff','--name-only',base,monthlyBase]).trim().split('\n').filter(Boolean),manifest:JSON.parse(read(manifestPath)),hash:p=>git(['rev-parse',`${monthlyBase}:${p}`]).trim(),workflow:read(workflowPath),baseWorkflow:git(['show',`${base}:${workflowPath}`])});
+  return {...current,ok:current.ok&&historical.ok,historical};
+ }
  const paths=git(['diff','--name-only',base,...(working?[]:['HEAD'])]).trim().split('\n').filter(Boolean);
  if(working)paths.push(...git(['ls-files','--others','--exclude-standard']).trim().split('\n').filter(Boolean));
  const read=p=>working?fs.readFileSync(p,'utf8'):git(['show',`HEAD:${p}`]);
