@@ -42,3 +42,18 @@ test('monthly administrator repair rejects every missing, changed and unrelated 
  assert.equal(monthly.verifyPayload({...f,workflow:f.workflow+'unreviewed'}).ok,false);
  assert.equal(monthly.verifyPayload({...f,manifest:{...f.manifest,files:{...f.manifest.files,extra:hash()}}}).ok,false);
 });
+
+import * as layout from '../.github/deepCleaningLayoutGuard.mjs';
+test('frontend-only Deep Cleaning layout requires every exact blob and preserves all workflow checks',()=>{
+ const paths=[...layout.payloadPaths,layout.manifestPath,layout.workflowPath],hash=()=> '5'.repeat(40);
+ const baseWorkflow='          # BEGIN DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD\nexisting checks\n';
+ const f={base:layout.approvedBase,paths,manifest:{schema:'deep-cleaning-layout-ui.v1',base_sha:layout.approvedBase,files:Object.fromEntries(layout.payloadPaths.map(p=>[p,hash()]))},hash,baseWorkflow,workflow:layout.reviewedWorkflow(baseWorkflow,hash(),hash())};
+ assert.equal(layout.verifyPayload(f).ok,true);
+ assert.equal(layout.payloadPaths.some(p=>/^(backend|supabase|Mobile_FO_V2)\//.test(p)),false);
+ for(const path of paths)assert.equal(layout.verifyPayload({...f,paths:paths.filter(p=>p!==path)}).ok,false,path);
+ for(const path of layout.payloadPaths)assert.equal(layout.verifyPayload({...f,hash:p=>p===path?'6'.repeat(40):hash()}).ok,false,path);
+ for(const path of ['backend/routes/retailMisRoutes.js','backend/server.js','supabase/proposals/unreviewed.sql','Mobile_FO_V2/lib/main.dart','src/pages/FOActivities.jsx','src/components/reliance-retail/ThermographyReports.jsx','src/utils/deepCleaningView.js'])assert.equal(layout.verifyPayload({...f,paths:[...paths,path]}).ok,false,path);
+ assert.equal(layout.verifyPayload({...f,base:'0'.repeat(40)}).ok,false);
+ assert.equal(layout.verifyPayload({...f,workflow:f.workflow+'unreviewed'}).ok,false);
+ assert.equal(layout.verifyPayload({...f,manifest:{...f.manifest,files:{...f.manifest.files,extra:hash()}}}).ok,false);
+});

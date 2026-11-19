@@ -93,6 +93,17 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # BEGIN DEEP CLEANING LAYOUT UI EXACT PAYLOAD
+          layout_manifest = ".github/deep-cleaning-layout-ui-pins.json"
+          if layout_manifest in files:
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{layout_manifest}"],text=True).strip() != "35cedcbf8b3ad351f2f1c59f40d0007f1eaeeb09":
+              sys.exit("Deep Cleaning UI manifest changed; renew review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningLayoutGuard.mjs"],text=True).strip() != "8e69def991a081a861caef8a7387c8ffe7c2514a":
+              sys.exit("Deep Cleaning UI guard changed; renew review")
+            subprocess.run(["node",".github/deepCleaningLayoutGuard.mjs",base],check=True)
+            print("PASS: exact frontend-only Deep Cleaning layout; all subsequent checks remain mandatory.")
+            sys.exit(0)
+          # END DEEP CLEANING LAYOUT UI EXACT PAYLOAD
           # BEGIN DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD
           monthly_manifest = ".github/deep-cleaning-monthly-admin-pins.json"
           if monthly_manifest in files:

@@ -42,17 +42,20 @@ test('Deep Cleaning V2 separates verified schedule KPIs from historical Excel an
  const work=page.getByRole('region',{name:'Submitted cleaning work'});
  await expect(summary).toBeVisible();
  // Excel-reported completion is never a verified operational KPI.
- await expect(page.locator('.dc-kpis .dc-kpi').first().locator('strong')).toHaveText('0');
+ await expect(page.locator('[data-kpi=scheduled] strong')).toHaveText('0');
  await expect(summary.getByRole('img',{name:/AP-1: 0 scheduled, 0 completed, N\/A completion/})).toBeVisible();
+ await expect(page.getByRole('region',{name:'Cleaning schedules'})).toBeVisible();
+ await page.getByRole('tab',{name:/Submitted Work & Evidence/}).click();
  await expect(page.getByRole('heading',{name:'Store-wise Submitted Work'})).toBeVisible();
  // Scheduled work is visible in V2; mutation controls remain authorized separately.
- await expect(page.getByRole('region',{name:'Cleaning schedules'})).toBeVisible();
+ await expect(page.getByRole('tab',{name:/Scheduled Deep Cleaning/})).toBeVisible();
  await expect(work.getByText('Completed (Excel reported)')).toBeVisible();
  await expect(work.getByText('No FO evidence')).toBeVisible();
  await expect(page.getByText('Deep Cleaning — imported October records')).toHaveCount(0);
  await expect(work.getByRole('button',{name:/View evidence/})).toHaveCount(0);
  for(const state of ['TN','KA','KL','TG','AP-1','AP-2'])await expect(summary.getByRole('img',{name:new RegExp(state+': 0 scheduled, 0 completed, N/A completion')})).toBeVisible();
- await expect(page.locator('.dc-kpis .dc-kpi').nth(1).locator('strong')).toHaveText('0');
- await expect(page.locator('.dc-kpis .dc-kpi').nth(2).locator('strong')).toHaveText('0');
- await expect(page.locator('.retail-schedule-admin summary')).toContainText('Scheduled work and verified completion links');
+ await expect(page.locator('[data-kpi=completed] strong')).toHaveText('0');
+ await expect(page.locator('[data-kpi=pending]')).toHaveText('0');
+ await page.getByRole('tab',{name:/Scheduled Deep Cleaning/}).click();
+ await expect(page.getByRole('region',{name:'Cleaning schedules'})).toBeVisible();
 });

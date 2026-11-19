@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {approvedBase as monthlyBase,manifestPath as monthlyManifest,verifyCurrent as verifyMonthly,priorWorkflow as priorMonthlyWorkflow} from './deepCleaningMonthlyAdminGuard.mjs';
+import {approvedBase as monthlyBase,manifestPath as monthlyManifest,verifyCurrent as verifyMonthly,verifyPayload as verifyMonthlyPayload,priorWorkflow as priorMonthlyWorkflow} from './deepCleaningMonthlyAdminGuard.mjs';
+import {approvedBase as layoutBase,manifestPath as layoutManifest,verifyCurrent as verifyLayout,priorWorkflow as priorLayoutWorkflow} from './deepCleaningLayoutGuard.mjs';
 export const approvedBase='3453b06aee160611a62755a9feaba8123a617886';
 export const manifestPath='.github/deep-cleaning-v2-pins.json';
 export const guardPath='.github/deepCleaningV2Guard.mjs';
@@ -66,6 +67,7 @@ export function verifyPayload({paths,manifest,hash,base,workflow,baseWorkflow}){
  return {ok:validManifest&&workflowMatches&&!missing.length&&!unexpected.length&&!mismatched.length,validManifest,workflowMatches,missing,unexpected,mismatched};
 }
 export function priorWorkflowForChecks(workflow){
+ if(workflow.includes('# BEGIN DEEP CLEANING LAYOUT UI EXACT PAYLOAD'))workflow=priorLayoutWorkflow(workflow);
  if(workflow.includes('# BEGIN DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD')){
   priorMonthlyWorkflow(workflow); // Validates the entire new workflow against current main.
   return git(['show',`${approvedBase}:${workflowPath}`]);
@@ -76,6 +78,16 @@ export function priorWorkflowForChecks(workflow){
  return base;
 }
 export function verifyCurrent(base,working=false){
+ if(fs.existsSync(layoutManifest)&&[layoutBase,monthlyBase,approvedBase].includes(base)){
+  const current=verifyLayout(layoutBase,working);
+  if(base===layoutBase)return current;
+  const read=p=>git(['show',`${layoutBase}:${p}`]);
+  const monthly=verifyMonthlyPayload({base:monthlyBase,paths:git(['diff','--name-only',monthlyBase,layoutBase]).trim().split('\n').filter(Boolean),manifest:JSON.parse(read(monthlyManifest)),hash:p=>git(['rev-parse',`${layoutBase}:${p}`]).trim(),workflow:read(workflowPath),baseWorkflow:git(['show',`${monthlyBase}:${workflowPath}`])});
+  if(base===monthlyBase)return {...current,ok:current.ok&&monthly.ok,monthly};
+  const historicalRead=p=>git(['show',`${monthlyBase}:${p}`]);
+  const historical=verifyPayload({base,paths:git(['diff','--name-only',base,monthlyBase]).trim().split('\n').filter(Boolean),manifest:JSON.parse(historicalRead(manifestPath)),hash:p=>git(['rev-parse',`${monthlyBase}:${p}`]).trim(),workflow:historicalRead(workflowPath),baseWorkflow:git(['show',`${base}:${workflowPath}`])});
+  return {...current,ok:current.ok&&monthly.ok&&historical.ok,monthly,historical};
+ }
  if(base===monthlyBase&&fs.existsSync(monthlyManifest))return verifyMonthly(base,working);
  if(base===approvedBase&&fs.existsSync(monthlyManifest)){
   // Historical preservation checks must verify both complete exact deltas:
