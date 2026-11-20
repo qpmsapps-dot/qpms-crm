@@ -32,7 +32,9 @@ export function cleaningView(report, historical, {
   // Pending and the schedule-based completion percentage.
   const completedReports = work.filter(row=>row.source_kind!=='IFMS_EXCEL'&&
     String(row.status||'').toLowerCase()==='submitted'&&
-    String(row.final_outcome||'').toLowerCase()==='completed');
+    String(row.final_outcome||'').trim().toLowerCase()==='completed'&&
+    (!report?.from||row.deep_cleaning_date>=report.from)&&
+    (!report?.to||row.deep_cleaning_date<=report.to));
   const reports = summarizeCleaningReports(completedReports,report?.schedules===null?null:matchedSchedules);
   const summary = {...scheduledSummary,
     total:{...scheduledSummary.total,...completion.total,
