@@ -18,12 +18,13 @@ export default function DeepCleaningOverview({
   } = view.summary;
   const val = n => available && Number.isFinite(n) ? n.toLocaleString('en-IN') : 'N/A';
   const percentage = available && Number.isFinite(total.percentage) ? total.percentage : null;
+  const schedulePercentage = available && Number.isFinite(total.schedule_percentage) ? total.schedule_percentage : null;
   const tillDate = !to || to <= today;
   return <section className="thv2-summary dc-overview" aria-label="Deep Cleaning performance">
     <div className="dc-kpis thv2-kpis">
       <article className="thv2-card thv2-scheduled" data-kpi="scheduled"><CalendarDays aria-hidden="true"/><div><h2>{tillDate?'Scheduled Till Date':'Scheduled in Selected Range'}</h2><strong>{val(total.scheduled)}</strong><small>{from} - {to}</small></div></article>
       <article className="thv2-card thv2-completed" data-kpi="completed"><CheckCircle2 aria-hidden="true"/><div><h2>{tillDate?'Completed Till Date':'Completed in Selected Range'}</h2><strong>{val(total.completed)}</strong><small>Confirmed completed reports / {from} - {to}</small></div></article>
-      <article className="thv2-completion"><h2>Completion Percentage</h2><div><strong>{percentage==null?'N/A':percentage.toFixed(1)+'%'}</strong><progress aria-label="Completion percentage" max="100" value={percentage??0}/></div><small>Existing verified schedule calculation</small></article>
+      <article className="thv2-completion"><h2>Completion Percentage</h2><div><strong>{percentage==null?'N/A':percentage.toFixed(1)+'%'}</strong><progress aria-label="Completion percentage" max={Math.max(100,percentage??0)} value={percentage??0}/></div><small>Confirmed completed reports / scheduled jobs</small><small>Verified schedule-linked completion: <b data-kpi="schedule-percentage">{schedulePercentage==null?'N/A':schedulePercentage.toFixed(1)+'%'}</b></small></article>
       <p className="dc-metric-notes"><span>Pending: <b data-kpi="pending">{val(total.pending)}</b></span><span>Submitted reports: <b>{val(total.submitted_reports)}</b></span><span>Overdue: <b>{val(view.overdue)}</b></span></p>
     </div>
     <section className="dc-performance thv2-chart" aria-label="State-wise Deep Cleaning performance"><div className="thv2-chart-head"><h2>State-wise Scheduled vs Completed</h2><span><i className="thv2-blue"/> Scheduled <i className="thv2-green"/> Completed</span></div>
@@ -45,6 +46,6 @@ export default function DeepCleaningOverview({
                   borderColor: '#dce4f3',
                   fontSize: 12
                 }} /><Bar isAnimationActive={false} name="Scheduled" dataKey="scheduled" fill="url(#dcScheduled)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="scheduled" content={<CountLabel />} /></Bar><Bar isAnimationActive={false} name="Completed" dataKey="completed" fill="url(#dcCompleted)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="completed" content={<CountLabel />} /></Bar></BarChart></ResponsiveContainer></div></> : <p className="dc-empty">Schedule reporting unavailable.</p>}
-    <p className="dc-chart-note">Scheduled bars show planned jobs; Completed bars show submitted, Completed-outcome reports. Schedule fulfilment percentage remains verified-link based.</p></section>
+    <p className="dc-chart-note">Scheduled bars show planned jobs; Completed bars show confirmed completed reports. Main completion percentage uses reports / scheduled jobs; verified schedule-linked completion remains separate.</p></section>
   </section>;
 }

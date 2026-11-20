@@ -1,4 +1,4 @@
-import { summarizeVerifiedCleaningSchedules } from './retailStatePerformance.js';
+import { summarizeVerifiedCleaningSchedules, retailPercent } from './retailStatePerformance.js';
 import { summarizeCleaningReports } from '../../backend/shared/retailModuleReports.js';
 export const recordedFoName = row => row?.fo_name || row?.submitted_by_name || row?.submitted_by_employee_name || row?.performed_by_name || row?.metadata?.executor_name || '';
 export const recordedFoCode = row => row?.submitted_by_employee_code || row?.employee_code || row?.metadata?.executor_employee_code || '';
@@ -32,7 +32,7 @@ export function cleaningView(report, historical, {
   const completion = summarizeCleaningReports(currentWork,report?.schedules===null?null:matchedSchedules);
   // The public Completed KPI/chart count actual submitted, Completed-outcome reports.
   // Verified schedule fulfilment is a separate metric and remains the source of
-  // Pending and the schedule-based completion percentage.
+  // Pending and the separately labelled schedule-linked completion percentage.
   const completedReports = currentWork.filter(row=>
     String(row.status||'').toLowerCase()==='submitted'&&
     String(row.final_outcome||'').trim().toLowerCase()==='completed');
@@ -42,6 +42,8 @@ export function cleaningView(report, historical, {
       report_completed:reports.total.completed,
       submitted_reports:completion.total.completed,
       completed:reports.total.completed,
+      schedule_percentage:completion.total.percentage,
+      percentage:retailPercent(reports.total.completed,completion.total.scheduled),
       scheduled_completed:completion.total.scheduled_completed},
     rows:scheduledSummary.rows.map(row=>{
       const all=completion.rows.find(state=>state.state===row.state);
@@ -50,6 +52,8 @@ export function cleaningView(report, historical, {
         report_completed:done?.completed||0,
         submitted_reports:all?.completed||0,
         completed:done?.completed||0,
+        schedule_percentage:all?.percentage??row.percentage,
+        percentage:retailPercent(done?.completed||0,all?.scheduled??row.scheduled),
         scheduled_completed:completion.schedule_available?(all?.scheduled_completed??0):null,
         ...(completion.schedule_available?{}:{scheduled:null,pending:null,other:null,percentage:null})};
     })};

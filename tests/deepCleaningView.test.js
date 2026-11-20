@@ -109,7 +109,8 @@ test('Completed KPI and chart count confirmed reports independent of verified sc
  assert.equal(v.summary.total.scheduled_completed,1);
  assert.equal(v.summary.total.scheduled,2);
  assert.equal(v.summary.total.pending,1);
- assert.equal(v.summary.total.percentage,50,'Schedule completion remains independent of reports');
+ assert.equal(v.summary.total.percentage,100,'Main completion uses confirmed reports / scheduled jobs');
+ assert.equal(v.summary.total.schedule_percentage,50,'Verified schedule fulfilment remains independent');
  const selected=cleaningView({...report,submissions:[standalone]}, {}, {status:'Completed'});
  assert.equal(selected.work.length,1);
  assert.equal(selected.summary.total.completed,1);
@@ -131,7 +132,8 @@ test('November state chart shows 12 AP-1 and 2 TN confirmed reports, excludes NU
  assert.equal(v.summary.total.submitted_reports,15);
  assert.equal(v.summary.total.scheduled_completed,0);
  assert.equal(v.summary.total.pending,6);
- assert.equal(v.summary.total.percentage,0);
+ assert.equal(v.summary.total.schedule_percentage,0);
+ assert.equal(v.summary.total.percentage,233.3,'Independent visits can exceed scheduled jobs; do not cap the calculation');
  assert.equal(v.summary.rows.find(row=>row.state==='AP-1').completed,12);
  assert.equal(v.summary.rows.find(row=>row.state==='TN').completed,2);
  assert.equal(v.summary.rows.find(row=>row.state==='TG').completed,0);
@@ -151,4 +153,46 @@ test('confirmed report KPI excludes out-of-range, Excel and linked-only history,
  assert.equal(v.summary.total.completed,1);
  assert.equal(v.summary.rows.find(r=>r.state==='TN').completed,1);
  assert.equal(v.summary.total.scheduled,0);assert.equal(v.summary.total.percentage,null);
+});
+
+function percentageFixture(){
+ const ap={id:'ap-store',store_code:'AP-001',store_name:'AP Store',state:'AP-1'};
+ const schedules=Array.from({length:423},(_,i)=>({id:'scheduled-'+i,store:i<300?store:ap,reporting_state:i<300?'TN':'AP-1',display_status:'Scheduled',scheduled_date:'2026-11-15',overdue:true}));
+ const submissions=Array.from({length:14},(_,i)=>({id:'completed-'+i,store:i<2?store:ap,reporting_state:i<2?'TN':'AP-1',status:'submitted',final_outcome:'Completed',deep_cleaning_date:i<2?'2026-11-14':'2026-11-12'}));
+ return {from:'2026-11-01',to:'2026-11-20',schedules,submissions};
+}
+
+test('423 scheduled / 14 confirmed reports gives 3.3%; new reports update it without changing pending or overdue',()=>{
+ const input=percentageFixture(),v=cleaningView(input,{});
+ assert.equal(v.summary.total.percentage,3.3);
+ assert.equal(v.summary.total.schedule_percentage,0);
+ assert.equal(v.summary.total.pending,423);assert.equal(v.overdue,423);
+ const next=cleaningView({...input,submissions:[...input.submissions,{...input.submissions[0],id:'new-completion'}]},{});
+ assert.equal(next.summary.total.percentage,3.5);assert.equal(next.summary.total.completed,15);
+ assert.equal(next.summary.total.pending,v.summary.total.pending);assert.equal(next.overdue,v.overdue);
+ const retry=cleaningView({...input,submissions:[...input.submissions,input.submissions[0]]},{});
+ assert.equal(retry.summary.total.completed,14);assert.equal(retry.summary.total.percentage,3.3);
+});
+
+test('report-based percentage respects state/store search and actual-date range while schedule fulfilment stays independent',()=>{
+ const input=percentageFixture();
+ const ap=cleaningView(input,{}, {query:'AP Store'});
+ assert.equal(ap.summary.total.completed,12);assert.equal(ap.summary.total.scheduled,123);assert.equal(ap.summary.total.percentage,9.8);
+ assert.equal(ap.summary.rows.find(r=>r.state==='AP-1').percentage,9.8);
+ const range=cleaningView({...input,from:'2026-11-13'},{});
+ assert.equal(range.summary.total.completed,2);assert.equal(range.summary.total.percentage,0.5);
+ const linked=structuredClone(input);linked.schedules[0].display_status='Completed';linked.schedules[0].submission_ids=['completed-0'];
+ const v=cleaningView(linked,{});
+ assert.equal(v.summary.total.percentage,3.3);assert.equal(v.summary.total.schedule_percentage,0.2);
+ assert.equal(v.summary.total.pending,422); // Existing verified schedule rules still own Pending.
+});
+
+test('zero reports shows 0.0 with a positive denominator; zero or unavailable schedules show no invented percentage',()=>{
+ const input=percentageFixture();
+ const empty=cleaningView({...input,submissions:[]},{});
+ assert.equal(empty.summary.total.percentage.toFixed(1),'0.0');
+ for(const schedules of [[],null]){
+  const v=cleaningView({...input,schedules},{});
+  assert.equal(v.summary.total.percentage,null);assert.equal(v.summary.total.schedule_percentage,null);
+ }
 });

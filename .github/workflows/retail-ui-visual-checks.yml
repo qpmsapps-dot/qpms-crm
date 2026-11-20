@@ -93,6 +93,17 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # BEGIN DEEP CLEANING COMPLETION PERCENTAGE EXACT PAYLOAD
+          percentage_manifest = ".github/deep-cleaning-percentage-pins.json"
+          if percentage_manifest in files:
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{percentage_manifest}"],text=True).strip() != "a0840885285ae753693f13ec01147e2eae4242fc":
+              sys.exit("Completion-percentage manifest changed; renew review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningPercentageGuard.mjs"],text=True).strip() != "8080977f720aa2018fa83329322946e0f8210783":
+              sys.exit("Completion-percentage guard changed; renew review")
+            subprocess.run(["node",".github/deepCleaningPercentageGuard.mjs",base],check=True)
+            print("PASS: exact reviewed Deep Cleaning report correction; all subsequent checks remain mandatory.")
+            sys.exit(0)
+          # END DEEP CLEANING COMPLETION PERCENTAGE EXACT PAYLOAD
           # BEGIN DEEP CLEANING COMPLETED REPORT EXACT PAYLOAD
           completed_manifest = ".github/deep-cleaning-completed-pins.json"
           if completed_manifest in files:

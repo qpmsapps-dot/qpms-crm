@@ -3,7 +3,8 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {approvedBase as monthlyBase,manifestPath as monthlyManifest,verifyCurrent as verifyMonthly,verifyPayload as verifyMonthlyPayload,priorWorkflow as priorMonthlyWorkflow} from './deepCleaningMonthlyAdminGuard.mjs';
 import {approvedBase as layoutBase,manifestPath as layoutManifest,verifyCurrent as verifyLayout,verifyPayload as verifyLayoutPayload,priorWorkflow as priorLayoutWorkflow} from './deepCleaningLayoutGuard.mjs';
-import {approvedBase as completedBase,manifestPath as completedManifest,verifyCurrent as verifyCompleted,priorWorkflow as priorCompletedWorkflow} from './deepCleaningCompletedGuard.mjs';
+import {approvedBase as completedBase,manifestPath as completedManifest,verifyCurrent as verifyCompleted,verifyPayload as verifyCompletedPayload,priorWorkflow as priorCompletedWorkflow} from './deepCleaningCompletedGuard.mjs';
+import {approvedBase as percentageBase,manifestPath as percentageManifest,verifyCurrent as verifyPercentage,priorWorkflow as priorPercentageWorkflow} from './deepCleaningPercentageGuard.mjs';
 export const approvedBase='3453b06aee160611a62755a9feaba8123a617886';
 export const manifestPath='.github/deep-cleaning-v2-pins.json';
 export const guardPath='.github/deepCleaningV2Guard.mjs';
@@ -68,6 +69,7 @@ export function verifyPayload({paths,manifest,hash,base,workflow,baseWorkflow}){
  return {ok:validManifest&&workflowMatches&&!missing.length&&!unexpected.length&&!mismatched.length,validManifest,workflowMatches,missing,unexpected,mismatched};
 }
 export function priorWorkflowForChecks(workflow){
+ if(workflow.includes('# BEGIN DEEP CLEANING COMPLETION PERCENTAGE EXACT PAYLOAD'))workflow=priorPercentageWorkflow(workflow);
  if(workflow.includes('# BEGIN DEEP CLEANING COMPLETED REPORT EXACT PAYLOAD'))workflow=priorCompletedWorkflow(workflow);
  if(workflow.includes('# BEGIN DEEP CLEANING LAYOUT UI EXACT PAYLOAD'))workflow=priorLayoutWorkflow(workflow);
  if(workflow.includes('# BEGIN DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD')){
@@ -79,13 +81,20 @@ export function priorWorkflowForChecks(workflow){
  if(normalize(workflow)!==reviewedWorkflow(base,hash(manifestPath),hash(guardPath)))throw Error('Unreviewed workflow alteration: Deep Cleaning');
  return base;
 }
+function verifyCompletedChain(working){
+ if(!fs.existsSync(percentageManifest))return verifyCompleted(completedBase,working);
+ const current=verifyPercentage(percentageBase,working),read=p=>git(['show',`${percentageBase}:${p}`]);
+ const historicalCompleted=verifyCompletedPayload({base:completedBase,paths:git(['diff','--name-only',completedBase,percentageBase]).trim().split('\n').filter(Boolean),manifest:JSON.parse(read(completedManifest)),hash:p=>git(['rev-parse',`${percentageBase}:${p}`]).trim(),workflow:read(workflowPath),baseWorkflow:git(['show',`${completedBase}:${workflowPath}`])});
+ return {...current,ok:current.ok&&historicalCompleted.ok,historicalCompleted};
+}
 export function verifyCurrent(base,working=false){
- if(base===completedBase&&fs.existsSync(completedManifest))return verifyCompleted(base,working);
+ if(base===percentageBase&&fs.existsSync(percentageManifest))return verifyPercentage(base,working);
+ if(base===completedBase&&fs.existsSync(completedManifest))return verifyCompletedChain(working);
  if(fs.existsSync(layoutManifest)&&[layoutBase,monthlyBase,approvedBase].includes(base)){
   // Verify the new delta and the unchanged historical layout from committed blobs.
   let current;
   if(fs.existsSync(completedManifest)){
-   const correction=verifyCompleted(completedBase,working),read=p=>git(['show',`${completedBase}:${p}`]);
+   const correction=verifyCompletedChain(working),read=p=>git(['show',`${completedBase}:${p}`]);
    const layout=verifyLayoutPayload({base:layoutBase,paths:git(['diff','--name-only',layoutBase,completedBase]).trim().split('\n').filter(Boolean),manifest:JSON.parse(read(layoutManifest)),hash:p=>git(['rev-parse',`${completedBase}:${p}`]).trim(),workflow:read(workflowPath),baseWorkflow:git(['show',`${layoutBase}:${workflowPath}`])});
    current={...correction,ok:correction.ok&&layout.ok,layout};
   }else current=verifyLayout(layoutBase,working);
