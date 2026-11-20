@@ -1,4 +1,4 @@
-import {retailMisRole,RETAIL_MIS_MODULES,retailMisRouteModule,RETAIL_MIS_ASSIGNMENT_ADMIN} from '../../backend/shared/retailMisAccess.js';
+import {retailMisRole,RETAIL_MIS_MODULES,retailMisRouteModule,RETAIL_MIS_ONBOARDING_ADMINS} from '../../backend/shared/retailMisAccess.js';
 import {isRetailLeadership} from '../../backend/shared/retailSouthHeadAccess.js';
 import {isOos12Specialist} from '../../backend/shared/retailOos12Workflow.js';
 const viteEnv = import.meta.env || {};
@@ -293,7 +293,7 @@ export function canAccessRoute(user, pathname) {
   if (!user) return false;
   const mis=retailMisRole(user.rawRole||user.role);
   if(mis)return pathname==='/profile'||Boolean(RETAIL_MIS_MODULES[mis].includes(retailMisRouteModule(pathname)));
-  if(pathname==='/settings/retail-mis-access')return user.profileId===RETAIL_MIS_ASSIGNMENT_ADMIN.profile_id&&user.id===RETAIL_MIS_ASSIGNMENT_ADMIN.auth_user_id&&user.employeeCode===RETAIL_MIS_ASSIGNMENT_ADMIN.employee_code&&isPlatformAdmin(user);
+  if(pathname==='/settings/retail-mis-access')return isPlatformAdmin(user)&&RETAIL_MIS_ONBOARDING_ADMINS.some(a=>user.profileId===a.profile_id&&user.id===a.auth_user_id&&user.employeeCode===a.employee_code);
   if (isPlatformAdmin(user)) return true;
   // Navigation only. Verified database role plus explicit state grants decide access.
   if (pathname==='/reliance-retail/mis/oos'&&isOos12Specialist({role:user.rawRole||user.role,business:user.business})) return true;
