@@ -26,15 +26,16 @@ export function cleaningView(report, historical, {
   const work = joined.filter(row => !row.linked_only && matches(row) && statusMatches(row, row.schedule));
   const scheduledSummary = summarizeVerifiedCleaningSchedules(schedules);
   const matchedSchedules=schedules.map(row=>String(row.display_status||row.status).toLowerCase()==='completed'&&!row.submission_ids?.length?{...row,display_status:'Scheduled'}:row);
-  const completion = summarizeCleaningReports(work,report?.schedules===null?null:matchedSchedules);
+  const currentWork = work.filter(row=>row.source_kind!=='IFMS_EXCEL'&&
+    (!report?.from||row.deep_cleaning_date>=report.from)&&
+    (!report?.to||row.deep_cleaning_date<=report.to));
+  const completion = summarizeCleaningReports(currentWork,report?.schedules===null?null:matchedSchedules);
   // The public Completed KPI/chart count actual submitted, Completed-outcome reports.
   // Verified schedule fulfilment is a separate metric and remains the source of
   // Pending and the schedule-based completion percentage.
-  const completedReports = work.filter(row=>row.source_kind!=='IFMS_EXCEL'&&
+  const completedReports = currentWork.filter(row=>
     String(row.status||'').toLowerCase()==='submitted'&&
-    String(row.final_outcome||'').trim().toLowerCase()==='completed'&&
-    (!report?.from||row.deep_cleaning_date>=report.from)&&
-    (!report?.to||row.deep_cleaning_date<=report.to));
+    String(row.final_outcome||'').trim().toLowerCase()==='completed');
   const reports = summarizeCleaningReports(completedReports,report?.schedules===null?null:matchedSchedules);
   const summary = {...scheduledSummary,
     total:{...scheduledSummary.total,...completion.total,
