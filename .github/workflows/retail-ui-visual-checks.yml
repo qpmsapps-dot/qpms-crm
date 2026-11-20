@@ -96,9 +96,9 @@ jobs:
           # BEGIN DEEP CLEANING COMPLETED REPORT EXACT PAYLOAD
           completed_manifest = ".github/deep-cleaning-completed-pins.json"
           if completed_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{completed_manifest}"],text=True).strip() != "e063dae974e43e44b0eaed369646098d91003255":
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{completed_manifest}"],text=True).strip() != "a1d9a5ba6cc4dc155e39387125d9979c65c4ec45":
               sys.exit("Completed-report manifest changed; renew review")
-            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningCompletedGuard.mjs"],text=True).strip() != "7c790d12ae69943f7c1d09779ce488823fa5661c":
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningCompletedGuard.mjs"],text=True).strip() != "f13286d5443ac78e6eb534bc4615f5a55f75c909":
               sys.exit("Completed-report guard changed; renew review")
             subprocess.run(["node",".github/deepCleaningCompletedGuard.mjs",base],check=True)
             print("PASS: exact reviewed Deep Cleaning report correction; all subsequent checks remain mandatory.")

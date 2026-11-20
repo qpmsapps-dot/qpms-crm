@@ -29,7 +29,8 @@ test('Deep Cleaning redesign: unchanged totals, responsive before/after, tabs, e
   const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j0L0AAAAASUVORK5CYII=','base64');
   async function launch(baseline) {
     const server=await createServer({configFile:false,envDir,cacheDir:path.join(envDir,baseline?'baseline':'candidate'),plugins:[{name:'cleaning-baseline-only',enforce:'pre',load(id){if(baseline){const file=Object.keys(baselineSources).find(file=>id.replaceAll('\\','/').endsWith('/'+file));if(file)return baselineSources[file];}}},react(),tailwindcss()],server:{host:'127.0.0.1',port:0,watch:{ignored:['**/outputs/**','**/artifacts/**','**/tmp/**']}},logLevel:'error'});
-    await server.listen();const context=await browser.newContext({acceptDownloads:true}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+    await server.listen();await server.environments.client.warmupRequest('/src/main.jsx');await server.environments.client.waitForRequestsIdle();
+    const context=await browser.newContext({acceptDownloads:true}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
     await context.addInitScript(()=>{localStorage.setItem('qpms-crm-auth-user',JSON.stringify({id:'fixture-auth',profileId:'fixture-profile',employeeCode:'QPMSADMIN',name:'Synthetic Admin',role:'Admin',rawRole:'Admin',status:'Active',isActive:true,webAccessEnabled:true,is_demo:true,isDemoReadOnly:true,read_only:false}));sessionStorage.setItem('qpms-crm-backend-token','synthetic-local-token');});
     await page.route('**/*',async route=>{
       const req=route.request(),url=new URL(req.url());
