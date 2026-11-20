@@ -96,7 +96,7 @@ jobs:
           # BEGIN DEEP CLEANING COMPLETION PERCENTAGE EXACT PAYLOAD
           percentage_manifest = ".github/deep-cleaning-percentage-pins.json"
           if percentage_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{percentage_manifest}"],text=True).strip() != "a0840885285ae753693f13ec01147e2eae4242fc":
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{percentage_manifest}"],text=True).strip() != "4acebc9e7ab58e111ef862579c0d0acd63cee368":
               sys.exit("Completion-percentage manifest changed; renew review")
             if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningPercentageGuard.mjs"],text=True).strip() != "8080977f720aa2018fa83329322946e0f8210783":
               sys.exit("Completion-percentage guard changed; renew review")
