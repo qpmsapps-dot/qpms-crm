@@ -12,6 +12,18 @@ export const RETAIL_MIS_MODULES = Object.freeze({
 });
 export const PADMA_RETAIL_IDENTITY = Object.freeze({profile_id:'83231458-af73-435a-abda-48bec9f29e5e',auth_user_id:'e843bc42-5f61-474d-8eca-1cf8d01ce2c1',employee_code:'QPMSAP2519'});
 export const RETAIL_MIS_ASSIGNMENT_ADMIN = Object.freeze({profile_id:'d40c2b3f-87f1-4c34-8798-cf9b0d9ca784',auth_user_id:'79cd196c-c6f3-404a-b22a-d4683afefa3f',employee_code:'QPMSADMIN'});
+// Exact existing operational Admin identities; never grant by role alone.
+export const RETAIL_MIS_ONBOARDING_ADMINS = Object.freeze([
+ RETAIL_MIS_ASSIGNMENT_ADMIN,
+ Object.freeze({profile_id:'2a1d8895-ce8d-4bf0-9d70-dbc6af60414b',auth_user_id:'7e84cddf-821a-4513-b7ce-25895d660393',employee_code:'QPMSAP25191'}),
+ Object.freeze({profile_id:'e2457d7a-018b-477e-9ba6-bd1021ed16aa',auth_user_id:'377ca7a2-95cc-4891-8840-338f2cb20bb9',employee_code:'QPMSTNC17010'}),
+ Object.freeze({profile_id:'a2edb589-ff09-4df8-8cd3-543dae919f79',auth_user_id:'f9238141-8f44-4073-86aa-2749b8a3dccf',employee_code:'QPMSTN4887'}),
+]);
+export function isRetailMisOnboardingAdmin(profile,authUser){
+ if(!profile||!authUser?.id||profile.auth_user_id!==authUser.id) return false;
+ if(!['Admin','QPMS Admin'].includes(profile.role)||profile.is_active!==true||String(profile.status||'Active').toUpperCase()!=='ACTIVE'||profile.web_access_enabled!==true) return false;
+ return RETAIL_MIS_ONBOARDING_ADMINS.some(a=>a.profile_id===profile.id&&a.auth_user_id===profile.auth_user_id&&a.employee_code===profile.employee_code);
+}
 export function retailMisRole(value){return Object.hasOwn(RETAIL_MIS_ROLES,value)?value:null;}
 export function retailMisApiAllowed(profile,path){return !retailMisRole(profile?.role)||/^\/api\/(?:reliance-retail\/(?:mis(?:\/|$)|access$)|profile\/(?:me|password-setup-complete|avatar)$)/.test(path);}
 export function retailMisState(value){const s=String(value||'').trim().toUpperCase();return s==='KN'?'KA':RETAIL_MIS_STATES.includes(s)?s:null;}
