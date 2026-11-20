@@ -91,14 +91,48 @@ test('unlinked completed schedules are not counted as verified completions', () 
   assert.equal(v.summary.total.pending, 1);
 });
 
-test('Done KPI and chart measure linked schedules; independent reports retain their separate count',()=>{
- const standalone={id:'independent',store,status:'submitted',reporting_state:'TN'};
- const v=cleaningView({...report,submissions:[...report.submissions,standalone,standalone,
-  {id:'draft',store,status:'draft'},{id:'failed',store,status:'failed'}]},{});
- assert.equal(v.summary.total.completed,1);assert.equal(v.summary.rows.find(row=>row.state==='TN').completed,1);
- assert.equal(v.summary.total.report_completed,2);assert.equal(v.summary.rows.find(row=>row.state==='TN').report_completed,2);
- assert.equal(v.summary.total.scheduled,2);assert.equal(v.summary.total.pending,1);
- assert.equal(v.summary.total.percentage,50,'Schedule completion is independent of the report count');
+test('Completed KPI and chart count confirmed reports independent of verified schedule fulfilment',()=>{
+ const standalone={id:'independent',store,status:'submitted',reporting_state:'TN',final_outcome:'Completed'};
+ const linkedDone={...report.submissions[0],final_outcome:'Completed'};
+ const v=cleaningView({...report,submissions:[linkedDone,standalone,standalone,
+  {id:'draft',store,status:'draft'},{id:'failed',store,status:'failed'},
+  {id:'unknown-outcome',store,status:'submitted',final_outcome:null},
+  {id:'not-done',store,status:'submitted',final_outcome:'Not Done'}]},{});
+ assert.equal(v.summary.total.completed,2);
+ assert.equal(v.summary.rows.find(row=>row.state==='TN').completed,2);
+ assert.equal(v.summary.total.report_completed,2);
+ assert.equal(v.summary.rows.find(row=>row.state==='TN').report_completed,2);
+ assert.equal(v.summary.total.submitted_reports,4);
+ assert.equal(v.summary.total.scheduled_completed,1);
+ assert.equal(v.summary.total.scheduled,2);
+ assert.equal(v.summary.total.pending,1);
+ assert.equal(v.summary.total.percentage,50,'Schedule completion remains independent of reports');
  const selected=cleaningView({...report,submissions:[standalone]}, {}, {status:'Completed'});
- assert.equal(selected.work.length,1);assert.equal(selected.summary.total.completed,1);assert.equal(selected.summary.total.report_completed,1);
+ assert.equal(selected.work.length,1);
+ assert.equal(selected.summary.total.completed,1);
+ assert.equal(selected.summary.total.report_completed,1);
+});
+
+test('November state chart shows 12 AP-1 and 2 TN confirmed reports, excludes NULL outcomes',()=>{
+ const states=['TN','AP-1','AP-2','KL','TG','KN'];
+ const schedules=states.map((state,i)=>({id:'plan-'+i,store:{id:'s-'+i,store_code:'S'+i,state},reporting_state:state,display_status:'Scheduled'}));
+ const submissions=[
+  ...Array.from({length:12},(_,i)=>({id:'ap-'+i,store:schedules[1].store,reporting_state:'AP-1',status:'submitted',final_outcome:'Completed',deep_cleaning_date:'2026-11-12'})),
+  ...Array.from({length:2},(_,i)=>({id:'tn-'+i,store:schedules[0].store,reporting_state:'TN',status:'submitted',final_outcome:'Completed',deep_cleaning_date:'2026-11-14'})),
+  {id:'tg-unknown',store:schedules[4].store,reporting_state:'TG',status:'submitted',final_outcome:null,deep_cleaning_date:'2026-11-07'},
+  {id:'ap-uploading',store:schedules[1].store,reporting_state:'AP-1',status:'uploading',deep_cleaning_date:'2026-11-15'}
+ ];
+ const v=cleaningView({schedules,submissions},{});
+ assert.equal(v.summary.total.completed,14);
+ assert.equal(v.summary.total.submitted_reports,15);
+ assert.equal(v.summary.total.scheduled_completed,0);
+ assert.equal(v.summary.total.pending,6);
+ assert.equal(v.summary.total.percentage,0);
+ assert.equal(v.summary.rows.find(row=>row.state==='AP-1').completed,12);
+ assert.equal(v.summary.rows.find(row=>row.state==='TN').completed,2);
+ assert.equal(v.summary.rows.find(row=>row.state==='TG').completed,0);
+ assert.ok(v.summary.rows.filter(row=>!['TN','AP-1'].includes(row.state)).every(row=>row.completed===0));
+ const scoped=cleaningView({schedules:schedules.slice(1,2),submissions:submissions.filter(row=>row.reporting_state==='AP-1')},{});
+ assert.equal(scoped.summary.total.completed,12);
+ assert.equal(scoped.summary.total.pending,1);
 });
