@@ -18,14 +18,19 @@ test('Deep Cleaning redesign: unchanged totals, responsive before/after, tabs, e
   const envDir=await mkdtemp(path.join(os.tmpdir(),'qpms-cleaning-export-env-'));
   Object.assign(process.env,{VITE_ENABLE_DEMO_AUTH:'true',VITE_APP_MODE:'demo',VITE_SUPABASE_URL:'',VITE_SUPABASE_ANON_KEY:'',VITE_API_URL:'http://127.0.0.1:4999'});
   const baselineSources=Object.fromEntries(['src/pages/reliance-retail/RetailScopedDeepCleaning.jsx','src/components/reliance-retail/DeepCleaningOverview.jsx','src/components/reliance-retail/RetailCleaningMonthlyPlan.jsx'].map(file=>[file,execFileSync('git',['show','f7dfc0a24eed2affb67e8b6469c4409e060e80cd:'+file],{encoding:'utf8'})]));
-  const browser=await chromium.launch({headless:true});let denyReport=false,denyEvidence=false;const calls=[];
+  const browser=await chromium.launch({headless:true});let denyReport=false,denyEvidence=false,novemberReports=false;const calls=[];
   const store={id:'store-1',store_code:'0012',store_name:'SYNTHETIC TEST STORE',state:'TN'};
-  const row={id:'synthetic-cleaning-1',store,status:'submitted',deep_cleaning_date:'2026-11-14',fo_name:'Synthetic FO',submitted_by_employee_code:'0007',before_count:1,after_count:1};
+  const row={id:'synthetic-cleaning-1',store,status:'submitted',final_outcome:'Completed',deep_cleaning_date:'2026-11-14',fo_name:'Synthetic FO',submitted_by_employee_code:'0007',before_count:1,after_count:1};
+  const apStore={id:'synthetic-ap-store',store_code:'AP-001',store_name:'SYNTHETIC AP STORE',state:'AP-1'};
+  const novemberRows=[...Array.from({length:14},(_,i)=>({...row,id:'confirmed-'+i,store:i<12?apStore:store})),
+    {...row,id:'unknown-outcome',final_outcome:null},
+    ...Array.from({length:4},(_,i)=>({...row,id:'uploading-'+i,status:'uploading',final_outcome:null}))];
   const uploads=['before','after','checklist'].map((type,i)=>({id:'synthetic-evidence-'+i,type,name:'SYNTHETIC_'+type+(i===2?'.pdf':'.png'),mime_type:i===2?'application/pdf':'image/png',url:'https://example.invalid/photo?token=NEVER_RETAIN'}));
   const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j0L0AAAAASUVORK5CYII=','base64');
   async function launch(baseline) {
     const server=await createServer({configFile:false,envDir,cacheDir:path.join(envDir,baseline?'baseline':'candidate'),plugins:[{name:'cleaning-baseline-only',enforce:'pre',load(id){if(baseline){const file=Object.keys(baselineSources).find(file=>id.replaceAll('\\','/').endsWith('/'+file));if(file)return baselineSources[file];}}},react(),tailwindcss()],server:{host:'127.0.0.1',port:0,watch:{ignored:['**/outputs/**','**/artifacts/**','**/tmp/**']}},logLevel:'error'});
-    await server.listen();const context=await browser.newContext({acceptDownloads:true}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+    await server.listen();await server.environments.client.warmupRequest('/src/main.jsx');await server.environments.client.waitForRequestsIdle();
+    const context=await browser.newContext({acceptDownloads:true}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
     await context.addInitScript(()=>{localStorage.setItem('qpms-crm-auth-user',JSON.stringify({id:'fixture-auth',profileId:'fixture-profile',employeeCode:'QPMSADMIN',name:'Synthetic Admin',role:'Admin',rawRole:'Admin',status:'Active',isActive:true,webAccessEnabled:true,is_demo:true,isDemoReadOnly:true,read_only:false}));sessionStorage.setItem('qpms-crm-backend-token','synthetic-local-token');});
     await page.route('**/*',async route=>{
       const req=route.request(),url=new URL(req.url());
@@ -35,7 +40,7 @@ test('Deep Cleaning redesign: unchanged totals, responsive before/after, tabs, e
       calls.push({method:req.method(),path:url.pathname,params:Object.fromEntries(url.searchParams)});assert.equal(req.method(),'GET');
       if(url.pathname.endsWith('/mis/access'))return route.fulfill({json:{result:{active:true,role:'SUPER_ADMIN',read_only:false,cleaning_schedule_admin:true,modules:[]}}});
       if(url.pathname.endsWith('/cleaning/plans'))return route.fulfill({json:{result:{schedules:[]}}});
-      if(url.pathname.endsWith('/module-reports/deep-cleaning'))return denyReport?route.fulfill({status:403,json:{message:'Synthetic report authorization denied'}}):route.fulfill({json:{report:{from:url.searchParams.get('from'),to:url.searchParams.get('to'),submissions:[row],stores:[store],schedules:[{id:'completed-plan',store,scheduled_date:'2026-11-14',display_status:'Completed',submission_ids:[row.id]},{id:'pending-plan',store,scheduled_date:'2026-11-15',display_status:'Scheduled',submission_ids:[]},{id:'another-plan',store,scheduled_date:'2026-11-16',display_status:'Scheduled',submission_ids:[]}],totals:{scheduled:3,completed:1,not_completed:0,pending:2},exceptions:[]}}});
+      if(url.pathname.endsWith('/module-reports/deep-cleaning'))return denyReport?route.fulfill({status:403,json:{message:'Synthetic report authorization denied'}}):route.fulfill({json:{report:{from:url.searchParams.get('from'),to:url.searchParams.get('to'),submissions:novemberReports?novemberRows:[row],stores:[store,apStore],schedules:[{id:'completed-plan',store,scheduled_date:'2026-11-14',display_status:novemberReports?'Scheduled':'Completed',submission_ids:novemberReports?[]:[row.id]},{id:'pending-plan',store,scheduled_date:'2026-11-15',display_status:'Scheduled',submission_ids:[]},{id:'another-plan',store,scheduled_date:'2026-11-16',display_status:'Scheduled',submission_ids:[]}],totals:{scheduled:3,completed:novemberReports?14:1,not_completed:0,pending:novemberReports?3:2},exceptions:[]}}});
       if(url.pathname.endsWith('/evidence'))return denyEvidence?route.fulfill({status:403,json:{message:'Synthetic evidence denied'}}):route.fulfill({json:{uploads}});
       if(url.pathname.endsWith('/module-reports/ifms-history'))return route.fulfill({json:{report:{rows:[],total:0}}});
       return route.fulfill({json:{}});
@@ -81,6 +86,15 @@ test('Deep Cleaning redesign: unchanged totals, responsive before/after, tabs, e
     for(const width of [1440,390]){await page.setViewportSize({width,height:1000});await page.evaluate(()=>new Promise(resolve=>{scrollTo({top:0,behavior:'instant'});requestAnimationFrame(()=>requestAnimationFrame(resolve));}));await page.screenshot({path:path.join(output,`evidence-viewer-${width}.png`),fullPage:true,animations:'disabled',style:'header.sticky{position:static!important}'});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+2));}
     for(const name of ['BROWSER_monthly.xlsx','BROWSER_filtered.xlsx','BROWSER_individual.xlsx']){const book=new ExcelJS.Workbook();await book.xlsx.readFile(path.join(output,name));assert.equal(book.getWorksheet('Submissions').getCell('C2').value,'0012');}
     for(const name of ['BROWSER_monthly.pptx','BROWSER_individual.pptx','BROWSER_denied-evidence.pptx']){const zip=await JSZip.loadAsync(await readFile(path.join(output,name))),docs=await Promise.all(Object.keys(zip.files).filter(p=>p.endsWith('.xml')||p.endsWith('.rels')).map(async p=>({path:p,xml:await zip.file(p).async('string')})));assert.deepEqual(await page.evaluate(d=>d.filter(x=>new DOMParser().parseFromString(x.xml,'application/xml').querySelector('parsererror')).map(x=>x.path),docs),[]);assert.ok(!docs.some(d=>d.xml.includes('NEVER_RETAIN')));if(!name.includes('denied'))assert.ok(Object.keys(zip.files).some(p=>p.startsWith('ppt/media/')));}
+    await page.getByRole('button',{name:'Close evidence details'}).click();
+    novemberReports=true;await page.getByRole('button',{name:'Refresh',exact:true}).click();
+    await page.locator('[data-kpi=completed] strong').filter({hasText:/^14$/}).waitFor();
+    assert.equal(await page.locator('[data-kpi=scheduled] strong').innerText(),'3');
+    assert.equal(await page.locator('[data-kpi=pending]').innerText(),'3');
+    assert.equal(await page.getByRole('progressbar',{name:'Completion percentage'}).getAttribute('value'),'0');
+    await page.getByRole('img',{name:/AP-1: 0 scheduled, 12 completed/}).waitFor();
+    await page.getByRole('img',{name:/TN: 3 scheduled, 2 completed/}).waitFor();
+    await page.getByRole('tab',{name:'Submitted Work & Evidence 19',exact:true}).waitFor();
     assert.deepEqual(candidate.errors,[]);assert.ok(calls.every(c=>c.method==='GET'));
   }catch(error){if(candidate){console.error('Synthetic export failure status:',await candidate.page.locator('[role=status],[role=alert]').allTextContents(),candidate.errors);await candidate.page.screenshot({path:path.join(output,'failure.png'),fullPage:true,animations:'disabled',style:'header.sticky{position:static!important}'});}throw error;}finally{for(const active of [baseline,candidate])if(active){await active.context.close();await active.server.close();}await browser.close();}
 });

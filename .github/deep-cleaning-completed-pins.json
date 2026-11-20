@@ -1,0 +1,15 @@
+{
+  "schema": "deep-cleaning-completed.v1",
+  "base_sha": "098a0c8b6278ac6f6e2e25b5c39360a47b5992e8",
+  "files": {
+    ".github/deepCleaningCompletedGuard.mjs": "f13286d5443ac78e6eb534bc4615f5a55f75c909",
+    ".github/deepCleaningV2Guard.mjs": "9b8411635bbdc2d2fb7597d2e48c89a440f5bddf",
+    ".github/thermographyV2Guard.mjs": "2631023eed26636b37e16d202f8fab3418540e1a",
+    "src/components/reliance-retail/DeepCleaningOverview.jsx": "adaf38592b8dbb1b6096f0a81a0b3da7d0abd1ea",
+    "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "056e7f857fbcf9cbf5cdb701e0f550b39f05bc9b",
+    "src/utils/deepCleaningView.js": "87685600ee57daa305bae9d96733aa1cca075419",
+    "tests/deepCleaningView.test.js": "46147e71b50699719ed65ea86142af968c4b0e75",
+    "tests/deepCleaningExports.browser.test.js": "c320feb1487bd676ca3357bd331f338c3ef191e1",
+    "tests/deepCleaningV2Guard.test.js": "ae20c731c0725fb4f37861f3071f61d2722b00f1"
+  }
+}

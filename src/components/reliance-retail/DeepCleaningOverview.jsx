@@ -22,9 +22,9 @@ export default function DeepCleaningOverview({
   return <section className="thv2-summary dc-overview" aria-label="Deep Cleaning performance">
     <div className="dc-kpis thv2-kpis">
       <article className="thv2-card thv2-scheduled" data-kpi="scheduled"><CalendarDays aria-hidden="true"/><div><h2>{tillDate?'Scheduled Till Date':'Scheduled in Selected Range'}</h2><strong>{val(total.scheduled)}</strong><small>{from} - {to}</small></div></article>
-      <article className="thv2-card thv2-completed" data-kpi="completed"><CheckCircle2 aria-hidden="true"/><div><h2>{tillDate?'Completed Till Date':'Completed in Selected Range'}</h2><strong>{val(total.completed)}</strong><small>Verified linked schedules / {from} - {to}</small></div></article>
+      <article className="thv2-card thv2-completed" data-kpi="completed"><CheckCircle2 aria-hidden="true"/><div><h2>{tillDate?'Completed Till Date':'Completed in Selected Range'}</h2><strong>{val(total.completed)}</strong><small>Confirmed completed reports / {from} - {to}</small></div></article>
       <article className="thv2-completion"><h2>Completion Percentage</h2><div><strong>{percentage==null?'N/A':percentage.toFixed(1)+'%'}</strong><progress aria-label="Completion percentage" max="100" value={percentage??0}/></div><small>Existing verified schedule calculation</small></article>
-      <p className="dc-metric-notes"><span>Pending: <b data-kpi="pending">{val(total.pending)}</b></span><span>Submitted reports: <b>{val(total.report_completed)}</b></span><span>Overdue: <b>{val(view.overdue)}</b></span></p>
+      <p className="dc-metric-notes"><span>Pending: <b data-kpi="pending">{val(total.pending)}</b></span><span>Submitted reports: <b>{val(total.submitted_reports)}</b></span><span>Overdue: <b>{val(view.overdue)}</b></span></p>
     </div>
     <section className="dc-performance thv2-chart" aria-label="State-wise Deep Cleaning performance"><div className="thv2-chart-head"><h2>State-wise Scheduled vs Completed</h2><span><i className="thv2-blue"/> Scheduled <i className="thv2-green"/> Completed</span></div>
   {available ? <><div className="dc-chart" role="img" aria-label={rows.map(r => r.label + ': ' + r.scheduled + ' scheduled, ' + r.completed + ' completed, ' + (Number.isFinite(r.percentage)?r.percentage+'%':'N/A') + ' completion').join('; ')}><ResponsiveContainer width="100%" height="100%"><BarChart data={rows} margin={{
@@ -45,6 +45,6 @@ export default function DeepCleaningOverview({
                   borderColor: '#dce4f3',
                   fontSize: 12
                 }} /><Bar isAnimationActive={false} name="Scheduled" dataKey="scheduled" fill="url(#dcScheduled)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="scheduled" content={<CountLabel />} /></Bar><Bar isAnimationActive={false} name="Completed" dataKey="completed" fill="url(#dcCompleted)" radius={[3, 3, 0, 0]} maxBarSize={31}><LabelList dataKey="completed" content={<CountLabel />} /></Bar></BarChart></ResponsiveContainer></div></> : <p className="dc-empty">Schedule reporting unavailable.</p>}
-    <p className="dc-chart-note">Same authorized date range and verified schedule totals as the KPI cards.</p></section>
+    <p className="dc-chart-note">Scheduled bars show planned jobs; Completed bars show submitted, Completed-outcome reports. Schedule fulfilment percentage remains verified-link based.</p></section>
   </section>;
 }

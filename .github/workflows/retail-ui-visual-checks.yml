@@ -93,6 +93,17 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # BEGIN DEEP CLEANING COMPLETED REPORT EXACT PAYLOAD
+          completed_manifest = ".github/deep-cleaning-completed-pins.json"
+          if completed_manifest in files:
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{completed_manifest}"],text=True).strip() != "a1d9a5ba6cc4dc155e39387125d9979c65c4ec45":
+              sys.exit("Completed-report manifest changed; renew review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningCompletedGuard.mjs"],text=True).strip() != "f13286d5443ac78e6eb534bc4615f5a55f75c909":
+              sys.exit("Completed-report guard changed; renew review")
+            subprocess.run(["node",".github/deepCleaningCompletedGuard.mjs",base],check=True)
+            print("PASS: exact reviewed Deep Cleaning report correction; all subsequent checks remain mandatory.")
+            sys.exit(0)
+          # END DEEP CLEANING COMPLETED REPORT EXACT PAYLOAD
           # BEGIN DEEP CLEANING LAYOUT UI EXACT PAYLOAD
           layout_manifest = ".github/deep-cleaning-layout-ui-pins.json"
           if layout_manifest in files:
