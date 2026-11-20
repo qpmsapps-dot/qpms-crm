@@ -1,11 +1,11 @@
 import {canonicalProfileRole} from '../userManagementService.js';
 import {retailMisRole,retailMisScopeStates,RETAIL_MIS_ASSIGNABLE_ROLES} from '../shared/retailMisAccess.js';
-import {isInitialRetailAdmin} from './retailInitialAdminAccess.js';
+import {isRetailMisOnboardingAdmin} from '../shared/retailMisAccess.js';
 import {misRpc} from './retailMisService.js';
 export async function prepareRetailMisUser(client,request,body,oldProfile=null){
  const role=canonicalProfileRole(body.role||oldProfile?.role);
  if(!retailMisRole(role)&&!retailMisRole(oldProfile?.role))return null;
- if(!request.authUser?.id||!isInitialRetailAdmin(request.profile,request.authUser))throw Object.assign(Error('Exact Super Admin required for MIS user management.'),{statusCode:403});
+ if(!request.authUser?.id||!isRetailMisOnboardingAdmin(request.profile,request.authUser))throw Object.assign(Error('Exact Super Admin required for MIS user management.'),{statusCode:403});
  if(!RETAIL_MIS_ASSIGNABLE_ROLES.includes(role))throw Object.assign(Error('Use audited Retail assignment revocation before changing to a non-MIS role.'),{statusCode:400});
  const states=retailMisScopeStates(body.retail_mis_states);
  if(body.retail_mis_states.some(s=>s==='PY'))throw Object.assign(Error('Select TN including PY; no separate PY grant.'),{statusCode:400});
