@@ -27,9 +27,29 @@ export function cleaningView(report, historical, {
   const scheduledSummary = summarizeVerifiedCleaningSchedules(schedules);
   const matchedSchedules=schedules.map(row=>String(row.display_status||row.status).toLowerCase()==='completed'&&!row.submission_ids?.length?{...row,display_status:'Scheduled'}:row);
   const completion = summarizeCleaningReports(work,report?.schedules===null?null:matchedSchedules);
-  const summary = {...scheduledSummary,total:{...scheduledSummary.total,...completion.total,report_completed:completion.total.completed,completed:completion.total.scheduled_completed},
-    rows:scheduledSummary.rows.map(row=>({...row,...completion.rows.find(state=>state.state===row.state),report_completed:completion.rows.find(state=>state.state===row.state)?.completed||0,completed:completion.schedule_available?(completion.rows.find(state=>state.state===row.state)?.scheduled_completed??0):null,
-      ...(completion.schedule_available?{}:{scheduled:null,pending:null,other:null,percentage:null})}))};
+  // The public Completed KPI/chart count actual submitted, Completed-outcome reports.
+  // Verified schedule fulfilment is a separate metric and remains the source of
+  // Pending and the schedule-based completion percentage.
+  const completedReports = work.filter(row=>row.source_kind!=='IFMS_EXCEL'&&
+    String(row.status||'').toLowerCase()==='submitted'&&
+    String(row.final_outcome||'').toLowerCase()==='completed');
+  const reports = summarizeCleaningReports(completedReports,report?.schedules===null?null:matchedSchedules);
+  const summary = {...scheduledSummary,
+    total:{...scheduledSummary.total,...completion.total,
+      report_completed:reports.total.completed,
+      submitted_reports:completion.total.completed,
+      completed:reports.total.completed,
+      scheduled_completed:completion.total.scheduled_completed},
+    rows:scheduledSummary.rows.map(row=>{
+      const all=completion.rows.find(state=>state.state===row.state);
+      const done=reports.rows.find(state=>state.state===row.state);
+      return {...row,...all,
+        report_completed:done?.completed||0,
+        submitted_reports:all?.completed||0,
+        completed:done?.completed||0,
+        scheduled_completed:completion.schedule_available?(all?.scheduled_completed??0):null,
+        ...(completion.schedule_available?{}:{scheduled:null,pending:null,other:null,percentage:null})};
+    })};
   const operational = schedules.filter(row => row.source_kind !== 'IFMS_EXCEL');
   return {
     schedules,
