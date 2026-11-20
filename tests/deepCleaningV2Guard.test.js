@@ -45,6 +45,21 @@ test('monthly administrator repair rejects every missing, changed and unrelated 
 
 import * as layout from '../.github/deepCleaningLayoutGuard.mjs';
 import * as completedReports from '../.github/deepCleaningCompletedGuard.mjs';
+import * as percentage from '../.github/deepCleaningPercentageGuard.mjs';
+
+test('percentage correction admits only the exact reviewed payload and preserves all prior workflow steps',()=>{
+ const g=percentage,paths=[...g.payloadPaths,g.manifestPath,g.workflowPath],hash=()=> '9'.repeat(40);
+ const baseWorkflow='          # BEGIN DEEP CLEANING COMPLETED REPORT EXACT PAYLOAD\nall existing checks\n';
+ const f={base:g.approvedBase,paths,hash,manifest:{schema:'deep-cleaning-percentage.v1',base_sha:g.approvedBase,files:Object.fromEntries(g.payloadPaths.map(p=>[p,hash()]))},baseWorkflow,workflow:g.reviewedWorkflow(baseWorkflow,hash(),hash())};
+ assert.equal(g.verifyPayload(f).ok,true);
+ for(const p of paths)assert.equal(g.verifyPayload({...f,paths:paths.filter(x=>x!==p)}).ok,false,p);
+ for(const p of g.payloadPaths)assert.equal(g.verifyPayload({...f,hash:x=>x===p?'8'.repeat(40):hash()}).ok,false,p);
+ for(const p of ['backend/server.js','backend/shared/retailModuleReports.js','supabase/proposals/unapproved.sql','Mobile_FO_V2/lib/main.dart','src/utils/retailStatePerformance.js','src/pages/FOActivities.jsx','src/components/reliance-retail/ThermographyReports.jsx','src/pages/reliance-retail/RetailTraining.jsx','package.json','.env'])assert.equal(g.verifyPayload({...f,paths:[...paths,p]}).ok,false,p);
+ assert.equal(g.verifyPayload({...f,base:'0'.repeat(40)}).ok,false);
+ assert.equal(g.verifyPayload({...f,manifest:{...f.manifest,files:{...f.manifest.files,extra:hash()}}}).ok,false);
+ assert.equal(g.verifyPayload({...f,workflow:f.workflow.replace('all existing checks','weakened checks')}).ok,false);
+ assert.throws(()=>g.reviewedWorkflow('anchor missing',hash(),hash()));
+});
 
 test('completed-report correction requires exact base, every blob, and only the reviewed workflow insertion',()=>{
  const g=completedReports,paths=[...g.payloadPaths,g.manifestPath,g.workflowPath],hash=()=> '7'.repeat(40);

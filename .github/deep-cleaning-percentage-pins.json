@@ -1,0 +1,15 @@
+{
+  "schema": "deep-cleaning-percentage.v1",
+  "base_sha": "d8d027fd6fd7ffb2d1c7a50553874fb7386fa41d",
+  "files": {
+    ".github/deepCleaningPercentageGuard.mjs": "8080977f720aa2018fa83329322946e0f8210783",
+    ".github/deepCleaningV2Guard.mjs": "b3695058116b5c4a86426d8f6e32b2b77a67206f",
+    ".github/thermographyV2Guard.mjs": "9f990ab732a67a85dbc4bf76aee1368123aba609",
+    "src/components/reliance-retail/DeepCleaningOverview.jsx": "c7c7f69cfedba2fe6dea9dcfe52f99faa45b2b4c",
+    "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "c9095027d593bbb832ee42d46ba1da15dde48889",
+    "src/utils/deepCleaningView.js": "3df8788bed04d97ec2b974e2daa8d5d4fac1967e",
+    "tests/deepCleaningView.test.js": "ca3a1de28d7d342da2ee7eba529009daee6deabc",
+    "tests/deepCleaningExports.browser.test.js": "b32c47e177fe18c10ad3ddfa19280b45775f5f27",
+    "tests/deepCleaningV2Guard.test.js": "6bc5517efed5be2e88cb85d306ec8967d8837424"
+  }
+}
