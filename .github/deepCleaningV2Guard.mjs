@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {approvedBase as monthlyBase,manifestPath as monthlyManifest,verifyCurrent as verifyMonthly,verifyPayload as verifyMonthlyPayload,priorWorkflow as priorMonthlyWorkflow} from './deepCleaningMonthlyAdminGuard.mjs';
-import {approvedBase as layoutBase,manifestPath as layoutManifest,verifyCurrent as verifyLayout,priorWorkflow as priorLayoutWorkflow} from './deepCleaningLayoutGuard.mjs';
+import {approvedBase as layoutBase,manifestPath as layoutManifest,verifyCurrent as verifyLayout,verifyPayload as verifyLayoutPayload,priorWorkflow as priorLayoutWorkflow} from './deepCleaningLayoutGuard.mjs';
+import {approvedBase as completedBase,manifestPath as completedManifest,verifyCurrent as verifyCompleted,priorWorkflow as priorCompletedWorkflow} from './deepCleaningCompletedGuard.mjs';
 export const approvedBase='3453b06aee160611a62755a9feaba8123a617886';
 export const manifestPath='.github/deep-cleaning-v2-pins.json';
 export const guardPath='.github/deepCleaningV2Guard.mjs';
@@ -67,6 +68,7 @@ export function verifyPayload({paths,manifest,hash,base,workflow,baseWorkflow}){
  return {ok:validManifest&&workflowMatches&&!missing.length&&!unexpected.length&&!mismatched.length,validManifest,workflowMatches,missing,unexpected,mismatched};
 }
 export function priorWorkflowForChecks(workflow){
+ if(workflow.includes('# BEGIN DEEP CLEANING COMPLETED REPORT EXACT PAYLOAD'))workflow=priorCompletedWorkflow(workflow);
  if(workflow.includes('# BEGIN DEEP CLEANING LAYOUT UI EXACT PAYLOAD'))workflow=priorLayoutWorkflow(workflow);
  if(workflow.includes('# BEGIN DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD')){
   priorMonthlyWorkflow(workflow); // Validates the entire new workflow against current main.
@@ -78,8 +80,15 @@ export function priorWorkflowForChecks(workflow){
  return base;
 }
 export function verifyCurrent(base,working=false){
+ if(base===completedBase&&fs.existsSync(completedManifest))return verifyCompleted(base,working);
  if(fs.existsSync(layoutManifest)&&[layoutBase,monthlyBase,approvedBase].includes(base)){
-  const current=verifyLayout(layoutBase,working);
+  // Verify the new delta and the unchanged historical layout from committed blobs.
+  let current;
+  if(fs.existsSync(completedManifest)){
+   const correction=verifyCompleted(completedBase,working),read=p=>git(['show',`${completedBase}:${p}`]);
+   const layout=verifyLayoutPayload({base:layoutBase,paths:git(['diff','--name-only',layoutBase,completedBase]).trim().split('\n').filter(Boolean),manifest:JSON.parse(read(layoutManifest)),hash:p=>git(['rev-parse',`${completedBase}:${p}`]).trim(),workflow:read(workflowPath),baseWorkflow:git(['show',`${layoutBase}:${workflowPath}`])});
+   current={...correction,ok:correction.ok&&layout.ok,layout};
+  }else current=verifyLayout(layoutBase,working);
   if(base===layoutBase)return current;
   const read=p=>git(['show',`${layoutBase}:${p}`]);
   const monthly=verifyMonthlyPayload({base:monthlyBase,paths:git(['diff','--name-only',monthlyBase,layoutBase]).trim().split('\n').filter(Boolean),manifest:JSON.parse(read(monthlyManifest)),hash:p=>git(['rev-parse',`${layoutBase}:${p}`]).trim(),workflow:read(workflowPath),baseWorkflow:git(['show',`${monthlyBase}:${workflowPath}`])});

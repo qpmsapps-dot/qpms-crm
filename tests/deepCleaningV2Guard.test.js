@@ -44,6 +44,22 @@ test('monthly administrator repair rejects every missing, changed and unrelated 
 });
 
 import * as layout from '../.github/deepCleaningLayoutGuard.mjs';
+import * as completedReports from '../.github/deepCleaningCompletedGuard.mjs';
+
+test('completed-report correction requires exact base, every blob, and only the reviewed workflow insertion',()=>{
+ const g=completedReports,paths=[...g.payloadPaths,g.manifestPath,g.workflowPath],hash=()=> '7'.repeat(40);
+ const baseWorkflow='          # BEGIN DEEP CLEANING LAYOUT UI EXACT PAYLOAD\nall existing steps remain\n';
+ const f={base:g.approvedBase,paths,hash,manifest:{schema:'deep-cleaning-completed.v1',base_sha:g.approvedBase,files:Object.fromEntries(g.payloadPaths.map(p=>[p,hash()]))},baseWorkflow,workflow:g.reviewedWorkflow(baseWorkflow,hash(),hash())};
+ assert.equal(g.verifyPayload(f).ok,true);
+ for(const p of paths)assert.equal(g.verifyPayload({...f,paths:paths.filter(x=>x!==p)}).ok,false,p);
+ for(const p of g.payloadPaths)assert.equal(g.verifyPayload({...f,hash:x=>x===p?'8'.repeat(40):hash()}).ok,false,p);
+ for(const p of ['backend/server.js','backend/shared/retailModuleReports.js','supabase/proposals/unreviewed.sql','Mobile_FO_V2/lib/main.dart','src/pages/FOActivities.jsx','src/components/reliance-retail/ThermographyReports.jsx','src/pages/reliance-retail/RetailTraining.jsx','src/utils/retailStatePerformance.js','package.json','.env'])assert.equal(g.verifyPayload({...f,paths:[...paths,p]}).ok,false,p);
+ assert.equal(g.verifyPayload({...f,base:'0'.repeat(40)}).ok,false);
+ assert.equal(g.verifyPayload({...f,manifest:{...f.manifest,files:{...f.manifest.files,extra:hash()}}}).ok,false);
+ assert.equal(g.verifyPayload({...f,workflow:f.workflow+'unreviewed'}).ok,false);
+ assert.equal(g.verifyPayload({...f,workflow:f.workflow.replace('all existing steps remain','skip checks')}).ok,false);
+ assert.throws(()=>g.reviewedWorkflow('anchor missing',hash(),hash()));
+});
 test('frontend-only Deep Cleaning layout requires every exact blob and preserves all workflow checks',()=>{
  const paths=[...layout.payloadPaths,layout.manifestPath,layout.workflowPath],hash=()=> '5'.repeat(40);
  const baseWorkflow='          # BEGIN DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD\nexisting checks\n';

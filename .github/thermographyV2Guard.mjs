@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {approvedBase as completedBase,manifestPath as completedManifest} from './deepCleaningCompletedGuard.mjs';
 import {approvedBase as layoutBase,manifestPath as layoutManifest,verifyCurrent as verifyLayout} from './deepCleaningLayoutGuard.mjs';
 import {approvedBase as monthlyBase,manifestPath as monthlyManifest,verifyCurrent as verifyMonthly} from './deepCleaningMonthlyAdminGuard.mjs';
 import {approvedBase as cleaningBase,priorWorkflowForChecks as priorCleaningWorkflow,verifyCurrent as verifyCleaning} from './deepCleaningV2Guard.mjs';
@@ -86,6 +87,9 @@ export const priorWorkflowForChecks=priorV2WorkflowForChecks;
 if(process.argv[1]&&fs.existsSync(process.argv[1])&&fileURLToPath(import.meta.url)===fs.realpathSync(process.argv[1])){
  const working=process.argv.includes('--working-tree'),base=process.argv.find(a=>/^[a-f0-9]{40}$/.test(a));
  if(!base)throw Error('Explicit reviewed base SHA required');
+ if(fs.existsSync(completedManifest)&&[completedBase,layoutBase,monthlyBase,cleaningBase].includes(base)){
+  const result=verifyCleaning(base,working);console.log(JSON.stringify(result));process.exit(result.ok?0:1);
+ }
  if(base===layoutBase&&fs.existsSync(layoutManifest)){
   const result=verifyLayout(base,working);console.log(JSON.stringify(result));process.exit(result.ok?0:1);
  }

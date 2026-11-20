@@ -4,7 +4,9 @@ test('Empty authorized schedule arrays show verified zero for every state; unava
  assert.equal(empty.summary.rows.length,6);assert.equal(empty.summary.total.completed,0);
  assert.ok(empty.summary.rows.every(row=>row.scheduled===0&&row.completed===0&&row.percentage===null));
  const missing=cleaningView({schedules:null,submissions:[]},{});
- assert.equal(missing.summary.total.completed,null);assert.ok(missing.summary.rows.every(row=>row.completed===null));
+ assert.equal(missing.summary.total.completed,0);assert.ok(missing.summary.rows.every(row=>row.completed===0));
+ assert.equal(missing.summary.total.scheduled,null);assert.equal(missing.summary.total.pending,null);
+ assert.ok(missing.summary.rows.every(row=>row.scheduled===null&&row.percentage===null));
 });
 import assert from 'node:assert/strict';
 import { cleaningView, cleaningPhotoCount, recordedFoName } from '../src/utils/deepCleaningView.js';
@@ -38,6 +40,7 @@ const report = {
     schedule_id: 'a',
     store,
     status: 'submitted',
+    final_outcome: 'Completed',
     fo_name: 'Synthetic FO',
     before_count: 2,
     after_count: 1
@@ -120,9 +123,10 @@ test('November state chart shows 12 AP-1 and 2 TN confirmed reports, excludes NU
   ...Array.from({length:12},(_,i)=>({id:'ap-'+i,store:schedules[1].store,reporting_state:'AP-1',status:'submitted',final_outcome:'Completed',deep_cleaning_date:'2026-11-12'})),
   ...Array.from({length:2},(_,i)=>({id:'tn-'+i,store:schedules[0].store,reporting_state:'TN',status:'submitted',final_outcome:'Completed',deep_cleaning_date:'2026-11-14'})),
   {id:'tg-unknown',store:schedules[4].store,reporting_state:'TG',status:'submitted',final_outcome:null,deep_cleaning_date:'2026-11-07'},
-  {id:'ap-uploading',store:schedules[1].store,reporting_state:'AP-1',status:'uploading',deep_cleaning_date:'2026-11-15'}
+  ...Array.from({length:4},(_,i)=>({id:'ap-uploading-'+i,store:schedules[1].store,reporting_state:'AP-1',status:'uploading',deep_cleaning_date:'2026-11-15'}))
  ];
  const v=cleaningView({schedules,submissions},{});
+ assert.equal(v.work.length,19,'All submitted-work records, including uploading, remain visible');
  assert.equal(v.summary.total.completed,14);
  assert.equal(v.summary.total.submitted_reports,15);
  assert.equal(v.summary.total.scheduled_completed,0);
@@ -135,4 +139,16 @@ test('November state chart shows 12 AP-1 and 2 TN confirmed reports, excludes NU
  const scoped=cleaningView({schedules:schedules.slice(1,2),submissions:submissions.filter(row=>row.reporting_state==='AP-1')},{});
  assert.equal(scoped.summary.total.completed,12);
  assert.equal(scoped.summary.total.pending,1);
+});
+
+test('confirmed report KPI excludes out-of-range, Excel and linked-only history, retaining duplicate-id protection',()=>{
+ const done={id:'current',store,status:'submitted',final_outcome:'Completed',deep_cleaning_date:'2026-11-12'};
+ const v=cleaningView({from:'2026-11-01',to:'2026-11-19',schedules:[],submissions:[done,done,
+  {...done,id:'old',deep_cleaning_date:'2026-10-31'},
+  {...done,id:'future',deep_cleaning_date:'2026-11-20'},
+  {...done,id:'historical-link',linked_only:true},
+  {...done,id:'excel',source_kind:'IFMS_EXCEL'}]},{});
+ assert.equal(v.summary.total.completed,1);
+ assert.equal(v.summary.rows.find(r=>r.state==='TN').completed,1);
+ assert.equal(v.summary.total.scheduled,0);assert.equal(v.summary.total.percentage,null);
 });
