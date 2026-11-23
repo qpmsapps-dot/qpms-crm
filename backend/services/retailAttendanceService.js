@@ -6,6 +6,7 @@ import {compactPreviewSummary,encodeAttendanceSource,decodeAttendanceSource,prev
 import { retailAccess, assertRetailAccess } from './relianceRetailManagementService.js';
 import { ATTENDANCE_MAX_FILE_BYTES, attendanceClass, attendanceCredit, validDate, stateLabel, reportingState, STATE_OPTIONS, storeKey, summarizeAttendance, indiaToday } from '../shared/retailAttendance.js';
 import {retailAttendanceTrend} from '../shared/retailAttendanceTrend.js';
+import {novemberStateAttendanceSummary} from '../shared/retailAttendanceNov2026.js';
 import {retailMisRole,assertRetailMis} from '../shared/retailMisAccess.js';
 import {isRetailLeadership} from '../shared/retailSouthHeadAccess.js';
 
@@ -230,6 +231,17 @@ export async function retailAttendanceReport(client, profile, input = {}) {
   const visibleStores=selected.filter(s => s.status === 'Active' || source.attendance.some(r => r.retail_store_id === s.id) || source.aop.some(r => r.retail_store_id === s.id));
   const summary = summarizeAttendance({ stores: visibleStores,
     attendance: source.attendance, aop: source.aop, cutoff, view: input.view || 'mtd' });
+  // November-only Central MIS override changes state totals, not store AOP records
+  // or attendance imports. Remove this overlay after approved store totals are ready.
+  const november = novemberStateAttendanceSummary({
+    stores: visibleStores, attendance: source.attendance, cutoff, view: input.view || 'mtd'
+  });
+  if (november) {
+    summary.states = november.states;
+    summary.total = november.total;
+    summary.state_aop_source = november.state_aop_source;
+    summary.mepc_target_policy = 'Temporary November 2026 state-level AOP: HK all calendar days; MEPC one planning weekly off every seventh day (month-start cycle). No individual absence or store AOP is inferred.';
+  }
   // Daily summary retains its original one-day employee-count scope. A separate
   // authorized month read supplies the trend without changing that daily contract.
   const trendSource=input.view==='daily'
@@ -237,7 +249,28 @@ export async function retailAttendanceReport(client, profile, input = {}) {
       p_store_ids: selected.map(s=>s.id),p_from:`${cutoff.slice(0,7)}-01`,p_to:cutoff
      }))
     : source;
-  const trend=retailAttendanceTrend({stores:visibleStores,attendance:trendSource.attendance,aop:trendSource.aop,cutoff});
+  let trend=retailAttendanceTrend({stores:visibleStores,attendance:trendSource.attendance,aop:trendSource.aop,cutoff});
+  if (november) {
+    trend = trend.map(point => {
+      const stateDay = novemberStateAttendanceSummary({
+        stores: visibleStores, attendance: trendSource.attendance, cutoff: point.date, view: 'daily'
+      }).total;
+      const observed = point.has_attendance_upload;
+      return {
+        ...point,
+        hk_actual: observed ? stateDay.hk_actual : null,
+        mepc_actual: observed ? stateDay.mepc_actual : null,
+        total_actual: observed ? stateDay.total_actual : null,
+        hk_target: stateDay.hk_target,
+        mepc_target: stateDay.mepc_target,
+        total_target: stateDay.total_target,
+        hk_pct: observed ? stateDay.hk_pct : null,
+        mepc_pct: observed ? stateDay.mepc_pct : null,
+        overall_pct: observed ? stateDay.overall_pct : null,
+        complete: observed && stateDay.complete,
+      };
+    });
+  }
   return { ...summary, trend,trend_latest_imported_date:trendSource.latest_date,
     employee_counts: source.employee_counts || null, available_states: states, latest_imported_date: source.latest_date, can_upload: scope.admin,
     aop_mapping_blocked: 'Budget workbook has conflicting proposed/current/WO and regional sources. Approved sheet, component totals and effective dates must be confirmed before AOP import.' };
