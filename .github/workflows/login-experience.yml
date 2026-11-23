@@ -1,0 +1,29 @@
+name: Login experience verification
+on:
+  pull_request:
+    paths:
+      - 'src/pages/Login.jsx'
+      - 'src/pages/SetPassword.jsx'
+      - 'src/routes/AppRoutes.jsx'
+      - 'src/layouts/MainLayout.jsx'
+      - 'playwright.login.config.js'
+      - 'tests/browser/loginExperience.spec.js'
+      - 'tests/loginExperienceContract.test.js'
+      - '.github/workflows/login-experience.yml'
+permissions:
+  contents: read
+jobs:
+  login-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: node --test tests/loginExperienceContract.test.js
+      - run: npx eslint src/pages/Login.jsx src/pages/SetPassword.jsx src/routes/AppRoutes.jsx src/layouts/MainLayout.jsx
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --config=playwright.login.config.js --reporter=line
