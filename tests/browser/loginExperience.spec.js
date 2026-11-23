@@ -23,7 +23,7 @@ test('login controls are accessible, responsive and clear remembered email when 
   await page.addInitScript(email => localStorage.setItem('qpms-remembered-email', email), fakeEmail);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/login');
-  await expect(page.getByLabel('Email', { exact: true })).toHaveValue(fakeEmail);
+  await expect(page.getByRole('textbox', { name: 'Email', exact: true })).toHaveValue(fakeEmail);
   await expect(page.getByRole('checkbox', { name: 'Remember email' })).toBeChecked();
   await page.getByRole('checkbox', { name: 'Remember email' }).uncheck();
   expect(await page.evaluate(() => localStorage.getItem('qpms-remembered-email'))).toBeNull();
@@ -42,7 +42,7 @@ test('reset validates email and sends only a mocked request with a generic respo
   await page.getByRole('button', { name: 'Forgot password?' }).click();
   await expect(page.getByRole('alert')).toContainText('Enter your work email');
   expect(calls.filter(call => call.path.endsWith('/recover'))).toHaveLength(0);
-  await page.getByLabel('Email', { exact: true }).fill(fakeEmail);
+  await page.getByRole('textbox', { name: 'Email', exact: true }).fill(fakeEmail);
   await page.getByRole('button', { name: 'Forgot password?' }).click();
   await expect(page.getByRole('status')).toContainText('If an account exists');
   expect(calls.filter(call => call.path.endsWith('/recover'))).toEqual([{ path: '/auth/v1/recover', method: 'POST', redirect: 'http://127.0.0.1:4175/set-password' }]);
@@ -51,7 +51,7 @@ test('reset validates email and sends only a mocked request with a generic respo
 test('reset and login errors remain visible without sending requests to production', async ({ page }) => {
   const calls = await mockAuth(page, { recoveryFails: true });
   await page.goto('/login');
-  await page.getByLabel('Email', { exact: true }).fill(fakeEmail);
+  await page.getByRole('textbox', { name: 'Email', exact: true }).fill(fakeEmail);
   await page.getByRole('button', { name: 'Forgot password?' }).click();
   await expect(page.getByRole('alert')).toContainText('Unable to request a reset');
   await page.locator('input[autocomplete="current-password"]').fill('synthetic-only');
