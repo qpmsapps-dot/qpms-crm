@@ -240,7 +240,7 @@ export async function retailAttendanceReport(client, profile, input = {}) {
     summary.states = november.states;
     summary.total = november.total;
     summary.state_aop_source = november.state_aop_source;
-    summary.mepc_target_policy = 'Temporary November 2026 state-level AOP: HK all calendar days; MEPC one planning weekly off every seventh day (month-start cycle). No individual absence or store AOP is inferred.';
+    summary.mepc_target_policy = 'Temporary November 2026 state AOP: daily HK and MEPC targets stay at full AOP; MEPC MTD eligible days = elapsed days minus floor((elapsed days - 1)/7). Weekly offs reduce only the cumulative required man-days, never uploaded actuals or a specific day\'s AOP.';
   }
   // Daily summary retains its original one-day employee-count scope. A separate
   // authorized month read supplies the trend without changing that daily contract.

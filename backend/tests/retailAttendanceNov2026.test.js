@@ -30,13 +30,13 @@ test('22 November MTD deducts three MEPC weekly offs and none from HK',()=>{
   for(let day=1;day<=22;day++){
     const date=`2026-11-${String(day).padStart(2,'0')}`;
     data.push(attendance('ap1',date,'HK',120));
-    if(day%7!==0)data.push(attendance('ap1',date,'MEPC',25));
+    data.push(attendance('ap1',date,'MEPC',25));
   }
   const report=novemberStateAttendanceSummary({stores:[stores[0]],attendance:data,cutoff:'2026-11-22'});
   assert.equal(report.total.hk_target,3565.1);
   assert.equal(report.total.mepc_target,570);
   assert.equal(report.total.hk_actual,2640);
-  assert.equal(report.total.mepc_actual,475);
+  assert.equal(report.total.mepc_actual,550);
   assert.equal(report.total.total_target,4135.1);
   assert.equal(report.total.complete,true);
   assert.equal(report.total.missing_dates.length,0);
@@ -47,7 +47,7 @@ test('November 1-16 uses 14 eligible MEPC days, not 16',()=>{
   for(let day=1;day<=16;day++){
     const date=`2026-11-${String(day).padStart(2,'0')}`;
     data.push(attendance('ap1',date,'HK',1));
-    if(day%7!==0)data.push(attendance('ap1',date,'MEPC',1));
+    data.push(attendance('ap1',date,'MEPC',1));
   }
   const report=novemberStateAttendanceSummary({stores:[stores[0]],attendance:data,cutoff:'2026-11-16'});
   assert.equal(report.total.hk_target,2592.8);
@@ -63,11 +63,39 @@ test('Missing uploaded classes or dates remain N/A, never fabricated absence',()
   assert.equal(report.total.overall_pct,null);
 });
 
-test('On the seventh day MEPC target is zero and HK still requires replacement manpower',()=>{
-  const report=novemberStateAttendanceSummary({stores:[stores[0]],attendance:[attendance('ap1','2026-11-07','HK',100)],cutoff:'2026-11-07',view:'daily'});
-  assert.equal(report.total.hk_target,162.05);
-  assert.equal(report.total.mepc_target,0);
-  assert.equal(report.total.missing_dates.length,0);
+test('On the seventh and eighth days daily MEPC AOP remains normal, actuals are never discarded',()=>{
+  for(const day of [7,8,14,15,21,22,28,29]){
+    const date=`2026-11-${String(day).padStart(2,'0')}`;
+    const report=novemberStateAttendanceSummary({
+      stores:[stores[0]],attendance:[attendance('ap1',date,'HK',100),attendance('ap1',date,'MEPC',30)],
+      cutoff:date,view:'daily'
+    });
+    assert.equal(report.total.hk_target,162.05);
+    assert.equal(report.total.mepc_target,30);
+    assert.equal(report.total.mepc_actual,30);
+    assert.equal(report.total.total_actual,130);
+    assert.equal(report.total.missing_dates.length,0);
+    assert.equal(report.total.complete,true);
+  }
+});
+
+test('MEPC MTD eligibility follows the Central MIS boundaries, not zero-AOP calendar dates',()=>{
+  const data=[];
+  for(let day=1;day<=30;day++){
+    const date=`2026-11-${String(day).padStart(2,'0')}`;
+    data.push(attendance('ap1',date,'HK',120),attendance('ap1',date,'MEPC',30));
+  }
+  const eligibleByDay=new Map([[1,1],[2,2],[6,6],[7,7],[8,7],[9,8],[13,12],
+    [14,13],[15,13],[16,14],[20,18],[21,19],[22,19],[23,20],[27,24],
+    [28,25],[29,25],[30,26]]);
+  for(const [day,eligible] of eligibleByDay){
+    const report=novemberStateAttendanceSummary({stores:[stores[0]],attendance:data,
+      cutoff:`2026-11-${String(day).padStart(2,'0')}`,view:'mtd'});
+    assert.equal(report.total.mepc_target,eligible*30,`MEPC cumulative target on November ${day}`);
+    assert.ok(Math.abs(report.total.hk_target - 162.05*day) < 1e-7,`HK target November ${day}`);
+    assert.equal(report.total.mepc_actual,day*30,`MEPC actual attendance must include all days to ${day}`);
+    assert.equal(report.total.complete,true);
+  }
 });
 
 test('Report totals cover authorized states only, and consolidate PY into TN',()=>{
