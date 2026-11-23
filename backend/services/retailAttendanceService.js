@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
 import XLSX from 'xlsx';
+import { attendanceTimeSource, summarizeAttendanceExceptions } from '../shared/retailAttendanceExceptions.js';
+import { hydrateAttendanceExceptionTimes } from './retailAttendanceExceptionSource.js';
 import { acquireAttendancePreviewSlot, parseAttendanceWorkbookStreaming } from './retailAttendanceXlsx.js';
 import {compactPreviewSummary,encodeAttendanceSource,decodeAttendanceSource,previewDatabase} from './retailAttendancePreviewAudit.js';
 import { retailAccess, assertRetailAccess } from './relianceRetailManagementService.js';
@@ -92,6 +94,8 @@ export function parseAttendanceWorkbook(bytes, filename) {
         row[key] = date ? `${date.y}-${String(date.m).padStart(2, '0')}-${String(date.d).padStart(2, '0')}` : '';
       }
     }
+    const timeSource = attendanceTimeSource(grid[0], values, row.raw_formulas);
+    if (timeSource) row.time_source = timeSource;
     rows.push(row);
   }
   return { sheet: sheets[0], headers: grid[0], rows };
@@ -123,7 +127,8 @@ export function validateAttendanceRows(rows, stores) {
     if (duplicates.has(`${storeKey(row.employee_code)}:${storeKey(row.store_code)}:${row.attendance_date}`)) errors.push('Duplicate Employee / Site / Attendance Date');
     if (errors.length) rejected.push({ source_row: row.source_row, employee_code: storeKey(row.employee_code), store_code: storeKey(row.store_code), attendance_date: String(row.attendance_date ?? ''), original_class: String(row.class ?? ''), original_status: String(row.original_status ?? ''), reasons: errors });
     else valid.push({ source_row: row.source_row, employee_code: storeKey(row.employee_code), employee_name: String(row.employee_name).trim(), retail_store_id: store.id, store_code: store.store_code,
-      class: kind, original_status: String(row.original_status), credit, attendance_date: row.attendance_date });
+      class: kind, original_status: String(row.original_status), credit, attendance_date: row.attendance_date,
+      ...(row.time_source ? { time_source: row.time_source } : {}) });
   }
   const totals = new Map();
   for (const row of valid) { const key = row.employee_code + ':' + row.attendance_date; totals.set(key, (totals.get(key) || 0) + row.credit); }
@@ -285,6 +290,32 @@ export async function retailAttendanceEmployees(client, profile, input) {
   const rows = await data(client.from('retail_employee_daily_attendance').select('employee_code,employee_name,store_code_snapshot,class,attendance_date,original_status,credit')
     .eq('retail_store_id', input.store_id).eq('attendance_date', date).is('superseded_at', null).order('employee_code').range(page * 100, page * 100 + 100));
   return rows.map(row => ({ ...row, reporting_state: reportingState(store.state), original_geographic_state: store.state }));
+}
+
+export async function retailAttendanceExceptions(client, profile, input = {}) {
+  attendanceAccess(profile);
+  let cutoff;
+  try { cutoff = validDate(input.cutoff); } catch (error) { throw attendanceError(400, error.message); }
+  if (cutoff > indiaToday() || !['daily', 'mtd'].includes(input.view || 'mtd')) throw attendanceError(400, 'Invalid exception reporting period.');
+  const stores = await scopedStores(client, profile);
+  const state = input.state ? reportingState(input.state) : '';
+  if (state && !STATE_OPTIONS.includes(state)) throw attendanceError(400, 'Invalid reporting state.');
+  if (state && !stores.some(s => reportingState(s.state) === state)) throw attendanceError(403, 'State is outside your authorized scope.');
+  const selected = stores.filter(s => !state || reportingState(s.state) === state);
+  const classes = retailMisRole(profile?.role) && profile._retailMisModule !== 'imports'
+    ? [profile._retailMisModule === 'attendance-hk' ? 'HK' : 'MEPC'] : ['HK', 'MEPC'];
+  const from = input.view === 'daily' ? cutoff : cutoff.slice(0, 7) + '-01';
+  const rows = await data(client.rpc('rpc_retail_attendance_exception_source', {
+    p_store_ids: selected.map(s => s.id), p_from: from, p_to: cutoff, p_classes: classes,
+  }));
+  if (!Array.isArray(rows) || rows.length > 100000) throw attendanceError(413, 'Exception report exceeds the safe reporting limit. Narrow the date or state scope.');
+  const byId = new Map(selected.map(s => [s.id, s]));
+  // Defense in depth: never return a foreign row even if an RPC contract drifts.
+  if (rows.some(r => !byId.has(r.retail_store_id) || !classes.includes(r.class) || r.attendance_date < from || r.attendance_date > cutoff || r.superseded_at)) throw attendanceError(502, 'Exception source scope mismatch.');
+  const withTimes = await hydrateAttendanceExceptionTimes(client, rows);
+  return { ...summarizeAttendanceExceptions(withTimes.map(r => ({ ...r, state: reportingState(byId.get(r.retail_store_id).state),
+    source_state: byId.get(r.retail_store_id).state, store_name: byId.get(r.retail_store_id).store_name })), { from, to: cutoff, classes }),
+    view: input.view || 'mtd', state, note: 'Counts use uploaded current employee/site/date records, not attendance credits. N/A means missing dates, legacy time fields or invalid times. Known exceptions remain reviewable. Punch/Man Hours disagreements are flagged; recorded valid Man Hours determines Below 9 Hours.' };
 }
 
 // Raw employee source history is administrative only; state readers keep the existing scoped report APIs.

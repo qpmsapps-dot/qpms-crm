@@ -3,6 +3,7 @@ import { ATTENDANCE_MAX_FILE_BYTES } from '../shared/retailAttendance.js';
 import { XLSX_ERROR_CODES } from '../services/retailAttendanceXlsx.js';
 import {PREVIEW_ERROR_CODES} from '../services/retailAttendancePreviewAudit.js';
 import {randomUUID} from 'node:crypto';
+import { retailAttendanceExceptions } from '../services/retailAttendanceService.js';
 import { attendanceAccess, previewRetailAttendance, commitRetailAttendance, retailAttendanceReport, retailAttendanceEmployees, retailAttendanceHistory } from '../services/retailAttendanceService.js';
 
 export function createRetailAttendanceRouter({ getClient, environment = process.env }) {
@@ -21,6 +22,7 @@ export function createRetailAttendanceRouter({ getClient, environment = process.
     }
   };
   router.get('/summary', run(async req => ({ report: await retailAttendanceReport(getClient(), req.profile, req.query) })));
+  router.get('/exceptions', run(async req => ({ report: await retailAttendanceExceptions(getClient(), req.profile, req.query) })));
   router.get('/history', run(async req => ({ history: await retailAttendanceHistory(getClient(), req.profile, req.query) })));
   router.get('/employees', run(async req => ({ rows: await retailAttendanceEmployees(getClient(), req.profile, req.query) })));
   router.post('/preview', (req, res, next) => {

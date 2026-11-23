@@ -13,7 +13,13 @@ test('main dependency versions and existing operational/HK/leadership workflows 
  const oldLock=JSON.parse(show('package-lock.json')),newLock=JSON.parse(readFileSync('package-lock.json','utf8'));
  for(const [path,node] of Object.entries(oldLock.packages))if(path)assert.equal(newLock.packages[path].version,node.version,path);
  for(const path of Object.keys(newLock.packages).filter(p=>p&&!oldLock.packages[p]))assert.equal(newLock.packages[path].dev,true,path);
- for(const path of ['.github/workflows/reliance-retail-operational-changes.yml','.github/workflows/retail-mis-mounted-auth.yml','.github/workflows/km-recalculation-tests.yml','.github/workflows/october-km-admin-approval.yml'])assert.equal(readFileSync(path,'utf8').replaceAll('\r\n','\n'),show(path).replaceAll('\r\n','\n'),path);
+ for(const path of ['.github/workflows/reliance-retail-operational-changes.yml','.github/workflows/retail-mis-mounted-auth.yml','.github/workflows/km-recalculation-tests.yml','.github/workflows/october-km-admin-approval.yml']){
+  // Current main added mandatory MIS onboarding tests/lint after the original
+  // Thermography release. Preserve those additions against its exact base blob.
+  const expected=path==='.github/workflows/reliance-retail-operational-changes.yml'
+   ? execFileSync('git',['show',`80fe06d842a0efc79c18124dbe16d05ca1bdf34c:${path}`],{encoding:'utf8'}) : show(path);
+  assert.equal(readFileSync(path,'utf8').replaceAll('\r\n','\n'),expected.replaceAll('\r\n','\n'),path);
+ }
 });
 
 function fixture(){

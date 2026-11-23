@@ -4,6 +4,7 @@ async function request(config) { return (await authenticatedApiRequest(config)).
 export const retailAttendanceApi = {
   history: params => request({ url: `${base}/history`, params }),
   summary: params => request({ url: `${base}/summary`, params }),
+  exceptions: params => request({ url: `${base}/exceptions`, params }),
   employees: params => request({ url: `${base}/employees`, params }),
   preview: file => request({ method: 'POST', url: `${base}/preview`, data: file,
     headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) }, timeout: 120000 }),

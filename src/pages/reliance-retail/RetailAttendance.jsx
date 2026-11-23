@@ -1,4 +1,5 @@
 import { useLocation } from 'react-router-dom';
+import RetailAttendanceExceptions from '../../components/reliance-retail/RetailAttendanceExceptions.jsx';
 import { readRetailNavigation } from '../../utils/retailNavigation.js';
 import RetailResponsibilityPanel from '../../components/reliance-retail/RetailResponsibilityPanel.jsx';
 import '../../components/reliance-retail/retailReport.css';
@@ -157,6 +158,7 @@ export default function RetailAttendance() {
     {report&&<>
       <RetailAttendanceTrend report={report}/>
       <RetailAttendanceKpis report={report}/>
+      <RetailAttendanceExceptions cutoff={report.cutoff} view={view} state={state} refresh={refresh}/>
       <RetailAttendanceSummary report={report} onState={setDrill} onExport={exportReport}/>
       {!total.complete&&<details className="rr-attendance-caution" role="status">
         <summary><AlertTriangle size={14} className="inline mr-1"/>Incomplete attendance or AOP coverage — verified percentages are N/A</summary>

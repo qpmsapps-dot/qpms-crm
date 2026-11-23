@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { ATTENDANCE_MAX_FILE_BYTES, summarizeAttendance } from '../../backend/shared/retailAttendance.js';
 import {retailAttendanceTrend} from '../../backend/shared/retailAttendanceTrend.js';
+import {summarizeAttendanceExceptions} from '../../backend/shared/retailAttendanceExceptions.js';
 const stores = [{ id:'kn', store_code:'K1', store_name:'Synthetic Karnataka Store', state:'KA', status:'Active' }, { id:'tn',store_code:'T1',store_name:'Synthetic Tamil Nadu Store',state:'TN',status:'Active' }];
 function source(cutoff, view, state, partial = false) {
   const days = Number(cutoff.slice(8));
@@ -20,6 +21,10 @@ async function seed(page, { partial = false, empty = false, fail = false, delay 
   });
   await page.route('**/api/**',async route=>{
     const url=new URL(route.request().url());
+    if(url.pathname.endsWith('/attendance/exceptions')) {
+      const to=url.searchParams.get('cutoff')||'2026-10-20';
+      return route.fulfill({json:{report:{...summarizeAttendanceExceptions([],{from:url.searchParams.get('view')==='daily'?to:to.slice(0,7)+'-01',to}),note:'Synthetic legacy imports have unavailable punch times.'}}});
+    }
     if(url.pathname.endsWith('/attendance/summary')) {
       if(delay) await new Promise(resolve=>setTimeout(resolve,delay));
       if(fail) return route.fulfill({status:503,json:{message:'Synthetic service unavailable'}});

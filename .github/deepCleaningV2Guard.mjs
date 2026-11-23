@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {approvedBase as attendanceBase,manifestPath as attendanceManifest,verifyCurrent as verifyAttendance,priorWorkflow as priorAttendanceWorkflow} from './retailAttendanceExceptionsGuard.mjs';
 import {approvedBase as monthlyBase,manifestPath as monthlyManifest,verifyCurrent as verifyMonthly,verifyPayload as verifyMonthlyPayload,priorWorkflow as priorMonthlyWorkflow} from './deepCleaningMonthlyAdminGuard.mjs';
 import {approvedBase as layoutBase,manifestPath as layoutManifest,verifyCurrent as verifyLayout,verifyPayload as verifyLayoutPayload,priorWorkflow as priorLayoutWorkflow} from './deepCleaningLayoutGuard.mjs';
 import {approvedBase as completedBase,manifestPath as completedManifest,verifyCurrent as verifyCompleted,verifyPayload as verifyCompletedPayload,priorWorkflow as priorCompletedWorkflow} from './deepCleaningCompletedGuard.mjs';
@@ -69,6 +70,7 @@ export function verifyPayload({paths,manifest,hash,base,workflow,baseWorkflow}){
  return {ok:validManifest&&workflowMatches&&!missing.length&&!unexpected.length&&!mismatched.length,validManifest,workflowMatches,missing,unexpected,mismatched};
 }
 export function priorWorkflowForChecks(workflow){
+ if(workflow.includes('# BEGIN RETAIL ATTENDANCE EXCEPTIONS EXACT PAYLOAD'))workflow=priorAttendanceWorkflow(workflow);
  if(workflow.includes('# BEGIN DEEP CLEANING COMPLETION PERCENTAGE EXACT PAYLOAD'))workflow=priorPercentageWorkflow(workflow);
  if(workflow.includes('# BEGIN DEEP CLEANING COMPLETED REPORT EXACT PAYLOAD'))workflow=priorCompletedWorkflow(workflow);
  if(workflow.includes('# BEGIN DEEP CLEANING LAYOUT UI EXACT PAYLOAD'))workflow=priorLayoutWorkflow(workflow);
@@ -88,6 +90,7 @@ function verifyCompletedChain(working){
  return {...current,ok:current.ok&&historicalCompleted.ok,historicalCompleted};
 }
 export function verifyCurrent(base,working=false){
+ if(base===attendanceBase&&fs.existsSync(attendanceManifest))return verifyAttendance(base,working);
  if(base===percentageBase&&fs.existsSync(percentageManifest))return verifyPercentage(base,working);
  if(base===completedBase&&fs.existsSync(completedManifest))return verifyCompletedChain(working);
  if(fs.existsSync(layoutManifest)&&[layoutBase,monthlyBase,approvedBase].includes(base)){
