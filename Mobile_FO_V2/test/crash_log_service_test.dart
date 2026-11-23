@@ -112,6 +112,21 @@ void main() {
         );
       }
       expect(CrashLogPolicy.classify('NEW_UNKNOWN_EVENT'), CrashLogLevel.error);
+      expect(
+        CrashLogPolicy.classify('FLUTTER_ERROR', error: OutOfMemoryError()),
+        CrashLogLevel.critical,
+      );
+      expect(
+        CrashLogPolicy.classify('FLUTTER_ERROR', error: StackOverflowError()),
+        CrashLogLevel.critical,
+      );
+      expect(
+        CrashLogPolicy.classify(
+          'LOCAL_SAVE_FAILED',
+          error: Exception('database disk image is malformed'),
+        ),
+        CrashLogLevel.critical,
+      );
       for (final action in [
         'FATAL_CRASH',
         'DATABASE_CORRUPTION',

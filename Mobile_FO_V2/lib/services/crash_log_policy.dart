@@ -204,7 +204,9 @@ class CrashLogPolicy {
     final failure = RegExp(
       r'FAILED|FAILURE|ERROR|EXCEPTION|DENIED|DISABLED|MISSING|TIMEOUT|BLOCKED|NOT_FOUND|NOT_CONFIRMED|PENDING|UNAVAILABLE|INVALID|REQUIRED|MISMATCH|WARNING',
     );
-    if (corruption.hasMatch(error?.toString().toUpperCase() ?? '') ||
+    if (error is OutOfMemoryError ||
+        error is StackOverflowError ||
+        corruption.hasMatch(error?.toString().toUpperCase() ?? '') ||
         name.contains('FATAL') ||
         name.contains('DATABASE_CORRUPTION') ||
         name.contains('UNRECOVERABLE') ||
