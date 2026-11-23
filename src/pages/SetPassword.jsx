@@ -139,10 +139,17 @@ export default function SetPassword() {
         setError(expiredInviteMessage);
         return;
       }
+      // Ordinary recovery must not overwrite the original invitation history.
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('requires_password_change')
+        .eq('auth_user_id', sessionData.session.user.id)
+        .maybeSingle();
+      if (profileError || !profile) throw profileError || new Error('Profile unavailable');
       const { error: updateError } = await supabase.auth.updateUser({ password });
       if (updateError) throw updateError;
       try {
-        await completePasswordSetup();
+        if (profile.requires_password_change === true) await completePasswordSetup();
       } catch (completeError) {
         console.warn('[myQPMS SetPassword] Profile completion sync failed', completeError);
         setError('Password was created, but profile status could not be updated. Please try again or contact admin.');
@@ -227,3 +234,4 @@ export default function SetPassword() {
     </main>
   );
 }
+

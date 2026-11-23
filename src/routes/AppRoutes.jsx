@@ -9,7 +9,7 @@ import Profile from '../pages/Profile.jsx';
 import SetPassword from '../pages/SetPassword.jsx';
 import TenderDemoLogin from '../pages/TenderDemoLogin.jsx';
 import TenderDemoWorkspace from '../pages/TenderDemoWorkspace.jsx';
-import Dashboard from '../pages/Dashboard.jsx';
+
 import LegacyCrmRoute from './LegacyCrmRoute.jsx';
 import PreSalesDashboard from '../pages/preSales/PreSalesDashboard.jsx';
 import PreSalesLeads from '../pages/preSales/PreSalesLeads.jsx';
@@ -27,17 +27,16 @@ import Settings from '../pages/Settings.jsx';
 import StoreMaster from '../pages/StoreMaster.jsx';
 import HospitalTicketRouteGuard from '../components/hospital-ticketing/HospitalTicketRouteGuard.jsx';
 import NimsTicketingPage, { LegacyHospitalTicketsRedirect } from '../pages/hospital-ticketing/NimsTicketingPage.jsx';
-import RetailDashboard from '../pages/reliance-retail/RetailDashboard.jsx';
+
 import RetailMisWorkspace from '../pages/reliance-retail/RetailMisWorkspace.jsx';
 import RetailOosWorkspace from '../pages/reliance-retail/RetailOosWorkspace.jsx';
 import RetailMisAssignments from '../pages/settings/RetailMisAssignments.jsx';
 import RetailStoreMaster from '../pages/reliance-retail/RetailStoreMaster.jsx';
 import RetailOperationalTrackers from '../pages/reliance-retail/RetailOperationalTrackers.jsx';
 import RetailComingSoon from '../pages/reliance-retail/RetailComingSoon.jsx';
-import RetailScopedDeepCleaning from '../pages/reliance-retail/RetailScopedDeepCleaning.jsx';
+
 import RetailTraining from '../pages/reliance-retail/RetailTraining.jsx';
-import RetailAttendance from '../pages/reliance-retail/RetailAttendance.jsx';
-import RetailOperations from '../pages/reliance-retail/RetailOperations.jsx';
+
 import RetailManpowerHistory from '../pages/reliance-retail/RetailManpowerHistory.jsx';
 import FaultTracker from '../pages/FaultTracker.jsx';
 import DeepCleaning from '../pages/DeepCleaning.jsx';
@@ -59,6 +58,11 @@ import {
   SiteMonitoringPage,
 } from '../pages/OperationalModules.jsx';
 
+const Dashboard = lazy(() => import('../pages/Dashboard.jsx'));
+const RetailDashboard = lazy(() => import('../pages/reliance-retail/RetailDashboard.jsx'));
+const RetailAttendance = lazy(() => import('../pages/reliance-retail/RetailAttendance.jsx'));
+const RetailScopedDeepCleaning = lazy(() => import('../pages/reliance-retail/RetailScopedDeepCleaning.jsx'));
+const RetailOperations = lazy(() => import('../pages/reliance-retail/RetailOperations.jsx'));
 const FOActivities = lazy(() => import('../pages/FOActivities.jsx'));
 
 const tenderDemoRoutes = [
