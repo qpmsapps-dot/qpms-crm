@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {retailAttendanceTrend} from '../shared/retailAttendanceTrend.js';
+// Include the temporary November state AOP regression suite in the scoped Retail CI job.
+import './retailAttendanceNov2026.test.js';
 
 const stores=[{id:'s1',store_code:'T001',state:'TN',status:'Active'}];
 const aop=[{retail_store_id:'s1',hk_count:2,mepc_count:1,effective_from:'2026-10-01',effective_to:null}];
