@@ -1,0 +1,96 @@
+name: Mobile crash logging verification
+
+on:
+  pull_request:
+    paths:
+      - 'Mobile_FO_V2/lib/services/crash_log*.dart'
+      - 'Mobile_FO_V2/test/crash_log*.dart'
+      - 'Mobile_FO_V2/pubspec.yaml'
+      - 'Mobile_FO_V2/pubspec.lock'
+      - '.github/workflows/mobile-crash-logging.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  logging:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Mobile_FO_V2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Protect operational code and runtime dependencies
+        working-directory: .
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess
+          def git(*args):
+            return subprocess.check_output(['git', *args], text=True).replace('\r\n', '\n')
+          base = os.environ.get('BASE_SHA') or git('merge-base', 'HEAD', 'origin/main').strip()
+          allowed = {
+            '.github/workflows/mobile-crash-logging.yml',
+            'Mobile_FO_V2/lib/services/crash_log_service.dart',
+            'Mobile_FO_V2/lib/services/crash_log_policy.dart',
+            'Mobile_FO_V2/lib/services/crash_log_dispatcher.dart',
+            'Mobile_FO_V2/lib/services/crash_log_outbox.dart',
+            'Mobile_FO_V2/lib/services/crash_log_upload.dart',
+            'Mobile_FO_V2/test/crash_log_service_test.dart',
+            'Mobile_FO_V2/test/crash_log_route_regression_test.dart',
+            'Mobile_FO_V2/pubspec.yaml', 'Mobile_FO_V2/pubspec.lock',
+          }
+          changed = set(git('diff', '--name-only', base, 'HEAD').splitlines())
+          assert changed <= allowed, 'Unrelated/protected changes: ' + str(changed - allowed)
+          manifest = 'Mobile_FO_V2/pubspec.yaml'
+          old, new = git('show', f'{base}:{manifest}'), open(manifest).read()
+          assert old.split('\ndependencies:\n')[1].split('\ndev_dependencies:')[0] == new.split('\ndependencies:\n')[1].split('\ndev_dependencies:')[0], 'Runtime dependencies changed'
+          def versions(source):
+            result, name = {}, None
+            for line in source.splitlines():
+              match = re.match(r'^  ([a-zA-Z0-9_]+):$', line)
+              if match: name = match.group(1)
+              if line.startswith('    version:') and name:
+                result[name] = line.strip()
+            return result
+          lock = 'Mobile_FO_V2/pubspec.lock'
+          before, after = versions(git('show', f'{base}:{lock}')), versions(open(lock).read())
+          assert all(after.get(name) == version for name, version in before.items()), 'Existing locked versions changed'
+          assert set(after) - set(before) <= {'sqflite_common_ffi', 'sqlite3', 'native_toolchain_c', 'glob'}, 'Unexpected test dependencies'
+          PY
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          channel: stable
+          cache: true
+      - name: Resolve exact test dependencies
+        run: flutter pub get --enforce-lockfile
+      - name: Analyze logging implementation and tests
+        run: >-
+          flutter analyze --no-pub
+          lib/services/crash_log_service.dart
+          lib/services/crash_log_policy.dart
+          lib/services/crash_log_dispatcher.dart
+          lib/services/crash_log_outbox.dart
+          lib/services/crash_log_upload.dart
+          test/crash_log_service_test.dart
+          test/crash_log_route_regression_test.dart
+      - name: Logging, route, attendance and background regressions (no APK)
+        run: >-
+          flutter test --no-pub
+          test/crash_log_service_test.dart
+          test/crash_log_route_regression_test.dart
+          test/phase1_battery_optimization_test.dart
+          test/fo_checkin_validation_service_test.dart
+          test/end_day_km_completion_test.dart
+          test/end_day_recalculation_contract_test.dart
+          test/checkout_auth_session_contract_test.dart
+          test/reopen_attendance_metadata_test.dart
+          test/travel_leg_lifecycle_test.dart
+          test/provider_timestamp_policy_test.dart
+          test/site_visit_model_test.dart
