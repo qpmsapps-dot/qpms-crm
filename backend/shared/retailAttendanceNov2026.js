@@ -64,7 +64,10 @@ export function novemberStateAttendanceSummary({ stores = [], attendance = [], c
     // They are not assigned to the 7th/14th/21st: different employees can
     // take weekly off on different dates, and actual attendance counts every day.
     const calendarDays = dates.length;
-    const eligibleMepcDays = view === 'daily' ? 1 : calendarDays - Math.floor(calendarDays / 7);
+    // Central MIS rule: the first 7 calendar days count as 7 eligible days;
+    // day 8 counts as 7, day 14 as 13, day 15 as 13, day 21 as 19, day 22 as 19.
+    // This is a cumulative allowance, not a staff leave schedule.
+    const eligibleMepcDays = view === 'daily' ? 1 : calendarDays - Math.floor((calendarDays - 1) / 7);
     row.hk_target = aop.HK * calendarDays;
     row.mepc_target = aop.MEPC * eligibleMepcDays;
     for (const date of dates) {
