@@ -5,6 +5,7 @@ import test from 'node:test';
 const login = await readFile(new URL('../src/pages/Login.jsx', import.meta.url), 'utf8');
 const routes = await readFile(new URL('../src/routes/AppRoutes.jsx', import.meta.url), 'utf8');
 const layout = await readFile(new URL('../src/layouts/MainLayout.jsx', import.meta.url), 'utf8');
+const setPassword = await readFile(new URL('../src/pages/SetPassword.jsx', import.meta.url), 'utf8');
 
 test('login retains existing authentication and immediate return route', () => {
   assert.match(login, /await loginWithPassword\(normalizedUsername, password\)/);
@@ -25,8 +26,15 @@ test('password reset uses the existing password setup route and generic message'
   assert.match(login, /If an account exists/);
 });
 
+test('normal password recovery does not rewrite completed onboarding metadata', () => {
+  assert.match(setPassword, /\.select\('requires_password_change'\)/);
+  assert.match(setPassword, /\.eq\('auth_user_id', sessionData\.session\.user\.id\)/);
+  assert.match(setPassword, /if \(profile\.requires_password_change === true\) await completePasswordSetup\(\)/);
+});
+
 test('major workspace pages are deferred behind a layout loading state', () => {
   assert.match(routes, /const Dashboard = lazy\(/);
   assert.match(routes, /const RetailDashboard = lazy\(/);
   assert.match(layout, /<Suspense fallback=/);
 });
+
