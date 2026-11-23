@@ -117,6 +117,7 @@ export default function RetailAttendance() {
   async function exportReport(scope) { try { await exportRetailAttendance(report, scope); } catch (e) { setError(errorText(e)); } }
   const total = report?.total;
   const aop = attendanceAopCoverage(report);
+  const temporaryStateAop = report?.state_aop_source === 'nov_2026_central_mis_temporary';
   const states = report?.available_states?.length ? report.available_states : isPlatformAdmin(user)?STATE_OPTIONS:[];
   const period = view === 'daily' ? cutoff : `${cutoff.slice(0,7)}-01 to ${cutoff}`;
   return <div className="retail-report retail-attendance-workspace rr-attendance-page text-slate-800">{entryScope?.store&&<p role="status">Dashboard period and state applied. This Attendance endpoint does not support a store filter; use the store summary for drill-down.</p>}
@@ -160,13 +161,13 @@ export default function RetailAttendance() {
       {!total.complete&&<details className="rr-attendance-caution" role="status">
         <summary><AlertTriangle size={14} className="inline mr-1"/>Incomplete attendance or AOP coverage — verified percentages are N/A</summary>
         <p>Missing attendance dates: {total.missing_dates.join(', ')||'None'}. Missing approved AOP dates: {total.missing_aop.join(', ')||'None'}.
-         Missing uploads must not be counted as employee absence. AOP configured for {aop.configured} of {aop.stores} authorized stores.</p>
+         Missing uploads must not be counted as employee absence. AOP configured for {aop.configured} of {aop.stores} authorized {temporaryStateAop ? 'reporting states' : 'stores'}.</p>
       </details>}
       <details className="rr-attendance-technical">
         <summary>Source coverage and calculation details</summary>
-        <p>Period: {period} · Latest imported: {report.latest_imported_date||'None'} · Approved AOP: {number(aop.total_aop)} across {aop.configured}/{aop.stores} stores.
+        <p>Period: {period} · Latest imported: {report.latest_imported_date||'None'} · {temporaryStateAop ? 'Temporary Central MIS November state AOP' : 'Approved AOP'}: {number(aop.total_aop)} across {aop.configured}/{aop.stores} {temporaryStateAop ? 'states (not store allocations)' : 'stores'}.
          HK: {number(aop.hk_aop)} · MEPC: {number(aop.mepc_aop)}.</p>
-        <p>{report.mepc_target_policy} Decimal AOPs are preserved. Percentages require complete approved coverage.</p>
+        <p>{report.mepc_target_policy} Decimal AOPs are preserved. Percentages require complete {temporaryStateAop ? 'uploaded attendance dates' : 'approved coverage'}.</p>
         <p>Unique attended employees: {number(report.employee_counts?.unique_employees)} · Attended employee-days: {number(report.employee_counts?.employee_days)}.
          HK replacement mapping: {report.replacement_mapping_status||'Unavailable'}.</p>
       </details>
