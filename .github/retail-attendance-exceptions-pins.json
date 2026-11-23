@@ -2,16 +2,16 @@
   "schema": "retail-attendance-exceptions.v1",
   "base_sha": "80fe06d842a0efc79c18124dbe16d05ca1bdf34c",
   "files": {
-    ".github/retailAttendanceExceptionsGuard.mjs": "81f5aa39e8b844dead88fdd7705f505dc27fac2a",
+    ".github/retailAttendanceExceptionsGuard.mjs": "af475ed9d76cbe288e2e16c7f12a323b89522b94",
     ".github/deepCleaningV2Guard.mjs": "a15cdcbef66bf0e328f4e8b55c23c9ed4b1b37ff",
     ".github/thermographyV2Guard.mjs": "2b2ec1d9fcea1935bb5c37f0ba63bb57e4a48e51",
     ".github/workflows/retail-attendance-exceptions.yml": "a2ff6eefa2ab9db73e751dd2ccd9525559e2cfd5",
     "backend/routes/retailAttendanceRoutes.js": "74b4bc84027d779e0ee989c2c7349b0b48df18da",
     "backend/services/retailAttendanceService.js": "2ac4b53d759fd085f5e6beca5c7e3b919f783f12",
     "backend/services/retailAttendanceXlsx.js": "70d79f521aa6b2b7fc8a5ad7c19c225690dc9fea",
-    "backend/shared/retailAttendanceExceptions.js": "6057f0c64f428ea2c2cb319ccad908b155118f86",
+    "backend/shared/retailAttendanceExceptions.js": "6fc7c1282a4d35fbd59a8ecfa698e8274581fe83",
     "backend/services/retailAttendanceExceptionSource.js": "fd5e6f5f27868a19a0ecc91636677954215ac8ef",
-    "backend/tests/retailAttendanceExceptions.test.js": "a9e26120c483f2142b76d80d908ad2e300dc46d9",
+    "backend/tests/retailAttendanceExceptions.test.js": "0ed4a210fd0124ba7e3b590ef0a8847525f910df",
     "backend/tests/retailAttendanceExceptionsPostgres.test.js": "858584bbbbce68f26f16e306c383040f2eccade7",
     "backend/tests/fixtures/retailAttendanceTimesNov21.json": "1f24baadaefac5733e441bc0d28150ab66538027",
     "src/pages/reliance-retail/RetailAttendance.jsx": "4fcbbf746bcb42bb4e1773e42c7c7f858b899d0d",
@@ -23,6 +23,7 @@
     "tests/browser/retailAttendance.spec.js": "a4239687ae00dc29d9454979de45c184b403553e",
     "tests/retailAttendanceExceptionsGuard.test.js": "c5ad2f87444f4d38c7f4a8c5dd77d2eaf3567b19",
     "tests/thermographyFullstackGuard.test.js": "2c63be9c3b2e56178cf3fb958184d78320cd07a1",
-    "docs/RETAIL_ATTENDANCE_EXCEPTIONS.md": "55cd6467c26a465529afb27b7fae4efcedb34028"
+    "tests/thermographyReports.test.js": "f6395b4acbcdf2bdada7ddf0da17fac41244b2a2",
+    "docs/RETAIL_ATTENDANCE_EXCEPTIONS.md": "6967ccedd2404f057cf953df611a9ec9630ca1b1"
   }
 }

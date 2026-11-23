@@ -28,6 +28,7 @@ test('exceptions are mutually exclusive, exclude no punches and keep discrepanci
   assert.equal(classifyAttendanceException(times('09:00:00', '', '0:00:00')).missing_checkout, true);
   assert.equal(classifyAttendanceException(times('09:00:00', '', '0:00:00')).below_9_hours, false);
   assert.equal(classifyAttendanceException(times('', '', '0:00:00')).below_9_hours, false);
+  assert.deepEqual(classifyAttendanceException(times('', '', '8:00:00')).issues, ['Man Hours recorded without both punches']);
   assert.equal(classifyAttendanceException(times('09:00:00', '18:00:00', '9:00:00')).below_9_hours, false);
   const bad = classifyAttendanceException(times('09:00:00', '18:00:00', 'bad'));
   assert.equal(bad.below_available, false); assert.equal(bad.below_9_hours, false);

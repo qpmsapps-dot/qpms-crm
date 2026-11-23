@@ -47,6 +47,7 @@ export function classifyAttendanceException(source) {
   result.missing_available = !start.unavailable && !end.unavailable && !start.invalid && !end.invalid;
   result.below_available = result.missing_available && !hours.unavailable && !hours.invalid;
   if (!result.missing_available) return result;
+  if ((start.blank || end.blank) && hours.seconds > 0) issues.push('Man Hours recorded without both punches');
   if (start.blank && !end.blank) { issues.push('Checkout without check-in'); result.below_available = false; }
   if (!start.blank && end.blank) result.missing_checkout = true;
   if (!start.blank && !end.blank && result.below_available) {

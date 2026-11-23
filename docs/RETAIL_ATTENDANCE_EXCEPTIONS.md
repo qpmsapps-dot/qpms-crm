@@ -119,6 +119,11 @@ The older Thermography preservation test expected an outdated operational workfl
 its reference is advanced only for that workflow to this exact main base, retaining
 the mandatory MIS onboarding tests/lint already deployed on main. No workflow step
 or security assertion is removed.
+GitHub's initial Thermography run also exposed an older blanket prohibition on
+Attendance changes in its preservation test. That test now requires the complete
+exact Attendance payload for the two authorized Attendance files and verifies all
+other protected modules against this main base. Historical Thermography contracts,
+shared calculations and migration assertions are retained.
 
 Local results: 76 focused reporting/parser/permission/AOP tests passed; one existing
 opt-in test for a different historical 64,838-row workbook was not run. This task's

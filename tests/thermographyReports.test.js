@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {readFileSync} from 'node:fs';
+import {readFileSync,existsSync} from 'node:fs';
+import {approvedBase as attendanceBase,manifestPath as attendanceManifest,verifyCurrent as verifyAttendancePayload} from '../.github/retailAttendanceExceptionsGuard.mjs';
 import {approvedBase as cleaningBase,verifyCurrent as verifyCleaningPayload} from '../.github/deepCleaningV2Guard.mjs';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
@@ -56,8 +57,14 @@ test('unrelated modules, mobile, existing migrations/policies and shared mainten
  const git=args=>execFileSync('git',['-c',`safe.directory=${process.cwd()}`,...args],{encoding:'utf8'}),base='46707ec63c440d015c21339b00c423b461089ff1';
  const paths=['Mobile_FO_V2','src/pages/reliance-retail/RetailTraining.jsx','src/pages/reliance-retail/RetailScopedDeepCleaning.jsx','src/pages/reliance-retail/RetailAttendance.jsx','backend/server.js','backend/services/clientDeepCleaningService.js','backend/services/trainingService.js','backend/services/retailAttendanceService.js','src/pages/FOActivities.jsx'];
  assert.equal(git(['diff','--name-only',base,cleaningBase,'--',...paths]).trim(),'','The immutable Thermography integration preserved all unrelated modules');
- assert.equal(git(['diff','--name-only',cleaningBase,'--',...paths.filter(p=>p!=='src/pages/reliance-retail/RetailScopedDeepCleaning.jsx')]).trim(),'','Current non-Deep-Cleaning application remains untouched');
- assert.equal(verifyCleaningPayload(cleaningBase,true).ok,true,'The current Deep Cleaning page and supporting changes require the full exact reviewed payload');
+ if(existsSync(attendanceManifest)){
+  const authorizedAttendance=['backend/services/retailAttendanceService.js','src/pages/reliance-retail/RetailAttendance.jsx'];
+  assert.equal(git(['diff','--name-only',attendanceBase,'--',...paths.filter(p=>!authorizedAttendance.includes(p))]).trim(),'','Current protected modules, including Deep Cleaning, remain unchanged from the reviewed main base');
+  assert.equal(verifyAttendancePayload(attendanceBase,true).ok,true,'Attendance changes require the complete exact reviewed payload, not a path allowlist');
+ }else{
+  assert.equal(git(['diff','--name-only',cleaningBase,'--',...paths.filter(p=>p!=='src/pages/reliance-retail/RetailScopedDeepCleaning.jsx')]).trim(),'','Current non-Deep-Cleaning application remains untouched');
+  assert.equal(verifyCleaningPayload(cleaningBase,true).ok,true,'The current Deep Cleaning page and supporting changes require the full exact reviewed payload');
+ }
  const file='backend/shared/retailOperations.js';assert.equal(readFileSync(file,'utf8').replaceAll('\r\n','\n').split('export function thermographyReport')[0],git(['show',base+':'+file]).replaceAll('\r\n','\n').split('export function thermographyReport')[0]);
  const routes='backend/routes/relianceRetailManagementRoutes.js',routeSource=readFileSync(routes,'utf8').replaceAll('\r\n','\n').replace(/^import \{createThermographyReportsRouter\}[^\n]+\n/m,'').replace(/^  \/\/ Thermography-specific RPCs[^\n]+\n  router.use\('\/mis\/thermography',createThermographyReportsRouter\(\{getClient\}\)\);\n/m,'');assert.equal(routeSource,git(['show',base+':'+routes]).replaceAll('\r\n','\n'));
  const service='backend/services/retailModuleReportService.js',serviceSource=git(['show',cleaningBase+':'+service]).replaceAll('\r\n','\n').replace('(t.report_date||t.scheduled_date)<=range.to','t.scheduled_date<=range.to');assert.equal(serviceSource,git(['show',base+':'+service]).replaceAll('\r\n','\n'));

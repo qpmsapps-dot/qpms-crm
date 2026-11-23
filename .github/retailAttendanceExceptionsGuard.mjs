@@ -17,6 +17,7 @@ export const payloadPaths = Object.freeze([
   'src/services/retailAttendanceApi.js', 'src/utils/retailAttendanceExceptionsExport.js',
   'supabase/proposals/retail_attendance_exceptions_20261123.sql',
   'tests/browser/retailAttendanceExceptions.spec.js', 'tests/browser/retailAttendance.spec.js', 'tests/retailAttendanceExceptionsGuard.test.js', 'tests/thermographyFullstackGuard.test.js',
+  'tests/thermographyReports.test.js',
   'docs/RETAIL_ATTENDANCE_EXCEPTIONS.md',
 ]);
 const git = args => execFileSync('git', ['-c', `safe.directory=${process.cwd()}`, ...args], { encoding: 'utf8' });
