@@ -92,7 +92,7 @@ test('MEPC MTD eligibility follows the Central MIS boundaries, not zero-AOP cale
     const report=novemberStateAttendanceSummary({stores:[stores[0]],attendance:data,
       cutoff:`2026-11-${String(day).padStart(2,'0')}`,view:'mtd'});
     assert.equal(report.total.mepc_target,eligible*30,`MEPC cumulative target on November ${day}`);
-    assert.equal(report.total.hk_target,162.05*day,`HK target November ${day}`);
+    assert.ok(Math.abs(report.total.hk_target - 162.05*day) < 1e-7,`HK target November ${day}`);
     assert.equal(report.total.mepc_actual,day*30,`MEPC actual attendance must include all days to ${day}`);
     assert.equal(report.total.complete,true);
   }
