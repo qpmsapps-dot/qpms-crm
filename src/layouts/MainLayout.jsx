@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import Navbar from '../components/Navbar.jsx';
 import Sidebar from '../components/Sidebar.jsx';
@@ -50,7 +50,9 @@ export default function MainLayout() {
                 Read-only demonstration access
               </div>
             ) : null}
-            <Outlet />
+            <Suspense fallback={<div role="status" className="enterprise-card p-6 text-sm text-slate-500">Loading workspace…</div>}>
+              <Outlet />
+            </Suspense>
           </main>
         </div>
       </div>
