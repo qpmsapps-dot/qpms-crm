@@ -5,6 +5,15 @@ export const attendanceColumns = [
   ['hk_pct', 'HK %'], ['mepc_pct', 'MEPC %'], ['overall_pct', 'Overall %'],
 ];
 export function attendanceAopCoverage(report, state) {
+  if (report?.state_aop_source === 'nov_2026_central_mis_temporary') {
+    const states = (report.states || []).filter(row => !state || row.state === state);
+    const rounded = value => Math.round((value + Number.EPSILON) * 1e8) / 1e8;
+    const hk_aop = rounded(states.reduce((sum, row) => sum + row.hk_aop, 0));
+    const mepc_aop = rounded(states.reduce((sum, row) => sum + row.mepc_aop, 0));
+    // The counts here are reporting states, never approved store-level AOP coverage.
+    return { stores: states.length, configured: states.length, missing: 0,
+      hk_aop, mepc_aop, total_aop: rounded(hk_aop + mepc_aop) };
+  }
   const stores = (report?.stores || []).filter(store => !state || store.state === state);
   const configured = stores.filter(store => !store.missing_aop.includes(report.cutoff));
   // Match the report's eight-decimal presentation precision after summing; avoid
@@ -16,6 +25,7 @@ export function attendanceAopCoverage(report, state) {
 }
 export function attendanceAopValue(report, row, key) {
   if (row.store_code) return row.missing_aop.includes(report.cutoff) ? null : row[key];
+  if (report?.state_aop_source === 'nov_2026_central_mis_temporary') return row[key] ?? null;
   const state = row.state === report.total.state ? undefined : row.state.replace(/ Total$/, '');
   const coverage = attendanceAopCoverage(report, state);
   return coverage.configured ? coverage[key] : null;
@@ -36,7 +46,9 @@ export async function exportRetailAttendance(report, scope) {
   sheet.addRow(['Missing attendance dates', report.total.missing_dates.join(', ')]);
   sheet.addRow(['Missing AOP dates', report.total.missing_aop.join(', ')]);
   const coverage = attendanceAopCoverage(report);
-  sheet.addRow(['AOP coverage at cutoff', `${coverage.configured} of ${coverage.stores} stores; ${coverage.missing} missing. Aggregate AOP is the configured subtotal; incomplete targets and percentages remain N/A.`]);
+  sheet.addRow(['AOP coverage at cutoff', report.state_aop_source === 'nov_2026_central_mis_temporary'
+    ? `Temporary Central MIS November 2026: ${coverage.configured} reporting states; no store-level AOP allocation. Incomplete attendance dates remain N/A.`
+    : `${coverage.configured} of ${coverage.stores} stores; ${coverage.missing} missing. Aggregate AOP is the configured subtotal; incomplete targets and percentages remain N/A.`]);
   sheet.addRow(['MEPC target policy', report.mepc_target_policy || 'Aggregate 7-day planning cycle; not employee weekly-off allocation']);
   sheet.addRow(['Unique employees with positive attendance', report.employee_counts?.unique_employees ?? 'N/A']);
   sheet.addRow(['Attended employee-days', report.employee_counts?.employee_days ?? 'N/A']);
