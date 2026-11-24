@@ -325,7 +325,7 @@ export default function Sidebar({ isOpen, onClose }) {
       to: '/reliance-retail/mis/' + module,
       icon: misRole === 'MIS_HK' ? hkMisNavigation[module]?.icon || ClipboardList : ClipboardList,
     })),
-  }] : isOos12Specialist({role:user?.rawRole||user?.role,business:user?.business}) ? [{title:'OOS workflow',items:[{label:'OOS Tracker',to:'/reliance-retail/mis/oos',icon:ClipboardList}]},...roleNavGroups] : retailWorkspace ? [
+  }, ...(misRole==='MIS_HK' ? [{title:'Retail tools',items:relianceRetailNavGroup.items.filter(item=>item.to==='/reliance-retail/store-master')}] : [])] : isOos12Specialist({role:user?.rawRole||user?.role,business:user?.business}) ? [{title:'OOS workflow',items:[{label:'OOS Tracker',to:'/reliance-retail/mis/oos',icon:ClipboardList}]},...roleNavGroups] : retailWorkspace ? [
     {...relianceRetailNavGroup,items:relianceRetailNavGroup.items.slice(0,7)},
     {title:'Retail tools',items:relianceRetailNavGroup.items.slice(7)},
     {title:'Workspace',items:[{label:'Back to QPMS',to:'/dashboard',icon:Home}]},
