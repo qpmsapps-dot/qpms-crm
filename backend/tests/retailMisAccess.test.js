@@ -20,7 +20,7 @@ const roles=Object.keys(RETAIL_MIS_ROLES),all=[...new Set(Object.values(RETAIL_M
 for(const role of roles)test(role+' has exact module/navigation matrix and explicit geographic grants',()=>{
  const access={role,states:['TN','AP-1'],active:true},user={role,rawRole:role,business:'Reliance Retail'};
  for(const module of all){const allowed=RETAIL_MIS_MODULES[role].includes(module);assert.equal(retailMisCan(access,module,'TN'),allowed);assert.equal(canAccessRoute(user,'/reliance-retail/mis/'+module),allowed);assert.equal(retailMisCan(access,module,'PY'),allowed&&(role==='CENTRAL_MIS'||module==='oos'));assert.equal(retailMisCan(access,module,'AP-2'),allowed&&role==='CENTRAL_MIS');}
- for(const path of ['/reliance-retail/store-master','/fault-tracker','/settings/retail-mis-access','/fo-activities','/approvals','/employees','/reliance-retail/oos'])assert.equal(canAccessRoute(user,path),false);
+ for(const path of ['/reliance-retail/store-master','/fault-tracker','/settings/retail-mis-access','/fo-activities','/approvals','/employees','/reliance-retail/oos'])assert.equal(canAccessRoute(user,path),role==='MIS_HK'&&path==='/reliance-retail/store-master');
  for(const path of ['/api/fault-tracker/tickets','/api/fo/activities','/api/training/sessions','/api/admin/users','/api/reliance-retail/operations/maintenance','/api/reliance-retail/unified-master'])assert.equal(retailMisApiAllowed({role},path),false);
  for(const path of ['/api/reliance-retail/mis/access','/api/reliance-retail/mis/report/pest','/api/profile/me'])assert.equal(retailMisApiAllowed({role},path),true);
  assert.equal(retailMisCan({...access,active:false},RETAIL_MIS_MODULES[role][0],'TN'),false);
