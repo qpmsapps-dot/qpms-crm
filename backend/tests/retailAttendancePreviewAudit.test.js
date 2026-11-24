@@ -38,7 +38,7 @@ test('MIS cannot disclose or take ownership of another uploader preview or commi
 });
 test('concurrent preview is refused while audit is pending; failed persistence releases slot for a safe retry',async()=>{
  let release,waiting;const ready=new Promise(resolve=>waiting=resolve);let writes=0;
- const db={from(){const q={select(){return q},order(){return q},eq(){return q},range:async()=>({data:[{id:'s1',store_code:'S1',state:'TN',status:'Active'}]}),maybeSingle:async()=>({data:null}),insert(){writes++;return q},single:()=>{waiting();return new Promise(resolve=>release=resolve)}};return q},rpc:async()=>({data:[]})};
+ const db={from(){const q={select(){return q},order(){return q},eq(){return q},range:async()=>({data:[{id:'s1',store_code:'S1',state:'TN',status:'Active'}]}),maybeSingle:async()=>({data:null}),insert(){writes++;return q},single:()=>{waiting();return new Promise(resolve=>release=resolve)}};return q},rpc:async()=>({data:{count:0,records:[]}})};
  const admin={id:'admin',role:'Admin',is_active:true},bytes=workbook(),log=()=>{};
  const first=previewRetailAttendance(db,admin,bytes,'a.xlsx',{log});await ready;
  await assert.rejects(()=>previewRetailAttendance(db,admin,bytes,'a.xlsx',{log}),e=>e.statusCode===429);

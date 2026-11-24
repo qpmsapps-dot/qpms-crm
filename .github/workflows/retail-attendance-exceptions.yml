@@ -8,6 +8,8 @@ on:
       - '.github/workflows/retail-attendance-exceptions.yml'
       - 'supabase/proposals/retail_attendance_exceptions_20261123.sql'
       - 'docs/RETAIL_ATTENDANCE_EXCEPTIONS.md'
+      - 'supabase/proposals/retail_attendance_correction_commit_20261124.sql'
+      - 'docs/RETAIL_ATTENDANCE_CORRECTION_REPAIR.md'
   workflow_dispatch:
 permissions:
   contents: read
@@ -32,9 +34,9 @@ jobs:
           npm ci --no-audit --no-fund
           npm ci --prefix backend --no-audit --no-fund
       - name: Scoped lint
-        run: npx eslint .github/retailAttendanceExceptionsGuard.mjs backend/shared/retailAttendanceExceptions.js backend/services/retailAttendanceService.js backend/services/retailAttendanceExceptionSource.js backend/services/retailAttendanceXlsx.js backend/routes/retailAttendanceRoutes.js backend/tests/retailAttendanceExceptions.test.js backend/tests/retailAttendanceExceptionsPostgres.test.js src/components/reliance-retail/RetailAttendanceExceptions.jsx src/pages/reliance-retail/RetailAttendance.jsx src/services/retailAttendanceApi.js src/utils/retailAttendanceExceptionsExport.js tests/browser/retailAttendanceExceptions.spec.js tests/retailAttendanceExceptionsGuard.test.js
+        run: npx eslint .github/retailAttendanceCorrectionGuard.mjs backend/services/retailAttendanceCommitService.js backend/routes/retailMisRoutes.js backend/tests/helpers/retailAttendanceCorrectionFixture.js backend/tests/retailAttendanceCorrection.test.js backend/tests/retailAttendanceCorrectionPostgres.test.js src/components/reliance-retail/RetailMisAttendanceUpload.jsx src/utils/retailAttendanceCommit.js tests/retailAttendanceCommit.test.js tests/retailAttendanceCorrectionGuard.test.js tests/browser/retailAttendanceCorrection.spec.js .github/retailAttendanceExceptionsGuard.mjs backend/shared/retailAttendanceExceptions.js backend/services/retailAttendanceService.js backend/services/retailAttendanceExceptionSource.js backend/services/retailAttendanceXlsx.js backend/routes/retailAttendanceRoutes.js backend/tests/retailAttendanceExceptions.test.js backend/tests/retailAttendanceExceptionsPostgres.test.js src/components/reliance-retail/RetailAttendanceExceptions.jsx src/pages/reliance-retail/RetailAttendance.jsx src/services/retailAttendanceApi.js src/utils/retailAttendanceExceptionsExport.js tests/browser/retailAttendanceExceptions.spec.js tests/retailAttendanceExceptionsGuard.test.js
       - name: Reporting, parser, export, authorization and protected calculation regressions
-        run: node --test backend/tests/retailAttendanceExceptions.test.js backend/tests/retailAttendanceXlsx.test.js backend/tests/retailAttendancePreviewAudit.test.js backend/tests/retailAttendanceReportScope.test.js backend/tests/retailAttendanceTrend.test.js backend/tests/retailAttendanceNov2026.test.js backend/tests/retailLeadershipRoleScope.test.js backend/tests/retailMisAccess.test.js backend/tests/retailMisMountedAuth.test.js tests/retailAttendanceExceptionsGuard.test.js tests/retailAttendanceVisualModel.test.js tests/retailAttendanceAopDisplay.test.js tests/thermographyFullstackGuard.test.js tests/deepCleaningV2Guard.test.js tests/trainingExportGuard.test.js tests/deepCleaningExportGuard.test.js
+        run: node --test backend/tests/retailAttendanceCorrection.test.js tests/retailAttendanceCommit.test.js tests/retailAttendanceCorrectionGuard.test.js backend/tests/retailAttendanceUploadSize.test.js backend/tests/retailAttendanceExceptions.test.js backend/tests/retailAttendanceXlsx.test.js backend/tests/retailAttendancePreviewAudit.test.js backend/tests/retailAttendanceReportScope.test.js backend/tests/retailAttendanceTrend.test.js backend/tests/retailAttendanceNov2026.test.js backend/tests/retailLeadershipRoleScope.test.js backend/tests/retailMisAccess.test.js backend/tests/retailMisMountedAuth.test.js tests/retailAttendanceExceptionsGuard.test.js tests/retailAttendanceVisualModel.test.js tests/retailAttendanceAopDisplay.test.js tests/thermographyFullstackGuard.test.js tests/deepCleaningV2Guard.test.js tests/trainingExportGuard.test.js tests/deepCleaningExportGuard.test.js
       - name: Provision isolated native PostgreSQL17
         run: |
           sudo install -d /usr/share/postgresql-common/pgdg
@@ -49,13 +51,15 @@ jobs:
           THERMOGRAPHY_TEST_TOOLS_DIR: ${{ runner.temp }}/attendance-tools
           THERMOGRAPHY_TEST_PG_BIN: /usr/lib/postgresql/17/bin
           THERMOGRAPHY_NATIVE_OUTPUT_DIR: ${{ runner.temp }}
-        run: node --test backend/tests/retailAttendanceExceptionsPostgres.test.js
+        run: |
+          node --test backend/tests/retailAttendanceExceptionsPostgres.test.js
+          node --test backend/tests/retailAttendanceCorrectionPostgres.test.js
       - name: Production frontend build
         run: npm run build
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Desktop, tablet, mobile, export and existing Attendance browser checks
-        run: npx playwright test tests/browser/retailAttendanceExceptions.spec.js tests/browser/retailAttendance.spec.js --reporter=line
+        run: npx playwright test --config tests/browser/retailAttendanceCorrection.config.js --reporter=line
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -43,7 +43,7 @@ async function serverForPreview(run) {
       return q;
     },
     async rpc(name, input) {
-      if (name === 'rpc_retail_attendance_conflicts') return { data: [] };
+      if (name === 'rpc_retail_attendance_conflict_snapshot') return { data: { count: 0, records: [] } };
       assert.equal(name, 'rpc_commit_retail_attendance_upload');
       assert.equal(input.p_batch, 'size-preview');
       assert.equal(input.p_preview_key, state.batch.validation_summary.preview_key);

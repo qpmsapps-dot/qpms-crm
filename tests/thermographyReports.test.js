@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {readFileSync,existsSync} from 'node:fs';
+import {approvedBase as correctionBase,manifestPath as correctionManifest,verifyCurrent as verifyCorrectionPayload} from '../.github/retailAttendanceCorrectionGuard.mjs';
 import {approvedBase as attendanceBase,manifestPath as attendanceManifest,verifyCurrent as verifyAttendancePayload} from '../.github/retailAttendanceExceptionsGuard.mjs';
 import {approvedBase as cleaningBase,verifyCurrent as verifyCleaningPayload} from '../.github/deepCleaningV2Guard.mjs';
 import ExcelJS from 'exceljs';
@@ -59,8 +60,9 @@ test('unrelated modules, mobile, existing migrations/policies and shared mainten
  assert.equal(git(['diff','--name-only',base,cleaningBase,'--',...paths]).trim(),'','The immutable Thermography integration preserved all unrelated modules');
  if(existsSync(attendanceManifest)){
   const authorizedAttendance=['backend/services/retailAttendanceService.js','src/pages/reliance-retail/RetailAttendance.jsx'];
-  assert.equal(git(['diff','--name-only',attendanceBase,'--',...paths.filter(p=>!authorizedAttendance.includes(p))]).trim(),'','Current protected modules, including Deep Cleaning, remain unchanged from the reviewed main base');
-  assert.equal(verifyAttendancePayload(attendanceBase,true).ok,true,'Attendance changes require the complete exact reviewed payload, not a path allowlist');
+  const currentBase=existsSync(correctionManifest)?correctionBase:attendanceBase;
+  assert.equal(git(['diff','--name-only',currentBase,'--',...paths.filter(p=>!authorizedAttendance.includes(p))]).trim(),'','Current protected modules, including Deep Cleaning, remain unchanged from the reviewed main base');
+  assert.equal((existsSync(correctionManifest)?verifyCorrectionPayload(currentBase,true):verifyAttendancePayload(currentBase,true)).ok,true,'Attendance changes require the complete exact reviewed payload, not a path allowlist');
  }else{
   assert.equal(git(['diff','--name-only',cleaningBase,'--',...paths.filter(p=>p!=='src/pages/reliance-retail/RetailScopedDeepCleaning.jsx')]).trim(),'','Current non-Deep-Cleaning application remains untouched');
   assert.equal(verifyCleaningPayload(cleaningBase,true).ok,true,'The current Deep Cleaning page and supporting changes require the full exact reviewed payload');
@@ -71,6 +73,7 @@ test('unrelated modules, mobile, existing migrations/policies and shared mainten
  const currentService=readFileSync(service,'utf8').replaceAll('\r\n','\n'),priorService=git(['show',cleaningBase+':'+service]).replaceAll('\r\n','\n');assert.equal(currentService.slice(currentService.indexOf('export async function retailCompletedTraining')),priorService.slice(priorService.indexOf('export async function retailCompletedTraining')),'Current shared non-cleaning reporting remains byte-equivalent');
  assert.deepEqual([...new Set((git(['diff','--name-only',base,'--','supabase/migrations'])+git(['ls-files','--others','--exclude-standard','--','supabase/migrations'])).trim().split('\n').filter(Boolean))].sort(),['supabase/migrations/20261115140000_retail_thermography_reports.sql','supabase/migrations/20261118010000_retail_thermography_schedule_v2.sql']);
  assert.ok(readFileSync('supabase/migrations/20261118010000_retail_thermography_schedule_v2.sql','utf8').includes('rpc_retail_thermography_schedule'));
- const mis='src/pages/reliance-retail/RetailMisWorkspace.jsx';const current=readFileSync(mis,'utf8').replaceAll('\r\n','\n').replace(/^import ThermographyReports[^\n]+\n/m,'').replace(" const {module}=useParams();\n const {user}=useAuth();"," const {user}=useAuth();").replace("<RetailHkMisWorkspace/> : module==='thermography' ? <ThermographyReports/> : <RetailMisLegacyWorkspace/>","<RetailHkMisWorkspace/> : <RetailMisLegacyWorkspace/>");assert.equal(current,git(['show',base+':'+mis]).replaceAll('\r\n','\n'));
+ const nonAttendanceMis=source=>existsSync(correctionManifest)?source.split('\n').filter(line=>!line.startsWith('import RetailMisAttendanceUpload ')&&!line.startsWith(' async function attendancePreview(')&&!line.startsWith(' async function attendanceCommit(')&&!line.startsWith("  {(module?.startsWith('attendance-')||module==='imports')")).join('\n'):source;
+ const mis='src/pages/reliance-retail/RetailMisWorkspace.jsx';const current=readFileSync(mis,'utf8').replaceAll('\r\n','\n').replace(/^import ThermographyReports[^\n]+\n/m,'').replace(" const {module}=useParams();\n const {user}=useAuth();"," const {user}=useAuth();").replace("<RetailHkMisWorkspace/> : module==='thermography' ? <ThermographyReports/> : <RetailMisLegacyWorkspace/>","<RetailHkMisWorkspace/> : <RetailMisLegacyWorkspace/>");assert.equal(nonAttendanceMis(current),nonAttendanceMis(git(['show',base+':'+mis]).replaceAll('\r\n','\n')));
  const ops='src/pages/reliance-retail/RetailOperations.jsx';assert.equal(readFileSync(ops,'utf8').replaceAll('\r\n','\n').replace(/^import ThermographyReports[^\n]+\n/m,'').replace("export default function RetailOperations({kind='maintenance'}) {\n return kind==='thermography'?<ThermographyReports/>:<RetailOperationsTracker kind={kind}/>;\n}\nfunction RetailOperationsTracker({kind}) {","export default function RetailOperations({kind='maintenance'}) {"),git(['show',base+':'+ops]).replaceAll('\r\n','\n'));
 });

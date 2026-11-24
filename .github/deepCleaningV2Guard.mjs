@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {approvedBase as correctionBase,manifestPath as correctionManifest,verifyCurrent as verifyCorrection} from './retailAttendanceCorrectionGuard.mjs';
 import {approvedBase as attendanceBase,manifestPath as attendanceManifest,verifyCurrent as verifyAttendance,priorWorkflow as priorAttendanceWorkflow} from './retailAttendanceExceptionsGuard.mjs';
 import {approvedBase as monthlyBase,manifestPath as monthlyManifest,verifyCurrent as verifyMonthly,verifyPayload as verifyMonthlyPayload,priorWorkflow as priorMonthlyWorkflow} from './deepCleaningMonthlyAdminGuard.mjs';
 import {approvedBase as layoutBase,manifestPath as layoutManifest,verifyCurrent as verifyLayout,verifyPayload as verifyLayoutPayload,priorWorkflow as priorLayoutWorkflow} from './deepCleaningLayoutGuard.mjs';
@@ -90,6 +91,7 @@ function verifyCompletedChain(working){
  return {...current,ok:current.ok&&historicalCompleted.ok,historicalCompleted};
 }
 export function verifyCurrent(base,working=false){
+ if(base===correctionBase&&fs.existsSync(correctionManifest))return verifyCorrection(base,working);
  if(base===attendanceBase&&fs.existsSync(attendanceManifest))return verifyAttendance(base,working);
  if(base===percentageBase&&fs.existsSync(percentageManifest))return verifyPercentage(base,working);
  if(base===completedBase&&fs.existsSync(completedManifest))return verifyCompletedChain(working);

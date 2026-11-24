@@ -177,14 +177,20 @@ export async function previewRetailAttendance(client, profile, bytes, filename, 
   const existing = await step('lookup',()=>previewDatabase(client.from('retail_attendance_uploads').select('id,status,uploaded_by,validation_summary').eq('kind', 'attendance').eq('checksum', checksum).maybeSingle(),'lookup',context.signal));
   if(retailMisRole(profile?.role)&&existing&&existing.uploaded_by!==profile.id)throw attendanceError(409,'This workbook already belongs to another uploader. Its audit and ownership were not changed.');
   if (existing?.status === 'committed') return { ...compactPreviewSummary(existing.validation_summary), id: existing.id, idempotent: true, committed: true };
-  const conflicts = await step('conflicts',()=>previewDatabase(client.rpc('rpc_retail_attendance_conflicts', { p_rows: result.valid }),'conflicts',context.signal));
+  const snapshot = await step('conflicts',()=>previewDatabase(client.rpc('rpc_retail_attendance_conflict_snapshot', { p_rows: result.valid }),'conflicts',context.signal));
+  if (!snapshot || !Array.isArray(snapshot.records) || !Number.isSafeInteger(snapshot.count) || snapshot.count !== snapshot.records.length
+    || snapshot.count > 100000 || snapshot.records.some(r=>!r||typeof r.id!=='string'||!r.id) || new Set(snapshot.records.map(r=>r.id)).size !== snapshot.count) {
+    throw attendanceError(413,'A complete attendance conflict snapshot could not be verified. Narrow the upload; no preview was saved.');
+  }
+  const conflicts = snapshot.records;
+  countsLog.conflict_rows = conflicts.length;
   if(retailMisRole(profile?.role)&&conflicts.some(r=>!stores.some(s=>s.id===r.retail_store_id)||(profile._retailMisModule!=='imports'&&r.class!==(profile._retailMisModule==='attendance-hk'?'HK':'MEPC'))))throw attendanceError(403,'Employee/day conflicts extend outside this assigned scope; independent reconciliation required.');
   const dates = [...new Set(result.valid.map(r => r.attendance_date))].sort();
   const countStart=performance.now();const countMaps=Object.fromEntries(['attendance_date','class','original_status'].map(k=>[k,new Map()]));
   for(const row of parsed.rows)for(const [key,map]of Object.entries(countMaps)){const value=String(row[key]??'');map.set(value,(map.get(value)||0)+1)}
   const counts = key => Object.fromEntries([...countMaps[key]].sort(([a],[b])=>a<b?-1:a>b?1:0));
   const summary = compactPreviewSummary({ total_rows: parsed.rows.length, valid_rows: result.valid.length, rejected_rows: result.rejected.length, rejected: result.rejected,
-    excluded_rows: result.excluded.length, excluded: result.excluded, date_counts: counts('attendance_date'), class_counts: counts('class'), status_counts: counts('original_status'), affected_records: conflicts, dates, sheet: parsed.sheet, preview: result.valid.slice(0, 100), can_commit: result.valid.length > 0,
+    excluded_rows: result.excluded.length, excluded: result.excluded, date_counts: counts('attendance_date'), class_counts: counts('class'), status_counts: counts('original_status'), affected_records: conflicts, affected_record_count: conflicts.length, conflict_snapshot_complete: true, dates, sheet: parsed.sheet, preview: result.valid.slice(0, 100), can_commit: result.valid.length > 0,
     note: 'Only validated rows are imported. Rejected/conflicting and excluded rows remain in source history and receive no attendance credit.' });
   timings.summary=Math.round(performance.now()-countStart);
   const previewKey = randomUUID();
