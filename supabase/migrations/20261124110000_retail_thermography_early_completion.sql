@@ -21,7 +21,7 @@ begin
  end loop;
  if definition=old_definition then raise exception 'No function change';end if;
  execute definition;
-end
+end;
 $migration$;
 -- Keep the legacy completion-date constraint for non-report-managed inspections.
 alter table public.retail_thermography_inspections
