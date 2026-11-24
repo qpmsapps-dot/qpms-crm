@@ -4,6 +4,7 @@ import { StringDecoder } from 'node:string_decoder';
 import path from 'node:path';
 import { SaxesParser } from 'saxes';
 import XLSX from 'xlsx';
+import { attendanceTimeSource } from '../shared/retailAttendanceExceptions.js';
 import { ATTENDANCE_MAX_FILE_BYTES } from '../shared/retailAttendance.js';
 
 // Only the streaming attendance preview uses these budgets. The legacy whole-book
@@ -45,7 +46,7 @@ export function inspectAttendanceZip(bytes, filename) {
     const local = bytes.readUInt32LE(offset + 42);
     if (offset + 46 + length + extra + comment > end || !length || length > 512 || bytes.readUInt16LE(offset + 34)) invalid();
     const nameBytes = bytes.subarray(offset + 46, offset + 46 + length), name = nameBytes.toString('utf8');
-    if (flags & 0x41 || /vbaProject|externalLinks|activeX/i.test(name) || /(^|\/)\.\.(\/|$)|\\|\x00|^\/|^[A-Za-z]:/.test(name)) unsafe();
+    if (flags & 0x41 || /vbaProject|externalLinks|activeX/i.test(name) || name.includes('\0') || /(^|\/)\.\.(\/|$)|\\|^\/|^[A-Za-z]:/.test(name)) unsafe();
     if (parts.has(name.toLowerCase()) || ![0, 8].includes(method) || [size, compressed, local].includes(0xffffffff)) invalid();
     const worksheet = /^xl\/worksheets\/[^/]+\.xml$/i.test(name);
     const limit = worksheet ? XLSX_LIMITS.worksheetBytes : name === 'xl/sharedStrings.xml' ? XLSX_LIMITS.sharedStringsBytes : XLSX_LIMITS.partBytes;
@@ -149,7 +150,7 @@ export async function parseAttendanceWorkbookStreaming(bytes, filename, columns,
   await read('xl/_rels/workbook.xml.rels', { open(tag) {
     if (tag.local !== 'Relationship') return;
     const target = attr(tag, 'Target');
-    if (/^[a-z]+:|\\|\x00/i.test(target)) unsafe();
+    if (target.includes('\0') || /^[a-z]+:|\\/i.test(target)) unsafe();
     const resolved = target.startsWith('/') ? target.slice(1) : path.posix.normalize('xl/' + target);
     if (!resolved.startsWith('xl/') || resolved.includes('../')) unsafe();
     relationships.set(attr(tag, 'Id'), resolved);
@@ -257,6 +258,8 @@ export async function parseAttendanceWorkbookStreaming(bytes, filename, columns,
             retainedCells += raw.length;
             if (retainedCells > XLSX_LIMITS.cells) resource();
             const row = { source_row: rowNumber, raw_cells: raw, raw_formulas: formulas };
+            const timeSource = attendanceTimeSource(headers, raw, formulas);
+            if (timeSource) row.time_source = timeSource;
             if (Object.keys(formulaAttributes).length) row.raw_formula_attributes = formulaAttributes;
             for (const [key, col] of Object.entries(indexes)) {
               if (Object.hasOwn(formulas, col)) fail('INVALID_XLSX', 'Formulas are not allowed in mandatory attendance fields.');

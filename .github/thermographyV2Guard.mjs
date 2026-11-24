@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {approvedBase as attendanceBase,manifestPath as attendanceManifest,verifyCurrent as verifyAttendance} from './retailAttendanceExceptionsGuard.mjs';
 import {approvedBase as percentageBase,manifestPath as percentageManifest} from './deepCleaningPercentageGuard.mjs';
 import {approvedBase as completedBase,manifestPath as completedManifest} from './deepCleaningCompletedGuard.mjs';
 import {approvedBase as layoutBase,manifestPath as layoutManifest,verifyCurrent as verifyLayout} from './deepCleaningLayoutGuard.mjs';
@@ -88,6 +89,9 @@ export const priorWorkflowForChecks=priorV2WorkflowForChecks;
 if(process.argv[1]&&fs.existsSync(process.argv[1])&&fileURLToPath(import.meta.url)===fs.realpathSync(process.argv[1])){
  const working=process.argv.includes('--working-tree'),base=process.argv.find(a=>/^[a-f0-9]{40}$/.test(a));
  if(!base)throw Error('Explicit reviewed base SHA required');
+ if(base===attendanceBase&&fs.existsSync(attendanceManifest)){
+  const result=verifyAttendance(base,working);console.log(JSON.stringify(result));process.exit(result.ok?0:1);
+ }
  if(fs.existsSync(percentageManifest)&&[percentageBase,completedBase,layoutBase,monthlyBase,cleaningBase].includes(base)){
   const result=verifyCleaning(base,working);console.log(JSON.stringify(result));process.exit(result.ok?0:1);
  }

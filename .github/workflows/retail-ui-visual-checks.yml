@@ -93,6 +93,17 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
+          # BEGIN RETAIL ATTENDANCE EXCEPTIONS EXACT PAYLOAD
+          attendance_manifest = ".github/retail-attendance-exceptions-pins.json"
+          if attendance_manifest in files:
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{attendance_manifest}"],text=True).strip() != "e12da7966e9445a136facd96d1a34a11685544dd":
+              sys.exit("Attendance exception manifest changed; renew review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/retailAttendanceExceptionsGuard.mjs"],text=True).strip() != "af475ed9d76cbe288e2e16c7f12a323b89522b94":
+              sys.exit("Attendance exception guard changed; renew review")
+            subprocess.run(["node",".github/retailAttendanceExceptionsGuard.mjs",base],check=True)
+            print("PASS: exact attendance exception payload; all subsequent checks remain mandatory.")
+            sys.exit(0)
+          # END RETAIL ATTENDANCE EXCEPTIONS EXACT PAYLOAD
           # BEGIN DEEP CLEANING COMPLETION PERCENTAGE EXACT PAYLOAD
           percentage_manifest = ".github/deep-cleaning-percentage-pins.json"
           if percentage_manifest in files:
