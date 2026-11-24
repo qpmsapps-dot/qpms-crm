@@ -4,6 +4,7 @@ import {gateCombinedMutationRoutes} from '../services/combinedReleaseGate.js';
 import {assertRetailMis,RETAIL_MIS_ROLES,RETAIL_MIS_MODULES,retailMisScopeStates,RETAIL_MIS_ASSIGNABLE_ROLES,isRetailMisOnboardingAdmin} from '../shared/retailMisAccess.js';
 import {retailMisAccess,retailMisReport,retailMisPermissions,retailMisQuotation,misRpc,signMisTrainingEvidence} from '../services/retailMisService.js';
 import {isInitialRetailAdmin} from '../services/retailInitialAdminAccess.js';
+import {readHkStoreMaster} from '../services/retailHkStoreMaster.js';
 import {retailHkMisOperations} from '../services/retailHkMisOperationsService.js';
 import {previewRetailAttendance} from '../services/retailAttendanceService.js';
 import {commitMisAttendance,misAttendanceStatus} from '../services/retailAttendanceCommitService.js';
@@ -43,6 +44,7 @@ gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=
    return res.status(403).json({ok:false,message:'HK MIS is view and download only.'});
   next();
  });
+ router.get('/hk-store-master',run((r,c)=>readHkStoreMaster(c,r.retailMis,r.query.state)));
  router.get('/hk-operations',run((r,c)=>retailHkMisOperations(c,r.retailMis)));
  // Existing HK read-only middleware above remains authoritative. The SQL RPC
  // independently verifies actor/auth, state scope, mutation fence and conflicts.
