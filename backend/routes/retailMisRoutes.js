@@ -6,6 +6,7 @@ import {retailMisAccess,retailMisReport,retailMisPermissions,retailMisQuotation,
 import {isInitialRetailAdmin} from '../services/retailInitialAdminAccess.js';
 import {retailHkMisOperations} from '../services/retailHkMisOperationsService.js';
 import {previewRetailAttendance} from '../services/retailAttendanceService.js';
+import {commitMisAttendance,misAttendanceStatus} from '../services/retailAttendanceCommitService.js';
 import {parseCleaningPlan,cleaningPlanCommand,cleaningScheduleWriterAccess,cleaningScheduleAdminAccess} from '../services/retailCleaningPlanService.js';
 import {signVerifiedFoCleaningSource} from '../services/retailCleaningFoLinkService.js';
 import {isOos12Specialist,requireOos12Environment} from '../shared/retailOos12Workflow.js';
@@ -66,7 +67,13 @@ gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=
  router.get('/oos/attachment/:id',run((r,c)=>{assertRetailMis(r.retailMis,'oos');return misRpc(c,'rpc_retail_mis_oos_attachment',{p_actor:r.profile.id,p_event:r.params.id});}));
  router.get('/report/:module',run((r,c)=>retailMisReport(c,r.profile,r.retailMis,r.params.module,r.query)));
  router.post('/attendance/:module/preview',express.raw({type:'application/octet-stream',limit:'15mb'}),run((r,c)=>{assertRetailMis(r.retailMis,r.params.module);if(!['attendance-hk','attendance-mepc','imports'].includes(r.params.module))throw Object.assign(Error('Attendance class required.'),{statusCode:400});return previewRetailAttendance(c,{...r.profile,_retailMis:r.retailMis,_retailMisModule:r.params.module},r.body,decodeURIComponent(r.get('x-file-name')||''));}));
- router.post('/attendance/commit',express.json({limit:'8kb'}),run((r,c)=>misRpc(c,'rpc_retail_mis_attendance_commit',{p_batch:r.body?.id,p_actor:r.profile.id,p_replace:r.body?.replace===true,p_reason:r.body?.reason||null,p_preview_key:r.body?.preview_key})));
+ const attendanceRun=fn=>async(req,res)=>{
+  const controller=new AbortController();res.on('close',()=>{if(!res.writableEnded)controller.abort();});
+  try{res.json({ok:true,result:await fn(req,getClient(),{signal:controller.signal})});}
+  catch(e){res.status(e.statusCode||503).json({ok:false,code:e.code||'ATTENDANCE_UNCONFIRMED',outcome:e.outcome||'unconfirmed',message:e.code?.startsWith('ATTENDANCE_')?e.message:'Attendance service unavailable. No result could be confirmed; check batch status before retrying.'});}
+ };
+ router.post('/attendance/commit',express.json({limit:'8kb'}),attendanceRun((r,c,context)=>commitMisAttendance(c,r.profile,r.body,context)));
+ router.get('/attendance/status/:id',attendanceRun((r,c,context)=>misAttendanceStatus(c,r.profile,{id:r.params.id,preview_key:r.query.preview_key},context)));
  router.get('/existing-evidence/:module/:record/:id',run(async(r,c)=>{assertRetailMis(r.retailMis,r.params.module);if(['training-hk','training-mepc'].includes(r.params.module))return signMisTrainingEvidence(c,r.profile,r.retailMis,r.params.module,r.params.record,r.params.id);const meta=await misRpc(c,'rpc_retail_mis_existing_evidence',{p_actor:r.profile.id,p_module:r.params.module,p_record:r.params.record,p_evidence:r.params.id});const result=await c.storage.from(meta.bucket).createSignedUrl(meta.path,120);if(result.error)throw Object.assign(Error('Private evidence unavailable.'),{statusCode:503});return {url:result.data.signedUrl};}));
  router.get('/linked-evidence/:schedule',run(async(r,c)=>{assertRetailMis(r.retailMis,'cleaning');const source=await misRpc(c,'rpc_retail_mis_linked_evidence',{p_actor:r.profile.id,p_schedule:r.params.schedule});if(!source)throw Object.assign(Error('Verified linked evidence unavailable.'),{statusCode:403});return signVerifiedFoCleaningSource(c,source,120);}));
  for(const operation of ['preview','import'])router.post('/oos/quotation/'+operation,express.raw({type:'application/octet-stream',limit:'10mb'}),run((r,c)=>retailMisQuotation(c,r.profile,r.retailMis,r.body,decodeURIComponent(r.get('x-file-name')||''),operation==='import',environment,r.get('x-quotation-review')?JSON.parse(r.get('x-quotation-review')):null)));

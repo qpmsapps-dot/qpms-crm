@@ -1,0 +1,30 @@
+{
+  "schema": "retail-attendance-correction.v1",
+  "base_sha": "6db290b91612663c2b66c1b7ce2d7a1fb7ce817d",
+  "files": {
+    ".github/retailAttendanceCorrectionGuard.mjs": "e1d445c1e7486073d65244f3a62dfac30e1c0b98",
+    ".github/retailAttendanceExceptionsGuard.mjs": "431bb78b6e3661c9f3f081bc168ec6f5bcb9bfa2",
+    ".github/deepCleaningV2Guard.mjs": "aaa7f074cd49eaf09bd4c344667e6ca4054ba9ae",
+    ".github/thermographyV2Guard.mjs": "fe60aa8fca331eb02bb6a7c06c86995434b145dc",
+    ".github/workflows/retail-attendance-exceptions.yml": "a4c24035ecdea80fbb56c5944cc8b788426def89",
+    "backend/routes/retailMisRoutes.js": "fffcf7a7f6ec1cb134a3ae0fd5d3238535c17408",
+    "backend/services/retailAttendanceService.js": "0096f58abc022cf5fc7b673374d04d0371b927ea",
+    "backend/services/retailAttendanceCommitService.js": "ec52b1054d39daa116705fedda77b2f40e34ad2a",
+    "backend/tests/helpers/retailAttendanceCorrectionFixture.js": "53ba6a05b2f29f0b0cd244f9fd177156a4187bd6",
+    "backend/tests/retailAttendanceCorrection.test.js": "0ff0dcafca3183cc6520dae0686370cb2c630355",
+    "backend/tests/retailAttendanceCorrectionPostgres.test.js": "8684b33a4ecdce31f4426693324cd5c3eb4e771b",
+    "backend/tests/retailAttendancePreviewAudit.test.js": "f293c7f10a1ba9c9d043ec9353e6a227b53fa65a",
+    "backend/tests/retailAttendanceUploadSize.test.js": "39601f678a82eaf0b93fc23d0d50e56053f76f4d",
+    "backend/tests/retailAttendancePostgres.test.js": "7846abc8fb22177207e10cd97f2d8966cd1a4aab",
+    "src/pages/reliance-retail/RetailMisWorkspace.jsx": "d3fe3219218c95f90b1e46f53f4312574e603b55",
+    "src/components/reliance-retail/RetailMisAttendanceUpload.jsx": "7c02bb214f7658fb9ddd646d4bc512e947dffbf1",
+    "src/utils/retailAttendanceCommit.js": "44fde9a4e8db09c6f9fea8b0a7dbf4fd59ca9e20",
+    "supabase/proposals/retail_attendance_correction_commit_20261124.sql": "30176d1b2cec3c5fe7acc522920df84652031430",
+    "tests/retailAttendanceCommit.test.js": "0c57fd12d978aa0aa73cb4976a89abef3f250e2f",
+    "tests/browser/retailAttendanceCorrection.spec.js": "2b3a6bd45e30dd3b95c5eb551875231f753f639a",
+    "tests/browser/retailAttendanceCorrection.config.js": "35d8dedf7997a7a8c9bd5f7f7d9b7bea5ade15f8",
+    "tests/retailAttendanceCorrectionGuard.test.js": "08393d00cd509035b57c28f63fbb102ab946b8df",
+    "tests/thermographyReports.test.js": "b33139fd6ea273670f60c1c30b968b68219817bc",
+    "docs/RETAIL_ATTENDANCE_CORRECTION_REPAIR.md": "9f10c8856f66308268379c1c7a138d4f8211b719"
+  }
+}

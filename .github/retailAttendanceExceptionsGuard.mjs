@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {approvedBase as correctionBase,manifestPath as correctionManifest,verifyCurrent as verifyCorrection,priorWorkflow as priorCorrectionWorkflow} from './retailAttendanceCorrectionGuard.mjs';
 export const approvedBase = '80fe06d842a0efc79c18124dbe16d05ca1bdf34c';
 export const manifestPath = '.github/retail-attendance-exceptions-pins.json';
 export const guardPath = '.github/retailAttendanceExceptionsGuard.mjs';
@@ -50,6 +51,7 @@ export function verifyPayload({ base, paths, manifest, hash, workflow, baseWorkf
   return { ok: validManifest && workflowMatches && !missing.length && !unexpected.length && !mismatched.length, validManifest, workflowMatches, missing, unexpected, mismatched };
 }
 export function verifyCurrent(base, working = false) {
+  if(base===correctionBase&&fs.existsSync(correctionManifest))return verifyCorrection(base,working);
   const paths = git(['diff', '--name-only', base, ...(working ? [] : ['HEAD'])]).trim().split('\n').filter(Boolean);
   if (working) paths.push(...git(['ls-files', '--others', '--exclude-standard']).trim().split('\n').filter(Boolean));
   const read = p => working ? fs.readFileSync(p, 'utf8') : git(['show', `HEAD:${p}`]);
@@ -57,6 +59,12 @@ export function verifyCurrent(base, working = false) {
   return verifyPayload({ base, paths, manifest: JSON.parse(read(manifestPath)), hash, workflow: read(workflowPath), baseWorkflow: git(['show', `${approvedBase}:${workflowPath}`]) });
 }
 export function priorWorkflow(workflow) {
+  if(workflow.includes('# BEGIN RETAIL ATTENDANCE CORRECTION EXACT PAYLOAD')){
+    const prior=priorCorrectionWorkflow(workflow),base=git(['show',`${approvedBase}:${workflowPath}`]);
+    const historicalHash=p=>git(['rev-parse',`${correctionBase}:${p}`]).trim();
+    if(normalize(prior)!==reviewedWorkflow(base,historicalHash(manifestPath),historicalHash(guardPath)))throw Error('Unreviewed workflow alteration: historical attendance authorization');
+    return base;
+  }
   const base = git(['show', `${approvedBase}:${workflowPath}`]), hash = p => git(['hash-object', `--path=${p}`, p]).trim();
   if (normalize(workflow) !== reviewedWorkflow(base, hash(manifestPath), hash(guardPath))) throw Error('Unreviewed workflow alteration: attendance exceptions');
   return base;

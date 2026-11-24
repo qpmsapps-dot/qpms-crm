@@ -63,6 +63,8 @@ test('Phase 1 real isolated PostgreSQL: upload, preview, import, report, correct
     sql(`create role anon;create role authenticated;create role service_role bypassrls;create table public.profiles(id uuid primary key,role text,designation text,department text,is_active boolean);create table public.reliance_retail_store_master(id uuid primary key,store_code text,store_name text,state text,status text);grant select on public.profiles,public.reliance_retail_store_master to service_role;insert into public.profiles values('${admin.id}','ADMIN',null,null,true);`);
     for(const s of stores)sql(`insert into public.reliance_retail_store_master values(${Object.values(s).map(quote).join(',')});`);
     sql(readFileSync(new URL('../../supabase/migrations_2_0/232_reliance_retail_uploaded_attendance.sql',import.meta.url),'utf8'));
+    const snapshotProposal=readFileSync(new URL('../../supabase/proposals/retail_attendance_correction_commit_20261124.sql',import.meta.url),'utf8');
+    sql(snapshotProposal.slice(snapshotProposal.indexOf('create or replace function public.rpc_retail_attendance_conflict_snapshot'),snapshotProposal.indexOf('create or replace function public.rpc_retail_mis_attendance_commit')));
     let initial;
     await t.test('real service preview retains every source row; all valid dates imported despite excluded/unmatched rows',async()=>{
       const bytes=workbook([['E1','Synthetic employee','S1','2026-09-28','P','House Keeping','keep me'],['E2','Synthetic employee','S2','2026-09-29','HD','MEPC','PY evidence'],['G1','Excluded','S1','2026-09-28','P','Goods Receiving','excluded raw'],['U1','Unknown','UNKNOWN','2026-09-29','P','MEPC','unmatched raw']]);
