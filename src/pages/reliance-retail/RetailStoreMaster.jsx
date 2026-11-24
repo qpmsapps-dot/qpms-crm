@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '../../context/auth-context.js';
+import HkStoreMasterView from './HkStoreMasterView.jsx';
 import { Plus, RefreshCw, Search } from 'lucide-react';
 import { usePageTitle } from '../../hooks/usePageTitle.js';
 import { relianceRetailApi } from '../../services/relianceRetailApi.js';
@@ -10,6 +12,10 @@ import './retailStoreVisual.css';
 const tabs = ['Unified Management', 'Batch Submission & Approval', 'Stores', 'Provisional MIS Review', 'Zones', 'FO Mapping', 'Manpower'];
 const blankStore = { store_code: '', store_name: '', state: 'TN', city: '', store_format: '', zone_id: '', status: 'Inactive' };
 export default function RetailStoreMaster() {
+  const { user } = useAuth();
+  return (user?.rawRole || user?.role) === 'MIS_HK' ? <HkStoreMasterView /> : <RetailAdminStoreMaster />;
+}
+function RetailAdminStoreMaster() {
   usePageTitle('Reliance Retail Store Master');
   const [tab, setTab] = useState('Unified Management'); const [stores, setStores] = useState([]); const [zones, setZones] = useState([]);
   const [query, setQuery] = useState(''); const [page, setPage] = useState(1); const [total, setTotal] = useState(0); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [editor, setEditor] = useState(null);
