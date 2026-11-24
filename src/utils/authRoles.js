@@ -292,7 +292,7 @@ export function retailWebAccess(user) {
 export function canAccessRoute(user, pathname) {
   if (!user) return false;
   const mis=retailMisRole(user.rawRole||user.role);
-  if(mis)return pathname==='/profile'||Boolean(RETAIL_MIS_MODULES[mis].includes(retailMisRouteModule(pathname)));
+  if(mis)return pathname==='/profile'||(mis==='MIS_HK'&&pathname==='/reliance-retail/store-master')||Boolean(RETAIL_MIS_MODULES[mis].includes(retailMisRouteModule(pathname)));
   if(pathname==='/settings/retail-mis-access')return isPlatformAdmin(user)&&RETAIL_MIS_ONBOARDING_ADMINS.some(a=>user.profileId===a.profile_id&&user.id===a.auth_user_id&&user.employeeCode===a.employee_code);
   if (isPlatformAdmin(user)) return true;
   // Navigation only. Verified database role plus explicit state grants decide access.
