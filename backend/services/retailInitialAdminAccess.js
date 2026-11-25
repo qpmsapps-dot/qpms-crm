@@ -7,31 +7,18 @@ export const INITIAL_RETAIL_ADMIN=Object.freeze({
  authUserId:'79cd196c-c6f3-404a-b22a-d4683afefa3f',
  employeeCode:'QPMSADMIN',
 });
-// Explicitly authorized co-administrator; do not expand by generic Admin role.
-export const PADMA_SUPER_ADMIN=Object.freeze({
- profileId:'2a1d8895-ce8d-4bf0-9d70-dbc6af60414b',
- authUserId:'7e84cddf-821a-4513-b7ce-25895d660393',
- employeeCode:'QPMSAP25191',
-});
-export const SHEBA_SUPER_ADMIN=Object.freeze({
- profileId:'e2457d7a-018b-477e-9ba6-bd1021ed16aa',
- authUserId:'377ca7a2-95cc-4891-8840-338f2cb20bb9',
- employeeCode:'QPMSTNC17010',
-});
 export function isInitialRetailAdmin(profile,authUser){
  const role=String(profile?.role||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
- return [INITIAL_RETAIL_ADMIN,PADMA_SUPER_ADMIN,SHEBA_SUPER_ADMIN].some(identity=>
-  profile?.id===identity.profileId
-  && profile.auth_user_id===identity.authUserId
-  && profile.employee_code===identity.employeeCode
+ return profile?.id===INITIAL_RETAIL_ADMIN.profileId
+  && profile.auth_user_id===INITIAL_RETAIL_ADMIN.authUserId
+  && profile.employee_code===INITIAL_RETAIL_ADMIN.employeeCode
   && profile.is_active===true&&String(profile.status||'Active').toUpperCase()==='ACTIVE'
   && ['ADMIN','QPMSADMIN'].includes(role)
-  && (identity===INITIAL_RETAIL_ADMIN||profile.web_access_enabled===true)
-  && (!authUser||authUser.id===identity.authUserId));
+  && (!authUser||authUser.id===INITIAL_RETAIL_ADMIN.authUserId);
 }
 export function requireInitialRetailAdmin(req,res,next){
  if(!req.authUser?.id||!req.profile?.id)return res.status(401).json({ok:false,message:'Authentication required.'});
- if(!isInitialRetailAdmin(req.profile,req.authUser))return res.status(403).json({ok:false,code:'retail_initial_admin_only',message:'Retail operational writes require an explicitly authorized Super Admin account.'});
+ if(!isInitialRetailAdmin(req.profile,req.authUser))return res.status(403).json({ok:false,code:'retail_initial_admin_only',message:'Retail operational writes are restricted to the existing QPMSADMIN account for this release.'});
  return next();
 }
 
