@@ -103,9 +103,10 @@ test('cannot infer closures across different IFMS dump families',async()=>{
 
 test('four vendor statuses append without changing the established ten or implying completion',()=>{
  assert.deepEqual(RETAIL_FAULT_VENDOR_STAGES,['CAMC','OEM','MEPC','IOT']);
- assert.equal(RETAIL_FAULT_STAGES.length,14);
- assert.deepEqual(RETAIL_FAULT_STAGES.slice(-4),RETAIL_FAULT_VENDOR_STAGES);
+ assert.equal(RETAIL_FAULT_STAGES.length,17);
+ assert.deepEqual(RETAIL_FAULT_STAGES.slice(10,14),RETAIL_FAULT_VENDOR_STAGES);
  assert.equal(RETAIL_FAULT_STAGES[9],'Set Off Pending');
+ assert.deepEqual(RETAIL_FAULT_STAGES.slice(14),['Pest Control','HK','Work Completed - Call Yet to Close']);
 });
 test('disappeared-ticket comparison groups by canonical scoped state, deduplicates keys and never mutates sources',()=>{
  const previous=[
