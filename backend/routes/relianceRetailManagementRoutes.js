@@ -38,6 +38,19 @@ function sendError(response, error) {
   response.status(status).json({ ok: false, code: error?.code || 'retail_management_failed', message: status >= 500 ? 'Reliance Retail request failed.' : error.message });
 }
 
+const timedRetailGet = (label) => (req, res, next) => {
+  const started = performance.now();
+  res.once('finish', () => {
+    console.info('[Retail GET timing]', {
+      endpoint: label,
+      status: res.statusCode,
+      durationMs: Math.round(performance.now() - started),
+      responseBytes: Number(res.getHeader('content-length')) || null,
+    });
+  });
+  next();
+};
+
 export function createRelianceRetailManagementRouter({ requireAuth, getClient }) {
   const router = express.Router();
 gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=>/^\/deep-cleaning(?:\/|$)|^\/module-reports\/deep-cleaning\//.test(path)});
@@ -68,10 +81,10 @@ gateCombinedMutationRoutes(router,{normalOperations:true,getClient,matches:path=
   router.use(createInitialRetailWriteGate({getClient}));
   router.post('/module-reports/deep-cleaning/:id/link-fo',async(req,res)=>{try{res.json({ok:true,result:await linkFoCleaning(getClient(),req.profile,req.params.id,req.body||{})});}catch(e){sendError(res,e);}});
   router.use('/operations',createRetailOperationsRouter({getClient}));
-  router.get('/module-reports/dashboard',async(req,res)=>{try{res.json({ok:true,report:await retailModuleDashboard(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
+  router.get('/module-reports/dashboard',timedRetailGet('module-reports/dashboard'),async(req,res)=>{try{res.json({ok:true,report:await retailModuleDashboard(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
   router.get('/module-reports/ifms-history',async(req,res)=>{try{res.json({ok:true,report:await retailIfmsHistoryRows(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
-  router.get('/module-reports/training',async(req,res)=>{try{res.json({ok:true,report:await retailCompletedTraining(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
-  router.get('/module-reports/deep-cleaning',async(req,res)=>{try{res.json({ok:true,report:await retailCleaningReport(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
+  router.get('/module-reports/training',timedRetailGet('module-reports/training'),async(req,res)=>{try{res.json({ok:true,report:await retailCompletedTraining(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
+  router.get('/module-reports/deep-cleaning',timedRetailGet('module-reports/deep-cleaning'),async(req,res)=>{try{res.json({ok:true,report:await retailCleaningReport(getClient(),req.profile,req.query)});}catch(e){sendError(res,e);}});
   router.get('/module-reports/deep-cleaning/:id/evidence',async(req,res)=>{try{res.json({ok:true,uploads:await retailCleaningEvidence(getClient(),req.profile,req.params.id,req.query)});}catch(e){sendError(res,e);}});
   router.use('/fo-self',createRetailFoSelfRouter({getClient}));
   router.use('/service-trackers',createRetailServiceTrackerRouter({getClient}));

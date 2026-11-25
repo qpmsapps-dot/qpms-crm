@@ -66,12 +66,34 @@ export default function RetailDashboard() {
       if (!Array.isArray(report?.stores) || !report.modules || report.from !== params.from || report.to !== params.to) throw Error('Report identity or authorized Store Master inventory is incomplete.');
       return report;
     });
-    Promise.allSettled([request({ from: period.start, to }), prior.comparable ? request({ from: prior.from, to: prior.to }) : Promise.reject(Error('Previous month has fewer days; no equal-length comparison.'))]).then(([current, priorResult]) => {
+    // The selected month's report must not wait for the optional comparison request.
+    let previousReport = null;
+    request({ from: period.start, to }).then(current => {
       if (!live) return;
-      if (current.status === 'fulfilled') setLoaded({ key: requestKey, current: current.value, previous: priorResult.status === 'fulfilled' ? priorResult.value : null, refreshed: new Date().toISOString() });
-      else setError(current.reason.response?.data?.message || current.reason.message);
-      if (priorResult.status === 'rejected') setPreviousError(priorResult.reason.response?.data?.message || priorResult.reason.message);
+      setLoaded(existing => ({
+        key: requestKey,
+        current,
+        previous: existing?.key === requestKey ? existing.previous : previousReport,
+        refreshed: new Date().toISOString(),
+      }));
+    }).catch(currentError => {
+      if (live) setError(currentError.response?.data?.message || currentError.message);
     });
+    if (prior.comparable) {
+      request({ from: prior.from, to: prior.to }).then(previous => {
+        if (!live) return;
+        previousReport = previous;
+        setLoaded(existing => existing?.key === requestKey && existing.current
+          ? { ...existing, previous }
+          : existing);
+      }).catch(priorError => {
+        if (live) setPreviousError(priorError.response?.data?.message || priorError.message);
+      });
+    } else {
+      queueMicrotask(() => {
+        if (live) setPreviousError('Previous month has fewer days; no equal-length comparison.');
+      });
+    }
     return () => { live = false; controller.abort(); };
   }, [requestKey, period.start, to, refresh]);
   useEffect(() => {
