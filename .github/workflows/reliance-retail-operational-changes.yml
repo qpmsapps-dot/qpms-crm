@@ -6,6 +6,7 @@ on:
       - 'backend/shared/retailAttendanceTrend.js'
       - 'backend/services/retailAttendanceService.js'
       - 'backend/services/faultTrackerStoreScope.js'
+      - 'backend/services/faultTrackerEditAccess.js'
       - 'backend/services/retailModuleReportService.js'
       - 'backend/services/retailIfmsHistoryService.js'
       - 'backend/routes/relianceRetailManagementRoutes.js'
@@ -50,7 +51,7 @@ jobs:
       - name: Install backend dependencies
         run: npm ci --prefix backend --no-audit --no-fund
       - name: Scoped Retail backend tests
-        run: node --test backend/tests/retailOperations.test.js backend/tests/faultTrackerStoreScope.test.js backend/tests/clientDeepCleaningService.test.js backend/tests/retailOos12Routes.test.js backend/tests/trainingReleaseCompatibility.test.js backend/tests/retailModuleReportService.test.js backend/tests/retailIfmsHistoryService.test.js backend/tests/retailAttendanceTrend.test.js backend/tests/retailAttendanceReportScope.test.js backend/tests/retailLeadershipRoleScope.test.js backend/tests/retailLeadershipTrainingScope.test.js
+        run: node --test backend/tests/retailOperations.test.js backend/tests/faultTrackerStoreScope.test.js backend/tests/faultTrackerEditAccess.test.js backend/tests/clientDeepCleaningService.test.js backend/tests/retailOos12Routes.test.js backend/tests/trainingReleaseCompatibility.test.js backend/tests/retailModuleReportService.test.js backend/tests/retailIfmsHistoryService.test.js backend/tests/retailAttendanceTrend.test.js backend/tests/retailAttendanceReportScope.test.js backend/tests/retailLeadershipRoleScope.test.js backend/tests/retailLeadershipTrainingScope.test.js
       - name: HK MIS role, routing and nonfinancial read-only regression
         run: node --test backend/tests/retailMisAccess.test.js backend/tests/retailHkMisOperationsService.test.js backend/tests/retailMisOperationalAdminOnboarding.test.js
       - name: Backend server syntax check
