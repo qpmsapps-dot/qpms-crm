@@ -4,9 +4,9 @@ export function isThermographyV2Dashboard(r){
  const count=n=>Number.isSafeInteger(n)&&n>=0;
  if(r?.contract!=='thermography.v2'||!/^\d{4}-\d{2}-\d{2}$/.test(r.today||'')||!r.scope_digest||!Array.isArray(r.rows)||!Array.isArray(r.stores)||!Array.isArray(r.chart))return false;
  if(![r.summary?.scheduled,r.summary?.completed,r.monthly?.total,r.monthly?.completed,r.monthly?.scheduled,r.total].every(count)||!Number.isFinite(r.summary.percentage))return false;
- if(r.summary.completed>r.summary.scheduled||r.summary.scheduled>r.monthly.total||r.monthly.completed+r.monthly.scheduled!==r.monthly.total||r.total>r.monthly.total)return false;
+ if(r.summary.completed>r.monthly.completed||r.summary.scheduled>r.monthly.total||r.monthly.completed+r.monthly.scheduled!==r.monthly.total||r.total>r.monthly.total)return false;
  const expected=r.summary.scheduled?r.summary.completed/r.summary.scheduled*100:0;if(Math.abs(expected-r.summary.percentage)>.0001)return false;
- if(!r.chart.every(s=>typeof s.state==='string'&&count(s.scheduled)&&count(s.completed)&&s.completed<=s.scheduled)||new Set(r.chart.map(s=>s.state)).size!==r.chart.length)return false;
+ if(!r.chart.every(s=>typeof s.state==='string'&&count(s.scheduled)&&count(s.completed))||new Set(r.chart.map(s=>s.state)).size!==r.chart.length)return false;
  if(r.chart.reduce((n,s)=>n+s.scheduled,0)!==r.summary.scheduled||r.chart.reduce((n,s)=>n+s.completed,0)!==r.summary.completed)return false;
  return r.rows.length<=r.total&&new Set(r.rows.map(row=>row.id)).size===r.rows.length&&r.rows.every(row=>row.id&&row.retail_store_id&&typeof row.store_code==='string'&&row.store_name&&row.state&&/^\d{4}-\d{2}-\d{2}$/.test(row.scheduled_date||'')&&typeof row.pdf_verified==='boolean')&&r.stores.every(s=>s.id&&s.state&&typeof s.store_code==='string');
 }

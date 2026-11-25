@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {dashboardResult,thermoDashboard} from '../services/thermographyDashboard.js';
 import {thermoServiceFixture} from './helpers/thermographyServiceFixture.js';
-const row=(id,date,verified=false,state='TN')=>({id,scheduled_date:date,pdf_verified:verified,state,store_code:'00'+id,store_name:'Synthetic',retail_store_id:'store'+id});
+const row=(id,date,verified=false,state='TN')=>({id,scheduled_date:date,pdf_verified:verified,completed_on:verified?date:null,state,store_code:'00'+id,store_name:'Synthetic',retail_store_id:'store'+id});
 const report={today:'2026-11-18',stores:[{id:'store1',state:'TN'},{id:'store2',state:'AP-1'},{id:'store3',state:'AP-2'}],scope_digest:'synthetic',can_upload:true};
 test('current month uses IST server cutoff; full-month table, chart and monthly counts remain independent of custom KPI range',()=>{
  const rows=[row('1','2026-11-01'),row('2','2026-11-18',true),row('3','2026-11-19',true),row('4','2026-11-30',false,'AP-1')];
@@ -30,5 +30,23 @@ test('actual SQL dashboard excludes other states and preserves future scheduled 
   assert.equal(result.summary.scheduled,h.today>=month+'-28'?1:0);
   await assert.rejects(thermoDashboard(h.client,h.profile,{month,state:'KA'}),e=>e.statusCode===403);
   await assert.rejects(thermoDashboard(h.client,h.profile,{month,store:h.ids.otherStore}),e=>e.statusCode===403);
+ }finally{await h.db.close();}
+});
+
+test('early verified completion is independent of scheduled cutoff and future completion dates are excluded',()=>{
+ const rows=[row('1','2026-11-01'),{...row('2','2026-11-30',true,'AP-1'),completed_on:'2026-11-17'},{...row('3','2026-11-14',true,'AP-2'),completed_on:'2026-11-20'}];
+ const result=dashboardResult(rows,report,{month:'2026-11'});
+ assert.deepEqual(result.summary,{scheduled:2,completed:1,percentage:50});
+ assert.deepEqual(result.chart.find(s=>s.state==='AP-1'),{state:'AP-1',scheduled:0,completed:1});
+ assert.equal(result.monthly.total,3);assert.equal(result.monthly.completed,2);
+ assert.equal(dashboardResult(rows,report,{month:'2026-11',kpi_to:'2026-11-16'}).summary.completed,0);
+});
+test('actual SQL allows early PDF completion and preserves schedule and authorization',async()=>{
+ const h=await thermoServiceFixture();try{
+  const date=new Date(Date.parse(h.today+'T00:00:00Z')+86400000).toISOString().slice(0,10);
+  const saved=await h.schedule({date});const list=await h.call(h.ids.mepc,'dashboard',{from:date,to:date});assert.equal(list.rows[0].can_upload,true);
+  await assert.rejects(h.prepare({id:saved.id,revision:saved.revision},h.ids.other));
+  const version=await h.prepare({id:saved.id,revision:saved.revision});await h.finalize(version);
+  const result=await h.call(h.ids.mepc,'dashboard',{from:date,to:date});assert.equal(result.rows[0].pdf_verified,true);assert.equal(result.rows[0].scheduled_date,date);assert.equal(result.rows[0].completed_on,h.today);
  }finally{await h.db.close();}
 });

@@ -33,6 +33,7 @@ export async function thermoFixture({db=new PGlite(),beforeReports,businessDate}
  if(beforeReports)await beforeReports(db);
  await db.exec(readFileSync(thermoMigration,'utf8'));
  await db.exec(readFileSync(new URL('../../../supabase/migrations/20261118010000_retail_thermography_schedule_v2.sql',import.meta.url),'utf8'));
+ await db.exec(readFileSync(new URL('../../../supabase/migrations/20261124110000_retail_thermography_early_completion.sql',import.meta.url),'utf8'));
  if(businessDate){if(!/^\d{4}-\d{2}-\d{2}$/.test(businessDate))throw Error('Invalid synthetic fixture date');await db.exec(`create or replace function public.retail_operations_today() returns date language sql stable as $$select date '${businessDate}'$$;`);}
  const ids=Object.fromEntries(['mepc','other','hk','central','admin','store','otherStore'].map(k=>[k,randomUUID()]));
  for(const [key,role,states] of [['mepc','MIS_MEPC',['TN']],['other','MIS_MEPC',['KA']],['hk','MIS_HK',['TN']],['central','CENTRAL_MIS',[]],['admin','Super Admin',[]]]){

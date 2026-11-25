@@ -14,8 +14,10 @@ export function dashboardResult(rows,report,filters){
  if(filters.store&&!report.stores.some(s=>s.id===filters.store))throw Object.assign(Error('Requested store is outside authorized Thermography scope.'),{statusCode:403});
  const scoped=rows.filter(r=>(!filters.state||r.state===filters.state||filters.state==='TN'&&r.state==='PY')&&(!filters.store||r.retail_store_id===filters.store));
  const cohort=scoped.filter(r=>r.scheduled_date>=start&&r.scheduled_date<=cutoff),states={};
- for(const row of cohort){const state=states[row.state]??={state:row.state,scheduled:0,completed:0};state.scheduled++;if(row.pdf_verified===true)state.completed++;}
- const completed=cohort.filter(r=>r.pdf_verified===true).length,monthlyCompleted=scoped.filter(r=>r.pdf_verified===true).length;
+ const completedRows=scoped.filter(r=>r.pdf_verified===true&&date(r.completed_on)&&r.completed_on>=start&&r.completed_on<=cutoff);
+ for(const row of cohort){const state=states[row.state]??={state:row.state,scheduled:0,completed:0};state.scheduled++;}
+ for(const row of completedRows){const state=states[row.state]??={state:row.state,scheduled:0,completed:0};state.completed++;}
+ const completed=completedRows.length,monthlyCompleted=scoped.filter(r=>r.pdf_verified===true).length;
  if(filters.status&&!['Scheduled','Completed'].includes(filters.status))throw bad('Unsupported Thermography status.');
  const filtered=scoped.filter(r=>(!filters.status||(r.pdf_verified?'Completed':'Scheduled')===filters.status)&&(!filters.q||r.store_code.toLowerCase().includes(String(filters.q).toLowerCase())));
  filtered.sort((a,b)=>a.scheduled_date.localeCompare(b.scheduled_date)||a.store_code.localeCompare(b.store_code)||a.id.localeCompare(b.id));
