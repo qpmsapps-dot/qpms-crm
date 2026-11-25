@@ -10,6 +10,8 @@ on:
       - 'backend/tests/faultTracker*.test.js'
       - 'src/pages/FaultTracker.jsx'
       - 'src/utils/faultTrackerAgeing.js'
+      - 'tests/browser/faultTrackerAgeing.spec.js'
+      - 'playwright.fault-tracker.config.js'
       - 'supabase/migrations/20261125120000_fault_tracker_ifms_persistence.sql'
       - '.github/workflows/fault-tracker-ifms-persistence.yml'
   workflow_dispatch:
@@ -37,3 +39,23 @@ jobs:
           RUN_IFMS_PERSISTENCE_POSTGRES: '1'
         run: node --test backend/tests/faultTrackerPersistencePostgres.test.js backend/tests/faultTrackerFrontendPersistence.test.js backend/tests/faultTrackerStoreScope.test.js backend/tests/faultTrackerEditAccess.test.js backend/tests/faultTrackerAgeing.test.js
       - run: node --check backend/server.js
+      - name: Install frontend test dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Lint frontend ageing report and calculation tests
+        run: npx eslint src/pages/FaultTracker.jsx src/utils/faultTrackerAgeing.js backend/tests/faultTrackerAgeing.test.js playwright.fault-tracker.config.js
+      - name: Production frontend build for local browser fixtures
+        env:
+          VITE_SUPABASE_URL: ''
+          VITE_SUPABASE_ANON_KEY: ''
+          VITE_API_URL: 'http://127.0.0.1:4999'
+        run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Production-artifact ageing browser and Excel regressions
+        run: npx playwright test --config playwright.fault-tracker.config.js
+      - name: Upload ageing browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fault-tracker-ageing-browser
+          path: .cache/fault-tracker-ageing-results
+          include-hidden-files: true

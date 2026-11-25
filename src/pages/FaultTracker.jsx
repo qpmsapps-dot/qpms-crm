@@ -1,4 +1,4 @@
-import { Fragment, createElement, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowUpDown,
@@ -31,7 +31,7 @@ import {
   YAxis,
 } from 'recharts';
 import * as XLSX from 'xlsx';
-import {AGEING_COLUMNS,AGEING_REGIONS,ageingBand,ageingValue,buildAgeingReports,ageingExportRows} from '../utils/faultTrackerAgeing.js';
+import {AGEING_REGIONS,AGEING_SHEET_NAMES,ageingRegion,ageingTableColumns,ageingDetailTickets,ageingTicketExportRows,buildAgeingReports,ageingExportRows} from '../utils/faultTrackerAgeing.js';
 import {scopedFaultExportRows} from '../utils/faultTrackerExport.js';
 import {verifiedWeeklyCompletions,RETAIL_FAULT_STAGES} from '../../backend/shared/retailFaultWorkflow.js';
 import { useAuth } from '../context/auth-context.js';
@@ -1227,61 +1227,44 @@ function HkPcTicketsByStateCard({ data }) {
     </ManagementCard>
   );
 }
-function stageCountsForSelection(tickets, selectedState) {
-  const scopedTickets = selectedState
-    ? tickets.filter((ticket) => ticket.groupedState === selectedState)
-    : tickets;
-  const hasScopedStageUpdates = scopedTickets.some((ticket) => ticket.ifmsStage);
-  if (tickets.length && hasScopedStageUpdates) {
-    return Object.fromEntries(ifmsStages.map((stage) => [
-      stage,
-      scopedTickets.filter((ticket) => ticket.ifmsStage === stage).length,
-    ]));
-  }
-
-  return Object.fromEntries(ifmsStages.map((stage) => [
-    stage,
-    0,
-  ]));
-}
-
 function StageProgress({ tickets, selectedState, onSelectedStateChange }) {
-  const stageCounts = stageCountsForSelection(tickets, selectedState);
-  const total = Math.max(1, Object.values(stageCounts).reduce((sum, count) => sum + count, 0));
-  const titleState = selectedState ? stateDisplayLabel(selectedState) : 'All States';
+  const {stages}=useMemo(()=>buildAgeingReports(tickets,selectedState),[tickets,selectedState]);
+  const total=stages.at(-1).total;
+  const titleState=AGEING_REGIONS.find(([code])=>code===selectedState)?.[1]||'South – Cumulative';
   return (
     <ManagementCard className="p-5">
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-black text-slate-950">Stage-wise Progress ({titleState})</h2>
+          <h2 className="text-sm font-black text-slate-950">Stage-wise Progress ({titleState})</h2><span className="text-xs font-semibold text-slate-500" aria-label="Stage progress total">{formatNumber(total)} tickets</span>
           <Info className="h-3.5 w-3.5 text-slate-300" />
         </div>
         <select
+          aria-label="Stage progress region"
           value={selectedState}
           onChange={(event) => onSelectedStateChange(event.target.value)}
           className="h-10 min-w-40 rounded-xl border border-slate-200 bg-white px-3 text-sm font-black text-slate-800 shadow-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
         >
-          {stateFilterOptions.map((option) => (
-            <option key={option.label} value={option.value}>{option.label}</option>
-          ))}
+          <option value="">South – Cumulative</option>
+          {AGEING_REGIONS.map(([code,label])=><option key={code} value={code}>{label}</option>)}
         </select>
       </div>
       <div className="space-y-3">
-        <div className="grid grid-cols-[1fr_6rem_6rem] gap-4 px-1 text-xs font-black uppercase tracking-wide text-slate-500">
+        <div className="grid grid-cols-[minmax(0,1fr)_3rem_3rem] gap-4 px-1 text-xs font-black uppercase tracking-wide text-slate-500 sm:grid-cols-[minmax(12rem,1fr)_minmax(3rem,1fr)_4rem_4rem]">
           <span />
+          <span className="hidden sm:block" />
           <span className="text-right">Tickets</span>
           <span className="text-right">% of Total</span>
         </div>
-        {ifmsStages.map((stage, index) => {
-          const count = stageCounts[stage] || 0;
+        {stages.slice(0,-1).map((row, index) => {
+          const stage=row.label, count=row.total;
           const percent = percentage(count, total);
           return (
-            <div key={stage} className="grid items-center gap-4 md:grid-cols-[13rem_1fr_6rem_6rem]">
+            <div key={stage} className="grid items-center gap-4 grid-cols-[minmax(0,1fr)_3rem_3rem] sm:grid-cols-[minmax(12rem,1fr)_minmax(3rem,1fr)_4rem_4rem]">
               <div className="flex min-w-0 items-center gap-3">
                 <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-blue-600 text-[11px] font-black text-white">{index + 1}</span>
-                <p className="truncate text-xs font-bold text-slate-600">{stage}</p>
+                <p className="min-w-0 whitespace-normal break-words text-xs font-bold text-slate-600">{stage}</p>
               </div>
-              <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+              <div className="hidden h-2.5 overflow-hidden rounded-full bg-slate-100 sm:block">
                 <div className="h-full rounded-full bg-blue-500" style={{ width: `${percent}%` }} />
               </div>
               <p className="text-right text-sm font-black text-slate-800">{formatNumber(count)}</p>
@@ -1307,34 +1290,80 @@ function FaultStoreReconciliation({summary}) {
 function ManagementAgeingReports({tickets,selectedState,onSelectedStateChange}) {
   const {stages,states}=useMemo(()=>buildAgeingReports(tickets,selectedState),[tickets,selectedState]);
   const [detail,setDetail]=useState(null);
-  const scopeLabel=AGEING_REGIONS.find(([code])=>code===selectedState)?.[1]||'South - Cumulative';
+  const detailHeading=useRef(null);
+  useEffect(()=>{if(detail)detailHeading.current?.focus();},[detail]);
+  const scopeLabel=AGEING_REGIONS.find(([code])=>code===selectedState)?.[1]||'South – Cumulative';
+  // Keep a selection descriptor, never a cached ticket list. Refreshes must use
+  // the latest authorized retained projection, including changed/removed tickets.
+  const detailRow=detail?(detail.section==='stage'?stages:states).find(row=>row.label===detail.label):null;
+  const detailTickets=ageingDetailTickets(detailRow,detail?.bands);
+  const detailRows=ageingTicketExportRows(detailTickets);
   const exportReports=()=>{
     const book=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet(ageingExportRows(stages)),'Stage ageing');
-    XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet(ageingExportRows(states,true)),'State ageing');
+    XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet(ageingExportRows(stages)),AGEING_SHEET_NAMES[0]);
+    XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet(ageingExportRows(states,true)),AGEING_SHEET_NAMES[1]);
     XLSX.writeFile(book,'Reliance_Retail_Ageing.xlsx');
   };
-  const show=(row,bands)=>setDetail({title:row.label+(bands?' · '+bands.join(', ')+' days':''),tickets:bands?row.tickets.filter(t=>bands.includes(ageingBand(t))):row.tickets});
-  const count=(row,value,bands,critical=false)=>value?<button type="button" onClick={()=>show(row,bands)} className={'underline decoration-dotted underline-offset-2 hover:decoration-solid '+(critical?'font-bold text-red-700':'text-blue-700')} aria-label={row.label+' '+(bands?bands.join(', '):'total')+' '+value+' tickets'}>{formatNumber(value)}</button>:<span className="text-slate-400">0</span>;
+  const exportDetails=()=>{
+    const book=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet(detailRows),'Ticket details');
+    XLSX.writeFile(book,'Reliance_Retail_Ageing_Tickets.xlsx');
+  };
+  const show=(section,row,bands)=>setDetail({section,label:row.label,bands});
+  const count=(section,row,value,bands,critical=false)=>value
+    ?<button type="button" onClick={()=>show(section,row,bands)} className={'min-h-8 rounded px-1 underline decoration-dotted underline-offset-2 hover:decoration-solid focus-visible:outline-2 '+(critical?'font-bold text-red-700':'text-blue-700')} aria-label={row.label+' '+(bands?bands.join(', '):'total')+' '+value+' tickets'}>{formatNumber(value)}</button>
+    :<span className="text-slate-400">0</span>;
   const renderTable=(rows,compact=false)=>{
-    const columns=compact?[['0–30',AGEING_COLUMNS.slice(0,4)],...AGEING_COLUMNS.slice(4).map(k=>[k,[k]])]:AGEING_COLUMNS.map(k=>[k,[k]]);
-    return <div className="overflow-x-auto"><table className="w-full whitespace-nowrap text-xs">
-      <thead className="bg-slate-50 text-slate-600"><tr><th scope="col" className="px-3 py-3 text-left">{compact?'Region':'IFMS Stage'}</th><th scope="col" className="px-3 py-3 text-right">Total</th>{columns.map(([label])=><th scope="col" key={label} className={'px-3 py-3 text-right '+(label==='>90'?'text-red-700':'')}>{label}</th>)}<th scope="col" className="px-3 py-3 text-right">Avg. days</th><th scope="col" className="px-3 py-3 text-right">Oldest</th></tr></thead>
-      <tbody>{rows.map((row,i)=><tr key={row.label} className={'border-t border-slate-100 '+(i===rows.length-1?'bg-slate-100 font-bold':'')}><th scope="row" className="px-3 py-2.5 text-left font-semibold">{row.label}</th><td className="px-3 py-2.5 text-right">{count(row,row.total,null)}</td>{columns.map(([label,bands])=><td key={label} className="px-3 py-2.5 text-right">{count(row,bands.reduce((n,k)=>n+row.bands[k],0),bands,label==='>90')}</td>)}<td className="px-3 py-2.5 text-right">{row.average??'—'}</td><td className={'px-3 py-2.5 text-right '+(row.oldest>90?'text-red-700 font-bold':'')}>{row.oldest??'—'}</td></tr>)}</tbody>
-    </table></div>;
+    const columns=ageingTableColumns(compact),section=compact?'state':'stage';
+    return <div className="max-w-full overflow-x-auto" tabIndex={0} role="region" aria-label={compact?'State ageing table':'Stage ageing table'}>
+      <table className="w-full min-w-[1050px] text-xs">
+        <thead className="bg-slate-50 text-slate-600"><tr>
+          <th scope="col" className="min-w-60 px-3 py-3 text-left">{compact?'State':'IFMS Stage'}</th>
+          <th scope="col" className="px-3 py-3 text-right">Total Tickets</th>
+          {columns.map(([label,bands])=><th scope="col" key={label} className={'px-3 py-3 text-right '+(bands.includes('>90')?'text-red-700':'')}>{label}</th>)}
+          <th scope="col" className="px-3 py-3 text-right">Average Ageing</th><th scope="col" className="px-3 py-3 text-right">Oldest Ticket Ageing</th>
+        </tr></thead>
+        <tbody>{rows.map((row,i)=><tr key={row.label} className={'border-t border-slate-100 '+(i===rows.length-1?'bg-slate-100 font-bold':'')}>
+          <th scope="row" className="whitespace-normal px-3 py-2 text-left font-semibold">{row.label}</th>
+          <td className="px-3 py-2 text-right">{count(section,row,row.total,null)}</td>
+          {columns.map(([label,bands])=><td key={label} className="px-3 py-2 text-right">{count(section,row,bands.reduce((n,k)=>n+row.bands[k],0),bands,bands.includes('>90'))}</td>)}
+          <td className="px-3 py-2 text-right">{row.average??'—'}</td><td className={'px-3 py-2 text-right '+(row.oldest>90?'font-bold text-red-700':'')}>{row.oldest??'—'}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>;
   };
   return <>
-    <ManagementCard className="p-5">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h2 className="text-sm font-black text-slate-950">Stage-wise Ageing Analysis ({scopeLabel})</h2><div className="flex flex-wrap items-center gap-2"><select aria-label="Ageing region" value={selectedState} onChange={e=>{setDetail(null);onSelectedStateChange(e.target.value);}} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold"><option value="">South - Cumulative</option>{AGEING_REGIONS.map(([code,label])=><option key={code} value={code}>{label}</option>)}</select><button type="button" onClick={exportReports} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold">Export ageing Excel</button></div></div>
-      <p className="mb-3 text-xs text-slate-500">Current dump, all ticket creation dates; stage filter follows Stage-wise Progress. Unmapped stages and missing ageing are shown separately. Averages exclude unknown ageing.</p>
+    <ManagementCard className="min-w-0 p-4 sm:p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-sm font-black text-slate-950">Stage-wise Ageing Analysis ({scopeLabel})</h2>
+        <div className="flex flex-wrap items-center gap-2"><select aria-label="Ageing region" value={selectedState} onChange={e=>onSelectedStateChange(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold">
+          <option value="">South – Cumulative</option>{AGEING_REGIONS.map(([code,label])=><option key={code} value={code}>{label}</option>)}
+        </select><button type="button" onClick={exportReports} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold">Export ageing Excel</button></div>
+      </div>
+      <p className="mb-3 text-xs text-slate-500">Latest imported dump, all ticket creation dates. Region follows Stage-wise Progress. Unknown ageing is counted separately and excluded from averages. Unmapped stages remain in totals.</p>
       {renderTable(stages)}
     </ManagementCard>
-    <ManagementCard className="p-5"><h2 className="mb-3 text-sm font-black text-slate-950">State-wise Consolidated Ageing</h2><p className="mb-3 text-xs text-slate-500">All regions in your authorized current dump, irrespective of the stage report's state selection.</p>{renderTable(states,true)}</ManagementCard>
-    {detail?<ManagementCard className="p-5"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-black">{detail.title} · {detail.tickets.length} tickets</h2><div className="flex gap-2"><button type="button" className="rounded border px-3 py-2 text-xs font-bold" onClick={()=>exportScopedFaults(detail.tickets)}>Export tickets</button><button type="button" className="rounded border px-3 py-2 text-xs font-bold" onClick={()=>setDetail(null)}>Close details</button></div></div><div className="max-h-96 overflow-auto"><table className="w-full text-xs"><thead className="sticky top-0 bg-slate-50"><tr>{['Ticket','Store','Region','IFMS Stage','Ageing days','Remarks'].map(x=><th key={x} className="p-2 text-left">{x}</th>)}</tr></thead><tbody>{detail.tickets.map(t=><tr key={t.id} className="border-t"><td className="p-2">{t.ticketNumber}</td><td className="p-2">{t.storeId}</td><td className="p-2">{t.groupedState}</td><td className="p-2">{t.ifmsStage}</td><td className="p-2">{ageingValue(t)??'—'}</td><td className="p-2">{t.remarks}</td></tr>)}</tbody></table></div></ManagementCard>:null}
+    <ManagementCard className="min-w-0 p-4 sm:p-5">
+      <h2 className="mb-2 text-sm font-black text-slate-950">State-wise Consolidated Ageing</h2>
+      <p className="mb-3 text-xs text-slate-500">All six regions within your authorized latest dump, independent of the stage report region selection. Averages use individual known ticket ages.</p>
+      {renderTable(states,true)}
+    </ManagementCard>
+    {detail?<ManagementCard className="min-w-0 p-4 sm:p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 ref={detailHeading} tabIndex={-1} className="text-sm font-black outline-none">{detail.label} · {detail.bands?.join(', ')||'All ages'} · {detailTickets.length} tickets</h2>
+        <div className="flex gap-2"><button type="button" disabled={!detailTickets.length} className="rounded border px-3 py-2 text-xs font-bold disabled:opacity-50" onClick={exportDetails}>Export tickets</button><button type="button" className="rounded border px-3 py-2 text-xs font-bold" onClick={()=>setDetail(null)}>Close details</button></div>
+      </div>
+      <div className="max-h-96 max-w-full overflow-auto" role="region" aria-label="Ageing ticket details" tabIndex={0}>
+        <table className="w-full min-w-[1000px] text-xs"><thead className="sticky top-0 bg-slate-50"><tr>{detailRows[0].map(label=><th scope="col" key={label} className="p-2 text-left">{label}</th>)}</tr></thead>
+          <tbody>{detailRows.slice(1).map((cells,i)=><tr key={detailTickets[i].id} className="border-t">{cells.map((value,index)=><td key={index} className={'p-2 '+(index===6&&Number(value)>90?'font-bold text-red-700':'')}>{value??'—'}</td>)}</tr>)}</tbody>
+        </table>
+        {!detailTickets.length?<p className="p-3 text-xs text-slate-500">No tickets match this selection in the latest imported dump.</p>:null}
+      </div>
+    </ManagementCard>:null}
   </>;
 }
 
-function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, canImport, onImport, isLoading, activeImportBatch, closedBetweenDumps }) {
+function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, canImport, onImport, isLoading, activeImportBatch, closedBetweenDumps, errorMessage }) {
   const [stageProgressState, setStageProgressState] = useState('');
   const monthOptions = useMemo(() => buildMonthOptions(tickets), [tickets]);
   const [performanceMonth, setPerformanceMonth] = useState('all');
@@ -1373,7 +1402,8 @@ function ManagementView({ tickets, viewMode, onViewModeChange, canSwitchView, ca
         canImport={canImport}
         onImport={onImport}
       />
-      <button className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold" onClick={()=>exportScopedFaults(scopedManagementTickets.filter(t=>!stageProgressState||t.groupedState===stageProgressState))}>Export scoped tickets</button>
+      <button className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold" onClick={()=>exportScopedFaults(scopedManagementTickets.filter(t=>!stageProgressState||ageingRegion(t)===stageProgressState))}>Export scoped tickets</button>
+      {errorMessage?<p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">{errorMessage}</p>:null}
       {isLoading ? (
         <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
           Loading saved Reliance Retail IFMS dump...
@@ -1634,6 +1664,7 @@ export default function FaultTracker({ retailScope = false }) {
   if (viewMode === 'Management View') {
     return (
       <><FaultStoreReconciliation summary={canSwitchView?reconciliation:null}/><ManagementView
+        errorMessage={importError}
         tickets={tickets}
         viewMode={viewMode}
         onViewModeChange={setManualViewMode}
