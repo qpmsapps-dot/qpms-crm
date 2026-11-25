@@ -6,6 +6,19 @@ import {randomUUID} from 'node:crypto';
 import { retailAttendanceExceptions } from '../services/retailAttendanceService.js';
 import { attendanceAccess, previewRetailAttendance, commitRetailAttendance, retailAttendanceReport, retailAttendanceEmployees, retailAttendanceHistory } from '../services/retailAttendanceService.js';
 
+const timedRetailGet = (label) => (req, res, next) => {
+  const started = performance.now();
+  res.once('finish', () => {
+    console.info('[Retail GET timing]', {
+      endpoint: label,
+      status: res.statusCode,
+      durationMs: Math.round(performance.now() - started),
+      responseBytes: Number(res.getHeader('content-length')) || null,
+    });
+  });
+  next();
+};
+
 export function createRetailAttendanceRouter({ getClient, environment = process.env }) {
   const router = express.Router(); // Mounted AFTER the established Retail JWT middleware.
   router.use((req, res, next) => {
@@ -21,10 +34,10 @@ export function createRetailAttendanceRouter({ getClient, environment = process.
       res.status(status).json({ ok: false, ...(XLSX_ERROR_CODES.has(error.code)||previewError ? { code: error.code } : {}), message: previewError ? error.message : status >= 500 ? 'Attendance service unavailable. Contact your administrator.' : conflict ? 'Data changed or file already exists. Preview again before importing.' : error.message });
     }
   };
-  router.get('/summary', run(async req => ({ report: await retailAttendanceReport(getClient(), req.profile, req.query) })));
-  router.get('/exceptions', run(async req => ({ report: await retailAttendanceExceptions(getClient(), req.profile, req.query) })));
-  router.get('/history', run(async req => ({ history: await retailAttendanceHistory(getClient(), req.profile, req.query) })));
-  router.get('/employees', run(async req => ({ rows: await retailAttendanceEmployees(getClient(), req.profile, req.query) })));
+  router.get('/summary', timedRetailGet('attendance/summary'), run(async req => ({ report: await retailAttendanceReport(getClient(), req.profile, req.query) })));
+  router.get('/exceptions', timedRetailGet('attendance/exceptions'), run(async req => ({ report: await retailAttendanceExceptions(getClient(), req.profile, req.query) })));
+  router.get('/history', timedRetailGet('attendance/history'), run(async req => ({ history: await retailAttendanceHistory(getClient(), req.profile, req.query) })));
+  router.get('/employees', timedRetailGet('attendance/employees'), run(async req => ({ rows: await retailAttendanceEmployees(getClient(), req.profile, req.query) })));
   router.post('/preview', (req, res, next) => {
     const controller=new AbortController(),start=performance.now();
     res.on('close',()=>{if(!res.writableEnded)controller.abort()});
