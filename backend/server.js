@@ -2,7 +2,7 @@ import {prepareRetailMisUser,saveRetailMisUser} from './services/retailMisUserMa
 import {scopedFaultTrackerReport} from './services/faultTrackerStoreScope.js';
 import {isRetailLeadership} from './shared/retailSouthHeadAccess.js';
 import {updateRetailFault} from './services/retailFaultUpdateService.js';
-import {requireInitialRetailAdmin} from './services/retailInitialAdminAccess.js';
+import {requireFaultTrackerEditor} from './services/faultTrackerEditAccess.js';
 import {retailMisApiAllowed} from './shared/retailMisAccess.js';
 import { ownedEndDayKmStatus } from './services/foOwnedEndDayKmService.js';
 import { createKmReconciliationRouter } from './routes/foKmReconciliationRoutes.js';
@@ -5315,7 +5315,7 @@ app.get('/api/fault-tracker/imports', requireSupabaseJwtOrDemoApiRead, requireFa
   }
 });
 
-app.patch('/api/fault-tracker/tickets/:id',requireSupabaseJwt,requireFaultTrackerManage,requireInitialRetailAdmin,async(request,response)=>{
+app.patch('/api/fault-tracker/tickets/:id',requireSupabaseJwt,requireFaultTrackerManage,requireFaultTrackerEditor,async(request,response)=>{
  try{response.json({ok:true,result:await updateRetailFault(requireServiceRoleSupabase(),request.profile,request.params.id,request.body||{},{readAll:true,isAdmin:faultTrackerCanManage(request.profile),stateCode:faultTrackerStateCode})});}
  catch(error){respondFaultTrackerError(response,error);}
 });
