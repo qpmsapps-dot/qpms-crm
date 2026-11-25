@@ -29,8 +29,18 @@ test('onboarding grant is not a general Admin or developer alias',()=>{
  assert.equal(isRetailMisOnboardingAdmin(profile(RETAIL_MIS_ONBOARDING_ADMINS[0]),null),false);
 });
 
-test('legacy initial-only Retail write gate remains exclusive to QPMSADMIN',()=>{
+test('Retail Super Admin operational gate permits only QPMSADMIN and verified Padma',()=>{
  for(const identity of RETAIL_MIS_ONBOARDING_ADMINS){
-  assert.equal(isInitialRetailAdmin(profile(identity),{id:identity.auth_user_id}),identity.employee_code==='QPMSADMIN');
+  assert.equal(isInitialRetailAdmin(profile(identity),{id:identity.auth_user_id}),['QPMSADMIN','QPMSAP25191'].includes(identity.employee_code));
  }
+});
+
+test('Padma Super Admin grant rejects identity mismatch, inactive and non-web accounts',()=>{
+ const identity=RETAIL_MIS_ONBOARDING_ADMINS.find(a=>a.employee_code==='QPMSAP25191');
+ const good=profile(identity),auth={id:identity.auth_user_id};
+ assert.equal(isInitialRetailAdmin(good,auth),true);
+ for(const changed of [{employee_code:'OTHER'},{id:'wrong'},{auth_user_id:'wrong'},{role:'MIS_MEPC'},{is_active:false},{status:'Inactive'},{web_access_enabled:false}]){
+  assert.equal(isInitialRetailAdmin({...good,...changed},auth),false);
+ }
+ assert.equal(isInitialRetailAdmin(good,{id:'wrong'}),false);
 });
