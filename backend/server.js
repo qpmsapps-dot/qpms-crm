@@ -1,3 +1,4 @@
+import {faultImportIdentity} from './services/faultTrackerPersistence.js';
 import {prepareRetailMisUser,saveRetailMisUser} from './services/retailMisUserManagement.js';
 import {scopedFaultTrackerReport} from './services/faultTrackerStoreScope.js';
 import {isRetailLeadership} from './shared/retailSouthHeadAccess.js';
@@ -5334,7 +5335,6 @@ app.get('/api/fault-tracker/tickets', requireSupabaseJwtOrDemoApiRead, requireFa
 });
 
 app.post('/api/fault-tracker/import', requireSupabaseJwtOrDemoApiRead, requireFaultTrackerManage, async (request, response) => {
-  let createdBatchId = null;
   try {
     const client = requireServiceRoleSupabase();
     console.log('[Fault Tracker] import route hit', {
@@ -5368,135 +5368,37 @@ app.post('/api/fault-tracker/import', requireSupabaseJwtOrDemoApiRead, requireFa
         invalidRowCount += 1;
         continue;
       }
-      rowsByTicketNo.set(row.ticket_no, row);
+      rowsByTicketNo.set(faultImportIdentity(row), row);
     }
     const validatedRows = Array.from(rowsByTicketNo.values());
     if (!validatedRows.length) {
       throw faultTrackerHttpError(400, 'no_valid_tickets', 'No valid ticket rows were found. ticket_no is required.');
     }
 
-    const { data: batch, error: batchError } = await client
-      .from('fault_tracker_import_batches')
-      .insert({
-        uploaded_by_auth_user_id: request.authUser?.id || null,
-        uploaded_by_employee_code: request.employeeCode,
-        uploaded_by_name: request.profile?.full_name || request.profile?.display_name || request.profile?.email || null,
-        uploaded_by_role: request.profile?.role || null,
-        source_name: 'Reliance Retail IFMS',
-        original_file_name: faultTrackerText(request.body?.file_name),
-        sheet_name: faultTrackerText(request.body?.sheet_name) || 'Pending Tickets',
-        ticket_count: validatedRows.length,
-        metadata: {
-          ...(request.body?.metadata && typeof request.body.metadata === 'object' ? request.body.metadata : {}),
-          submitted_rows: tickets.length,
-          valid_rows: validatedRows.length,
-          invalid_rows_skipped: invalidRowCount,
-          duplicate_ticket_rows_collapsed: tickets.length - invalidRowCount - validatedRows.length,
-        },
-      })
-      .select('*')
-      .single();
-    if (batchError) {
-      logFaultTrackerDbError('POST /api/fault-tracker/import', 'fault_tracker_import_batches', 'insert_import_batch', batchError);
-      throw batchError;
-    }
-    createdBatchId = batch.id;
-
-    const rows = validatedRows.map((row) => ({
-      ...row,
-      import_batch_id: batch.id,
-    }));
-
-    let insertedCount = 0;
-    try {
-      for (let index = 0; index < rows.length; index += 500) {
-        const chunk = rows.slice(index, index + 500);
-        const { error } = await client
-          .from('fault_tracker_tickets')
-          .insert(chunk);
-        if (error) {
-          logFaultTrackerDbError('POST /api/fault-tracker/import', 'fault_tracker_tickets', 'insert_ticket_chunk', error, {
-            chunk_start: index,
-            chunk_size: chunk.length,
-          });
-          throw faultTrackerHttpError(500, 'ticket_insert_failed', 'Fault Tracker ticket insert failed.', {
-            chunk_start: index,
-            chunk_size: chunk.length,
-            database_code: error.code || null,
-            database_message: error.message || null,
-          });
-        }
-        insertedCount += chunk.length;
-      }
-
-      if (insertedCount !== rows.length) {
-        throw faultTrackerHttpError(500, 'ticket_insert_failed', 'Fault Tracker import inserted fewer tickets than expected.', {
-          expected: rows.length,
-          inserted: insertedCount,
-        });
-      }
-
-      const { data: updatedBatch, error: updateError } = await client
-        .from('fault_tracker_import_batches')
-        .update({ ticket_count: insertedCount })
-        .eq('id', batch.id)
-        .select('*')
-        .single();
-      if (updateError) {
-        logFaultTrackerDbError('POST /api/fault-tracker/import', 'fault_tracker_import_batches', 'update_ticket_count', updateError, {
-          import_batch_id: batch.id,
-        });
-        throw faultTrackerHttpError(500, 'ticket_insert_failed', 'Fault Tracker import finalization failed.', {
-          database_code: updateError.code || null,
-          database_message: updateError.message || null,
-        });
-      }
-
-      console.log('[Fault Tracker] import completed', {
-        import_batch_id: batch.id,
-        ticket_count: insertedCount,
-        submitted_rows: tickets.length,
+    const {data: batch, error} = await client.rpc('rpc_fault_tracker_import', {
+      p_actor: request.profile.id, p_rows: validatedRows,
+      p_file_name: faultTrackerText(request.body.file_name),
+      p_sheet_name: faultTrackerText(request.body.sheet_name) || 'Pending Tickets',
+      p_metadata: {
+        ...(request.body.metadata && typeof request.body.metadata === 'object' ? request.body.metadata : {}),
+        submitted_rows: tickets.length, valid_rows: validatedRows.length,
         invalid_rows_skipped: invalidRowCount,
-        duplicate_ticket_rows_collapsed: tickets.length - invalidRowCount - rows.length,
-        uploaded_by_employee_code: request.employeeCode,
-        uploaded_by_role: request.profile?.role || null,
-        file_name: request.body?.file_name || null,
-      });
-
-      response.json({
-        ok: true,
-        import_batch_id: batch.id,
-        import_batch: updatedBatch,
-        ticket_count: insertedCount,
-        imported_at: updatedBatch.imported_at,
-        message: `${insertedCount} Fault Tracker tickets imported successfully.`,
-      });
-    } catch (importError) {
-      try {
-        await cleanupFaultTrackerImportBatch(client, batch.id);
-        createdBatchId = null;
-      } catch (cleanupError) {
-        logFaultTrackerDbError('POST /api/fault-tracker/import', 'fault_tracker_import_batches', 'delete_failed_import_batch', cleanupError, {
-          import_batch_id: batch.id,
-        });
-        throw faultTrackerHttpError(500, 'import_cleanup_failed', 'Fault Tracker import failed and cleanup also failed. Please contact Admin.', {
-          import_batch_id: batch.id,
-          original_code: importError.code || null,
-          original_message: importError.message || null,
-          cleanup_code: cleanupError.code || null,
-          cleanup_message: cleanupError.message || null,
-        });
-      }
-      throw importError;
+        duplicate_ticket_rows_collapsed: tickets.length - invalidRowCount - validatedRows.length,
+      },
+    });
+    if (error) {
+      logFaultTrackerDbError('POST /api/fault-tracker/import', 'fault_tracker_import_batches', 'atomic_import', error);
+      if (['PGRST202','42883'].includes(error.code)) throw faultTrackerHttpError(503,'persistence_unavailable','Reviewed Fault Tracker database capability required. No import was saved.');
+      throw error;
     }
+    console.log('[Fault Tracker] import completed', {import_batch_id:batch.id,ticket_count:batch.ticket_count,
+      submitted_rows:tickets.length,invalid_rows_skipped:invalidRowCount,
+      duplicate_ticket_rows_collapsed:tickets.length-invalidRowCount-validatedRows.length,
+      uploaded_by_employee_code:request.employeeCode,uploaded_by_role:request.profile.role,
+      file_name:request.body.file_name||null});
+    response.json({ok:true,import_batch_id:batch.id,import_batch:batch,ticket_count:batch.ticket_count,
+      imported_at:batch.imported_at,message:batch.ticket_count+' Fault Tracker tickets imported successfully.'});
   } catch (error) {
-    if (createdBatchId) {
-      console.error('[Fault Tracker] import failed after batch creation without cleanup', {
-        import_batch_id: createdBatchId,
-        message: error.message,
-        code: error.code || null,
-      });
-    }
     respondFaultTrackerError(response, error);
   }
 });
