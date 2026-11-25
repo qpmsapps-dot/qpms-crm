@@ -13,9 +13,14 @@ export const PADMA_SUPER_ADMIN=Object.freeze({
  authUserId:'7e84cddf-821a-4513-b7ce-25895d660393',
  employeeCode:'QPMSAP25191',
 });
+export const SHEBA_SUPER_ADMIN=Object.freeze({
+ profileId:'e2457d7a-018b-477e-9ba6-bd1021ed16aa',
+ authUserId:'377ca7a2-95cc-4891-8840-338f2cb20bb9',
+ employeeCode:'QPMSTNC17010',
+});
 export function isInitialRetailAdmin(profile,authUser){
  const role=String(profile?.role||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
- return [INITIAL_RETAIL_ADMIN,PADMA_SUPER_ADMIN].some(identity=>
+ return [INITIAL_RETAIL_ADMIN,PADMA_SUPER_ADMIN,SHEBA_SUPER_ADMIN].some(identity=>
   profile?.id===identity.profileId
   && profile.auth_user_id===identity.authUserId
   && profile.employee_code===identity.employeeCode
