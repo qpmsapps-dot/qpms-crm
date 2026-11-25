@@ -1,0 +1,35 @@
+name: Fault Tracker IFMS persistence
+on:
+  pull_request:
+    paths:
+      - 'backend/services/faultTracker*.js'
+      - 'backend/services/retailFaultUpdateService.js'
+      - 'backend/server.js'
+      - 'backend/tests/faultTracker*.test.js'
+      - 'supabase/migrations/20261125120000_fault_tracker_ifms_persistence.sql'
+      - '.github/workflows/fault-tracker-ifms-persistence.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix backend --ignore-scripts --no-audit --no-fund
+      - name: Install disposable PostgreSQL test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql
+          npm install --prefix "$RUNNER_TEMP/ifms-pg-tools" --ignore-scripts --no-audit --no-fund pg@8.16.3
+          echo "THERMOGRAPHY_TEST_TOOLS_DIR=$RUNNER_TEMP/ifms-pg-tools" >> "$GITHUB_ENV"
+          echo "THERMOGRAPHY_TEST_PG_BIN=$(pg_config --bindir)" >> "$GITHUB_ENV"
+      - name: Run synthetic source, access and disposable PostgreSQL regressions
+        env:
+          RUN_IFMS_PERSISTENCE_POSTGRES: '1'
+        run: node --test backend/tests/faultTrackerPersistencePostgres.test.js backend/tests/faultTrackerFrontendPersistence.test.js backend/tests/faultTrackerStoreScope.test.js backend/tests/faultTrackerEditAccess.test.js
+      - run: node --check backend/server.js
