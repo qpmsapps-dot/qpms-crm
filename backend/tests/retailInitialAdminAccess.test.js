@@ -3,12 +3,15 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import express from 'express';
 import fs from 'node:fs';
-import {INITIAL_RETAIL_ADMIN,isInitialRetailAdmin,requireInitialRetailAdmin,createInitialRetailWriteGate} from '../services/retailInitialAdminAccess.js';
+import {INITIAL_RETAIL_ADMIN,isInitialRetailAdmin,createInitialRetailWriteGate} from '../services/retailInitialAdminAccess.js';
+import {requireFaultTrackerEditor} from '../services/faultTrackerEditAccess.js';
+import {RETAIL_MIS_ONBOARDING_ADMINS} from '../shared/retailMisAccess.js';
 import {createRelianceRetailManagementRouter} from '../routes/relianceRetailManagementRoutes.js';
 const qpms={id:INITIAL_RETAIL_ADMIN.profileId,auth_user_id:INITIAL_RETAIL_ADMIN.authUserId,employee_code:'QPMSADMIN',role:'Admin',is_active:true,status:'Active',business:'Reliance Retail',state:'TN'};
 const other={...qpms,id:randomUUID(),auth_user_id:randomUUID(),employee_code:'OTHER_ADMIN'};
+const delegated=RETAIL_MIS_ONBOARDING_ADMINS.filter(a=>['QPMSAP25191','QPMSTNC17010'].includes(a.employee_code)).map(a=>({...qpms,id:a.profile_id,auth_user_id:a.auth_user_id,employee_code:a.employee_code,web_access_enabled:true}));
 // Synthetic HTTP authentication fixtures only: no real sessions or database writes.
-function auth(req,res,next){const token=req.get('authorization');const p=token==='Bearer fixture-qpms'?qpms:token==='Bearer fixture-other'?other:token==='Bearer fixture-fo'?{...other,role:'FO'}:null;if(!p)return res.status(401).json({});req.profile=p;req.authUser={id:p.auth_user_id};next();}
+function auth(req,res,next){const token=req.get('authorization');const p=token==='Bearer fixture-qpms'?qpms:token==='Bearer fixture-other'?other:token==='Bearer fixture-fo'?{...other,role:'FO'}:delegated.find(a=>token==='Bearer fixture-'+a.employee_code)||null;if(!p)return res.status(401).json({});req.profile=p;req.authUser={id:p.auth_user_id};next();}
 async function running(app,fn){const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));try{await fn(`http://127.0.0.1:${server.address().port}`);}finally{server.closeAllConnections();await new Promise(r=>server.close(r));}}
 test('identity restriction requires the exact active profile/auth linkage; role, employee code or supplied actor alone never grants writes',()=>{
  assert.equal(isInitialRetailAdmin(qpms,{id:qpms.auth_user_id}),true);
@@ -18,22 +21,28 @@ test('identity restriction requires the exact active profile/auth linkage; role,
 test('HTTP gate denies other users before operational writes, binds Fault PATCH, and preserves unrelated reads/FO/Training/OOS paths',async()=>{
  const calls=[],client={rpc:async(name,args)=>{calls.push({name,args});return {data:{proposals:[{id:'plan',kind:'DC_SCHEDULE'}]}};}};
  const app=express();app.use(express.json());app.use(auth);
- app.patch('/api/fault-tracker/tickets/:id',requireInitialRetailAdmin,(req,res)=>res.json({actor:req.profile.id}));
+ app.patch('/api/fault-tracker/tickets/:id',requireFaultTrackerEditor,(req,res)=>res.json({actor:req.profile.id}));
  app.use('/api/reliance-retail',createInitialRetailWriteGate({getClient:()=>client}),(req,res)=>res.json({passed:true}));
  const paths=['/operations/maintenance','/OPERATIONS/THERMOGRAPHY/','/attendance/preview','/attendance/commit','/module-reports/deep-cleaning/plan/link-fo','/deep-cleaning/schedules','/unified-master/propose'];
  await running(app,async base=>{
   for(const path of paths){const url=base+'/api/reliance-retail'+path,body=JSON.stringify({kind:'DC_SCHEDULE',p_actor:qpms.id,profile:qpms,auth_user_id:qpms.auth_user_id});
    assert.equal((await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body})).status,401);
-   for(const token of ['fixture-other','fixture-fo'])assert.equal((await fetch(url,{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body})).status,403,path);
+   for(const token of ['fixture-other','fixture-fo',...delegated.map(a=>'fixture-'+a.employee_code)])assert.equal((await fetch(url,{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body})).status,403,path);
    assert.equal((await fetch(url,{method:'POST',headers:{authorization:'Bearer fixture-qpms','content-type':'application/json'},body})).status,200,path);
   }
   assert.equal(calls.length,0);
   assert.equal((await fetch(base+'/api/fault-tracker/tickets/plan',{method:'PATCH',headers:{authorization:'Bearer fixture-other'}})).status,403);
   const accepted=await fetch(base+'/api/fault-tracker/tickets/plan',{method:'PATCH',headers:{authorization:'Bearer fixture-qpms'}});assert.equal(accepted.status,200);assert.equal((await accepted.json()).actor,qpms.id);
+  for(const a of delegated){
+   const r=await fetch(base+'/api/fault-tracker/tickets/plan',{method:'PATCH',headers:{authorization:'Bearer fixture-'+a.employee_code}});
+   assert.equal(r.status,200);assert.equal((await r.json()).actor,a.id);
+  }
+  assert.equal((await fetch(base+'/api/fault-tracker/tickets/plan',{method:'PATCH',headers:{authorization:'Bearer fixture-fo'}})).status,403);
+  assert.equal((await fetch(base+'/api/fault-tracker/tickets/plan',{method:'PATCH'})).status,401);
   for(const path of ['/fo-self/complete','/service-trackers/command','/unified-master/saved-review/aop-apply','/unified-master/decide'])assert.equal((await fetch(base+'/api/reliance-retail'+path,{method:'POST',headers:{authorization:'Bearer fixture-other'}})).status,200,'Existing downstream authorization remains responsible for '+path);
   assert.equal((await fetch(base+'/api/reliance-retail/module-reports/deep-cleaning',{headers:{authorization:'Bearer fixture-other'}})).status,200);
  });
- const serverSource=fs.readFileSync(new URL('../server.js',import.meta.url),'utf8');assert.match(serverSource,/app\.patch\('\/api\/fault-tracker\/tickets\/:id',requireSupabaseJwt,requireFaultTrackerManage,requireInitialRetailAdmin,/);
+ const serverSource=fs.readFileSync(new URL('../server.js',import.meta.url),'utf8');assert.match(serverSource,/app\.patch\('\/api\/fault-tracker\/tickets\/:id',requireSupabaseJwt,requireFaultTrackerManage,requireFaultTrackerEditor,/);
 });
 test('real Retail router applies the identity gate before RPC, keeps actor binding and exposes a read-only acceptance flag',async()=>{
  const calls=[],store=randomUUID(),source=randomUUID(),client={rpc:async(name,args)=>{calls.push({name,args});return {data:{id:'fo:'+source,saved:true}};}};
