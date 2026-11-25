@@ -927,6 +927,11 @@ export function buildEmployeeRangeDataset({
 }
 
 export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
+  const started = performance.now();
+  let previous = started;
+  const stages = {};
+  const mark = (name) => { const now = performance.now(); stages[name] = Math.round(now - previous); previous = now; };
+  try {
   const employeeIdentifier = text(
     query.employee || query.employee_identifier || query.employee_code || query.fo_user_id,
   );
@@ -935,6 +940,7 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
     text(query.date_from || query.from_date),
     text(query.date_to || query.to_date),
   );
+  mark('authorization');
   const employee = await resolveAuthorizedEmployee(client, actor, employeeIdentifier);
   const identifiers = [
     employee.employee_code,
@@ -955,11 +961,14 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
       .order('attendance_date', { ascending: true })
       .order('login_time', { ascending: true })
       .order('id', { ascending: true }));
+  mark('attendance');
   await attachEffectiveEndEvidence(client,attendances);
+  mark('effective_end_evidence');
   const attendanceIds = attendances.map((row) => row.id).filter(Boolean);
   const visits = attendanceIds.length
     ? await fetchByAttendanceIds(client, 'fo_site_visits', attendanceIds, 'check_in_time')
     : [];
+  mark('site_visits');
   let travelLegs = [];
   let travelLegTableUnavailable = false;
   if (attendanceIds.length) {
@@ -970,11 +979,13 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
       travelLegTableUnavailable = true;
     }
   }
+  mark('travel_legs');
   const optionalClaims = await loadOptionalExpenseClaims(client, attendanceIds, {
     employeeCodes: [employee.employee_code],
     fromIso: period.from_iso,
     toIso: period.to_iso,
   });
+  mark('expense_claims');
   const linkedExpenseClaims = attachFallbackClaimsToAttendance(
     optionalClaims.rows,
     attendances,
@@ -992,9 +1003,11 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
     client,
     dataset.expense_claims,
   );
+  mark('travel_claim_proofs');
   const reviews = attendanceIds.length
     ? await fetchByAttendanceIds(client, 'fo_missing_km_reviews', attendanceIds, 'created_at')
     : [];
+  mark('missing_km_reviews');
   const reviewByVisit = new Map(reviews.map((review) => [text(review.site_visit_id), review]));
   dataset.site_visits = dataset.site_visits.map((visit) => {
     const review = reviewByVisit.get(text(visit.id));
@@ -1092,7 +1105,12 @@ export async function loadAuthorizedEmployeeRange(client, actor, query = {}) {
       message: 'Travel-leg records are temporarily unavailable.',
     });
   }
-  return attachRangeRecovery(dataset, await loadApprovedOctoberRecoveries(client, [employee.employee_code], period.from_date, period.to_date));
+  const result = attachRangeRecovery(dataset, await loadApprovedOctoberRecoveries(client, [employee.employee_code], period.from_date, period.to_date));
+  mark('october_recovery');
+  return result;
+  } finally {
+    console.info('[myQPMS Employee Range Timing]', JSON.stringify({totalMs: Math.round(performance.now() - started), stagesMs: stages}));
+  }
 }
 
 export async function recalculateEmployeeRange({ attendances = [], recalculate }) {
