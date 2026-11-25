@@ -39,7 +39,7 @@ left join lateral (select verified.* from (
  and u.metadata->>'retail_workflow_version'='1'
  and u.metadata->>'retail_request_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
  and u.update_type in ('STAGE_OR_REMARKS','WORK_COMPLETED')
- and u.new_stage=any(array['Fault Raised - Quote Yet to Submit','Quote Submitted - PO Yet to Receive','PO Received - Fund Request Pending','Fund Released - Work Yet to Start','Fund Released - Work in Progress','Work Completed - Documents Pending','Documents Received - JMS Yet to Create','JMS Created - Invoice Yet to Raise','Invoice Raised - Payment Pending','Set Off Pending','CAMC','OEM','MEPC','IOT']::text[]) and u.remarks is not null
+ and u.new_stage=any(array['Fault Raised - Quote Yet to Submit','Quote Submitted - PO Yet to Receive','PO Received - Fund Request Pending','Fund Released - Work Yet to Start','Fund Released - Work in Progress','Work Completed - Documents Pending','Documents Received - JMS Yet to Create','JMS Created - Invoice Yet to Raise','Invoice Raised - Payment Pending','Set Off Pending','CAMC','OEM','MEPC','IOT','Pest Control','HK','Work Completed - Call Yet to Close']::text[]) and u.remarks is not null
  and (not(u.metadata ? 'ifms_identity') or u.metadata->'ifms_identity'=jsonb_build_array(tb.source_name,upper(btrim(target.ticket_no)),upper(btrim(target.store_code)),s.id))
 ) verified order by verified.created_at desc,verified.id desc limit 1) e on true
 order by a.ticket_no;
