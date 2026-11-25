@@ -8,7 +8,7 @@ import {randomUUID} from 'node:crypto';
 import {RETAIL_FAULT_STAGES} from '../shared/retailFaultWorkflow.js';
 import {scopedFaultExportRows} from '../../src/utils/faultTrackerExport.js';
 
-test('existing dashboard, drawer, stage filters and Excel export consume the retained IFMS projection for all 14 stages',()=>{
+test('existing dashboard, drawer, stage filters and Excel export consume the retained IFMS projection for all 17 stages',()=>{
  const source=fs.readFileSync(new URL('../../src/pages/FaultTracker.jsx',import.meta.url),'utf8');
  const functions=['numberValue','normalizeText','normalizeKey','ticketFromDatabaseRow','createdDateKey','matchesDateRange','matchesSearch','filterTickets','stageMatches','ticketsForStage'];
  const context={crypto:{randomUUID},demoReadOnly:false,ifmsStages:RETAIL_FAULT_STAGES};
