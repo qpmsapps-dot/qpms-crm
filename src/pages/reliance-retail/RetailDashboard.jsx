@@ -67,12 +67,13 @@ export default function RetailDashboard() {
       return report;
     });
     // The selected month's report must not wait for the optional comparison request.
+    let previousReport = null;
     request({ from: period.start, to }).then(current => {
       if (!live) return;
       setLoaded(existing => ({
         key: requestKey,
         current,
-        previous: existing?.key === requestKey ? existing.previous : null,
+        previous: existing?.key === requestKey ? existing.previous : previousReport,
         refreshed: new Date().toISOString(),
       }));
     }).catch(currentError => {
@@ -81,9 +82,10 @@ export default function RetailDashboard() {
     if (prior.comparable) {
       request({ from: prior.from, to: prior.to }).then(previous => {
         if (!live) return;
-        setLoaded(existing => existing?.key === requestKey
+        previousReport = previous;
+        setLoaded(existing => existing?.key === requestKey && existing.current
           ? { ...existing, previous }
-          : { key: requestKey, current: null, previous, refreshed: null });
+          : existing);
       }).catch(priorError => {
         if (live) setPreviousError(priorError.response?.data?.message || priorError.message);
       });
