@@ -44,18 +44,19 @@ test('retained IFMS history across snapshots, transactions, races and state scop
   await q("insert into reliance_retail_store_master values($1,'0012','TN','Active'),($2,'12','KA','Active')",[store,otherStore]);
   await q(fs.readFileSync(new URL('../../supabase/migrations/20261125120000_fault_tracker_ifms_persistence.sql',import.meta.url),'utf8'));
 
-  await t.test('all 14 stages and empty remarks survive repeated and duplicate uploads; source snapshots stay untouched',async()=>{
+  await q(fs.readFileSync(new URL('../../supabase/proposals/fault_tracker_three_ifms_stages.sql',import.meta.url),'utf8'));
+  await t.test('all 17 stages and empty remarks survive repeated and duplicate uploads; source snapshots stay untouched',async()=>{
    first=await upload([source()]);let id=await ticket(first);
    for(const stage of stages){
     const before=await retained(id);await save(id,stage,'',before.updated_at);
     current=await upload([source('T-1','0012',22)]);
     id=await ticket(current);const row=await retained(id);
-    assert.equal(row.stage,stage);assert.equal(row.remarks,'');assert.equal(row.source_stage,'IN_PROGRESS');
+    assert.equal(row.stage,stage);if(stage==='Pest Control'||stage==='HK')assert.equal(row.stage_group,'Pending');if(stage==='Work Completed - Call Yet to Close')assert.equal(row.stage_group,'Completed');assert.equal(row.remarks,'');assert.equal(row.source_stage,'IN_PROGRESS');
     assert.equal((await q('select ageing_days,stage,remarks,raw_row from fault_tracker_tickets where id=$1',[id])).rows[0].ageing_days,22);
     assert.equal((await q('select stage from fault_tracker_tickets where id=$1',[id])).rows[0].stage,'IN_PROGRESS');
    }
-   assert.equal((await q('select count(*)::int n from fault_tracker_ticket_updates')).rows[0].n,14);
-   assert.equal((await retained(await ticket(first))).stage,'IOT','history remains linked to original snapshot and resolves consistently');
+   assert.equal((await q('select count(*)::int n from fault_tracker_ticket_updates')).rows[0].n,17);
+   assert.equal((await retained(await ticket(first))).stage,'Work Completed - Call Yet to Close','history remains linked to original snapshot and resolves consistently');
   });
   await t.test('13 legacy affected identities recover from verified FK history without rewriting snapshots',async()=>{
    const legacy=await upload(Array.from({length:13},(_,i)=>source('LEGACY-'+i)));

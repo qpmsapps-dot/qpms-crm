@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'backend/services/faultTracker*.js'
+      - 'backend/shared/retailFaultWorkflow.js'
+      - 'supabase/proposals/fault_tracker_three_ifms_stages.sql'
       - 'backend/services/retailFaultUpdateService.js'
       - 'backend/server.js'
       - 'backend/tests/faultTracker*.test.js'

@@ -1,4 +1,4 @@
-export const RETAIL_FAULT_STAGES=['Fault Raised - Quote Yet to Submit','Quote Submitted - PO Yet to Receive','PO Received - Fund Request Pending','Fund Released - Work Yet to Start','Fund Released - Work in Progress','Work Completed - Documents Pending','Documents Received - JMS Yet to Create','JMS Created - Invoice Yet to Raise','Invoice Raised - Payment Pending','Set Off Pending','CAMC','OEM','MEPC','IOT'];
+export const RETAIL_FAULT_STAGES=['Fault Raised - Quote Yet to Submit','Quote Submitted - PO Yet to Receive','PO Received - Fund Request Pending','Fund Released - Work Yet to Start','Fund Released - Work in Progress','Work Completed - Documents Pending','Documents Received - JMS Yet to Create','JMS Created - Invoice Yet to Raise','Invoice Raised - Payment Pending','Set Off Pending','CAMC','OEM','MEPC','IOT','Pest Control','HK','Work Completed - Call Yet to Close'];
 export function verifiedWeeklyCompletions(tickets,now=new Date()){
  if(!tickets.length||tickets.some(t=>!Array.isArray(t.verifiedUpdates)))return null;
  const india=new Date(now.getTime()+330*60000),start=new Date(Date.UTC(india.getUTCFullYear(),india.getUTCMonth(),india.getUTCDate()));
