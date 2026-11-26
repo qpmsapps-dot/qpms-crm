@@ -149,3 +149,6 @@ vite.config.ts.timestamp-*
 .phase4-test-output/
 test-results/
 playwright-report/
+# Local-only Training V2 disposable database and browser caches.
+/artifacts/training-v2-validation/
+/artifacts/training-v2-vite-cache/

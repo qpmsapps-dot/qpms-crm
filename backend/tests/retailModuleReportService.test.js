@@ -52,16 +52,16 @@ test('tampered evidence paths cannot sign another submission object',async()=>{
 function trainingFixture(count=501){
  const calls=[],tables={profiles:[{id:'fo',employee_code:'FO1',role:'FO',is_active:true,business:'Reliance Retail',state:'TN'}],employee_hierarchy:[],fo_activity_submissions:[],training_sessions:[],training_categories:[{id:'hk',code:'hk'},{id:'mep',code:'technical_mep'}]};
  for(let i=0;i<count;i++){const id='training-'+i;tables.fo_activity_submissions.push({id,activity_type:'training',employee_code:'FO1'});tables.training_sessions.push({id,retail_store_id:'s',store_code_snapshot:'T1',state_snapshot:'TN',training_date:'2026-10-01',status:'submitted',category_id:i%2?'mep':'hk',access_client_id:RELIANCE_TRAINING_CLIENT_ID,access_client_code:'reliance_retail'});}
- const client={rpc:async(name,args)=>{calls.push({name,args});return {data:{...snapshot,attendance:[],aop:[]}};},from(table){let rows=[...(tables[table]||[])];let first=0,last=Infinity;const q={select(){return q},eq(k,v){rows=rows.filter(r=>r[k]===v);return q},in(k,vs){rows=rows.filter(r=>vs.includes(r[k]));return q},gte(k,v){rows=rows.filter(r=>r[k]>=v);return q},lte(k,v){rows=rows.filter(r=>r[k]<=v);return q},order(){return q},limit(n){last=n-1;return q},range(a,b){first=a;last=b;calls.push({table,first:a,last:b});return q},then(resolve,reject){return Promise.resolve({data:rows.slice(first,last+1)}).then(resolve,reject)}};return q;}};
+ const client={rpc:async(name,args)=>{calls.push({name,args});if(name==='rpc_training_v2_list')return {data:tables.training_sessions.filter(s=>s.access_client_code==='reliance_retail' && tables.fo_activity_submissions.some(e=>e.id===s.id) && s.training_date>=args.p_from && s.training_date<=args.p_to)};return {data:{...snapshot,attendance:[],aop:[]}};},from(table){let rows=[...(tables[table]||[])];let first=0,last=Infinity;const q={select(){return q},eq(k,v){rows=rows.filter(r=>r[k]===v);return q},in(k,vs){rows=rows.filter(r=>vs.includes(r[k]));return q},gte(k,v){rows=rows.filter(r=>r[k]>=v);return q},lte(k,v){rows=rows.filter(r=>r[k]<=v);return q},order(){return q},limit(n){last=n-1;return q},range(a,b){first=a;last=b;calls.push({table,first:a,last:b});return q},then(resolve,reject){return Promise.resolve({data:rows.slice(first,last+1)}).then(resolve,reject)}};return q;}};
  return {client,calls,tables};
 }
-test('completed Training totals read beyond 200 rows in bounded batches and retain existing hierarchy envelope/client guards',async()=>{
+test('completed Training totals use the authoritative uncapped session RPC beyond 200 rows',async()=>{
  const {client,calls,tables}=trainingFixture();
  tables.training_sessions.push({...tables.training_sessions[0],id:'outside-envelope'});
  tables.training_sessions[0].access_client_code='other';
  const result=await retailCompletedTraining(client,{...admin,employee_code:'ADMIN'},range);
  assert.equal(result.complete,true);assert.equal(result.rows.length,500);assert.deepEqual(result.total,{hk:250,mepc:250});
- assert.equal(calls.filter(c=>c.table==='training_sessions').length,3);assert.ok(calls.filter(c=>c.table==='training_sessions').every(c=>c.last-c.first<200));
+ assert.equal(calls.filter(c=>c.name==='rpc_training_v2_list').length,1);
 });
 test('dashboard uses scoped actual data and keeps absent CM/PM/Thermography sources unavailable',async()=>{
  const {client}=trainingFixture(2),r=await retailModuleDashboard(client,{...admin,employee_code:'ADMIN'},range);

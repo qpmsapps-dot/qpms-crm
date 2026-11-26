@@ -1,4 +1,5 @@
 import {RETAIL_MIS_ROLES} from '../../../backend/shared/retailMisAccess.js';
+import TrainingCategoriesPanel from './TrainingCategoriesPanel.jsx';
 import RetailResponsibilityPanel,{isRetailFoProfile} from '../reliance-retail/RetailResponsibilityPanel.jsx';
 import { AlertTriangle, KeyRound, ShieldOff, ShieldCheck, Trash2, Wrench, X } from 'lucide-react';
 import { useState } from 'react';
@@ -26,6 +27,12 @@ function CountCard({ label, value }) {
 
 function initials(name = '') {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'QP';
+}
+
+function trainingFoCandidate(employee) {
+  const key=value=>String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  return ['FO','FIELDOFFICER'].includes(key(employee?.role)) && (isRetailFoProfile(employee)
+    || employee?.unifiedAccess?.assignments?.some(a=>['RELIANCE','RELIANCERETAIL'].includes(key(a.client?.code))));
 }
 
 function hierarchyPathLabel(employee, hierarchy = {}) {
@@ -326,6 +333,7 @@ export default function EmployeeDetailsDrawer({
             </div>
           ) : null}
           {isRetailFoProfile(employee)&&<RetailResponsibilityPanel key={employee.id} profileId={employee.id}/>}
+          {trainingFoCandidate(employee)&&<TrainingCategoriesPanel key={`training-${employee.id}`} profileId={employee.id}/>}
           {sections.map(([title, fields]) => (
             <section key={title} className="rounded-xl border border-slate-200 p-4">
               <h3 className="text-sm font-bold text-slate-950">{title}</h3>

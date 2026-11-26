@@ -11,7 +11,7 @@ function client(overrides = {}) {
     reliance_retail_store_master: [{ id: 'retail', state: 'KA', status: 'Active', zone_id: null, metadata: { operational_model: 'SUPERVISOR_ONLY' } }],
     ...overrides,
   };
-  return { from(table) { let rows = tables[table] || []; const q = { select() { return q; }, eq(key, value) { rows = rows.filter(r => r[key] === value); return q; }, async maybeSingle() { return { data: rows[0] || null, error: null }; } }; return q; } };
+  return {rpc:async(name,args)=>({data:args.p_category_id==='hk'}),from(table) { let rows = table==='training_categories'?[{id:'hk',code:'hk',is_active:true},{id:'technical_mep',code:'technical_mep',is_active:true}]:tables[table] || []; const q = { select() { return q; }, eq(key, value) { rows = rows.filter(r => r[key] === value); return q; }, then(ok,bad){return Promise.resolve({data:rows}).then(ok,bad);},async maybeSingle() { return { data: rows[0] || null, error: null }; } }; return q; } };
 }
 test('Training mutation entry permits Retail trainers while reporting-only roles remain denied', () => {
   assert.equal(assertTrainingActor(fo, { mutation: true }), fo);
@@ -27,8 +27,8 @@ test('current checked-in FO attendance/visit context passes; foreign and closed 
   }
 });
 test('authoritative Retail store gate denies other state, business and unsupported supervisor category', async () => {
-  assert.equal((await loadTrainingRetailStore(client(), {...fo,role:'KAM'}, 'retail', 'technical_mep')).id, 'retail');
-  await assert.rejects(loadTrainingRetailStore(client(), { ...fo, role:'KAM', state: 'TN' }, 'retail', 'technical_mep'), { code: 'store_scope_forbidden' });
+  await assert.rejects(loadTrainingRetailStore(client(), {...fo,role:'KAM'}, 'retail', 'technical_mep'),{code:'forbidden_role'});
+  await assert.rejects(loadTrainingRetailStore(client(), { ...fo, state: 'TN' }, 'retail', 'hk'), { code: 'store_scope_forbidden' });
   await assert.rejects(loadTrainingRetailStore(client(), { ...fo, business: 'Other' }, 'retail', 'hk'), { code: 'forbidden_business' });
   assert.equal((await loadTrainingRetailStore(client(), fo, 'retail', 'hk')).id,'retail');
 });
@@ -50,8 +50,8 @@ function scopedClient(overrides={}) {
    {zone_id:'zone-tn',fo_profile_id:'tn-fo',effective_from:'2025-01-01T00:00:00Z',effective_to:null}
   ],...overrides
  };
- return {from(table){
-  let values=[...(tables[table]||[])],range=[0,9999];
+ return {rpc:async(name,args)=>({data:args.p_category_id==='hk'}),from(table){
+  let values=table==='training_categories'?[{id:'hk',code:'hk',is_active:true},{id:'technical_mep',code:'technical_mep',is_active:true}]:[...(tables[table]||[])],range=[0,9999];
   const q={
    select(){return q;},
    eq(k,v){values=values.filter(row=>row[k]===v);return q;},
@@ -81,7 +81,7 @@ test('KA Training searches all own-state stores without zone assignment; supervi
  assert.deepEqual(found.stores.map(x=>x.store_code),['KA01','KA02','KA03']);
  assert.equal((await loadTrainingRetailStore(db,profile,'ka-no-zone','hk')).id,'ka-no-zone');
  assert.equal((await loadTrainingRetailStore(db,profile,'ka-supervisor','hk')).id,'ka-supervisor');
- assert.equal((await loadTrainingRetailStore(db,{...profile,role:'KAM'},'ka-supervisor','technical_mep')).id,'ka-supervisor');
+ await assert.rejects(loadTrainingRetailStore(db,{...profile,role:'KAM'},'ka-supervisor','technical_mep'),{code:'forbidden_role'});
  await assert.rejects(loadTrainingRetailStore(db,profile,'tn-zone','hk'),{code:'store_scope_forbidden'});
 });
 test('TN Training uses state-wide stores and does not require Zone assignment',async()=>{

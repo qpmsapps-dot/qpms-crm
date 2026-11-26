@@ -1,0 +1,58 @@
+name: Reliance Training V2 isolated validation
+on:
+  pull_request:
+    paths:
+      - '.github/trainingV2Guard.mjs'
+      - '.github/training-v2-pins.json'
+      - '.github/workflows/reliance-training-v2.yml'
+      - 'backend/**/training*.js'
+      - 'backend/**/training*.sql'
+      - 'backend/services/retailModuleReportService.js'
+      - 'backend/services/relianceRetailManagementService.js'
+      - 'src/components/user-management/**'
+      - 'supabase/**/*training_v2*'
+      - 'tests/trainingCategories.browser.test.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VITE_SUPABASE_URL: ''
+      VITE_SUPABASE_ANON_KEY: ''
+      VITE_API_URL: 'http://127.0.0.1:4999'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify exact reviewed Training payload
+        run: node .github/trainingV2Guard.mjs '${{ github.event.pull_request.base.sha || 'eff30bf06e8d9c66c9fc03be8e5b7b9866b0bab4' }}'
+      - name: Install locked dependencies without lifecycle scripts
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix backend --ignore-scripts --no-audit --no-fund
+      - name: Install disposable PostgreSQL tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql
+          npm install --prefix "$RUNNER_TEMP/training-v2-pg" --ignore-scripts --no-audit --no-fund pg@8.16.3
+          echo "THERMOGRAPHY_TEST_TOOLS_DIR=$RUNNER_TEMP/training-v2-pg" >> "$GITHUB_ENV"
+          echo "THERMOGRAPHY_TEST_PG_BIN=$(pg_config --bindir)" >> "$GITHUB_ENV"
+      - name: Training, reporting and protected guard regressions
+        run: node --test backend/tests/trainingV2Database.test.js backend/tests/trainingV2Services.test.js backend/tests/trainingMobileV4.test.js backend/tests/trainingRoutes.test.js backend/tests/trainingService.test.js backend/tests/trainingReleaseCompatibility.test.js backend/tests/trainingPhase2.test.js backend/tests/trainingLegacyCompatibility.test.js backend/tests/trainingBackendRpcMigration.test.js backend/tests/trainingMigrationContract.test.js backend/tests/retailHkTrainingReadScope.test.js backend/tests/retailLeadershipTrainingScope.test.js backend/tests/retailModuleReportService.test.js backend/tests/retailDashboardTrainingCount.test.js backend/tests/retailMisAccess.test.js tests/trainingView.test.js tests/trainingExports.test.js tests/trainingV2Guard.test.js tests/thermographyFullstackGuard.test.js
+      - name: Scoped lint
+        run: npx eslint backend/services/trainingAccessService.js backend/services/trainingService.js backend/services/trainingEvidenceService.js backend/services/trainingEntitlementService.js backend/services/trainingWebService.js backend/routes/trainingRoutes.js backend/services/relianceRetailManagementService.js backend/services/retailModuleReportService.js backend/shared/retailMisAccess.js src/components/user-management/TrainingCategoriesPanel.jsx src/components/user-management/EmployeeDetailsDrawer.jsx
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Isolated User Management component validation
+        run: node --test tests/trainingCategories.browser.test.js
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: training-v2-isolated-ui
+          path: docs/retail/screenshots/training-v2/

@@ -1,6 +1,6 @@
-import { resolveTrainingReadScope, RELIANCE_TRAINING_CLIENT_ID } from './trainingAccessService.js';
+import { resolveTrainingReadScope } from './trainingAccessService.js';
 import { isRetailSouthHead, isRetailBranchHead } from '../shared/retailSouthHeadAccess.js';
-import { isRetailHkTrainingReader, applyRetailTrainingStoreScope, narrowRetailTrainingScope, retailTrainingEnvelopeIds } from './retailTrainingReadScopeService.js';
+import { isRetailHkTrainingReader } from './retailTrainingReadScopeService.js';
 
 const norm = (value) => String(value ?? '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
 const text = (value) => String(value ?? '').trim();
@@ -636,29 +636,19 @@ export async function retailDashboard(client, profile, input = {}) {
   if (text(input.store_id)) storeQuery = storeQuery.eq('id', text(input.store_id));
   const stores = await storeQuery;
   if (stores.error) throw stores.error;
-  const storeIds = (stores.data || []).map((row) => row.id);
   const storeCodes = (stores.data || []).map((row) => row.store_code);
   const zoneIds = [...new Set((stores.data || []).map((row) => row.zone_id).filter(Boolean))];
   let cleaningQuery = client.from('client_deep_cleaning_submissions').select('id', { count: 'exact', head: true }).in('business', ['Reliance Retail', 'Reliance']);
-  let trainingQuery = client.from('training_sessions').select('id', { count: 'exact', head: true }).eq('access_client_code', 'reliance_retail');
   if (storeCodes.length) cleaningQuery = cleaningQuery.in('store_code', storeCodes); else cleaningQuery = cleaningQuery.eq('store_code', '__NO_MATCH__');
-  // One row-level OR preserves exact counting when both store links match.
-  if (storeIds.length) {
-    const ids = storeIds.join(',');
-    trainingQuery = trainingQuery.or(`store_id.in.(${ids}),retail_store_id.in.(${ids})`);
-  } else trainingQuery = trainingQuery.eq('store_id', '00000000-0000-0000-0000-000000000000');
   const range = monthRange(input.month);
-  if (range) { cleaningQuery = cleaningQuery.gte('deep_cleaning_date', range.from).lt('deep_cleaning_date', range.to); trainingQuery = trainingQuery.gte('training_date', range.from).lt('training_date', range.to); }
-  if (trainingScope) {
-    const narrowed = narrowRetailTrainingScope(trainingScope.retailScope, storeIds);
-    const envelopeIds = await retailTrainingEnvelopeIds(client, [...trainingScope.employeeCodes]);
-    // Rebuild this HK-only query so no legacy OR can override the store guard.
-    if (envelopeIds.length && narrowed.retailStoreIds.length) {
-      trainingQuery = applyRetailTrainingStoreScope(client.from('training_sessions').select('id', { count: 'exact', head: true })
-        .eq('access_client_id', RELIANCE_TRAINING_CLIENT_ID).eq('access_client_code', 'reliance_retail').in('id', envelopeIds), narrowed);
-      if (range) trainingQuery = trainingQuery.gte('training_date', range.from).lt('training_date', range.to);
-    } else trainingQuery = Promise.resolve({ data: null, count: 0, error: null });
-  }
+  if (range) cleaningQuery = cleaningQuery.gte('deep_cleaning_date',range.from).lt('deep_cleaning_date',range.to);
+  const today=new Date(Date.now()+330*60000).toISOString().slice(0,10);
+  const trainingQuery=(async()=>{
+    const result=await client.rpc('rpc_training_v2_list',{p_actor:profile.id,p_from:range?.from || new Date(Date.parse(today)-366*86400000).toISOString().slice(0,10),p_to:range?new Date(Date.parse(range.to)-86400000).toISOString().slice(0,10):today,p_category:null});
+    if(result.error)return result;
+    const ids=new Set((stores.data||[]).map(s=>s.id));
+    return {count:new Set((result.data||[]).filter(s=>s.status==='submitted' && ids.has(s.canonical_store_id || s.retail_store_id || s.store_id)).map(s=>s.id)).size};
+  })();
   const [zones, assignments, cleaning, training] = await Promise.all([
     zoneIds.length ? client.from('reliance_retail_zones').select('id,zone_code,zone_name,status').in('id', zoneIds).limit(500) : { data: [], error: null },
     zoneIds.length ? client.from('reliance_retail_zone_fo_assignments').select('fo_profile_id,zone_id').in('zone_id', zoneIds).eq('status', 'Active').is('effective_to', null).limit(500) : { data: [], error: null },

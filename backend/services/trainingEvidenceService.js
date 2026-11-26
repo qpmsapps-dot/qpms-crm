@@ -241,19 +241,21 @@ export async function verifyTrainingEvidenceObjects(client, profile, sessionId) 
   const { data, error } = await client.from('training_evidence').select('*').eq('training_session_id', sessionId);
   if (error) throw error;
   assertTopicPhotographs(topics || [], data || [], sessionId);
+  if (context.session.completion_policy_version === 2 && !(data || []).some(e=>e.evidence_type==='additional_document' && e.metadata?.upload_status==='uploaded')) throw trainingError(400,'training_completion_proof_required','Upload verified completion proof before submitting.');
   for (const row of data || []) {
     if (row.metadata?.upload_status !== 'uploaded') {
       throw trainingError(409, 'evidence_upload_incomplete', 'All evidence uploads must complete before submission.');
     }
     await storageObject(client, row);
     if (row.evidence_type === 'topic_photo') await verifyStoredPhotograph(client, row);
+    if (row.evidence_type==='additional_document' && context.session.completion_policy_version===2) await verifyCompletionProof(client,row);
   }
   return true;
 }
 
 // The upload authorization is checked when bytes arrive, not just when an intent is issued.
 export async function uploadTrainingEvidenceContent(client, profile, sessionId, evidenceId, bytes, contentType) {
-  await loadAuthorizedTrainingSession(client, profile, sessionId, { editable: true });
+  const context=await loadAuthorizedTrainingSession(client, profile, sessionId, { editable: true });
   const row = await evidenceRow(client, sessionId, evidenceId);
   assertServerPath(row);
   if (!Buffer.isBuffer(bytes) || bytes.length !== Number(row.file_size) || contentType?.split(';')[0] !== row.mime_type) {
@@ -261,6 +263,7 @@ export async function uploadTrainingEvidenceContent(client, profile, sessionId, 
   }
   const photo = ['topic_photo','group_photo'].includes(row.evidence_type);
   if (photo) await validatePhotograph(bytes, row.mime_type);
+  if(row.evidence_type==='additional_document' && context.session.completion_policy_version===2) await validateCompletionProofBytes(bytes,row.mime_type);
   const hash = createHash('sha256').update(bytes).digest('hex');
   const { error } = await withCombinedReleaseOperation(client,profile.id,'storage:training-content',()=>client.storage.from(row.storage_bucket).upload(row.storage_path, bytes, { contentType: row.mime_type, upsert: false }));
   if (error) {
@@ -306,4 +309,20 @@ async function verifyStoredPhotograph(client,row) {
   await validatePhotograph(bytes,row.mime_type);
   const verified=await client.from('training_evidence').update({metadata:{...row.metadata,verified_sha256:createHash('sha256').update(bytes).digest('hex')}}).eq('id',row.id).eq('training_session_id',row.training_session_id);
   if(verified.error) throw translateTrainingDatabaseError(verified.error);
+}
+
+async function verifyCompletionProof(client,row) {
+  const {data,error}=await client.storage.from(row.storage_bucket).download(row.storage_path);
+  if(error||!data) throw trainingError(409,'storage_object_missing','Completion proof is unavailable.');
+  const bytes=Buffer.from(await data.arrayBuffer());
+  if(bytes.length!==Number(row.file_size)) throw trainingError(409,'storage_object_size_mismatch','Completion proof size changed.');
+  await validateCompletionProofBytes(bytes,row.mime_type);
+  const verified=await client.from('training_evidence').update({metadata:{...row.metadata,verified_sha256:createHash('sha256').update(bytes).digest('hex')}}).eq('id',row.id).eq('training_session_id',row.training_session_id);
+  if(verified.error) throw translateTrainingDatabaseError(verified.error);
+}
+
+async function validateCompletionProofBytes(bytes,mime) {
+  if(mime==='application/pdf') {
+    if(bytes.subarray(0,5).toString()!=='%PDF-' || !bytes.subarray(-1024).includes(Buffer.from('%%EOF'))) throw trainingError(415,'invalid_completion_proof','A valid PDF or photograph is required.');
+  } else await validatePhotograph(bytes,mime);
 }

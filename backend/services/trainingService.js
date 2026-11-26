@@ -1,6 +1,4 @@
 import {
-  RELIANCE_TRAINING_CLIENT_ID,
-  RELIANCE_TRAINING_CLIENT_CODE,
   assertTrainingActor,
   assertTrainingCategory,
   resolveTrainingMutationProfile,
@@ -8,28 +6,18 @@ import {
   cleanTrainingText,
   loadAuthorizedTrainingSession,
   loadTrainingCreateContext,
-  resolveTrainingReadScope,
   trainingEmployeeCode,
   trainingError,
   translateTrainingDatabaseError,
 } from './trainingAccessService.js';
 import { isRelianceRetailStore, isRelianceRetailValue,retailStateKey,retailStateQueryValues,loadAuthorizedRetailZones } from './clientDeepCleaningService.js';
-import { applyRetailTrainingStoreScope, narrowRetailTrainingScope, retailTrainingEnvelopeIds } from './retailTrainingReadScopeService.js';
-import { normalizedStateKey } from './workMappingScope.js';
+import { isRetailHkTrainingReader, resolveRetailHkTrainingScope } from './retailTrainingReadScopeService.js';
 import { retailFoStateAllows, retailFoStateValues } from './retailFoStoreScope.js';
 
 function nullableText(value) {
   const valueText = cleanTrainingText(value);
   return valueText || null;
 }
-function validDate(value, field = 'training_date') {
-  const clean = cleanTrainingText(value);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(clean) || Number.isNaN(Date.parse(`${clean}T00:00:00Z`))) {
-    throw trainingError(400, `invalid_${field}`, `${field} must be a valid YYYY-MM-DD date.`);
-  }
-  return clean;
-}
-
 function boundedText(value, { required = false, max = 500, code, label }) {
   const clean = cleanTrainingText(value);
   if (required && !clean) throw trainingError(400, code, `${label} is required.`);
@@ -152,42 +140,13 @@ export async function createTrainingSession(client, profile, input = {}) {
 }
 
 export async function listTrainingSessions(client, profile, input = {}) {
-  const scope = await resolveTrainingReadScope(client, profile);
-  const mine = ['1', 'true', 'yes'].includes(cleanTrainingText(input.mine).toLowerCase());
-  const actorCode = trainingEmployeeCode(profile);
-  const codes = mine ? (scope.retailScope ? [] : [actorCode]) : [...scope.employeeCodes];
-  if (!codes.length) return [];
-  let envelopeQuery = client.from('fo_activity_submissions')
-    .select('id,employee_code,fo_user_id,created_at')
-    .eq('activity_type', 'training')
-    .in('employee_code', codes).order('created_at', { ascending: false });
-  if (input.site_visit_id) envelopeQuery = envelopeQuery.eq('site_visit_id', cleanTrainingText(input.site_visit_id));
-  const envelopes = scope.retailScope
-    ? (await retailTrainingEnvelopeIds(client, codes)).map(id => ({ id }))
-    : await rows(envelopeQuery.limit(2000));
-  const envelopeById = new Map(envelopes.map((row) => [row.id, row]));
-  if (!envelopeById.size) return [];
-  let query = client.from('training_sessions').select('*')
-    .eq('access_client_id', RELIANCE_TRAINING_CLIENT_ID)
-    .in('id', [...envelopeById.keys()])
-    .order('created_at', { ascending: false })
-    .limit(Math.min(200, Math.max(1, Number.parseInt(input.limit, 10) || 100)));
-  let hkScope = scope.retailScope;
-  if (hkScope && input.store_id) {
-    const legacy = hkScope.legacyStores.find(s => s.id === cleanTrainingText(input.store_id));
-    hkScope = narrowRetailTrainingScope(hkScope, hkScope.stores.filter(s => s.id === cleanTrainingText(input.store_id) || (legacy && s.store_code === legacy.store_code && normalizedStateKey(s.state) === normalizedStateKey(legacy.state))).map(s => s.id));
-    if (!hkScope.retailStoreIds.length) return [];
-  }
-  if (input.status) query = query.eq('status', cleanTrainingText(input.status).toLowerCase());
-  if (input.date_from) query = query.gte('training_date', validDate(input.date_from, 'date_from'));
-  if (input.date_to) query = query.lte('training_date', validDate(input.date_to, 'date_to'));
-  if (input.category_id) query = query.eq('category_id', cleanTrainingText(input.category_id));
-  if (input.store_id && !hkScope) query = query.or(
-    `store_id.eq.${cleanTrainingText(input.store_id)},retail_store_id.eq.${cleanTrainingText(input.store_id)}`,
-  );
-  if (hkScope) query = applyRetailTrainingStoreScope(query, hkScope).eq('access_client_code', RELIANCE_TRAINING_CLIENT_CODE);
-  if (hkScope && input.site_visit_id) query = query.eq('site_visit_id', cleanTrainingText(input.site_visit_id));
-  const sessions = await rows(query);
+  assertTrainingActor(profile);
+  const legacyHkScope=isRetailHkTrainingReader(profile)?await resolveRetailHkTrainingScope(client,profile):null;
+  const today=trainingIndiaDate();
+  const result=await rpc(client,'rpc_training_v2_list',{p_actor:profile.id,p_from:input.date_from || new Date(Date.parse(today)-366*86400000).toISOString().slice(0,10),p_to:input.date_to || today,p_category:input.category_id || null});
+  const selectedCanonical=legacyHkScope?.legacyStores.find(s=>s.id===input.store_id);
+  const selectedCanonicalId=selectedCanonical?legacyHkScope.stores.find(s=>s.store_code===selectedCanonical.store_code && retailFoStateAllows(s.state,selectedCanonical.state))?.id:input.store_id;
+  const sessions=(result || []).filter(s=>(!legacyHkScope || legacyHkScope.retailStoreIds.includes(s.canonical_store_id || s.retail_store_id)) && (!input.status || s.status===input.status) && (!input.mine || s.trainer_profile_id===profile.id) && (!input.site_visit_id || s.site_visit_id===input.site_visit_id) && (!input.store_id || s.retail_store_id===input.store_id || s.store_id===input.store_id || s.canonical_store_id===selectedCanonicalId));
   if (!sessions.length) return [];
   const ids = sessions.map((row) => row.id);
   const standardStoreIds = [...new Set(sessions.map((row) => row.store_id).filter(Boolean))];
@@ -213,6 +172,9 @@ export async function listTrainingSessions(client, profile, input = {}) {
   return sessions.map((session) => ({
     id: session.id,
     status: session.status,
+    submission_source: session.submission_source || null,
+    actual_trainer_profile_id: session.actual_trainer_profile_id,
+    uploader_profile_id: session.uploader_profile_id,
     attendance_id: session.attendance_id,
     site_visit_id: session.site_visit_id,
     training_date: session.training_date,
@@ -346,7 +308,7 @@ export async function submitTrainingSession(client, profile, sessionId, { verify
     return getTrainingSession(client, profile, sessionId);
   }
   await loadAuthorizedTrainingSession(client, profile, sessionId, { editable: true });
-  if (context.session.retail_store_id) {
+  if (context.session.retail_store_id && context.session.submission_source !== 'Web') {
     const category = await activeMaster(client, 'training_categories', context.session.category_id, 'category');
     await loadTrainingRetailStore(client, profile, context.session.retail_store_id, category.code);
   }
