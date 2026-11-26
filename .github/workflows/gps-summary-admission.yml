@@ -1,0 +1,33 @@
+name: GPS summary admission integration
+on:
+  pull_request:
+    paths:
+      - 'supabase/pending_review/gps_summary_worker*'
+      - '.github/workflows/gps-summary-admission.yml'
+permissions:
+  contents: read
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGPASSWORD: test-only
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise isolated ownership handoff
+        run: |
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f supabase/pending_review/gps_summary_worker_fixture.sql
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f supabase/pending_review/gps_summary_worker_admission.sql
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f supabase/pending_review/gps_summary_worker_admission_test.sql
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f supabase/pending_review/gps_summary_worker_handoff_test.sql
