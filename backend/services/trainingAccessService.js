@@ -1,11 +1,11 @@
-import { isRelianceRetailStore, isRelianceRetailValue, retailStateKey } from './clientDeepCleaningService.js';
+import { isRelianceRetailValue } from './clientDeepCleaningService.js';
 import { foOperationalAllowedEmployeeCodes } from './foOperationalAccessService.js';
 import { retailFoStateAllows } from './retailFoStoreScope.js';
-import { resolveRetailHkTrainingScope, resolveRetailLeadershipTrainingScope, applyRetailTrainingStoreScope, retailTrainingFoCodes, retailTrainingFoProfiles } from './retailTrainingReadScopeService.js';
+import { isRetailHkTrainingReader, resolveRetailHkTrainingScope, resolveRetailLeadershipTrainingScope, retailTrainingFoCodes, retailTrainingFoProfiles } from './retailTrainingReadScopeService.js';
 
 export const RELIANCE_TRAINING_CLIENT_ID = '369d2d5f-396f-49f9-a47d-bfbc8f7cb922';
 export const RELIANCE_TRAINING_CLIENT_CODE = 'reliance_retail';
-export const TRAINING_CREATE_ROLES = new Set(['FO', 'KAM', 'OPERATIONSMANAGER', 'BRANCHHEAD']);
+export const TRAINING_CREATE_ROLES = new Set(['FO']);
 
 export class TrainingError extends Error {
   constructor(statusCode, code, message) {
@@ -113,6 +113,8 @@ export function translateTrainingDatabaseError(error) {
   if (code === '23505') return trainingError(409, 'duplicate_record', 'This Training record already exists.');
   if (code === '42501') return trainingError(403, 'forbidden', 'Training access is not allowed.');
   if (code === 'P0002') return trainingError(404, 'not_found', 'Training resource was not found.');
+  if (code === '40001') return trainingError(409, 'training_conflict', 'Training changed. Refresh before retrying.');
+  if (['22003','22007','22008','22P02','23514'].includes(code)) return trainingError(400,'training_invalid_request','Training fields or validity are invalid.');
   if (code === '22023') return trainingError(400, 'validation_error', 'Training request validation failed.');
   return error;
 }
@@ -140,12 +142,6 @@ function employeeMatches(profile, record) {
     .map((value) => cleanTrainingText(value).toUpperCase())
     .filter(Boolean)
     .includes(actor);
-}
-
-function stateMatches(profile, state) {
-  if (canonicalTrainingRole(profile?.role) === 'FO') return retailFoStateAllows(profile.state, state);
-  const actorState = retailStateKey(profile?.state);
-  return !actorState || actorState === retailStateKey(state);
 }
 
 export async function loadTrainingCreateContext(client, profile, input = {}) {
@@ -210,62 +206,26 @@ export async function resolveTrainingReadScope(client, profile) {
 }
 
 export async function loadAuthorizedTrainingSession(client, profile, sessionId, { editable = false } = {}) {
-  if (editable) profile = await resolveTrainingMutationProfile(client, profile);
-  assertTrainingActor(profile, { mutation: editable });
-  const retailScope = editable ? null : await resolveRetailLeadershipTrainingScope(client,profile)
-    || await resolveRetailHkTrainingScope(client, profile);
-  let sessionQuery = client.from('training_sessions').select('*').eq('id', sessionId);
-  if (retailScope) sessionQuery = applyRetailTrainingStoreScope(sessionQuery, retailScope)
-    .eq('access_client_id', RELIANCE_TRAINING_CLIENT_ID).eq('access_client_code', RELIANCE_TRAINING_CLIENT_CODE);
-  const session = await one(
-    sessionQuery,
-    'session_not_found',
-    'Training session was not found.',
-  );
-  const envelope = await one(
-    client.from('fo_activity_submissions').select('*').eq('id', session.id).eq('activity_type', 'training'),
-    'session_not_found',
-    'Training envelope was not found.',
-  );
-  if (session.access_client_id !== RELIANCE_TRAINING_CLIENT_ID || session.access_client_code !== RELIANCE_TRAINING_CLIENT_CODE) {
-    throw trainingError(403, 'cross_business_forbidden', 'Training session is outside Reliance Retail scope.');
-  }
-  const self = trainingEmployeeCode(profile);
-  const creator = cleanTrainingText(envelope.employee_code || envelope.fo_user_id).toUpperCase();
+  assertTrainingActor(profile);
+  const legacyHkScope = isRetailHkTrainingReader(profile) ? await resolveRetailHkTrainingScope(client,profile) : null;
+  const allowed = await client.rpc('rpc_training_v2_read_allowed', {p_actor: profile.id, p_session: sessionId});
+  if (allowed.error) throw translateTrainingDatabaseError(allowed.error);
+  if (allowed.data !== true) throw trainingError(403, 'session_read_forbidden', 'Training session is outside your authorized scope.');
   if (editable) {
-    const category = await one(client.from('training_categories').select('*').eq('id', session.category_id), 'category_not_found', 'Training category was not found.');
-    assertTrainingCategory(profile, category.code);
-    if (session.status !== 'draft') throw trainingError(409, 'session_immutable', 'Submitted or cancelled Training sessions cannot be changed.');
-    if (creator !== self) throw trainingError(403, 'not_session_creator', 'Only the session creator may change this draft.');
-    await loadTrainingCreateContext(client, profile, {
-      attendance_id: session.attendance_id, site_visit_id: session.site_visit_id,
-    });
-  } else if (retailScope || creator !== self) {
-    const scope = await resolveTrainingReadScope(client, profile);
-    if (!scope.employeeCodes.has(creator)) {
-      throw trainingError(403, 'session_read_forbidden', 'Training session is outside your hierarchy scope.');
-    }
+    const edit = await client.rpc('training_assert_draft_editor', {p_session_id: sessionId, p_actor_profile_id: profile.id});
+    if (edit.error) throw translateTrainingDatabaseError(edit.error);
   }
-  if (!retailScope && !stateMatches(profile, session.state_snapshot)) {
-    throw trainingError(403, 'cross_state_forbidden', 'Training session is outside your state scope.');
-  }
-  const store = await one(
-    client.from(session.retail_store_id ? 'reliance_retail_store_master' : 'store_master')
-      .select('*')
-      .eq('id', session.retail_store_id || session.store_id),
-    'store_not_found',
-    'Training store was not found.',
-  );
-  if (!session.retail_store_id && !isRelianceRetailStore(store)) {
-    throw trainingError(403, 'non_reliance_store', 'Training store is not Reliance Retail.');
-  }
-  return { session, envelope, store };
+  const session = await one(client.from('training_sessions').select('*').eq('id',sessionId),'session_not_found','Training session was not found.');
+  const envelope = await one(client.from('fo_activity_submissions').select('*').eq('id',sessionId).eq('activity_type','training'),'session_not_found','Training envelope was not found.');
+  const store = await one(client.from(session.retail_store_id ? 'reliance_retail_store_master' : 'store_master').select('*').eq('id',session.retail_store_id || session.store_id),'store_not_found','Training store was not found.');
+  if (legacyHkScope && !legacyHkScope.stores.some(s=>s.id===session.retail_store_id || (!session.retail_store_id && s.store_code===store.store_code && retailFoStateAllows(s.state,store.state)))) throw trainingError(403,'training_scope_unverified','Training store is outside the verified HK scope.');
+  return {session,envelope,store};
 }
 
 // Only server-loaded assignments may supplement the authenticated profile business.
 export async function resolveTrainingMutationProfile(client, profile) {
   assertTrainingActor(profile);
-  if (isRelianceRetailValue(profile.business)) return profile;
+  if (isRelianceRetailValue(profile.business)) return loadTrainingEntitlements(client, profile);
   const {data, error} = await client.from('access_user_assignments').select('*,access_roles!inner(code,active)')
     .eq('profile_id', profile.id).eq('auth_user_id', profile.auth_user_id)
     .eq('client_id', RELIANCE_TRAINING_CLIENT_ID).eq('active', true).eq('verification_status', 'verified');
@@ -275,12 +235,20 @@ export async function resolveTrainingMutationProfile(client, profile) {
     && canonicalTrainingRole(a.access_roles.code) === canonicalTrainingRole(profile.role)
     && a.effective_from && Date.parse(a.effective_from) <= now
     && (!a.effective_to || Date.parse(a.effective_to) > now));
-  return {...profile, trainingRetailVerified: verified};
+  return loadTrainingEntitlements(client, {...profile, trainingRetailVerified: verified});
+}
+async function loadTrainingEntitlements(client, profile) {
+  const {data, error} = await client.from('training_categories').select('id,code').eq('is_active',true);
+  if (error) throw error;
+  const trainingCategories = [];
+  for (const c of data || []) {
+    const grant = await client.rpc('training_category_allowed_v4', {p_actor_profile_id:profile.id,p_category_id:c.id});
+    if (grant.error) throw translateTrainingDatabaseError(grant.error);
+    if (grant.data === true) trainingCategories.push(c.code);
+  }
+  return {...profile,trainingCategories};
 }
 export function assertTrainingCategory(profile, categoryCode) {
-  assertTrainingActor(profile, {mutation: true});
-  const role = canonicalTrainingRole(profile.role);
-  const allowed = categoryCode === 'hk' ? role === 'FO'
-    : categoryCode === 'technical_mep' && ['KAM','OPERATIONSMANAGER','BRANCHHEAD'].includes(role);
-  if (!allowed) throw trainingError(403, 'category_forbidden', 'Your role cannot initiate or submit this Training category.');
+  assertTrainingActor(profile, {mutation:true});
+  if (!profile.trainingCategories?.includes(categoryCode)) throw trainingError(403,'category_forbidden','An active individual Training category entitlement is required.');
 }

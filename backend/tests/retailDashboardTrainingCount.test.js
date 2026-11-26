@@ -6,7 +6,7 @@ const TN = '10000000-0000-0000-0000-000000000001';
 const KL = '10000000-0000-0000-0000-000000000002';
 const OTHER = '10000000-0000-0000-0000-000000000003';
 const actor = { id: 'admin', role: 'Admin', business: 'Reliance Retail' };
-const session = (id, extra = {}) => ({ id, store_id: null, retail_store_id: null, access_client_code: 'reliance_retail', training_date: '2026-10-22', ...extra });
+const session = (id, extra = {}) => ({ id, store_id: null, retail_store_id: null, access_client_code: 'reliance_retail', training_date: '2026-10-22', status:'submitted', ...extra });
 
 function fixture(sessions) {
   const calls = [];
@@ -17,7 +17,7 @@ function fixture(sessions) {
     ],
     training_sessions: sessions,
   };
-  return { calls, client: { from(table) {
+  return { calls, client: { async rpc(name,args){calls.push({rpc:name,args});return {data:sessions.filter(s=>s.access_client_code==='reliance_retail' && s.training_date>=args.p_from && s.training_date<=args.p_to)};},from(table) {
     calls.push({ table });
     let rows = [...(tables[table] || [])];
     const q = {
@@ -55,16 +55,15 @@ for (const [name, rows, expected] of [
   const f = fixture(rows);
   const result = await retailDashboard(f.client, actor, { month: '2026-10' });
   assert.equal(result.training_sessions, expected);
-  assert.equal(f.calls.filter(c => c.table === 'training_sessions' && c.or).length, 1);
-  assert.ok(f.calls.some(c => c.table === 'training_sessions' && c.options?.count === 'exact' && c.options?.head === true));
+  assert.equal(f.calls.filter(c=>c.rpc==='rpc_training_v2_list').length,1);
+  assert.equal(f.calls.find(c=>c.rpc).args.p_actor,actor.id);
 });
 
 for (const filters of [{ state: 'TN' }, { zone_id: 'zone-tn' }, { store_id: TN }]) {
   test(`Retail Training count preserves selected store filters ${JSON.stringify(filters)}`, async () => {
     const f = fixture([session('a', { retail_store_id: TN }), session('b', { store_id: KL })]);
     assert.equal((await retailDashboard(f.client, actor, { month: '2026-10', ...filters })).training_sessions, 1);
-    const expression = f.calls.find(c => c.or).or;
-    assert.ok(expression.includes(TN)); assert.ok(!expression.includes(KL));
+    assert.equal(f.calls.find(c=>c.rpc).args.p_actor,actor.id);
   });
 }
 

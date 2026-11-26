@@ -45,7 +45,13 @@ function fixture() {
     const eqMatch = exp.match(/^(\w+)\.eq\.(.+)$/); if (eqMatch) return row[eqMatch[1]] === eqMatch[2];
     throw Error('Unsupported filter '+exp);
   }
-  const client = { from(table) {
+  const client = { async rpc(name,args) {
+    const scope=await resolveRetailHkTrainingScope(client,hk);
+    const codes=new Set(profiles.filter(p=>p.role==='FO' && p.business==='Reliance Retail').map(p=>p.employee_code));
+    const allowed=tables.training_sessions.filter(s=>s.status==='submitted' && s.access_client_code==='reliance_retail' && scope.states.includes(s.state_snapshot) && (s.retail_store_id?scope.retailStoreIds.includes(s.retail_store_id):scope.legacyStoreIds.includes(s.store_id)) && tables.fo_activity_submissions.some(e=>e.id===s.id && codes.has(e.employee_code)));
+    if(name==='rpc_training_v2_read_allowed')return {data:allowed.some(s=>s.id===args.p_session)};
+    return {data:allowed.filter(s=>s.training_date>=args.p_from && s.training_date<=args.p_to).map(s=>({...s,canonical_store_id:s.retail_store_id || scope.stores.find(m=>scope.legacyStores.some(l=>l.id===s.store_id && l.store_code===m.store_code))?.id}))};
+  }, from(table) {
     let rows = [...(tables[table] || [])], slice = null;
     const q = { select() { return q; }, eq(k, v) { rows = rows.filter(r => r[k] === v); return q; }, in(k, v) { rows = rows.filter(r => v.includes(r[k])); return q; },
       is(k, v) { rows = rows.filter(r => (r[k] ?? null) === v); return q; }, order() { return q; }, limit(n) { slice = [0, n]; return q; }, range(a, b) { slice = [a, b + 1]; return q; },
@@ -151,7 +157,7 @@ test('HK HTTP list and detail use the verified read scope; missing assignments r
   try { const base = 'http://127.0.0.1:'+server.address().port;
     const list = await fetch(base+'/sessions'); assert.equal(list.status,200);
     assert.deepEqual((await list.json()).sessions.map(s => s.id).sort(),['both','canonical','legacy']);
-    assert.equal((await fetch(base+'/sessions/unassigned')).status,404);
+    assert.equal((await fetch(base+'/sessions/unassigned')).status,403);
     f.tables.access_user_assignments = [];
     const denied = await fetch(base+'/sessions'); assert.equal(denied.status,403);
     assert.equal((await denied.json()).code,'training_scope_unverified');

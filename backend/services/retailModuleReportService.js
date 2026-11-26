@@ -1,8 +1,7 @@
 import {unifiedSnapshot} from './retailUnifiedService.js';
 import {assertRetailAccess,retailAccess} from './relianceRetailManagementService.js';
 import {canonicalActivityStore,cleaningReport,completedTrainingReport,submittedCleaningReport} from '../shared/retailModuleReports.js';
-import {resolveTrainingReadScope,RELIANCE_TRAINING_CLIENT_ID} from './trainingAccessService.js';
-import {retailTrainingEnvelopeIds,applyRetailTrainingStoreScope} from './retailTrainingReadScopeService.js';
+import {isRetailHkTrainingReader,resolveRetailHkTrainingScope} from './retailTrainingReadScopeService.js';
 import {indiaToday,validDate,stateLabel,reportingState,summarizeAttendance} from '../shared/retailAttendance.js';
 import {attendanceAccess} from './retailAttendanceService.js';
 import {CLIENT_DEEP_CLEANING_BUCKET,buildClientDeepCleaningStoragePath,verifyClientDeepCleaningStorageObject} from './clientDeepCleaningService.js';
@@ -101,20 +100,13 @@ export async function retailCleaningEvidence(client,profile,id,input={}) {
 
 export async function retailCompletedTraining(client,profile,input={},existingSnapshot=null) {
  assertRetailAccess(profile,'training');
- const range=moduleReportRange(input),scope=await resolveTrainingReadScope(client,profile);
+ const range=moduleReportRange(input);
  const snapshot=existingSnapshot||await authorizedSnapshot(client,profile,range);
- const ids=await retailTrainingEnvelopeIds(client,[...scope.employeeCodes]),sessions=new Map();
- // Bounded ID batches preserve the existing employee-envelope and verified HK store scope.
- // No 200-row UI cap is used for period totals, and no training mutation workflow changes.
- for(let start=0;start<ids.length;start+=200){
-  let q=client.from('training_sessions').select('id,store_id,retail_store_id,store_code_snapshot,state_snapshot,training_date,status,category_id,submitted_at,trainer_name_snapshot')
-   .eq('access_client_id',RELIANCE_TRAINING_CLIENT_ID).eq('access_client_code','reliance_retail').in('id',ids.slice(start,start+200))
-   .in('status',['submitted','completed']).gte('training_date',range.from).lte('training_date',range.to).order('id').range(0,199);
-  if(scope.retailScope)q=applyRetailTrainingStoreScope(q,scope.retailScope);
-  const {data,error}=await q;if(error)throw error;for(const s of data||[])sessions.set(s.id,s);
- }
- const values=[...sessions.values()],categoryIds=[...new Set(values.map(s=>s.category_id))];
- // Resolve legacy identities only after employee-envelope/client/HK store guards.
+ const result=await client.rpc('rpc_training_v2_list',{p_actor:profile.id,p_from:range.from,p_to:range.to,p_category:null});
+ if(result.error)throw result.error;
+ const legacyHkScope=isRetailHkTrainingReader(profile)?await resolveRetailHkTrainingScope(client,profile):null;
+ const values=(result.data||[]).filter(s=>s.status==='submitted' && (!legacyHkScope || legacyHkScope.retailStoreIds.includes(s.canonical_store_id || s.retail_store_id)));
+ const categoryIds=[...new Set(values.map(s=>s.category_id))];
  const legacyIds=[...new Set(values.filter(s=>!s.retail_store_id&&!s.store_code_snapshot&&s.store_id).map(s=>s.store_id))],legacyStores=[];
  for(let start=0;start<legacyIds.length;start+=200){
   const result=await client.from('store_master').select('id,store_code,state,business').in('id',legacyIds.slice(start,start+200)).in('business',['Reliance Retail','Reliance']).order('id').range(0,199);
