@@ -1,3 +1,4 @@
+import {mainBase,assertCheckout} from '../.github/sharedIntegrity.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -6,6 +7,7 @@ import {approvedBase,manifestPath,workflowPath,guardPath,payloadPaths,reviewedWo
 import {priorWorkflowForChecks} from '../.github/thermographyV2Guard.mjs';
 
 test('main dependency versions and existing operational/HK/leadership workflows are preserved',()=>{
+ assertCheckout();
  const show=p=>execFileSync('git',['show',`${approvedBase}:${p}`],{encoding:'utf8'});
  const before=JSON.parse(show('package.json')),after=JSON.parse(readFileSync('package.json','utf8'));
  assert.deepEqual(after.dependencies,before.dependencies);
@@ -17,7 +19,7 @@ test('main dependency versions and existing operational/HK/leadership workflows 
   // Current main added mandatory MIS onboarding tests/lint after the original
   // Thermography release. Preserve those additions against its exact base blob.
   const expected=path==='.github/workflows/reliance-retail-operational-changes.yml'
-   ? execFileSync('git',['show',`80fe06d842a0efc79c18124dbe16d05ca1bdf34c:${path}`],{encoding:'utf8'}) : show(path);
+   ? execFileSync('git',['show',`${mainBase}:${path}`],{encoding:'utf8'}) : show(path);
   assert.equal(readFileSync(path,'utf8').replaceAll('\r\n','\n'),expected.replaceAll('\r\n','\n'),path);
  }
 });

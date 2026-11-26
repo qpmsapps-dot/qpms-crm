@@ -1,3 +1,4 @@
+import {verifyCheckout as verifySharedCheckout} from './sharedIntegrity.mjs';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -51,6 +52,7 @@ export function verifyPayload({ base, paths, manifest, hash, workflow, baseWorkf
   return { ok: validManifest && workflowMatches && !missing.length && !unexpected.length && !mismatched.length, validManifest, workflowMatches, missing, unexpected, mismatched };
 }
 export function verifyCurrent(base, working = false) {
+  if(fs.existsSync('.github/shared-integrity-pins.json'))return verifySharedCheckout(base,working);
   if(base===correctionBase&&fs.existsSync(correctionManifest))return verifyCorrection(base,working);
   const paths = git(['diff', '--name-only', base, ...(working ? [] : ['HEAD'])]).trim().split('\n').filter(Boolean);
   if (working) paths.push(...git(['ls-files', '--others', '--exclude-standard']).trim().split('\n').filter(Boolean));

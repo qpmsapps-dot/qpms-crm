@@ -1,3 +1,4 @@
+import {priorSharedWorkflow,verifyCheckout as verifySharedCheckout} from './sharedIntegrity.mjs';
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -76,6 +77,7 @@ export function verifyThermographyPayload({paths,manifest,hash,base,workflow,bas
 }
 const git=args=>execFileSync('git',['-c',`safe.directory=${process.cwd()}`,...args],{encoding:'utf8'});
 export function priorV2WorkflowForChecks(workflow){
+ workflow=priorSharedWorkflow(workflow);
  if(workflow.includes('# BEGIN DEEP CLEANING V2 EXACT PAYLOAD')){
   const prior=priorCleaningWorkflow(workflow),base=git(['show',`${approvedBase}:${workflowPath}`]);
   const hash=p=>git(['rev-parse',`${cleaningBase}:${p}`]).trim();
@@ -90,6 +92,7 @@ export const priorWorkflowForChecks=priorV2WorkflowForChecks;
 if(process.argv[1]&&fs.existsSync(process.argv[1])&&fileURLToPath(import.meta.url)===fs.realpathSync(process.argv[1])){
  const working=process.argv.includes('--working-tree'),base=process.argv.find(a=>/^[a-f0-9]{40}$/.test(a));
  if(!base)throw Error('Explicit reviewed base SHA required');
+ if(fs.existsSync('.github/shared-integrity-pins.json')){const r=verifySharedCheckout(base,working);console.log(JSON.stringify(r));process.exit(r.ok?0:1);}
  if(base===correctionBase&&fs.existsSync(correctionManifest)){
   const result=verifyCorrection(base,working);console.log(JSON.stringify(result));process.exit(result.ok?0:1);
  }

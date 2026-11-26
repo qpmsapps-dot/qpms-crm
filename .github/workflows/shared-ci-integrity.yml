@@ -1,0 +1,29 @@
+name: Shared CI integrity compatibility
+on:
+  pull_request:
+    paths:
+      - '.github/**'
+      - 'tests/sharedIntegrity.test.js'
+      - 'tests/thermography*'
+      - 'tests/retailAttendance*Guard.test.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify the complete exact delta
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node .github/sharedIntegrity.mjs "${BASE_SHA:-eff30bf06e8d9c66c9fc03be8e5b7b9866b0bab4}"
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Historical assertions, all mutation probes and direct consumer compatibility
+        run: node --test tests/sharedIntegrity.test.js tests/retailAttendanceCorrectionGuard.test.js tests/retailAttendanceExceptionsGuard.test.js tests/thermographyFullstackGuard.test.js tests/thermographyReports.test.js tests/trainingExportGuard.test.js tests/deepCleaningExportGuard.test.js
