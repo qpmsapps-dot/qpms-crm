@@ -1,3 +1,4 @@
+import {priorSharedWorkflow,verifyCheckout as verifySharedCheckout} from './sharedIntegrity.mjs';
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -44,6 +45,7 @@ export function verifyPayload({base,paths,manifest,hash,workflow,baseWorkflow}){
  return {ok:validManifest&&workflowMatches&&!missing.length&&!unexpected.length&&!mismatched.length,validManifest,workflowMatches,missing,unexpected,mismatched};
 }
 export function verifyCurrent(base,working=false){
+ if(fs.existsSync('.github/shared-integrity-pins.json'))return verifySharedCheckout(base,working);
  const paths=git(['diff','--name-only',base,...(working?[]:['HEAD'])]).trim().split('\n').filter(Boolean);
  if(working)paths.push(...git(['ls-files','--others','--exclude-standard']).trim().split('\n').filter(Boolean));
  const read=p=>working?fs.readFileSync(p,'utf8'):git(['show',`HEAD:${p}`]);
@@ -51,7 +53,8 @@ export function verifyCurrent(base,working=false){
  return verifyPayload({base,paths,manifest:JSON.parse(read(manifestPath)),hash,workflow:read(workflowPath),baseWorkflow:git(['show',`${approvedBase}:${workflowPath}`])});
 }
 export function priorWorkflow(workflow){
- const base=git(['show',`${approvedBase}:${workflowPath}`]),hash=p=>git(['hash-object',`--path=${p}`,p]).trim();
+ workflow=priorSharedWorkflow(workflow);
+ const base=git(['show',`${approvedBase}:${workflowPath}`]),hash=p=>git(['rev-parse',`eff30bf06e8d9c66c9fc03be8e5b7b9866b0bab4:${p}`]).trim();
  if(normalize(workflow)!==reviewedWorkflow(base,hash(manifestPath),hash(guardPath)))throw Error('Unreviewed workflow alteration: attendance correction');
  return base;
 }

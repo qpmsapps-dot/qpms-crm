@@ -1,6 +1,7 @@
+import {mainBase,assertCheckout,show as snapshot,git as snapshotGit} from '../.github/sharedIntegrity.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync,existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import * as g from '../.github/retailAttendanceExceptionsGuard.mjs';
 test('attendance exceptions admit only exact reviewed blobs, base and additive workflow block', () => {
@@ -17,7 +18,9 @@ test('attendance exceptions admit only exact reviewed blobs, base and additive w
   assert.equal(g.verifyPayload({ ...f, manifest: { ...f.manifest, files: { ...f.manifest.files, extra: hash() } } }).ok, false);
 });
 test('existing UI workflow steps, dependency pins and protected business modules are unchanged', () => {
-  const show = p => execFileSync('git', ['show', `${g.approvedBase}:${p}`], { encoding: 'utf8' });
-  assert.equal(g.priorWorkflow(readFileSync(g.workflowPath, 'utf8')).replaceAll('\r\n', '\n'), show(g.workflowPath).replaceAll('\r\n', '\n'));
+  assertCheckout();
+  const historicalShow = p => execFileSync('git', ['show', `${g.approvedBase}:${p}`], { encoding: 'utf8' });
+  assert.equal(g.priorWorkflow(readFileSync(g.workflowPath, 'utf8')).replaceAll('\r\n', '\n'), historicalShow(g.workflowPath).replaceAll('\r\n', '\n'));
+ const show=p=>p==='backend/shared/retailMisAccess.js'&&existsSync('.github/training-v2-pins.json')?snapshotGit(['cat-file','blob',JSON.parse(readFileSync('.github/shared-training-pins.json','utf8')).files[p]]):snapshot(mainBase,p);
   for (const p of ['package.json', 'package-lock.json', 'backend/shared/retailAttendance.js', 'backend/shared/retailAttendanceNov2026.js', 'backend/services/retailAttendancePreviewAudit.js', 'supabase/migrations_2_0/232_reliance_retail_uploaded_attendance.sql', '.github/workflows/reliance-retail-operational-changes.yml']) assert.equal(readFileSync(p, 'utf8').replaceAll('\r\n', '\n'), show(p).replaceAll('\r\n', '\n'), p);
 });

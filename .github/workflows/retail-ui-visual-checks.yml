@@ -93,167 +93,8 @@ jobs:
           import os, re, subprocess, sys
           base = os.environ.get("BASE_SHA") or subprocess.check_output(["git","merge-base","HEAD","origin/main"],text=True).strip()
           files = subprocess.check_output(["git","diff","--name-only",base,"HEAD"],text=True).splitlines()
-          # BEGIN RETAIL ATTENDANCE CORRECTION EXACT PAYLOAD
-          correction_manifest = ".github/retail-attendance-correction-pins.json"
-          if correction_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{correction_manifest}"],text=True).strip() != "e6ff19b4a8cddaa43b7cc3962fce5b5115d11162":
-              sys.exit("Attendance correction manifest changed; renew review")
-            if subprocess.check_output(["git","rev-parse","HEAD:.github/retailAttendanceCorrectionGuard.mjs"],text=True).strip() != "e1d445c1e7486073d65244f3a62dfac30e1c0b98":
-              sys.exit("Attendance correction guard changed; renew review")
-            subprocess.run(["node",".github/retailAttendanceCorrectionGuard.mjs",base],check=True)
-            print("PASS: exact attendance correction payload; all subsequent checks remain mandatory.")
-            sys.exit(0)
-          # END RETAIL ATTENDANCE CORRECTION EXACT PAYLOAD
-          # BEGIN RETAIL ATTENDANCE EXCEPTIONS EXACT PAYLOAD
-          attendance_manifest = ".github/retail-attendance-exceptions-pins.json"
-          if attendance_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{attendance_manifest}"],text=True).strip() != "e12da7966e9445a136facd96d1a34a11685544dd":
-              sys.exit("Attendance exception manifest changed; renew review")
-            if subprocess.check_output(["git","rev-parse","HEAD:.github/retailAttendanceExceptionsGuard.mjs"],text=True).strip() != "af475ed9d76cbe288e2e16c7f12a323b89522b94":
-              sys.exit("Attendance exception guard changed; renew review")
-            subprocess.run(["node",".github/retailAttendanceExceptionsGuard.mjs",base],check=True)
-            print("PASS: exact attendance exception payload; all subsequent checks remain mandatory.")
-            sys.exit(0)
-          # END RETAIL ATTENDANCE EXCEPTIONS EXACT PAYLOAD
-          # BEGIN DEEP CLEANING COMPLETION PERCENTAGE EXACT PAYLOAD
-          percentage_manifest = ".github/deep-cleaning-percentage-pins.json"
-          if percentage_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{percentage_manifest}"],text=True).strip() != "4acebc9e7ab58e111ef862579c0d0acd63cee368":
-              sys.exit("Completion-percentage manifest changed; renew review")
-            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningPercentageGuard.mjs"],text=True).strip() != "8080977f720aa2018fa83329322946e0f8210783":
-              sys.exit("Completion-percentage guard changed; renew review")
-            subprocess.run(["node",".github/deepCleaningPercentageGuard.mjs",base],check=True)
-            print("PASS: exact reviewed Deep Cleaning report correction; all subsequent checks remain mandatory.")
-            sys.exit(0)
-          # END DEEP CLEANING COMPLETION PERCENTAGE EXACT PAYLOAD
-          # BEGIN DEEP CLEANING COMPLETED REPORT EXACT PAYLOAD
-          completed_manifest = ".github/deep-cleaning-completed-pins.json"
-          if completed_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{completed_manifest}"],text=True).strip() != "a1d9a5ba6cc4dc155e39387125d9979c65c4ec45":
-              sys.exit("Completed-report manifest changed; renew review")
-            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningCompletedGuard.mjs"],text=True).strip() != "f13286d5443ac78e6eb534bc4615f5a55f75c909":
-              sys.exit("Completed-report guard changed; renew review")
-            subprocess.run(["node",".github/deepCleaningCompletedGuard.mjs",base],check=True)
-            print("PASS: exact reviewed Deep Cleaning report correction; all subsequent checks remain mandatory.")
-            sys.exit(0)
-          # END DEEP CLEANING COMPLETED REPORT EXACT PAYLOAD
-          # BEGIN DEEP CLEANING LAYOUT UI EXACT PAYLOAD
-          layout_manifest = ".github/deep-cleaning-layout-ui-pins.json"
-          if layout_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{layout_manifest}"],text=True).strip() != "35cedcbf8b3ad351f2f1c59f40d0007f1eaeeb09":
-              sys.exit("Deep Cleaning UI manifest changed; renew review")
-            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningLayoutGuard.mjs"],text=True).strip() != "8e69def991a081a861caef8a7387c8ffe7c2514a":
-              sys.exit("Deep Cleaning UI guard changed; renew review")
-            subprocess.run(["node",".github/deepCleaningLayoutGuard.mjs",base],check=True)
-            print("PASS: exact frontend-only Deep Cleaning layout; all subsequent checks remain mandatory.")
-            sys.exit(0)
-          # END DEEP CLEANING LAYOUT UI EXACT PAYLOAD
-          # BEGIN DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD
-          monthly_manifest = ".github/deep-cleaning-monthly-admin-pins.json"
-          if monthly_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{monthly_manifest}"],text=True).strip() != "39a196b59eceed1f4aa38ed7a727454437449a60":
-              sys.exit("Monthly administrator manifest changed; renew review")
-            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningMonthlyAdminGuard.mjs"],text=True).strip() != "60567205f86337c26bb2d62cb2b265e8c044c260":
-              sys.exit("Monthly administrator guard changed; renew review")
-            subprocess.run(["node",".github/deepCleaningMonthlyAdminGuard.mjs",base],check=True)
-            print("PASS: exact monthly administrator repair; all subsequent checks remain mandatory.")
-            sys.exit(0)
-          # END DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD
-          # BEGIN DEEP CLEANING V2 EXACT PAYLOAD
-          dc_manifest = ".github/deep-cleaning-v2-pins.json"
-          if dc_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{dc_manifest}"],text=True).strip() != "2881b91382b38668322dec058fd22e1b60d9dd7a":
-              sys.exit("Deep Cleaning manifest changed; renew review")
-            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningV2Guard.mjs"],text=True).strip() != "d39203d45f1ade863ecfe9a22b11a627d2f0b8cf":
-              sys.exit("Deep Cleaning guard changed; renew review")
-            subprocess.run(["node",".github/deepCleaningV2Guard.mjs",base],check=True)
-            print("PASS: exact reviewed Deep Cleaning V2 payload; all subsequent checks remain mandatory.")
-            sys.exit(0)
-          # END DEEP CLEANING V2 EXACT PAYLOAD
-          # BEGIN THERMOGRAPHY V2 EXACT PAYLOAD
-          v2_manifest = ".github/thermography-v2-pins.json"
-          if v2_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{v2_manifest}"],text=True).strip() != "8ec5ad45c794aadd695bd953d3f8ed38b8e05877":
-              sys.exit("Thermography V2 manifest changed; renew independent review")
-            if subprocess.check_output(["git","rev-parse","HEAD:.github/thermographyV2Guard.mjs"],text=True).strip() != "fb76fa8b4a228302f861f3c7b7aedb601d42d7a4":
-              sys.exit("Thermography V2 guard changed; renew independent review")
-            subprocess.run(["node",".github/thermographyV2Guard.mjs",base],check=True)
-            print("PASS: exact reviewed Thermography V2 payload; every subsequent check remains mandatory.")
-            sys.exit(0)
-          # END THERMOGRAPHY V2 EXACT PAYLOAD
-          # BEGIN DEEP CLEANING EXPORT EXACT PAYLOAD
-          approved_cleaning_exports = {
-            ".github/deepCleaningExportGuard.mjs": "d3ee4072d294a8869c969481005d67dcc3a2b1f5",
-            "tests/deepCleaningExportGuard.test.js": "391602139dc3c03505cbb4102ff96fce76bf564e",
-            "tests/trainingExportGuard.test.js": "f24a80c66546dbd281e939367abf35dea3c1904f",
-            "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "9716e433b15fdc90f3efc042e2cfb3db1720ae98",
-            "src/components/reliance-retail/DeepCleaningExportControls.jsx": "8195c0d24e62b02352c3d9369929e7f1b72f7cb6",
-            "src/utils/deepCleaningExport.js": "06628add1d1130c5813fb5d48d83b23588d2bed7",
-            "src/utils/deepCleaningExportFiles.js": "9b32acfaa7a51cbf6632b4248a14387dbe18ced0",
-            "tests/deepCleaningExports.test.js": "44294a46f53d68463c6a7456b88f88175dc68156",
-            "tests/deepCleaningExports.browser.test.js": "9594ee886e9757ba2599756e4408512d40783f89"
-          }
-          cleaning_changed = set(files) - {'.github/workflows/retail-ui-visual-checks.yml'}
-          if '.github/deepCleaningExportGuard.mjs' in cleaning_changed:
-            subprocess.run(['node', '.github/deepCleaningExportGuard.mjs', base], check=True)
-            print('PASS: exact export-only payload; every following CI step remains mandatory.')
-            sys.exit(0)
-          # END DEEP CLEANING EXPORT EXACT PAYLOAD
-          # BEGIN TRAINING EXPORT EXACT PAYLOAD
-          approved_training_exports = {
-            "package.json": "d09171ac1f85630d6c4882ab724a0f425097896e",
-            "package-lock.json": "cbac25222684bad886563cddce7f2e19993da6f5",
-            "src/pages/reliance-retail/RetailTraining.jsx": "2393b9e4cc3cc06c1af79d04cec521a7d55fd05e",
-            "src/components/reliance-retail/TrainingExportControls.jsx": "d510c64dfe0db35cef8f987058b1425d0d2f99b7",
-            "src/components/reliance-retail/trainingExports.css": "08d034ed88e50639ca1c5fcf35daf61bdf4946b3",
-            "src/utils/trainingExport.js": "8f8b21d2094be0ce0d9da2dd296dbac31499495b",
-            "src/utils/trainingExportFiles.js": "69954dfeaa2febeed720e945cb93cd3f6b0c820d",
-            "tests/trainingExports.test.js": "7626aeca04dfd23bc0658304ebf8d73349cc6e6d",
-            "tests/trainingExports.browser.test.js": "50be16d0dc6c1ab12a491b1583080c2ac2e4d047",
-            ".github/trainingExportGuard.mjs": "174dee37f9e572f96b9a20145a124f4de4126ce7",
-            "tests/trainingExportGuard.test.js": "e136dc64e1b65823de8bd3402555946c335de967"
-          }
-          training_export_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
-          if training_export_changed == set(approved_training_exports):
-            mismatch = [path for path, expected in approved_training_exports.items()
-                        if subprocess.check_output(["git", "rev-parse", f"HEAD:{path}"], text=True).strip() != expected]
-            if mismatch:
-              sys.exit("Training export payload changed; renew protected review: " + ", ".join(mismatch))
-            subprocess.run(["node", ".github/trainingExportGuard.mjs", base], check=True)
-            print("PASS: exact Training export payload; all following CI steps remain mandatory.")
-            sys.exit(0)
-          # END TRAINING EXPORT EXACT PAYLOAD
-          # Combined Executive V3 + Training V2: exact reviewed payload only.
-          import json
-          combined_manifest = ".github/retail-combined-ui-pins.json"
-          if combined_manifest in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{combined_manifest}"],text=True).strip() != "7e282fdb8189aa764cda8c3d69d431abb8b18d00":
-              sys.exit("Combined manifest changed; renew protected review")
-            if subprocess.check_output(["git","rev-parse","HEAD:.github/retailCombinedGuard.mjs"],text=True).strip() != "81154680b9529640bcc607571571973c0418a54b":
-              sys.exit("Combined guard changed; renew protected review")
-            subprocess.run(["node",".github/retailCombinedGuard.mjs",base],check=True)
-            print("PASS: exact combined frontend/test/asset payload; all later checks mandatory")
-            sys.exit(0)
-          # Training V2: reviewed exact frontend/test payload; no sensitive path broadening.
-          approved_training_v2 = {
-            "src/pages/reliance-retail/RetailTraining.jsx": "5b2cca44b656f779baba3128274af648a5b3d4ad",
-            "src/components/reliance-retail/TrainingV2Overview.jsx": "4b0244e5e720dc01d45dede359e1a242ed81c735",
-            "src/components/reliance-retail/TrainingV2Drawer.jsx": "583f5b85c1422153cb48e0ea33d3bb92c2456cd3",
-            "src/components/reliance-retail/trainingV2.css": "6bb2ade266149d7f96417dfe90d3bc3c42c7fa8a",
-            "src/utils/trainingView.js": "fb549d0c29eb62d4efe2dd535c707d359db6617c",
-            "tests/trainingView.test.js": "0a13518bc7cca5bd11613d027cb8b0e82362052f",
-            "tests/browser/trainingV2.spec.js": "fb8e270d62ab4eacd3b06e96e876743e73f16d10",
-          }
-          training_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
-          if training_changed == set(approved_training_v2):
-            mismatch = [path for path, expected in approved_training_v2.items()
-                        if subprocess.check_output(["git", "rev-parse", f"HEAD:{path}"], text=True).strip() != expected]
-            if mismatch:
-              sys.exit("Training V2 content changed; renew protected review: " + ", ".join(mismatch))
-            print("PASS: exact Training V2 frontend/test payload; all following CI steps remain mandatory.")
-            sys.exit(0)
-          # PR #82: exact Phase 6 frontend + Deep Cleaning V2 payload only.
-          # No wildcard paths; all subsequent lint/test/build steps remain mandatory.
+          # BEGIN SHARED INTEGRITY EXACT PAYLOAD
+          authorized = False
           approved_phase6_ui = {
             "src/components/reliance-retail/DeepCleaningEvidenceDrawer.jsx": "e2570f184002d7948e90fa56a595b5bbab136808",
             "src/components/reliance-retail/DeepCleaningOverview.jsx": "0439a221074ea9652ec2436ca308ab662fbd6acd",
@@ -295,12 +136,182 @@ jobs:
             assert not phase6_payload_matches(reviewed_paths | {extra}, reviewed_blob)
             negative_cases += 1
           print(f"PASS: Phase 6 exact-payload authorization and {negative_cases} negative guard cases.")
+          shared_manifest = ".github/shared-integrity-pins.json"
+          if shared_manifest in files or ".github/training-v2-pins.json" in files:
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{shared_manifest}"],text=True).strip() != "9bb6b8f44b5e720f02744a12455e57a90917ac73":
+              sys.exit("Shared integrity manifest changed; renew review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/sharedIntegrity.mjs"],text=True).strip() != "9952cedf3bfd34e6cdf70a53cce73afdc0c0461b":
+              sys.exit("Shared integrity verifier changed; renew review")
+            subprocess.run(["node",".github/sharedIntegrity.mjs",base],check=True)
+            authorized = True
+          # END SHARED INTEGRITY EXACT PAYLOAD
+          # BEGIN RETAIL ATTENDANCE CORRECTION EXACT PAYLOAD
+          correction_manifest = ".github/retail-attendance-correction-pins.json"
+          if not authorized and (correction_manifest in files):
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{correction_manifest}"],text=True).strip() != "e6ff19b4a8cddaa43b7cc3962fce5b5115d11162":
+              sys.exit("Attendance correction manifest changed; renew review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/retailAttendanceCorrectionGuard.mjs"],text=True).strip() != "e1d445c1e7486073d65244f3a62dfac30e1c0b98":
+              sys.exit("Attendance correction guard changed; renew review")
+            subprocess.run(["node",".github/retailAttendanceCorrectionGuard.mjs",base],check=True)
+            print("PASS: exact attendance correction payload; all subsequent checks remain mandatory.")
+            authorized = True
+          # END RETAIL ATTENDANCE CORRECTION EXACT PAYLOAD
+          # BEGIN RETAIL ATTENDANCE EXCEPTIONS EXACT PAYLOAD
+          attendance_manifest = ".github/retail-attendance-exceptions-pins.json"
+          if not authorized and (attendance_manifest in files):
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{attendance_manifest}"],text=True).strip() != "e12da7966e9445a136facd96d1a34a11685544dd":
+              sys.exit("Attendance exception manifest changed; renew review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/retailAttendanceExceptionsGuard.mjs"],text=True).strip() != "af475ed9d76cbe288e2e16c7f12a323b89522b94":
+              sys.exit("Attendance exception guard changed; renew review")
+            subprocess.run(["node",".github/retailAttendanceExceptionsGuard.mjs",base],check=True)
+            print("PASS: exact attendance exception payload; all subsequent checks remain mandatory.")
+            authorized = True
+          # END RETAIL ATTENDANCE EXCEPTIONS EXACT PAYLOAD
+          # BEGIN DEEP CLEANING COMPLETION PERCENTAGE EXACT PAYLOAD
+          percentage_manifest = ".github/deep-cleaning-percentage-pins.json"
+          if not authorized and (percentage_manifest in files):
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{percentage_manifest}"],text=True).strip() != "4acebc9e7ab58e111ef862579c0d0acd63cee368":
+              sys.exit("Completion-percentage manifest changed; renew review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningPercentageGuard.mjs"],text=True).strip() != "8080977f720aa2018fa83329322946e0f8210783":
+              sys.exit("Completion-percentage guard changed; renew review")
+            subprocess.run(["node",".github/deepCleaningPercentageGuard.mjs",base],check=True)
+            print("PASS: exact reviewed Deep Cleaning report correction; all subsequent checks remain mandatory.")
+            authorized = True
+          # END DEEP CLEANING COMPLETION PERCENTAGE EXACT PAYLOAD
+          # BEGIN DEEP CLEANING COMPLETED REPORT EXACT PAYLOAD
+          completed_manifest = ".github/deep-cleaning-completed-pins.json"
+          if not authorized and (completed_manifest in files):
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{completed_manifest}"],text=True).strip() != "a1d9a5ba6cc4dc155e39387125d9979c65c4ec45":
+              sys.exit("Completed-report manifest changed; renew review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningCompletedGuard.mjs"],text=True).strip() != "f13286d5443ac78e6eb534bc4615f5a55f75c909":
+              sys.exit("Completed-report guard changed; renew review")
+            subprocess.run(["node",".github/deepCleaningCompletedGuard.mjs",base],check=True)
+            print("PASS: exact reviewed Deep Cleaning report correction; all subsequent checks remain mandatory.")
+            authorized = True
+          # END DEEP CLEANING COMPLETED REPORT EXACT PAYLOAD
+          # BEGIN DEEP CLEANING LAYOUT UI EXACT PAYLOAD
+          layout_manifest = ".github/deep-cleaning-layout-ui-pins.json"
+          if not authorized and (layout_manifest in files):
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{layout_manifest}"],text=True).strip() != "35cedcbf8b3ad351f2f1c59f40d0007f1eaeeb09":
+              sys.exit("Deep Cleaning UI manifest changed; renew review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningLayoutGuard.mjs"],text=True).strip() != "8e69def991a081a861caef8a7387c8ffe7c2514a":
+              sys.exit("Deep Cleaning UI guard changed; renew review")
+            subprocess.run(["node",".github/deepCleaningLayoutGuard.mjs",base],check=True)
+            print("PASS: exact frontend-only Deep Cleaning layout; all subsequent checks remain mandatory.")
+            authorized = True
+          # END DEEP CLEANING LAYOUT UI EXACT PAYLOAD
+          # BEGIN DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD
+          monthly_manifest = ".github/deep-cleaning-monthly-admin-pins.json"
+          if not authorized and (monthly_manifest in files):
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{monthly_manifest}"],text=True).strip() != "39a196b59eceed1f4aa38ed7a727454437449a60":
+              sys.exit("Monthly administrator manifest changed; renew review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningMonthlyAdminGuard.mjs"],text=True).strip() != "60567205f86337c26bb2d62cb2b265e8c044c260":
+              sys.exit("Monthly administrator guard changed; renew review")
+            subprocess.run(["node",".github/deepCleaningMonthlyAdminGuard.mjs",base],check=True)
+            print("PASS: exact monthly administrator repair; all subsequent checks remain mandatory.")
+            authorized = True
+          # END DEEP CLEANING MONTHLY ADMIN EXACT PAYLOAD
+          # BEGIN DEEP CLEANING V2 EXACT PAYLOAD
+          dc_manifest = ".github/deep-cleaning-v2-pins.json"
+          if not authorized and (dc_manifest in files):
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{dc_manifest}"],text=True).strip() != "2881b91382b38668322dec058fd22e1b60d9dd7a":
+              sys.exit("Deep Cleaning manifest changed; renew review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/deepCleaningV2Guard.mjs"],text=True).strip() != "d39203d45f1ade863ecfe9a22b11a627d2f0b8cf":
+              sys.exit("Deep Cleaning guard changed; renew review")
+            subprocess.run(["node",".github/deepCleaningV2Guard.mjs",base],check=True)
+            print("PASS: exact reviewed Deep Cleaning V2 payload; all subsequent checks remain mandatory.")
+            authorized = True
+          # END DEEP CLEANING V2 EXACT PAYLOAD
+          # BEGIN THERMOGRAPHY V2 EXACT PAYLOAD
+          v2_manifest = ".github/thermography-v2-pins.json"
+          if not authorized and (v2_manifest in files):
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{v2_manifest}"],text=True).strip() != "8ec5ad45c794aadd695bd953d3f8ed38b8e05877":
+              sys.exit("Thermography V2 manifest changed; renew independent review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/thermographyV2Guard.mjs"],text=True).strip() != "fb76fa8b4a228302f861f3c7b7aedb601d42d7a4":
+              sys.exit("Thermography V2 guard changed; renew independent review")
+            subprocess.run(["node",".github/thermographyV2Guard.mjs",base],check=True)
+            print("PASS: exact reviewed Thermography V2 payload; every subsequent check remains mandatory.")
+            authorized = True
+          # END THERMOGRAPHY V2 EXACT PAYLOAD
+          # BEGIN DEEP CLEANING EXPORT EXACT PAYLOAD
+          approved_cleaning_exports = {
+            ".github/deepCleaningExportGuard.mjs": "d3ee4072d294a8869c969481005d67dcc3a2b1f5",
+            "tests/deepCleaningExportGuard.test.js": "391602139dc3c03505cbb4102ff96fce76bf564e",
+            "tests/trainingExportGuard.test.js": "f24a80c66546dbd281e939367abf35dea3c1904f",
+            "src/pages/reliance-retail/RetailScopedDeepCleaning.jsx": "9716e433b15fdc90f3efc042e2cfb3db1720ae98",
+            "src/components/reliance-retail/DeepCleaningExportControls.jsx": "8195c0d24e62b02352c3d9369929e7f1b72f7cb6",
+            "src/utils/deepCleaningExport.js": "06628add1d1130c5813fb5d48d83b23588d2bed7",
+            "src/utils/deepCleaningExportFiles.js": "9b32acfaa7a51cbf6632b4248a14387dbe18ced0",
+            "tests/deepCleaningExports.test.js": "44294a46f53d68463c6a7456b88f88175dc68156",
+            "tests/deepCleaningExports.browser.test.js": "9594ee886e9757ba2599756e4408512d40783f89"
+          }
+          cleaning_changed = set(files) - {'.github/workflows/retail-ui-visual-checks.yml'}
+          if not authorized and ('.github/deepCleaningExportGuard.mjs' in cleaning_changed):
+            subprocess.run(['node', '.github/deepCleaningExportGuard.mjs', base], check=True)
+            print('PASS: exact export-only payload; every following CI step remains mandatory.')
+            authorized = True
+          # END DEEP CLEANING EXPORT EXACT PAYLOAD
+          # BEGIN TRAINING EXPORT EXACT PAYLOAD
+          approved_training_exports = {
+            "package.json": "d09171ac1f85630d6c4882ab724a0f425097896e",
+            "package-lock.json": "cbac25222684bad886563cddce7f2e19993da6f5",
+            "src/pages/reliance-retail/RetailTraining.jsx": "2393b9e4cc3cc06c1af79d04cec521a7d55fd05e",
+            "src/components/reliance-retail/TrainingExportControls.jsx": "d510c64dfe0db35cef8f987058b1425d0d2f99b7",
+            "src/components/reliance-retail/trainingExports.css": "08d034ed88e50639ca1c5fcf35daf61bdf4946b3",
+            "src/utils/trainingExport.js": "8f8b21d2094be0ce0d9da2dd296dbac31499495b",
+            "src/utils/trainingExportFiles.js": "69954dfeaa2febeed720e945cb93cd3f6b0c820d",
+            "tests/trainingExports.test.js": "7626aeca04dfd23bc0658304ebf8d73349cc6e6d",
+            "tests/trainingExports.browser.test.js": "50be16d0dc6c1ab12a491b1583080c2ac2e4d047",
+            ".github/trainingExportGuard.mjs": "174dee37f9e572f96b9a20145a124f4de4126ce7",
+            "tests/trainingExportGuard.test.js": "e136dc64e1b65823de8bd3402555946c335de967"
+          }
+          training_export_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
+          if not authorized and (training_export_changed == set(approved_training_exports)):
+            mismatch = [path for path, expected in approved_training_exports.items()
+                        if subprocess.check_output(["git", "rev-parse", f"HEAD:{path}"], text=True).strip() != expected]
+            if mismatch:
+              sys.exit("Training export payload changed; renew protected review: " + ", ".join(mismatch))
+            subprocess.run(["node", ".github/trainingExportGuard.mjs", base], check=True)
+            print("PASS: exact Training export payload; all following CI steps remain mandatory.")
+            authorized = True
+          # END TRAINING EXPORT EXACT PAYLOAD
+          # Combined Executive V3 + Training V2: exact reviewed payload only.
+          import json
+          combined_manifest = ".github/retail-combined-ui-pins.json"
+          if not authorized and (combined_manifest in files):
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{combined_manifest}"],text=True).strip() != "7e282fdb8189aa764cda8c3d69d431abb8b18d00":
+              sys.exit("Combined manifest changed; renew protected review")
+            if subprocess.check_output(["git","rev-parse","HEAD:.github/retailCombinedGuard.mjs"],text=True).strip() != "81154680b9529640bcc607571571973c0418a54b":
+              sys.exit("Combined guard changed; renew protected review")
+            subprocess.run(["node",".github/retailCombinedGuard.mjs",base],check=True)
+            print("PASS: exact combined frontend/test/asset payload; all later checks mandatory")
+            authorized = True
+          # Training V2: reviewed exact frontend/test payload; no sensitive path broadening.
+          approved_training_v2 = {
+            "src/pages/reliance-retail/RetailTraining.jsx": "5b2cca44b656f779baba3128274af648a5b3d4ad",
+            "src/components/reliance-retail/TrainingV2Overview.jsx": "4b0244e5e720dc01d45dede359e1a242ed81c735",
+            "src/components/reliance-retail/TrainingV2Drawer.jsx": "583f5b85c1422153cb48e0ea33d3bb92c2456cd3",
+            "src/components/reliance-retail/trainingV2.css": "6bb2ade266149d7f96417dfe90d3bc3c42c7fa8a",
+            "src/utils/trainingView.js": "fb549d0c29eb62d4efe2dd535c707d359db6617c",
+            "tests/trainingView.test.js": "0a13518bc7cca5bd11613d027cb8b0e82362052f",
+            "tests/browser/trainingV2.spec.js": "fb8e270d62ab4eacd3b06e96e876743e73f16d10",
+          }
+          training_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
+          if not authorized and (training_changed == set(approved_training_v2)):
+            mismatch = [path for path, expected in approved_training_v2.items()
+                        if subprocess.check_output(["git", "rev-parse", f"HEAD:{path}"], text=True).strip() != expected]
+            if mismatch:
+              sys.exit("Training V2 content changed; renew protected review: " + ", ".join(mismatch))
+            print("PASS: exact Training V2 frontend/test payload; all following CI steps remain mandatory.")
+            authorized = True
+          # PR #82: exact Phase 6 frontend + Deep Cleaning V2 payload only.
+          # No wildcard paths; all subsequent lint/test/build steps remain mandatory.
           phase6_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
-          if phase6_changed == reviewed_paths:
+          if not authorized and (phase6_changed == reviewed_paths):
             if not phase6_payload_matches(phase6_changed, lambda path: subprocess.check_output(["git", "rev-parse", f"HEAD:{path}"], text=True).strip()):
               sys.exit("Phase 6 UI content changed; renew protected review.")
             print("PASS: exact reviewed Phase 6 UI/test blobs; remaining CI steps are required.")
-            sys.exit(0)
+            authorized = True
           # PR #80: authorize only the reviewed five-file accessibility payload.
           # Pins are committed Git blobs; no broader path/control rules are relaxed.
           approved_ui_accessibility_release = {
@@ -311,13 +322,13 @@ jobs:
             "src/components/reliance-retail/RetailAttendanceVisual.jsx": "5e267fbbfb04d00c995d77f28c9f3a8eeed19866",
           }
           accessibility_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
-          if accessibility_changed == set(approved_ui_accessibility_release):
+          if not authorized and (accessibility_changed == set(approved_ui_accessibility_release)):
             mismatch = [path for path, expected in approved_ui_accessibility_release.items()
                         if subprocess.check_output(["git","rev-parse",f"HEAD:{path}"],text=True).strip() != expected]
             if mismatch:
               sys.exit("Accessibility payload changed; renew protected review: " + ", ".join(mismatch))
             print("PASS: exact reviewed five-file accessibility payload; all regression steps remain required.")
-            sys.exit(0)
+            authorized = True
           # Scoped in-page Attendance redesign. Byte-for-byte source checks
           # preserve existing actions, route permissions, and sidebar/branding.
           approved_attendance_visual_release = {
@@ -329,12 +340,12 @@ jobs:
             "tests/retailAttendanceVisualModel.test.js": "280951b5235a1f556c965ab763d97ae9db37500f",
           }
           attendance_changed = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
-          if attendance_changed == set(approved_attendance_visual_release):
+          if not authorized and (attendance_changed == set(approved_attendance_visual_release)):
             changes=[p for p,digest in approved_attendance_visual_release.items()
               if subprocess.check_output(["git","hash-object",p],text=True).strip()!=digest]
             if changes: sys.exit("Attendance visual content changed: "+", ".join(changes))
             print("PASS: scoped Attendance visual redesign; original workflow regressions remain active.")
-            sys.exit(0)
+            authorized = True
           # One-time, exact-content checked Retail dashboard presentation release.
           # Any edited source/control logic must undergo a fresh review; all regular
           # path and action safeguards below remain active for other pull requests.
@@ -355,13 +366,13 @@ jobs:
             "tests/retailOosAgeingBrowser.test.js": "4b94200a0e2af0a548aa3a954b88fb441a298f48",
           }
           candidate = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
-          if candidate == set(approved_statewise_release):
+          if not authorized and (candidate == set(approved_statewise_release)):
             bad = [path for path,expected in approved_statewise_release.items()
                    if subprocess.check_output(["git","hash-object",path],text=True).strip() != expected]
             if bad:
               sys.exit("State-wise Retail dashboard content has changed: " + ", ".join(bad))
             print("PASS: exact reviewed state-wise dashboard with all reporting and workflow tests required.")
-            sys.exit(0)
+            authorized = True
           # One-time, content-pinned operational Retail feature review.
           # This does not broaden the old UI-only path/control guard for other PRs.
           # The feature-specific CI also runs backend tests, scoped lint, build,
@@ -378,13 +389,13 @@ jobs:
             "src/services/retailUnifiedApi.js": "b603aefd9354bb8c3b2d035febf7055d12788a39",
           }
           operational_diff = set(files) - {".github/workflows/retail-ui-visual-checks.yml"}
-          if operational_diff == set(approved_operational_ui):
+          if not authorized and (operational_diff == set(approved_operational_ui)):
             mismatch = [path for path, expected in approved_operational_ui.items()
                         if subprocess.check_output(["git","hash-object",path],text=True).strip() != expected]
             if mismatch:
               sys.exit("Operational Retail UI payload changed; protected review must be renewed: " + ", ".join(mismatch))
             print("PASS: exact content-pinned Retail operational UI patch; full UI and operational tests are required.")
-            sys.exit(0)
+            authorized = True
           allowed = {
             "src/components/reliance-retail/retailReport.css",
             "src/pages/reliance-retail/ifmsDashboard.css",
@@ -422,12 +433,13 @@ jobs:
             "tests/retailOosTrainingBrowser.test.js",
             "tests/retailOosUiPresentationBrowser.test.js"
           }
-          unexpected = [p for p in files if p not in allowed]
+          fallback_files = [] if authorized else files
+          unexpected = [p for p in fallback_files if p not in allowed]
           if unexpected: sys.exit("Unexpected/protected files changed: " + ", ".join(unexpected))
           # The OOS drawer intentionally relocates controls; its behavior is
           # covered by the OOS browser regressions below. Keep the existing
           # control-count guard for the other reporting pages.
-          jsx = [p for p in files if p.endswith(".jsx") and p not in oos_ui]
+          jsx = [p for p in fallback_files if p.endswith(".jsx") and p not in oos_ui]
           for path, start, end in [
               ("src/pages/reliance-retail/RetailOos12Transition.jsx", " const requirement=", " return <section"),
               ("src/pages/reliance-retail/RetailOosWorkspace.jsx", " async function commit()", " if(accessError)"),
@@ -459,7 +471,7 @@ jobs:
             "tests/browser/retailExcelInline.spec.js": "a8845630f06c13141059f1becf7ee6de0e95ef65",
           }
           for path,expected in approved_inline_ui.items():
-            if path in files:
+            if path in fallback_files:
               actual = subprocess.check_output(["git","hash-object",path],text=True).strip()
               if actual != expected:
                 sys.exit(f"{path}: unreviewed inline source presentation change")

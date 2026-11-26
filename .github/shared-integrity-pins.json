@@ -1,0 +1,23 @@
+{
+  "schema": "shared-integrity.v1",
+  "base_sha": "eff30bf06e8d9c66c9fc03be8e5b7b9866b0bab4",
+  "integrationBases": [
+    "6db290b91612663c2b66c1b7ce2d7a1fb7ce817d"
+  ],
+  "files": {
+    ".github/retailAttendanceCorrectionGuard.mjs": "f59345fc306c6e78e9cbaca4afcb61cee97a0830",
+    ".github/retailAttendanceExceptionsGuard.mjs": "03bc773f71358668647bc1a8e0ed0ad7a2bda963",
+    ".github/shared-integrity-probes.json": "bdfd8321fc58b3d902e37f97280f72a7f30eb22d",
+    ".github/shared-training-pins.json": "d25c292fe250f39336df197d9810cbf2dcea53ea",
+    ".github/sharedHistoricalChecks.mjs": "3e20a330d6e7799dde79fa388ebcece8810c19f0",
+    ".github/sharedIntegrity.mjs": "9952cedf3bfd34e6cdf70a53cce73afdc0c0461b",
+    ".github/thermographyV2Guard.mjs": "ce6f95dd7fdea71c078e3ac6365ae3f316e8078d",
+    ".github/workflows/shared-ci-integrity.yml": "344f9bd8dd2ec9f2a4f7b8cee3815db867c08aa0",
+    "docs/SHARED_CI_INTEGRITY_REMEDIATION.md": "6ae385aa538a357d87457727f51ec57858d633e5",
+    "tests/retailAttendanceCorrectionGuard.test.js": "850c9aefa85aec76024989b2c9bfb2b0c674e585",
+    "tests/retailAttendanceExceptionsGuard.test.js": "fa41136f5de714fbe5b224b711cd567f76013ef8",
+    "tests/sharedIntegrity.test.js": "febacc3933b6cfbabaa42e8a99b8347304856eea",
+    "tests/thermographyFullstackGuard.test.js": "bf74539f025e1b9ab33d2daf3addef5664b1fc06",
+    "tests/thermographyReports.test.js": "c2cac5aebf2593cbffd3df89299955a4748175c7"
+  }
+}

@@ -1,0 +1,342 @@
+[
+  {
+    "kind": "missing file",
+    "name": ".github/thermographyV2Guard.mjs"
+  },
+  {
+    "kind": "missing file",
+    "name": ".github/training-v2-pins.json"
+  },
+  {
+    "kind": "missing file",
+    "name": ".github/trainingV2Guard.mjs"
+  },
+  {
+    "kind": "missing file",
+    "name": ".github/workflows/reliance-training-v2.yml"
+  },
+  {
+    "kind": "missing file",
+    "name": ".github/workflows/retail-ui-visual-checks.yml"
+  },
+  {
+    "kind": "missing file",
+    "name": ".gitignore"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/routes/trainingRoutes.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/services/relianceRetailManagementService.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/services/retailModuleReportService.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/services/trainingAccessService.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/services/trainingEntitlementService.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/services/trainingEvidenceService.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/services/trainingService.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/services/trainingWebService.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/shared/retailMisAccess.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/tests/fixtures/training_v2_installed_baseline.sql"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/tests/retailDashboardTrainingCount.test.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/tests/retailHkTrainingReadScope.test.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/tests/retailMisAccess.test.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/tests/retailModuleReportService.test.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/tests/trainingMobileV4.test.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/tests/trainingReleaseCompatibility.test.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/tests/trainingV2Database.test.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "backend/tests/trainingV2Services.test.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "docs/retail/TRAINING_V2_PHASE2.md"
+  },
+  {
+    "kind": "missing file",
+    "name": "docs/retail/screenshots/training-v2/training-categories-desktop.png"
+  },
+  {
+    "kind": "missing file",
+    "name": "docs/retail/screenshots/training-v2/training-categories-mobile.png"
+  },
+  {
+    "kind": "missing file",
+    "name": "src/components/user-management/EmployeeDetailsDrawer.jsx"
+  },
+  {
+    "kind": "missing file",
+    "name": "src/components/user-management/TrainingCategoriesPanel.jsx"
+  },
+  {
+    "kind": "missing file",
+    "name": "supabase/migrations/20261126064945_reliance_training_v2_entitlements_web_contract.sql"
+  },
+  {
+    "kind": "missing file",
+    "name": "supabase/proposals/training_v2_phase2_rollback.sql"
+  },
+  {
+    "kind": "missing file",
+    "name": "tests/thermographyFullstackGuard.test.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "tests/thermographyReports.test.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "tests/trainingCategories.browser.test.js"
+  },
+  {
+    "kind": "missing file",
+    "name": "tests/trainingV2Guard.test.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": ".github/trainingV2Guard.mjs"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": ".github/workflows/reliance-training-v2.yml"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": ".gitignore"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/routes/trainingRoutes.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/services/relianceRetailManagementService.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/services/retailModuleReportService.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/services/trainingAccessService.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/services/trainingEntitlementService.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/services/trainingEvidenceService.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/services/trainingService.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/services/trainingWebService.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/shared/retailMisAccess.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/tests/fixtures/training_v2_installed_baseline.sql"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/tests/retailDashboardTrainingCount.test.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/tests/retailHkTrainingReadScope.test.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/tests/retailMisAccess.test.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/tests/retailModuleReportService.test.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/tests/trainingMobileV4.test.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/tests/trainingReleaseCompatibility.test.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/tests/trainingV2Database.test.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "backend/tests/trainingV2Services.test.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "docs/retail/TRAINING_V2_PHASE2.md"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "docs/retail/screenshots/training-v2/training-categories-desktop.png"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "docs/retail/screenshots/training-v2/training-categories-mobile.png"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "src/components/user-management/EmployeeDetailsDrawer.jsx"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "src/components/user-management/TrainingCategoriesPanel.jsx"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "supabase/migrations/20261126064945_reliance_training_v2_entitlements_web_contract.sql"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "supabase/proposals/training_v2_phase2_rollback.sql"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "tests/thermographyFullstackGuard.test.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "tests/thermographyReports.test.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "tests/trainingCategories.browser.test.js"
+  },
+  {
+    "kind": "modified pinned file",
+    "name": "tests/trainingV2Guard.test.js"
+  },
+  {
+    "kind": "unrelated future modification",
+    "name": "backend/server.js"
+  },
+  {
+    "kind": "unrelated future modification",
+    "name": "src/pages/FOActivities.jsx"
+  },
+  {
+    "kind": "unrelated future modification",
+    "name": "Mobile_FO_V2/lib/main.dart"
+  },
+  {
+    "kind": "unrelated future modification",
+    "name": "backend/services/retailAttendanceService.js"
+  },
+  {
+    "kind": "unrelated future modification",
+    "name": "backend/services/clientDeepCleaningService.js"
+  },
+  {
+    "kind": "unrelated future modification",
+    "name": "backend/shared/retailOperations.js"
+  },
+  {
+    "kind": "unrelated future modification",
+    "name": "src/context/AuthContext.jsx"
+  },
+  {
+    "kind": "unrelated future modification",
+    "name": "supabase/migrations/unapproved.sql"
+  },
+  {
+    "kind": "unrelated future modification",
+    "name": ".github/workflows/deploy.yml"
+  },
+  {
+    "kind": "workflow tampering",
+    "name": "remove build"
+  },
+  {
+    "kind": "workflow tampering",
+    "name": "remove security step"
+  },
+  {
+    "kind": "workflow tampering",
+    "name": "broaden permissions"
+  },
+  {
+    "kind": "workflow tampering",
+    "name": "skip tests"
+  },
+  {
+    "kind": "workflow tampering",
+    "name": "extra trigger"
+  },
+  {
+    "kind": "old guard tampering",
+    "name": "append unauthorized branch"
+  },
+  {
+    "kind": "baseline drift",
+    "name": "wrong base"
+  },
+  {
+    "kind": "manifest tampering",
+    "name": "missing pins"
+  },
+  {
+    "kind": "manifest tampering",
+    "name": "extra pin"
+  }
+]
