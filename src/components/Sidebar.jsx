@@ -71,6 +71,7 @@ const relianceRetailNavGroup = {
     { label: 'OOS Tracker', to: '/reliance-retail/oos', icon: ClipboardList },
     { label: 'Manpower Vacancy', to: '/reliance-retail/manpower', icon: Users },
     { label: 'Reliance Retail Store Master', to: '/reliance-retail/store-master', icon: Store },
+    { label: 'Upload MEPC Training', to: '/reliance-retail/training-upload', icon: ListChecks },
   ],
 };
 

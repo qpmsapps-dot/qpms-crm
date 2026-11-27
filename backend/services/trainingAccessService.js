@@ -69,6 +69,10 @@ export function translateTrainingDatabaseError(error) {
   const message = dbErrorMessage(error);
   const code = cleanTrainingText(error?.code);
   const known = {
+    training_mobile_management_release_disabled: [403, 'training_mobile_management_release_disabled', 'Mobile management Training uploads are awaiting release approval.'],
+    training_mobile_management_forbidden: [403, 'training_mobile_management_forbidden', 'Mobile management Training access is not authorized.'],
+    training_mobile_date_not_allowed: [400, 'training_mobile_date_not_allowed', 'Management mobile Training must be conducted today (IST).'],
+    training_web_release_disabled: [403, 'training_web_release_disabled', 'MEPC Web uploads are awaiting release approval.'],
     training_category_forbidden: [403, 'category_forbidden', 'Your role cannot initiate or submit this Training category.'],
     training_creation_key_conflict: [409, 'creation_key_conflict', 'This creation identity belongs to a different draft.'],
     training_attendance_not_active: [409, 'attendance_not_active', 'Start Day and an active Check-In are required.'],

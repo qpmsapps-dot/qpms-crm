@@ -34,6 +34,10 @@ class TrainingSession {
     this.trainingDate,
     this.canEdit = true,
     this.hkTrainingPolicy,
+    this.completionPolicyVersion = 1,
+    this.submissionChannel,
+    this.uploaderProfileId,
+    this.actualTrainerProfileId,
     this.category,
     this.trainingType,
     this.trainerName,
@@ -67,9 +71,13 @@ class TrainingSession {
   });
 
   final String id;
+  final String? submissionChannel;
+  final String? uploaderProfileId;
+  final String? actualTrainerProfileId;
   final TrainingSessionStatus status;
   final DateTime? trainingDate;
   final bool canEdit;
+  final int completionPolicyVersion;
   final String? hkTrainingPolicy;
   final TrainingCategory? category;
   final TrainingType? trainingType;
@@ -114,8 +122,13 @@ class TrainingSession {
     final counts = _map(envelope['counts']);
     return TrainingSession(
       id: '${session['id'] ?? ''}',
+      submissionChannel: session['submission_channel'] as String?,
+      uploaderProfileId: session['uploader_profile_id'] as String?,
+      actualTrainerProfileId: session['actual_trainer_profile_id'] as String?,
       canEdit: session['can_edit'] as bool? ?? false,
       hkTrainingPolicy: session['hk_training_policy'] as String?,
+      completionPolicyVersion:
+          (session['completion_policy_version'] as num?)?.toInt() ?? 1,
       status: TrainingSessionStatusValue.parse(session['status']),
       trainingDate: _date(session['training_date']),
       category: categoryJson == null
@@ -201,6 +214,10 @@ class TrainingSession {
     trainingDate: trainingDate,
     canEdit: canEdit,
     hkTrainingPolicy: hkTrainingPolicy,
+    completionPolicyVersion: completionPolicyVersion,
+    submissionChannel: submissionChannel,
+    uploaderProfileId: uploaderProfileId,
+    actualTrainerProfileId: actualTrainerProfileId,
     category: category,
     trainingType: trainingType,
     trainerName: trainerName,

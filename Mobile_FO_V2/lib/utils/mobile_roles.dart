@@ -13,6 +13,7 @@ const mobileRegistrationRoles = <String>{
 
 const mobileLoginRoles = <String>{
   ...mobileRegistrationRoles,
+  'MIS_MEPC',
   'Manager',
   'General Manager',
   'QPMS Admin',
@@ -31,6 +32,7 @@ String _normalizedMobileRole(String role) =>
 String canonicalMobileRole(String role) {
   final normalizedRole = _normalizedMobileRole(role);
   const canonicalByNormalized = <String, String>{
+    'MISMEPC': 'MIS_MEPC',
     'FO': 'FO',
     'FIELDOFFICER': 'FO',
     'KAM': 'KAM',
@@ -301,4 +303,17 @@ bool isMobileDebugVisible({
   return allowed.contains(_normalizedRoleText(role)) ||
       allowed.contains(_normalizedRoleText(designation)) ||
       allowed.contains(_normalizedRoleText(department));
+}
+
+// Dedicated management Training shell; this does not grant operational modules.
+bool usesManagementTrainingShell(String role, String? business) {
+  final retail = (business ?? '')
+      .replaceAll(RegExp(r'[\s_-]+'), '')
+      .toUpperCase();
+  try {
+    return const {'MIS_MEPC', 'Operations Manager'}.contains(canonicalMobileRole(role)) &&
+        const {'RELIANCE', 'RELIANCERETAIL'}.contains(retail);
+  } catch (_) {
+    return false;
+  }
 }

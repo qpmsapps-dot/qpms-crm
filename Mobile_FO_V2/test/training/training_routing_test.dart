@@ -37,19 +37,18 @@ void main() {
       expect(route(role: 'Field Officer'), TrainingLaunchMode.structuredNew);
     });
 
-    test('existing Technical Training creator roles retain structured access', () {
-      for (final role in ['Operations Manager', 'OM', 'KAM', 'Branch Head']) {
-        expect(route(role: role), TrainingLaunchMode.structuredNew);
-      }
-    });
+    test(
+      'reporting and Web uploader roles cannot create FO mobile sessions',
+      () {
+        for (final role in ['Operations Manager', 'OM', 'KAM', 'Branch Head']) {
+          expect(isTrainingCreatorRole(role), isFalse);
+          expect(route(role: role), TrainingLaunchMode.legacy);
+        }
+      },
+    );
 
     test('Reliance roles outside FO, OM, and Admin stay on legacy', () {
-      for (final role in [
-        'Admin',
-        'GM',
-        'Management',
-        'Unknown',
-      ]) {
+      for (final role in ['Admin', 'GM', 'Management', 'Unknown']) {
         expect(route(role: role), TrainingLaunchMode.legacy, reason: role);
       }
     });

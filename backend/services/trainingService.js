@@ -1,3 +1,4 @@
+import {withTrainingChannels,trainingSubmissionChannel} from './trainingSubmissionChannel.js';
 import {
   assertTrainingActor,
   assertTrainingCategory,
@@ -169,7 +170,7 @@ export async function listTrainingSessions(client, profile, input = {}) {
   const categoryById = lookup(categories);
   const typeById = lookup(types);
   const storeById = lookup([...stores, ...retailStores]);
-  return sessions.map((session) => ({
+  return withTrainingChannels(client,sessions.map((session) => ({
     id: session.id,
     status: session.status,
     submission_source: session.submission_source || null,
@@ -187,7 +188,7 @@ export async function listTrainingSessions(client, profile, input = {}) {
     evidence_count: evidence.filter((row) => row.training_session_id === session.id && row.metadata?.upload_status === 'uploaded').length,
     submitted_at: session.submitted_at,
     created_at: session.created_at,
-  }));
+  })));
 }
 
 export async function getTrainingSession(client, profile, sessionId) {
@@ -211,7 +212,7 @@ export async function getTrainingSession(client, profile, sessionId) {
     catch (error) { if (![403, 409].includes(error.statusCode)) throw error; }
   }
   return {
-    session: { ...session, can_edit: canEdit },
+    session: { ...session, submission_channel: trainingSubmissionChannel(session,events.map(e=>({...e,training_session_id:session.id}))), can_edit: canEdit },
     category: categoryRows[0] || null,
     training_type: typeRows[0] || null,
     store: {

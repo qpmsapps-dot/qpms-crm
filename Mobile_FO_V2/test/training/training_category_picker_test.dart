@@ -7,7 +7,7 @@ void main() {
   const hk = TrainingCategory(id: 'hk', code: 'hk', name: 'HK Training');
   const mepc = TrainingCategory(
     id: 'mepc',
-    code: 'mepc',
+    code: 'technical_mep',
     name: 'MEPC Training',
   );
   const inactive = TrainingCategory(
@@ -16,6 +16,39 @@ void main() {
     name: 'Inactive',
     isActive: false,
   );
+
+  for (final categories in <List<TrainingCategory>>[
+    [hk],
+    [mepc],
+    [hk, mepc],
+    [],
+  ]) {
+    testWidgets(
+      'FO picker shows only server-entitled categories: ${categories.map((c) => c.code).join(',')}',
+      (tester) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => selectNewTrainingCategory(context, categories),
+                child: const Text('Choose category'),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('Choose category'));
+        await tester.pumpAndSettle();
+        expect(
+          find.text('HK Training'),
+          categories.contains(hk) ? findsOneWidget : findsNothing,
+        );
+        expect(
+          find.text('MEPC Training'),
+          categories.contains(mepc) ? findsOneWidget : findsNothing,
+        );
+      },
+    );
+  }
 
   for (final category in [hk, mepc]) {
     testWidgets('new Training can select ${category.code}', (tester) async {

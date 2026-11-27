@@ -1,0 +1,91 @@
+name: Reliance Training Phase 3 UI and authorization
+on:
+  pull_request:
+    paths:
+      - '.github/shared-training-pins.json'
+      - '.github/shared-integrity-pins.json'
+      - '.github/workflows/reliance-training-phase3.yml'
+      - 'Mobile_FO_V2/lib/training/**'
+      - 'Mobile_FO_V2/test/training/**'
+      - 'backend/**/training*.js'
+      - 'backend/shared/retailMisAccess.js'
+      - 'src/components/reliance-retail/TrainingWebUpload.jsx'
+      - 'src/pages/reliance-retail/RetailTraining*.jsx'
+      - 'src/pages/reliance-retail/RetailMisWorkspace.jsx'
+      - 'src/utils/trainingWebUpload.js'
+      - 'src/utils/authRoles.js'
+      - 'src/routes/AppRoutes.jsx'
+      - 'tests/training*.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VITE_SUPABASE_URL: ''
+      VITE_SUPABASE_ANON_KEY: ''
+      VITE_API_URL: 'http://127.0.0.1:4999'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify exact Phase 3 payload and protected baseline
+        run: node .github/sharedIntegrity.mjs '${{ github.event.pull_request.base.sha || '65b5d3ce2b7af23d270022c887c920e5f26cc503' }}'
+      - name: Install locked dependencies without lifecycle scripts
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix backend --ignore-scripts --no-audit --no-fund
+      - name: Focused authorization, reporting, entitlement and upload tests
+        run: node --test backend/tests/trainingMobileManagement.test.js backend/tests/trainingWebSetup.test.js backend/tests/trainingV2Services.test.js backend/tests/retailLeadershipTrainingScope.test.js backend/tests/retailHkTrainingReadScope.test.js backend/tests/retailMisAccess.test.js tests/trainingWebUpload.test.js tests/trainingView.test.js tests/trainingExports.test.js tests/trainingPhase3Guard.test.js
+      - name: Scoped lint
+        run: npx eslint src/components/reliance-retail/TrainingWebUpload.jsx src/utils/trainingWebUpload.js src/pages/reliance-retail/RetailTrainingUpload.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailMisWorkspace.jsx src/components/Sidebar.jsx src/routes/AppRoutes.jsx src/utils/authRoles.js backend/services/trainingMobileManagementService.js backend/services/trainingSubmissionChannel.js backend/services/trainingWebService.js backend/services/trainingAccessService.js backend/routes/trainingRoutes.js backend/shared/retailMisAccess.js
+      - name: Production Web build
+        run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Synthetic upload, regional report and permission administration browsers
+        run: node --test --test-concurrency=1 tests/trainingWebUpload.browser.test.js tests/trainingRegional.browser.test.js tests/trainingCategories.browser.test.js
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: training-phase3-web-review
+          path: .phase4-test-output/screenshots/
+          retention-days: 7
+  mobile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify exact Phase 3 payload before mobile tools
+        run: node .github/sharedIntegrity.mjs '${{ github.event.pull_request.base.sha || '65b5d3ce2b7af23d270022c887c920e5f26cc503' }}'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: '3.44.1'
+          channel: stable
+      - name: Resolve locked Flutter packages
+        working-directory: Mobile_FO_V2
+        run: flutter pub get --enforce-lockfile
+      - name: Mobile Training analysis
+        working-directory: Mobile_FO_V2
+        run: dart analyze lib/training test/training lib/app.dart lib/utils/mobile_roles.dart lib/services/supabase_service.dart
+      - name: HK, MEPC, entitlement routing, offline queue and evidence regressions
+        working-directory: Mobile_FO_V2
+        run: flutter test --no-pub test/training
+      - name: Existing mobile role, login recovery and operational auth guards
+        working-directory: Mobile_FO_V2
+        run: flutter test --no-pub test/mobile_roles_test.dart test/auth_session_recovery_test.dart test/split_auth_state_contract_test.dart test/checkout_auth_session_contract_test.dart
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: training-phase3-mobile-review
+          path: .phase4-test-output/screenshots/mepc-mobile-*.png
+          retention-days: 7

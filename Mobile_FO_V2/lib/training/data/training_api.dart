@@ -200,6 +200,25 @@ class TrainingApi {
     return response.body;
   }
 
+  Future<Map<String, dynamic>> managementSetup({
+    required String storeCode,
+    required String trainerCode,
+    required String date,
+  }) async => Map<String, dynamic>.from(
+    (await _request(
+      'GET',
+      '/mobile-management/setup',
+      query: {
+        'store_code': storeCode,
+        'trainer_employee_code': trainerCode,
+        'training_date': date,
+      },
+    ))['setup'],
+  );
+  Future<Map<String, dynamic>> createManagementSession(
+    Map<String, dynamic> body,
+  ) => _request('POST', '/mobile-management/sessions', body: body);
+
   Future<List<TrainingCategory>> getCategories() async =>
       ((await _request('GET', '/categories'))['categories'] as List? ??
               const [])

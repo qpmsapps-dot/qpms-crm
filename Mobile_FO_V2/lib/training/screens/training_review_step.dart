@@ -268,6 +268,12 @@ class TrainingReviewStep extends StatelessWidget {
     if (!value.canContinueTopics) missing.add('topics');
     if (value.pendingUploadCount > 0) missing.add('pending uploads');
     if (value.failedUploadCount > 0) missing.add('failed uploads');
+    if (value.requiresMepcCompletionProof) {
+      if (!value.hasVerifiedCompletionProof) missing.add('completion proof');
+      if (!value.hasVerifiedMepcTopicEvidence) {
+        missing.add('verified photos and coverage for every topic');
+      }
+    }
     return 'Complete ${missing.isEmpty ? 'the required evidence' : missing.join(', ')}.';
   }
 }

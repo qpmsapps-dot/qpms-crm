@@ -1,4 +1,5 @@
 import {retailMisRole,RETAIL_MIS_MODULES,retailMisRouteModule,RETAIL_MIS_ONBOARDING_ADMINS} from '../../backend/shared/retailMisAccess.js';
+import {webTrainingUploader} from './trainingWebUpload.js';
 import {isRetailLeadership} from '../../backend/shared/retailSouthHeadAccess.js';
 import {isOos12Specialist} from '../../backend/shared/retailOos12Workflow.js';
 const viteEnv = import.meta.env || {};
@@ -295,6 +296,9 @@ export function canAccessRoute(user, pathname) {
   if(mis)return pathname==='/profile'||Boolean(RETAIL_MIS_MODULES[mis].includes(retailMisRouteModule(pathname)));
   if(pathname==='/settings/retail-mis-access')return isPlatformAdmin(user)&&RETAIL_MIS_ONBOARDING_ADMINS.some(a=>user.profileId===a.profile_id&&user.id===a.auth_user_id&&user.employeeCode===a.employee_code);
   if (isPlatformAdmin(user)) return true;
+  if (pathname === '/reliance-retail/training-upload') {
+    return webTrainingUploader(user) && ['RELIANCE','RELIANCERETAIL'].includes(normalizeRawRole(user.business));
+  }
   // Navigation only. Verified database role plus explicit state grants decide access.
   if (pathname==='/reliance-retail/mis/oos'&&isOos12Specialist({role:user.rawRole||user.role,business:user.business})) return true;
   if (pathname.startsWith('/reliance-retail')) {

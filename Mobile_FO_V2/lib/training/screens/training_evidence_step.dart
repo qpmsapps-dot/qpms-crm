@@ -190,8 +190,12 @@ class _TrainingEvidenceStepState extends State<TrainingEvidenceStep> {
         ),
         _SupportingCard(
           icon: Icons.attach_file_rounded,
-          title: 'Additional Documents',
-          subtitle: 'PDF, JPG or PNG',
+          title: controller.requiresMepcCompletionProof
+              ? 'Completion Proof (Required)'
+              : 'Additional Documents',
+          subtitle: controller.requiresMepcCompletionProof
+              ? 'Verified PDF, JPG or PNG required before submission'
+              : 'PDF, JPG or PNG',
           value:
               '${controller.supportingEvidenceByType(TrainingEvidenceType.additionalDocument).length} files',
           actionLabel: 'Add File',

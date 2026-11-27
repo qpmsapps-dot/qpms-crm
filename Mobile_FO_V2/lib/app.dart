@@ -1,3 +1,5 @@
+import 'training/screens/management_training_shell.dart';
+import 'utils/mobile_roles.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -78,6 +80,11 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
           await _requireReauthentication(cachedUser, source: 'app_resume');
           return;
         }
+      }
+      if (_user?.role == 'MIS_MEPC') {
+        final refreshed = await _refreshCachedProfile(_user, source: 'management_resume');
+        if (mounted) setState(() => _user = refreshed);
+        return;
       }
       if (SupabaseService.isReady) {
         await TrackingService.syncQueuedLogs();
@@ -531,6 +538,15 @@ class _MyQpmsFoAppState extends State<MyQpmsFoApp> with WidgetsBindingObserver {
         onRetry: () =>
             _resolvePrimaryHospitalAccess(_user!, source: 'manual_retry'),
         onLogout: _logout,
+      );
+    }
+    if (usesManagementTrainingShell(_user!.role, _user!.business)) {
+      return ManagementTrainingShell(
+        user: _user!, onLogout: _logout,
+        operationalWorkspace: _user!.role == 'MIS_MEPC' ? null : (_) => HomeShell(
+          user: _user!, onLogout: _logout,
+          onAuthRequired: () => _requireReauthentication(_user, source: 'authenticated_write'),
+        ),
       );
     }
     return HomeShell(
