@@ -138,7 +138,7 @@ jobs:
           print(f"PASS: Phase 6 exact-payload authorization and {negative_cases} negative guard cases.")
           shared_manifest = ".github/shared-integrity-pins.json"
           if shared_manifest in files or ".github/training-v2-pins.json" in files:
-            if subprocess.check_output(["git","rev-parse",f"HEAD:{shared_manifest}"],text=True).strip() != "7cf7d93ecdb9bed273ce1d2064b0571c18f69ffa":
+            if subprocess.check_output(["git","rev-parse",f"HEAD:{shared_manifest}"],text=True).strip() != "2f68a007842c631cc36824f62074b677cd6780cb":
               sys.exit("Shared integrity manifest changed; renew review")
             if subprocess.check_output(["git","rev-parse","HEAD:.github/sharedIntegrity.mjs"],text=True).strip() != "9952cedf3bfd34e6cdf70a53cce73afdc0c0461b":
               sys.exit("Shared integrity verifier changed; renew review")

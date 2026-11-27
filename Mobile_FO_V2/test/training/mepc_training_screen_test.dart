@@ -179,7 +179,23 @@ void main() {
           ['TrainingReview', 'roboto-regular.ttf'],
           ['MaterialIcons', 'materialicons-regular.otf'],
         ]) {
-          final bytes = File.fromUri(fonts.resolve(pair[1])).readAsBytesSync();
+          // Flutter SDK archives use different font filename casing by host.
+          // Require the actual bundled font; never fall back to Ahem/skip capture.
+          final matches = Directory.fromUri(fonts)
+              .listSync()
+              .whereType<File>()
+              .where(
+                (file) =>
+                    file.uri.pathSegments.last.toLowerCase() ==
+                    pair[1].toLowerCase(),
+              )
+              .toList();
+          expect(
+            matches.length,
+            1,
+            reason: 'SDK font ${pair[1]} must be available',
+          );
+          final bytes = matches.single.readAsBytesSync();
           await (FontLoader(
             pair[0],
           )..addFont(Future.value(ByteData.sublistView(bytes)))).load();
