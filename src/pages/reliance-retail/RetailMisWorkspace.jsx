@@ -1,6 +1,7 @@
 import ThermographyReports from '../../components/reliance-retail/ThermographyReports.jsx';
 import RetailHkMisWorkspace from './RetailHkMisWorkspace.jsx';
 import RetailMisAttendanceUpload from '../../components/reliance-retail/RetailMisAttendanceUpload.jsx';
+import TrainingWebUpload from '../../components/reliance-retail/TrainingWebUpload.jsx';
 import {useEffect,useState} from 'react';
 import {useParams,Link} from 'react-router-dom';
 import {useAuth} from '../../context/auth-context.js';
@@ -63,6 +64,7 @@ function RetailMisLegacyWorkspace(){
    <label>Reason<input required minLength={3} maxLength={2000} value={fields.reason||''} onChange={e=>set('reason',e.target.value)}/></label><label><input type="checkbox" checked={confirm} onChange={e=>setConfirm(e.target.checked)}/>I reviewed this action and its canonical store scope.</label><button disabled={busy||!confirm||!action}>Confirm {action==='RETIRE'?'audited retirement':'action'}</button>
   </form>}
   {module==='oos'&&<div><label>Quotation workbook<input aria-label="Quotation workbook" type="file" accept=".xlsx" onChange={e=>{setFile(e.target.files?.[0]||null);setPreview(null);setConfirm(false);}}/></label><button disabled={!file||busy} onClick={()=>void quotation()}>Preview quotation</button>{preview&&<><p>{preview.source_rows} rows; {preview.groups?.length} complete quotation groups.</p><pre className="overflow-auto">{JSON.stringify(preview.groups?.map(g=>({reference:g.quotation_number,state:g.state,items:g.items.map(i=>({store_code:i.store_code,description:i.description,quantity:i.quantity,unit_rate:i.unit_rate}))})),null,2)}</pre><pre>{JSON.stringify(preview.plan,null,2)}</pre><label><input type="checkbox" checked={confirm} onChange={e=>setConfirm(e.target.checked)}/>I reviewed this workbook, quotation revisions and complete store scope.</label><button disabled={busy||!confirm} onClick={()=>void quotation(true)}>Import reviewed quotation</button></>}</div>}
+  {module==='training-mepc'&&<TrainingWebUpload key={user?.profileId||user?.id} profile={user} onSubmitted={()=>setRefresh(v=>v+1)}/>}
   {(module?.startsWith('attendance-')||module==='imports')&&<RetailMisAttendanceUpload key={`${module}:${user?.profileId||user?.id}`} module={module} actor={user?.profileId||user?.id} request={api} disabled={busy} onCommitted={()=>setRefresh(v=>v+1)}/>}
  </section>;
 }

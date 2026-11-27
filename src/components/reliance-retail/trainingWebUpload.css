@@ -1,0 +1,9 @@
+.training-web-upload { margin-block: 12px; padding: 16px; }
+.training-web-upload summary { cursor: pointer; font-weight: 600; }
+.training-web-upload fieldset { border: 0; padding: 0; display: grid; gap: 12px; max-width: 680px; min-width: 0; }
+.training-web-upload label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.training-web-upload input:not([type=checkbox]), .training-web-upload textarea, .training-web-upload select { border: 1px solid #cbd5e1; border-radius: 5px; padding: 8px; max-width: 100%; }
+.training-web-upload button { border: 1px solid #cbd5e1; border-radius: 5px; padding: 8px 12px; width: fit-content; }
+.training-web-upload button:disabled { opacity: .5; }
+.training-web-upload p[role=alert] { color: #b91c1c; }
+@media (max-width: 640px) { .training-web-upload label { align-items: stretch; flex-direction: column; } .training-web-upload input, .training-web-upload select { min-width: 0; } }

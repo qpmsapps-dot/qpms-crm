@@ -1,5 +1,5 @@
 import {readTrainingEntitlements,saveTrainingEntitlements} from '../services/trainingEntitlementService.js';
-import {createWebTrainingSession} from '../services/trainingWebService.js';
+import {createWebTrainingSession,loadWebTrainingSetup} from '../services/trainingWebService.js';
 import express from 'express';
 import {gateCombinedMutationRoutes} from '../services/combinedReleaseGate.js';
 import * as defaultTrainingService from '../services/trainingService.js';
@@ -49,6 +49,7 @@ gateCombinedMutationRoutes(router,{normalOperations:true,getClient});
   router.get('/administration/:profileId/categories', route('read_entitlements', async (request, client) => ({result:await readTrainingEntitlements(client,request.profile,request.params.profileId)})));
   router.put('/administration/:profileId/categories', route('save_entitlements', async (request, client) => ({result:await saveTrainingEntitlements(client,request.profile,request.params.profileId,request.body)})));
   router.post('/web/sessions', route('create_web_session', async (request,client) => createWebTrainingSession(client,request.profile,request.body),{status:201}));
+  router.get('/web/setup', route('web_setup', async (request,client) => ({setup:await loadWebTrainingSetup(client,request.profile,request.query)})));
 
   router.get('/categories', route('list_categories', async (request, client) => ({
     categories: await service.listTrainingCategories(client, request.profile),

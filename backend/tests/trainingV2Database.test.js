@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {resolve} from 'node:path';
 import {nativeThermographyPostgres} from './helpers/nativeThermographyPostgres.js';
+import {loadWebTrainingSetup} from '../services/trainingWebService.js';
 
 test('Training V2 real PostgreSQL authorization, evidence, history and concurrency',{timeout:180000},async t=>{
  process.env.THERMOGRAPHY_NATIVE_OUTPUT_DIR=resolve('artifacts/training-v2-validation');
@@ -120,6 +121,22 @@ test('Training V2 real PostgreSQL authorization, evidence, history and concurren
   await assert.rejects(()=>createWeb(mis,'future','2099-01-01'),/date_not_allowed/);await assert.rejects(()=>createWeb(mis,'past','2020-01-01'),/date_not_allowed/);
   assert.equal((await q('select attendance_id,site_visit_id from training_sessions where id=$1',[web])).rows[0].attendance_id,null);
  });
+ await t.test('Phase 3 setup uses the real gate, assignment, category and canonical trainer contracts',async()=>{
+  const client={
+   from(table){let fields='*';const filters=[],args=[];let ordering='';
+    const identifier=value=>{assert.match(value,/^[a-z_][a-z_0-9]*$/i);return '"'+value+'"';};
+    const query={select(value){fields=value.split(',').map(identifier).join(',');return this;},eq(field,value){args.push(value);filters.push(identifier(field)+'=$'+args.length);return this;},order(field){ordering=' order by '+identifier(field);return this;},
+     async result(single=false){try{const result=await q('select '+fields+' from public.'+identifier(table)+(filters.length?' where '+filters.join(' and '):'')+ordering,args);return {data:single?result.rows[0]:result.rows};}catch(error){return {error};}},
+     maybeSingle(){return this.result(true);},then(resolve,reject){return this.result().then(resolve,reject);}};return query;},
+   async rpc(name,params){try{assert.match(name,/^[a-z_0-9]+$/);const args=Object.values(params),named=Object.keys(params).map((p,i)=>{assert.match(p,/^[a-z_0-9]+$/);return p+'=> $'+(i+1);});return {data:(await q('select public.'+name+'('+named.join(',')+') value',args)).rows[0].value};}catch(error){return {error};}}
+  };
+  const input={store_code:'T1',trainer_employee_code:'FO1',training_date:today};
+  for(const actor of [mis,om]){const profile=(await q('select * from profiles where id=$1',[actor])).rows[0];const setup=await loadWebTrainingSetup(client,profile,input);assert.equal(setup.store.id,store);assert.equal(setup.trainer.id,fo);assert.equal(setup.category.id,mep);await assert.rejects(()=>loadWebTrainingSetup(client,profile,{...input,store_code:'K1'}),{statusCode:403});}
+  const profile=(await q('select * from profiles where id=$1',[om])).rows[0];
+  await q('update training_v2_private.release_policy set web_enabled=false');
+  await assert.rejects(()=>loadWebTrainingSetup(client,profile,input),{statusCode:403,code:'training_web_release_disabled'});
+  await q('update training_v2_private.release_policy set web_enabled=true');
+ });
  await t.test('store/zone intersection, business eligibility, AP umbrella and state aliases remain enforced',async()=>{
   const zone=randomUUID(),otherZone=randomUUID(),sameState=randomUUID();
   await q('update reliance_retail_store_master set zone_id=$2 where id=$1',[store,zone]);
@@ -140,7 +157,7 @@ test('Training V2 real PostgreSQL authorization, evidence, history and concurren
  await t.test('MEPC needs topic photo and verified completion proof; pending/object-only rejected',async()=>{
   await assert.rejects(()=>rpc('rpc_submit_reliance_training_session_v2',[mobile,fo]),/topic_required/);
   await evidence(mobile,fo,false);await assert.rejects(()=>rpc('rpc_submit_reliance_training_session_v2',[mobile,fo]),/completion_proof_required/);
-  const st=(await q('select id from training_session_topics where training_session_id=$1',[mobile])).rows[0].id;
+  assert.ok((await q('select id from training_session_topics where training_session_id=$1',[mobile])).rows[0].id);
   const id=randomUUID(),path=`training/${mobile}/${id}/proof.png`;
   await q("insert into training_evidence(id,training_session_id,evidence_type,storage_bucket,storage_path,file_name,mime_type,file_size,uploaded_by,metadata) values($1,$2,'additional_document','training-evidence',$3,'proof.png','image/png',10,$4,'{\"upload_status\":\"pending\"}')",[id,mobile,path,fo]);await q("insert into storage.objects values('training-evidence',$1,'{\"size\":10,\"mimetype\":\"image/png\"}')",[path]);
   await assert.rejects(()=>rpc('rpc_submit_reliance_training_session_v2',[mobile,fo]),/upload_incomplete/);
@@ -178,6 +195,21 @@ test('Training V2 real PostgreSQL authorization, evidence, history and concurren
   const eid=(await q('select id from training_evidence where training_session_id=$1 limit 1',[web])).rows[0].id;
   assert.ok(await rpc('rpc_retail_mis_training_evidence_v4',[mis,auth,'technical_mep',web,eid]));
   await q('update retail_mis_assignments set states=array[\'KA\'] where profile_id=$1',[mis]);assert.equal(await rpc('rpc_training_v2_read_allowed',[mis,web]),false);await assert.rejects(()=>rpc('rpc_retail_mis_training_evidence_v4',[mis,auth,'technical_mep',web,eid]));
+ });
+ await t.test('Branch Head reports both categories only in explicitly covered regions and never uploads',async()=>{
+  const auth=(await q('select auth_user_id from profiles where id=$1',[bh])).rows[0].auth_user_id;
+  for(const [category,sid] of [['hk',oldDraft],['technical_mep',web]]) {
+   assert.equal(await rpc('training_v2_report_store',[bh,category,store]),true);
+   assert.equal(await rpc('training_v2_report_store',[bh,category,py]),false);
+   assert.equal(await rpc('training_v2_report_store',[bh,category,foreign]),false);
+   assert.equal(await rpc('rpc_training_v2_read_allowed',[bh,sid]),true);
+   const report=await rpc('rpc_retail_mis_training_v4',[bh,auth,category,today,today,null]);assert.ok(report.rows.some(s=>s.id===sid));
+   const eid=(await q('select id from training_evidence where training_session_id=$1 limit 1',[sid])).rows[0].id;
+   assert.ok(await rpc('rpc_retail_mis_training_evidence_v4',[bh,auth,category,sid,eid]));
+  }
+  assert.equal(await rpc('training_v2_web_allowed',[bh,store]),false);
+  await q("insert into access_user_scopes(user_assignment_id,scope_type,scope_code) select id,'state','PY' from access_user_assignments where profile_id=$1",[bh]);
+  for(const category of ['hk','technical_mep']){assert.equal(await rpc('training_v2_report_store',[bh,category,py]),true);assert.equal(await rpc('training_v2_report_store',[bh,category,foreign]),false);}
  });
  await t.test('RLS/function ACLs deny direct browser writes; rollback disables gate without deleting history',async()=>{
   assert.equal((await q("select has_function_privilege('authenticated','rpc_set_training_category_entitlements(uuid,uuid,jsonb,text)','EXECUTE') allowed")).rows[0].allowed,false);

@@ -2,13 +2,14 @@
   "schema": "shared-integrity.v1",
   "base_sha": "eff30bf06e8d9c66c9fc03be8e5b7b9866b0bab4",
   "integrationBases": [
-    "6db290b91612663c2b66c1b7ce2d7a1fb7ce817d"
+    "6db290b91612663c2b66c1b7ce2d7a1fb7ce817d",
+    "65b5d3ce2b7af23d270022c887c920e5f26cc503"
   ],
   "files": {
     ".github/retailAttendanceCorrectionGuard.mjs": "f59345fc306c6e78e9cbaca4afcb61cee97a0830",
     ".github/retailAttendanceExceptionsGuard.mjs": "03bc773f71358668647bc1a8e0ed0ad7a2bda963",
     ".github/shared-integrity-probes.json": "bdfd8321fc58b3d902e37f97280f72a7f30eb22d",
-    ".github/shared-training-pins.json": "d25c292fe250f39336df197d9810cbf2dcea53ea",
+    ".github/shared-training-pins.json": "97ee2150818c49a20bcbe5570524a8ed0a1e588d",
     ".github/sharedHistoricalChecks.mjs": "3e20a330d6e7799dde79fa388ebcece8810c19f0",
     ".github/sharedIntegrity.mjs": "9952cedf3bfd34e6cdf70a53cce73afdc0c0461b",
     ".github/thermographyV2Guard.mjs": "ce6f95dd7fdea71c078e3ac6365ae3f316e8078d",

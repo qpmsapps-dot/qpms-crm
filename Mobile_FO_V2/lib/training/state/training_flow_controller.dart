@@ -147,6 +147,27 @@ class TrainingFlowController extends ChangeNotifier {
           selectedCategory?.requireSelectedTopic ??
           true) ||
       selectedSessionTopics.isNotEmpty;
+  // Retain historical version-1 policy; new MEPC sessions use server policy 2.
+  bool get requiresMepcCompletionProof =>
+      selectedCategory?.code == 'technical_mep' &&
+      (session == null || session!.completionPolicyVersion >= 2);
+  bool get hasVerifiedCompletionProof => evidence.any(
+    (item) =>
+        item.evidenceType == TrainingEvidenceType.additionalDocument &&
+        item.trainingSessionTopicId == null &&
+        item.isUploaded,
+  );
+  bool get hasVerifiedMepcTopicEvidence =>
+      selectedSessionTopics.isNotEmpty &&
+      selectedSessionTopics.every(
+        (topic) =>
+            topic.isCovered &&
+            evidenceForTopic(topic.id).any(
+              (item) =>
+                  item.evidenceType == TrainingEvidenceType.topicPhoto &&
+                  item.isUploaded,
+            ),
+      );
   bool get canSubmitLocally =>
       isEditable &&
       canContinueDetails &&
@@ -154,6 +175,8 @@ class TrainingFlowController extends ChangeNotifier {
       canContinueTopics &&
       pendingUploadCount == 0 &&
       failedUploadCount == 0 &&
+      (!requiresMepcCompletionProof ||
+          (hasVerifiedCompletionProof && hasVerifiedMepcTopicEvidence)) &&
       (!(session?.requireGroupPhotoSnapshot ?? false) || groupPhotoCount > 0) &&
       (!(session?.requireAttendanceSheetSnapshot ?? false) ||
           hasAttendanceSheet) &&

@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../models/fo_models.dart';
 import '../services/supabase_service.dart';
 import '../services/local_store.dart';
-import '../utils/mobile_roles.dart';
 import 'data/training_api.dart';
 import 'data/training_draft_cache.dart';
 import 'data/training_errors.dart';
@@ -11,6 +10,7 @@ import 'data/training_repository.dart';
 import 'models/training_category.dart';
 import 'screens/training_flow_screen.dart';
 import 'screens/hk_training_screen.dart';
+import 'screens/mepc_training_screen.dart';
 import 'state/training_flow_controller.dart';
 import 'widgets/training_site_context.dart';
 
@@ -19,14 +19,13 @@ enum TrainingLaunchMode { structuredNew, structuredResume, legacy }
 bool isTrainingFoRole(String role) =>
     {'FO', 'FIELDOFFICER'}.contains(_normalizedTrainingStoreText(role));
 
-bool isTrainingCreatorRole(String role) {
-  try {
-    return const {'FO', 'KAM', 'Operations Manager', 'Branch Head'}
-        .contains(canonicalMobileRole(role));
-  } catch (_) {
-    return false;
-  }
-}
+// Submission categories come only from the authenticated server entitlement list.
+bool isTrainingCreatorRole(String role) => isTrainingFoRole(role);
+
+bool usesMepcSinglePage(TrainingFlowController controller) =>
+    controller.selectedCategory?.code == 'technical_mep' &&
+    (controller.session == null ||
+        controller.session!.completionPolicyVersion >= 2);
 
 String _normalizedTrainingStoreText(String? value) =>
     (value ?? '').trim().replaceAll(RegExp(r'[\s_-]+'), '').toUpperCase();
@@ -343,6 +342,8 @@ class _TrainingControllerRouteState extends State<_TrainingControllerRoute>
           (widget.controller.session == null &&
               widget.controller.selectedCategory?.code == 'hk'))
       ? HkTrainingScreen(controller: widget.controller)
+      : usesMepcSinglePage(widget.controller)
+      ? MepcTrainingScreen(controller: widget.controller)
       : TrainingFlowScreen(
           controller: widget.controller,
           siteContext: widget.siteContext,

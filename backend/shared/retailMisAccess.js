@@ -25,7 +25,7 @@ export function isRetailMisOnboardingAdmin(profile,authUser){
  return RETAIL_MIS_ONBOARDING_ADMINS.some(a=>a.profile_id===profile.id&&a.auth_user_id===profile.auth_user_id&&a.employee_code===profile.employee_code);
 }
 export function retailMisRole(value){return Object.hasOwn(RETAIL_MIS_ROLES,value)?value:null;}
-export function retailMisApiAllowed(profile,path){return (profile?.role==='MIS_MEPC' && /^\/api\/training\/(?:web\/sessions|sessions(?:\/|$)|types$|topics$)/.test(path)) || !retailMisRole(profile?.role)||/^\/api\/(?:reliance-retail\/(?:mis(?:\/|$)|access$)|profile\/(?:me|password-setup-complete|avatar)$)/.test(path);}
+export function retailMisApiAllowed(profile,path){return (profile?.role==='MIS_MEPC' && /^\/api\/training\/(?:web\/(?:sessions|setup)$|sessions(?:\/|$)|types$|topics$)/.test(path)) || !retailMisRole(profile?.role)||/^\/api\/(?:reliance-retail\/(?:mis(?:\/|$)|access$)|profile\/(?:me|password-setup-complete|avatar)$)/.test(path);}
 export function retailMisState(value){const s=String(value||'').trim().toUpperCase();return s==='KN'?'KA':RETAIL_MIS_STATES.includes(s)?s:null;}
 export function retailMisScopeStates(states){
  if(!Array.isArray(states)||!states.length)throw Object.assign(Error('Assign one or more explicit Retail states; AP and All States are not state grants.'),{statusCode:400});
