@@ -8,10 +8,12 @@ import '../data/training_repository.dart';
 import '../models/training_evidence.dart';
 import '../models/training_type.dart';
 import '../state/training_flow_controller.dart';
+import '../state/mepc_form_controller.dart';
+import 'package:image_picker/image_picker.dart';
 import '../widgets/training_store_picker.dart';
 
 // MEPC uses the existing single-page HK interaction pattern without altering HK.
-bool compatibleMepcMaster(TrainingFlowController c) {
+bool compatibleMepcMaster(MepcFormController c) {
   final category = c.selectedCategory;
   return category != null &&
       category.isActive &&
@@ -20,14 +22,19 @@ bool compatibleMepcMaster(TrainingFlowController c) {
 }
 
 class MepcTrainingScreen extends StatefulWidget {
-  const MepcTrainingScreen({required this.controller, super.key});
-  final TrainingFlowController controller;
+  const MepcTrainingScreen({
+    required this.controller,
+    this.management = false,
+    super.key,
+  });
+  final MepcFormController controller;
+  final bool management;
   @override
   State<MepcTrainingScreen> createState() => _MepcTrainingScreenState();
 }
 
 class _MepcTrainingScreenState extends State<MepcTrainingScreen> {
-  TrainingFlowController get c => widget.controller;
+  MepcFormController get c => widget.controller;
   final Set<String> _topics = {};
   final Map<String, List<PlatformFile>> _photos = {};
   PlatformFile? _proof;
@@ -49,14 +56,52 @@ class _MepcTrainingScreenState extends State<MepcTrainingScreen> {
 
   Future<void> _pick({String? topicId}) async {
     try {
-      final result = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: topicId == null
-            ? ['pdf', 'jpg', 'jpeg', 'png']
-            : ['jpg', 'jpeg', 'png'],
+      final source = await showModalBottomSheet<String>(
+        context: context,
+        builder: (context) => SafeArea(
+          child: Wrap(
+            children: [
+              ListTile(
+                title: const Text('Camera'),
+                onTap: () => Navigator.pop(context, 'camera'),
+              ),
+              ListTile(
+                title: const Text('Gallery'),
+                onTap: () => Navigator.pop(context, 'gallery'),
+              ),
+              if (topicId == null)
+                ListTile(
+                  title: const Text('PDF or image file'),
+                  onTap: () => Navigator.pop(context, 'file'),
+                ),
+            ],
+          ),
+        ),
       );
-      if (result == null || !mounted) return;
-      final file = result.files.single;
+      if (source == null || !mounted) return;
+      PlatformFile file;
+      if (source != 'file') {
+        final image = await ImagePicker().pickImage(
+          source: source == 'camera' ? ImageSource.camera : ImageSource.gallery,
+          imageQuality: 85,
+          maxWidth: 1920,
+        );
+        if (image == null || !mounted) return;
+        file = PlatformFile(
+          name: image.name,
+          path: image.path,
+          size: await image.length(),
+        );
+      } else {
+        final result = await FilePicker.pickFiles(
+          type: FileType.custom,
+          allowedExtensions: topicId == null
+              ? ['pdf', 'jpg', 'jpeg', 'png']
+              : ['jpg', 'jpeg', 'png'],
+        );
+        if (result == null || !mounted) return;
+        file = result.files.single;
+      }
       if (file.path == null) {
         throw StateError('The selected file cannot be read.');
       }
@@ -260,7 +305,11 @@ class _MepcTrainingScreenState extends State<MepcTrainingScreen> {
             padding: const EdgeInsets.all(16),
             children: [
               if (!c.isEditable)
-                const Text('Read only — submitted or Check-In ended.'),
+                Text(
+                  widget.management
+                      ? 'Read only — submitted Training report.'
+                      : 'Read only — submitted or Check-In ended.',
+                ),
               if (c.session == null && !compatibleMepcMaster(c))
                 const Text(
                   'MEPC master policy is incompatible. Contact your administrator.',
@@ -270,12 +319,14 @@ class _MepcTrainingScreenState extends State<MepcTrainingScreen> {
                 subtitle: Text(
                   '${c.selectedStore?['store_code'] ?? c.session?.storeCodeSnapshot ?? 'Select store'} — ${c.selectedStore?['store_name'] ?? c.session?.storeNameSnapshot ?? ''}',
                 ),
-                trailing: const Icon(Icons.search),
-                onTap: editable && c.session == null
+                trailing: widget.management ? null : const Icon(Icons.search),
+                onTap: editable && c.session == null && !widget.management
                     ? () async {
                         final store = await showDialog<Map<String, dynamic>>(
                           context: context,
-                          builder: (_) => TrainingStorePicker(controller: c),
+                          builder: (_) => TrainingStorePicker(
+                            controller: c as TrainingFlowController,
+                          ),
                         );
                         if (store != null && mounted) c.selectStore(store);
                       }
@@ -416,6 +467,7 @@ class _MepcTrainingScreenState extends State<MepcTrainingScreen> {
                 onChanged: (value) => c.setDetails(remarks: value),
               ),
               if (_busy) ...[const LinearProgressIndicator(), Text(_progress)],
+              for (final warning in c.overlapWarnings) Text(warning),
               if (_message != null)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 12),

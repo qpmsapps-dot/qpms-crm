@@ -554,7 +554,11 @@ class SupabaseService {
         'Your profile is inactive. Please contact admin.',
       );
     }
-    if (row['mobile_access_enabled'] == false) {
+    if (row['mobile_access_enabled'] == false ||
+        (user.role == 'MIS_MEPC' &&
+            (row['is_active'] != true ||
+                row['mobile_access_enabled'] != true ||
+                !usesManagementTrainingShell(user.role, user.business)))) {
       throw const MobileLoginException(
         MobileLoginFailureType.roleNotAllowed,
         'Mobile access is not enabled for your profile. Please contact admin.',

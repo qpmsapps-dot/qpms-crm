@@ -35,6 +35,9 @@ class TrainingSession {
     this.canEdit = true,
     this.hkTrainingPolicy,
     this.completionPolicyVersion = 1,
+    this.submissionChannel,
+    this.uploaderProfileId,
+    this.actualTrainerProfileId,
     this.category,
     this.trainingType,
     this.trainerName,
@@ -68,6 +71,9 @@ class TrainingSession {
   });
 
   final String id;
+  final String? submissionChannel;
+  final String? uploaderProfileId;
+  final String? actualTrainerProfileId;
   final TrainingSessionStatus status;
   final DateTime? trainingDate;
   final bool canEdit;
@@ -116,6 +122,9 @@ class TrainingSession {
     final counts = _map(envelope['counts']);
     return TrainingSession(
       id: '${session['id'] ?? ''}',
+      submissionChannel: session['submission_channel'] as String?,
+      uploaderProfileId: session['uploader_profile_id'] as String?,
+      actualTrainerProfileId: session['actual_trainer_profile_id'] as String?,
       canEdit: session['can_edit'] as bool? ?? false,
       hkTrainingPolicy: session['hk_training_policy'] as String?,
       completionPolicyVersion:
@@ -206,6 +215,9 @@ class TrainingSession {
     canEdit: canEdit,
     hkTrainingPolicy: hkTrainingPolicy,
     completionPolicyVersion: completionPolicyVersion,
+    submissionChannel: submissionChannel,
+    uploaderProfileId: uploaderProfileId,
+    actualTrainerProfileId: actualTrainerProfileId,
     category: category,
     trainingType: trainingType,
     trainerName: trainerName,

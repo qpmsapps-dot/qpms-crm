@@ -1,3 +1,4 @@
+import {withTrainingChannels} from './trainingSubmissionChannel.js';
 import {assertRetailMis,RETAIL_MIS_MODULES,retailOosState} from '../shared/retailMisAccess.js';
 import {summarizeAttendance} from '../shared/retailAttendance.js';
 import {parseQuotation} from './retailQuotationImport.js';
@@ -19,7 +20,7 @@ export async function signMisTrainingEvidence(client,profile,access,module,sessi
 export async function retailMisReport(client,profile,access,module,input={}){
  assertRetailMis(access,module);const today=new Date(Date.now()+330*60000).toISOString().slice(0,10),to=input.to||today,from=input.from||to.slice(0,7)+'-01';
  if(module.startsWith('attendance-')&&from!==to.slice(0,7)+'-01')throw Object.assign(Error('Attendance targets require a month-start to cutoff reporting period.'),{statusCode:400});
- if(['training-hk','training-mepc'].includes(module))return misRpc(client,'rpc_retail_mis_training_v4',{p_actor:profile.id,p_auth:profile.auth_user_id,p_category:module==='training-hk'?'hk':'technical_mep',p_from:from,p_to:to,p_state:input.state||null});
+ if(['training-hk','training-mepc'].includes(module)){const report=await misRpc(client,'rpc_retail_mis_training_v4',{p_actor:profile.id,p_auth:profile.auth_user_id,p_category:module==='training-hk'?'hk':'technical_mep',p_from:from,p_to:to,p_state:input.state||null});return {...report,rows:await withTrainingChannels(client,report.rows||[])};}
  const result=await misRpc(client,'rpc_retail_mis_report',{p_actor:profile.id,p_module:module,p_from:from,p_to:to,p_state:input.state||null});
  if(module==='dashboard'){
   const reports=await Promise.all(['hk','technical_mep'].map(category=>misRpc(client,'rpc_retail_mis_training_v4',{p_actor:profile.id,p_auth:profile.auth_user_id,p_category:category,p_from:from,p_to:to,p_state:input.state||null})));

@@ -91,6 +91,7 @@ export default function TrainingV2Drawer({
   const available = selected.filter(e => links[e.id]);
   const topicInfo = trainingTopics(record, detail);
   const facts = [[UserRound, 'Trainer', session.trainer_name_snapshot || record.trainer_name || 'Not recorded', session.trainer_employee_code || record.trainer_employee_code], [ClipboardList, 'Topics', (topicInfo.selected == null ? 'Unknown selected' : topicInfo.selected + ' selected') + ' / ' + (topicInfo.covered == null ? 'Unknown covered' : topicInfo.covered + ' covered')], [CalendarDays, 'Training Date', session.training_date || 'Not recorded', session.training_at ? time(session.training_at) : 'Time not recorded'], [UsersRound, 'Recorded Attendees', Array.isArray(detail?.attendees) ? detail.attendees.length + ' Members' : record.attendee_count ?? 'Not recorded'], [GraduationCap, 'Class', record.training_class], [Images, 'Evidence', detail ? evidence.length + ' Files' : 'Not loaded'], [MapPin, 'Store Address', record.store?.address || detail?.store?.address || 'Not recorded'], [FileText, 'Supporting Doc', detail ? docs.length + ' Files' : 'Not loaded']];
+  if (record.training_class === 'MEPC' || detail?.category?.code === 'technical_mep') facts.push([FileText, 'Submission channel', session.submission_channel || record.submission_channel || 'Unknown'], [CalendarDays, 'Uploaded', time(session.created_at || record.created_at)]);
   async function download(item) {
     try {
       setDownloadError('');

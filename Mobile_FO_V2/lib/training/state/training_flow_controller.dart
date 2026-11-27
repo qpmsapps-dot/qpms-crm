@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+import 'mepc_form_controller.dart';
 
 import '../data/training_draft_cache.dart';
 import '../data/training_errors.dart';
@@ -11,18 +11,23 @@ import '../models/training_session_topic.dart';
 import '../models/training_topic.dart';
 import '../models/training_type.dart';
 
-class TrainingFlowController extends ChangeNotifier {
+class TrainingFlowController extends MepcFormController {
   TrainingFlowController({
     required TrainingRepository repository,
     this.activeContextCheck,
   }) : _repository = repository;
   final TrainingRepository _repository;
   final Future<bool> Function()? activeContextCheck;
+  @override
   TrainingSession? session;
   List<TrainingCategory> categories = [];
+  @override
   List<TrainingType> types = [];
+  @override
   List<TrainingTopic> topics = [];
+  @override
   TrainingCategory? selectedCategory;
+  @override
   TrainingType? selectedTrainingType;
   static DateTime indiaDate([DateTime? now]) {
     final ist = (now ?? DateTime.now()).toUtc().add(
@@ -31,7 +36,9 @@ class TrainingFlowController extends ChangeNotifier {
     return DateTime(ist.year, ist.month, ist.day);
   }
 
+  @override
   DateTime trainingDate = indiaDate();
+  @override
   Map<String, dynamic>? selectedStore;
   bool readOnlyContext = false;
   void lockForHistory() {
@@ -58,6 +65,7 @@ class TrainingFlowController extends ChangeNotifier {
     query: query,
     offset: offset,
   );
+  @override
   void selectStore(Map<String, dynamic> store) {
     _ensureEditable();
     if (session != null) return;
@@ -66,14 +74,19 @@ class TrainingFlowController extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   String trainerName = '';
+  @override
   String remarks = '';
   String attendanceId = '';
   String siteVisitId = '';
   String cacheId = '';
   List<TrainingAttendee> attendees = [];
+  @override
   List<TrainingSessionTopic> selectedSessionTopics = [];
+  @override
   List<TrainingEvidence> evidence = [];
+  @override
   List<TrainingPendingEvidence> pendingEvidence = [];
   List<TrainingStaffSuggestion> staffSuggestions = [];
   TrainingFlowStep currentStep = TrainingFlowStep.details;
@@ -89,8 +102,10 @@ class TrainingFlowController extends ChangeNotifier {
 
   bool get isDraft =>
       session == null || session!.status == TrainingSessionStatus.draft;
+  @override
   bool get isSubmitted => session?.status == TrainingSessionStatus.submitted;
   bool get isCancelled => session?.status == TrainingSessionStatus.cancelled;
+  @override
   bool get isEditable => !readOnlyContext && (session?.isEditable ?? true);
   int get attendeeCount => attendees.length;
   int get selectedTopicCount => selectedSessionTopics.length;
@@ -131,6 +146,7 @@ class TrainingFlowController extends ChangeNotifier {
   int get failedUploadCount => pendingEvidence
       .where((item) => item.state == TrainingUploadState.failed)
       .length;
+  @override
   bool get canContinueDetails =>
       selectedCategory != null &&
       selectedTrainingType != null &&
@@ -183,6 +199,7 @@ class TrainingFlowController extends ChangeNotifier {
       (!(session?.requireTrainingDocumentSnapshot ?? false) ||
           hasTrainingDocument);
 
+  @override
   List<TrainingEvidence> evidenceForTopic(String sessionTopicId) => evidence
       .where((item) => item.trainingSessionTopicId == sessionTopicId)
       .toList();
@@ -266,6 +283,7 @@ class TrainingFlowController extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   void selectTrainingType(TrainingType value) {
     _ensureEditable();
     selectedTrainingType = value;
@@ -274,6 +292,7 @@ class TrainingFlowController extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   void setDetails({DateTime? date, String? trainer, String? remarks}) {
     _ensureEditable();
     // Creation date is assigned by the server and is immutable.
@@ -290,6 +309,7 @@ class TrainingFlowController extends ChangeNotifier {
     _cacheLocal();
   }
 
+  @override
   Future<TrainingSession> saveDraft() async {
     await _verifyLocalContext();
     _ensureEditable();
@@ -387,6 +407,7 @@ class TrainingFlowController extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   Future<void> setSelectedTopics(List<String> topicIds) async {
     await _requireActiveDraft();
     final refreshed = await _repository.setTopics(session!.id, topicIds);
@@ -394,6 +415,7 @@ class TrainingFlowController extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   Future<void> updateTopic(
     String sessionTopicId, {
     required bool isCovered,
@@ -412,6 +434,7 @@ class TrainingFlowController extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   Future<void> queueEvidence({
     required String localId,
     String? sessionTopicId,
@@ -439,6 +462,7 @@ class TrainingFlowController extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   Future<void> uploadQueued(String localId) async {
     await _requireActiveDraft();
     final item = pendingEvidence.firstWhere((row) => row.localId == localId);
@@ -468,6 +492,7 @@ class TrainingFlowController extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   Future<TrainingEvidenceView> getEvidenceViewUrl(String evidenceId) {
     if (session == null) {
       throw const TrainingValidationException(
@@ -482,6 +507,7 @@ class TrainingFlowController extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   Future<void> retryUploads() async {
     await _requireActiveDraft();
     isUploading = true;
@@ -498,6 +524,7 @@ class TrainingFlowController extends ChangeNotifier {
     }
   }
 
+  @override
   Future<void> deleteEvidence(String evidenceId) async {
     await _requireActiveDraft();
     await _repository.deleteEvidence(session!.id, evidenceId);
@@ -505,11 +532,13 @@ class TrainingFlowController extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   Future<void> refresh() async {
     if (session == null) return;
     await _busy(() => _loadServer(session!.id));
   }
 
+  @override
   Future<void> submit() async {
     await _requireActiveDraft();
     isSubmitting = true;

@@ -9,7 +9,7 @@
     ".github/retailAttendanceCorrectionGuard.mjs": "f59345fc306c6e78e9cbaca4afcb61cee97a0830",
     ".github/retailAttendanceExceptionsGuard.mjs": "03bc773f71358668647bc1a8e0ed0ad7a2bda963",
     ".github/shared-integrity-probes.json": "bdfd8321fc58b3d902e37f97280f72a7f30eb22d",
-    ".github/shared-training-pins.json": "ab3862fb983ba1d46bdedb9fa57fd8bd4feb12fa",
+    ".github/shared-training-pins.json": "8ea2f899568ea8268f4449b2e15a61c7d15f5d3d",
     ".github/sharedHistoricalChecks.mjs": "3e20a330d6e7799dde79fa388ebcece8810c19f0",
     ".github/sharedIntegrity.mjs": "9952cedf3bfd34e6cdf70a53cce73afdc0c0461b",
     ".github/thermographyV2Guard.mjs": "ce6f95dd7fdea71c078e3ac6365ae3f316e8078d",

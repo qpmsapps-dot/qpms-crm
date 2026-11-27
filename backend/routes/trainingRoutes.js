@@ -1,3 +1,4 @@
+import {createMobileManagementSession,loadMobileManagementSetup} from '../services/trainingMobileManagementService.js';
 import {readTrainingEntitlements,saveTrainingEntitlements} from '../services/trainingEntitlementService.js';
 import {createWebTrainingSession,loadWebTrainingSetup} from '../services/trainingWebService.js';
 import express from 'express';
@@ -48,6 +49,8 @@ gateCombinedMutationRoutes(router,{normalOperations:true,getClient});
 
   router.get('/administration/:profileId/categories', route('read_entitlements', async (request, client) => ({result:await readTrainingEntitlements(client,request.profile,request.params.profileId)})));
   router.put('/administration/:profileId/categories', route('save_entitlements', async (request, client) => ({result:await saveTrainingEntitlements(client,request.profile,request.params.profileId,request.body)})));
+  router.get('/mobile-management/setup', route('mobile_management_setup', async (request,client) => ({setup:await loadMobileManagementSetup(client,request.profile,request.query)})));
+  router.post('/mobile-management/sessions', route('create_mobile_management', async (request,client) => createMobileManagementSession(client,request.profile,request.body),{status:201}));
   router.post('/web/sessions', route('create_web_session', async (request,client) => createWebTrainingSession(client,request.profile,request.body),{status:201}));
   router.get('/web/setup', route('web_setup', async (request,client) => ({setup:await loadWebTrainingSetup(client,request.profile,request.query)})));
 

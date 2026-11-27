@@ -41,9 +41,9 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm ci --prefix backend --ignore-scripts --no-audit --no-fund
       - name: Focused authorization, reporting, entitlement and upload tests
-        run: node --test backend/tests/trainingWebSetup.test.js backend/tests/trainingV2Services.test.js backend/tests/retailLeadershipTrainingScope.test.js backend/tests/retailHkTrainingReadScope.test.js backend/tests/retailMisAccess.test.js tests/trainingWebUpload.test.js tests/trainingView.test.js tests/trainingExports.test.js tests/trainingPhase3Guard.test.js
+        run: node --test backend/tests/trainingMobileManagement.test.js backend/tests/trainingWebSetup.test.js backend/tests/trainingV2Services.test.js backend/tests/retailLeadershipTrainingScope.test.js backend/tests/retailHkTrainingReadScope.test.js backend/tests/retailMisAccess.test.js tests/trainingWebUpload.test.js tests/trainingView.test.js tests/trainingExports.test.js tests/trainingPhase3Guard.test.js
       - name: Scoped lint
-        run: npx eslint src/components/reliance-retail/TrainingWebUpload.jsx src/utils/trainingWebUpload.js src/pages/reliance-retail/RetailTrainingUpload.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailMisWorkspace.jsx src/components/Sidebar.jsx src/routes/AppRoutes.jsx src/utils/authRoles.js backend/services/trainingWebService.js backend/services/trainingAccessService.js backend/routes/trainingRoutes.js backend/shared/retailMisAccess.js
+        run: npx eslint src/components/reliance-retail/TrainingWebUpload.jsx src/utils/trainingWebUpload.js src/pages/reliance-retail/RetailTrainingUpload.jsx src/pages/reliance-retail/RetailTraining.jsx src/pages/reliance-retail/RetailMisWorkspace.jsx src/components/Sidebar.jsx src/routes/AppRoutes.jsx src/utils/authRoles.js backend/services/trainingMobileManagementService.js backend/services/trainingSubmissionChannel.js backend/services/trainingWebService.js backend/services/trainingAccessService.js backend/routes/trainingRoutes.js backend/shared/retailMisAccess.js
       - name: Production Web build
         run: npm run build
       - run: npx playwright install --with-deps chromium
@@ -76,10 +76,13 @@ jobs:
         run: flutter pub get --enforce-lockfile
       - name: Mobile Training analysis
         working-directory: Mobile_FO_V2
-        run: dart analyze lib/training test/training
+        run: dart analyze lib/training test/training lib/app.dart lib/utils/mobile_roles.dart lib/services/supabase_service.dart
       - name: HK, MEPC, entitlement routing, offline queue and evidence regressions
         working-directory: Mobile_FO_V2
         run: flutter test --no-pub test/training
+      - name: Existing mobile role, login recovery and operational auth guards
+        working-directory: Mobile_FO_V2
+        run: flutter test --no-pub test/mobile_roles_test.dart test/auth_session_recovery_test.dart test/split_auth_state_contract_test.dart test/checkout_auth_session_contract_test.dart
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -41,8 +41,8 @@ export default function RetailTrainingUpload() {
   const exportRows=async()=>{
     setBusy(true);
     try{const {default:ExcelJS}=await import('exceljs'),book=new ExcelJS.Workbook(),sheet=book.addWorksheet('MEPC Training');
-      sheet.addRow(['Training date','Store code','Store name','State','Actual trainer','Status','Verified evidence count']);
-      rows.forEach(r=>sheet.addRow([r.training_date,r.store?.store_code,r.store?.store_name,r.store?.state,r.trainer_name,r.status,r.evidence_count]));
+      sheet.addRow(['Training date','Store code','Store name','State','Actual trainer','Status','Verified evidence count','Submission channel','Uploader profile ID']);
+      rows.forEach(r=>sheet.addRow([r.training_date,r.store?.store_code,r.store?.store_name,r.store?.state,r.trainer_name,r.status,r.evidence_count,r.submission_channel,r.uploader_profile_id]));
       await downloadUnified(book,'MEPC_Training_Reports.xlsx');
     }catch(e){setError(e.message);}finally{setBusy(false);}
   };
@@ -55,8 +55,8 @@ export default function RetailTrainingUpload() {
       <button disabled={busy} onClick={()=>setRevision(v=>v+1)}>Refresh reports</button>
       <button disabled={busy||!rows.length||!!error} onClick={exportRows}>Download MEPC reports</button></div>
       {busy&&<p role="status">Loading reports…</p>}{error&&<p role="alert">{error}</p>}
-      <div className="dc-table-wrap"><table><thead><tr><th>Date</th><th>Store</th><th>State</th><th>Actual trainer</th><th>Status</th><th>Details</th></tr></thead><tbody>
-        {rows.map(row=><tr key={row.id}><td>{row.training_date}</td><td>{row.store?.store_code} / {row.store?.store_name}</td><td>{row.store?.state}</td><td>{row.trainer_name}</td><td>{row.status}</td><td><button onClick={()=>inspect(row)}>View {row.store?.store_code||row.id}</button></td></tr>)}
+      <div className="dc-table-wrap"><table><thead><tr><th>Date</th><th>Store</th><th>State</th><th>Actual trainer</th><th>Status</th><th>Channel</th><th>Details</th></tr></thead><tbody>
+        {rows.map(row=><tr key={row.id}><td>{row.training_date}</td><td>{row.store?.store_code} / {row.store?.store_name}</td><td>{row.store?.state}</td><td>{row.trainer_name}</td><td>{row.status}</td><td>{row.submission_channel || 'Unknown'}</td><td><button onClick={()=>inspect(row)}>View {row.store?.store_code||row.id}</button></td></tr>)}
       </tbody></table></div>{!busy&&!error&&!rows.length&&<p>No authorized MEPC reports in this period.</p>}
     </section></div>
     {selected&&<TrainingV2Drawer key={selected.id} record={selected} detail={detail} busy={detailBusy} error={detailError} links={links} linkErrors={linkErrors} onAuthorize={authorize} onRetry={()=>inspect(selected)} onClose={close} />}

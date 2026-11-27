@@ -71,6 +71,16 @@ test('Training V2 real PostgreSQL authorization, evidence, history and concurren
   assert.equal((await q("select to_regclass('public.training_category_entitlements') name")).rows[0].name,null);
  });
  await q(migration);
+ await t.test('management migration rejects editor baseline drift before additive changes',async()=>{
+  await q('begin;alter function public.training_assert_draft_editor(uuid,uuid) set search_path=public');
+  await assert.rejects(()=>q(read('supabase/migrations/20261127120000_training_mobile_management_provenance.sql')),/baseline_drift/);
+  await q('rollback');
+  assert.equal((await q("select count(*)::int n from information_schema.columns where table_schema='training_v2_private' and table_name='release_policy' and column_name='mobile_management_enabled'")).rows[0].n,0);
+ });
+ const editorBefore=(await q("select oid::text,prosrc from pg_proc where oid='public.training_assert_draft_editor(uuid,uuid)'::regprocedure")).rows[0];
+ await q(read('supabase/migrations/20261127120000_training_mobile_management_provenance.sql'));
+ assert.equal((await q("select oid::text from pg_proc where oid='public.training_assert_draft_editor(uuid,uuid)'::regprocedure")).rows[0].oid,editorBefore.oid,'public editor identity is retained');
+ assert.equal((await q("select prosrc from pg_proc where oid='training_v2_private.management_v2_draft_editor(uuid,uuid)'::regprocedure")).rows[0].prosrc.replace(/\r/g,''),editorBefore.prosrc.replace(/\r/g,''),'all original V2 editor checks are preserved exactly');
  await t.test('backfill preserves 27 HK grants, history and no MEPC grants',async()=>{
   assert.equal((await q('select count(*)::int n from training_category_entitlements')).rows[0].n,27);
   assert.equal(await rpc('training_category_allowed_v4',[fo,hk]),true);assert.equal(await rpc('training_category_allowed_v4',[fo,mep]),false);
@@ -210,6 +220,65 @@ test('Training V2 real PostgreSQL authorization, evidence, history and concurren
   assert.equal(await rpc('training_v2_web_allowed',[bh,store]),false);
   await q("insert into access_user_scopes(user_assignment_id,scope_type,scope_code) select id,'state','PY' from access_user_assignments where profile_id=$1",[bh]);
   for(const category of ['hk','technical_mep']){assert.equal(await rpc('training_v2_report_store',[bh,category,py]),true);assert.equal(await rpc('training_v2_report_store',[bh,category,foreign]),false);}
+ });
+ await t.test('management mobile: separate disabled gate, MIS/OM scope, today-only, evidence and durable provenance',async()=>{
+  try {
+   await q("update retail_mis_assignments set states=array['TN','PY'] where profile_id=$1",[mis]);
+   const create=(actor=mis,key='management-1',target=store,date=today)=>rpc('rpc_create_reliance_training_mobile_management_v3',[actor,target,date,type,fo,key,null]);
+   await assert.rejects(()=>create(),/mobile_management_release_disabled/);
+   await q('update training_v2_private.release_policy set mobile_management_enabled=true');
+   await q('update training_v2_private.release_policy set web_enabled=false');
+   await assert.rejects(()=>create(),/web_release_disabled/);
+   await q('update training_v2_private.release_policy set web_enabled=true');
+   const id=await create();assert.equal(await create(),id);
+   const [a,b]=await Promise.all([cluster.connect(),cluster.connect()]);
+   const concurrent=await Promise.all([a,b].map(db=>rpc('rpc_create_reliance_training_mobile_management_v3',[mis,store,today,type,fo,'management-1',null],db)));
+   assert.deepEqual(concurrent,[id,id]);
+   assert.equal((await q("select count(*)::int n from training_events where training_session_id=$1 and event_type='management_mobile_created_v3'",[id])).rows[0].n,1);
+   const row=(await q('select * from training_sessions where id=$1',[id])).rows[0];
+   assert.equal(row.attendance_id,null);assert.equal(row.site_visit_id,null);
+   assert.equal(row.uploader_profile_id,mis);assert.equal(row.actual_trainer_profile_id,fo);
+   assert.equal(row.submission_source,'Web');
+   for(const actor of [fo,bh,kam,hkMis,admin,south])await assert.rejects(()=>create(actor,'denied-'+actor),/mobile_management_forbidden/);
+   const omId=await create(om,'management-om');await create(mis,'management-py',py);
+   const zone=randomUUID();
+   await q("delete from access_user_scopes where user_assignment_id in(select id from access_user_assignments where profile_id=$1) and scope_type in('store','zone')",[om]);
+   await q("insert into access_user_scopes(user_assignment_id,scope_type,scope_id) select id,'zone',$2 from access_user_assignments where profile_id=$1",[om,zone]);
+   await assert.rejects(()=>create(om,'wrong-zone'),/scope_forbidden/);
+   assert.equal(await rpc('rpc_training_v2_read_allowed',[om,omId]),false);
+   await q('update reliance_retail_store_master set zone_id=$2 where id=$1',[store,zone]);
+   await create(om,'authorized-zone');
+   await q("insert into access_user_scopes(user_assignment_id,scope_type,scope_id) select id,'store',$2 from access_user_assignments where profile_id=$1",[om,foreign]);
+   await assert.rejects(()=>create(om,'wrong-store'),/scope_forbidden/);
+   await q("delete from access_user_scopes where user_assignment_id in(select id from access_user_assignments where profile_id=$1) and scope_type in('store','zone')",[om]);
+   await q('update reliance_retail_store_master set zone_id=null where id=$1',[store]);
+   const otherClient=randomUUID();await q("insert into access_clients values($1,'other_business','Other Business',true)",[otherClient]);
+   await q('update access_user_assignments set client_id=$2 where profile_id=$1',[om,otherClient]);
+   await q("update profiles set business='Hospitals' where id=$1",[om]);
+   await assert.rejects(()=>create(om,'foreign-business'),/scope_forbidden/);
+   await q("update profiles set business='Reliance Retail' where id=$1",[om]);
+   await q("update access_user_assignments set client_id='369d2d5f-396f-49f9-a47d-bfbc8f7cb922' where profile_id=$1",[om]);
+   await assert.rejects(()=>create(om,'management-om-py',py),/scope_forbidden/);
+   for(const actor of [mis,om])await assert.rejects(()=>create(actor,'foreign-'+actor,foreign),/scope_forbidden/);
+   for(const date of ['2020-01-01','2099-01-01'])await assert.rejects(()=>create(mis,'date-'+date,store,date),/date_not_allowed/);
+   await assert.rejects(()=>rpc('rpc_create_reliance_training_mobile_management_v3',[mis,store,today,type,om,'management-1',null]),/creation_key_conflict/);
+   await q('update profiles set mobile_access_enabled=false where id=$1',[mis]);
+   await assert.rejects(()=>rpc('training_assert_draft_editor',[id,mis]),/mobile_management_forbidden/);
+   await q('update profiles set mobile_access_enabled=true where id=$1',[mis]);
+   await assert.rejects(()=>rpc('rpc_submit_reliance_training_session_v2',[id,mis]),/topic|completion|photo/);
+   await evidence(id,mis);await rpc('rpc_submit_reliance_training_session_v2',[id,mis]);
+   assert.equal(await rpc('rpc_submit_reliance_training_session_v2',[id,mis]),id);
+   assert.equal(await rpc('rpc_training_v2_read_allowed',[bh,id]),true);
+   assert.equal(await rpc('rpc_training_v2_read_allowed',[hkMis,id]),false);
+   const misAuth=(await q('select auth_user_id from profiles where id=$1',[mis])).rows[0].auth_user_id;
+   const report=await rpc('rpc_retail_mis_training_v4',[mis,misAuth,'technical_mep',today,today,null]);
+   assert.equal(report.rows.filter(s=>s.id===id).length,1);
+   assert.equal(report.counts.completed_sessions,3,'FO, Web and management Mobile each count once');
+   assert.equal((await q("select has_function_privilege('authenticated','rpc_create_reliance_training_mobile_management_v3(uuid,uuid,date,uuid,uuid,text,text)','EXECUTE') allowed")).rows[0].allowed,false);
+   await q(read('supabase/proposals/training_mobile_management_rollback.sql').replace(/BEGIN;|COMMIT;/g,''));
+   assert.equal((await q('select mobile_management_enabled from training_v2_private.release_policy')).rows[0].mobile_management_enabled,false);
+   assert.equal((await q('select count(*)::int n from training_sessions where id=$1',[id])).rows[0].n,1);
+  } finally {await q("update retail_mis_assignments set states=array['KA'] where profile_id=$1",[mis]);await q('update training_v2_private.release_policy set mobile_management_enabled=false');}
  });
  await t.test('RLS/function ACLs deny direct browser writes; rollback disables gate without deleting history',async()=>{
   assert.equal((await q("select has_function_privilege('authenticated','rpc_set_training_category_entitlements(uuid,uuid,jsonb,text)','EXECUTE') allowed")).rows[0].allowed,false);

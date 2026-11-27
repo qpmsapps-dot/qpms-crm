@@ -46,7 +46,7 @@ export async function loadWebTrainingSetup(client, profile, input = {}) {
 export async function createWebTrainingSession(client, profile, input = {}) {
   const allowed = ['retail_store_id', 'training_date', 'training_type_id', 'actual_trainer_profile_id', 'creation_key', 'remarks'];
   if (Object.keys(input).some(k => !allowed.includes(k)) || typeof input.creation_key !== 'string'
-      || !input.creation_key.trim() || input.creation_key.length > 160
+      || !input.creation_key.trim() || input.creation_key.startsWith('mm3:') || input.creation_key.length > 160
       || !/^\d{4}-\d{2}-\d{2}$/.test(input.training_date || '')
       || Number.isNaN(Date.parse(input.training_date + 'T00:00:00Z'))
       || new Date(input.training_date + 'T00:00:00Z').toISOString().slice(0, 10) !== input.training_date) {

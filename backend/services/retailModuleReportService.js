@@ -1,3 +1,4 @@
+import {withTrainingChannels} from './trainingSubmissionChannel.js';
 import {unifiedSnapshot} from './retailUnifiedService.js';
 import {assertRetailAccess,retailAccess} from './relianceRetailManagementService.js';
 import {canonicalActivityStore,cleaningReport,completedTrainingReport,submittedCleaningReport} from '../shared/retailModuleReports.js';
@@ -125,7 +126,7 @@ export async function retailCompletedTraining(client,profile,input={},existingSn
  const scopedSessions=Array.isArray(profile._retailRoleStates)
   ? normalized.filter(s=>canonicalActivityStore(snapshot.stores,s))
   : normalized;
- return {...range,...completedTrainingReport(scopedSessions.map(s=>({...s,category:categoryById.get(s.category_id),trainer_name:s.trainer_name_snapshot})),snapshot.stores,{state:input.state,store:input.store}),complete:true};
+ return {...range,...completedTrainingReport((await withTrainingChannels(client,scopedSessions)).map(s=>({...s,category:categoryById.get(s.category_id),trainer_name:s.trainer_name_snapshot})),snapshot.stores,{state:input.state,store:input.store}),complete:true};
 }
 
 export async function retailModuleDashboard(client,profile,input={}) {

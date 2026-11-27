@@ -1,4 +1,6 @@
 # Training Phase 3 review
+
+This is the original Phase 3 baseline review at `0b028ef5`. The current mobile-management extension, proposed additive database guard, fresh validation and release prerequisites are documented in [the management mobile review](TRAINING_MOBILE_MANAGEMENT_REVIEW.md). Statements below about FO-only mobile creation and no proposed SQL describe that earlier baseline.
 27 November 2026. Branch `feat/reliance-training-mepc-ui-v3`, stacked on PR #126 at `65b5d3ce2b7af23d270022c887c920e5f26cc503`. Do not merge before the dependency or infer production approval.
 
 ## Completed
